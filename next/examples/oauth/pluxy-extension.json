@@ -1,0 +1,12 @@
+{
+  "manifest_version": 0,
+  "id": "example/oauth",
+  "version": "0.1.0",
+  "protocol": [0],
+  "programs": {
+    "linux/amd64": "oauth",
+    "linux/arm64": "oauth",
+    "darwin/amd64": "oauth",
+    "darwin/arm64": "oauth"
+  }
+}

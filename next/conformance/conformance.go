@@ -1,7 +1,8 @@
 // Package conformance is the extension conformance kit, version 0. It starts a provider
 // extension exactly as core does and checks it against the extension protocol
 // (../protocol/README.md): the handshake, streamed and unstreamed replies, cancellation, a crash,
-// shutdown and structured errors.
+// shutdown and structured errors; and, for an extension that signs in to accounts, login and
+// credential refresh.
 //
 // The kit cannot know how to make an extension's upstream behave, so the extension's test gives
 // it a fixture: for each Scenario, the account that makes the extension act it out. See
@@ -54,6 +55,46 @@ const (
 	OutputTokens = 7
 )
 
+// LoginScenario names a login or refresh behaviour the fixture must arrange.
+type LoginScenario string
+
+const (
+	// LoginApproved: the user completes the login. The extension must end it with login.done
+	// and a credential.
+	LoginApproved LoginScenario = "login_approved"
+	// LoginDenied: the user or the provider refuses the login (for an api_key login: the key is
+	// refused). The extension must end it with code auth.
+	LoginDenied LoginScenario = "login_denied"
+	// LoginAbandoned: the user never completes the login. The kit cancels it after its first
+	// prompt; the extension must stop (with UpstreamCancelled set, the provider must see it
+	// stop) and keep serving. Only for browser and device logins.
+	LoginAbandoned LoginScenario = "login_abandoned"
+	// RefreshRenewed: the provider renews the credential. The extension must return a
+	// credential of the same kind that differs from the one sent.
+	RefreshRenewed LoginScenario = "refresh_renewed"
+	// RefreshRejected: the provider refuses the grant itself (OAuth invalid_grant). The
+	// extension must report code auth, scope credential, not retryable.
+	RefreshRejected LoginScenario = "refresh_rejected"
+	// RefreshUnavailable: the provider's token endpoint fails in a way that may pass. The
+	// extension must report a retryable error that is not code auth.
+	RefreshUnavailable LoginScenario = "refresh_unavailable"
+)
+
+// LoginSetup is what a fixture returns for a login scenario.
+type LoginSetup struct {
+	// Account is passed with the call: for a login, its ID and settings; for a refresh, also
+	// the credential to renew.
+	Account protocol.Account
+	// Input is what the user entered when starting the login.
+	Input map[string]string
+	// Act plays the user for each prompt of an approved or denied login. It returns the input
+	// to send back (login.input), or nil when it acted another way, for example by approving
+	// a device code at the fake provider. Nil Act answers nothing.
+	Act func(t *testing.T, p protocol.Prompt) map[string]string
+	// UpstreamCancelled, if not nil, closes when the provider sees an abandoned login stop.
+	UpstreamCancelled <-chan struct{}
+}
+
 // Setup is what a fixture returns for a scenario.
 type Setup struct {
 	// Account is passed to the extension with the kit's request.
@@ -69,6 +110,10 @@ type Target struct {
 	Manifest string
 	// Prepare returns the setup for a scenario. It is called once per check.
 	Prepare func(t *testing.T, s Scenario) Setup
+	// PrepareLogin returns the setup for a login scenario and login method (empty for refresh
+	// scenarios). Required when the extension's describe lists login or refresh; called once
+	// per check.
+	PrepareLogin func(t *testing.T, s LoginScenario, method string) LoginSetup
 }
 
 // Each check waits at most this long for something that should happen at once.
@@ -122,6 +167,8 @@ func Run(t *testing.T, target Target) {
 	})
 	t.Run("crash", k.crash)
 	t.Run("shutdown", k.shutdown)
+	t.Run("login", k.login)
+	t.Run("refresh", k.refresh)
 }
 
 type kit struct {
@@ -374,4 +421,211 @@ func (k *kit) shutdown(t *testing.T) {
 func jsonString(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+// login checks every login method the extension lists, or that it refuses login when it lists
+// none.
+func (k *kit) login(t *testing.T) {
+	info := k.start(t).Info()
+	if !slices.Contains(info.Operations, protocol.OpLogin) {
+		t.Run("unsupported", func(t *testing.T) {
+			ext := k.start(t)
+			l := ext.Login(context.Background(), protocol.Account{ID: "conformance"}, protocol.Login{Method: protocol.LoginAPIKey})
+			defer l.Close()
+			if r := nextLogin(t, l); r.Type != llm.EventError || r.Error.Code != llm.CodeUnsupported {
+				t.Errorf("login on an extension that does not list it got %s, want error %s", jsonString(r), llm.CodeUnsupported)
+			}
+		})
+		return
+	}
+	if k.target.PrepareLogin == nil {
+		t.Fatal("describe lists login, but the target has no PrepareLogin")
+	}
+	if len(info.LoginMethods) == 0 {
+		t.Fatal("describe lists login but no login_methods")
+	}
+	seen := map[string]bool{}
+	for _, m := range info.LoginMethods {
+		if m.Method == "" || seen[m.Method] {
+			t.Errorf("login method %s: method must be set and unique", jsonString(m))
+		}
+		seen[m.Method] = true
+		switch m.Kind {
+		case protocol.LoginAPIKey, protocol.LoginBrowser, protocol.LoginDevice:
+		default:
+			t.Errorf("login method %q has unknown kind %q", m.Method, m.Kind)
+			continue
+		}
+		t.Run(m.Method+"/approved", func(t *testing.T) { k.loginOutcome(t, m, LoginApproved) })
+		t.Run(m.Method+"/denied", func(t *testing.T) { k.loginOutcome(t, m, LoginDenied) })
+		if m.Kind != protocol.LoginAPIKey {
+			t.Run(m.Method+"/abandoned", func(t *testing.T) { k.loginAbandoned(t, m) })
+		}
+	}
+	t.Run("unknown_method", func(t *testing.T) {
+		ext := k.start(t)
+		l := ext.Login(context.Background(), protocol.Account{ID: "conformance"}, protocol.Login{Method: "no-such-method"})
+		defer l.Close()
+		if r := nextLogin(t, l); r.Type != llm.EventError || r.Error.Code != llm.CodeUnsupported {
+			t.Errorf("login with an unknown method got %s, want error %s", jsonString(r), llm.CodeUnsupported)
+		}
+	})
+}
+
+// nextLogin returns the login's next frame, failing the test if it takes longer than wait.
+func nextLogin(t *testing.T, l *host.LoginCall) protocol.Reply {
+	t.Helper()
+	ch := make(chan protocol.Reply, 1)
+	go func() { ch <- l.Next() }()
+	select {
+	case r := <-ch:
+		return r
+	case <-time.After(wait):
+		l.Close()
+		t.Fatalf("no login frame within %s", wait)
+		return protocol.Reply{}
+	}
+}
+
+// checkPrompt checks that a prompt carries what its kind needs.
+func checkPrompt(t *testing.T, p *protocol.Prompt) {
+	t.Helper()
+	switch p.Kind {
+	case protocol.PromptBrowser:
+		if p.URL == "" {
+			t.Errorf("browser prompt has no url: %s", jsonString(p))
+		}
+	case protocol.PromptDevice:
+		if p.UserCode == "" || p.VerificationURI == "" {
+			t.Errorf("device prompt needs user_code and verification_uri: %s", jsonString(p))
+		}
+	case protocol.PromptInput:
+		if len(p.Inputs) == 0 {
+			t.Errorf("input prompt asks for no inputs: %s", jsonString(p))
+		}
+	default:
+		t.Errorf("prompt has unknown kind %q", p.Kind)
+	}
+}
+
+func (k *kit) loginOutcome(t *testing.T, m protocol.LoginMethod, s LoginScenario) {
+	ext := k.start(t)
+	setup := k.target.PrepareLogin(t, s, m.Method)
+	l := ext.Login(context.Background(), setup.Account, protocol.Login{Method: m.Method, Input: setup.Input})
+	defer l.Close()
+	for {
+		r := nextLogin(t, l)
+		switch r.Type {
+		case protocol.TypeLoginPrompt:
+			checkPrompt(t, r.Prompt)
+			if setup.Act == nil {
+				continue
+			}
+			if in := setup.Act(t, *r.Prompt); in != nil {
+				if err := l.Send(in); err != nil {
+					t.Fatalf("sending login input: %v", err)
+				}
+			}
+			continue
+		case protocol.TypeLoginDone:
+			if s != LoginApproved {
+				t.Fatalf("a %s login succeeded", s)
+			}
+			if c := r.Grant.Credential; c.Kind == "" {
+				t.Error("login.done credential has no kind")
+			}
+		case llm.EventError:
+			if s == LoginApproved {
+				t.Fatalf("approved login failed: %s", jsonString(r.Error))
+			}
+			if r.Error.Code != llm.CodeAuth || r.Error.Message == "" {
+				t.Errorf("denied login ended with %s, want code %s and a message", jsonString(r.Error), llm.CodeAuth)
+			}
+		default:
+			t.Fatalf("unexpected login frame %s", jsonString(r))
+		}
+		return
+	}
+}
+
+func (k *kit) loginAbandoned(t *testing.T, m protocol.LoginMethod) {
+	ext := k.start(t)
+	setup := k.target.PrepareLogin(t, LoginAbandoned, m.Method)
+	ctx, cancel := context.WithCancel(context.Background())
+	l := ext.Login(ctx, setup.Account, protocol.Login{Method: m.Method, Input: setup.Input})
+	defer l.Close()
+	r := nextLogin(t, l)
+	if r.Type != protocol.TypeLoginPrompt {
+		t.Fatalf("a %s login's first frame was %s, want a prompt", m.Kind, jsonString(r))
+	}
+	checkPrompt(t, r.Prompt)
+	cancel()
+	if setup.UpstreamCancelled != nil {
+		select {
+		case <-setup.UpstreamCancelled:
+		case <-time.After(wait):
+			t.Fatal("the provider did not see the abandoned login stop")
+		}
+	}
+	// The extension keeps serving after an abandoned login.
+	text := k.target.Prepare(t, ScenarioText)
+	s := ext.Generate(context.Background(), text.Account, request(false))
+	defer s.Close()
+	if evs := collect(t, s); evs[len(evs)-1].Type != llm.EventFinish {
+		t.Errorf("call after an abandoned login ended with %s", jsonString(evs[len(evs)-1]))
+	}
+}
+
+// refresh checks credential refresh, or that the extension refuses it when describe does not
+// list it.
+func (k *kit) refresh(t *testing.T) {
+	info := k.start(t).Info()
+	if !slices.Contains(info.Operations, protocol.OpRefresh) {
+		t.Run("unsupported", func(t *testing.T) {
+			_, e := k.start(t).Refresh(context.Background(), protocol.Account{ID: "conformance",
+				Credential: &protocol.Credential{Kind: protocol.CredentialOAuth, RefreshToken: "conformance-refresh-token"}})
+			if e == nil || e.Code != llm.CodeUnsupported {
+				t.Errorf("refresh on an extension that does not list it got %s, want error %s", jsonString(e), llm.CodeUnsupported)
+			}
+		})
+		return
+	}
+	if k.target.PrepareLogin == nil {
+		t.Fatal("describe lists refresh, but the target has no PrepareLogin")
+	}
+	run := func(t *testing.T, s LoginScenario) (sent, got *protocol.Credential, e *llm.Error) {
+		ext := k.start(t)
+		setup := k.target.PrepareLogin(t, s, "")
+		if setup.Account.Credential == nil {
+			t.Fatal("the refresh setup has no credential")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), wait)
+		defer cancel()
+		got, e = ext.Refresh(ctx, setup.Account)
+		return setup.Account.Credential, got, e
+	}
+	t.Run("renewed", func(t *testing.T) {
+		sent, got, e := run(t, RefreshRenewed)
+		if e != nil {
+			t.Fatalf("refresh failed: %s", jsonString(e))
+		}
+		if got.Kind != sent.Kind {
+			t.Errorf("refresh returned kind %q for a %q credential", got.Kind, sent.Kind)
+		}
+		if jsonString(got) == jsonString(sent) {
+			t.Error("refresh returned the credential it was sent")
+		}
+	})
+	t.Run("rejected", func(t *testing.T) {
+		_, _, e := run(t, RefreshRejected)
+		if e == nil || e.Code != llm.CodeAuth || e.Scope != llm.ScopeCredential || e.Retryable {
+			t.Errorf("rejected grant got %s, want code %s, scope %s, not retryable", jsonString(e), llm.CodeAuth, llm.ScopeCredential)
+		}
+	})
+	t.Run("unavailable", func(t *testing.T) {
+		_, _, e := run(t, RefreshUnavailable)
+		if e == nil || e.Code == llm.CodeAuth || !e.Retryable {
+			t.Errorf("transient refresh failure got %s, want a retryable error that is not code %s", jsonString(e), llm.CodeAuth)
+		}
+	})
 }

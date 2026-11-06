@@ -159,3 +159,34 @@ closes when the upstream sees the request cancelled; the kit then checks cancell
 upstream, not only the extension.
 
 Run it with `go test`. Each check is a named subtest, so a failure tells you which rule broke.
+
+## 6. Sign in to accounts (optional)
+
+A provider whose accounts sign in, rather than taking a key from the config, adds login and
+refresh handlers. Core keeps the credential; your extension only knows how to get one and how to
+renew it:
+
+```go
+sdk.Serve(sdk.Extension{
+	ID: "example/oauth", Version: "0.1.0", Generate: generate,
+	LoginMethods: []protocol.LoginMethod{{Method: "device", Kind: protocol.LoginDevice, Label: "Device code"}},
+	Login: func(ctx context.Context, call sdk.LoginCall, s *sdk.LoginSession) (*protocol.Grant, error) {
+		// Ask the provider for a device code, show it, poll until the user approves.
+		s.Prompt(protocol.Prompt{Kind: protocol.PromptDevice, UserCode: code, VerificationURI: uri})
+		...
+		return &protocol.Grant{Credential: &protocol.Credential{Kind: protocol.CredentialOAuth,
+			AccessToken: at, RefreshToken: rt, ExpiresAt: exp}, Label: email}, nil
+	},
+	Refresh: func(ctx context.Context, call sdk.RefreshCall) (*protocol.Credential, error) {
+		// Trade call.Account.Credential.RefreshToken for a new credential.
+		...
+	},
+})
+```
+
+A browser login prompts with the sign-in URL and waits for the redirect URL with `s.Input(ctx)`.
+Report a refused grant (OAuth `invalid_grant`) from Refresh as code `auth`, scope `credential`,
+not retryable; anything that may pass as retryable. [`examples/oauth`](../examples/oauth) is a
+complete example with all three login kinds, and its `oauthtest` package is a fake OAuth provider
+for tests. Give the conformance kit a `PrepareLogin` fixture and it checks each login method and
+refresh outcome too. The rules are in [Login and refresh](README.md#login-and-refresh).

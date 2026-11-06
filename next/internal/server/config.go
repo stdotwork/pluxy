@@ -26,6 +26,12 @@ type Config struct {
 	// drop part of it: "report" (the default) sends it and logs what was dropped, "reject"
 	// refuses it with an error naming what could not be carried.
 	DropPolicy string `json:"drop_policy,omitempty"`
+	// ManagementKey turns on the management API (ManagementPrefix); clients send it as a
+	// bearer token. Empty: no management API.
+	ManagementKey string `json:"management_key,omitempty"`
+	// CredentialsDir is the folder that keeps accounts added by login, relative to the config
+	// file. Default: "credentials" beside the config file.
+	CredentialsDir string `json:"credentials_dir,omitempty"`
 }
 
 // ExtensionConfig names the provider extension and its accounts.
@@ -62,8 +68,14 @@ func LoadConfig(path string) (*Config, error) {
 	default:
 		return nil, fmt.Errorf("config: drop_policy must be %q or %q", llm.DropReport, llm.DropReject)
 	}
-	if len(c.Extension.Accounts) == 0 {
-		return nil, errors.New("config: extension.accounts must not be empty")
+	if c.CredentialsDir == "" {
+		c.CredentialsDir = "credentials"
+	}
+	if !filepath.IsAbs(c.CredentialsDir) {
+		c.CredentialsDir = filepath.Join(filepath.Dir(path), c.CredentialsDir)
+	}
+	if len(c.Extension.Accounts) == 0 && c.ManagementKey == "" {
+		return nil, errors.New("config: extension.accounts must not be empty unless management_key is set (accounts can then be added by login)")
 	}
 	seen := map[string]bool{}
 	for i, a := range c.Extension.Accounts {

@@ -2,9 +2,9 @@
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
-model service, and streams the reply back. It is deliberately small; later versions add
-capabilities, credentials and login, more operations, and hot swap without changing what is
-described here.
+model service, and streams the reply back; a provider may also sign in to accounts and renew their
+credentials (see [Login and refresh](#login-and-refresh)). It is deliberately small; later
+versions add capabilities, more operations, and hot swap without changing what is described here.
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
 the details. A Go SDK (`github.com/stdotwork/pluxy/next/sdk`) implements the extension side of
@@ -114,9 +114,10 @@ Core opens a connection and writes one call frame:
 | Field | Meaning |
 | --- | --- |
 | `id` | Call ID for logs and traces. Unique per core process. |
-| `op` | The operation. Version 0 has `describe` and `generate`. |
-| `account` | For `generate`: the account to use (below). |
+| `op` | The operation. Version 0 has `describe`, `generate`, `login` and `refresh`. |
+| `account` | For `generate` and `refresh`: the account to use (below). For `login`: the account being signed in to, with its `id` and `settings` but no `credential`. |
 | `request` | For `generate`: the model request (below). |
+| `login` | For `login`: what to sign in with (see [Login and refresh](#login-and-refresh)). |
 
 An extension that gets an `op` it does not know replies with an `error` event whose code is
 `unsupported`.
@@ -128,6 +129,10 @@ The reply is one frame, then the extension closes the connection:
 ```json
 {"type": "describe.result", "info": {"id": "pluxy/openai-compatible", "version": "0.1.0", "protocol": 0, "operations": ["generate"]}}
 ```
+
+`operations` lists the operations the extension serves: always `generate`, plus `login` and
+`refresh` when it signs in to accounts. An extension that lists `login` also lists its
+`login_methods` (see [Login and refresh](#login-and-refresh)).
 
 ### `generate`
 
@@ -160,9 +165,25 @@ decide.
 | --- | --- |
 | `id` | The account's ID in core's configuration. |
 | `settings` | Extension-specific settings, passed through as configured. |
-| `credential` | The credential for this call. Version 0 has one kind, `api_key`. |
+| `credential` | The credential for this call (below). |
 
-An extension only ever receives its own accounts.
+An extension only ever receives its own accounts: core stores each credential with the ID of the
+extension that created it and never sends it to another.
+
+A credential has a `kind` and the fields that kind uses:
+
+| Field | Meaning |
+| --- | --- |
+| `kind` | `api_key`, `oauth`, or a kind of the extension's own. |
+| `api_key` | For `api_key`: the key. |
+| `access_token`, `refresh_token` | For `oauth`: the tokens. |
+| `expires_at` | When the access token stops working, in Unix seconds; absent when it does not expire or is not known. |
+| `refresh_at` | When core should renew the credential, in Unix seconds. Absent: 5 minutes before `expires_at`. A provider whose tokens are best renewed well ahead (days, for some) sets it. |
+| `data` | A JSON object of anything else the provider needs (an ID token, a service-account key, an account ID). Core stores it and passes it on without reading it. |
+
+Every string in a credential except `kind` counts as secret: core removes each of them, in their
+JSON, URL and base64 forms, from everything a call sends back. Keep values that are not secret,
+especially short ones, out of the credential.
 
 ## The request
 
@@ -367,6 +388,100 @@ An error may come after other events, for example when the upstream stream break
 then reports it to the client in the client's stream format; it never retries once bytes have
 reached the client.
 
+## Login and refresh
+
+Core owns the record of every account added by login: it stores the credential, with a version,
+and decides when to renew it. The provider owns the protocol: how to sign in, and how to turn an
+old credential into a new one. An extension that signs in to accounts lists `login` and `refresh`
+in `operations`, and its ways of signing in in `login_methods`:
+
+```json
+"login_methods": [
+  {"method": "device", "kind": "device", "label": "Device code"},
+  {"method": "browser", "kind": "browser", "label": "Browser"},
+  {"method": "api_key", "kind": "api_key", "label": "API key", "inputs": [{"name": "api_key", "label": "API key", "secret": true}]}
+]
+```
+
+| Field | Meaning |
+| --- | --- |
+| `method` | Names the method in a login call. Unique within the extension. |
+| `kind` | `api_key` (the user enters a key), `browser` (the user opens a URL and signs in: OAuth authorization code with PKCE, [RFC 7636](https://www.rfc-editor.org/rfc/rfc7636)) or `device` (the user enters a code on another device: [RFC 8628](https://www.rfc-editor.org/rfc/rfc8628)). |
+| `label` | For people. |
+| `inputs` | What the user enters when starting the login: `name`, `label`, `secret` (hide it), `optional`. |
+
+### `login`
+
+```json
+{"type": "call", "id": "c-9", "op": "login", "account": {"id": "work", "settings": {...}}, "login": {"method": "device", "input": {}}}
+```
+
+`login.input` holds what the user entered for the method's `inputs`. The reply is a stream:
+any number of `login.prompt` frames, then exactly one terminal frame, `login.done` or `error`,
+after which the extension closes the connection.
+
+```json
+{"type": "login.prompt", "prompt": {"kind": "device", "user_code": "WDJB-MJHT", "verification_uri": "https://example.com/device", "expires_in": 900}}
+{"type": "login.done", "grant": {"credential": {"kind": "oauth", "access_token": "...", "refresh_token": "...", "expires_at": 1767225600}, "label": "user@example.com"}}
+```
+
+A prompt tells the user what to do; a later prompt replaces an earlier one. Its fields:
+
+| Field | Meaning |
+| --- | --- |
+| `kind` | `browser` (open `url`), `device` (open `verification_uri` and enter `user_code`) or `input` (enter `inputs`). |
+| `message` | For people. |
+| `url` | For `browser`. |
+| `user_code`, `verification_uri`, `verification_uri_complete` | For `device`, as RFC 8628 section 3.2 names them. |
+| `expires_in` | Seconds the prompt stays valid. |
+| `inputs` | What the user may send back. A browser prompt usually accepts the URL the browser was redirected to, for when the extension's own callback cannot be reached (core runs on another machine). |
+
+While a login runs, core may send `login.input` frames on the same connection with what the user
+entered for the last prompt; nothing else follows the call frame:
+
+```json
+{"type": "login.input", "input": {"redirect_url": "http://localhost:1455/callback?code=...&state=..."}}
+```
+
+`login.done` carries the `grant`: the new `credential` and a `label` naming the account for people
+(not secret). A refusal (the user denied access, the code expired, the key was refused) is an
+`error` with code `auth`. Closing the connection cancels the login: stop polling and release any
+callback listener. A login may wait for a person for a long time; core ends it after 15 minutes.
+
+The provider does the protocol work: generating and checking the PKCE verifier and `state`,
+polling the token endpoint at the interval it gave (and slowing down on `slow_down`), and talking
+to its own callback. Core never sees a verifier or an authorization code, only the credential.
+
+### `refresh`
+
+```json
+{"type": "call", "id": "c-12", "op": "refresh", "account": {"id": "work", "settings": {...}, "credential": {...}}}
+```
+
+The reply is one frame: `refresh.done` with the renewed credential, whole (core replaces the
+stored one with it; keep the old refresh token when the provider did not send a new one), or an
+`error`:
+
+```json
+{"type": "refresh.done", "grant": {"credential": {"kind": "oauth", "access_token": "...", "refresh_token": "...", "expires_at": 1767229200}}}
+```
+
+| Failure | Report |
+| --- | --- |
+| The provider refused the grant itself (OAuth `invalid_grant`): only a new login helps. | Code `auth`, scope `credential`, not retryable. Core marks the account as needing a new login. |
+| The token endpoint failed in a way that may pass (down, 5xx, rate limited). | A retryable error such as `unavailable` or `rate_limit`, with `retry_after_ms` when known. Core keeps the credential and tries again later. |
+
+Core sends at most one refresh per credential at a time, and every request that needs the same
+credential renewed waits for that one call. It applies the result only if the stored credential
+has not changed since the refresh began (a new login, a removal); otherwise the result is
+discarded. A refresh call is never cancelled because a client stopped waiting, since a provider
+that rotates refresh tokens ([RFC 9700 section 4.14](https://www.rfc-editor.org/rfc/rfc9700#section-4.14))
+may already have retired the old one: only core shutting down cancels it. Core renews a credential
+at its `refresh_at` (on the first request after it), and when the upstream refuses it with an
+`auth` error (once per request). After a renewal that failed in a way that may pass, core waits 5
+minutes (or the `retry_after_ms` given) before renewing automatically again; after one that gave a
+credential already due for renewal, 30 seconds. An extension never refreshes on its own.
+
 ## Versioning
 
 The version in the handshake covers everything in this document. Additive changes (new optional
@@ -376,6 +491,5 @@ version; anything else needs a new version, and core keeps speaking old versions
 ## What version 0 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
-capabilities in `describe`; login and credential refresh; operations beyond `generate` (token
-counting, model listing); session ownership and WebSocket sessions; draining and hot swap; a
-private data folder per extension.
+capabilities in `describe`; operations beyond `generate` (token counting, model listing); session
+ownership and WebSocket sessions; draining and hot swap; a private data folder per extension.

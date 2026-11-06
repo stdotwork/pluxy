@@ -35,21 +35,46 @@ const HandshakeMarker = "pluxy"
 const (
 	OpDescribe = "describe"
 	OpGenerate = "generate"
+	OpLogin    = "login"
+	OpRefresh  = "refresh"
 )
 
 // Frame types that are not events.
 const (
 	TypeCall           = "call"
 	TypeDescribeResult = "describe.result"
+	// TypeLoginInput is a frame core sends during a login call, after the call frame: what the
+	// user entered for the extension's last prompt.
+	TypeLoginInput = "login.input"
+	// TypeLoginPrompt is a frame an extension sends during a login call: what to show the user.
+	TypeLoginPrompt = "login.prompt"
+	// TypeLoginDone ends a login call successfully, with the new credential.
+	TypeLoginDone = "login.done"
+	// TypeRefreshDone ends a refresh call successfully, with the renewed credential.
+	TypeRefreshDone = "refresh.done"
 )
 
-// Call is the single frame core sends on a connection.
+// Call is the first frame core sends on a connection. For every op but login it is the only
+// one; a login call may be followed by login.input frames.
 type Call struct {
 	Type    string       `json:"type"`
 	ID      string       `json:"id"`
 	Op      string       `json:"op"`
 	Account *Account     `json:"account,omitempty"`
 	Request *llm.Request `json:"request,omitempty"`
+	// Login is what a login call asks for.
+	Login *Login `json:"login,omitempty"`
+	// Input is what the user entered, in a login.input frame.
+	Input map[string]string `json:"input,omitempty"`
+}
+
+// Login is the subject of a login call.
+type Login struct {
+	// Method is one of the login methods the extension's describe lists.
+	Method string `json:"method"`
+	// Input holds what the user entered when starting the login, by the method's input names
+	// (for an api_key login, the key).
+	Input map[string]string `json:"input,omitempty"`
 }
 
 // Account is the account a call runs under.
@@ -59,13 +84,30 @@ type Account struct {
 	Credential *Credential     `json:"credential,omitempty"`
 }
 
-// Credential kinds.
-const CredentialAPIKey = "api_key"
+// Credential kinds core knows. Extensions may use other kinds; core stores them as they are.
+const (
+	// CredentialAPIKey is a static key in APIKey. Core never refreshes it.
+	CredentialAPIKey = "api_key"
+	// CredentialOAuth is an OAuth grant: AccessToken, usually RefreshToken and ExpiresAt.
+	CredentialOAuth = "oauth"
+)
 
-// Credential is the secret a call uses.
+// Credential is the secret a call uses. Every string in it, except Kind, is treated as secret:
+// core removes each from what a call sends back, so keep non-secret values out of it.
 type Credential struct {
-	Kind   string `json:"kind"`
-	APIKey string `json:"api_key,omitempty"`
+	Kind         string `json:"kind"`
+	APIKey       string `json:"api_key,omitempty"`
+	AccessToken  string `json:"access_token,omitempty"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	// ExpiresAt is when AccessToken stops working, in Unix seconds; 0 means it does not
+	// expire or the extension does not know.
+	ExpiresAt int64 `json:"expires_at,omitempty"`
+	// RefreshAt is when core should renew the credential, in Unix seconds. 0: 5 minutes
+	// before ExpiresAt. Providers whose tokens are best renewed earlier (days ahead, say) set it.
+	RefreshAt int64 `json:"refresh_at,omitempty"`
+	// Data holds anything else the provider needs, as a JSON object (an ID token, a
+	// service-account key, an account ID). Core stores and passes it on without reading it.
+	Data json.RawMessage `json:"data,omitempty"`
 }
 
 // Info is the reply to describe.
@@ -74,12 +116,84 @@ type Info struct {
 	Version    string   `json:"version"`
 	Protocol   int      `json:"protocol"`
 	Operations []string `json:"operations"`
+	// LoginMethods are the ways login can add an account; present when Operations includes
+	// login.
+	LoginMethods []LoginMethod `json:"login_methods,omitempty"`
 }
 
-// Reply is a frame an extension sends: an event, or the result of describe.
+// Login method kinds.
+const (
+	// LoginAPIKey: the user enters a key; the extension checks it and returns a credential.
+	LoginAPIKey = "api_key"
+	// LoginBrowser: the user opens a URL and signs in; the extension gets the result on its own
+	// callback or as a pasted redirect URL (OAuth authorization code with PKCE, RFC 7636).
+	LoginBrowser = "browser"
+	// LoginDevice: the user enters a code on another device while the extension polls (OAuth
+	// device authorization grant, RFC 8628).
+	LoginDevice = "device"
+)
+
+// LoginMethod is one way to log in.
+type LoginMethod struct {
+	// Method names it in a login call. Kind says how it works; an extension with two browser
+	// logins (say, two account types) gives them different methods of the same kind.
+	Method string `json:"method"`
+	Kind   string `json:"kind"`
+	Label  string `json:"label,omitempty"`
+	// Inputs are what the user enters when starting the login.
+	Inputs []LoginInput `json:"inputs,omitempty"`
+}
+
+// LoginInput is one value the user enters.
+type LoginInput struct {
+	Name  string `json:"name"`
+	Label string `json:"label,omitempty"`
+	// Secret marks a value that must be hidden as it is typed and never shown again.
+	Secret bool `json:"secret,omitempty"`
+	// Optional marks a value the user may leave empty.
+	Optional bool `json:"optional,omitempty"`
+}
+
+// Prompt kinds.
+const (
+	PromptBrowser = "browser"
+	PromptDevice  = "device"
+	PromptInput   = "input"
+)
+
+// Prompt is what a login asks the user to do.
+type Prompt struct {
+	// Kind is browser (open URL), device (open VerificationURI and enter UserCode) or input
+	// (enter Inputs).
+	Kind    string `json:"kind"`
+	Message string `json:"message,omitempty"`
+	URL     string `json:"url,omitempty"`
+	// For device prompts (RFC 8628 section 3.2).
+	UserCode                string `json:"user_code,omitempty"`
+	VerificationURI         string `json:"verification_uri,omitempty"`
+	VerificationURIComplete string `json:"verification_uri_complete,omitempty"`
+	// ExpiresIn is how long the prompt stays valid, in seconds.
+	ExpiresIn int64 `json:"expires_in,omitempty"`
+	// Inputs the user may send back with login.input. A browser prompt usually accepts the
+	// redirect URL, for when the extension's own callback cannot be reached.
+	Inputs []LoginInput `json:"inputs,omitempty"`
+}
+
+// Grant is the result of a login or refresh.
+type Grant struct {
+	Credential *Credential `json:"credential"`
+	// Label names the account for people, for example the e-mail address it belongs to. Not
+	// secret; login only.
+	Label string `json:"label,omitempty"`
+}
+
+// Reply is a frame an extension sends: an event, the result of describe, or a login or
+// refresh frame.
 type Reply struct {
 	llm.Event
-	Info *Info `json:"info,omitempty"`
+	Info   *Info   `json:"info,omitempty"`
+	Prompt *Prompt `json:"prompt,omitempty"`
+	Grant  *Grant  `json:"grant,omitempty"`
 }
 
 // ErrFrameTooLarge is returned for a frame longer than MaxFrame.
