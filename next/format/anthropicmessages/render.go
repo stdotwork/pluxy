@@ -145,14 +145,21 @@ type builder struct {
 	usage    *llm.Usage
 	losses   []llm.Loss
 	carried  map[string]bool // encrypted reasoning a thinking block's signature holds
+	lost     map[string]bool
+	lossSize int
 }
 
+// lose records a loss once per path. lossSize counts what the losses hold, which comes from
+// upstream data, so an aggregator can bound it with the reply.
 func (b *builder) lose(path, detail string) {
-	for _, l := range b.losses {
-		if l.Path == path {
-			return
-		}
+	if b.lost[path] {
+		return
 	}
+	if b.lost == nil {
+		b.lost = map[string]bool{}
+	}
+	b.lost[path] = true
+	b.lossSize += len(path) + len(detail)
 	b.losses = append(b.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: detail})
 }
 
@@ -510,9 +517,11 @@ const blockOverhead = len(`{"type":"tool_use","id":"","name":"","input":{}},`)
 
 // Size is about how many bytes of content the response holds so far: text, thinking, tool
 // calls, the upstream events it puts a Message together from and the upstream's final
-// Message, before JSON escaping. Callers use it to bound what
+// Message and what it reports as lost, before JSON escaping. Callers use it to bound what
 // they collect.
-func (a *Aggregator) Size() int { return a.size + len(a.final) }
+func (a *Aggregator) Size() int {
+	return a.size + len(a.final) + a.b.lossSize + a.acc.lossSize
+}
 
 // Response returns the response body.
 func (a *Aggregator) Response() ([]byte, error) {
@@ -547,10 +556,12 @@ func (a *Aggregator) Response() ([]byte, error) {
 // accumulator puts a Message together from the events of a Messages stream, keeping every field
 // of the message and its blocks: signatures, citations and blocks the model has no place for.
 type accumulator struct {
-	message map[string]json.RawMessage
-	blocks  map[int]*accBlock
-	usage   json.RawMessage
-	losses  []llm.Loss
+	message  map[string]json.RawMessage
+	blocks   map[int]*accBlock
+	usage    json.RawMessage
+	losses   []llm.Loss
+	lost     map[string]bool
+	lossSize int
 }
 
 type accBlock struct {
@@ -560,12 +571,17 @@ type accBlock struct {
 	inputs  bool
 }
 
+// lose records a loss once per path. lossSize counts what the losses hold, which comes from
+// upstream data, so an aggregator can bound it with the reply.
 func (a *accumulator) lose(path, detail string) {
-	for _, l := range a.losses {
-		if l.Path == path {
-			return
-		}
+	if a.lost[path] {
+		return
 	}
+	if a.lost == nil {
+		a.lost = map[string]bool{}
+	}
+	a.lost[path] = true
+	a.lossSize += len(path) + len(detail)
 	a.losses = append(a.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: detail})
 }
 

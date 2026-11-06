@@ -247,9 +247,12 @@ func runCoreArgs(t *testing.T, cfg map[string]any, args ...string) (string, stri
 	go func() {
 		defer close(addr) // core exited
 		sc := bufio.NewScanner(stderr)
+		// A line can hold a whole reply's translation report; a scanner that stopped at a long
+		// line would leave core blocked writing its log.
+		sc.Buffer(nil, 256<<20)
 		for sc.Scan() {
 			line := sc.Text()
-			t.Log("core:", line)
+			t.Logf("core: %.4096s", line)
 			logs.add(line)
 			if rest, ok := strings.CutPrefix(line, "pluxy: listening on "); ok {
 				select {

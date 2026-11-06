@@ -94,6 +94,8 @@ type builder struct {
 	finish   *llm.Finish
 	usage    *llm.Usage
 	losses   []llm.Loss
+	lost     map[string]bool
+	lossSize int
 	upFormat string
 }
 
@@ -125,12 +127,17 @@ func (b *builder) start(r *llm.ResponseInfo) {
 	}
 }
 
+// lose records a loss once per path. lossSize counts what the losses hold, which comes from
+// upstream data, so an aggregator can bound it with the reply.
 func (b *builder) lose(path, detail string) {
-	for _, l := range b.losses {
-		if l.Path == path {
-			return
-		}
+	if b.lost[path] {
+		return
 	}
+	if b.lost == nil {
+		b.lost = map[string]bool{}
+	}
+	b.lost[path] = true
+	b.lossSize += len(path) + len(detail)
 	b.losses = append(b.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: detail})
 }
 
@@ -490,9 +497,9 @@ func (a *Aggregator) Add(ev llm.Event) {
 const itemOverhead = len(`{"id":"","type":"function_call","status":"completed","call_id":"","name":"","arguments":""},`)
 
 // Size is about how many bytes of content the response holds so far: text, reasoning, tool
-// calls and the upstream's final Response object, before JSON escaping. Callers use it to bound
+// calls, the upstream's final Response object and what it reports as lost, before JSON escaping. Callers use it to bound
 // what they collect.
-func (a *Aggregator) Size() int { return a.size + len(a.final) }
+func (a *Aggregator) Size() int { return a.size + len(a.final) + a.b.lossSize }
 
 // finalResponse returns the Response object in a terminal event's raw: the response of a
 // response.completed or response.incomplete event, or a whole Response object.

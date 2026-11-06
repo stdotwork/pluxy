@@ -215,3 +215,43 @@ func TestGeminiNonStreamingReplyCountsThoughtSignatures(t *testing.T) {
 		})
 	}
 }
+
+// What a reply records as lost (here the type of each Messages content block a Gemini reply
+// has no place for) counts toward core's 64 MiB limit on a non-streamed reply like its content.
+// This is the reviewer's case: 65 block types of 1 MiB each were kept, 68,162,435 bytes, while
+// the reply's size stayed 0.
+func TestGeminiNonStreamingReplyCountsLosses(t *testing.T) {
+	u := newUpstream(t)
+	u.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/messages" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		write := func(event, data string) bool {
+			_, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
+			w.(http.Flusher).Flush()
+			return err == nil && r.Context().Err() == nil
+		}
+		write("message_start", `{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"m","content":[],"usage":{"input_tokens":1,"output_tokens":0}}}`)
+		typ := strings.Repeat("t", 1<<20)
+		for i := range 65 {
+			if !write("content_block_start", fmt.Sprintf(`{"type":"content_block_start","index":%d,"content_block":{"type":"block%d_%s"}}`, i, i, typ)) ||
+				!write("content_block_stop", fmt.Sprintf(`{"type":"content_block_stop","index":%d}`, i)) {
+				return
+			}
+		}
+		write("message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`)
+		write("message_stop", `{"type":"message_stop"}`)
+	})
+	base := startCore(t, u, func(cfg map[string]any) {
+		acct := cfg["extension"].(map[string]any)["accounts"].([]any)[0].(map[string]any)
+		acct["settings"].(map[string]any)["wire_api"] = "messages"
+	})
+	resp := postPath(t, context.Background(), base, "/v1beta/models/gpt-test:generateContent", clientKey, `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`)
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(raw), "64 MiB") {
+		t.Fatalf("status %d, want 502 naming the 64 MiB limit; body starts %.200s", resp.StatusCode, raw)
+	}
+}

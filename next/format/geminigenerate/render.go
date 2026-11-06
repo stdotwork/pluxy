@@ -112,14 +112,21 @@ type builder struct {
 	id, model string
 	upFormat  string
 	losses    []llm.Loss
+	lost      map[string]bool
+	lossSize  int
 }
 
+// lose records a loss once per path. lossSize counts what the losses hold, which comes from
+// upstream data, so an aggregator can bound it with the reply.
 func (b *builder) lose(path, detail string) {
-	for _, l := range b.losses {
-		if l.Path == path {
-			return
-		}
+	if b.lost[path] {
+		return
 	}
+	if b.lost == nil {
+		b.lost = map[string]bool{}
+	}
+	b.lost[path] = true
+	b.lossSize += len(path) + len(detail)
 	b.losses = append(b.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: detail})
 }
 
@@ -433,9 +440,9 @@ func (a *Aggregator) Add(ev llm.Event) {
 const partOverhead = len(`{"functionCall":{"id":"","name":"","args":{}}},`)
 
 // Size is about how many bytes of content the response holds so far: text, thoughts, function
-// calls with their thought signatures and the upstream chunks it keeps, before JSON escaping. Callers use it to bound what
-// they collect.
-func (a *Aggregator) Size() int { return a.size }
+// calls with their thought signatures, the upstream chunks it keeps and what it reports as lost,
+// before JSON escaping. Callers use it to bound what they collect.
+func (a *Aggregator) Size() int { return a.size + a.b.lossSize }
 
 // Response returns the response body.
 func (a *Aggregator) Response() ([]byte, error) {

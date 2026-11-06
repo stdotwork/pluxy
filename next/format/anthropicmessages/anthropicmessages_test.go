@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -958,4 +959,30 @@ func TestStreamDecoderBoundsSignature(t *testing.T) {
 		}
 	}
 	t.Fatal("the decoder took signature deltas beyond MaxSignature")
+}
+
+// What the reply reports as lost counts toward its size, so core's limit on a non-streamed reply
+// bounds it: each reasoning item of a Responses upstream adds a loss of its own.
+func TestAggregatorSizeCountsLosses(t *testing.T) {
+	const n = 1000
+	items := make([]string, n)
+	want := 0
+	for i := range items {
+		items[i] = `{"type":"reasoning","encrypted_content":"x"}`
+		want += len(fmt.Sprintf("output[%d].encrypted_content", i))
+	}
+	evs, err := openairesponses.NewStreamDecoder().Decode([]byte(`{"type":"response.completed","response":{"id":"r1","status":"completed","model":"up","output":[` + strings.Join(items, ",") + `]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := NewAggregator()
+	for _, ev := range evs {
+		a.Add(ev)
+	}
+	if len(a.Losses()) != n {
+		t.Fatalf("%d losses, want %d", len(a.Losses()), n)
+	}
+	if got := a.Size(); got < want {
+		t.Errorf("Size() = %d, want at least the %d bytes of the paths it reports lost", got, want)
+	}
 }
