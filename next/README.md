@@ -23,6 +23,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `extensions/openai-compatible` | Provider extension for OpenAI-compatible APIs with an API key. |
 | `extensions/codex` | Provider extension for OpenAI's Codex models: an OpenAI API key or a ChatGPT subscription (sign-in in a browser or with a device code), with a fake OpenAI login server and Codex endpoint for tests (`codextest`). |
 | `extensions/claude` | Provider extension for Anthropic's Claude, with an API key or a Claude subscription login; `claudetest` is a fake Anthropic for its tests. |
+| `extensions/gemini` | Provider extension for Google's Gemini: the Gemini API with an API key, and Vertex AI with a service account or an express mode key; `geminitest` is a fake Google for its tests. |
 | `examples/scripted` | The tutorial's example extension. |
 | `examples/oauth` | An example provider that signs in by device code, browser (PKCE) or API key and renews its tokens, with a fake OAuth provider for tests (`oauthtest`). |
 | `internal/host`, `internal/server` | Core's extension host and HTTP API (client formats and the management API). |
@@ -171,6 +172,59 @@ not Claude Code is not made to look like Claude Code.
 
 A 429 from a subscription whose usage window is used up blocks the account until the window
 resets; a 529 (overloaded) moves the request to another account.
+
+## Gemini
+
+The Gemini extension (`extensions/gemini`) talks to Google's Gemini models through the Gemini API
+or Vertex AI. Point `extension.manifest` at `extensions/gemini/pluxy-extension.json`. A Gemini API
+key:
+
+```json
+{"id": "gemini", "credential": {"kind": "api_key", "api_key": "AIza..."}}
+```
+
+A Vertex AI account has `vertex` in its settings and either a service account or an express mode
+API key:
+
+```json
+{
+  "id": "vertex",
+  "settings": {"vertex": {"project": "my-project", "location": "us-central1"}},
+  "credential": {"kind": "service_account", "data": {"client_email": "...@my-project.iam.gserviceaccount.com", "private_key": "-----BEGIN PRIVATE KEY-----\n..."}}
+}
+```
+
+The service account's credential holds the secret part of the JSON key Google Cloud gives you
+(`client_email`, `private_key`, and `token_uri` if the key names another token endpoint; it must
+be https, or plain http only to this machine, since the signed assertion goes there). The
+whole key file works too, but core removes every string of a credential from replies, so its
+project ID and other plain fields would be cut out of model output; keep them in settings. The
+extension signs a JWT with the key, trades it for an access token at Google's token endpoint and
+keeps the token until five minutes before it expires, or until Vertex refuses it. Accounts can also be added by login
+(management API, below) with method `api_key` (a Gemini API key, checked by listing a model, or a
+Vertex express key) or `service_account` (the JSON key; the account's settings must name
+`vertex.project`).
+
+| Setting | Meaning |
+| --- | --- |
+| `base_url` | The Gemini API (default `https://generativelanguage.googleapis.com`; requests go to `{base_url}/v1beta/models/{model}:generateContent`), or for Vertex the host that replaces Google's. |
+| `vertex.project` | The Google Cloud project; default the service account key's `project_id` when the credential holds the whole key. |
+| `vertex.location` | Default `global` (`aiplatform.googleapis.com`); `us` and `eu` use the multi-region hosts, any other location `{location}-aiplatform.googleapis.com`. |
+
+A Gemini request goes upstream unchanged. Chat Completions, Responses and Messages requests are
+translated to GenerateContent with every safety filter off (as today's core sends them); their
+reasoning effort becomes a thinking level on Gemini 3 and later and a thinking budget on Gemini 2.5
+(low 1024, medium 8192, high 24576 tokens, within the model's range), with thought summaries
+included. A Messages client's `max_tokens` is left to the model's own limit, since Messages makes
+it mandatory. Each thought signature Gemini sends reaches a Messages client as a thinking block's
+signature and a Responses client as a reasoning item's `encrypted_content`; when the client replays
+it, the signature goes back on the part that follows it, so Gemini 3's function calls keep their
+reasoning between turns. A function call with no signature gets the value Google documents for
+calls it did not issue.
+
+Today's core can also relay Gemini requests through a browser tab signed in to AI Studio, which
+connects to core over a WebSocket. This extension does not: the extension protocol gives a
+program no listener that outlives its calls, and core stops idle programs.
 
 ## Accounts and routing
 

@@ -64,6 +64,9 @@ Providers with their own folder of cases:
 | `openai-responses`, `anthropic`, `gemini` | OpenAI-compatible extension, `wire_api` responses, messages or gemini | a Codex API key without the Codex identity, a Claude API key, a Gemini API key |
 | `codex` | Codex extension, API key | a Codex API key (Codex identity on) |
 | `codex-oauth` | Codex extension, a ChatGPT subscription's OAuth credential | a Codex auth file |
+| `gemini-api-key` | Gemini extension, API key | a Gemini API key |
+| `vertex-api-key` | Gemini extension, Vertex settings and an express mode key | a `vertex` API-key entry |
+| `vertex` | Gemini extension, a Vertex service account | a Vertex service account auth file |
 
 Today's core sends a ChatGPT subscription's requests to `https://chatgpt.com/backend-api/codex`,
 which no setting moves. For `codex-oauth` the runner therefore gives the old core an HTTP proxy
@@ -76,6 +79,13 @@ which the corpus does not fake (no `codex-oauth` case answers 401). The fake tok
 unsigned JWTs that expire in 2100, so neither core renews them, and the old core is given time
 to load its auth file before the case runs. The subscription cases use `gpt-6.1-sol`, because
 today's core serves a subscription only the models in its catalog.
+
+A Vertex service account works the same way: today's core always calls
+`https://aiplatform.googleapis.com` and trades the account's signed JWT for a token at
+`https://oauth2.googleapis.com/token`, so both hosts go through the proxy, and each `vertex`
+case's first upstream reply is the token endpoint's. The new core's account points `base_url`
+and the key's `token_uri` at the fake upstream. The key is an RSA key made for the run; the JWT
+body is volatile. These cases use `gemini-2.5-pro`, a model in today's catalog.
 
 ## Case files
 

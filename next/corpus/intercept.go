@@ -28,7 +28,7 @@ import (
 // reaches the internet.
 
 // InterceptHosts are the hosts (host:port) the intercepting proxy serves.
-var InterceptHosts = []string{"chatgpt.com:443"}
+var InterceptHosts = []string{"chatgpt.com:443", "aiplatform.googleapis.com:443", "oauth2.googleapis.com:443"}
 
 // testCA is the run's certificate authority; its certificate is written to CAFile.
 type testCA struct {

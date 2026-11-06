@@ -236,6 +236,18 @@ func (d *StreamDecoder) part(raw json.RawMessage, out []llm.Event) []llm.Event {
 	if pm == nil {
 		return out
 	}
+	var sig string
+	_ = json.Unmarshal(pm["thoughtSignature"], &sig)
+	if sig != "" && !isThought(pm) {
+		// The part's thought signature becomes a reasoning item of its own, just before the
+		// part, holding the signature as opaque data; a client format with a place for it
+		// keeps it and replays it, and EncodeRequest puts it back on the part that follows.
+		out = d.closeItem(&d.think, out)
+		out = d.closeItem(&d.text, out)
+		var idx int
+		idx, out = d.open(llm.ItemReasoning, out, llm.ItemStart{})
+		out = append(out, llm.Event{Type: llm.EventItemEnd, Index: idx, Opaque: &llm.Opaque{Format: format, Data: sig}})
+	}
 	if fc := object(pm["functionCall"]); fc != nil {
 		var call struct {
 			ID   string `json:"id"`
@@ -274,7 +286,13 @@ func (d *StreamDecoder) part(raw json.RawMessage, out []llm.Event) []llm.Event {
 		if d.think < 0 {
 			d.think, out = d.open(llm.ItemReasoning, out, llm.ItemStart{})
 		}
-		return append(out, llm.Event{Type: llm.EventReasoningDelta, Index: d.think, Delta: text})
+		out = append(out, llm.Event{Type: llm.EventReasoningDelta, Index: d.think, Delta: text})
+		if sig != "" {
+			// A signed thought ends its reasoning item, which carries the signature.
+			out = append(out, llm.Event{Type: llm.EventItemEnd, Index: d.think, Opaque: &llm.Opaque{Format: format, Data: sig}})
+			d.think = -1
+		}
+		return out
 	}
 	out = d.closeItem(&d.think, out)
 	if d.text < 0 {
