@@ -9,10 +9,9 @@ import (
 // the same account while it stays eligible and keep using its prompt cache. It is a soft
 // preference: when the bound account is blocked the request goes elsewhere and the session is
 // bound to the new account. Bindings are scoped by tenant (the client key) and model and
-// expire after ttl without use.
+// expire after the router's TTL without use. The table is part of State, so bindings survive a
+// config reload.
 type affinity struct {
-	ttl time.Duration
-
 	mu       sync.Mutex
 	bindings map[affinityKey]binding
 }
@@ -29,8 +28,8 @@ type binding struct {
 // worth adding if pools see more concurrent sessions than this.
 const maxBindings = 100_000
 
-func newAffinity(ttl time.Duration) *affinity {
-	return &affinity{ttl: ttl, bindings: map[affinityKey]binding{}}
+func newAffinity() *affinity {
+	return &affinity{bindings: map[affinityKey]binding{}}
 }
 
 // lookup returns the account bound to the session, if any.
@@ -44,8 +43,8 @@ func (f *affinity) lookup(k affinityKey, now time.Time) (string, bool) {
 	return b.account, true
 }
 
-// bind binds the session to account and restarts its expiry.
-func (f *affinity) bind(k affinityKey, account string, now time.Time) {
+// bind binds the session to account until ttl from now.
+func (f *affinity) bind(k affinityKey, account string, now time.Time, ttl time.Duration) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, ok := f.bindings[k]; !ok && len(f.bindings) >= maxBindings {
@@ -58,5 +57,16 @@ func (f *affinity) bind(k affinityKey, account string, now time.Time) {
 			return
 		}
 	}
-	f.bindings[k] = binding{account: account, expires: now.Add(f.ttl)}
+	f.bindings[k] = binding{account: account, expires: now.Add(ttl)}
+}
+
+// retain drops the bindings to accounts not in keep.
+func (f *affinity) retain(keep map[string]bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for k, b := range f.bindings {
+		if !keep[b.account] {
+			delete(f.bindings, k)
+		}
+	}
 }

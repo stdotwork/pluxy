@@ -331,13 +331,13 @@ func TestBackoffWithoutRetryAfter(t *testing.T) {
 	e := &llm.Error{Code: llm.CodeRateLimit, Retryable: true}
 	var got []time.Duration
 	for range 3 {
-		st.failure(a, "m", e, now)
+		st.failure(a, "m", e, now, 0)
 		until, _, _ := st.availability(a, "m", now)
 		got = append(got, until.Sub(now))
 		now = until
 	}
-	st.failure(a, "m", e, now) // step 4 starts at now: 8s step, 4s block
-	st.failure(a, "m", e, now) // while live: same step, deadline unchanged
+	st.failure(a, "m", e, now, 0) // step 4 starts at now: 8s step, 4s block
+	st.failure(a, "m", e, now, 0) // while live: same step, deadline unchanged
 	until, _, _ := st.availability(a, "m", now)
 	got = append(got, until.Sub(now))
 	want := []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second}
@@ -351,8 +351,8 @@ func TestBlockOnlyExtends(t *testing.T) {
 	st := NewState()
 	a := &Account{ID: "a"}
 	now := time.Unix(0, 0)
-	st.failure(a, "m", &llm.Error{Code: llm.CodeRateLimit, RetryAfterMS: 60_000}, now)
-	st.failure(a, "m", &llm.Error{Code: llm.CodeRateLimit, RetryAfterMS: 1_000}, now)
+	st.failure(a, "m", &llm.Error{Code: llm.CodeRateLimit, RetryAfterMS: 60_000}, now, 0)
+	st.failure(a, "m", &llm.Error{Code: llm.CodeRateLimit, RetryAfterMS: 1_000}, now, 0)
 	if until, _, _ := st.availability(a, "m", now); until.Sub(now) != time.Minute {
 		t.Errorf("block = %v, want 1m", until.Sub(now))
 	}
@@ -620,4 +620,71 @@ func TestRenewedAccountIsTriedAgain(t *testing.T) {
 	h.on("b", fail(llm.Error{Code: llm.CodeInvalidRequest, Status: 400, Scope: llm.ScopeRequest, Message: "b rejected request"}))
 	h.runOK("m")
 	h.wantAttempts("a", "a")
+}
+
+// reload builds the router a config reload would: new accounts over the same state, carried
+// over by Retain with "same" meaning same settings.
+func (h *harness) reload(cfg Config, accounts ...Account) {
+	h.t.Helper()
+	prev := make([]Account, len(h.r.accounts))
+	for i, a := range h.r.accounts {
+		prev[i] = *a
+	}
+	h.r.state.Retain(prev, accounts, func(old, cur *Account) bool { return string(old.Settings) == string(cur.Settings) })
+	r, err := New(cfg, accounts, h.attempt, h.r.state)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	r.now, r.sleep, r.rand = h.r.now, h.r.sleep, h.r.rand
+	h.r = r
+}
+
+func withSettings(a Account, s string) Account { a.Settings = []byte(s); return a }
+
+// After a reload, an attempt that began on an account before the account changed records
+// nothing on the changed account.
+func TestRetainIgnoresOutcomesFromBeforeAChange(t *testing.T) {
+	h := newHarness(t, Config{Strategy: StrategyFillFirst}, accts("a", "b")...)
+	h.on("a", script{start(), rateLimited(time.Minute)[0]}) // a 429 after the reply started
+	older := h.r.Generate(context.Background(), h.req("m"))
+	older.Next() // attempt on a, reply started
+	h.reload(Config{Strategy: StrategyFillFirst}, withSettings(Account{ID: "a"}, `{"base_url":"elsewhere"}`), Account{ID: "b"})
+	older.Next() // the old attempt now fails with a 429
+	older.Close()
+	h.on("a", ok())
+	h.runOK("m")
+	h.wantAttempts("a", "a")
+}
+
+// Changed accounts lose their session bindings and the blocks on an endpoint label only they
+// named; weighted rotation starts afresh when weights change.
+func TestRetainDropsWhatBelongedToChangedAccounts(t *testing.T) {
+	ep := func(id, endpoint string) Account { return Account{ID: id, Endpoint: endpoint} }
+	h := newHarness(t, Config{SessionAffinity: &AffinityConfig{}}, ep("a", "shared"), ep("b", "solo"))
+	s1 := Request{LLM: llm.Request{Model: "m"}, Tenant: "t", Session: "s1"}
+	h.run(s1) // a, bound
+	seq, _ := h.r.state.reserve(h.r.accounts[1], "m", h.now)
+	h.r.state.failure(h.r.accounts[0], "m", &llm.Error{Code: llm.CodeUpstream, Scope: llm.ScopeEndpoint, RetryAfterMS: 60_000}, h.now, seq)
+	h.r.state.end(h.r.accounts[1])
+
+	// a changes; a new account c joins the "shared" label. The outage on "shared" was a's
+	// endpoint, so c starts unblocked, and s1 is no longer bound to the changed a.
+	c := ep("c", "shared")
+	c.Priority = 1
+	h.reload(Config{SessionAffinity: &AffinityConfig{}}, withSettings(ep("a", "shared"), `{"x":1}`), ep("b", "solo"), c)
+	h.attempts = nil
+	h.run(s1)
+	h.wantAttempts("c")
+
+	// Weighted: a big weight scale, then a small one; the balances must not carry over.
+	big := 1_000_000_000
+	w := func(id string, n int) Account { return Account{ID: id, Weight: &n} }
+	h = newHarness(t, Config{Strategy: StrategyWeighted}, w("a", big), w("b", big))
+	h.runOK("m")
+	h.reload(Config{Strategy: StrategyWeighted}, w("a", 1), w("b", 1))
+	h.attempts = nil
+	for range 4 {
+		h.runOK("m")
+	}
+	h.wantAttempts("a", "b", "a", "b")
 }

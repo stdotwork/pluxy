@@ -158,3 +158,65 @@ send it as a bearer token. With a management key set, `extension.accounts` may b
 | `DELETE /accounts/{id}` | Removes the account and its credential. |
 
 Accounts set in the config are listed but changed only in the config.
+
+## Reloading config and swapping extensions
+
+Core reloads its config file without a restart: when the file changes (it looks every second;
+`-watch-interval` changes that, `0` turns it off), on `SIGHUP`, or on `POST
+/v0/management/reload`. A reload reads the file, validates it, prepares what it needs and only
+then switches to it in one step; requests that already started finish on the config and
+extension version they started with. A file core has already seen, or an empty one (an editor
+in the middle of saving), is skipped; the file watcher waits until the file has stopped changing.
+A reload that fails at any step, from broken JSON to an extension that does not start, leaves
+the running config in place, and management shows why. `listen` and `credentials_dir` cannot
+change without a restart.
+
+When the extension's manifest or program changes, a reload starts the new version and waits for
+its handshake before switching. The old version then drains: it finishes the requests that
+started on it and stops, at the latest after `drain_timeout_ms`. Routing state (blocks,
+cooldowns, session bindings, the round-robin turn) carries over for every account whose ID,
+extension and `settings` stay the same; an account whose `settings` change starts fresh.
+Accounts added by login stay in the credential store through reloads and serve requests on every
+version of the extension that logged them in.
+
+An extension's program runs only while it is needed: core starts it at load to check it, stops
+it after `idle_stop_ms` without requests, and starts it again for the next request. A program
+that exits on its own is restarted after a backoff that doubles with each crash in a row; after
+`quarantine_after` crashes in a row it is quarantined: requests fail with a 503 until a reload
+starts it afresh.
+
+```json
+{
+  "management_key": "choose-a-management-key",
+  "extension": {
+    "manifest": "...",
+    "accounts": ["..."],
+    "idle_stop_ms": 600000,
+    "drain_timeout_ms": 600000,
+    "restart": {"backoff_ms": 1000, "max_backoff_ms": 60000, "quarantine_after": 5, "stable_ms": 600000}
+  }
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `management_key` | Bearer token for the management API. Without it the management API is off. |
+| `idle_stop_ms` | Stop the program after this long without requests. Default 10 minutes; 0 keeps it running. |
+| `drain_timeout_ms` | Longest a replaced version may keep finishing its requests. Default 10 minutes. |
+| `restart.backoff_ms` | Wait before the first restart after a crash; doubles per crash in a row. Default 1 second. |
+| `restart.max_backoff_ms` | Cap on that wait. Default 1 minute. |
+| `restart.quarantine_after` | Crashes in a row that quarantine the extension. Default 5. |
+| `restart.stable_ms` | A program that ran this long before crashing starts a new count. Default 10 minutes. |
+
+`./pluxy -safe-mode` starts core with no extensions: client requests fail with a 503, and the
+config can still be checked and reloaded through management.
+
+### Management API
+
+Beside the account calls [above](#accounts-added-by-login), management serves these. Every call
+needs `Authorization: Bearer <management_key>`.
+
+| Call | What it does |
+| --- | --- |
+| `GET /v0/management/status` | `desired` (the newest config version core has seen, with `error` when it was refused) and `active` (the one serving), each with `revision` and `hash`; `extensions`, one entry per running generation with `state` (`starting`, `active`, `idle`, `crashed`, `quarantined`, `draining`, `stopped`), `current`, `pid`, `restarts`, `last_error` and `active_requests`; `safe_mode`. |
+| `POST /v0/management/reload` | Reload now. 200 with the status when the new revision is active; 422 with the status when it was refused. |

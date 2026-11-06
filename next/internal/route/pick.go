@@ -26,12 +26,16 @@ const (
 // Strategies lists the valid strategy names.
 var Strategies = []string{StrategyRoundRobin, StrategyWeighted, StrategyFillFirst, StrategyLeastActive}
 
-// picker chooses among eligible accounts. Its state is kept per model, so rotation for one
-// model does not disturb another.
+// picker chooses among eligible accounts. Its memory is kept per model, so rotation for one
+// model does not disturb another, and lives in State, so rotation carries on across a reload.
 type picker struct {
 	strategy string
 	order    map[string]int // account ID -> position in config
+	*rotation
+}
 
+// rotation is a picker's memory.
+type rotation struct {
 	mu        sync.Mutex
 	last      map[string]string           // model -> account ID picked last
 	current   map[string]map[string]int64 // model -> account ID -> smooth weighted current weight
@@ -39,14 +43,22 @@ type picker struct {
 	lastSweep time.Time
 }
 
-func newPicker(strategy string, accounts []*Account) (*picker, error) {
+func newRotation() *rotation {
+	return &rotation{last: map[string]string{}, current: map[string]map[string]int64{}, used: map[string]time.Time{}}
+}
+
+// newPicker returns a picker for accounts; mem is its memory, nil for a fresh one.
+func newPicker(strategy string, accounts []*Account, mem *rotation) (*picker, error) {
 	if strategy == "" {
 		strategy = StrategyRoundRobin
 	}
 	if !slices.Contains(Strategies, strategy) {
 		return nil, fmt.Errorf("unknown routing strategy %q (want one of %v)", strategy, Strategies)
 	}
-	p := &picker{strategy: strategy, order: map[string]int{}, last: map[string]string{}, current: map[string]map[string]int64{}, used: map[string]time.Time{}}
+	if mem == nil {
+		mem = newRotation()
+	}
+	p := &picker{strategy: strategy, order: map[string]int{}, rotation: mem}
 	for i, a := range accounts {
 		p.order[a.ID] = i
 	}
@@ -128,11 +140,10 @@ func (p *picker) pick(model string, cands []*Account, active func(string) int, n
 // after returns the first candidate that comes after the account picked last for model, in
 // configured order, wrapping around.
 func (p *picker) after(model string, cands []*Account) *Account {
-	last, ok := p.last[model]
-	if !ok {
+	pos, ok := p.order[p.last[model]]
+	if !ok { // none yet, or one a reload removed
 		return cands[0]
 	}
-	pos := p.order[last]
 	for _, c := range cands {
 		if p.order[c.ID] > pos {
 			return c

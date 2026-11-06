@@ -57,7 +57,7 @@ type AffinityConfig struct {
 
 // Validate checks the strategy name and limits.
 func (c *Config) Validate() error {
-	if _, err := newPicker(c.Strategy, nil); err != nil {
+	if _, err := newPicker(c.Strategy, nil, nil); err != nil {
 		return err
 	}
 	if c.MaxAttempts < 0 || c.MaxAccounts < 0 || c.MaxWaitMS < 0 {
@@ -109,7 +109,8 @@ type Router struct {
 	attempt  AttemptFunc
 	state    *State
 	picker   *picker
-	affinity *affinity
+	affinity *affinity // nil without session affinity
+	ttl      time.Duration
 
 	mu       sync.RWMutex // guards accounts and creds
 	accounts []*Account
@@ -123,7 +124,8 @@ type Router struct {
 	beforeReserve func(account string)
 }
 
-// New returns a router for accounts. state may be shared with other routers; nil starts empty.
+// New returns a router for accounts. state may be shared with other routers, such as the
+// router of the config a reload replaces (see State.Retain); nil starts empty.
 func New(cfg Config, accounts []Account, attempt AttemptFunc, state *State) (*Router, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -136,7 +138,7 @@ func New(cfg Config, accounts []Account, attempt AttemptFunc, state *State) (*Ro
 	if r.accounts, err = accountList(accounts); err != nil {
 		return nil, err
 	}
-	if r.picker, err = newPicker(cfg.Strategy, r.accounts); err != nil {
+	if r.picker, err = newPicker(cfg.Strategy, r.accounts, state.rotation); err != nil {
 		return nil, err
 	}
 	if cfg.SessionAffinity != nil {
@@ -144,7 +146,7 @@ func New(cfg Config, accounts []Account, attempt AttemptFunc, state *State) (*Ro
 		if ttl == 0 {
 			ttl = time.Hour
 		}
-		r.affinity = newAffinity(ttl)
+		r.affinity, r.ttl = state.affinity, ttl
 	}
 	return r, nil
 }
@@ -182,6 +184,16 @@ func (r *Router) SetAccounts(accounts []Account) error {
 		}
 	}
 	return nil
+}
+
+// Accounts returns the accounts requests are routed over now.
+func (r *Router) Accounts() []Account {
+	accounts, _ := r.snapshot()
+	out := make([]Account, len(accounts))
+	for i, a := range accounts {
+		out[i] = *a
+	}
+	return out
 }
 
 // UseCredentials sets where managed accounts' credentials come from.
@@ -251,7 +263,7 @@ func (c *call) Next() llm.Event {
 		if ev.Type == llm.EventFinish {
 			c.r.state.success(c.acct, c.req.LLM.Model, c.seq)
 		} else {
-			c.r.state.failure(c.acct, c.req.LLM.Model, ev.Error, c.r.now())
+			c.r.state.failure(c.acct, c.req.LLM.Model, ev.Error, c.r.now(), c.seq)
 		}
 		c.release()
 	}
@@ -438,7 +450,7 @@ func (c *call) try(a *Account, seq uint64) (ev llm.Event, started bool) {
 			call.Credential, version, e = c.creds.Credential(c.ctx, a.ID)
 		}
 		if e != nil {
-			r.state.failure(a, c.req.LLM.Model, e, r.now())
+			r.state.failure(a, c.req.LLM.Model, e, r.now(), seq)
 			r.state.end(a)
 			return errorEvent(e), false
 		}
@@ -460,13 +472,13 @@ func (c *call) try(a *Account, seq uint64) (ev llm.Event, started bool) {
 				return ev, false
 			}
 		}
-		r.state.failure(a, c.req.LLM.Model, ev.Error, r.now())
+		r.state.failure(a, c.req.LLM.Model, ev.Error, r.now(), seq)
 		r.state.end(a)
 		return ev, false
 	}
 	c.cur, c.acct, c.seq = s, a, seq
 	if r.affinity != nil && c.req.Session != "" {
-		r.affinity.bind(c.affinityKey(), a.ID, r.now())
+		r.affinity.bind(c.affinityKey(), a.ID, r.now(), r.ttl)
 	}
 	if ev.Terminal() {
 		// A reply that is finished in its first event: record it now.

@@ -46,53 +46,66 @@ type AccountView struct {
 	UpdatedAt    *time.Time `json:"updated_at,omitempty"`
 }
 
-type management struct {
-	cfg   *Config
+// Management is the management API, version 0. Every call needs the management key of the
+// config active when it arrives, as a bearer token; while that config sets none, the API is not
+// served.
+type Management struct {
+	mux   *http.ServeMux
+	cfg   func() *Config
 	creds *cred.Manager
 }
 
-// addManagement serves the management API on mux, when the config sets a management key.
-func addManagement(mux *http.ServeMux, cfg *Config, creds *cred.Manager) {
-	if cfg.ManagementKey == "" || creds == nil {
+// NewManagement returns the management API with its account and login calls. cfg returns the
+// active config.
+func NewManagement(cfg func() *Config, creds *cred.Manager) *Management {
+	m := &Management{mux: http.NewServeMux(), cfg: cfg, creds: creds}
+	m.Handle("GET /accounts", m.list)
+	m.Handle("POST /accounts", m.add)
+	m.Handle("PATCH /accounts/{id}", m.patch)
+	m.Handle("DELETE /accounts/{id}", m.remove)
+	m.Handle("POST /accounts/{id}/refresh", m.refresh)
+	m.Handle("POST /accounts/{id}/login", m.reauth)
+	m.Handle("GET /logins/{id}", m.login)
+	m.Handle("POST /logins/{id}/input", m.input)
+	m.Handle("DELETE /logins/{id}", m.cancel)
+	return m
+}
+
+// Handle adds a call: pattern is a method and a path under ManagementPrefix, such as
+// "GET /accounts".
+func (m *Management) Handle(pattern string, h http.HandlerFunc) {
+	method, path, _ := strings.Cut(pattern, " ")
+	m.mux.HandleFunc(method+" "+ManagementPrefix+path, h)
+}
+
+func (m *Management) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	key := m.cfg().ManagementKey
+	if key == "" {
+		http.NotFound(w, r)
 		return
 	}
-	m := &management{cfg: cfg, creds: creds}
-	handle := func(pattern string, h func(w http.ResponseWriter, r *http.Request)) {
-		method, path, _ := strings.Cut(pattern, " ")
-		mux.HandleFunc(method+" "+ManagementPrefix+path, func(w http.ResponseWriter, r *http.Request) {
-			if !m.authorized(r) {
-				writeManagementError(w, http.StatusUnauthorized, "unauthorized", "missing or invalid management key")
-				return
-			}
-			w.Header().Set("Cache-Control", "no-store")
-			h(w, r)
-		})
-	}
-	handle("GET /accounts", m.list)
-	handle("POST /accounts", m.add)
-	handle("PATCH /accounts/{id}", m.patch)
-	handle("DELETE /accounts/{id}", m.remove)
-	handle("POST /accounts/{id}/refresh", m.refresh)
-	handle("POST /accounts/{id}/login", m.reauth)
-	handle("GET /logins/{id}", m.login)
-	handle("POST /logins/{id}/input", m.input)
-	handle("DELETE /logins/{id}", m.cancel)
-}
-
-func (m *management) authorized(r *http.Request) bool {
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	return ok && token != "" && subtle.ConstantTimeCompare([]byte(token), []byte(m.cfg.ManagementKey)) == 1
+	if !ok || token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(key)) != 1 {
+		writeManagementError(w, http.StatusUnauthorized, "unauthorized", "missing or invalid management key")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	m.mux.ServeHTTP(w, r)
 }
 
-func (m *management) configured(id string) (route.Account, bool) {
-	i := slices.IndexFunc(m.cfg.Extension.Accounts, func(a route.Account) bool { return a.ID == id })
+func (m *Management) configured(id string) (route.Account, bool) {
+	return configured(m.cfg(), id)
+}
+
+func configured(cfg *Config, id string) (route.Account, bool) {
+	i := slices.IndexFunc(cfg.Extension.Accounts, func(a route.Account) bool { return a.ID == id })
 	if i < 0 {
 		return route.Account{}, false
 	}
-	return m.cfg.Extension.Accounts[i], true
+	return cfg.Extension.Accounts[i], true
 }
 
-func (m *management) view(r cred.Record) AccountView {
+func (m *Management) view(r cred.Record) AccountView {
 	v := AccountView{ID: r.ID, Source: "login", Extension: r.Extension, Kind: r.Credential.Kind, State: r.State,
 		Disabled: r.Disabled, Reason: r.Reason, Label: r.Label, Version: r.Version, ExpiresAt: r.Credential.ExpiresAt,
 		Refreshable: m.creds.Refreshable(r), RenewalError: m.creds.LastRenewalError(r)}
@@ -101,9 +114,10 @@ func (m *management) view(r cred.Record) AccountView {
 	return v
 }
 
-func (m *management) list(w http.ResponseWriter, r *http.Request) {
+func (m *Management) list(w http.ResponseWriter, r *http.Request) {
+	cfg := m.cfg()
 	views := []AccountView{}
-	for _, a := range m.cfg.Extension.Accounts {
+	for _, a := range cfg.Extension.Accounts {
 		v := AccountView{ID: a.ID, Source: "config", State: cred.StateActive}
 		if a.Credential != nil {
 			v.Kind = a.Credential.Kind
@@ -111,7 +125,7 @@ func (m *management) list(w http.ResponseWriter, r *http.Request) {
 		views = append(views, v)
 	}
 	for _, rec := range m.creds.Records() {
-		if _, shadowed := m.configured(rec.ID); !shadowed {
+		if _, shadowed := configured(cfg, rec.ID); !shadowed {
 			views = append(views, m.view(rec))
 		}
 	}
@@ -126,7 +140,7 @@ type addRequest struct {
 	Input  map[string]string `json:"input,omitempty"`
 }
 
-func (m *management) add(w http.ResponseWriter, r *http.Request) {
+func (m *Management) add(w http.ResponseWriter, r *http.Request) {
 	var req addRequest
 	if !readJSON(w, r, &req) {
 		return
@@ -142,7 +156,7 @@ func (m *management) add(w http.ResponseWriter, r *http.Request) {
 	m.startLogin(w, r, cred.LoginRequest{Account: req.Account, Method: req.Method, Input: req.Input})
 }
 
-func (m *management) reauth(w http.ResponseWriter, r *http.Request) {
+func (m *Management) reauth(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var req struct {
 		Method string            `json:"method"`
@@ -154,7 +168,7 @@ func (m *management) reauth(w http.ResponseWriter, r *http.Request) {
 	m.startLogin(w, r, cred.LoginRequest{Account: route.Account{ID: id}, Method: req.Method, Input: req.Input, Reauth: true})
 }
 
-func (m *management) startLogin(w http.ResponseWriter, r *http.Request, req cred.LoginRequest) {
+func (m *Management) startLogin(w http.ResponseWriter, r *http.Request, req cred.LoginRequest) {
 	if _, ok := m.configured(req.Account.ID); ok {
 		writeManagementError(w, http.StatusConflict, "conflict", fmt.Sprintf("account %q is set in core's config", req.Account.ID))
 		return
@@ -171,7 +185,7 @@ func (m *management) startLogin(w http.ResponseWriter, r *http.Request, req cred
 	writeJSON(w, http.StatusAccepted, map[string]any{"login": l})
 }
 
-func (m *management) login(w http.ResponseWriter, r *http.Request) {
+func (m *Management) login(w http.ResponseWriter, r *http.Request) {
 	l, ok := m.creds.Login(r.PathValue("id"))
 	if !ok {
 		writeCredError(w, cred.ErrNotFound)
@@ -180,7 +194,7 @@ func (m *management) login(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"login": l})
 }
 
-func (m *management) input(w http.ResponseWriter, r *http.Request) {
+func (m *Management) input(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Input map[string]string `json:"input"`
 	}
@@ -194,7 +208,7 @@ func (m *management) input(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (m *management) cancel(w http.ResponseWriter, r *http.Request) {
+func (m *Management) cancel(w http.ResponseWriter, r *http.Request) {
 	if err := m.creds.CancelLogin(r.PathValue("id")); err != nil {
 		writeCredError(w, err)
 		return
@@ -203,7 +217,7 @@ func (m *management) cancel(w http.ResponseWriter, r *http.Request) {
 }
 
 // stored refuses changes to config accounts, which only the config changes.
-func (m *management) stored(w http.ResponseWriter, id string) bool {
+func (m *Management) stored(w http.ResponseWriter, id string) bool {
 	if _, ok := m.configured(id); ok {
 		writeManagementError(w, http.StatusConflict, "conflict", fmt.Sprintf("account %q is set in core's config; change it there", id))
 		return false
@@ -211,7 +225,7 @@ func (m *management) stored(w http.ResponseWriter, id string) bool {
 	return true
 }
 
-func (m *management) patch(w http.ResponseWriter, r *http.Request) {
+func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var req struct {
 		Disabled *bool `json:"disabled"`
@@ -231,7 +245,7 @@ func (m *management) patch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"account": m.view(rec)})
 }
 
-func (m *management) remove(w http.ResponseWriter, r *http.Request) {
+func (m *Management) remove(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if !m.stored(w, id) {
 		return
@@ -243,7 +257,7 @@ func (m *management) remove(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (m *management) refresh(w http.ResponseWriter, r *http.Request) {
+func (m *Management) refresh(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if !m.stored(w, id) {
 		return
