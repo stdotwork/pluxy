@@ -22,13 +22,16 @@ func TestApplyEffort(t *testing.T) {
 		{"claude-fable-5-1", "minimal", 32000, `{"thinking":{"type":"adaptive"},"output_config":{"effort":"low"}}`},
 		{"claude-opus-4-6", "auto", 32000, `{"thinking":{"type":"adaptive"}}`},
 		{"claude-sonnet-4-5", "medium", 32000, `{"thinking":{"type":"enabled","budget_tokens":8192}}`},
-		{"claude-test", "high", 32000, `{"thinking":{"type":"enabled","budget_tokens":24576}}`},
+		{"claude-test", "high", 32000, ""},
+		{"claude-opus-4-1", "high", 32000, `{"thinking":{"type":"enabled","budget_tokens":24576}}`},
 		{"claude-3-7-sonnet-latest", "low", 32000, `{"thinking":{"type":"enabled","budget_tokens":1024}}`},
-		{"claude-test", "max", 32000, `{"thinking":{"type":"enabled","budget_tokens":31999}}`},
-		{"claude-test", "auto", 32000, `{"thinking":{"type":"enabled","budget_tokens":1024}}`},
-		{"claude-test", "none", 32000, `{"thinking":{"type":"disabled"}}`},
-		{"claude-test", "low", 1024, ""},
+		{"claude-sonnet-4", "max", 32000, `{"thinking":{"type":"enabled","budget_tokens":31999}}`},
+		{"claude-sonnet-4", "auto", 32000, `{"thinking":{"type":"enabled","budget_tokens":1024}}`},
+		{"claude-sonnet-4", "none", 32000, `{"thinking":{"type":"disabled"}}`},
+		{"claude-sonnet-4", "low", 1024, ""},
 		{"claude-opus-4-6", "unheard-of", 32000, ""},
+		{"claude-3-5-sonnet-latest", "high", 32000, ""},
+		{"gpt-5", "high", 32000, ""},
 	} {
 		body := []byte(`{"model":"` + c.model + `","max_tokens":` + itoa(c.maxTokens) + `}`)
 		out, applied, err := applyEffort(body, c.model, c.effort)

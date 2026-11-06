@@ -1,0 +1,50 @@
+{
+  "description": "A client request with no client credentials at all (no x-api-key, no bearer token) is refused before any upstream request.",
+  "source": [
+    "core/sdk/access/errors.go (AuthErrorCodeNoCredentials, AuthErrorCodeInvalidCredential)"
+  ],
+  "client": {
+    "path": "/v1/messages",
+    "auth": "none",
+    "headers": {"anthropic-version":"2023-06-01"},
+    "body": {
+      "model": "claude-test",
+      "max_tokens": 256,
+      "messages": [{"role":"user","content":"Say hello"}]
+    }
+  },
+  "exceptions": [
+    {
+      "path": "client.body.error",
+      "kind": "intended",
+      "reason": "The old core answers a missing client key with {\"error\": \"<text>\"} on every route; the new core answers a Messages client with Anthropic's error envelope (type error, error.type authentication_error).",
+      "want": {"message":"missing or invalid API key","type":"authentication_error"}
+    },
+    {
+      "path": "client.body.type",
+      "kind": "intended",
+      "reason": "The old core answers a missing client key with {\"error\": \"<text>\"} on every route; the new core answers a Messages client with Anthropic's error envelope (type error, error.type authentication_error).",
+      "want": "error"
+    },
+    {
+      "path": "client.headers.Content-Type",
+      "kind": "intended",
+      "reason": "The old core answers a missing client key with {\"error\": \"<text>\"} on every route; the new core answers a Messages client with Anthropic's error envelope (type error, error.type authentication_error).",
+      "want": "application/json"
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {"error":"Missing API key"},
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8"
+      },
+      "status": 401
+    },
+    "upstream": []
+  }
+}

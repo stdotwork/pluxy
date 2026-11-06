@@ -171,13 +171,18 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	}
 	send := &reporting{Stream: out, tr: tr}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.BaseURL+"/v1/messages", bytes.NewReader(body))
+	// ?beta=true is how Anthropic's SDKs, Claude Code among them, call the API with betas.
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.BaseURL+"/v1/messages?beta=true", bytes.NewReader(body))
 	if err != nil {
 		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if call.Request.Stream {
 		req.Header.Set("Accept", "text/event-stream")
+		// An uncompressed stream reaches the client event by event.
+		req.Header.Set("Accept-Encoding", "identity")
+	} else {
+		req.Header.Set("Accept", "application/json")
 	}
 	req.Header.Set("Anthropic-Version", anthropicVersion)
 	if tr.Passthrough {
@@ -243,6 +248,9 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 	}
 	body, losses, err := anthropicmessages.EncodeRequest(req)
 	if err != nil {
+		return nil, nil, err
+	}
+	if body, err = addCacheBreakpoints(body); err != nil {
 		return nil, nil, err
 	}
 	if req.Options.ReasoningEffort != "" {

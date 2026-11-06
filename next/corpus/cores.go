@@ -263,6 +263,47 @@ var Providers = map[string]Provider{
 			return "openai-compatible", accounts
 		},
 	},
+	// Anthropic's Claude with an API key: the new core's Claude extension against today's Claude
+	// API-key provider, both with a custom base URL. Today's core cannot point a Claude
+	// subscription login at a fake upstream (its OAuth accounts always call api.anthropic.com),
+	// so subscription behaviour is checked by the e2e tests instead.
+	"claude": {
+		OldCore: func(upstreamURL string, models, keys []string) map[string]any {
+			var ms []any
+			for _, m := range models {
+				ms = append(ms, map[string]any{"name": m, "alias": m})
+			}
+			var ks []any
+			for _, k := range keys {
+				ks = append(ks, map[string]any{"api-key": k})
+			}
+			return map[string]any{"claude": []any{map[string]any{
+				"name":     "corpus",
+				"base-url": upstreamURL,
+				"keys":     ks,
+				"models":   ms,
+			}}}
+		},
+		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
+			var accounts []any
+			for i, k := range keys {
+				id := "corpus"
+				if i > 0 {
+					id = fmt.Sprintf("corpus-%d", i+1)
+				}
+				acct := map[string]any{
+					"id":         id,
+					"settings":   map[string]any{"base_url": upstreamURL},
+					"credential": map[string]any{"kind": "api_key", "api_key": k},
+				}
+				if len(models) > 0 {
+					acct["models"] = models
+				}
+				accounts = append(accounts, acct)
+			}
+			return "claude", accounts
+		},
+	},
 	// An upstream that speaks Gemini GenerateContent with an API key. The new core uses the
 	// OpenAI-compatible extension with wire_api "gemini" (the Gemini provider extension comes
 	// later); today's core uses a Gemini API key with a custom base URL. Both send requests to
@@ -310,6 +351,7 @@ var Providers = map[string]Provider{
 var NewCoreExtensions = map[string]string{
 	"openai-compatible": "./extensions/openai-compatible",
 	"codex":             "./extensions/codex",
+	"claude":            "./extensions/claude",
 }
 
 // BuildNewCore builds the new core and its extensions into dir. moduleRoot is the next/

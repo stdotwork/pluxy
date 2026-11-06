@@ -76,6 +76,9 @@ type item struct {
 	name   string
 	text   strings.Builder
 	done   bool
+	// opaque is a reasoning item's opaque record from another provider (an Anthropic thinking
+	// signature), written as its encrypted_content so the client can replay it.
+	opaque string
 }
 
 // builder rebuilds Responses output from model events whose upstream format is not Responses.
@@ -173,7 +176,10 @@ func (b *builder) doneItem(it *item, final bool) obj {
 		return obj{"id": it.id, "type": "message", "status": b.itemStatus(), "role": "assistant", "content": []any{textPart(it.text.String())}}
 	case llm.ItemReasoning:
 		o := obj{"id": it.id, "type": "reasoning", "summary": []any{obj{"type": "summary_text", "text": it.text.String()}}}
-		if !final {
+		switch {
+		case it.opaque != "":
+			o["encrypted_content"] = it.opaque
+		case !final:
 			o["encrypted_content"] = ""
 		}
 		return o
@@ -367,6 +373,9 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		}
 		return s.emit("response.function_call_arguments.delta", obj{"output_index": ev.Index, "item_id": it.id, "delta": ev.Delta})
 	case llm.EventItemEnd:
+		if it := b.items[ev.Index]; it != nil && ev.Opaque != nil {
+			it.opaque = ev.Opaque.Data
+		}
 		s.pending = append(s.pending, ev.Index)
 		return nil
 	case llm.EventNative:
@@ -461,6 +470,9 @@ func (a *Aggregator) Add(ev llm.Event) {
 		b.items[ev.Index].text.WriteString(ev.Delta)
 	case llm.EventItemEnd:
 		b.items[ev.Index].done = true
+		if ev.Opaque != nil {
+			b.items[ev.Index].opaque = ev.Opaque.Data
+		}
 	case llm.EventNative:
 		if b.upFormat != format {
 			b.lose("choices", "reply data in "+b.upFormat+" with no place in a Response")

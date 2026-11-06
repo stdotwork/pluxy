@@ -37,34 +37,48 @@ var adaptiveEfforts = map[string]string{
 }
 
 // claudeModel reads a model name such as claude-opus-4-6 or claude-sonnet-5-5-20261001: its
-// family, major and minor version.
-var claudeModel = regexp.MustCompile(`^claude-(?:opus|sonnet|haiku|fable)-(\d+)(?:-(\d{1,2}))?(?:$|-)`)
+// major and minor version. oldClaudeModel reads the older form, such as claude-3-7-sonnet-latest.
+var (
+	claudeModel    = regexp.MustCompile(`^claude-(?:opus|sonnet|haiku|fable)-(\d+)(?:-(\d{1,2}))?(?:$|-)`)
+	oldClaudeModel = regexp.MustCompile(`^claude-(\d+)(?:-(\d))?-(?:opus|sonnet|haiku)(?:$|-)`)
+)
 
-// adaptive reports whether model thinks adaptively: Claude 4.6 and later.
+// claudeVersion reads the version of a Claude model that can think (Claude 3.7 and later); ok is
+// false for any other name, which then gets no thinking settings, as today's core gives none to
+// models missing from its catalog.
 //
-// shortcut: decided from the model name, since protocol v0 has no model capabilities; unknown
-// names take a budget, as today's core does for models missing from its catalog. Move this to
-// per-model capabilities when describe carries them.
-func adaptive(model string) bool {
+// shortcut: decided from the model name, since protocol v0 has no model capabilities. Move this
+// to per-model capabilities when describe carries them.
+func claudeVersion(model string) (major, minor int, ok bool) {
 	m := claudeModel.FindStringSubmatch(model)
 	if m == nil {
-		return false
+		m = oldClaudeModel.FindStringSubmatch(model)
 	}
-	major, _ := strconv.Atoi(m[1])
-	minor := 0
+	if m == nil {
+		return 0, 0, false
+	}
+	major, _ = strconv.Atoi(m[1])
 	if m[2] != "" {
 		minor, _ = strconv.Atoi(m[2])
 	}
-	return major > 4 || (major == 4 && minor >= 6)
+	return major, minor, major > 3 || (major == 3 && minor >= 7)
 }
+
+// adaptive reports whether a Claude model of this version thinks adaptively: Claude 4.6 and later.
+func adaptive(major, minor int) bool { return major > 4 || (major == 4 && minor >= 6) }
 
 // applyEffort sets the thinking settings for effort on a Messages body built for model. It reports
 // false, leaving the body as it was, for an effort it does not know or a body whose max_tokens
-// leaves no room for the smallest budget; the effort then stays reported as dropped.
+// leaves no room for the smallest budget, or a model that is not a Claude model; the effort then
+// stays reported as dropped.
 func applyEffort(body []byte, model, effort string) ([]byte, bool, error) {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(body, &m); err != nil {
 		return nil, false, err
+	}
+	major, minor, ok := claudeVersion(model)
+	if !ok {
+		return body, false, nil
 	}
 	set := func(key string, v any) {
 		b, _ := json.Marshal(v)
@@ -73,14 +87,14 @@ func applyEffort(body []byte, model, effort string) ([]byte, bool, error) {
 	switch {
 	case effort == "none":
 		set("thinking", map[string]any{"type": "disabled"})
-	case effort == "auto" && adaptive(model):
+	case effort == "auto" && adaptive(major, minor):
 		set("thinking", map[string]any{"type": "adaptive"})
 	case effort == "auto":
 		// Thinking with no budget named: the smallest one.
 		if !setBudget(m, minBudget, set) {
 			return body, false, nil
 		}
-	case adaptive(model):
+	case adaptive(major, minor):
 		e, ok := adaptiveEfforts[effort]
 		if !ok {
 			return body, false, nil

@@ -1,0 +1,104 @@
+{
+  "description": "An upstream rate-limit reply (429 with retry-after) to a streamed Chat request reaches the client as a 429 with an error body built from the upstream's error type and message. The old core's Retry-After is its own cooldown estimate, so the header is masked here.",
+  "source": [
+    "core/internal/translator/claude/openai/chat-completions/claude_openai_response.go",
+    "core/sdk/api/handlers/claude/code_handlers_error_test.go (TestClaudeErrorExtractsClaudeStyleUpstreamJSON)"
+  ],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {"model":"claude-test","messages":[{"role":"user","content":"Say hello"}],"stream":true}
+  },
+  "upstream": [
+    {
+      "status": 429,
+      "headers": {"Content-Type":"application/json","retry-after":"20"},
+      "body": {
+        "type": "error",
+        "error": {
+          "type": "rate_limit_error",
+          "message": "Number of request tokens has exceeded your per-minute rate limit"
+        }
+      }
+    }
+  ],
+  "volatile": ["client.body.created","client.events[*].data.created","client.headers.Retry-After"],
+  "exceptions": [
+    {
+      "path": "client.body.error.code",
+      "kind": "intended",
+      "reason": "The new core answers a Chat client with OpenAI's error body, error.code holding Claude's error type and error.type server_error for a 5xx; today's core passes Claude's envelope (type error) through.",
+      "want": "rate_limit_error"
+    },
+    {
+      "path": "client.body.type",
+      "kind": "intended",
+      "reason": "The new core answers a Chat client with OpenAI's error body, error.code holding Claude's error type and error.type server_error for a 5xx; today's core passes Claude's envelope (type error) through.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.metadata",
+      "kind": "intended",
+      "reason": "Today's core adds metadata.user_id, a hash it derives from the request, to every request it translates to Claude; the new core does not make up a user identifier for the client.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.Authorization",
+      "kind": "intended",
+      "reason": "The Claude extension sends an API key in x-api-key, as Anthropic's API defines it; today's core sends it as a bearer token whenever the base URL is not api.anthropic.com (it uses x-api-key only there).",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.X-Api-Key",
+      "kind": "intended",
+      "reason": "The Claude extension sends an API key in x-api-key, as Anthropic's API defines it; today's core sends it as a bearer token whenever the base URL is not api.anthropic.com (it uses x-api-key only there).",
+      "want": "sk-corpus-upstream"
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {
+          "message": "Number of request tokens has exceeded your per-minute rate limit",
+          "type": "rate_limit_error"
+        },
+        "type": "error"
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "Retry-After": "(volatile)",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 429
+    },
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 32000,
+          "messages": [
+            {
+              "content": [{"cache_control":{"type":"ephemeral"},"text":"Say hello","type":"text"}],
+              "role": "user"
+            }
+          ],
+          "metadata": {"user_id":"120226d8c5cb65e3acdd1f5e56fb3cf04f8bf909fe34ece9118dcc2d0e8b6c46"},
+          "model": "claude-test",
+          "stream": true
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "identity",
+          "Anthropic-Version": "2023-06-01",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/messages?beta=true"
+      }
+    ]
+  }
+}

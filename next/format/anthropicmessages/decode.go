@@ -137,6 +137,7 @@ type streamEvent struct {
 		Text        string `json:"text"`
 		Thinking    string `json:"thinking"`
 		PartialJSON string `json:"partial_json"`
+		Signature   string `json:"signature"`
 		StopReason  string `json:"stop_reason"`
 	} `json:"delta"`
 	Usage json.RawMessage `json:"usage"`
@@ -152,14 +153,15 @@ type StreamDecoder struct {
 	started bool
 	done    bool
 	next    int
-	items   map[int]int // upstream block index -> open model item index
+	items   map[int]int    // upstream block index -> open model item index
+	sigs    map[int]string // model item index -> signature of an open thinking block
 	stop    string
 	usage   json.RawMessage
 }
 
 // NewStreamDecoder returns a decoder for one stream.
 func NewStreamDecoder() *StreamDecoder {
-	return &StreamDecoder{items: map[int]int{}}
+	return &StreamDecoder{items: map[int]int{}, sigs: map[int]string{}}
 }
 
 // closeAll closes items the upstream left open; the events it adds carry no Raw.
@@ -260,6 +262,10 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		case "input_json_delta":
 			return append(out, llm.Event{Type: llm.EventToolInputDelta, Index: idx, Delta: ev.Delta.PartialJSON, Raw: raw}), nil
 		}
+		if ev.Delta.Type == "signature_delta" {
+			// Carried on the item's end as well, for clients in other formats.
+			d.sigs[idx] += ev.Delta.Signature
+		}
 		// signature_delta, citations_delta and deltas the model has no place for.
 		return native(), nil
 	case "content_block_stop":
@@ -268,7 +274,12 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			return native(), nil
 		}
 		delete(d.items, ev.Index)
-		return append(out, llm.Event{Type: llm.EventItemEnd, Index: idx, Raw: raw}), nil
+		end := llm.Event{Type: llm.EventItemEnd, Index: idx, Raw: raw}
+		if sig := d.sigs[idx]; sig != "" {
+			end.Opaque = &llm.Opaque{Format: format, Data: sig}
+		}
+		delete(d.sigs, idx)
+		return append(out, end), nil
 	case "message_delta":
 		if ev.Delta != nil && ev.Delta.StopReason != "" {
 			d.stop = ev.Delta.StopReason
@@ -409,7 +420,12 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 			out = append(out, llm.Event{Type: llm.EventNative, Raw: eventJSON(map[string]any{"type": "content_block_delta", "index": i,
 				"delta": map[string]json.RawMessage{"type": json.RawMessage(`"signature_delta"`), "signature": sig}})})
 		}
-		out = append(out, llm.Event{Type: llm.EventItemEnd, Index: next, Raw: stop})
+		end := llm.Event{Type: llm.EventItemEnd, Index: next, Raw: stop}
+		var sig string
+		if kind == llm.ItemReasoning && json.Unmarshal(b["signature"], &sig) == nil && sig != "" {
+			end.Opaque = &llm.Opaque{Format: format, Data: sig}
+		}
+		out = append(out, end)
 		next++
 	}
 	md := map[string]json.RawMessage{"stop_reason": json.RawMessage("null"), "stop_sequence": json.RawMessage("null")}

@@ -271,9 +271,14 @@ type Event struct {
 
 	Response *ResponseInfo `json:"response,omitempty"` // response.start
 	Item     *ItemStart    `json:"item,omitempty"`     // item.start
-	Finish   *Finish       `json:"finish,omitempty"`   // finish
-	Usage    *Usage        `json:"usage,omitempty"`    // finish
-	Error    *Error        `json:"error,omitempty"`    // error
+	// Opaque, on the item.end of a reasoning item, is the provider's opaque record of that
+	// reasoning, which the provider needs back to continue from it (an Anthropic thinking
+	// signature). A client format with a place for it (a Responses reasoning item's
+	// encrypted_content) carries it, so the client can replay it.
+	Opaque *Opaque `json:"opaque,omitempty"`
+	Finish *Finish `json:"finish,omitempty"` // finish
+	Usage  *Usage  `json:"usage,omitempty"`  // finish
+	Error  *Error  `json:"error,omitempty"`  // error
 
 	// Raw is the upstream data the event came from, for diagnostics. In a native event it is the
 	// event's content: upstream data the model has no place for, such as OpenAI choices after
@@ -309,6 +314,12 @@ const (
 )
 
 // ItemStart describes an output item when it opens.
+// Opaque is reasoning state only its provider can read, with the format it came from.
+type Opaque struct {
+	Format string `json:"format"`
+	Data   string `json:"data"`
+}
+
 type ItemStart struct {
 	Kind   string `json:"kind"`
 	CallID string `json:"call_id,omitempty"`

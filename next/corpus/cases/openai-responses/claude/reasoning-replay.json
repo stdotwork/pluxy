@@ -1,0 +1,216 @@
+{
+  "description": "Reasoning replay: a reasoning item whose encrypted_content holds a Claude thinking signature (as a Responses client gets it back from a Claude reply) goes back to Messages as a thinking block with that signature, in the assistant turn before its tool_use, so Claude can continue from its own thinking.",
+  "source": [
+    "core/internal/translator/claude/openai/responses/claude_openai-responses_request.go",
+    "core/internal/translator/claude/openai/responses/claude_openai-responses_response.go"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "body": {
+      "model": "claude-sonnet-4-5",
+      "tools": [
+        {
+          "type": "function",
+          "name": "get_weather",
+          "parameters": {
+            "type": "object",
+            "properties": {"city":{"type":"string"}},
+            "required": ["city"]
+          }
+        }
+      ],
+      "input": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": [{"type":"input_text","text":"What is the weather in Oslo?"}]
+        },
+        {
+          "type": "reasoning",
+          "id": "rs_corpus",
+          "summary": [{"type":"summary_text","text":"I should look up the weather."}],
+          "encrypted_content": "EqoBCkgIARABGAIiQCorpusSig"
+        },
+        {
+          "type": "function_call",
+          "call_id": "toolu_corpus",
+          "name": "get_weather",
+          "arguments": "{\"city\":\"Oslo\"}"
+        },
+        {"type":"function_call_output","call_id":"toolu_corpus","output":"4C, rain"}
+      ],
+      "stream": true,
+      "reasoning": {"effort":"medium"}
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"event":"message_start","data":{"type":"message_start","message":{"id":"msg_corpus","type":"message","role":"assistant","content":[],"model":"claude-test-upstream","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":58,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}},
+        {"event":"ping","data":{"type":"ping"}},
+        {"event":"content_block_start","data":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}},
+        {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"It is 4C and raining in Oslo."}}},
+        {"event":"content_block_stop","data":{"type":"content_block_stop","index":0}},
+        {"event":"message_delta","data":{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":9}}},
+        {"event":"message_stop","data":{"type":"message_stop"}}
+      ]
+    }
+  ],
+  "volatile": ["client.body.created_at","client.events[*].data.response.created_at"],
+  "exceptions": [
+    {
+      "path": "upstream[0].body.messages[0].content",
+      "kind": "intended",
+      "reason": "The same text: the new core writes message content as content blocks; today's core keeps a plain string.",
+      "want": [{"text":"What is the weather in Oslo?","type":"text"}]
+    },
+    {
+      "path": "upstream[0].body.messages[1].content[0].id",
+      "kind": "intended",
+      "reason": "The new core replays a Claude thinking signature that a Responses client sends back in a reasoning item's encrypted_content as the thinking block before the tool call, so Claude can continue from its own thinking (with thinking on, Anthropic requires it before a tool_use it answered); today's core drops the reasoning item. claude-sonnet-4-5 takes a thinking budget (medium 8192); today's core gives thinking settings only to models in its catalog.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.messages[1].content[0].input",
+      "kind": "intended",
+      "reason": "The new core replays a Claude thinking signature that a Responses client sends back in a reasoning item's encrypted_content as the thinking block before the tool call, so Claude can continue from its own thinking (with thinking on, Anthropic requires it before a tool_use it answered); today's core drops the reasoning item. claude-sonnet-4-5 takes a thinking budget (medium 8192); today's core gives thinking settings only to models in its catalog.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.messages[1].content[0].name",
+      "kind": "intended",
+      "reason": "The new core replays a Claude thinking signature that a Responses client sends back in a reasoning item's encrypted_content as the thinking block before the tool call, so Claude can continue from its own thinking (with thinking on, Anthropic requires it before a tool_use it answered); today's core drops the reasoning item. claude-sonnet-4-5 takes a thinking budget (medium 8192); today's core gives thinking settings only to models in its catalog.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.messages[1].content[0].signature",
+      "kind": "intended",
+      "reason": "The new core replays a Claude thinking signature that a Responses client sends back in a reasoning item's encrypted_content as the thinking block before the tool call, so Claude can continue from its own thinking (with thinking on, Anthropic requires it before a tool_use it answered); today's core drops the reasoning item. claude-sonnet-4-5 takes a thinking budget (medium 8192); today's core gives thinking settings only to models in its catalog.",
+      "want": "EqoBCkgIARABGAIiQCorpusSig"
+    },
+    {
+      "path": "upstream[0].body.messages[1].content[0].thinking",
+      "kind": "intended",
+      "reason": "The new core replays a Claude thinking signature that a Responses client sends back in a reasoning item's encrypted_content as the thinking block before the tool call, so Claude can continue from its own thinking (with thinking on, Anthropic requires it before a tool_use it answered); today's core drops the reasoning item. claude-sonnet-4-5 takes a thinking budget (medium 8192); today's core gives thinking settings only to models in its catalog.",
+      "want": "I should look up the weather."
+    },
+    {
+      "path": "upstream[0].body.messages[1].content[0].type",
+      "kind": "intended",
+      "reason": "The new core replays a Claude thinking signature that a Responses client sends back in a reasoning item's encrypted_content as the thinking block before the tool call, so Claude can continue from its own thinking (with thinking on, Anthropic requires it before a tool_use it answered); today's core drops the reasoning item. claude-sonnet-4-5 takes a thinking budget (medium 8192); today's core gives thinking settings only to models in its catalog."
+    },
+    {
+      "path": "upstream[0].body.messages[1].content[1]",
+      "kind": "intended",
+      "reason": "The new core replays a Claude thinking signature that a Responses client sends back in a reasoning item's encrypted_content as the thinking block before the tool call, so Claude can continue from its own thinking (with thinking on, Anthropic requires it before a tool_use it answered); today's core drops the reasoning item. claude-sonnet-4-5 takes a thinking budget (medium 8192); today's core gives thinking settings only to models in its catalog.",
+      "want": {"id":"toolu_corpus","input":{"city":"Oslo"},"name":"get_weather","type":"tool_use"}
+    },
+    {
+      "path": "upstream[0].body.metadata",
+      "kind": "intended",
+      "reason": "Today's core adds metadata.user_id, a hash it derives from the request, to every request it translates to Claude; the new core does not make up a user identifier for the client.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.thinking",
+      "kind": "intended",
+      "reason": "The new core replays a Claude thinking signature that a Responses client sends back in a reasoning item's encrypted_content as the thinking block before the tool call, so Claude can continue from its own thinking (with thinking on, Anthropic requires it before a tool_use it answered); today's core drops the reasoning item. claude-sonnet-4-5 takes a thinking budget (medium 8192); today's core gives thinking settings only to models in its catalog.",
+      "want": {"budget_tokens":8192,"type":"enabled"}
+    },
+    {
+      "path": "upstream[0].body.tools[0].description",
+      "kind": "intended",
+      "reason": "Today's core writes an empty description for a tool that has none; the new core leaves it out.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.Authorization",
+      "kind": "intended",
+      "reason": "The Claude extension sends an API key in x-api-key, as Anthropic's API defines it; today's core sends it as a bearer token whenever the base URL is not api.anthropic.com (it uses x-api-key only there).",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.X-Api-Key",
+      "kind": "intended",
+      "reason": "The Claude extension sends an API key in x-api-key, as Anthropic's API defines it; today's core sends it as a bearer token whenever the base URL is not api.anthropic.com (it uses x-api-key only there).",
+      "want": "sk-corpus-upstream"
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"response":{"background":false,"created_at":1793974099,"error":null,"id":"msg_corpus","model":"claude-sonnet-4-5","object":"response","output":[],"status":"in_progress"},"sequence_number":1,"type":"response.created"},"event":"response.created"},
+        {"data":{"response":{"created_at":1793974099,"id":"msg_corpus","model":"claude-sonnet-4-5","object":"response","output":[],"status":"in_progress"},"sequence_number":2,"type":"response.in_progress"},"event":"response.in_progress"},
+        {"data":{"item":{"content":[],"id":"msg_msg_corpus_0","role":"assistant","status":"in_progress","type":"message"},"output_index":0,"sequence_number":3,"type":"response.output_item.added"},"event":"response.output_item.added"},
+        {"data":{"content_index":0,"item_id":"msg_msg_corpus_0","output_index":0,"part":{"annotations":[],"logprobs":[],"text":"","type":"output_text"},"sequence_number":4,"type":"response.content_part.added"},"event":"response.content_part.added"},
+        {"data":{"content_index":0,"delta":"It is 4C and raining in Oslo.","item_id":"msg_msg_corpus_0","logprobs":[],"output_index":0,"sequence_number":5,"type":"response.output_text.delta"},"event":"response.output_text.delta"},
+        {"data":{"content_index":0,"item_id":"msg_msg_corpus_0","logprobs":[],"output_index":0,"sequence_number":6,"text":"It is 4C and raining in Oslo.","type":"response.output_text.done"},"event":"response.output_text.done"},
+        {"data":{"content_index":0,"item_id":"msg_msg_corpus_0","output_index":0,"part":{"annotations":[],"logprobs":[],"text":"It is 4C and raining in Oslo.","type":"output_text"},"sequence_number":7,"type":"response.content_part.done"},"event":"response.content_part.done"},
+        {"data":{"item":{"content":[{"annotations":[],"logprobs":[],"text":"It is 4C and raining in Oslo.","type":"output_text"}],"id":"msg_msg_corpus_0","role":"assistant","status":"completed","type":"message"},"output_index":0,"sequence_number":8,"type":"response.output_item.done"},"event":"response.output_item.done"},
+        {"data":{"response":{"background":false,"created_at":1793974099,"error":null,"id":"msg_corpus","model":"claude-sonnet-4-5","object":"response","output":[{"content":[{"annotations":[],"logprobs":[],"text":"It is 4C and raining in Oslo.","type":"output_text"}],"id":"msg_msg_corpus_0","role":"assistant","status":"completed","type":"message"}],"reasoning":{"effort":"medium"},"status":"completed","tools":[{"name":"get_weather","parameters":{"properties":{"city":{"type":"string"}},"required":["city"],"type":"object"},"type":"function"}],"usage":{"input_tokens":58,"input_tokens_details":{"cached_tokens":0},"output_tokens":9,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":67}},"sequence_number":9,"type":"response.completed"},"event":"response.completed"}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 32000,
+          "messages": [
+            {"content":"What is the weather in Oslo?","role":"user"},
+            {
+              "content": [
+                {"id":"toolu_corpus","input":{"city":"Oslo"},"name":"get_weather","type":"tool_use"}
+              ],
+              "role": "assistant"
+            },
+            {
+              "content": [
+                {
+                  "cache_control": {"type":"ephemeral"},
+                  "content": "4C, rain",
+                  "tool_use_id": "toolu_corpus",
+                  "type": "tool_result"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "metadata": {"user_id":"3cbf12a1b27a5b4c7baec773ca1fb924e0d72a2b079d6807e98a5ee85847669e"},
+          "model": "claude-sonnet-4-5",
+          "stream": true,
+          "tools": [
+            {
+              "cache_control": {"type":"ephemeral"},
+              "description": "",
+              "input_schema": {
+                "properties": {"city":{"type":"string"}},
+                "required": ["city"],
+                "type": "object"
+              },
+              "name": "get_weather"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "identity",
+          "Anthropic-Version": "2023-06-01",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/messages?beta=true"
+      }
+    ]
+  }
+}
