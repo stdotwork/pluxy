@@ -1,0 +1,90 @@
+name: Next app
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'next/**'
+      - '.github/workflows/next-app.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'next/**'
+      - '.github/workflows/next-app.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: next/app
+
+jobs:
+  app:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install WebKitGTK, the tray library, Xvfb and D-Bus
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth dbus-daemon
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: next/go.mod
+          cache: true
+          cache-dependency-path: next/go.mod
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.3'
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.97.0
+        with:
+          components: rustfmt, clippy
+      - name: Cache Rust dependencies and build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: next/app/src-tauri -> target
+      # The app builds the UI kit from next/ui, with its copy of preact.
+      - name: UI kit install
+        working-directory: next/ui
+        run: bun install --frozen-lockfile
+      - name: Install
+        run: bun install --frozen-lockfile
+      - name: Type check
+        run: bun run check
+      - name: Lint
+        run: bun run lint
+      - name: Unit tests
+        run: bun run test
+      - name: Build the window
+        run: bun run build
+      - name: Rust format
+        working-directory: next/app/src-tauri
+        run: cargo fmt --check
+      - name: Clippy
+        working-directory: next/app/src-tauri
+        run: cargo clippy --locked --all-targets --features native-test -- -D warnings
+      # Unit tests, and each connection mode against a real core with fake extensions, with an
+      # empty HOME and XDG folders.
+      - name: Rust tests
+        working-directory: next/app/src-tauri
+        run: |
+          export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+          export GOCACHE="$(go env GOCACHE)" GOMODCACHE="$(go env GOMODCACHE)" GOPATH="$(go env GOPATH)"
+          test_env="$(mktemp -d)"
+          export HOME="$test_env/home" XDG_CONFIG_HOME="$test_env/config" XDG_DATA_HOME="$test_env/data" XDG_CACHE_HOME="$test_env/cache"
+          mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME"
+          cargo test --locked
+      # The real app on Xvfb in each mode: extension page webviews cannot call app commands.
+      - name: Native test
+        timeout-minutes: 20
+        run: bun run test:native

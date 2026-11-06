@@ -1,8 +1,8 @@
 # pluxy UI kit and panel
 
 One UI kit, two builds. The **panel** is the kit's browser build: core embeds it and serves it at
-`/panel/` while the management API is on. The desktop app will be the kit's second build, with
-more pages. Both read the same theme files ([theme contract](themes/README.md)) and put shared
+`/panel/` while the management API is on. The desktop app ([`../app`](../app/README.md)) is the
+kit's second build, with more pages. Both read the same theme files ([theme contract](themes/README.md)) and put shared
 pages in the same places.
 
 | Folder | What it holds |
@@ -20,8 +20,8 @@ A host implements `Host` (`kit/host.ts`): calling core's management API with the
 and out, keeping small settings, and saying which optional features it has. The kit never holds
 the management key and never builds a URL to core; it asks the host. In the browser,
 `panel/browserHost.ts` sends every call to `/v0/management` on the origin that served the panel,
-and only those calls carry the key. The desktop app will implement the same interface over its
-own connection to core.
+and only those calls carry the key. The desktop app implements the same interface over its own
+connection to core, holding the key in its native side.
 
 A build then picks its pages and mounts the shell:
 
@@ -37,7 +37,8 @@ desktop app add nothing to the panel.
 
 With `extensionPages` set, the shell adds the pages of the extensions that run, after the
 build's own: each is a `PageDef` (address `#/ext/<publisher>/<name>/<page>`) whose render shows
-the extension's document in a sandboxed frame from a separate site, talking to the panel through
+the extension's document in a sandboxed frame from a separate site (a host can draw it its own
+way with `extensionPage`, as the desktop app does), talking to the panel through
 a message channel, never with the management key. The Extensions page draws each extension's
 settings form from its schema. The contract for both, and the module pages use, are in
 [extension-pages](extension-pages/README.md).

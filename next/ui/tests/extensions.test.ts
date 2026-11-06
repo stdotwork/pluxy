@@ -201,6 +201,16 @@ describe("where pages may come from", () => {
     expect(related("localhost", "127.0.0.1")).toBe(false);
     expect(related("pages.example.net", "panel.example.com")).toBe(false);
   });
+
+  test("a host that shows pages in a webview of their own checks the address only", () => {
+    const page = "http://localhost:8401/pub/ext/0123/index.html";
+    expect(pageProblem(page, "http://localhost:8401")).toBeUndefined();
+    expect(pageProblem("http://evil.example/x.html", "http://localhost:8401")).toContain(
+      "not on the extension pages site",
+    );
+    expect(pageProblem(page, undefined)).toContain("no address");
+    expect(pageProblem("javascript:alert(1)", "javascript:")).toBeDefined();
+  });
 });
 
 describe("the settings form", () => {

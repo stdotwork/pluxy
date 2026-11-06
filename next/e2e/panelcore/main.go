@@ -1,12 +1,21 @@
 // Command panelcore runs a real pluxy core with fake provider extensions, for the web panel's
-// browser tests. Run it from the next folder: go run ./e2e/panelcore.
+// browser tests and the desktop app's tests. Run it from the next folder: go run ./e2e/panelcore.
 //
 // test/alpha brings a benign extension page and a settings schema, and test/hostile a page that
-// tries to escape its sandbox; their files are in ui/e2e/fixtures.
+// tries to escape its sandbox; their files are in ui/e2e/fixtures. With -probe, test/probe too:
+// the page the desktop app's native test shows (fixtures/probe).
 //
 // Once core listens and test/beta is disabled, it prints one line of JSON on stdout,
 // {"base":"http://127.0.0.1:port","key":"<management key>"}, and nothing else on stdout. It runs
 // until stdin reaches EOF or it gets SIGINT or SIGTERM, then stops core and removes its files.
+//
+// With -tls, core's API is reached through an https proxy whose certificate comes from a new
+// authority: base is https://127.0.0.1:port, and "ca" names the authority's PEM file.
+//
+// With -prepare <folder>, it starts nothing: it builds core into <folder>/pluxy and writes the
+// test packages as core's bundled packages, <folder>/bundled/index.json (where core looks for
+// them beside its program), prints {"core":"<folder>/pluxy"} and exits. The folder is the
+// caller's to remove.
 package main
 
 import (
@@ -20,6 +29,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"maps"
@@ -42,16 +52,60 @@ const (
 )
 
 func main() {
-	if err := serve(); err != nil {
+	prepare := flag.String("prepare", "", "only build core and its bundled test packages into this folder, then exit")
+	withTLS := flag.Bool("tls", false, "reach core's API through an https proxy with a certificate from a new authority")
+	probe := flag.Bool("probe", false, "also offer test/probe, the desktop app's native test page")
+	flag.Parse()
+	if *probe {
+		testPackages = append(testPackages, probePackage)
+	}
+	var err error
+	if *prepare != "" {
+		err = prepareOnly(*prepare)
+	} else {
+		err = serve(*withTLS)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "panelcore:", err)
 		os.Exit(1)
 	}
 }
 
+// prepareOnly builds core into dir/pluxy and writes the test packages as its bundled packages.
+func prepareOnly(dir string) error {
+	root, err := moduleRoot()
+	if err != nil {
+		return err
+	}
+	if dir, err = filepath.Abs(dir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	pluxy := filepath.Join(dir, "pluxy")
+	testext := filepath.Join(dir, "testext")
+	if err := buildBinary(root, pluxy, "./cmd/pluxy"); err != nil {
+		return err
+	}
+	if err := buildBinary(root, testext, "./e2e/testext"); err != nil {
+		return err
+	}
+	if _, err := writeRegistry(dir, "bundled", testext, filepath.Join(root, "ui")); err != nil {
+		return err
+	}
+	out, err := json.Marshal(map[string]string{"core": pluxy})
+	if err != nil {
+		return err
+	}
+	_, err = os.Stdout.Write(append(out, '\n'))
+	return err
+}
+
 // serve builds core and the test extension, starts core with them, prints its address and
 // management key, and runs until stdin ends or a signal arrives. The deferred calls stop core
 // and then remove the temporary folder, also when setup fails.
-func serve() error {
+func serve(withTLS bool) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -76,7 +130,7 @@ func serve() error {
 	if _, err := writeLocal(dir, testext); err != nil {
 		return err
 	}
-	index, err := writeRegistry(dir, testext, filepath.Join(root, "ui"))
+	index, err := writeRegistry(dir, "registry", testext, filepath.Join(root, "ui"))
 	if err != nil {
 		return err
 	}
@@ -105,7 +159,16 @@ func serve() error {
 	if err := disablePackage(base, mgmtKey, "test/beta"); err != nil {
 		return err
 	}
-	out, err := json.Marshal(map[string]string{"base": base, "key": mgmtKey})
+	ready := map[string]string{"base": base, "key": mgmtKey}
+	if withTLS {
+		tlsBase, caFile, closeTLS, err := serveTLS(dir, base)
+		if err != nil {
+			return err
+		}
+		defer closeTLS()
+		ready["base"], ready["ca"] = tlsBase, caFile
+	}
+	out, err := json.Marshal(ready)
 	if err != nil {
 		return err
 	}
@@ -206,6 +269,22 @@ var testPackages = []pkg{
 	},
 }
 
+// probePackage is the page the desktop app's native test shows: it tries to reach the app's
+// commands and writes what happened into its own report setting, the one way out it has.
+var probePackage = pkg{
+	id: "test/probe", version: "0.1.0", file: "probe.tar.gz", fixture: "probe",
+	ui: map[string]any{
+		"version": 0, "dir": "ui", "permissions": []string{"config.read", "config.write"},
+		"pages": []any{map[string]any{"id": "probe", "title": "Probe", "short": "Probe", "path": "index.html"}},
+	},
+	config: map[string]any{"version": 0, "schema": map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"report": map[string]any{"type": "string", "title": "Report", "maxLength": 4096},
+		},
+	}},
+}
+
 // writeLocal puts the test extension in the local folder, with the manifest the config runs from
 // a path, and returns the manifest's path.
 func writeLocal(dir, testext string) (string, error) {
@@ -235,13 +314,14 @@ func writeLocal(dir, testext string) (string, error) {
 }
 
 // writeRegistry writes the archives of the test packages and the registry index that offers
-// them, and returns the index's path. uiRoot is next/ui: the fixtures and the page library.
-func writeRegistry(dir, testext, uiRoot string) (string, error) {
+// them into dir/folder, and returns the index's path. uiRoot is next/ui: the fixtures and the
+// page library.
+func writeRegistry(dir, folder, testext, uiRoot string) (string, error) {
 	prog, err := os.ReadFile(testext)
 	if err != nil {
 		return "", err
 	}
-	reg := filepath.Join(dir, "registry")
+	reg := filepath.Join(dir, folder)
 	if err := os.Mkdir(reg, 0o755); err != nil {
 		return "", err
 	}

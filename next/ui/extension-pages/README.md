@@ -1,6 +1,6 @@
 # Extension pages, version 0
 
-An extension package can bring its own pages for the panel (and later the desktop app), and a
+An extension package can bring its own pages for the panel and the desktop app, and a
 settings form the panel draws for it. This is the contract for both: what goes in the package,
 how core serves the pages, what a page may do, and the message channel a page talks to the
 panel through.
@@ -293,8 +293,8 @@ every `theme` event.
 
 ## Limits of version 0
 
-- Pages are for the browser panel. The desktop app will show them in a separate webview with no
-  native permissions, with the same channel (planned with the app shell).
+- The desktop app shows each page in a webview of its own, which can call no app command, with
+  the page in the same sandboxed frame and the same channel ([the app's README](../../app/README.md#extension-pages)).
 - A package needs a program even when it only brings pages.
 - Settings reach the extension's pages, not its program.
 - The page's frame has a fixed size within the panel's content area; a page cannot resize it.

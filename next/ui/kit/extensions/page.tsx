@@ -20,7 +20,7 @@ export function themeSnapshot(r: Resolved) {
 }
 
 /** Turns a management reply into a channel outcome, never passing on more than the view. */
-async function settingsOutcome(
+export async function settingsOutcome(
   call: ReturnType<Api["settings"]>,
   unauthorized: () => void,
 ): Promise<Outcome> {
@@ -38,12 +38,15 @@ async function settingsOutcome(
 
 type Phase = "loading" | "connected" | "closed";
 
-export function ExtensionPage(props: {
+/** One extension page, as core lists it. */
+export interface ExtensionPageProps {
   ext: UIExtension;
   page: UIPage;
   pagesOrigin?: string;
   pagesError?: string;
-}) {
+}
+
+export function ExtensionPage(props: ExtensionPageProps) {
   const { api, themes, unauthorized } = useKit();
   const { ext, page } = props;
   const frame = useRef<HTMLIFrameElement>(null);

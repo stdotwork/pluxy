@@ -30,11 +30,13 @@ export function related(a: string, b: string): boolean {
 /**
  * Why the page at pageUrl may not be shown in a panel on panelHost, or undefined when it may:
  * it must be on pagesOrigin, over http or https, and pagesOrigin must not be the panel's site.
+ * A host that shows each page in a webview of its own, sharing no cookies or storage with the
+ * host's document (the desktop app), passes no panelHost: only the address is checked.
  */
 export function pageProblem(
   pageUrl: string,
   pagesOrigin: string | undefined,
-  panelHost: string,
+  panelHost?: string,
 ): string | undefined {
   if (!pagesOrigin) return "core has no address for extension pages";
   let page: URL;
@@ -48,7 +50,7 @@ export function pageProblem(
   if (origin.protocol !== "http:" && origin.protocol !== "https:")
     return "extension pages must be served over http or https";
   if (page.origin !== origin.origin) return "the page is not on the extension pages site";
-  if (related(origin.hostname, panelHost))
+  if (panelHost !== undefined && related(origin.hostname, panelHost))
     return `extension pages are on ${origin.host}, the panel's own site: set extension_pages.url to another host name`;
   return undefined;
 }

@@ -1,0 +1,23 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "The app's own window, and nothing else: every app command and listening for the app's events. Extension page webviews (page-<n>) get no capability.",
+  "local": true,
+  "webviews": [
+    "main"
+  ],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-connection-get",
+    "allow-connection-set",
+    "allow-core-restart",
+    "allow-core-call",
+    "allow-sign-in",
+    "allow-sign-out",
+    "allow-page-open",
+    "allow-page-place",
+    "allow-page-close",
+    "allow-page-send"
+  ]
+}

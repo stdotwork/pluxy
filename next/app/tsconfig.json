@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "types": ["bun"],
+    "paths": {
+      "preact": ["../ui/node_modules/preact"],
+      "preact/*": ["../ui/node_modules/preact/*"]
+    }
+  },
+  "include": ["src", "native", "page", "build.ts", "preact.ts"]
+}

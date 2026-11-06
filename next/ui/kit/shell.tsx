@@ -4,7 +4,7 @@
 import type { VNode } from "preact";
 import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
 import { api } from "./api";
-import { ExtensionPage } from "./extensions/page";
+import { ExtensionPage, type ExtensionPageProps } from "./extensions/page";
 import type { Host } from "./host";
 import type { ThemeState } from "./theme/state";
 import { Button, type Kit, KitContext, Notice } from "./ui";
@@ -32,8 +32,11 @@ function currentId(pages: PageDef[]): string {
   return longest?.id ?? pages[0]?.id ?? "";
 }
 
+/** Draws one extension page. The panel's default shows it in a sandboxed frame. */
+export type ExtensionPageView = (props: ExtensionPageProps) => VNode;
+
 /** The pages of the extensions that run, from core. */
-function useExtensionPages(on: boolean, kit: Kit, version: number): PageDef[] {
+function useExtensionPages(on: boolean, kit: Kit, version: number, View: ExtensionPageView): PageDef[] {
   const [defs, setDefs] = useState<PageDef[]>([]);
   useEffect(() => {
     if (!on) {
@@ -53,12 +56,7 @@ function useExtensionPages(on: boolean, kit: Kit, version: number): PageDef[] {
             title: page.title,
             short: page.short,
             render: () => (
-              <ExtensionPage
-                ext={ext}
-                page={page}
-                pagesOrigin={ui.pages_origin}
-                pagesError={ui.pages_error}
-              />
+              <View ext={ext} page={page} pagesOrigin={ui.pages_origin} pagesError={ui.pages_error} />
             ),
           })),
         ),
@@ -67,7 +65,7 @@ function useExtensionPages(on: boolean, kit: Kit, version: number): PageDef[] {
     return () => {
       live = false;
     };
-  }, [on, kit, version]);
+  }, [on, kit, version, View]);
   return defs;
 }
 
@@ -122,6 +120,11 @@ export function Shell(props: {
   brand?: string;
   /** Adds the pages of the extensions that run, after the build's own. */
   extensionPages?: boolean;
+  /**
+   * Draws an extension page, for a host that shows pages its own way: the desktop app puts each
+   * in a webview of its own. Default: a sandboxed frame in the page area.
+   */
+  extensionPage?: ExtensionPageView;
 }) {
   const { host, themes } = props;
   const [signedIn, setSignedIn] = useState(host.signedIn());
@@ -138,7 +141,12 @@ export function Shell(props: {
     () => ({ host, api: api(host), themes, unauthorized, extensionsChanged }),
     [host, themes, unauthorized, extensionsChanged],
   );
-  const extPages = useExtensionPages(signedIn && props.extensionPages === true, kit, uiVersion);
+  const extPages = useExtensionPages(
+    signedIn && props.extensionPages === true,
+    kit,
+    uiVersion,
+    props.extensionPage ?? ExtensionPage,
+  );
   const pages = useMemo(() => [...props.pages, ...extPages], [props.pages, extPages]);
   const [page, setPage] = useState(() => currentId(pages));
 

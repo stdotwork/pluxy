@@ -85,6 +85,18 @@ cd ui && bun run check && bun run lint && bun run test   # type check, Biome, un
 cd ui && bun run test:browser    # the browser test, headless Chromium (bunx playwright install chromium once)
 ```
 
+The desktop app in `next/app` (see `next/app/README.md`) builds the kit from `next/ui`, so run
+`bun install` there first. It needs Rust and, on Linux, the WebKitGTK 4.1 and
+libayatana-appindicator development packages. Its tests start real cores through
+`go run ./e2e/panelcore`; run them with a temporary HOME. The native test needs `xvfb-run` and
+`dbus-run-session`, and gives each run its own HOME, XDG folders, X server and session bus:
+
+```bash
+cd app && bun install --frozen-lockfile && bun run check && bun run lint && bun run test && bun run build
+cd app/src-tauri && cargo fmt --check && cargo test --locked
+cd app && bun run test:native   # the real app on Xvfb, in each connection mode
+```
+
 `corpus/` is the differential test corpus (see `next/corpus/README.md`). By default it compares
 the new core with the old core's recorded replies. To run today's core live as well, or to
 re-record after changing a case:
@@ -149,6 +161,7 @@ Workflows live in `.github/workflows/`, one set per folder, each limited to its 
 | `panel-release.yml` | `panel-v*` tags | `bun run build`, publishes `management.html` |
 | `app-ci.yml` | PRs and pushes to `main` touching `extensions/app/` | Front end: `bun run check`, `bun test`, `bun run build`; Rust: `cargo check --locked`, `cargo test --locked` |
 | `next-ci.yml` | PRs and pushes to `main` touching `next/` | UI type check, lint and unit tests; builds the panel; `gofmt -l .`, `go build ./...`, `go vet ./...`, `go test -race ./...`; the panel's browser test in headless Chromium, and the extension pages test in Chromium, Firefox and WebKit |
+| `next-app.yml` | PRs and pushes to `main` touching `next/` | The desktop app in `next/app`: type check, lint, unit tests and build of the window; `cargo fmt --check`, `cargo clippy`, `cargo test --locked` (unit tests and each connection mode against a real core); the native test on Xvfb |
 | `next-corpus.yml` | PRs and pushes to `main` touching `next/` or `core/` | Builds `core/` and runs the corpus against both cores live; the report is in the job summary |
 
 When you add a workflow, add a row here.
