@@ -1,0 +1,328 @@
+{
+  "description": "ChatGPT subscription: a non-streamed Chat request to a Codex upstream is sent upstream as a stream and the reply is built from it as one chat.completion.",
+  "source": [
+    "core/internal/translator/codex/openai/chat-completions/codex_openai_request.go",
+    "core/internal/translator/codex/openai/chat-completions/codex_openai_response.go",
+    "core/internal/runtime/executor/codex_executor_request.go",
+    "core/internal/runtime/executor/codex_executor_execute.go",
+    "core/internal/runtime/executor/codex_executor_request.go (subscription headers: Chatgpt-Account-Id, X-Codex-Routing-Hint)"
+  ],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {
+      "model": "gpt-6.1-sol",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Say hello"
+        }
+      ],
+      "max_tokens": 64
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {
+          "event": "response.created",
+          "data": {
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": {
+              "id": "resp_corpus",
+              "object": "response",
+              "created_at": 1700000000,
+              "status": "in_progress",
+              "model": "gpt-test-upstream",
+              "output": [],
+              "usage": null
+            }
+          }
+        },
+        {
+          "event": "response.in_progress",
+          "data": {
+            "type": "response.in_progress",
+            "sequence_number": 1,
+            "response": {
+              "id": "resp_corpus",
+              "object": "response",
+              "created_at": 1700000000,
+              "status": "in_progress",
+              "model": "gpt-test-upstream",
+              "output": [],
+              "usage": null
+            }
+          }
+        },
+        {
+          "event": "response.output_item.added",
+          "data": {
+            "type": "response.output_item.added",
+            "sequence_number": 2,
+            "output_index": 0,
+            "item": {
+              "id": "msg_corpus",
+              "type": "message",
+              "status": "in_progress",
+              "role": "assistant",
+              "content": []
+            }
+          }
+        },
+        {
+          "event": "response.content_part.added",
+          "data": {
+            "type": "response.content_part.added",
+            "sequence_number": 3,
+            "output_index": 0,
+            "content_index": 0,
+            "item_id": "msg_corpus",
+            "part": {
+              "type": "output_text",
+              "text": "",
+              "annotations": []
+            }
+          }
+        },
+        {
+          "event": "response.output_text.delta",
+          "data": {
+            "type": "response.output_text.delta",
+            "sequence_number": 4,
+            "output_index": 0,
+            "content_index": 0,
+            "item_id": "msg_corpus",
+            "delta": "Hello"
+          }
+        },
+        {
+          "event": "response.output_text.delta",
+          "data": {
+            "type": "response.output_text.delta",
+            "sequence_number": 5,
+            "output_index": 0,
+            "content_index": 0,
+            "item_id": "msg_corpus",
+            "delta": " there"
+          }
+        },
+        {
+          "event": "response.output_text.done",
+          "data": {
+            "type": "response.output_text.done",
+            "sequence_number": 6,
+            "output_index": 0,
+            "content_index": 0,
+            "item_id": "msg_corpus",
+            "text": "Hello there"
+          }
+        },
+        {
+          "event": "response.content_part.done",
+          "data": {
+            "type": "response.content_part.done",
+            "sequence_number": 7,
+            "output_index": 0,
+            "content_index": 0,
+            "item_id": "msg_corpus",
+            "part": {
+              "type": "output_text",
+              "text": "Hello there",
+              "annotations": []
+            }
+          }
+        },
+        {
+          "event": "response.output_item.done",
+          "data": {
+            "type": "response.output_item.done",
+            "sequence_number": 8,
+            "output_index": 0,
+            "item": {
+              "id": "msg_corpus",
+              "type": "message",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Hello there",
+                  "annotations": []
+                }
+              ]
+            }
+          }
+        },
+        {
+          "event": "response.completed",
+          "data": {
+            "type": "response.completed",
+            "sequence_number": 9,
+            "response": {
+              "id": "resp_corpus",
+              "object": "response",
+              "created_at": 1700000000,
+              "status": "completed",
+              "model": "gpt-test-upstream",
+              "output": [
+                {
+                  "id": "msg_corpus",
+                  "type": "message",
+                  "status": "completed",
+                  "role": "assistant",
+                  "content": [
+                    {
+                      "type": "output_text",
+                      "text": "Hello there",
+                      "annotations": []
+                    }
+                  ]
+                }
+              ],
+              "usage": {
+                "input_tokens": 5,
+                "output_tokens": 2,
+                "total_tokens": 7,
+                "input_tokens_details": {
+                  "cached_tokens": 0
+                },
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[*].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."
+    },
+    {
+      "path": "upstream[*].headers.Session-Id",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    },
+    {
+      "path": "upstream[*].body.prompt_cache_key",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    },
+    {
+      "path": "client.body.choices[0].message.reasoning_content",
+      "kind": "intended",
+      "reason": "The new core leaves out Chat message fields that have no value (tool_calls, reasoning_content) and the non-standard native_finish_reason; today's Codex translator writes them, null when empty.",
+      "absent": true
+    },
+    {
+      "path": "client.body.choices[0].message.tool_calls",
+      "kind": "intended",
+      "reason": "The new core leaves out Chat message fields that have no value (tool_calls, reasoning_content) and the non-standard native_finish_reason; today's Codex translator writes them, null when empty.",
+      "absent": true
+    },
+    {
+      "path": "client.body.choices[0].native_finish_reason",
+      "kind": "intended",
+      "reason": "The new core leaves out Chat message fields that have no value (tool_calls, reasoning_content) and the non-standard native_finish_reason; today's Codex translator writes them, null when empty.",
+      "absent": true
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "Hello there",
+              "reasoning_content": null,
+              "role": "assistant",
+              "tool_calls": null
+            },
+            "native_finish_reason": "stop"
+          }
+        ],
+        "created": 1700000000,
+        "id": "resp_corpus",
+        "model": "gpt-test-upstream",
+        "object": "chat.completion",
+        "usage": {
+          "completion_tokens": 2,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "prompt_tokens": 5,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 7
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": [
+            "reasoning.encrypted_content"
+          ],
+          "input": [
+            {
+              "content": [
+                {
+                  "text": "Say hello",
+                  "type": "input_text"
+                }
+              ],
+              "role": "user",
+              "type": "message"
+            }
+          ],
+          "instructions": "",
+          "max_output_tokens": 64,
+          "model": "gpt-6.1-sol",
+          "parallel_tool_calls": true,
+          "prompt_cache_key": "becce0c1-881e-5dd4-88bc-0eaf647f4517",
+          "reasoning": {
+            "effort": "medium"
+          },
+          "store": false,
+          "stream": true,
+          "tools": [
+            {
+              "output_format": "png",
+              "type": "image_generation"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0NDQ4MDAsInN1YiI6ImNvcnB1c3xzay1jb3JwdXMtdXBzdHJlYW0ifQ.corpus",
+          "Chatgpt-Account-Id": "acct-sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "Originator": "codex-tui",
+          "Session-Id": "becce0c1-881e-5dd4-88bc-0eaf647f4517",
+          "User-Agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)",
+          "X-Codex-Routing-Hint": "model=gpt-6.1-sol"
+        },
+        "method": "POST",
+        "path": "/backend-api/codex/responses"
+      }
+    ]
+  }
+}

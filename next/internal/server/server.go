@@ -85,6 +85,7 @@ var responsesFormat = clientFormat{
 	parse:     bodyOnly(openairesponses.ParseRequest),
 	stream:    func(w io.Writer, req llm.Request) eventWriter { return openairesponses.NewStreamWriter(w, req) },
 	aggregate: func(req llm.Request) aggregator { return openairesponses.NewAggregator(req) },
+	headers:   openairesponses.Headers,
 }
 
 var messagesFormat = clientFormat{

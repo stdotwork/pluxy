@@ -72,7 +72,8 @@ type outFunctionTool struct {
 // what it could not carry over. Every item keeps its place in input; system and developer
 // messages stay messages with their role. Fields kept from a Responses source (Origin) are written
 // back. Reasoning from another provider cannot be replayed to a Responses upstream, so it is
-// dropped and reported. A user turn left with nothing to send after its unsupported parts are
+// dropped and reported, except a Messages thinking block that carries a Responses upstream's
+// encrypted reasoning in its signature, which goes back as that reasoning item. A user turn left with nothing to send after its unsupported parts are
 // dropped is an invalid_request error, never sent empty. It does not look at req.Native; callers
 // that can pass the native body through do so first.
 func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
@@ -176,6 +177,19 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 				out.Input = append(out.Input, marshal(m, it.Origin.Raw))
 				break
 			}
+			if sig, rest := carriedReasoning(it.Origin); sig != "" {
+				// A Messages thinking block whose signature is a Responses upstream's encrypted
+				// reasoning (see IsEncryptedReasoning) goes back as that reasoning item. Its
+				// thinking text was the upstream's summary; the encrypted content is what the
+				// upstream reads, so the summary is left empty, as today's core sends it.
+				m := map[string]any{"type": "reasoning", "summary": []any{}, "content": nil, "encrypted_content": sig}
+				out.Input = append(out.Input, marshal(m, nil))
+				e.losses = append(e.losses, rawjson.Losses(&llm.Origin{Format: it.Origin.Format, Path: it.Origin.Path, Raw: rest}, format)...)
+				if it.Text != "" {
+					e.lose(llm.LossApproximated, p+".thinking", "the reasoning's encrypted content is sent; its summary text is not")
+				}
+				break
+			}
 			e.lose(llm.LossDropped, p, "Responses cannot replay reasoning from another provider")
 		case llm.ItemTypeNative:
 			if it.Origin != nil && it.Origin.Format == format {
@@ -251,4 +265,19 @@ func partFormat(p llm.Part) string {
 		return p.Format
 	}
 	return p.Type
+}
+
+// carriedReasoning returns the encrypted reasoning a Messages thinking block carries in its
+// signature, and the block's other kept fields, when the signature has the shape of a Responses
+// upstream's encrypted reasoning; otherwise "".
+func carriedReasoning(o *llm.Origin) (string, json.RawMessage) {
+	if o == nil || o.Format != llm.FormatAnthropicMessages {
+		return "", nil
+	}
+	m := rawjson.Object(o.Raw)
+	var sig string
+	if json.Unmarshal(m["signature"], &sig) != nil || !IsEncryptedReasoning(sig) {
+		return "", nil
+	}
+	return sig, rawjson.Rest(m, "signature")
 }

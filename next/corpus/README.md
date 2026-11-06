@@ -56,6 +56,27 @@ The generated config is the same for every case:
 
 The client sends no `Accept-Encoding`, so replies are observed as the core sent them.
 
+Providers with their own folder of cases:
+
+| Provider | New core | Today's core |
+| --- | --- | --- |
+| `openai-compatible` | OpenAI-compatible extension, `wire_api` chat | an `openai-compatibility` entry |
+| `openai-responses`, `anthropic`, `gemini` | OpenAI-compatible extension, `wire_api` responses, messages or gemini | a Codex API key without the Codex identity, a Claude API key, a Gemini API key |
+| `codex` | Codex extension, API key | a Codex API key (Codex identity on) |
+| `codex-oauth` | Codex extension, a ChatGPT subscription's OAuth credential | a Codex auth file |
+
+Today's core sends a ChatGPT subscription's requests to `https://chatgpt.com/backend-api/codex`,
+which no setting moves. For `codex-oauth` the runner therefore gives the old core an HTTP proxy
+(the auth file's `proxy_url`) that accepts `CONNECT` only to `chatgpt.com:443`, ends the TLS
+connection itself with a certificate from a test authority made for the run (the old core
+trusts it through `SSL_CERT_FILE`), and hands the requests to the fake upstream. A `CONNECT` to
+any other host is refused and fails the case, so nothing reaches the internet: this is how the
+corpus noticed that today's core renews a subscription's token at `auth.openai.com` on a 401,
+which the corpus does not fake (no `codex-oauth` case answers 401). The fake tokens are
+unsigned JWTs that expire in 2100, so neither core renews them, and the old core is given time
+to load its auth file before the case runs. The subscription cases use `gpt-6.1-sol`, because
+today's core serves a subscription only the models in its catalog.
+
 ## Case files
 
 One file per case: `cases/<client format>/<provider>/<name>.json`. `cases/corpus.json` holds
@@ -163,4 +184,6 @@ A path joins keys with `.` and puts array indexes in brackets:
    with its reason.
 
 A new provider needs an entry in `Providers` (`cores.go`): how each core's config points that
-provider at the fake upstream. A new extension also goes in `NewCoreExtensions`.
+provider at the fake upstream (for the old core, its `api-keys` block, or auth files with
+`OldCoreAuthFiles`, and `Intercept` for a fixed upstream host). A new extension also goes in
+`NewCoreExtensions`.

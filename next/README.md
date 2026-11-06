@@ -7,7 +7,8 @@ Responses, Anthropic Messages and Gemini GenerateContent (streamed and not, over
 OpenAI-compatible API-key provider, which talks to an upstream that speaks any of them. A request
 in the upstream's own format passes through unchanged; a Responses, Messages or Gemini request to a
 Chat upstream, a Messages or Gemini request to a Responses upstream, and a Gemini request to a
-Messages upstream are translated, and what the translation could not carry is logged.
+Messages upstream are translated, and what the translation could not carry is logged. The
+[Codex provider](#codex) serves OpenAI's Codex models from an API key or a ChatGPT subscription.
 
 ## Layout
 
@@ -20,6 +21,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `conformance/` | The conformance kit extensions run in their tests. |
 | `format/` | Client and upstream formats as libraries extensions build in: `sse`, `openaichat`, `openairesponses`, `anthropicmessages`, `geminigenerate`. |
 | `extensions/openai-compatible` | Provider extension for OpenAI-compatible APIs with an API key. |
+| `extensions/codex` | Provider extension for OpenAI's Codex models: an OpenAI API key or a ChatGPT subscription (sign-in in a browser or with a device code), with a fake OpenAI login server and Codex endpoint for tests (`codextest`). |
 | `examples/scripted` | The tutorial's example extension. |
 | `examples/oauth` | An example provider that signs in by device code, browser (PKCE) or API key and renews its tokens, with a fake OAuth provider for tests (`oauthtest`). |
 | `internal/host`, `internal/server` | Core's extension host and HTTP API (client formats and the management API). |
@@ -79,6 +81,46 @@ clients may also send it in `x-goog-api-key` or the `key` query parameter.
 `drop_policy` (top level) says what happens when translating a request to the upstream's format
 would drop part of it: `"report"` (the default) sends it and logs what was dropped, `"reject"`
 refuses it with a 400 that names what could not be carried.
+
+## Codex
+
+The Codex provider extension (`extensions/codex`) serves OpenAI's Codex models from an OpenAI API
+key or a ChatGPT subscription. Build it as `extensions/codex/codex` and name its manifest:
+
+```json
+{
+  "management_key": "choose-a-management-key",
+  "extension": {
+    "manifest": "extensions/codex/pluxy-extension.json",
+    "accounts": [
+      {"id": "openai", "credential": {"kind": "api_key", "api_key": "sk-..."}}
+    ]
+  }
+}
+```
+
+A subscription is added by signing in through the management API (see
+[Accounts added by login](#accounts-added-by-login)), with method `browser` or `device`; `api_key`
+adds an API key the same way. A browser sign-in listens for its redirect on `localhost:1455`
+when that port is free on core's machine; otherwise, or when core runs elsewhere, send the
+address the browser ended on as the login's `redirect_url` input. Core renews a subscription's
+tokens four days before they expire (tokens that last less than that, five minutes before).
+
+Every request goes to `{base_url}/responses` as Codex takes it: streamed, not stored, with the
+reasoning's encrypted content included, sampling settings removed, and the Codex terminal
+client's `User-Agent` and `originator` (turn off with `"codex_identity": false`). Chat
+Completions, Messages and Gemini requests are translated to Responses. A Messages client (such as
+Claude Code) gets each reasoning item's encrypted content as its thinking block's signature, and
+replaying the block sends the reasoning back, so it carries over between turns. Account
+`settings`, all optional:
+
+| Field | Meaning |
+| --- | --- |
+| `base_url` | Default `https://api.openai.com/v1` for an API key, `https://chatgpt.com/backend-api/codex` for a subscription. |
+| `codex_identity` | Default `true`: send the Codex client's `User-Agent` and `originator`. |
+| `image_generation_tool` | Default `true`: offer the hosted `image_generation` tool, as today's core does (never to a free plan or a `-spark` model). |
+| `callback_listen` | Default `true`: let a browser sign-in listen on `localhost:1455`. |
+| `auth_base_url` | OpenAI's login server; for tests. |
 
 ## Accounts and routing
 

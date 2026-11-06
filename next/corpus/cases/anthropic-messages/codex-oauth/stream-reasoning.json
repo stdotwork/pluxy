@@ -1,0 +1,526 @@
+{
+  "description": "ChatGPT subscription: a streamed Messages request with extended thinking: the Responses reasoning item (summary deltas, then output_item.done with encrypted_content) becomes a thinking block whose signature is the encrypted content, followed by the text block.",
+  "source": [
+    "core/internal/translator/codex/claude/codex_claude_request.go (convertClaudeRequestToCodex: thinking enabled budget_tokens to reasoning.effort)",
+    "core/internal/translator/codex/claude/codex_claude_response.go (ConvertCodexResponseToClaude: response.output_item.added reasoning, response.reasoning_summary_part.added, response.reasoning_summary_text.delta, response.output_item.done reasoning; finalizeCodexThinkingBlock)",
+    "core/internal/translator/codex/claude/codex_claude_response_test.go (TestConvertCodexResponseToClaude_StreamThinkingIncludesSignature, TestConvertCodexResponseToClaude_StreamThinkingUsesFinalDoneSignature)",
+    "next/corpus/cases/anthropic-messages/openai-responses/stream-reasoning.json (same exchange through the Responses API-key upstream)",
+    "core/internal/runtime/executor/codex_executor_request.go (subscription headers: Chatgpt-Account-Id, X-Codex-Routing-Hint)"
+  ],
+  "client": {
+    "path": "/v1/messages",
+    "auth": "none",
+    "headers": {
+      "x-api-key": "corpus-client-key",
+      "anthropic-version": "2023-06-01"
+    },
+    "body": {
+      "model": "gpt-6.1-sol",
+      "max_tokens": 8192,
+      "stream": true,
+      "thinking": {
+        "type": "enabled",
+        "budget_tokens": 4096
+      },
+      "messages": [
+        {
+          "role": "user",
+          "content": "Say hello"
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {
+          "event": "response.created",
+          "data": {
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": {
+              "id": "resp_corpus",
+              "object": "response",
+              "created_at": 1700000000,
+              "status": "in_progress",
+              "model": "gpt-test-upstream",
+              "output": [],
+              "usage": null
+            }
+          }
+        },
+        {
+          "event": "response.output_item.added",
+          "data": {
+            "type": "response.output_item.added",
+            "sequence_number": 1,
+            "output_index": 0,
+            "item": {
+              "id": "rs_corpus",
+              "type": "reasoning",
+              "summary": []
+            }
+          }
+        },
+        {
+          "event": "response.reasoning_summary_part.added",
+          "data": {
+            "type": "response.reasoning_summary_part.added",
+            "sequence_number": 2,
+            "item_id": "rs_corpus",
+            "output_index": 0,
+            "summary_index": 0,
+            "part": {
+              "type": "summary_text",
+              "text": ""
+            }
+          }
+        },
+        {
+          "event": "response.reasoning_summary_text.delta",
+          "data": {
+            "type": "response.reasoning_summary_text.delta",
+            "sequence_number": 3,
+            "item_id": "rs_corpus",
+            "output_index": 0,
+            "summary_index": 0,
+            "delta": "Checking "
+          }
+        },
+        {
+          "event": "response.reasoning_summary_text.delta",
+          "data": {
+            "type": "response.reasoning_summary_text.delta",
+            "sequence_number": 4,
+            "item_id": "rs_corpus",
+            "output_index": 0,
+            "summary_index": 0,
+            "delta": "the question."
+          }
+        },
+        {
+          "event": "response.reasoning_summary_text.done",
+          "data": {
+            "type": "response.reasoning_summary_text.done",
+            "sequence_number": 5,
+            "item_id": "rs_corpus",
+            "output_index": 0,
+            "summary_index": 0,
+            "text": "Checking the question."
+          }
+        },
+        {
+          "event": "response.reasoning_summary_part.done",
+          "data": {
+            "type": "response.reasoning_summary_part.done",
+            "sequence_number": 6,
+            "item_id": "rs_corpus",
+            "output_index": 0,
+            "summary_index": 0,
+            "part": {
+              "type": "summary_text",
+              "text": "Checking the question."
+            }
+          }
+        },
+        {
+          "event": "response.output_item.done",
+          "data": {
+            "type": "response.output_item.done",
+            "sequence_number": 7,
+            "output_index": 0,
+            "item": {
+              "id": "rs_corpus",
+              "type": "reasoning",
+              "summary": [
+                {
+                  "type": "summary_text",
+                  "text": "Checking the question."
+                }
+              ],
+              "encrypted_content": "gAAAAABlU_EAY29ycHVzLWl2LTAwMDAwMGNvcnB1cy1jaXBoZXItMDBjb3JwdXMtaG1hYy1jb3JwdXMtaG1hYy1jb3JwdXMtLQ"
+            }
+          }
+        },
+        {
+          "event": "response.output_item.added",
+          "data": {
+            "type": "response.output_item.added",
+            "sequence_number": 8,
+            "output_index": 1,
+            "item": {
+              "id": "msg_corpus",
+              "type": "message",
+              "status": "in_progress",
+              "role": "assistant",
+              "content": []
+            }
+          }
+        },
+        {
+          "event": "response.content_part.added",
+          "data": {
+            "type": "response.content_part.added",
+            "sequence_number": 9,
+            "output_index": 1,
+            "content_index": 0,
+            "item_id": "msg_corpus",
+            "part": {
+              "type": "output_text",
+              "text": "",
+              "annotations": []
+            }
+          }
+        },
+        {
+          "event": "response.output_text.delta",
+          "data": {
+            "type": "response.output_text.delta",
+            "sequence_number": 10,
+            "output_index": 1,
+            "content_index": 0,
+            "item_id": "msg_corpus",
+            "delta": "Hello"
+          }
+        },
+        {
+          "event": "response.output_text.delta",
+          "data": {
+            "type": "response.output_text.delta",
+            "sequence_number": 11,
+            "output_index": 1,
+            "content_index": 0,
+            "item_id": "msg_corpus",
+            "delta": " there."
+          }
+        },
+        {
+          "event": "response.output_text.done",
+          "data": {
+            "type": "response.output_text.done",
+            "sequence_number": 12,
+            "output_index": 1,
+            "content_index": 0,
+            "item_id": "msg_corpus",
+            "text": "Hello there."
+          }
+        },
+        {
+          "event": "response.content_part.done",
+          "data": {
+            "type": "response.content_part.done",
+            "sequence_number": 13,
+            "output_index": 1,
+            "content_index": 0,
+            "item_id": "msg_corpus",
+            "part": {
+              "type": "output_text",
+              "text": "Hello there.",
+              "annotations": []
+            }
+          }
+        },
+        {
+          "event": "response.output_item.done",
+          "data": {
+            "type": "response.output_item.done",
+            "sequence_number": 14,
+            "output_index": 1,
+            "item": {
+              "id": "msg_corpus",
+              "type": "message",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Hello there.",
+                  "annotations": []
+                }
+              ]
+            }
+          }
+        },
+        {
+          "event": "response.completed",
+          "data": {
+            "type": "response.completed",
+            "sequence_number": 15,
+            "response": {
+              "id": "resp_corpus",
+              "object": "response",
+              "created_at": 1700000000,
+              "status": "completed",
+              "model": "gpt-test-upstream",
+              "output": [
+                {
+                  "id": "rs_corpus",
+                  "type": "reasoning",
+                  "summary": [
+                    {
+                      "type": "summary_text",
+                      "text": "Checking the question."
+                    }
+                  ],
+                  "encrypted_content": "gAAAAABlU_EAY29ycHVzLWl2LTAwMDAwMGNvcnB1cy1jaXBoZXItMDBjb3JwdXMtaG1hYy1jb3JwdXMtaG1hYy1jb3JwdXMtLQ"
+                },
+                {
+                  "id": "msg_corpus",
+                  "type": "message",
+                  "status": "completed",
+                  "role": "assistant",
+                  "content": [
+                    {
+                      "type": "output_text",
+                      "text": "Hello there.",
+                      "annotations": []
+                    }
+                  ]
+                }
+              ],
+              "usage": {
+                "input_tokens": 30,
+                "input_tokens_details": {
+                  "cached_tokens": 0
+                },
+                "output_tokens": 20,
+                "output_tokens_details": {
+                  "reasoning_tokens": 12
+                },
+                "total_tokens": 50
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[*].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."
+    },
+    {
+      "path": "upstream[*].headers.Session-Id",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    },
+    {
+      "path": "upstream[*].body.prompt_cache_key",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    },
+    {
+      "path": "client.events[0].data.message.usage.input_tokens",
+      "kind": "gap",
+      "reason": "Today's core puts its own local estimate of the input tokens in message_start; the new core has no tokenizer and sends 0 there, as Anthropic's message_start allows, until message_delta carries the upstream's count.",
+      "want": 0
+    },
+    {
+      "path": "client.events[10].data.usage.output_tokens_details",
+      "kind": "gap",
+      "reason": "Today's core adds a non-standard usage.output_tokens_details.thinking_tokens to Messages usage from a Responses upstream; Anthropic's usage object has no such field and the new core leaves it out. Whether to keep it is open.",
+      "absent": true
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {
+          "data": {
+            "message": {
+              "content": [],
+              "id": "resp_corpus",
+              "model": "gpt-test-upstream",
+              "role": "assistant",
+              "stop_reason": null,
+              "stop_sequence": null,
+              "type": "message",
+              "usage": {
+                "input_tokens": 4,
+                "output_tokens": 0
+              }
+            },
+            "type": "message_start"
+          },
+          "event": "message_start"
+        },
+        {
+          "data": {
+            "content_block": {
+              "thinking": "",
+              "type": "thinking"
+            },
+            "index": 0,
+            "type": "content_block_start"
+          },
+          "event": "content_block_start"
+        },
+        {
+          "data": {
+            "delta": {
+              "thinking": "Checking ",
+              "type": "thinking_delta"
+            },
+            "index": 0,
+            "type": "content_block_delta"
+          },
+          "event": "content_block_delta"
+        },
+        {
+          "data": {
+            "delta": {
+              "thinking": "the question.",
+              "type": "thinking_delta"
+            },
+            "index": 0,
+            "type": "content_block_delta"
+          },
+          "event": "content_block_delta"
+        },
+        {
+          "data": {
+            "delta": {
+              "signature": "gAAAAABlU_EAY29ycHVzLWl2LTAwMDAwMGNvcnB1cy1jaXBoZXItMDBjb3JwdXMtaG1hYy1jb3JwdXMtaG1hYy1jb3JwdXMtLQ",
+              "type": "signature_delta"
+            },
+            "index": 0,
+            "type": "content_block_delta"
+          },
+          "event": "content_block_delta"
+        },
+        {
+          "data": {
+            "index": 0,
+            "type": "content_block_stop"
+          },
+          "event": "content_block_stop"
+        },
+        {
+          "data": {
+            "content_block": {
+              "text": "",
+              "type": "text"
+            },
+            "index": 1,
+            "type": "content_block_start"
+          },
+          "event": "content_block_start"
+        },
+        {
+          "data": {
+            "delta": {
+              "text": "Hello",
+              "type": "text_delta"
+            },
+            "index": 1,
+            "type": "content_block_delta"
+          },
+          "event": "content_block_delta"
+        },
+        {
+          "data": {
+            "delta": {
+              "text": " there.",
+              "type": "text_delta"
+            },
+            "index": 1,
+            "type": "content_block_delta"
+          },
+          "event": "content_block_delta"
+        },
+        {
+          "data": {
+            "index": 1,
+            "type": "content_block_stop"
+          },
+          "event": "content_block_stop"
+        },
+        {
+          "data": {
+            "delta": {
+              "stop_reason": "end_turn",
+              "stop_sequence": null
+            },
+            "type": "message_delta",
+            "usage": {
+              "input_tokens": 30,
+              "output_tokens": 20,
+              "output_tokens_details": {
+                "thinking_tokens": 12
+              }
+            }
+          },
+          "event": "message_delta"
+        },
+        {
+          "data": {
+            "type": "message_stop"
+          },
+          "event": "message_stop"
+        }
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": [
+            "reasoning.encrypted_content"
+          ],
+          "input": [
+            {
+              "content": [
+                {
+                  "text": "Say hello",
+                  "type": "input_text"
+                }
+              ],
+              "role": "user",
+              "type": "message"
+            }
+          ],
+          "instructions": "",
+          "max_output_tokens": 8192,
+          "model": "gpt-6.1-sol",
+          "parallel_tool_calls": true,
+          "prompt_cache_key": "0bb04468-244c-51fa-8540-e4ce1d784add",
+          "reasoning": {
+            "effort": "medium"
+          },
+          "store": false,
+          "stream": true,
+          "tools": [
+            {
+              "output_format": "png",
+              "type": "image_generation"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0NDQ4MDAsInN1YiI6ImNvcnB1c3xzay1jb3JwdXMtdXBzdHJlYW0ifQ.corpus",
+          "Chatgpt-Account-Id": "acct-sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "Originator": "codex-tui",
+          "Session-Id": "0bb04468-244c-51fa-8540-e4ce1d784add",
+          "User-Agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)",
+          "X-Codex-Routing-Hint": "model=gpt-6.1-sol"
+        },
+        "method": "POST",
+        "path": "/backend-api/codex/responses"
+      }
+    ]
+  }
+}

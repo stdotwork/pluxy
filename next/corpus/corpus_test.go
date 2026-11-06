@@ -152,7 +152,7 @@ func runCase(t *testing.T, c *Case, global *Global) Result {
 	res := Result{Case: c}
 	volatile := append(append([]string(nil), global.Volatile...), c.Volatile...)
 
-	newObs, err := observe(t, c, "new", func(dir, upstreamURL string) (*Core, error) {
+	newObs, err := observe(t, c, "new", func(dir, upstreamURL, _, _ string) (*Core, error) {
 		return StartNewCore(binDir, dir, c.Provider, upstreamURL, c.AccountModels, UpstreamKeys(c.Accounts))
 	})
 	if err != nil {
@@ -180,8 +180,9 @@ func runCase(t *testing.T, c *Case, global *Global) Result {
 		Mask(ref, volatile)
 	}
 	if liveOld {
-		oldObs, err := observe(t, c, "old", func(dir, upstreamURL string) (*Core, error) {
-			return StartOldCore(OldCoreSetup{Binary: oldBinary, WorkDir: dir, Provider: c.Provider, UpstreamURL: upstreamURL, Models: caseModels(c), Keys: UpstreamKeys(c.Accounts)})
+		oldObs, err := observe(t, c, "old", func(dir, upstreamURL, proxyURL, caFile string) (*Core, error) {
+			return StartOldCore(OldCoreSetup{Binary: oldBinary, WorkDir: dir, Provider: c.Provider, UpstreamURL: upstreamURL, Models: caseModels(c), Keys: UpstreamKeys(c.Accounts),
+				ProxyURL: proxyURL, CAFile: caFile})
 		})
 		if err != nil {
 			res.Err = fmt.Errorf("old core: %w", err)
@@ -220,17 +221,30 @@ func runCase(t *testing.T, c *Case, global *Global) Result {
 }
 
 // observe runs the case once against a core started by start, with a fresh fake upstream.
-func observe(t *testing.T, c *Case, label string, start func(dir, upstreamURL string) (*Core, error)) (Observation, error) {
+// For the old core and a provider with Intercept set, start also gets the URL of an
+// intercepting proxy in front of the fake upstream and the test authority's certificate file.
+func observe(t *testing.T, c *Case, label string, start func(dir, upstreamURL, proxyURL, caFile string) (*Core, error)) (Observation, error) {
 	coreSlots <- struct{}{}
 	defer func() { <-coreSlots }()
 	up := NewFakeUpstream(c.Upstream)
 	defer up.Close()
+	var proxyURL, caFile string
+	var ic *interceptor
+	if label == "old" && Providers[c.Provider].Intercept {
+		ca, err := TestCA(binDir)
+		if err != nil {
+			return nil, err
+		}
+		ic = up.Intercept(ca)
+		defer ic.Close()
+		proxyURL, caFile = ic.URL, ca.File
+	}
 	dir, err := os.MkdirTemp("", "pluxy-corpus-"+label+"-")
 	if err != nil {
 		return nil, err
 	}
 	defer os.RemoveAll(dir)
-	core, err := start(dir, up.URL)
+	core, err := start(dir, up.URL, proxyURL, caFile)
 	if err != nil {
 		return nil, err
 	}
@@ -240,6 +254,11 @@ func observe(t *testing.T, c *Case, label string, start func(dir, upstreamURL st
 	obs, err := Run(ctx, c, core.URL, up)
 	if err != nil {
 		return nil, fmt.Errorf("%w\ncore output:\n%s", err, core.Logs())
+	}
+	if ic != nil {
+		if r := ic.Refused(); len(r) > 0 {
+			return nil, fmt.Errorf("the core tried to reach hosts the intercepting proxy refuses: %v", r)
+		}
 	}
 	if testing.Verbose() && os.Getenv("PLUXY_CORPUS_LOGS") == "1" {
 		t.Logf("%s core output:\n%s", label, core.Logs())

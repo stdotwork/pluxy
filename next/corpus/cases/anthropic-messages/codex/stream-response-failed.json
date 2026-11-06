@@ -1,0 +1,191 @@
+{
+  "description": "A Responses stream that ends with response.failed (server_error) reaches the Messages client as message_start followed by a terminal error event (type api_error, the upstream's message). No content block and no message_stop follow, and the failure is not turned into a successful message.",
+  "source": [
+    "core/internal/runtime/executor/codex_executor_terminal.go (terminal event conversion: case response.failed reads the upstream error body)",
+    "core/internal/translator/codex/claude/codex_claude_response.go (ConvertCodexResponseToClaude: no case for response.failed; case error and codexStreamErrorToClaudeError)",
+    "core/internal/translator/codex/claude/codex_claude_response_test.go (TestConvertCodexResponseToClaude_StreamErrorTypeFallbackMessage)",
+    "next/corpus/cases/anthropic-messages/openai-responses/stream-response-failed.json (same exchange through the Responses API-key upstream)"
+  ],
+  "client": {
+    "path": "/v1/messages",
+    "auth": "none",
+    "headers": {
+      "x-api-key": "corpus-client-key",
+      "anthropic-version": "2023-06-01"
+    },
+    "body": {
+      "model": "gpt-test",
+      "max_tokens": 1024,
+      "stream": true,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Say hello"
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {
+          "event": "response.created",
+          "data": {
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": {
+              "id": "resp_corpus",
+              "object": "response",
+              "created_at": 1700000000,
+              "status": "in_progress",
+              "model": "gpt-test-upstream",
+              "output": [],
+              "usage": null
+            }
+          }
+        },
+        {
+          "event": "response.failed",
+          "data": {
+            "type": "response.failed",
+            "sequence_number": 1,
+            "response": {
+              "id": "resp_corpus",
+              "object": "response",
+              "created_at": 1700000000,
+              "status": "failed",
+              "model": "gpt-test-upstream",
+              "output": [],
+              "usage": null,
+              "error": {
+                "code": "server_error",
+                "message": "The model failed to generate a response."
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "client.events[0].data.message.usage.input_tokens",
+      "kind": "gap",
+      "reason": "Today's core puts its own local estimate of the input tokens in message_start; the new core has no tokenizer and sends 0 there, as Anthropic's message_start allows, until message_delta carries the upstream's count.",
+      "want": 0
+    },
+    {
+      "path": "upstream[*].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."
+    },
+    {
+      "path": "upstream[*].headers.Session-Id",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    },
+    {
+      "path": "upstream[*].body.prompt_cache_key",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    },
+    {
+      "path": "upstream[0].body.reasoning",
+      "kind": "intended",
+      "reason": "The new core sends the reasoning effort the client asked for (reasoning_effort, a Messages thinking budget's effort or a model-name suffix) whatever the model, and gives a translated request that names none the medium effort today's core gives it; today's core checks the effort against its model catalog and drops it for a model it does not list, such as gpt-test. The *-catalog-model cases and the codex-oauth cases show both cores sending it for a model today's core lists.",
+      "want": {
+        "effort": "medium"
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {
+          "data": {
+            "message": {
+              "content": [],
+              "id": "resp_corpus",
+              "model": "gpt-test-upstream",
+              "role": "assistant",
+              "stop_reason": null,
+              "stop_sequence": null,
+              "type": "message",
+              "usage": {
+                "input_tokens": 4,
+                "output_tokens": 0
+              }
+            },
+            "type": "message_start"
+          },
+          "event": "message_start"
+        },
+        {
+          "data": {
+            "error": {
+              "message": "The model failed to generate a response.",
+              "type": "api_error"
+            },
+            "type": "error"
+          },
+          "event": "error"
+        }
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": [
+            "reasoning.encrypted_content"
+          ],
+          "input": [
+            {
+              "content": [
+                {
+                  "text": "Say hello",
+                  "type": "input_text"
+                }
+              ],
+              "role": "user",
+              "type": "message"
+            }
+          ],
+          "instructions": "",
+          "max_output_tokens": 1024,
+          "model": "gpt-test",
+          "parallel_tool_calls": true,
+          "prompt_cache_key": "0bb04468-244c-51fa-8540-e4ce1d784add",
+          "store": false,
+          "stream": true,
+          "tools": [
+            {
+              "output_format": "png",
+              "type": "image_generation"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "Originator": "codex-tui",
+          "Session-Id": "0bb04468-244c-51fa-8540-e4ce1d784add",
+          "User-Agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      }
+    ]
+  }
+}

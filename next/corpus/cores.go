@@ -2,12 +2,14 @@ package corpus
 
 import (
 	"bufio"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,6 +44,13 @@ type Provider struct {
 	// accounts for the provider, one per key. models is empty when the accounts serve any
 	// model.
 	NewCore func(upstreamURL string, models, keys []string) (extension string, accounts []any)
+	// OldCoreAuthFiles, when set, returns auth files to write into the old core's auth folder,
+	// by file name, one account per key. proxyURL is the intercepting proxy the files must name
+	// when Intercept is set.
+	OldCoreAuthFiles func(proxyURL string, models, keys []string) map[string]any
+	// Intercept runs the old core through the intercepting proxy (see InterceptHosts), for a
+	// provider whose upstream host no setting moves.
+	Intercept bool
 }
 
 // Providers maps a provider directory name to its setup. Later slices add theirs here.
@@ -122,6 +131,96 @@ var Providers = map[string]Provider{
 				accounts = append(accounts, acct)
 			}
 			return "openai-compatible", accounts
+		},
+	},
+	// A Codex API key: the Codex provider extension in the new core, a codex-api-key entry with
+	// the Codex client identity on (the default) in today's core. Both send requests to
+	// {base_url}/responses.
+	"codex": {
+		OldCore: func(upstreamURL string, models, keys []string) map[string]any {
+			var ms []any
+			for _, m := range models {
+				ms = append(ms, map[string]any{"name": m, "alias": m})
+			}
+			var ks []any
+			for _, k := range keys {
+				ks = append(ks, map[string]any{"api-key": k})
+			}
+			return map[string]any{"codex": []any{map[string]any{
+				"name":     "corpus",
+				"base-url": upstreamURL + "/v1",
+				"keys":     ks,
+				"models":   ms,
+			}}}
+		},
+		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
+			var accounts []any
+			for i, k := range keys {
+				id := "corpus"
+				if i > 0 {
+					id = fmt.Sprintf("corpus-%d", i+1)
+				}
+				acct := map[string]any{
+					"id":         id,
+					"settings":   map[string]any{"base_url": upstreamURL + "/v1"},
+					"credential": map[string]any{"kind": "api_key", "api_key": k},
+				}
+				if len(models) > 0 {
+					acct["models"] = models
+				}
+				accounts = append(accounts, acct)
+			}
+			return "codex", accounts
+		},
+	},
+	// A ChatGPT subscription signed in to Codex: the Codex provider extension with an OAuth
+	// credential in the new core, a Codex auth file in today's core. Today's core always calls
+	// https://chatgpt.com/backend-api/codex, so it runs through the intercepting proxy; the new
+	// core's account points base_url at the same path on the fake upstream. The tokens are fake
+	// JWTs that expire in 2100, so neither core tries to renew them.
+	"codex-oauth": {
+		Intercept: true,
+		OldCore:   func(string, []string, []string) map[string]any { return map[string]any{} },
+		OldCoreAuthFiles: func(proxyURL string, models, keys []string) map[string]any {
+			files := map[string]any{}
+			for i, k := range keys {
+				t := corpusTokens(k)
+				f := map[string]any{
+					"type":          "codex",
+					"email":         t.email,
+					"account_id":    t.accountID,
+					"plan_type":     "plus",
+					"access_token":  t.access,
+					"id_token":      t.id,
+					"refresh_token": t.refresh,
+					"expired":       "2100-01-01T00:00:00Z",
+					"last_refresh":  "2026-01-01T00:00:00Z",
+					"proxy_url":     proxyURL,
+				}
+				files[fmt.Sprintf("codex-corpus-%d.json", i+1)] = f
+			}
+			return files
+		},
+		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
+			var accounts []any
+			for i, k := range keys {
+				id := "corpus"
+				if i > 0 {
+					id = fmt.Sprintf("corpus-%d", i+1)
+				}
+				t := corpusTokens(k)
+				acct := map[string]any{
+					"id":       id,
+					"settings": map[string]any{"base_url": upstreamURL + "/backend-api/codex"},
+					"credential": map[string]any{"kind": "oauth", "access_token": t.access, "refresh_token": t.refresh,
+						"expires_at": corpusTokenExpiry, "data": map[string]any{"id_token": t.id, "account_id": t.accountID}},
+				}
+				if len(models) > 0 {
+					acct["models"] = models
+				}
+				accounts = append(accounts, acct)
+			}
+			return "codex", accounts
 		},
 	},
 	// An upstream that speaks Anthropic Messages with an API key. The new core uses the
@@ -210,6 +309,7 @@ var Providers = map[string]Provider{
 // NewCoreExtensions maps an extension name to its package, relative to the next module root.
 var NewCoreExtensions = map[string]string{
 	"openai-compatible": "./extensions/openai-compatible",
+	"codex":             "./extensions/codex",
 }
 
 // BuildNewCore builds the new core and its extensions into dir. moduleRoot is the next/
@@ -290,6 +390,10 @@ type OldCoreSetup struct {
 	UpstreamURL string
 	Models      []string
 	Keys        []string // one upstream key per account
+	// ProxyURL and CAFile are the intercepting proxy and the test authority's certificate, for
+	// a provider with Intercept set.
+	ProxyURL string
+	CAFile   string
 }
 
 // StartOldCore starts today's core on a free local port with a generated config: the client
@@ -310,6 +414,14 @@ func StartOldCore(s OldCoreSetup) (*Core, error) {
 	authDir := filepath.Join(s.WorkDir, "auths")
 	if err := os.MkdirAll(authDir, 0o700); err != nil {
 		return nil, err
+	}
+	if p.OldCoreAuthFiles != nil {
+		for name, f := range p.OldCoreAuthFiles(s.ProxyURL, s.Models, s.Keys) {
+			b, _ := json.Marshal(f)
+			if err := os.WriteFile(filepath.Join(authDir, name), b, 0o600); err != nil {
+				return nil, err
+			}
+		}
 	}
 	cfg := map[string]any{
 		"config-version": 8,
@@ -338,8 +450,54 @@ func StartOldCore(s OldCoreSetup) (*Core, error) {
 	cmd := exec.Command(s.Binary, "-config", path, "-local-model")
 	cmd.Dir = s.WorkDir
 	cmd.Env = isolatedEnv(s.WorkDir)
+	if p.Intercept {
+		cmd.Env = append(cmd.Env, "SSL_CERT_FILE="+s.CAFile)
+	}
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	return startProcess(cmd, regexp.MustCompile(`API server started successfully on: (\S+)`), "http://"+addr)
+	core, err := startProcess(cmd, regexp.MustCompile(`API server started successfully on: (\S+)`), "http://"+addr)
+	if err != nil || p.OldCoreAuthFiles == nil {
+		return core, err
+	}
+	// The old core loads auth files after it reports that it started; wait until it serves the
+	// case's model.
+	if err := waitModel(core.URL, s.Models); err != nil {
+		core.Stop()
+		return nil, fmt.Errorf("%w\ncore output:\n%s", err, core.Logs())
+	}
+	return core, nil
+}
+
+// waitModel waits until the core at url lists every model in models.
+func waitModel(url string, models []string) error {
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		req, _ := http.NewRequest(http.MethodGet, url+"/v1/models", nil)
+		req.Header.Set("Authorization", "Bearer "+ClientKey)
+		if resp, err := http.DefaultClient.Do(req); err == nil {
+			var list struct {
+				Data []struct {
+					ID string `json:"id"`
+				} `json:"data"`
+			}
+			_ = json.NewDecoder(resp.Body).Decode(&list)
+			resp.Body.Close()
+			seen := map[string]bool{}
+			for _, m := range list.Data {
+				seen[m.ID] = true
+			}
+			all := true
+			for _, m := range models {
+				all = all && seen[m]
+			}
+			if all {
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("the old core did not list %v within 15s of starting", models)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // isolatedEnv is the environment for a core under test: nothing from the caller's
@@ -497,4 +655,26 @@ func (l *logBuffer) String() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return strings.Join(l.lines, "\n")
+}
+
+// corpusTokenExpiry is when the corpus's fake subscription tokens expire: 2100-01-01.
+const corpusTokenExpiry = 4102444800
+
+// fakeTokens are a fake ChatGPT sign-in for one corpus account: unsigned JWTs with the claims
+// both cores read, deterministic so recordings stay stable. Nothing checks their signatures.
+type fakeTokens struct {
+	access, id, refresh, accountID, email string
+}
+
+func corpusTokens(key string) fakeTokens {
+	jwt := func(claims map[string]any) string {
+		h := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
+		b, _ := json.Marshal(claims)
+		return h + "." + base64.RawURLEncoding.EncodeToString(b) + ".corpus"
+	}
+	t := fakeTokens{accountID: "acct-" + key, email: key + "@example.invalid", refresh: "corpus-refresh-" + key}
+	t.access = jwt(map[string]any{"exp": corpusTokenExpiry, "sub": "corpus|" + key})
+	t.id = jwt(map[string]any{"exp": corpusTokenExpiry, "email": t.email,
+		"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": t.accountID, "chatgpt_plan_type": "plus"}})
+	return t
 }
