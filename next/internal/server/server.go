@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/stdotwork/pluxy/next/format/anthropicmessages"
 	"github.com/stdotwork/pluxy/next/format/geminigenerate"
@@ -130,7 +131,12 @@ func New(cfg *Config, generate GenerateFunc, creds *cred.Manager) (http.Handler,
 	}
 	if creds != nil {
 		router.UseCredentials(creds)
+		// One update at a time, each reading the accounts when it runs: an update that read an
+		// older set can never be published after a newer one.
+		var mu sync.Mutex
 		update := func() {
+			mu.Lock()
+			defer mu.Unlock()
 			accounts := slices.Clone(cfg.Extension.Accounts)
 			for _, a := range creds.Accounts() {
 				if slices.ContainsFunc(cfg.Extension.Accounts, func(c route.Account) bool { return c.ID == a.ID }) {

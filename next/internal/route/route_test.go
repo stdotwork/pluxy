@@ -595,3 +595,29 @@ func TestModelStateIsBounded(t *testing.T) {
 		t.Errorf("24h later: %d scopes, %d model cursors; want 0 and at most 1", n, cursors)
 	}
 }
+
+// fakeCredentials stands in for core's credential store at the router's boundary: every
+// refused credential is renewed.
+type fakeCredentials struct{ version uint64 }
+
+func (f *fakeCredentials) Credential(context.Context, string) (*protocol.Credential, uint64, *llm.Error) {
+	return &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: fmt.Sprint("access-", f.version)}, f.version, nil
+}
+
+func (f *fakeCredentials) Rejected(_ context.Context, _ string, version uint64) bool {
+	if version == f.version {
+		f.version++
+	}
+	return true
+}
+
+// After the upstream refuses an account's credential and it is renewed, the request goes back
+// to that account, not to the next one in rotation.
+func TestRenewedAccountIsTriedAgain(t *testing.T) {
+	h := newHarness(t, Config{}, Account{ID: "a", Managed: true}, Account{ID: "b"})
+	h.r.UseCredentials(&fakeCredentials{})
+	h.on("a", fail(llm.Error{Code: llm.CodeAuth, Status: 401, Retryable: true, Scope: llm.ScopeCredential}), ok())
+	h.on("b", fail(llm.Error{Code: llm.CodeInvalidRequest, Status: 400, Scope: llm.ScopeRequest, Message: "b rejected request"}))
+	h.runOK("m")
+	h.wantAttempts("a", "a")
+}

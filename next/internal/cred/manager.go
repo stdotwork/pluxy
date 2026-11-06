@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"reflect"
 	"slices"
 	"sync"
 	"time"
@@ -388,7 +389,7 @@ func (m *Manager) apply(cur Record, cred *protocol.Credential, perr *llm.Error) 
 	now := m.now()
 	switch {
 	case perr == nil:
-		next, err := m.store.Update(cur.ID, cur.Registration, cur.Version, func(r *Record) {
+		next, err := m.updateRenewed(cur, func(r *Record) {
 			r.Credential = *cred
 			r.State, r.Reason = StateActive, ""
 		})
@@ -397,7 +398,7 @@ func (m *Manager) apply(cur Record, cred *protocol.Credential, perr *llm.Error) 
 			log.Printf("credentials: account %q: refused a renewed credential: the account was removed while it was being renewed", cur.ID)
 			return Record{}, credentialError(llm.CodeUnavailable, fmt.Sprintf("account %q was removed", cur.ID))
 		case errors.Is(err, ErrStale):
-			log.Printf("credentials: account %q: refused a renewed credential: the account changed while it was being renewed", cur.ID)
+			log.Printf("credentials: account %q: refused a renewed credential: the account's credential was replaced while it was being renewed", cur.ID)
 			return next, nil
 		case err != nil:
 			log.Printf("credentials: account %q: saving the renewed credential failed: %v", cur.ID, err)
@@ -411,12 +412,19 @@ func (m *Manager) apply(cur Record, cred *protocol.Credential, perr *llm.Error) 
 		m.setRenewal(cur.ID, rn)
 		return next, nil
 	case rejectedGrant(perr):
-		next, err := m.store.Update(cur.ID, cur.Registration, cur.Version, func(r *Record) {
+		next, err := m.updateRenewed(cur, func(r *Record) {
 			r.State, r.Reason = StateReauth, perr.Message
 		})
-		if err != nil {
-			// The account changed meanwhile (a new login, say): the refusal was about the old grant.
+		switch {
+		case errors.Is(err, ErrNotFound):
+			return Record{}, credentialError(llm.CodeUnavailable, fmt.Sprintf("account %q was removed", cur.ID))
+		case errors.Is(err, ErrStale):
+			// The credential was replaced meanwhile (a new login): the refusal was about the old one.
 			return next, nil
+		case err != nil:
+			log.Printf("credentials: account %q: the provider refused the grant, and saving that failed: %v", cur.ID, err)
+			m.setRenewal(cur.ID, &renewal{at: now, until: now.Add(failedBackoff), err: perr})
+			return cur, perr
 		}
 		log.Printf("credentials: account %q needs a new login: %s", cur.ID, perr.Message)
 		m.setRenewal(cur.ID, &renewal{at: now, err: perr})
@@ -425,6 +433,13 @@ func (m *Manager) apply(cur Record, cred *protocol.Credential, perr *llm.Error) 
 	case perr.Code == llm.CodeCancelled:
 		return cur, perr
 	default:
+		if latest, ok := m.store.Get(cur.ID); !ok {
+			return Record{}, credentialError(llm.CodeUnavailable, fmt.Sprintf("account %q was removed", cur.ID))
+		} else if latest.Registration != cur.Registration || !sameCredential(latest.Credential, cur.Credential) {
+			// The failure was about a credential that has since been replaced: it says
+			// nothing about the new one.
+			return latest, nil
+		}
 		wait := failedBackoff
 		if perr.RetryAfterMS > 0 {
 			wait = time.Duration(perr.RetryAfterMS) * time.Millisecond
@@ -433,6 +448,29 @@ func (m *Manager) apply(cur Record, cred *protocol.Credential, perr *llm.Error) 
 		m.setRenewal(cur.ID, &renewal{at: now, until: now.Add(wait), err: perr})
 		return cur, perr
 	}
+}
+
+// updateRenewed applies change to the account renewed from cur, if the account still holds
+// cur's credential under cur's registration. Changes to anything else made meanwhile (a
+// disable, a label) do not refuse it: change is applied on top of them. A replaced credential
+// returns ErrStale with the current record; a removed account, ErrNotFound.
+func (m *Manager) updateRenewed(cur Record, change func(*Record)) (Record, error) {
+	base := cur
+	for {
+		next, err := m.store.Update(base.ID, base.Registration, base.Version, change)
+		if !errors.Is(err, ErrStale) {
+			return next, err
+		}
+		if next.Registration != cur.Registration || !sameCredential(next.Credential, cur.Credential) {
+			return next, ErrStale
+		}
+		base = next
+	}
+}
+
+// sameCredential reports whether a and b are the same credential.
+func sameCredential(a, b protocol.Credential) bool {
+	return reflect.DeepEqual(a, b)
 }
 
 func (m *Manager) setRenewal(id string, rn *renewal) {

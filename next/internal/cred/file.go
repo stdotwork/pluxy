@@ -18,6 +18,9 @@ import (
 //
 // shortcut: no file lock, so two cores must not share a folder (their refreshes would not be
 // serialised against each other); add a lock or a lease when one folder serves several cores.
+//
+// shortcut: on Windows the modes do not restrict access (Go applies only the read-only bit);
+// files inherit the folder's ACL. Set an owner-only ACL before Windows is a supported platform.
 type FileBackend struct {
 	Dir string
 }

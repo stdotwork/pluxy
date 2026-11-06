@@ -50,7 +50,7 @@ type login struct {
 	reauth              bool
 	registration        string // the account's, for a reauth
 	fields              route.Account
-	call                LoginCall
+	call                LoginCall // set under Manager.mu once the call has started
 	cancel              context.CancelFunc
 	first               chan struct{} // closed after the first frame
 	firstOnce           bool
@@ -122,7 +122,10 @@ func (m *Manager) StartLogin(ctx context.Context, req LoginRequest) (LoginView, 
 	m.wg.Add(1)
 	m.mu.Unlock()
 
-	l.call = m.prov.Login(lctx, protocol.Account{ID: id, Settings: l.fields.Settings}, protocol.Login{Method: req.Method, Input: req.Input})
+	call := m.prov.Login(lctx, protocol.Account{ID: id, Settings: l.fields.Settings}, protocol.Login{Method: req.Method, Input: req.Input})
+	m.mu.Lock()
+	l.call = call
+	m.mu.Unlock()
 	go m.runLogin(l)
 	select {
 	case <-l.first:
@@ -234,15 +237,21 @@ func (m *Manager) Login(id string) (LoginView, bool) {
 func (m *Manager) LoginInput(id string, input map[string]string) error {
 	m.mu.Lock()
 	l, ok := m.logins[id]
+	var call LoginCall
 	pending := ok && l.state == LoginPending
+	if ok {
+		call = l.call
+	}
 	m.mu.Unlock()
-	if !ok {
+	switch {
+	case !ok:
 		return ErrNotFound
-	}
-	if !pending {
+	case !pending:
 		return fmt.Errorf("%w: login %s has finished", ErrConflict, id)
+	case call == nil:
+		return fmt.Errorf("%w: login %s is still starting; try again", ErrConflict, id)
 	}
-	return l.call.Send(input)
+	return call.Send(input)
 }
 
 // CancelLogin cancels a running login.

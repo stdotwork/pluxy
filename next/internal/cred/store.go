@@ -108,7 +108,11 @@ func Open(b Backend) (*Store, error) {
 		if r.Format != RecordFormat {
 			return nil, fmt.Errorf("credential store: account %q has record format %d; this core reads %d", r.ID, r.Format, RecordFormat)
 		}
-		if _, dup := s.recs[r.ID]; dup || !ValidID(r.ID) {
+		dup := false
+		for id := range s.recs {
+			dup = dup || strings.EqualFold(id, r.ID)
+		}
+		if dup || !ValidID(r.ID) {
 			return nil, fmt.Errorf("credential store: account ID %q is not valid or is used twice", r.ID)
 		}
 		s.recs[r.ID] = r
@@ -143,8 +147,12 @@ func (s *Store) Create(r Record) (Record, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.recs[r.ID]; ok {
-		return Record{}, ErrExists
+	for id := range s.recs {
+		// IDs name files, and on case-insensitive file systems (macOS, Windows) IDs that
+		// differ only in case name the same file.
+		if strings.EqualFold(id, r.ID) {
+			return Record{}, ErrExists
+		}
 	}
 	r.Format, r.Version, r.Registration = RecordFormat, 1, newRegistration()
 	r.CreatedAt = s.now().UTC()

@@ -77,8 +77,7 @@ func (l *LoginCall) Next() protocol.Reply {
 	}
 	switch {
 	case r.Type == protocol.TypeLoginPrompt && r.Prompt != nil:
-		p := *r.Prompt
-		p.Message = l.redactor().String(p.Message)
+		p := redactPrompt(l.redactor(), *r.Prompt)
 		return protocol.Reply{Event: llm.Event{Type: protocol.TypeLoginPrompt}, Prompt: &p}
 	case r.Type == protocol.TypeLoginDone && validGrant(r.Grant):
 		done := protocol.Reply{Event: llm.Event{Type: protocol.TypeLoginDone}, Grant: r.Grant}
@@ -195,4 +194,21 @@ func inputRedactor(input map[string]string) *protocol.Redactor {
 	}
 	data, _ := json.Marshal(input)
 	return protocol.NewRedactor(&protocol.Credential{Kind: "input", Data: data})
+}
+
+// redactPrompt removes what the user entered from every text a prompt shows, in case the
+// extension echoes it.
+func redactPrompt(r *protocol.Redactor, p protocol.Prompt) protocol.Prompt {
+	for _, f := range []*string{&p.Kind, &p.Message, &p.URL, &p.UserCode, &p.VerificationURI, &p.VerificationURIComplete} {
+		*f = r.String(*f)
+	}
+	inputs := make([]protocol.LoginInput, len(p.Inputs))
+	for i, in := range p.Inputs {
+		in.Name, in.Label = r.String(in.Name), r.String(in.Label)
+		inputs[i] = in
+	}
+	if p.Inputs != nil {
+		p.Inputs = inputs
+	}
+	return p
 }

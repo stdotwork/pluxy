@@ -229,6 +229,7 @@ type call struct {
 	creds   Credentials
 	renewed map[string]bool // accounts whose refused credential was renewed during this request
 	fresh   bool            // the last failed attempt's credential has been renewed: try it again
+	again   *Account        // the account to try next, its credential just renewed
 }
 
 func (c *call) Next() llm.Event {
@@ -324,7 +325,11 @@ func (c *call) route() llm.Event {
 			return errorEvent(last)
 		}
 		if len(cands) > 0 {
-			a := c.choose(cands, now)
+			a := c.again
+			if c.again == nil || !slices.Contains(cands, c.again) {
+				a = c.choose(cands, now)
+			}
+			c.again = nil
 			if r.beforeReserve != nil {
 				r.beforeReserve(a.ID)
 			}
@@ -346,6 +351,7 @@ func (c *call) route() llm.Event {
 				// the account may serve the request after all.
 				c.fresh = false
 				delete(tried, a.ID)
+				c.again = a
 				continue
 			}
 			if !retrySafe(last) {

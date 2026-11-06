@@ -3,6 +3,7 @@ package cred
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -429,4 +430,172 @@ func TestRefreshAtSetsRenewalTime(t *testing.T) {
 	if c, _, e := m.Credential(context.Background(), "acct"); e != nil || c.AccessToken != "access-1" {
 		t.Errorf("Credential = %v, %v; want the renewed access-1", c, e)
 	}
+}
+
+// Disabling an account while its credential is being renewed keeps the renewed credential:
+// the provider has already retired the old refresh token.
+func TestDisableDuringRenewalKeepsRotatedToken(t *testing.T) {
+	p := &fakeProvider{gate: make(chan struct{}), started: make(chan struct{}, 2)}
+	m, store := newManager(t, p, time.Minute)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.Credential(context.Background(), "acct")
+	}()
+	wait(t, p.started)
+	if _, err := m.SetDisabled("acct", true); err != nil {
+		t.Fatal(err)
+	}
+	p.gate <- struct{}{}
+	wait(t, done)
+	rec, _ := store.Get("acct")
+	if rec.Credential.RefreshToken != "refresh-1" || !rec.Disabled || rec.State != StateActive {
+		t.Fatalf("record: refresh %q disabled %v state %q; want refresh-1, disabled, active", rec.Credential.RefreshToken, rec.Disabled, rec.State)
+	}
+	if _, err := m.SetDisabled("acct", false); err != nil {
+		t.Fatal(err)
+	}
+	close(p.gate)
+	if rec, err := m.Refresh(context.Background(), "acct"); err != nil || rec.Credential.RefreshToken != "refresh-2" {
+		t.Errorf("renewing after enabling: %q, %v; want refresh-2", rec.Credential.RefreshToken, err)
+	}
+}
+
+// A renewal that fails after the credential it renews was replaced (a new login) leaves no
+// backoff on the new credential.
+func TestStaleFailureLeavesNewCredentialAlone(t *testing.T) {
+	p := &fakeProvider{gate: make(chan struct{}), started: make(chan struct{}, 2),
+		fail: &llm.Error{Code: llm.CodeUnavailable, Retryable: true, Message: "old grant failed"}}
+	m, store := newManager(t, p, time.Minute)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.Credential(context.Background(), "acct")
+	}()
+	wait(t, p.started)
+	cur, _ := store.Get("acct")
+	if _, err := store.Update("acct", cur.Registration, cur.Version, func(r *Record) {
+		r.Credential = protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: "access-login", RefreshToken: "refresh-login", ExpiresAt: time.Now().Add(time.Minute).Unix()}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p.gate <- struct{}{}
+	wait(t, done)
+	p.mu.Lock()
+	p.fail = nil
+	p.mu.Unlock()
+	close(p.gate)
+	// The new credential is due for renewal: it is renewed, not held back by the old failure.
+	if c, _, e := m.Credential(context.Background(), "acct"); e != nil || c.AccessToken != "access-2" {
+		t.Errorf("Credential = %v, %v; want the renewed access-2", c, e)
+	}
+}
+
+// failingBackend refuses saves once fail is set.
+type failingBackend struct {
+	Backend
+	fail atomic.Bool
+}
+
+func (b *failingBackend) Save(r Record) error {
+	if b.fail.Load() {
+		return fmt.Errorf("disk full")
+	}
+	return b.Backend.Save(r)
+}
+
+// When the provider refuses the grant and recording that fails, the refusal is still
+// reported, not taken for success.
+func TestRejectedGrantSaveFailureIsReported(t *testing.T) {
+	b := &failingBackend{Backend: FileBackend{Dir: filepath.Join(t.TempDir(), "credentials")}}
+	store, err := Open(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(Record{ID: "acct", Extension: provID, State: StateActive, Credential: protocol.Credential{
+		Kind: protocol.CredentialOAuth, AccessToken: "a", RefreshToken: "r", ExpiresAt: time.Now().Add(time.Hour).Unix()}}); err != nil {
+		t.Fatal(err)
+	}
+	p := &fakeProvider{fail: &llm.Error{Code: llm.CodeAuth, Scope: llm.ScopeCredential, Message: "invalid_grant"}}
+	m := NewManager(store, p, Options{})
+	t.Cleanup(m.Close)
+	b.fail.Store(true)
+	if _, err := m.Refresh(context.Background(), "acct"); err == nil {
+		t.Error("Refresh succeeded although the provider refused the grant")
+	}
+}
+
+// IDs that differ only in case would share a file on macOS and Windows, so the second is
+// refused.
+func TestIDsDifferingInCaseAreOneAccount(t *testing.T) {
+	store, err := Open(FileBackend{Dir: filepath.Join(t.TempDir(), "credentials")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(Record{ID: "Work", Extension: provID, State: StateActive}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(Record{ID: "work", Extension: provID, State: StateActive}); err != ErrExists {
+		t.Errorf("creating \"work\" beside \"Work\": %v, want ErrExists", err)
+	}
+}
+
+// slowLoginProvider's logins take until start is closed to begin, then prompt once and wait
+// until cancelled.
+type slowLoginProvider struct {
+	fakeProvider
+	start   chan struct{}
+	calling chan struct{}
+}
+
+type waitingLogin struct {
+	ctx    context.Context
+	n      int
+	inputs chan map[string]string
+}
+
+func (l *waitingLogin) Next() protocol.Reply {
+	l.n++
+	if l.n == 1 {
+		return protocol.Reply{Event: llm.Event{Type: protocol.TypeLoginPrompt}, Prompt: &protocol.Prompt{Kind: protocol.PromptInput}}
+	}
+	<-l.ctx.Done()
+	return protocol.Reply{Event: llm.Event{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeCancelled, Message: "cancelled"}}}
+}
+func (l *waitingLogin) Send(in map[string]string) error { l.inputs <- in; return nil }
+func (l *waitingLogin) Close()                          {}
+
+func (p *slowLoginProvider) Login(ctx context.Context, _ protocol.Account, _ protocol.Login) LoginCall {
+	close(p.calling)
+	<-p.start
+	return &waitingLogin{ctx: ctx, inputs: make(chan map[string]string, 1)}
+}
+
+// Input for a login that is still starting is refused, not sent to a call that does not exist
+// yet.
+func TestInputWhileLoginStarts(t *testing.T) {
+	p := &slowLoginProvider{start: make(chan struct{}), calling: make(chan struct{})}
+	store, err := Open(FileBackend{Dir: filepath.Join(t.TempDir(), "credentials")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(store, p, Options{})
+	t.Cleanup(m.Close)
+	started := make(chan error, 1)
+	go func() {
+		_, err := m.StartLogin(context.Background(), LoginRequest{Account: route.Account{ID: "new"}, Method: "device"})
+		started <- err
+	}()
+	wait(t, p.calling)
+	if err := m.LoginInput("login-1", map[string]string{"x": "y"}); !errors.Is(err, ErrConflict) {
+		t.Errorf("input while starting: %v, want ErrConflict", err)
+	}
+	close(p.start)
+	if err := <-started; err != nil {
+		t.Fatal(err)
+	}
+	if err := m.LoginInput("login-1", map[string]string{"x": "y"}); err != nil {
+		t.Errorf("input once started: %v", err)
+	}
+	m.CancelLogin("login-1")
 }
