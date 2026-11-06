@@ -125,6 +125,10 @@ var geminiFormat = clientFormat{
 type Generation struct {
 	Config *Config
 	Router *route.Router
+	// Attempt runs one attempt as the router does (a WebSocket turn routes with its own).
+	Attempt route.AttemptFunc
+	// OpenSession opens a session on an extension; nil when sessions are not served.
+	OpenSession OpenSessionFunc
 }
 
 // Source hands out the current generation. The request holds it until release is called.
@@ -149,6 +153,7 @@ func NewHandler(src Source) http.Handler {
 			serve(w, r, g.Config, g.Router, f)
 		})
 	}
+	mux.HandleFunc("GET /v1/responses", func(w http.ResponseWriter, r *http.Request) { serveResponsesWebSocket(w, r, src) })
 	return mux
 }
 

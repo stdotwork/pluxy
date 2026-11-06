@@ -6,7 +6,7 @@
 // Account settings, all optional:
 //
 //	{"base_url": "https://api.openai.com/v1", "codex_identity": true, "image_generation_tool": true,
-//	 "auth_base_url": "https://auth.openai.com", "callback_listen": true}
+//	 "auth_base_url": "https://auth.openai.com", "callback_listen": true, "websockets": false}
 //
 // base_url is where requests go ({base_url}/responses); the default is
 // https://api.openai.com/v1 for an API key and https://chatgpt.com/backend-api/codex for a
@@ -16,7 +16,10 @@
 // follow what today's core sends.
 // auth_base_url is OpenAI's login server; it is for tests. callback_listen (default true) lets
 // the browser login listen for its redirect on localhost:1455; off, the user pastes the address
-// the browser ended on, as they must when core runs on another machine.
+// the browser ended on, as they must when core runs on another machine. websockets (default
+// false, as in today's core) holds sessions for WebSocket clients: their turns go over the
+// upstream's Responses WebSocket ({base_url}/responses with ws or wss), one upstream socket per
+// client socket, so a turn can continue the previous response with previous_response_id.
 //
 // Every request is sent in the shape the Codex endpoint takes: streamed, not stored, encrypted
 // reasoning included, sampling settings removed (see shape). Requests in Chat Completions,
@@ -47,6 +50,7 @@ func main() {
 		LoginMethods: loginMethods,
 		Login:        login,
 		Refresh:      refresh,
+		Session:      openSession,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "codex:", err)
@@ -69,6 +73,9 @@ type settings struct {
 	// CallbackListen (default true) serves the browser login's redirect on this machine; off,
 	// the user always pastes the address the browser ended on.
 	CallbackListen *bool `json:"callback_listen"`
+	// Websockets (default false) sends a WebSocket client's turns over the upstream's Responses
+	// WebSocket, one socket per client socket; off, core sends each turn over HTTP.
+	Websockets *bool `json:"websockets"`
 }
 
 func (s settings) identity() bool  { return s.CodexIdentity == nil || *s.CodexIdentity }

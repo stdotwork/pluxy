@@ -1,11 +1,12 @@
 // Package sdk implements the extension side of the pluxy extension protocol for Go extensions:
 // the handshake, framing, cancellation and shutdown. An extension supplies a Generate handler,
-// and Login and Refresh handlers if it signs in to accounts, and calls Serve from main. See
-// ../protocol/TUTORIAL.md.
+// Login and Refresh handlers if it signs in to accounts, a Session handler if it holds
+// sessions, and calls Serve from main. See ../protocol/TUTORIAL.md.
 package sdk
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -61,6 +62,35 @@ type RefreshCall struct {
 // failure that may pass (the token endpoint is down or rate limited) is retryable.
 type RefreshHandler func(ctx context.Context, call RefreshCall) (*protocol.Credential, error)
 
+// SessionCall is one session call: open a session of a kind on an account.
+type SessionCall struct {
+	ID      string
+	Account protocol.Account
+	// Format is the kind of session (protocol.SessionOpenAIResponses).
+	Format string
+}
+
+// SessionHandler opens a session and returns what answers its turns. It may connect to the
+// upstream now or at the first turn. ctx lasts as long as the session. Returning an error
+// refuses the session: an *llm.Error is sent as it is (code unsupported with scope credential
+// for an account that takes no sessions: core then sends its requests as generate calls), any
+// other error as code internal.
+type SessionHandler func(ctx context.Context, call SessionCall) (Session, error)
+
+// Session answers the turns of one session, one at a time.
+type Session interface {
+	// Turn answers one turn as a Handler answers a generate call. call.Account is the
+	// session's account, with the newest credential core holds. ctx is cancelled when core
+	// cancels the turn, which also ends the session.
+	Turn(ctx context.Context, call Call, out *Stream) error
+	// Interrupt passes the client's control message for the running turn upstream. It is
+	// called from another goroutine while Turn runs, never otherwise.
+	Interrupt(raw json.RawMessage)
+	// Close ends the session, once, after the last turn has returned: close the upstream
+	// connection here.
+	Close()
+}
+
 // Extension describes the extension to Serve.
 type Extension struct {
 	ID       string
@@ -70,6 +100,8 @@ type Extension struct {
 	LoginMethods []protocol.LoginMethod
 	Login        LoginHandler
 	Refresh      RefreshHandler
+	// Session, when set, holds sessions (protocol minor version 1).
+	Session SessionHandler
 }
 
 // operations lists the operations ext serves.
@@ -80,6 +112,9 @@ func (ext Extension) operations() []string {
 	}
 	if ext.Refresh != nil {
 		ops = append(ops, protocol.OpRefresh)
+	}
+	if ext.Session != nil {
+		ops = append(ops, protocol.OpSession)
 	}
 	return ops
 }
@@ -197,7 +232,7 @@ func (s *server) handle(conn net.Conn) {
 		_ = protocol.WriteFrame(conn, protocol.Reply{
 			Event: llm.Event{Type: protocol.TypeDescribeResult},
 			Info: &protocol.Info{
-				ID: s.ext.ID, Version: s.ext.Version, Protocol: protocol.Version,
+				ID: s.ext.ID, Version: s.ext.Version, Protocol: protocol.Version, ProtocolMinor: protocol.Minor,
 				Operations: s.ext.operations(), LoginMethods: s.ext.LoginMethods,
 			},
 		})
@@ -207,6 +242,8 @@ func (s *server) handle(conn net.Conn) {
 		s.login(conn, call)
 	case protocol.OpRefresh:
 		s.refresh(conn, call)
+	case protocol.OpSession:
+		s.session(conn, call)
 	default:
 		_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: llm.EventError, Error: &llm.Error{
 			Code: llm.CodeUnsupported, Message: fmt.Sprintf("unknown operation %q", call.Op), Scope: llm.ScopeRequest,
@@ -249,6 +286,130 @@ func (s *server) generate(conn net.Conn, call protocol.Call) {
 		err = &llm.Error{Code: llm.CodeInternal, Message: "the extension returned without finishing the reply"}
 	}
 	_ = out.send(llm.Event{Type: llm.EventError, Error: asError(ctx, err)})
+}
+
+// session holds one session: it answers session.ready, then each turn frame as a generate call
+// on the session, and passes interrupts on while a turn runs. The connection closing ends the
+// session.
+func (s *server) session(conn net.Conn, call protocol.Call) {
+	ctx, cancel, ok := s.begin(conn)
+	if !ok {
+		return
+	}
+	defer cancel()
+	refuse := func(err error) {
+		_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: llm.EventError, Error: asError(ctx, err)}})
+	}
+	if s.ext.Session == nil {
+		refuse(&llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeRequest, Message: "this extension holds no sessions"})
+		return
+	}
+	sc := SessionCall{ID: call.ID}
+	if call.Account != nil {
+		sc.Account = *call.Account
+	}
+	if call.Session != nil {
+		sc.Format = call.Session.Format
+	}
+	sess, err := openSession(ctx, s.ext.Session, sc)
+	if err != nil {
+		refuse(err)
+		return
+	}
+	defer sess.Close()
+	if err := protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: protocol.TypeSessionReady}}); err != nil {
+		return
+	}
+
+	// The reader hands turns to the loop below and passes interrupts on while a turn runs.
+	// Anything else, or the connection closing, ends the session.
+	turns := make(chan protocol.Call)
+	var mu sync.Mutex
+	running := false
+	go func() {
+		defer cancel()
+		for {
+			var f protocol.Call
+			if err := protocol.ReadFrame(conn, &f); err != nil {
+				return
+			}
+			switch f.Type {
+			case protocol.TypeSessionTurn:
+				select {
+				case turns <- f:
+				case <-ctx.Done():
+					return
+				}
+			case protocol.TypeSessionInterrupt:
+				mu.Lock()
+				if running {
+					sess.Interrupt(f.Raw)
+				}
+				mu.Unlock()
+			default:
+				return
+			}
+		}
+	}()
+	for {
+		var f protocol.Call
+		select {
+		case <-ctx.Done():
+			return
+		case f = <-turns:
+		}
+		c := Call{ID: call.ID}
+		if f.Account != nil {
+			c.Account = *f.Account
+		}
+		if f.Request != nil {
+			c.Request = *f.Request
+		}
+		out := &Stream{w: conn}
+		mu.Lock()
+		running = true
+		mu.Unlock()
+		err := runTurn(ctx, sess, c, out)
+		mu.Lock()
+		running = false
+		mu.Unlock()
+		if out.broken {
+			return
+		}
+		if !out.seq.Done() {
+			if err == nil {
+				err = &llm.Error{Code: llm.CodeInternal, Message: "the extension returned without finishing the turn"}
+			}
+			if out.send(llm.Event{Type: llm.EventError, Error: asError(ctx, err)}) != nil {
+				return
+			}
+		}
+		if ctx.Err() != nil {
+			return
+		}
+	}
+}
+
+func openSession(ctx context.Context, h SessionHandler, c SessionCall) (sess Session, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			sess, err = nil, &llm.Error{Code: llm.CodeInternal, Message: fmt.Sprintf("the extension panicked: %v", r)}
+		}
+	}()
+	sess, err = h(ctx, c)
+	if err == nil && sess == nil {
+		err = &llm.Error{Code: llm.CodeInternal, Message: "the session handler returned no session"}
+	}
+	return sess, err
+}
+
+func runTurn(ctx context.Context, sess Session, c Call, out *Stream) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = &llm.Error{Code: llm.CodeInternal, Message: fmt.Sprintf("the extension panicked: %v", r)}
+		}
+	}()
+	return sess.Turn(ctx, c, out)
 }
 
 // asError turns a handler's error into the error event's payload.

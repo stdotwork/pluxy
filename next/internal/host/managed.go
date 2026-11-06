@@ -155,6 +155,7 @@ type Managed struct {
 	drained   chan struct{} // closed when a draining generation has no leases left
 	retired   bool
 	stopping  map[*Extension]bool // programs asked to stop that may not have exited yet
+	sessions  map[*Session]bool   // open sessions, each holding a lease and a call
 }
 
 // Prepare starts a new generation of the extension at manifestPath and waits for its handshake,
@@ -269,6 +270,52 @@ func (g *Managed) Generate(ctx context.Context, account protocol.Account, req ll
 	s := ext.Generate(ctx, account, req)
 	s.onClose = end
 	return s
+}
+
+// OpenSession opens a session on account, starting the program first if it is idle. The
+// session holds a lease and counts as a running call until it is closed, so the program is not
+// stopped for idleness under it and a drain waits for it; a drain closes it once no turn runs.
+func (g *Managed) OpenSession(ctx context.Context, account protocol.Account, info protocol.SessionInfo) (*Session, *llm.Error) {
+	if !HoldsSessions(g.info) {
+		return nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Message: fmt.Sprintf("extension %s holds no sessions", g.manifest.ID)}
+	}
+	if !g.Acquire() {
+		return nil, g.unavailable("generation %d is being replaced", g.generation)
+	}
+	end := g.beginCall()
+	release := func() {
+		end()
+		g.Release()
+	}
+	ext, e := g.ensure(ctx)
+	if e != nil {
+		release()
+		return nil, e
+	}
+	s, e := ext.OpenSession(ctx, account, info)
+	if e != nil {
+		release()
+		return nil, e
+	}
+	g.mu.Lock()
+	if g.draining {
+		g.mu.Unlock()
+		s.Close()
+		release()
+		return nil, g.unavailable("generation %d is being replaced", g.generation)
+	}
+	if g.sessions == nil {
+		g.sessions = map[*Session]bool{}
+	}
+	g.sessions[s] = true
+	g.mu.Unlock()
+	s.OnClose(func() {
+		g.mu.Lock()
+		delete(g.sessions, s)
+		g.mu.Unlock()
+		release()
+	})
+	return s, nil
 }
 
 // Login starts a login call, starting the program first if it is idle. The caller holds a
@@ -517,6 +564,10 @@ func (g *Managed) Drain(done func()) {
 		g.restart.Stop()
 		g.restart = nil
 	}
+	sessions := make([]*Session, 0, len(g.sessions))
+	for s := range g.sessions {
+		sessions = append(sessions, s)
+	}
 	if g.ext != nil || g.leases > 0 {
 		g.state = StateDraining
 	}
@@ -527,6 +578,12 @@ func (g *Managed) Drain(done func()) {
 	}
 	timeout, leases := g.policy.DrainTimeout, g.leases
 	g.mu.Unlock()
+	// A session's state lives in this program, so it cannot move to the new one: close each
+	// once its running turn ends. A turn that continues it then fails, and one that continues
+	// nothing opens a session on the new generation.
+	for _, s := range sessions {
+		s.CloseWhenIdle()
+	}
 
 	go func() {
 		defer done()

@@ -275,7 +275,10 @@ func errorFields(e *llm.Error) obj {
 // Responses upstream it writes the upstream's events as they came; otherwise it rebuilds the
 // Responses event sequence from the model events.
 type StreamWriter struct {
-	w       io.Writer
+	w io.Writer
+	// send, when set, takes each event instead of w: its type and its JSON (a WebSocket
+	// client gets each event as one message).
+	send    func(typ string, data []byte) error
 	b       *builder
 	native  bool
 	ended   bool  // an upstream terminal event was passed through
@@ -288,8 +291,25 @@ func NewStreamWriter(w io.Writer, req llm.Request) *StreamWriter {
 	return &StreamWriter{w: w, b: newBuilder(req)}
 }
 
+// NewMessageWriter returns a writer for one turn of a WebSocket client of req: send gets each
+// event's type and JSON, one event per call.
+func NewMessageWriter(send func(typ string, data []byte) error, req llm.Request) *StreamWriter {
+	return &StreamWriter{send: send, b: newBuilder(req)}
+}
+
 // Losses returns what the reply had that the client format could not carry.
 func (s *StreamWriter) Losses() []llm.Loss { return s.b.losses }
+
+func (s *StreamWriter) out(typ string, data []byte) error {
+	if s.send != nil {
+		var buf bytes.Buffer
+		if err := json.Compact(&buf, data); err != nil {
+			return err
+		}
+		return s.send(typ, buf.Bytes())
+	}
+	return writeEvent(s.w, typ, data)
+}
 
 func (s *StreamWriter) emit(typ string, fields obj) error {
 	s.seq++
@@ -299,7 +319,7 @@ func (s *StreamWriter) emit(typ string, fields obj) error {
 	if err != nil {
 		return err
 	}
-	return writeEvent(s.w, typ, data)
+	return s.out(typ, data)
 }
 
 // passthrough writes an upstream event unchanged.
@@ -310,7 +330,7 @@ func (s *StreamWriter) passthrough(typ string, raw json.RawMessage) error {
 	if json.Unmarshal(raw, &n) == nil && n.Seq != nil {
 		s.seq = *n.Seq
 	}
-	return writeEvent(s.w, typ, raw)
+	return s.out(typ, raw)
 }
 
 // Write writes the stream events for one model event.

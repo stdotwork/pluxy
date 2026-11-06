@@ -9,8 +9,8 @@
 //     that no block covers (rate limit, quota or cooldown, on the account's credential, the
 //     model on that account, or its endpoint), that are under their concurrency limit and that
 //     this request has not tried in the current round.
-//  2. Prefer: the account the request's session is bound to, if it is still eligible; else the
-//     eligible accounts with the highest priority.
+//  2. Prefer: the account the request names to prefer, or that its session is bound to, if it
+//     is still eligible; else the eligible accounts with the highest priority.
 //  3. Pick by strategy: round robin, weighted, fill-first or least-active.
 //  4. Attempt, and read the first event. An error before the reply starts is an outcome: it
 //     updates the account's state, then the request rotates to another eligible account if the
@@ -90,6 +90,12 @@ type Request struct {
 	Session string
 	// Pin, when set, restricts the request to the account with this ID.
 	Pin string
+	// Prefer, when set, names the account to choose when it is eligible, ahead of priority and
+	// strategy (a session's account, for a request that need not stay on it).
+	Prefer string
+	// Attempt, when set, runs this request's attempts in place of the router's AttemptFunc (a
+	// WebSocket turn that goes to an open session). Routing, state and retries are the same.
+	Attempt AttemptFunc
 }
 
 // Credentials supplies the credentials of managed accounts (Account.Managed): core's
@@ -414,6 +420,13 @@ func (c *call) route() llm.Event {
 // and then strategy.
 func (c *call) choose(cands []*Account, now time.Time) *Account {
 	r := c.r
+	if c.req.Prefer != "" {
+		for _, a := range cands {
+			if a.ID == c.req.Prefer {
+				return a
+			}
+		}
+	}
 	if r.affinity != nil && c.req.Session != "" {
 		if id, ok := r.affinity.lookup(c.affinityKey(), now); ok {
 			for _, a := range cands {
@@ -459,7 +472,11 @@ func (c *call) try(a *Account, seq uint64) (ev llm.Event, started bool) {
 			return errorEvent(e), false
 		}
 	}
-	s := r.attempt(c.ctx, a.Extension, call, c.req.LLM)
+	attempt := r.attempt
+	if c.req.Attempt != nil {
+		attempt = c.req.Attempt
+	}
+	s := attempt(c.ctx, a.Extension, call, c.req.LLM)
 	ev = s.Next()
 	if ev.Type == llm.EventError {
 		s.Close()

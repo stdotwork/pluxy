@@ -53,6 +53,23 @@
       "kind": "gap",
       "absent": true,
       "reason": "The old core sets stream_options.include_usage true on every streamed upstream request; the new core passes the client's body through unchanged."
+    },
+    {
+      "path": "upstream[*].headers.Sec-Websocket-Extensions",
+      "kind": "intended",
+      "reason": "Both cores offer permessage-deflate without context takeover on either side; the new core's WebSocket library (github.com/coder/websocket) writes the two parameters in the other order."
+    },
+    {
+      "path": "client.messages[*].response.usage.input_tokens_details",
+      "kind": "intended",
+      "absent": true,
+      "reason": "The new core passes a Responses upstream's usage to a WebSocket client as the upstream sent it, as it does for a streamed HTTP reply (today's Codex executor too fills nothing in on that path); today's core's WebSocket path fills in input_tokens_details.cached_tokens and output_tokens_details.reasoning_tokens as 0 when the upstream leaves them out."
+    },
+    {
+      "path": "client.messages[*].response.usage.output_tokens_details",
+      "kind": "intended",
+      "absent": true,
+      "reason": "The new core passes a Responses upstream's usage to a WebSocket client as the upstream sent it, as it does for a streamed HTTP reply (today's Codex executor too fills nothing in on that path); today's core's WebSocket path fills in input_tokens_details.cached_tokens and output_tokens_details.reasoning_tokens as 0 when the upstream leaves them out."
     }
   ]
 }
