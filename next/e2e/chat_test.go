@@ -577,6 +577,79 @@ func TestClientDisconnectCancelsUpstream(t *testing.T) {
 	}
 }
 
+// What a Chat reply keeps of the upstream's reply besides its content counts toward core's 64 MiB
+// limit on a non-streamed reply: reply-level fields such as system_fingerprint, and the usage
+// object with fields the model has no place for. The reviewer's case: an 8 MiB fingerprint and
+// 60 MiB of text came back as a 200 of 71,303,351 bytes.
+func TestNonStreamingChatCountsKeptFields(t *testing.T) {
+	big := strings.Repeat("f", 8<<20)
+	for _, c := range []struct{ name, first, usage string }{
+		{"fingerprint", fmt.Sprintf(`,"system_fingerprint":%q`, big), ""},
+		{"usage", "", fmt.Sprintf(`{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"extra":%q}`, big)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			u := newUpstream(t)
+			u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				const head = `"id":"c1","object":"chat.completion.chunk","created":1,"model":"m"`
+				fmt.Fprintf(w, "data: {%s%s,\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}\n\n", head, c.first)
+				content := strings.Repeat("x", 64<<10)
+				for sent := 0; sent < 60<<20; sent += len(content) {
+					if _, err := fmt.Fprintf(w, "data: {%s,\"choices\":[{\"index\":0,\"delta\":{\"content\":%q}}]}\n\n", head, content); err != nil {
+						return
+					}
+				}
+				fmt.Fprintf(w, "data: {%s,\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n", head)
+				if c.usage != "" {
+					fmt.Fprintf(w, "data: {%s,\"choices\":[],\"usage\":%s}\n\n", head, c.usage)
+				}
+				fmt.Fprint(w, "data: [DONE]\n\n")
+			}
+			base := startCore(t, u)
+			resp := post(t, context.Background(), base, clientKey, `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`)
+			defer resp.Body.Close()
+			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+			if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(raw), "64 MiB") {
+				t.Fatalf("status %d, want 502 naming the 64 MiB limit; body starts %.200s", resp.StatusCode, raw)
+			}
+		})
+	}
+}
+
+// The upstream's response id and model, which Messages and Gemini replies carry, count toward
+// core's 64 MiB limit on a non-streamed reply.
+func TestNonStreamingReplyCountsIDAndModel(t *testing.T) {
+	for _, c := range []struct{ path, body string }{
+		{"/v1/messages", `{"model":"gpt-test","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`},
+		{"/v1beta/models/gpt-test:generateContent", `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`},
+	} {
+		path, body := c.path, c.body
+		t.Run(path, func(t *testing.T) {
+			u := newUpstream(t)
+			u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				big := strings.Repeat("i", 6<<20)
+				fmt.Fprintf(w, "data: {\"id\":%q,\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":%q,\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}\n\n", big, big)
+				const head = `"id":"c1","object":"chat.completion.chunk","created":1,"model":"m"`
+				content := strings.Repeat("x", 64<<10)
+				for sent := 0; sent < 56<<20; sent += len(content) {
+					if _, err := fmt.Fprintf(w, "data: {%s,\"choices\":[{\"index\":0,\"delta\":{\"content\":%q}}]}\n\n", head, content); err != nil {
+						return
+					}
+				}
+				fmt.Fprintf(w, "data: {%s,\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", head)
+			}
+			base := startCore(t, u)
+			resp := postPath(t, context.Background(), base, path, clientKey, body)
+			defer resp.Body.Close()
+			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+			if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(raw), "64 MiB") {
+				t.Fatalf("status %d, want 502 naming the 64 MiB limit; body starts %.200s", resp.StatusCode, raw)
+			}
+		})
+	}
+}
+
 // A non-streamed request whose upstream answers with a stream larger than core will collect
 // gets a clear error, and core cancels the upstream request instead of reading it all. Chat,
 // Responses, Messages and Gemini clients collect the reply in different aggregators; all are

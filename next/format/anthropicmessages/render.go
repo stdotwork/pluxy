@@ -476,6 +476,7 @@ func (a *Aggregator) Add(ev llm.Event) {
 	a.size += len(ev.Delta)
 	if ev.Type == llm.EventResponseStart {
 		b.start(ev.Response)
+		a.size += len(b.id) + len(b.model)
 		b.upstreamData(ev) // a stream that opened with its terminal event
 	}
 	if b.upFormat == format {
@@ -515,10 +516,10 @@ func (a *Aggregator) Add(ev llm.Event) {
 // blockOverhead is about the JSON a content block adds around its ID, name and content.
 const blockOverhead = len(`{"type":"tool_use","id":"","name":"","input":{}},`)
 
-// Size is about how many bytes of content the response holds so far: text, thinking, tool
-// calls, the upstream events it puts a Message together from and the upstream's final
-// Message and what it reports as lost, before JSON escaping. Callers use it to bound what
-// they collect.
+// Size is about how many bytes of content the response holds so far: its id and model, text,
+// thinking, tool calls, the upstream events it puts a Message together from, the upstream's final
+// Message and what it reports as lost, before JSON escaping. Callers use it to bound what they
+// collect.
 func (a *Aggregator) Size() int {
 	return a.size + len(a.final) + a.b.lossSize + a.acc.lossSize
 }

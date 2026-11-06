@@ -407,6 +407,7 @@ func (a *Aggregator) Add(ev llm.Event) {
 	switch ev.Type {
 	case llm.EventResponseStart:
 		a.b.id, a.b.model, a.b.upFormat = ev.Response.ID, ev.Response.Model, ev.Response.Format
+		a.size += len(a.b.id) + len(a.b.model)
 	case llm.EventItemStart:
 		a.size += len(ev.Item.CallID) + len(ev.Item.Name) + partOverhead
 		p := &aggPart{kind: ev.Item.Kind}
@@ -439,9 +440,9 @@ func (a *Aggregator) Add(ev llm.Event) {
 // partOverhead is about the JSON a part adds around a call's ID, name and arguments or a text.
 const partOverhead = len(`{"functionCall":{"id":"","name":"","args":{}}},`)
 
-// Size is about how many bytes of content the response holds so far: text, thoughts, function
-// calls with their thought signatures, the upstream chunks it keeps and what it reports as lost,
-// before JSON escaping. Callers use it to bound what they collect.
+// Size is about how many bytes of content the response holds so far: its id and model, text,
+// thoughts, function calls with their thought signatures, the upstream chunks it keeps and what
+// it reports as lost, before JSON escaping. Callers use it to bound what they collect.
 func (a *Aggregator) Size() int { return a.size + a.b.lossSize }
 
 // Response returns the response body.

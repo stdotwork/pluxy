@@ -298,6 +298,7 @@ func (a *Aggregator) Add(ev llm.Event) {
 	case llm.EventResponseStart:
 		a.head.ID, a.head.Model, a.head.Created = ev.Response.ID, ev.Response.Model, created(ev.Response)
 		a.up = newUpstream(ev.Response)
+		a.size += len(a.head.ID) + len(a.head.Model) + len(a.up.fields)
 	case llm.EventNative:
 		for _, c := range a.up.choices(ev) {
 			a.size += len(c)
@@ -319,6 +320,12 @@ func (a *Aggregator) Add(ev llm.Event) {
 		a.tools[a.toolIdx[ev.Index]].Function.Arguments += ev.Delta
 	case llm.EventFinish:
 		a.finish, a.usage = ev.Finish, ev.Usage
+		if ev.Finish != nil {
+			a.size += len(ev.Finish.RawReason)
+		}
+		if ev.Usage != nil {
+			a.size += len(ev.Usage.Raw)
+		}
 	}
 }
 
@@ -466,7 +473,8 @@ func entryWithIndex(list []any, idx any) map[string]any {
 const toolCallOverhead = len(`{"id":"","type":"function","function":{"name":"","arguments":""}},`)
 
 // Size is about how many bytes of content the response holds so far: text, reasoning, tool
-// calls and extra choices, before JSON escaping. Callers use it to bound what they collect.
+// calls, extra choices and what it keeps of the upstream's reply (id, model, reply-level fields,
+// finish reason and usage), before JSON escaping. Callers use it to bound what they collect.
 func (a *Aggregator) Size() int { return a.size }
 
 // Response returns the response body.
