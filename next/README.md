@@ -22,6 +22,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `format/` | Client and upstream formats as libraries extensions build in: `sse`, `openaichat`, `openairesponses`, `anthropicmessages`, `geminigenerate`. |
 | `extensions/openai-compatible` | Provider extension for OpenAI-compatible APIs with an API key. |
 | `extensions/codex` | Provider extension for OpenAI's Codex models: an OpenAI API key or a ChatGPT subscription (sign-in in a browser or with a device code), with a fake OpenAI login server and Codex endpoint for tests (`codextest`). |
+| `extensions/claude` | Provider extension for Anthropic's Claude, with an API key or a Claude subscription login; `claudetest` is a fake Anthropic for its tests. |
 | `examples/scripted` | The tutorial's example extension. |
 | `examples/oauth` | An example provider that signs in by device code, browser (PKCE) or API key and renews its tokens, with a fake OAuth provider for tests (`oauthtest`). |
 | `internal/host`, `internal/server` | Core's extension host and HTTP API (client formats and the management API). |
@@ -40,6 +41,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 go generate ./internal/panel   # builds the web panel core embeds; needs Bun (skip it for a core without the panel)
 go build -o pluxy ./cmd/pluxy
 go build -o extensions/openai-compatible/openai-compatible ./extensions/openai-compatible
+go build -o extensions/claude/claude ./extensions/claude
 ```
 
 `config.json`:
@@ -133,6 +135,41 @@ replaying the block sends the reasoning back, so it carries over between turns. 
 | `image_generation_tool` | Default `true`: offer the hosted `image_generation` tool, as today's core does (never to a free plan or a `-spark` model). |
 | `callback_listen` | Default `true`: let a browser sign-in listen on `localhost:1455`. |
 | `auth_base_url` | OpenAI's login server; for tests. |
+
+## Claude
+
+The Claude extension (`extensions/claude`) talks to Anthropic's Messages API with an API key or a
+Claude subscription. Point `extension.manifest` at `extensions/claude/pluxy-extension.json`. An
+API-key account in the config:
+
+```json
+{"id": "anthropic", "credential": {"kind": "api_key", "api_key": "sk-ant-..."}}
+```
+
+A subscription account is added by login through the management API (below), with method
+`subscription`: the reply's prompt carries a sign-in URL; after signing in, send the address the
+browser was sent to (or the code Claude's page shows) as `{"input": {"redirect_url": "..."}}` to
+`POST /logins/{id}/input`. Method `api_key` adds an account from a key, after checking it with
+Anthropic. Core renews a subscription's token an hour before it expires.
+
+| Setting | Meaning |
+| --- | --- |
+| `base_url` | Where the Messages API is. Default `https://api.anthropic.com`; requests go to `{base_url}/v1/messages`. |
+| `authorize_url`, `token_url`, `client_id` | Claude's OAuth sign-in page, token endpoint and client, for a test server. Defaults are Claude's. |
+
+A Messages request goes to Anthropic unchanged: its body, so thinking blocks, signatures and
+`cache_control` markers arrive as the client wrote them, and its `anthropic-version`,
+`anthropic-beta` and identification headers (`User-Agent`, `X-App`, the `X-Stainless-*` headers of
+Anthropic's SDKs). An API key goes in `x-api-key`; a subscription's token goes as a bearer token,
+with the `oauth-2025-04-20` beta added. Chat Completions, Responses and Gemini requests are
+translated to Messages; their reasoning effort becomes adaptive thinking with that effort on
+Claude 4.6 and later, and a thinking budget from Claude 3.7 to 4.5 (low 1024, medium 8192, high
+24576 tokens); a model name the extension does not know as a Claude model gets no thinking
+settings, and the effort is reported as dropped. The extension never changes how a client presents itself: a client that is
+not Claude Code is not made to look like Claude Code.
+
+A 429 from a subscription whose usage window is used up blocks the account until the window
+resets; a 529 (overloaded) moves the request to another account.
 
 ## Accounts and routing
 

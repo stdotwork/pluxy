@@ -240,12 +240,13 @@ func buildBody(req llm.Request, target string) ([]byte, *llm.Translation, error)
 		// have no corpus cases for it yet. Allow them once they do.
 		encode = openairesponses.EncodeRequest
 	case target == llm.FormatAnthropicMessages && tr.From == llm.FormatGeminiGenerate:
-		// shortcut: only Gemini requests are rebuilt as Messages; Chat and Responses requests
-		// wait for the Claude provider's corpus cases.
+		// shortcut: only Gemini requests are rebuilt as Messages here; the Claude extension
+		// rebuilds Chat and Responses requests too. Allow them here once this extension's
+		// Messages accounts have corpus cases for them.
 		encode = anthropicmessages.EncodeRequest
 	default:
-		// shortcut: nothing else is rebuilt as Messages yet (the Claude provider brings that),
-		// and nothing is rebuilt as GenerateContent (the Gemini provider brings that).
+		// shortcut: nothing else is rebuilt as Messages here (the Claude extension does it for
+		// Claude), and nothing is rebuilt as GenerateContent (the Gemini provider brings that).
 		// The refusal is about this account's upstream, not the request: an account that speaks
 		// the client's format can still serve it, so core may try one (scope credential,
 		// retryable: nothing reached the upstream).

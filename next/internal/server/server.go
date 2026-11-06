@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -93,7 +94,7 @@ var messagesFormat = clientFormat{
 	stream:    func(w io.Writer, _ llm.Request) eventWriter { return anthropicmessages.NewStreamWriter(w) },
 	aggregate: func(llm.Request) aggregator { return anthropicmessages.NewAggregator() },
 	errorBody: anthropicmessages.ErrorResponse,
-	headers:   anthropicmessages.Headers,
+	headers:   slices.Concat(anthropicmessages.Headers, anthropicmessages.ClientHeaders),
 }
 
 // geminiFormat serves Gemini's GenerateContent at /v1beta/models/{model}:{method}. The method

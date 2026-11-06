@@ -292,7 +292,7 @@ version 0.
 | `items` | The conversation, in order. |
 | `tools` | Function tools the model may call. `parameters` is a JSON Schema. |
 | `options` | Generation options; any field may be absent: `max_output_tokens`, `temperature`, `top_p`, `stop`, `tool_choice` (`mode`: `auto`, `none`, `required` or `tool` with `name`), `parallel_tool_calls`, `response_format` (`type`: `text`, `json_object` or `json_schema` with `name`, `description`, `schema`, `strict`), `reasoning_effort` (as the client named it). |
-| `native` | The client's original request body and its format, when core received one; `headers` holds the client's request headers that belong to that format, by lower-case name (for `anthropic.messages`: `anthropic-version` and `anthropic-beta`; for `openai.responses`: the headers the Codex CLI sends, such as `session-id`, `x-codex-window-id`, `x-codex-turn-metadata`, `version` and `originator`). |
+| `native` | The client's original request body and its format, when core received one; `headers` holds the client's request headers that belong to that format, by lower-case name (for `anthropic.messages`: `anthropic-version` and `anthropic-beta`, and the headers the client names itself with: `user-agent`, `x-app`, `anthropic-dangerous-direct-browser-access`, `x-claude-code-session-id`, `x-client-request-id` and the `x-stainless-*` headers of Anthropic's SDKs; for `openai.responses`: the headers the Codex CLI sends, such as `session-id`, `x-codex-window-id`, `x-codex-turn-metadata`, `version` and `originator`). |
 | `origin` | The request's top-level fields that have no place in the model (see Origin below). |
 | `drop_policy` | What to do when building the upstream request would drop part of this one: `report` (default: send it and report the losses) or `reject` (refuse with `unsupported`, naming what could not be carried). |
 
@@ -329,7 +329,7 @@ trip; an encoder for another format cannot, and reports each of them as dropped.
 
 **Native passthrough.** When `native.format` is the format the extension's upstream speaks, the
 extension should send `native.body` upstream unchanged instead of rebuilding a body from `items`.
-That keeps fields core does not model. It also sends `native.headers` with it. Formats in version
+That keeps fields core does not model. It also sends `native.headers` with it (for `anthropic.messages`, at least `anthropic-version` and `anthropic-beta`; the client's identification headers when the upstream should see the real client). Formats in version
 0: `openai.chat` (OpenAI Chat Completions request body), `openai.responses` (OpenAI Responses
 request body), `anthropic.messages` (Anthropic Messages request body) and
 `gemini.generate_content` (Gemini GenerateContent request body; its model and whether it streams
@@ -355,7 +355,7 @@ with deltas and closed, then one terminal event.
 | `text.delta` | `index`, `delta` | Text for an open `message` item. |
 | `reasoning.delta` | `index`, `delta` | Reasoning text for an open `reasoning` item. |
 | `tool_input.delta` | `index`, `delta` | A fragment of the argument string for an open `tool_call` item. |
-| `item.end` | `index` | Closes item `index`. |
+| `item.end` | `index`; for a reasoning item, optional `opaque`: `format` and `data` | Closes item `index`. `opaque` is the provider's opaque record of the reasoning, which it needs back to continue from it (for `anthropic.messages`, the thinking block's signature; for `openai.responses`, the reasoning item's `encrypted_content`). A client format with a place for it carries it: a Responses client gets a thinking signature as the reasoning item's `encrypted_content`, and a Messages client gets a Responses reasoning item's encrypted content as the thinking block's signature. When the client replays that item or block, the request builder for the provider's format turns it back into the provider's own. |
 | `native` | `raw` | Upstream data that has no place in the model, in the reply's `format`. For `openai.chat` it is `{"choices": [...]}`: choices after the first, as the upstream sent them. For `openai.responses` and `anthropic.messages` it is an upstream stream event the model has no event for (for example `response.in_progress`, or `ping`, `message_delta` and a thinking block's `signature_delta`). For `gemini.generate_content` it is a stream chunk that produced no other event. |
 | `finish` | `finish`: `reason`, `raw_reason`; optional `usage` | Terminal: success. |
 | `error` | `error` (below) | Terminal: failure. |
@@ -367,9 +367,7 @@ and the usage `raw` (so fields such as a vendor cost survive); other clients do 
 
 For `openai.responses` and `anthropic.messages`, every event carries the upstream stream event it
 came from in `raw` (an `error` carries it in `error.raw`), and the `finish` of a non-streamed reply
-carries the whole Response or Message object. In a non-streamed `openai.responses` reply, each
-`item.end` carries its output item, so a client in another format can keep what the item holds
-(such as a reasoning item's encrypted content). A client in that format gets those upstream events
+carries the whole Response or Message object. A client in that format gets those upstream events
 and that object unchanged; events an extension adds itself (such as closing an item the upstream
 left open) carry no `raw` and are not written to it.
 
@@ -433,7 +431,7 @@ Usage, in `finish.usage`; a field that is absent was not reported, which is diff
 | Field | Meaning |
 | --- | --- |
 | `code` | One of the codes below. |
-| `message` | Human-readable; safe to show to the client. Never include credentials. Core also removes the call's credential, and its JSON, URL and base64 forms, from `message`, `provider_code` and every `raw` field of every event before passing them on, in case an upstream echoes it. |
+| `message` | Human-readable; safe to show to the client. Never include credentials. Core also removes the call's credential, and its JSON, URL and base64 forms, from `message`, `provider_code`, every `raw` field and every `opaque` `data` of every event before passing them on, in case an upstream echoes it. |
 | `status` | The upstream HTTP status, when there was one. |
 | `provider_code` | The upstream's own error code, when there was one. |
 | `retryable` | True only when the upstream certainly did not run the request (it was refused), so trying again, on this account later or on another account, is safe. |

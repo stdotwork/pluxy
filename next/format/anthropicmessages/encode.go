@@ -1,6 +1,7 @@
 package anthropicmessages
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -63,6 +64,9 @@ type outMessage struct {
 	role    string
 	turn    string
 	content []json.RawMessage
+	// joinNext: the next item of the same role goes in this message too. A replayed thinking
+	// block opens the assistant turn its tool calls and text belong to.
+	joinNext bool
 }
 
 // EncodeRequest builds a Messages request body from req's items, tools and options, and returns
@@ -133,7 +137,8 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 	var system []json.RawMessage
 	var msgs []*outMessage
 	add := func(role, turn string, block json.RawMessage) {
-		if n := len(msgs); n > 0 && msgs[n-1].role == role && msgs[n-1].turn == turn {
+		if n := len(msgs); n > 0 && msgs[n-1].role == role && (msgs[n-1].turn == turn || msgs[n-1].joinNext) {
+			msgs[n-1].joinNext = false
 			msgs[n-1].content = append(msgs[n-1].content, block)
 			return
 		}
@@ -182,6 +187,11 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 		case llm.ItemTypeReasoning:
 			if it.Origin != nil && it.Origin.Format == format {
 				add(llm.RoleAssistant, turn, marshal(map[string]any{"type": "thinking", "thinking": it.Text}, it.Origin.Raw))
+				break
+			}
+			if sig := replayedSignature(it); sig != "" {
+				add(llm.RoleAssistant, turn, marshal(map[string]any{"type": "thinking", "thinking": it.Text, "signature": sig}, nil))
+				msgs[len(msgs)-1].joinNext = true
 				break
 			}
 			e.lose(llm.LossDropped, p, "Messages cannot replay reasoning from another provider")
@@ -311,4 +321,32 @@ func source(p llm.Part) map[string]any {
 		return map[string]any{"type": "file", "file_id": p.FileID}
 	}
 	return nil
+}
+
+// replayedSignature returns the Claude thinking signature a Responses reasoning item carries in
+// encrypted_content, or "" when it carries none. The Responses writer puts a Claude signature
+// there unchanged; OpenAI's own encrypted content is a Fernet token, which starts with "g".
+//
+// shortcut: a Claude signature is told apart by its shape (base64 starting with "E" or "R", as
+// today's core checks); an origin record that travels with the item would be exact.
+func replayedSignature(it llm.Item) string {
+	if it.Origin == nil || it.Origin.Format != llm.FormatOpenAIResponses {
+		return ""
+	}
+	var r struct {
+		EncryptedContent string `json:"encrypted_content"`
+	}
+	if json.Unmarshal(it.Origin.Raw, &r) != nil {
+		return ""
+	}
+	sig := r.EncryptedContent
+	if sig == "" || (sig[0] != 'E' && sig[0] != 'R') {
+		return ""
+	}
+	if _, err := base64.StdEncoding.DecodeString(sig); err != nil {
+		if _, err := base64.RawStdEncoding.DecodeString(sig); err != nil {
+			return ""
+		}
+	}
+	return sig
 }

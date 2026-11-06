@@ -1,0 +1,141 @@
+{
+  "description": "A non-streamed Gemini request with maxOutputTokens 16 to a Messages upstream that stops at the limit: the partial text comes back as one candidate whose finishReason is MAX_TOKENS, with the usage of the partial answer.",
+  "source": [
+    "core/internal/translator/claude/gemini/claude_gemini_request.go (maxOutputTokens to max_tokens)",
+    "core/internal/translator/claude/gemini/claude_gemini_response.go (stop_reason max_tokens to finish MAX_TOKENS; usage input_tokens to promptTokenCount, output_tokens to candidatesTokenCount)"
+  ],
+  "client": {
+    "path": "/v1beta/models/claude-test:generateContent",
+    "body": {
+      "contents": [{"role":"user","parts":[{"text":"Write a long story about a lighthouse."}]}],
+      "generationConfig": {"maxOutputTokens":16}
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"event":"message_start","data":{"type":"message_start","message":{"id":"msg_corpus","type":"message","role":"assistant","content":[],"model":"claude-test-upstream","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":14,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}},
+        {"event":"content_block_start","data":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}},
+        {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Once upon a time, a lighthouse keeper"}}},
+        {"event":"content_block_stop","data":{"type":"content_block_stop","index":0}},
+        {"event":"message_delta","data":{"type":"message_delta","delta":{"stop_reason":"max_tokens","stop_sequence":null},"usage":{"output_tokens":16}}},
+        {"event":"message_stop","data":{"type":"message_stop"}}
+      ]
+    }
+  ],
+  "volatile": ["client.body.createTime"],
+  "exceptions": [
+    {
+      "path": "client.body",
+      "kind": "intended",
+      "reason": "The new core writes the Gemini reply the same way for every upstream format: candidate index 0, one chunk per text or thought delta, a last chunk holding the finish reason, any function calls and usageMetadata with Gemini's inclusion rules (promptTokenCount counts every input token, cache reads included, in cachedContentTokenCount; a Messages upstream gives no separate thinking count, so all output tokens count as candidates), and max_tokens as MAX_TOKENS. Today's Claude translator adds createTime and usageMetadata.trafficType PROVISIONED_THROUGHPUT, leaves out the candidate index, reports a promptTokenCount of 0, maps a non-streamed max_tokens stop to STOP, and turns a Claude thinking signature into a thought part holding skip_thought_signature_validator, Google's last-resort value that skips validation; the new core does not invent a signature and reports the Claude one as dropped.",
+      "want": {
+        "candidates": [
+          {
+            "content": {"parts":[{"text":"Once upon a time, a lighthouse keeper"}],"role":"model"},
+            "finishReason": "MAX_TOKENS",
+            "index": 0
+          }
+        ],
+        "modelVersion": "claude-test-upstream",
+        "responseId": "msg_corpus",
+        "usageMetadata": {"candidatesTokenCount":16,"promptTokenCount":14,"totalTokenCount":30}
+      }
+    },
+    {
+      "path": "upstream[0].body.metadata",
+      "kind": "intended",
+      "reason": "Today's core adds metadata.user_id, a hash it derives from the request, to every request it translates to Claude; the new core does not make up a user identifier for the client.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.stream",
+      "kind": "intended",
+      "reason": "Today's core streams every translated request to Claude and assembles the reply; the new core asks Claude for a non-streamed reply when the client asked for one (stream false, Accept application/json, Accept-Encoding gzip, which Go's HTTP client decodes)."
+    },
+    {
+      "path": "upstream[0].headers.Accept",
+      "kind": "intended",
+      "reason": "Today's core streams every translated request to Claude and assembles the reply; the new core asks Claude for a non-streamed reply when the client asked for one (stream false, Accept application/json, Accept-Encoding gzip, which Go's HTTP client decodes)."
+    },
+    {
+      "path": "upstream[0].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "Today's core streams every translated request to Claude and assembles the reply; the new core asks Claude for a non-streamed reply when the client asked for one (stream false, Accept application/json, Accept-Encoding gzip, which Go's HTTP client decodes)."
+    },
+    {
+      "path": "upstream[0].headers.Authorization",
+      "kind": "intended",
+      "reason": "The Claude extension sends an API key in x-api-key, as Anthropic's API defines it; today's core sends it as a bearer token whenever the base URL is not api.anthropic.com (it uses x-api-key only there).",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.X-Api-Key",
+      "kind": "intended",
+      "reason": "The Claude extension sends an API key in x-api-key, as Anthropic's API defines it; today's core sends it as a bearer token whenever the base URL is not api.anthropic.com (it uses x-api-key only there).",
+      "want": "sk-corpus-upstream"
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "candidates": [
+          {
+            "content": {"parts":[{"text":"Once upon a time, a lighthouse keeper"}],"role":"model"},
+            "finishReason": "STOP"
+          }
+        ],
+        "createTime": "(volatile)",
+        "modelVersion": "claude-test",
+        "responseId": "msg_corpus",
+        "usageMetadata": {
+          "candidatesTokenCount": 16,
+          "promptTokenCount": 0,
+          "totalTokenCount": 16,
+          "trafficType": "PROVISIONED_THROUGHPUT"
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 16,
+          "messages": [
+            {
+              "content": [
+                {
+                  "cache_control": {"type":"ephemeral"},
+                  "text": "Write a long story about a lighthouse.",
+                  "type": "text"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "metadata": {"user_id":"9054cbafd765368c317363d2dd9810bcdae3603f3765f982704a4afafd0cbbf2"},
+          "model": "claude-test",
+          "stream": true
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "identity",
+          "Anthropic-Version": "2023-06-01",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/messages?beta=true"
+      }
+    ]
+  }
+}

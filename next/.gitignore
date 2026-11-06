@@ -2,4 +2,5 @@
 /pluxy
 /extensions/openai-compatible/openai-compatible
 /extensions/codex/codex
+/extensions/claude/claude
 /examples/scripted/scripted

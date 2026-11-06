@@ -75,6 +75,16 @@ type outputItem struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"summary"`
+	EncryptedContent string `json:"encrypted_content"`
+}
+
+// opaque returns a reasoning item's encrypted content as the opaque data its item.end carries, or
+// nil when it has none.
+func opaque(it outputItem) *llm.Opaque {
+	if it.Type != "reasoning" || it.EncryptedContent == "" {
+		return nil
+	}
+	return &llm.Opaque{Format: format, Data: it.EncryptedContent}
 }
 
 // kindOf returns the model's item kind for a Responses output item, or "" when the model has no
@@ -262,7 +272,9 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			return native(), nil
 		}
 		delete(d.items, ev.OutputIndex)
-		return append(out, llm.Event{Type: llm.EventItemEnd, Index: idx, Raw: raw}), nil
+		var it outputItem
+		_ = json.Unmarshal(ev.Item, &it)
+		return append(out, llm.Event{Type: llm.EventItemEnd, Index: idx, Opaque: opaque(it), Raw: raw}), nil
 	case "response.completed", "response.incomplete":
 		d.done = true
 		out = d.closeAll(out)
@@ -295,8 +307,8 @@ func (d *StreamDecoder) Close() ([]llm.Event, error) {
 }
 
 // DecodeResponse turns an upstream non-streamed Response object into the events a stream of it
-// would have produced. Each item.end carries its output item in Raw, and the finish event the
-// whole body, so a Responses client gets it unchanged.
+// would have produced. The finish event carries the whole body in Raw, so a Responses client
+// gets it unchanged.
 func DecodeResponse(body []byte) ([]llm.Event, error) {
 	var r response
 	if err := json.Unmarshal(body, &r); err != nil {
@@ -307,16 +319,15 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 	}
 	out := []llm.Event{{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: r.ID, Model: r.Model, Created: r.CreatedAt, Format: format}}}
 	next := 0
-	var raw json.RawMessage
-	add := func(start llm.ItemStart, deltaType, delta string) {
+	add := func(start llm.ItemStart, deltaType, delta string, o *llm.Opaque) {
 		out = append(out, llm.Event{Type: llm.EventItemStart, Index: next, Item: &start})
 		if delta != "" {
 			out = append(out, llm.Event{Type: deltaType, Index: next, Delta: delta})
 		}
-		out = append(out, llm.Event{Type: llm.EventItemEnd, Index: next, Raw: raw})
+		out = append(out, llm.Event{Type: llm.EventItemEnd, Index: next, Opaque: o})
 		next++
 	}
-	for _, raw = range r.Output {
+	for _, raw := range r.Output {
 		var it outputItem
 		if json.Unmarshal(raw, &it) != nil {
 			return nil, malformed("upstream sent a malformed response", body)
@@ -329,19 +340,19 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 					text += c.Text
 				}
 			}
-			add(llm.ItemStart{Kind: llm.ItemMessage}, llm.EventTextDelta, text)
+			add(llm.ItemStart{Kind: llm.ItemMessage}, llm.EventTextDelta, text, nil)
 		case llm.ItemReasoning:
 			text := ""
 			for _, s := range it.Summary {
 				text += s.Text
 			}
-			add(llm.ItemStart{Kind: llm.ItemReasoning}, llm.EventReasoningDelta, text)
+			add(llm.ItemStart{Kind: llm.ItemReasoning}, llm.EventReasoningDelta, text, opaque(it))
 		case llm.ItemToolCall:
 			if it.CallID == "" || it.Name == "" {
 				out = append(out, llm.Event{Type: llm.EventNative, Raw: raw})
 				continue
 			}
-			add(llm.ItemStart{Kind: llm.ItemToolCall, CallID: it.CallID, Name: it.Name}, llm.EventToolInputDelta, it.Arguments)
+			add(llm.ItemStart{Kind: llm.ItemToolCall, CallID: it.CallID, Name: it.Name}, llm.EventToolInputDelta, it.Arguments, nil)
 		default:
 			out = append(out, llm.Event{Type: llm.EventNative, Raw: raw})
 		}

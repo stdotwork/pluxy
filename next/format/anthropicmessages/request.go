@@ -24,6 +24,27 @@ const format = llm.FormatAnthropicMessages
 // written against and the beta features it uses. Core passes them on with the native body.
 var Headers = []string{"anthropic-version", "anthropic-beta"}
 
+// ClientHeaders are the headers a Messages client names itself with, such as Claude Code's
+// User-Agent, X-App and the X-Stainless headers of Anthropic's SDKs. Core passes them on with the
+// native body too, so a provider that sends the body through unchanged can send the client's own
+// identification with it.
+var ClientHeaders = []string{
+	"user-agent",
+	"x-app",
+	"anthropic-dangerous-direct-browser-access",
+	"x-claude-code-session-id",
+	"x-client-request-id",
+	"x-stainless-lang",
+	"x-stainless-package-version",
+	"x-stainless-os",
+	"x-stainless-arch",
+	"x-stainless-runtime",
+	"x-stainless-runtime-version",
+	"x-stainless-retry-count",
+	"x-stainless-timeout",
+	"x-stainless-helper-method",
+}
+
 func invalid(msg string, args ...any) *llm.Error {
 	return &llm.Error{Code: llm.CodeInvalidRequest, Message: fmt.Sprintf(msg, args...), Scope: llm.ScopeRequest}
 }

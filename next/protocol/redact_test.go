@@ -45,3 +45,17 @@ func TestRedactorEvent(t *testing.T) {
 		t.Error("a call without a credential changed text")
 	}
 }
+
+// A reasoning item's opaque data reaches clients (a Responses client gets it as
+// encrypted_content), so an upstream that echoes the credential there has it removed too.
+func TestRedactorOpaque(t *testing.T) {
+	r := NewRedactor(&Credential{Kind: CredentialOAuth, AccessToken: "oauth-access-secret"})
+	in := &llm.Opaque{Format: llm.FormatAnthropicMessages, Data: "Esig-oauth-access-secret"}
+	ev := r.Event(llm.Event{Type: llm.EventItemEnd, Opaque: in})
+	if ev.Opaque == nil || ev.Opaque.Data != "Esig-[redacted]" || ev.Opaque.Format != llm.FormatAnthropicMessages {
+		t.Errorf("opaque = %+v, want the access token redacted", ev.Opaque)
+	}
+	if in.Data != "Esig-oauth-access-secret" {
+		t.Error("redaction changed the caller's event")
+	}
+}

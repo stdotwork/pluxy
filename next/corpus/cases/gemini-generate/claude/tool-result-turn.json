@@ -1,0 +1,204 @@
+{
+  "description": "A non-streamed Gemini request whose history has a model functionCall (with a thought part before it and a thoughtSignature on the call) and a user functionResponse with the same id: the upstream Messages request carries a tool_use block and a matching tool_result block, and the text reply comes back as one Gemini candidate.",
+  "source": [
+    "core/internal/translator/claude/gemini/claude_gemini_request.go (functionCall to tool_use, functionResponse to tool_result; explicit IDs preserved; thought parts dropped)",
+    "core/internal/translator/claude/gemini/claude_gemini_request_test.go (TestConvertGeminiRequestToClaude_PreservesCustomToolIDs, TestConvertGeminiRequestToClaude_DropsHiddenThoughtParts)",
+    "core/internal/translator/claude/gemini/claude_gemini_response.go (non-stream: Message content text to a text part; usage and stop reason mapping)"
+  ],
+  "client": {
+    "path": "/v1beta/models/claude-test:generateContent",
+    "body": {
+      "contents": [
+        {"role":"user","parts":[{"text":"Weather in Paris?"}]},
+        {
+          "role": "model",
+          "parts": [
+            {"text":"I should look up the weather.","thought":true},
+            {
+              "functionCall": {"id":"fc-1","name":"get_weather","args":{"city":"Paris"}},
+              "thoughtSignature": "CiQB0e2Kb7sigA1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [{"functionResponse":{"id":"fc-1","name":"get_weather","response":{"temp":18}}}]
+        }
+      ],
+      "tools": [
+        {
+          "functionDeclarations": [
+            {
+              "name": "get_weather",
+              "description": "Current weather",
+              "parameters": {
+                "type": "OBJECT",
+                "properties": {"city":{"type":"STRING"}},
+                "required": ["city"]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"event":"message_start","data":{"type":"message_start","message":{"id":"msg_corpus","type":"message","role":"assistant","content":[],"model":"claude-test-upstream","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":40,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}},
+        {"event":"content_block_start","data":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}},
+        {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"You're"}}},
+        {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" welcome."}}},
+        {"event":"content_block_stop","data":{"type":"content_block_stop","index":0}},
+        {"event":"message_delta","data":{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":4}}},
+        {"event":"message_stop","data":{"type":"message_stop"}}
+      ]
+    }
+  ],
+  "volatile": ["client.body.createTime"],
+  "exceptions": [
+    {
+      "path": "client.body",
+      "kind": "intended",
+      "reason": "The new core writes the Gemini reply the same way for every upstream format: candidate index 0, one chunk per text or thought delta, a last chunk holding the finish reason, any function calls and usageMetadata with Gemini's inclusion rules (promptTokenCount counts every input token, cache reads included, in cachedContentTokenCount; a Messages upstream gives no separate thinking count, so all output tokens count as candidates), and max_tokens as MAX_TOKENS. Today's Claude translator adds createTime and usageMetadata.trafficType PROVISIONED_THROUGHPUT, leaves out the candidate index, reports a promptTokenCount of 0, maps a non-streamed max_tokens stop to STOP, and turns a Claude thinking signature into a thought part holding skip_thought_signature_validator, Google's last-resort value that skips validation; the new core does not invent a signature and reports the Claude one as dropped.",
+      "want": {
+        "candidates": [
+          {
+            "content": {"parts":[{"text":"You're welcome."}],"role":"model"},
+            "finishReason": "STOP",
+            "index": 0
+          }
+        ],
+        "modelVersion": "claude-test-upstream",
+        "responseId": "msg_corpus",
+        "usageMetadata": {"candidatesTokenCount":4,"promptTokenCount":40,"totalTokenCount":44}
+      }
+    },
+    {
+      "path": "upstream[0].body.metadata",
+      "kind": "intended",
+      "reason": "Today's core adds metadata.user_id, a hash it derives from the request, to every request it translates to Claude; the new core does not make up a user identifier for the client.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.stream",
+      "kind": "intended",
+      "reason": "Today's core streams every translated request to Claude and assembles the reply; the new core asks Claude for a non-streamed reply when the client asked for one (stream false, Accept application/json, Accept-Encoding gzip, which Go's HTTP client decodes)."
+    },
+    {
+      "path": "upstream[0].body.tools[0].input_schema.$schema",
+      "kind": "intended",
+      "reason": "Today's Gemini-to-Claude translator sends the system instruction as a user message, adds $schema and additionalProperties false to tool schemas and drops temperature and top_p; the new core sends the system instruction as system, the client's schema as given and the client's sampling options. The cache breakpoints follow from that: the new core marks the end of the system prompt (and, without one, the last tool), today's core the last tool.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.tools[0].input_schema.additionalProperties",
+      "kind": "intended",
+      "reason": "Today's Gemini-to-Claude translator sends the system instruction as a user message, adds $schema and additionalProperties false to tool schemas and drops temperature and top_p; the new core sends the system instruction as system, the client's schema as given and the client's sampling options. The cache breakpoints follow from that: the new core marks the end of the system prompt (and, without one, the last tool), today's core the last tool.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.Accept",
+      "kind": "intended",
+      "reason": "Today's core streams every translated request to Claude and assembles the reply; the new core asks Claude for a non-streamed reply when the client asked for one (stream false, Accept application/json, Accept-Encoding gzip, which Go's HTTP client decodes)."
+    },
+    {
+      "path": "upstream[0].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "Today's core streams every translated request to Claude and assembles the reply; the new core asks Claude for a non-streamed reply when the client asked for one (stream false, Accept application/json, Accept-Encoding gzip, which Go's HTTP client decodes)."
+    },
+    {
+      "path": "upstream[0].headers.Authorization",
+      "kind": "intended",
+      "reason": "The Claude extension sends an API key in x-api-key, as Anthropic's API defines it; today's core sends it as a bearer token whenever the base URL is not api.anthropic.com (it uses x-api-key only there).",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.X-Api-Key",
+      "kind": "intended",
+      "reason": "The Claude extension sends an API key in x-api-key, as Anthropic's API defines it; today's core sends it as a bearer token whenever the base URL is not api.anthropic.com (it uses x-api-key only there).",
+      "want": "sk-corpus-upstream"
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "candidates": [
+          {"content":{"parts":[{"text":"You're welcome."}],"role":"model"},"finishReason":"STOP"}
+        ],
+        "createTime": "(volatile)",
+        "modelVersion": "claude-test",
+        "responseId": "msg_corpus",
+        "usageMetadata": {
+          "candidatesTokenCount": 4,
+          "promptTokenCount": 0,
+          "totalTokenCount": 4,
+          "trafficType": "PROVISIONED_THROUGHPUT"
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 32000,
+          "messages": [
+            {"content":[{"text":"Weather in Paris?","type":"text"}],"role":"user"},
+            {
+              "content": [
+                {"id":"fc-1","input":{"city":"Paris"},"name":"get_weather","type":"tool_use"}
+              ],
+              "role": "assistant"
+            },
+            {
+              "content": [
+                {
+                  "cache_control": {"type":"ephemeral"},
+                  "content": "{\"temp\":18}",
+                  "tool_use_id": "fc-1",
+                  "type": "tool_result"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "metadata": {"user_id":"d6ed28dfbc4a5dffb158a501c6faac7a11b2eccab2805869a92aa56510f7e89d"},
+          "model": "claude-test",
+          "stream": true,
+          "tools": [
+            {
+              "cache_control": {"type":"ephemeral"},
+              "description": "Current weather",
+              "input_schema": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "additionalProperties": false,
+                "properties": {"city":{"type":"string"}},
+                "required": ["city"],
+                "type": "object"
+              },
+              "name": "get_weather"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "identity",
+          "Anthropic-Version": "2023-06-01",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/messages?beta=true"
+      }
+    ]
+  }
+}

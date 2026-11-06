@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"slices"
 	"strings"
@@ -851,4 +852,110 @@ func TestResponsesReasoningCarriedAsSignature(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A Claude thinking signature survives a Responses client's round trip: the reply's reasoning
+// item carries it as encrypted_content, streamed or not, and when the client replays that item
+// it goes back to Messages as the thinking block, in the assistant turn of the tool call it
+// preceded.
+func TestThinkingSignatureRoundTripsThroughResponses(t *testing.T) {
+	const sig = "EqoBCkgIARABGAIiQRoundTripSig0"
+	stream := []string{
+		`{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"m","content":[],"usage":{"input_tokens":3,"output_tokens":1}}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Look it up."}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"` + sig + `"}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}`,
+		`{"type":"message_stop"}`,
+	}
+	dec := NewStreamDecoder()
+	var events []llm.Event
+	for _, data := range stream {
+		evs, err := dec.Decode([]byte(data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, evs...)
+	}
+	req, err := openairesponses.ParseRequest([]byte(`{"model":"m","input":"hi","stream":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	w := openairesponses.NewStreamWriter(&out, req)
+	for _, ev := range events {
+		if err := w.Write(ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !strings.Contains(out.String(), `"encrypted_content":"`+sig+`"`) {
+		t.Errorf("streamed Responses reply has no encrypted_content %q:\n%s", sig, out.String())
+	}
+
+	body := `{"type":"message","id":"msg_1","role":"assistant","model":"m","stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":5},` +
+		`"content":[{"type":"thinking","thinking":"Look it up.","signature":"` + sig + `"}]}`
+	events, err = DecodeResponse([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	agg := openairesponses.NewAggregator(req)
+	for _, ev := range events {
+		agg.Add(ev)
+	}
+	resp, err := agg.Response()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(resp), `"encrypted_content":"`+sig+`"`) {
+		t.Errorf("Responses reply has no encrypted_content %q: %s", sig, resp)
+	}
+
+	replay, err := openairesponses.ParseRequest([]byte(`{"model":"m","input":[
+	 {"type":"message","role":"user","content":"Weather?"},
+	 {"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"Look it up."}],"encrypted_content":"` + sig + `"},
+	 {"type":"function_call","call_id":"c1","name":"w","arguments":"{}"},
+	 {"type":"function_call_output","call_id":"c1","output":"sunny"},
+	 {"type":"reasoning","id":"rs_2","summary":[],"encrypted_content":"gAAAAABopenai"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, losses, err := EncodeRequest(replay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameJSON(t, "body", encoded, `{"model":"m","stream":false,"max_tokens":32000,"messages":[
+	 {"role":"user","content":[{"type":"text","text":"Weather?"}]},
+	 {"role":"assistant","content":[
+	  {"type":"thinking","thinking":"Look it up.","signature":"`+sig+`"},
+	  {"type":"tool_use","id":"c1","name":"w","input":{}}]},
+	 {"role":"user","content":[{"type":"tool_result","tool_use_id":"c1","content":"sunny"}]}]}`)
+	if got := lossList(losses); !slices.Contains(got, "dropped input[4]") {
+		t.Errorf("losses %q: the OpenAI reasoning item is not reported dropped", got)
+	}
+}
+
+// Signature deltas are collected for the item's end, up to a limit: a stream that keeps sending
+// them fails instead of growing without bound.
+func TestStreamDecoderBoundsSignature(t *testing.T) {
+	dec := NewStreamDecoder()
+	for _, data := range []string{
+		`{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"m","content":[],"usage":{"input_tokens":3,"output_tokens":1}}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}`,
+	} {
+		if _, err := dec.Decode([]byte(data)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	piece := `{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"` + strings.Repeat("E", 64<<10) + `"}}`
+	for range MaxSignature/(64<<10) + 1 {
+		if _, err := dec.Decode([]byte(piece)); err != nil {
+			var e *llm.Error
+			if !errors.As(err, &e) || e.Code != llm.CodeUpstream || e.Retryable {
+				t.Fatalf("err = %v, want a non-retryable upstream error", err)
+			}
+			return
+		}
+	}
+	t.Fatal("the decoder took signature deltas beyond MaxSignature")
 }
