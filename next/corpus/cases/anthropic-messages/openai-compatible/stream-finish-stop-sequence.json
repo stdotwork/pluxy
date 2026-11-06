@@ -1,0 +1,75 @@
+{
+  "description": "Streamed reply that ends at a stop sequence. The Chat upstream reports finish_reason stop without the stop text; the Messages stream maps it to end_turn in message_delta.",
+  "source": [
+    "core/internal/translator/openai/claude/openai_claude_request.go (stop_sequences becomes stop)",
+    "core/internal/translator/openai/claude/openai_claude_response.go (mapOpenAIFinishReasonToAnthropic, emitAnthropicMessageDelta)",
+    "core/internal/runtime/executor/openai_compat_executor.go (executeStreamWithCredentials)"
+  ],
+  "client": {
+    "path": "/v1/messages",
+    "auth": "none",
+    "headers": {"x-api-key":"corpus-client-key","anthropic-version":"2023-06-01"},
+    "body": {
+      "model": "gpt-test",
+      "max_tokens": 256,
+      "stream": true,
+      "stop_sequences": ["END"],
+      "messages": [{"role":"user","content":"Count to 42, then write END."}]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"data":{"id":"chatcmpl-corpus","object":"chat.completion.chunk","created":1700000000,"model":"gpt-test-upstream","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}},
+        {"data":{"id":"chatcmpl-corpus","object":"chat.completion.chunk","created":1700000000,"model":"gpt-test-upstream","choices":[{"index":0,"delta":{"content":"Result: 42 "},"finish_reason":null}]}},
+        {"data":{"id":"chatcmpl-corpus","object":"chat.completion.chunk","created":1700000000,"model":"gpt-test-upstream","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}},
+        {"data":{"id":"chatcmpl-corpus","object":"chat.completion.chunk","created":1700000000,"model":"gpt-test-upstream","choices":[],"usage":{"prompt_tokens":18,"completion_tokens":5,"total_tokens":23}}},
+        {"data":"[DONE]"}
+      ]
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"message":{"content":[],"id":"chatcmpl-corpus","model":"gpt-test-upstream","role":"assistant","stop_reason":null,"stop_sequence":null,"type":"message","usage":{"input_tokens":11,"output_tokens":0}},"type":"message_start"},"event":"message_start"},
+        {"data":{"content_block":{"text":"","type":"text"},"index":0,"type":"content_block_start"},"event":"content_block_start"},
+        {"data":{"delta":{"text":"Result: 42 ","type":"text_delta"},"index":0,"type":"content_block_delta"},"event":"content_block_delta"},
+        {"data":{"index":0,"type":"content_block_stop"},"event":"content_block_stop"},
+        {"data":{"delta":{"stop_reason":"end_turn","stop_sequence":null},"type":"message_delta","usage":{"input_tokens":18,"output_tokens":5}},"event":"message_delta"},
+        {"data":{"type":"message_stop"},"event":"message_stop"}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 256,
+          "messages": [{"content":"Count to 42, then write END.","role":"user"}],
+          "model": "gpt-test",
+          "stop": ["END"],
+          "stream": true,
+          "stream_options": {"include_usage":true}
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Cache-Control": "no-cache",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  }
+}

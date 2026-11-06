@@ -1,0 +1,141 @@
+{
+  "description": "A follow-up turn with two tool calls and their results. The tool_result blocks come back out of order (toolu_01B before toolu_01A); the upstream must still get the tool messages in the order of the assistant's tool_use blocks, each with the id and name of its call, and the assistant message's text stays with its tool_calls.",
+  "source": [
+    "core/internal/translator/common/claude_messages.go (AlignClaudeToolResults, ClaudeMessageAccumulator)",
+    "core/internal/translator/openai/claude/openai_claude_request.go (tool_use becomes tool_calls, tool_result becomes role tool with tool_call_id and name)",
+    "core/internal/runtime/executor/openai_compat_executor.go (executeWithCredentials)"
+  ],
+  "client": {
+    "path": "/v1/messages",
+    "auth": "none",
+    "headers": {"x-api-key":"corpus-client-key","anthropic-version":"2023-06-01"},
+    "body": {
+      "model": "gpt-test",
+      "max_tokens": 512,
+      "tools": [
+        {
+          "name": "get_weather",
+          "description": "Get the current weather for a city.",
+          "input_schema": {
+            "type": "object",
+            "properties": {"city":{"type":"string"}},
+            "required": ["city"]
+          }
+        }
+      ],
+      "messages": [
+        {"role":"user","content":"What is the weather in Paris and Rome?"},
+        {
+          "role": "assistant",
+          "content": [
+            {"type":"text","text":"Checking."},
+            {"type":"tool_use","id":"toolu_01A","name":"get_weather","input":{"city":"Paris"}},
+            {"type":"tool_use","id":"toolu_01B","name":"get_weather","input":{"city":"Rome"}}
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {"type":"tool_result","tool_use_id":"toolu_01B","content":"18C"},
+            {"type":"tool_result","tool_use_id":"toolu_01A","content":"21C"},
+            {"type":"text","text":"Which is warmer?"}
+          ]
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "id": "chatcmpl-corpus",
+        "object": "chat.completion",
+        "created": 1700000001,
+        "model": "gpt-test-upstream",
+        "choices": [
+          {
+            "index": 0,
+            "message": {"role":"assistant","content":"Paris is warmer, at 21C, than Rome at 18C."},
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {"prompt_tokens":90,"completion_tokens":12,"total_tokens":102}
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "content": [{"text":"Paris is warmer, at 21C, than Rome at 18C.","type":"text"}],
+        "id": "chatcmpl-corpus",
+        "model": "gpt-test-upstream",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "type": "message",
+        "usage": {"input_tokens":90,"output_tokens":12}
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 512,
+          "messages": [
+            {"content":"What is the weather in Paris and Rome?","role":"user"},
+            {
+              "content": [{"text":"Checking.","type":"text"}],
+              "role": "assistant",
+              "tool_calls": [
+                {
+                  "function": {"arguments":"{\"city\":\"Paris\"}","name":"get_weather"},
+                  "id": "toolu_01A",
+                  "type": "function"
+                },
+                {
+                  "function": {"arguments":"{\"city\":\"Rome\"}","name":"get_weather"},
+                  "id": "toolu_01B",
+                  "type": "function"
+                }
+              ]
+            },
+            {"content":"21C","name":"get_weather","role":"tool","tool_call_id":"toolu_01A"},
+            {"content":"18C","name":"get_weather","role":"tool","tool_call_id":"toolu_01B"},
+            {"content":[{"text":"Which is warmer?","type":"text"}],"role":"user"}
+          ],
+          "model": "gpt-test",
+          "stream": false,
+          "tools": [
+            {
+              "function": {
+                "description": "Get the current weather for a city.",
+                "name": "get_weather",
+                "parameters": {
+                  "properties": {"city":{"type":"string"}},
+                  "required": ["city"],
+                  "type": "object"
+                }
+              },
+              "type": "function"
+            }
+          ]
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  }
+}

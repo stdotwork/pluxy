@@ -1,0 +1,64 @@
+{
+  "description": "The upstream rejects the request with 400 (context too long) and an OpenAI error body. The Messages client gets HTTP 400 with an Anthropic error body {\"error\": {message, type}, \"type\": \"error\"}; the upstream's code and param are not passed through.",
+  "source": [
+    "core/internal/runtime/executor/openai_compat_executor.go (newOpenAICompatStatusError, executeWithCredentials error path)",
+    "core/internal/translator/openai/claude/openai_claude_response.go (error body translation)"
+  ],
+  "client": {
+    "path": "/v1/messages",
+    "auth": "none",
+    "headers": {"x-api-key":"corpus-client-key","anthropic-version":"2023-06-01"},
+    "body": {"model":"gpt-test","max_tokens":256,"messages":[{"role":"user","content":"Say hello"}]}
+  },
+  "upstream": [
+    {
+      "status": 400,
+      "body": {
+        "error": {
+          "message": "This model's maximum context length is 8192 tokens.",
+          "type": "invalid_request_error",
+          "param": "messages",
+          "code": "context_length_exceeded"
+        }
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {
+          "message": "This model's maximum context length is 8192 tokens.",
+          "type": "invalid_request_error"
+        },
+        "type": "error"
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 400
+    },
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 256,
+          "messages": [{"content":"Say hello","role":"user"}],
+          "model": "gpt-test",
+          "stream": false
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  }
+}

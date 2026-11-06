@@ -1,0 +1,125 @@
+{
+  "description": "A non-streamed Chat reply with two parallel tool calls in one message. The Messages reply carries two tool_use blocks in order, with their JSON arguments as input, and stop_reason tool_use.",
+  "source": [
+    "core/internal/translator/openai/claude/openai_claude_response.go (ConvertOpenAIResponseToClaudeNonStream, mapOpenAINonStreamFinishReasonToAnthropic)",
+    "core/internal/translator/openai/claude/openai_claude_request.go (tools: input_schema becomes function.parameters)",
+    "core/internal/runtime/executor/openai_compat_executor.go (executeWithCredentials)"
+  ],
+  "client": {
+    "path": "/v1/messages",
+    "auth": "none",
+    "headers": {"x-api-key":"corpus-client-key","anthropic-version":"2023-06-01"},
+    "body": {
+      "model": "gpt-test",
+      "max_tokens": 1024,
+      "tools": [
+        {
+          "name": "get_weather",
+          "description": "Get the current weather for a city.",
+          "input_schema": {
+            "type": "object",
+            "properties": {"city":{"type":"string"}},
+            "required": ["city"]
+          }
+        }
+      ],
+      "messages": [{"role":"user","content":"Weather in Paris and Rome?"}]
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "id": "chatcmpl-corpus",
+        "object": "chat.completion",
+        "created": 1700000001,
+        "model": "gpt-test-upstream",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": null,
+              "tool_calls": [
+                {
+                  "id": "call_abc",
+                  "type": "function",
+                  "function": {"name":"get_weather","arguments":"{\"city\":\"Paris\"}"}
+                },
+                {
+                  "id": "call_def",
+                  "type": "function",
+                  "function": {"name":"get_weather","arguments":"{\"city\":\"Rome\"}"}
+                }
+              ]
+            },
+            "finish_reason": "tool_calls"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 85,
+          "completion_tokens": 40,
+          "total_tokens": 125,
+          "prompt_tokens_details": {"cached_tokens":0}
+        }
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "content": [
+          {"id":"call_abc","input":{"city":"Paris"},"name":"get_weather","type":"tool_use"},
+          {"id":"call_def","input":{"city":"Rome"},"name":"get_weather","type":"tool_use"}
+        ],
+        "id": "chatcmpl-corpus",
+        "model": "gpt-test-upstream",
+        "role": "assistant",
+        "stop_reason": "tool_use",
+        "stop_sequence": null,
+        "type": "message",
+        "usage": {"input_tokens":85,"output_tokens":40}
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 1024,
+          "messages": [{"content":"Weather in Paris and Rome?","role":"user"}],
+          "model": "gpt-test",
+          "stream": false,
+          "tools": [
+            {
+              "function": {
+                "description": "Get the current weather for a city.",
+                "name": "get_weather",
+                "parameters": {
+                  "properties": {"city":{"type":"string"}},
+                  "required": ["city"],
+                  "type": "object"
+                }
+              },
+              "type": "function"
+            }
+          ]
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  }
+}
