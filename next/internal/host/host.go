@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"runtime"
@@ -294,6 +295,13 @@ func (e *Extension) Generate(ctx context.Context, account protocol.Account, req 
 	s.stop = context.AfterFunc(ctx, func() { conn.Close() })
 	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: protocol.OpGenerate, Account: &account, Request: &req}
 	if err := protocol.WriteFrame(conn, call); err != nil {
+		if errors.Is(err, protocol.ErrFrameTooLarge) {
+			// The request is valid but too big to pass on in one frame; only a smaller request
+			// can fix that.
+			s.fail(&llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusRequestEntityTooLarge, Scope: llm.ScopeRequest,
+				Message: "request is too large to pass to the provider extension"})
+			return s
+		}
 		s.fail(s.readError(err))
 	}
 	return s

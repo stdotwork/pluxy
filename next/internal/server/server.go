@@ -17,7 +17,9 @@ import (
 )
 
 // MaxRequestBody limits a client request body. The request travels to the extension in one
-// frame, as parsed items plus the original body, so this stays well under protocol.MaxFrame.
+// frame, as parsed items plus the original body. JSON escaping can make the parsed items longer
+// than the body (U+2028 takes six bytes escaped, three raw), so a body under this limit can
+// still exceed protocol.MaxFrame; the host then fails the request with status 413.
 const MaxRequestBody = 24 << 20
 
 // MaxResponseBody limits what core collects for a non-streamed reply; streamed replies are not
