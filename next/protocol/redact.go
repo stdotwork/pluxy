@@ -30,6 +30,7 @@ type Redactor struct {
 	min     int               // length of the shortest form; shorter text cannot hold one
 	chars   [256]bool         // the bytes the forms are made of
 	numeric bool              // some form could be part of a JSON number
+	fffd    bool              // some form holds U+FFFD, which JSON decoders read invalid UTF-8 as
 }
 
 // NewRedactor returns the Redactor for the credentials cs. Every string in a credential except its
@@ -45,6 +46,17 @@ func NewRedactor(cs ...*Credential) *Redactor {
 		_ = json.Unmarshal(b, &m)
 		delete(m, "kind")
 		secrets = collectStrings(m, secrets)
+	}
+	// Each line of a secret that spans lines (a PEM private key) is secret on its own too: text
+	// read a line at a time, such as a log, never holds the whole secret.
+	for _, s := range secrets {
+		if strings.Contains(s, "\n") {
+			for _, line := range strings.Split(s, "\n") {
+				if line = strings.TrimSpace(line); len(line) >= minFragment {
+					secrets = append(secrets, line)
+				}
+			}
+		}
 	}
 	var variants []string
 	for _, s := range secrets {
@@ -69,6 +81,7 @@ func NewRedactor(cs ...*Credential) *Redactor {
 			numeric = numeric && strings.IndexByte(numberChars, v[i]) >= 0
 		}
 		red.numeric = red.numeric || numeric
+		red.fffd = red.fffd || strings.ContainsRune(v, utf8.RuneError)
 	}
 	red.r, red.find = strings.NewReplacer(pairs...), strings.NewReplacer(gone...)
 	return red
@@ -151,6 +164,9 @@ func (r *Redactor) text(s string, depth int) string {
 			return string(r.redactJSON([]byte(s), depth+1))
 		}
 	}
+	if r.numeric {
+		s = r.jsonNumbers(s)
+	}
 	out := r.r.Replace(s)
 	if r.liveEscape(out) {
 		out = r.escaped(out)
@@ -158,10 +174,40 @@ func (r *Redactor) text(s string, depth int) string {
 	return out
 }
 
+// jsonNumbers returns s with each number that holds the credential and stands as a JSON value
+// (after a colon, bracket or comma and before the end of a value, as in JSON quoted after other
+// text) replaced by 0, so that the JSON stays valid.
+func (r *Redactor) jsonNumbers(s string) string {
+	var b strings.Builder
+	last := 0
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c != '-' && (c < '0' || c > '9') {
+			continue
+		}
+		end := i
+		for end < len(s) && strings.IndexByte(numberChars, s[end]) >= 0 {
+			end++
+		}
+		before := strings.TrimRight(s[:i], " \t\r\n")
+		if before != "" && strings.IndexByte(":[,", before[len(before)-1]) >= 0 &&
+			(end == len(s) || strings.IndexByte(",]} \t\r\n", s[end]) >= 0) && r.holds(s[i:end]) {
+			b.WriteString(s[last:i])
+			b.WriteByte('0')
+			last = end
+		}
+		i = end - 1
+	}
+	if last == 0 {
+		return s
+	}
+	b.WriteString(s[last:])
+	return b.String()
+}
+
 // mayHold reports whether s may hold the credential: as it is, or behind an escape that could
 // decode to part of it (liveEscape). Decoding any other escape cannot reveal the credential.
 func (r *Redactor) mayHold(s string) bool {
-	return r.holds(s) || r.liveEscape(s)
+	return r.holds(s) || r.liveEscape(s) || r.fffd && !utf8.ValidString(s)
 }
 
 // holds reports whether s holds a form of the credential as it is. It reads s once and copies
@@ -188,7 +234,7 @@ func (r *Redactor) liveEscape(s string) bool {
 		if s[i] != '\\' && s[i] != '%' {
 			continue
 		}
-		v, n := escapeAt(s, i)
+		v, n := escapeAt(s, i, allEscapes)
 		if n == 0 {
 			continue
 		}
@@ -207,18 +253,27 @@ func (r *Redactor) liveEscape(s string) bool {
 	return false
 }
 
-// escapeAt decodes the escape at s[i], a JSON escape (\n, \u00e9, a surrogate pair \ud83d\ude00)
-// or a percent escape (%2F, %2f), and returns what it stands for (a rune, or for a percent
-// escape a byte) and its length. n is 0 when s[i] starts no escape. As encoding/json does, an
-// unpaired surrogate decodes to U+FFFD.
-func escapeAt(s string, i int) (v rune, n int) {
-	if s[i] == '%' {
+// Kinds of escape a decoding layer decodes, and fixUTF8: read invalid UTF-8 as U+FFFD, as
+// encoding/json does.
+const (
+	jsonEscapes = 1 << iota
+	percentEscapes
+	fixUTF8
+	allEscapes = jsonEscapes | percentEscapes
+)
+
+// escapeAt decodes the escape at s[i] if it is of the kinds given: a JSON escape (\n, \u00e9, a
+// surrogate pair \ud83d\ude00) or a percent escape (%2F, %2f). It returns what the escape stands
+// for (a rune, or for a percent escape a byte) and its length; n is 0 when s[i] starts no such
+// escape. As encoding/json does, an unpaired surrogate decodes to U+FFFD.
+func escapeAt(s string, i int, kinds int) (v rune, n int) {
+	if s[i] == '%' && kinds&percentEscapes != 0 {
 		if i+2 < len(s) && isHex(s[i+1]) && isHex(s[i+2]) {
 			return rune(unhex(s[i+1])<<4 | unhex(s[i+2])), 3
 		}
 		return 0, 0
 	}
-	if s[i] != '\\' || i+1 >= len(s) {
+	if s[i] != '\\' || kinds&jsonEscapes == 0 || i+1 >= len(s) {
 		return 0, 0
 	}
 	switch c := s[i+1]; c {
@@ -283,10 +338,11 @@ func unhex(c byte) byte {
 // span is where in the text being redacted some decoded bytes came from: text[start:end].
 type span struct{ start, end int }
 
-// unescapeLayer decodes one layer of the escapes in s (escapeAt) and reports whether there were
-// any. With track it also returns, for each byte of the result, the span of the original text
-// it came from, given from: the same for each byte of s (nil when s is the original text).
-func unescapeLayer(s string, from []span, track bool) (string, []span, bool) {
+// unescapeLayer decodes one layer of the escapes of the given kinds in s (escapeAt) and reports
+// whether there were any. With track it also returns, for each byte of the result, the span of
+// the original text it came from, given from: the same for each byte of s (nil when s is the
+// original text).
+func unescapeLayer(s string, from []span, track bool, kinds int) (string, []span, bool) {
 	out := make([]byte, 0, len(s))
 	var spans []span
 	if track {
@@ -294,11 +350,19 @@ func unescapeLayer(s string, from []span, track bool) (string, []span, bool) {
 	}
 	changed := false
 	for i := 0; i < len(s); {
-		v, n := escapeAt(s, i)
-		if n == 0 {
+		v, n := escapeAt(s, i, kinds)
+		switch {
+		case n == 0 && kinds&fixUTF8 != 0 && s[i] >= utf8.RuneSelf:
+			var size int
+			if v, size = utf8.DecodeRuneInString(s[i:]); v == utf8.RuneError && size == 1 {
+				changed = true
+			}
+			n = size
+			out = utf8.AppendRune(out, v)
+		case n == 0:
 			n = 1
 			out = append(out, s[i])
-		} else {
+		default:
 			changed = true
 			if s[i] == '%' {
 				out = append(out, byte(v))
@@ -321,29 +385,20 @@ func unescapeLayer(s string, from []span, track bool) (string, []span, bool) {
 }
 
 // escaped returns s with the credential replaced wherever s holds it once its escapes are
-// decoded, layer after layer up to maxDepth: only the characters of s that spell it are
-// replaced, so every other escape keeps its bytes.
+// decoded, up to maxDepth layers: only the characters of s that spell it are replaced, so every
+// other escape keeps its bytes.
 func (r *Redactor) escaped(s string) string {
 	// Most text with escapes does not hold the credential behind them: find out first, without
-	// tracking where each byte came from. A layer without a live escape reveals nothing more.
-	hit := false
-	for cur, i := s, 0; !hit && i < maxDepth && r.liveEscape(cur); i++ {
-		next, _, _ := unescapeLayer(cur, nil, false)
-		hit, cur = r.holds(next), next
-	}
-	if !hit {
+	// tracking where each byte came from.
+	hit, over := r.decodings(s, false, func(d string, _ []span) bool { return r.holds(d) })
+	if !hit && !over {
 		return s
 	}
 	var cuts []span
-	cur, from := s, []span(nil)
-	for range maxDepth {
-		next, spans, changed := unescapeLayer(cur, from, true)
-		if !changed {
-			break
-		}
+	_, over2 := r.decodings(s, true, func(d string, spans []span) bool {
 		for _, f := range r.forms {
 			for off := 0; ; {
-				k := strings.Index(next[off:], f)
+				k := strings.Index(d[off:], f)
 				if k < 0 {
 					break
 				}
@@ -352,7 +407,10 @@ func (r *Redactor) escaped(s string) string {
 				off = k + 1
 			}
 		}
-		cur, from = next, spans
+		return false
+	})
+	if over || over2 {
+		return Redacted
 	}
 	slices.SortFunc(cuts, func(a, b span) int { return cmp.Compare(a.start, b.start) })
 	var b strings.Builder
@@ -370,12 +428,52 @@ func (r *Redactor) escaped(s string) string {
 	return b.String()
 }
 
+// maxDecodings bounds how many different decodings of one text are tried. Text with more is
+// redacted whole, rather than risk missing one.
+const maxDecodings = 16
+
+// decodings calls visit with each different decoding of s, layer after layer up to maxDepth, until
+// visit returns true. A reader may decode JSON and percent escapes in either order, so each layer
+// is decoded each way and both at once; a layer without a live escape reveals nothing more. It
+// reports whether visit returned true, and whether s had more than maxDecodings decodings.
+func (r *Redactor) decodings(s string, track bool, visit func(string, []span) bool) (found, over bool) {
+	type layer struct {
+		s    string
+		from []span
+	}
+	seen := map[string]bool{s: true}
+	frontier := []layer{{s, nil}}
+	for depth := 0; depth < maxDepth && len(frontier) > 0; depth++ {
+		var next []layer
+		for _, l := range frontier {
+			if !r.liveEscape(l.s) {
+				continue
+			}
+			for _, kinds := range []int{allEscapes, jsonEscapes, percentEscapes} {
+				d, spans, changed := unescapeLayer(l.s, l.from, track, kinds)
+				if !changed || seen[d] {
+					continue
+				}
+				if seen[d] = true; len(seen) > maxDecodings {
+					return false, true
+				}
+				if visit(d, spans) {
+					return true, false
+				}
+				next = append(next, layer{d, spans})
+			}
+		}
+		frontier = next
+	}
+	return false, false
+}
+
 // raw returns b with the credential removed, still valid JSON. A client decodes the JSON, so
 // the credential is removed from each decoded string rather than from b's bytes: an upstream
 // can escape any character of it (\u0073 for "s"), and no list of byte encodings covers them
 // all. Data that cannot hold it is returned as it is, without being copied or decoded.
 func (r *Redactor) raw(b json.RawMessage) json.RawMessage {
-	if r == nil || r.r == nil || len(b) < r.min || !r.mayHold(view(b)) {
+	if r == nil || r.r == nil || len(b) < r.min && !r.fffd || !r.mayHold(view(b)) {
 		return b
 	}
 	var out []byte
@@ -422,17 +520,15 @@ func (r *Redactor) redactJSON(b []byte, depth int) []byte {
 			}
 			end++
 		}
-		// A decoded string is no longer than its token, so a short token cannot hold the
-		// credential.
-		if content := b[i+1 : end]; len(content) >= r.min && r.mayHold(view(content)) {
-			var s string
-			if bytes.IndexByte(content, '\\') < 0 {
-				s = string(content)
-			} else if json.Unmarshal(b[i:end+1], &s) != nil {
-				s = ""
+		// A decoded string is no longer than its token (unless invalid UTF-8 becomes U+FFFD), so
+		// a short token cannot hold the credential.
+		if content := b[i+1 : end]; (len(content) >= r.min || r.fffd) && r.mayHold(view(content)) {
+			s, spans := string(content), []span(nil)
+			if bytes.IndexByte(content, '\\') >= 0 || r.fffd && !utf8.Valid(content) {
+				s, spans, _ = unescapeLayer(view(content), nil, true, jsonEscapes|fixUTF8)
 			}
 			if red := r.text(s, depth); red != s {
-				out = append(append(out, b[last:i]...), encodeString(red)...)
+				out = append(append(out, b[last:i]...), keepBytes(content, s, spans, red)...)
 				last = end + 1
 			}
 		}
@@ -442,6 +538,41 @@ func (r *Redactor) redactJSON(b []byte, depth int) []byte {
 		return b
 	}
 	return append(out, b[last:]...)
+}
+
+// keepBytes returns the JSON string token for red, the redaction of s, which is the decoding of
+// the token content raw (spans maps each byte of s to raw; nil when s is raw). The bytes before
+// the first change and after the last keep their escapes as raw has them.
+func keepBytes(raw []byte, s string, spans []span, red string) []byte {
+	p := 0
+	for p < len(s) && p < len(red) && s[p] == red[p] {
+		p++
+	}
+	for p > 0 && (p < len(s) && !utf8.RuneStart(s[p]) || p < len(red) && !utf8.RuneStart(red[p])) {
+		p--
+	}
+	q := 0
+	for q < len(s)-p && q < len(red)-p && s[len(s)-1-q] == red[len(red)-1-q] {
+		q++
+	}
+	for q > 0 && (!utf8.RuneStart(s[len(s)-q]) || !utf8.RuneStart(red[len(red)-q])) {
+		q--
+	}
+	rawStart, rawEnd := p, len(raw)-q
+	if spans != nil {
+		rawStart, rawEnd = 0, len(raw)
+		if p > 0 {
+			rawStart = spans[p-1].end
+		}
+		if q > 0 {
+			rawEnd = spans[len(s)-q].start
+		}
+	}
+	mid := encodeString(red[p : len(red)-q])
+	out := append([]byte{'"'}, raw[:rawStart]...)
+	out = append(out, mid[1:len(mid)-1]...)
+	out = append(out, raw[rawEnd:]...)
+	return append(out, '"')
 }
 
 func encodeString(s string) []byte {

@@ -260,3 +260,55 @@ func BenchmarkRedactorLargeReply(b *testing.B) {
 		})
 	}
 }
+
+// Second-review probes. Expected values were written by hand.
+func TestRedactorReviewRound2(t *testing.T) {
+	raw := func(key, in string) string {
+		r := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: key})
+		return string(r.Event(llm.Event{Type: llm.EventNative, Raw: json.RawMessage(in)}).Raw)
+	}
+	for _, c := range []struct{ name, key, in, want string }{
+		// A key holding what reads as a percent escape, behind a JSON escape: decoding both at
+		// once would turn %41 into A and miss it.
+		{"json escape, then a percent sign in the key", "sk-%41tail", `{"m":"upstream: \\u0073k-%41tail"}`, `{"m":"upstream: [redacted]"}`},
+		// The low surrogate appears only once %5C is decoded.
+		{"percent, then a surrogate pair", "pa😀ss", `{"m":"upstream: pa\\ud83d%5Cude00ss"}`, `{"m":"upstream: [redacted]"}`},
+		// Escapes away from the key keep their bytes in a string that changes.
+		{"other escapes in a changed string", "sk-test/key+42", `{"m":"caf\u00e9 \/home key \u0073k-test/key+42 \t done"}`, `{"m":"caf\u00e9 \/home key [redacted] \t done"}`},
+		// JSON after other text in a string stays valid JSON.
+		{"number in JSON after text", "12345678", `{"m":"upstream: {\"n\":12345678,\"m\":[12345678]}"}`, `{"m":"upstream: {\"n\":0,\"m\":[0]}"}`},
+		// Go's JSON decoder reads an invalid byte as U+FFFD, so for a key holding U+FFFD the byte
+		// spells it.
+		{"invalid UTF-8", "pa�ss", "{\"m\":\"key pa\xffss\"}", `{"m":"key [redacted]"}`},
+	} {
+		if got := raw(c.key, c.in); got != c.want {
+			t.Errorf("%s: raw %s\n got %s\nwant %s", c.name, c.in, got, c.want)
+		}
+	}
+	r := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: "12345678"})
+	for in, want := range map[string]string{
+		`upstream: {"n":12345678}`: `upstream: {"n":0}`,
+		"key 12345678 refused":     "key [redacted] refused",
+	} {
+		if got := r.String(in); got != want {
+			t.Errorf("String(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Each line of a secret that spans lines (a PEM private key) counts as secret on its own, so text
+// split into lines, such as a log, cannot show it a line at a time.
+func TestRedactorMultilineSecret(t *testing.T) {
+	key := "-----BEGIN PRIVATE KEY-----\nbm90LWEtcmVhbC1rZXktb25seS1wcm9iZQ==\n-----END PRIVATE KEY-----\n"
+	data, _ := json.Marshal(map[string]string{"private_key": key})
+	r := NewRedactor(&Credential{Kind: "service_account", Data: data})
+	for in, want := range map[string]string{
+		"bm90LWEtcmVhbC1rZXktb25seS1wcm9iZQ==": "[redacted]",
+		"key: " + key:                          "key: [redacted]",
+		"short line\nok":                       "short line\nok",
+	} {
+		if got := r.String(in); got != want {
+			t.Errorf("String(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
