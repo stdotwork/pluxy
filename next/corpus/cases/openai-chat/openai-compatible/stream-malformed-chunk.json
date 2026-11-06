@@ -20,7 +20,12 @@
     {
       "path": "client.events[2].data.error",
       "kind": "gap",
-      "reason": "Both cores end the stream with an error event, but the new core's comes from the extension failing: the decoder puts the non-JSON line in llm.Error.Raw, the error event then cannot be encoded as JSON, and core reports extension_crashed. To fix in the new core."
+      "reason": "Both cores end the stream with an error event and no [DONE]; the error's message and code differ.",
+      "want": {
+        "code": "upstream",
+        "message": "upstream sent a malformed stream chunk",
+        "type": "server_error"
+      }
     }
   ],
   "recorded_old_core": {

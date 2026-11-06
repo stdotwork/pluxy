@@ -53,32 +53,81 @@ func decodeFinish(raw string) llm.Finish {
 	return llm.Finish{Reason: reason, RawReason: raw}
 }
 
-type streamChunk struct {
-	ID      string `json:"id"`
-	Model   string `json:"model"`
-	Created int64  `json:"created"`
-	Choices []struct {
-		Index int `json:"index"`
-		Delta struct {
-			Content          *string `json:"content"`
-			ReasoningContent *string `json:"reasoning_content"`
-			ToolCalls        []struct {
-				Index    int    `json:"index"`
-				ID       string `json:"id"`
-				Function struct {
-					Name      string `json:"name"`
-					Arguments string `json:"arguments"`
-				} `json:"function"`
-			} `json:"tool_calls"`
-		} `json:"delta"`
-		FinishReason *string `json:"finish_reason"`
-	} `json:"choices"`
-	Usage json.RawMessage `json:"usage"`
-	Error json.RawMessage `json:"error"`
+// maxErrorRaw limits the upstream bytes an error keeps for diagnostics.
+const maxErrorRaw = 1 << 20
+
+// malformed returns the error for upstream data that is not the JSON it should be. The data is
+// kept in Raw as a JSON string when it is not JSON, so the error can still be sent to core.
+func malformed(msg string, data []byte) *llm.Error {
+	return &llm.Error{Code: llm.CodeUpstream, Message: msg, Raw: llm.RawJSON(data[:min(len(data), maxErrorRaw)])}
 }
 
-// StreamDecoder turns the data of an upstream Chat Completions stream into events. Only the
-// first choice (index 0) is read. Use one decoder per stream.
+// replyFields returns the reply-level fields of a response or chunk that the model has no place
+// for (system_fingerprint, service_tier and the like), as a JSON object, or nil when there are
+// none.
+func replyFields(data []byte) json.RawMessage {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(data, &m) != nil {
+		return nil
+	}
+	for _, k := range modelledFields {
+		delete(m, k)
+	}
+	if len(m) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+// modelledFields are the top-level fields of a response or chunk that the model carries.
+var modelledFields = []string{"id", "object", "created", "model", "choices", "usage", "error"}
+
+// otherChoices returns a native event holding the choices after the first, kept as the upstream
+// sent them, or nil when there are none.
+func otherChoices(choices []json.RawMessage) *llm.Event {
+	if len(choices) == 0 {
+		return nil
+	}
+	raw, err := json.Marshal(map[string][]json.RawMessage{"choices": choices})
+	if err != nil {
+		return nil
+	}
+	return &llm.Event{Type: llm.EventNative, Raw: raw}
+}
+
+type streamChunk struct {
+	ID      string            `json:"id"`
+	Model   string            `json:"model"`
+	Created int64             `json:"created"`
+	Choices []json.RawMessage `json:"choices"`
+	Usage   json.RawMessage   `json:"usage"`
+	Error   json.RawMessage   `json:"error"`
+}
+
+type streamChoice struct {
+	Index int `json:"index"`
+	Delta struct {
+		Content          *string `json:"content"`
+		ReasoningContent *string `json:"reasoning_content"`
+		ToolCalls        []struct {
+			Index    int    `json:"index"`
+			ID       string `json:"id"`
+			Function struct {
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			} `json:"function"`
+		} `json:"tool_calls"`
+	} `json:"delta"`
+	FinishReason *string `json:"finish_reason"`
+}
+
+// StreamDecoder turns the data of an upstream Chat Completions stream into events. The first
+// choice (index 0) becomes items; other choices are passed on in native events. Use one decoder
+// per stream.
 type StreamDecoder struct {
 	started   bool
 	done      bool
@@ -125,28 +174,46 @@ func (d *StreamDecoder) closeAll(ev *[]llm.Event) {
 }
 
 // Decode takes the data of one SSE event and returns the events it produces. After "[DONE]" it
-// returns the finish event and the decoder is done. An upstream error object becomes an
+// returns the finish event and the decoder is done; a "[DONE]" before any finish reason is an
+// error, because the reply may have been cut short. An upstream error object becomes an
 // *llm.Error.
 func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 	if d.done {
 		return nil, fmt.Errorf("openaichat: data after the end of the stream")
 	}
 	if string(data) == "[DONE]" {
+		if d.finish == nil {
+			return nil, d.unfinished()
+		}
 		return d.end(), nil
 	}
 	var c streamChunk
 	if err := json.Unmarshal(data, &c); err != nil {
-		return nil, &llm.Error{Code: llm.CodeUpstream, Message: "upstream sent a malformed stream chunk", Raw: append(json.RawMessage(nil), data...)}
+		return nil, malformed("upstream sent a malformed stream chunk", data)
 	}
 	if len(c.Error) > 0 && string(c.Error) != "null" {
 		return nil, upstreamStreamError(c.Error)
 	}
+	choices := make([]streamChoice, len(c.Choices))
+	var others []json.RawMessage
+	for i, raw := range c.Choices {
+		if err := json.Unmarshal(raw, &choices[i]); err != nil {
+			return nil, malformed("upstream sent a malformed stream chunk", data)
+		}
+		if choices[i].Index != 0 {
+			others = append(others, raw)
+		}
+	}
 	var out []llm.Event
 	if !d.started {
 		d.started = true
-		out = append(out, llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: c.ID, Model: c.Model, Created: c.Created}})
+		// Reply-level fields are read from the first chunk only; later chunks are expected to
+		// repeat them.
+		out = append(out, llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{
+			ID: c.ID, Model: c.Model, Created: c.Created, Format: llm.FormatOpenAIChat, Raw: replyFields(data),
+		}})
 	}
-	for _, ch := range c.Choices {
+	for _, ch := range choices {
 		if ch.Index != 0 {
 			continue
 		}
@@ -186,6 +253,9 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			d.closeAll(&out)
 		}
 	}
+	if ev := otherChoices(others); ev != nil {
+		out = append(out, *ev)
+	}
 	if u := decodeUsage(c.Usage); u != nil {
 		d.usage = u
 	}
@@ -213,10 +283,14 @@ func (d *StreamDecoder) Close() ([]llm.Event, error) {
 		return nil, nil
 	}
 	if d.finish == nil {
-		d.done = true
-		return nil, &llm.Error{Code: llm.CodeUpstream, Message: "upstream stream ended before the reply finished"}
+		return nil, d.unfinished()
 	}
 	return d.end(), nil
+}
+
+func (d *StreamDecoder) unfinished() *llm.Error {
+	d.done = true
+	return &llm.Error{Code: llm.CodeUpstream, Message: "upstream stream ended before the reply finished"}
 }
 
 func upstreamStreamError(raw json.RawMessage) *llm.Error {
@@ -236,29 +310,44 @@ func upstreamStreamError(raw json.RawMessage) *llm.Error {
 }
 
 type completion struct {
-	ID      string `json:"id"`
-	Model   string `json:"model"`
-	Created int64  `json:"created"`
-	Choices []struct {
-		Index   int `json:"index"`
-		Message struct {
-			Content          *string        `json:"content"`
-			ReasoningContent *string        `json:"reasoning_content"`
-			ToolCalls        []chatToolCall `json:"tool_calls"`
-		} `json:"message"`
-		FinishReason string `json:"finish_reason"`
-	} `json:"choices"`
-	Usage json.RawMessage `json:"usage"`
+	ID      string            `json:"id"`
+	Model   string            `json:"model"`
+	Created int64             `json:"created"`
+	Choices []json.RawMessage `json:"choices"`
+	Usage   json.RawMessage   `json:"usage"`
+}
+
+type completionChoice struct {
+	Index   int `json:"index"`
+	Message struct {
+		Content          *string        `json:"content"`
+		ReasoningContent *string        `json:"reasoning_content"`
+		ToolCalls        []chatToolCall `json:"tool_calls"`
+	} `json:"message"`
+	FinishReason string `json:"finish_reason"`
 }
 
 // DecodeResponse turns an upstream non-streamed Chat Completions response into the events a
-// stream of it would have produced. Only the first choice is read.
+// stream of it would have produced. The first choice becomes items; other choices are passed on
+// in a native event.
 func DecodeResponse(body []byte) ([]llm.Event, error) {
 	var c completion
 	if err := json.Unmarshal(body, &c); err != nil {
-		return nil, &llm.Error{Code: llm.CodeUpstream, Message: "upstream sent a malformed response", Raw: append(json.RawMessage(nil), body...)}
+		return nil, malformed("upstream sent a malformed response", body)
 	}
-	out := []llm.Event{{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: c.ID, Model: c.Model, Created: c.Created}}}
+	choices := make([]completionChoice, len(c.Choices))
+	var others []json.RawMessage
+	for i, raw := range c.Choices {
+		if err := json.Unmarshal(raw, &choices[i]); err != nil {
+			return nil, malformed("upstream sent a malformed response", body)
+		}
+		if choices[i].Index != 0 {
+			others = append(others, raw)
+		}
+	}
+	out := []llm.Event{{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{
+		ID: c.ID, Model: c.Model, Created: c.Created, Format: llm.FormatOpenAIChat, Raw: replyFields(body),
+	}}}
 	next := 0
 	item := func(start llm.ItemStart, delta string, deltaType string) {
 		out = append(out, llm.Event{Type: llm.EventItemStart, Index: next, Item: &start})
@@ -269,7 +358,7 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 		next++
 	}
 	finish := llm.Finish{Reason: llm.FinishOther}
-	for _, ch := range c.Choices {
+	for _, ch := range choices {
 		if ch.Index != 0 {
 			continue
 		}
@@ -288,6 +377,9 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 			item(llm.ItemStart{Kind: llm.ItemToolCall, CallID: id, Name: tc.Function.Name}, tc.Function.Arguments, llm.EventToolInputDelta)
 		}
 		finish = decodeFinish(ch.FinishReason)
+	}
+	if ev := otherChoices(others); ev != nil {
+		out = append(out, *ev)
 	}
 	return append(out, llm.Event{Type: llm.EventFinish, Finish: &finish, Usage: decodeUsage(c.Usage)}), nil
 }

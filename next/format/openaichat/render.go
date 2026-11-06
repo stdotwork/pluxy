@@ -56,12 +56,74 @@ type outUsage struct {
 }
 
 type outCompletion struct {
-	ID      string      `json:"id"`
-	Object  string      `json:"object"`
-	Created int64       `json:"created"`
-	Model   string      `json:"model"`
-	Choices []outChoice `json:"choices"`
-	Usage   *outUsage   `json:"usage,omitempty"`
+	ID      string `json:"id"`
+	Object  string `json:"object"`
+	Created int64  `json:"created"`
+	Model   string `json:"model"`
+	Choices any    `json:"choices"`
+	Usage   any    `json:"usage,omitempty"`
+}
+
+// upstream is what a reply kept from a Chat Completions upstream that the model has no place
+// for. It is written back only when the reply came from that format.
+type upstream struct {
+	native bool
+	fields []byte // reply-level fields as `"k":v,...`, without braces
+}
+
+func newUpstream(r *llm.ResponseInfo) upstream {
+	u := upstream{native: r.Format == llm.FormatOpenAIChat}
+	if !u.native || len(r.Raw) == 0 {
+		return u
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(r.Raw, &m) != nil {
+		return u
+	}
+	for _, k := range modelledFields {
+		delete(m, k)
+	}
+	if len(m) == 0 {
+		return u
+	}
+	if b, err := json.Marshal(m); err == nil {
+		u.fields = b[1 : len(b)-1]
+	}
+	return u
+}
+
+// withFields adds the kept reply-level fields to an encoded response or chunk object.
+func (u upstream) withFields(obj []byte) []byte {
+	if len(u.fields) == 0 {
+		return obj
+	}
+	out := append(obj[:len(obj)-1:len(obj)-1], ',')
+	out = append(out, u.fields...)
+	return append(out, '}')
+}
+
+// usage returns the usage object to write: the upstream's own when it came from this format, so
+// fields the model does not carry (such as a vendor cost) survive.
+func (u upstream) usage(us *llm.Usage) any {
+	if us == nil {
+		return nil
+	}
+	if u.native && len(us.Raw) > 0 {
+		return us.Raw
+	}
+	return encodeUsage(us)
+}
+
+// choices returns the choices kept in a native event.
+func (u upstream) choices(ev llm.Event) []json.RawMessage {
+	if !u.native {
+		return nil
+	}
+	var n struct {
+		Choices []json.RawMessage `json:"choices"`
+	}
+	_ = json.Unmarshal(ev.Raw, &n)
+	return n.Choices
 }
 
 func encodeUsage(u *llm.Usage) *outUsage {
@@ -127,6 +189,7 @@ type StreamWriter struct {
 	w            io.Writer
 	includeUsage bool
 	head         outCompletion
+	up           upstream
 	tools        map[int]int // item index -> tool_calls index
 }
 
@@ -136,7 +199,7 @@ func NewStreamWriter(w io.Writer, includeUsage bool) *StreamWriter {
 	return &StreamWriter{w: w, includeUsage: includeUsage, tools: map[int]int{}, head: outCompletion{Object: "chat.completion.chunk"}}
 }
 
-func (s *StreamWriter) chunk(choices []outChoice, usage *outUsage) error {
+func (s *StreamWriter) chunk(choices any, usage any) error {
 	c := s.head
 	c.Choices = choices
 	c.Usage = usage
@@ -144,7 +207,7 @@ func (s *StreamWriter) chunk(choices []outChoice, usage *outUsage) error {
 	if err != nil {
 		return err
 	}
-	return sse.WriteData(s.w, b)
+	return sse.WriteData(s.w, s.up.withFields(b))
 }
 
 func (s *StreamWriter) delta(d outDelta) error {
@@ -158,6 +221,7 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 	switch ev.Type {
 	case llm.EventResponseStart:
 		s.head.ID, s.head.Model, s.head.Created = ev.Response.ID, ev.Response.Model, created(ev.Response)
+		s.up = newUpstream(ev.Response)
 		empty := ""
 		return s.delta(outDelta{Role: llm.RoleAssistant, Content: &empty})
 	case llm.EventItemStart:
@@ -182,13 +246,18 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		return s.delta(outDelta{ToolCalls: []outToolCall{tc}})
 	case llm.EventItemEnd:
 		return nil
+	case llm.EventNative:
+		if c := s.up.choices(ev); len(c) > 0 {
+			return s.chunk(c, nil)
+		}
+		return nil
 	case llm.EventFinish:
 		reason := finishReason(ev.Finish)
 		if err := s.chunk([]outChoice{{Delta: &outDelta{}, FinishReason: &reason}}, nil); err != nil {
 			return err
 		}
 		if s.includeUsage && ev.Usage != nil {
-			if err := s.chunk([]outChoice{}, encodeUsage(ev.Usage)); err != nil {
+			if err := s.chunk([]outChoice{}, s.up.usage(ev.Usage)); err != nil {
 				return err
 			}
 		}
@@ -204,6 +273,8 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 // Aggregator collects events into a non-streamed Chat Completions response.
 type Aggregator struct {
 	head      outCompletion
+	up        upstream
+	others    []json.RawMessage // choices after the first, as the upstream sent them
 	text      strings.Builder
 	reasoning strings.Builder
 	tools     []outToolCall
@@ -222,6 +293,9 @@ func (a *Aggregator) Add(ev llm.Event) {
 	switch ev.Type {
 	case llm.EventResponseStart:
 		a.head.ID, a.head.Model, a.head.Created = ev.Response.ID, ev.Response.Model, created(ev.Response)
+		a.up = newUpstream(ev.Response)
+	case llm.EventNative:
+		a.others = append(a.others, a.up.choices(ev)...)
 	case llm.EventItemStart:
 		if ev.Item.Kind == llm.ItemToolCall {
 			a.toolIdx[ev.Index] = len(a.tools)
@@ -253,9 +327,17 @@ func (a *Aggregator) Response() ([]byte, error) {
 	}
 	reason := finishReason(a.finish)
 	c := a.head
-	c.Choices = []outChoice{{Message: msg, FinishReason: &reason}}
-	c.Usage = encodeUsage(a.usage)
-	return json.Marshal(c)
+	choices := []any{outChoice{Message: msg, FinishReason: &reason}}
+	for _, o := range a.others {
+		choices = append(choices, o)
+	}
+	c.Choices = choices
+	c.Usage = a.up.usage(a.usage)
+	b, err := json.Marshal(c)
+	if err != nil {
+		return nil, err
+	}
+	return a.up.withFields(b), nil
 }
 
 // ErrorResponse returns the HTTP status and OpenAI-style error body for e.

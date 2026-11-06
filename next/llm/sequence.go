@@ -4,7 +4,8 @@ import "fmt"
 
 // Sequence checks that a stream of events follows the ordering rules of the extension protocol:
 // response.start (or error) first, item indexes counting up from 0, deltas only into open items of
-// the matching kind, every item closed before finish, nothing after the terminal event.
+// the matching kind, native events only with raw, every item closed before finish, nothing after
+// the terminal event.
 // The zero value is ready to use.
 type Sequence struct {
 	started bool
@@ -69,6 +70,10 @@ func (s *Sequence) Check(ev Event) error {
 			return fmt.Errorf("item.end for item %d, which is not open", ev.Index)
 		}
 		delete(s.open, ev.Index)
+	case EventNative:
+		if len(ev.Raw) == 0 {
+			return fmt.Errorf("%q without raw", ev.Type)
+		}
 	case EventFinish:
 		if ev.Finish == nil {
 			return fmt.Errorf("%q without finish", ev.Type)

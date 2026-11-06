@@ -226,23 +226,27 @@ with deltas and closed, then one terminal event.
 
 | Type | Fields | Meaning |
 | --- | --- | --- |
-| `response.start` | `response`: `id`, `model`, `created` (Unix seconds) | First event. `model` is the model that actually served the request. |
+| `response.start` | `response`: `id`, `model`, `created` (Unix seconds), optional `format` and `raw` | First event. `model` is the model that actually served the request. `format` names the upstream format the reply came from (for example `openai.chat`); `raw` is a JSON object of the upstream's reply-level fields that have no place in the model (for example `system_fingerprint`). |
 | `item.start` | `index`, `item`: `kind` (`message`, `reasoning`, `tool_call`), and for tool calls `call_id` and `name` | Opens output item `index`. |
 | `text.delta` | `index`, `delta` | Text for an open `message` item. |
 | `reasoning.delta` | `index`, `delta` | Reasoning text for an open `reasoning` item. |
 | `tool_input.delta` | `index`, `delta` | A fragment of the argument string for an open `tool_call` item. |
 | `item.end` | `index` | Closes item `index`. |
+| `native` | `raw` | Upstream data that has no place in the model, in the reply's `format`. For `openai.chat` it is `{"choices": [...]}`: choices after the first, as the upstream sent them. |
 | `finish` | `finish`: `reason`, `raw_reason`; optional `usage` | Terminal: success. |
 | `error` | `error` (below) | Terminal: failure. |
 
-Any event may carry `raw`: the upstream data it came from, for diagnostics. Core does not
-interpret it in version 0.
+Any event may carry `raw`: the upstream data it came from, for diagnostics. `raw` must be valid
+JSON; upstream bytes that are not JSON go in as a JSON string. Core writes upstream data back
+only to a client that speaks the reply's `format`: the `response.start` fields, `native` events
+and the usage `raw` (so fields such as a vendor cost survive); other clients do not get it.
 
 Ordering rules, which core enforces and the conformance kit checks:
 
 - The first event is `response.start` or `error`.
 - Item indexes start at 0 and go up by one with each `item.start`.
 - A delta's `index` names an open item of the matching kind.
+- A `native` event carries `raw`; it may come anywhere between the first and the terminal event.
 - Every opened item is closed before `finish`. Items may interleave (for example, parallel tool
   calls).
 - Nothing follows the terminal event.
