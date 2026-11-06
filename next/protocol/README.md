@@ -274,6 +274,11 @@ carries the whole Response or Message object. A client in that format gets those
 and that object unchanged; events an extension adds itself (such as closing an item the upstream
 left open) carry no `raw` and are not written to it.
 
+For `openai.chat`, a `tool_call`'s `item.start` carries the call's `extra_content` in `raw`, as
+`{"extra_content": ...}`, when the upstream sent one: Gemini's OpenAI-compatible API puts a call's
+thought signature there (`extra_content.google.thought_signature`), and a Gemini client gets it back
+as the call part's `thoughtSignature`.
+
 For `gemini.generate_content`, each upstream chunk (a whole GenerateContentResponse) rides in the
 `raw` of the first event it produces, or of a `native` event when it produces none; a non-streamed
 reply's body rides on `response.start`. A Gemini client gets those chunks unchanged, thought

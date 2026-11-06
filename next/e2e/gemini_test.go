@@ -3,8 +3,11 @@ package e2e
 import (
 	"context"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -60,4 +63,38 @@ func TestGeminiDropPolicy(t *testing.T) {
 			t.Errorf("upstream got %d requests, want none", len(bodies))
 		}
 	})
+}
+
+// An upstream that redirects to another host does not get the account's key sent there: Go drops
+// Authorization on such a redirect but not x-goog-api-key or x-api-key. The client gets a 502.
+func TestUpstreamRedirectToAnotherHostIsNotFollowed(t *testing.T) {
+	var leaked atomic.Int32
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Goog-Api-Key") != "" || r.Header.Get("X-Api-Key") != "" || r.Header.Get("Authorization") != "" {
+			leaked.Add(1)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer other.Close()
+	_, port, _ := net.SplitHostPort(other.Listener.Addr().String())
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://localhost:"+port+r.URL.RequestURI(), http.StatusTemporaryRedirect)
+	}))
+	defer redirect.Close()
+
+	base := startCore(t, &upstream{Server: redirect}, func(cfg map[string]any) {
+		ext := cfg["extension"].(map[string]any)
+		acct := ext["accounts"].([]any)[0].(map[string]any)
+		acct["settings"] = map[string]any{"base_url": redirect.URL + "/v1beta", "wire_api": "gemini"}
+	})
+	resp := postPath(t, context.Background(), base, "/v1beta/models/gemini-test:generateContent", clientKey,
+		`{"contents":[{"role":"user","parts":[{"text":"Hi"}]}]}`)
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if n := leaked.Load(); n != 0 {
+		t.Errorf("the other host got %d requests carrying the account's key", n)
+	}
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("status %d: %s; want 502", resp.StatusCode, raw)
+	}
 }

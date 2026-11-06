@@ -254,7 +254,13 @@ func (d *StreamDecoder) part(raw json.RawMessage, out []llm.Event) []llm.Event {
 			}
 		}
 		var idx int
-		idx, out = d.open(llm.ItemToolCall, out, llm.ItemStart{CallID: call.ID, Name: call.Name})
+		id := call.ID
+		if id == "" {
+			// Gemini's call id is optional; the model needs one. The raw chunk keeps the
+			// call as it came.
+			id = fmt.Sprintf("call_%d", d.next)
+		}
+		idx, out = d.open(llm.ItemToolCall, out, llm.ItemStart{CallID: id, Name: call.Name})
 		return append(out,
 			llm.Event{Type: llm.EventToolInputDelta, Index: idx, Delta: args},
 			llm.Event{Type: llm.EventItemEnd, Index: idx})

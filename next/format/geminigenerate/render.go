@@ -230,31 +230,55 @@ func (b *builder) callPart(c *call) obj {
 	if c.id != "" {
 		fc["id"] = c.id
 	}
-	return obj{"functionCall": fc}
+	p := obj{"functionCall": fc}
+	if c.signature != nil {
+		p["thoughtSignature"] = c.signature
+	}
+	return p
 }
 
 type call struct {
-	id, name string
-	args     strings.Builder
+	id, name  string
+	args      strings.Builder
+	signature json.RawMessage
+}
+
+// newCall starts a tool call from its item.start event. A call from a Chat upstream that is
+// Gemini's OpenAI-compatible API carries its thought signature in the event's raw, as
+// extra_content.google.thought_signature; it goes back on the call's part.
+func (b *builder) newCall(ev llm.Event) *call {
+	c := &call{id: ev.Item.CallID, name: ev.Item.Name}
+	if b.upFormat == llm.FormatOpenAIChat && len(ev.Raw) > 0 {
+		var x struct {
+			ExtraContent struct {
+				Google struct {
+					ThoughtSignature json.RawMessage `json:"thought_signature"`
+				} `json:"google"`
+			} `json:"extra_content"`
+		}
+		if json.Unmarshal(ev.Raw, &x) == nil && !isNull(x.ExtraContent.Google.ThoughtSignature) {
+			c.signature = x.ExtraContent.Google.ThoughtSignature
+		}
+	}
+	return c
 }
 
 // StreamWriter writes events to a client as a GenerateContent SSE stream. When the reply came
 // from a Gemini upstream it writes the upstream's chunks as they came; otherwise it writes one
-// chunk per text or thought delta, and each function call whole in the last chunk with the
-// finish reason and usage, as Gemini sends calls whole.
+// chunk per text or thought delta, and the function calls whole, in the order they started, in
+// the last chunk with the finish reason and usage, as Gemini sends calls whole.
 type StreamWriter struct {
 	w      io.Writer
 	b      builder
 	native bool
 
-	kinds map[int]string // model item index -> kind
-	calls map[int]*call  // open tool calls by model item index
-	done  []*call        // finished tool calls waiting for the last chunk
+	calls map[int]*call // tool calls by model item index
+	order []int         // tool call item indexes in start order
 }
 
 // NewStreamWriter returns a writer for one client stream.
 func NewStreamWriter(w io.Writer) *StreamWriter {
-	return &StreamWriter{w: w, kinds: map[int]string{}, calls: map[int]*call{}}
+	return &StreamWriter{w: w, calls: map[int]*call{}}
 }
 
 // Losses returns what the reply had that the client format could not carry.
@@ -298,9 +322,9 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 	b.eventLosses(ev)
 	switch ev.Type {
 	case llm.EventItemStart:
-		s.kinds[ev.Index] = ev.Item.Kind
 		if ev.Item.Kind == llm.ItemToolCall {
-			s.calls[ev.Index] = &call{id: ev.Item.CallID, name: ev.Item.Name}
+			s.calls[ev.Index] = b.newCall(ev)
+			s.order = append(s.order, ev.Index)
 		}
 	case llm.EventTextDelta, llm.EventReasoningDelta:
 		if ev.Delta == "" {
@@ -315,15 +339,10 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		if c := s.calls[ev.Index]; c != nil {
 			c.args.WriteString(ev.Delta)
 		}
-	case llm.EventItemEnd:
-		if c := s.calls[ev.Index]; c != nil {
-			s.done = append(s.done, c)
-			delete(s.calls, ev.Index)
-		}
 	case llm.EventFinish:
 		var parts []any
-		for _, c := range s.done {
-			parts = append(parts, b.callPart(c))
+		for _, idx := range s.order {
+			parts = append(parts, b.callPart(s.calls[idx]))
 		}
 		return s.emit(b.response(parts, ev.Finish, ev.Usage))
 	case llm.EventError:
@@ -378,7 +397,7 @@ func (a *Aggregator) Add(ev llm.Event) {
 		a.size += len(ev.Item.CallID) + len(ev.Item.Name) + partOverhead
 		p := &aggPart{kind: ev.Item.Kind}
 		if ev.Item.Kind == llm.ItemToolCall {
-			p.call = &call{id: ev.Item.CallID, name: ev.Item.Name}
+			p.call = a.b.newCall(ev)
 		}
 		a.parts[ev.Index] = p
 		a.order = append(a.order, ev.Index)

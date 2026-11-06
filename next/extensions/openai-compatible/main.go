@@ -94,14 +94,32 @@ func endpoint(wire string, req llm.Request) string {
 }
 
 // client has no timeouts after the connection is made: a long generation is not a failure, and
-// cancellation comes from the call's context.
-var client = &http.Client{Transport: &http.Transport{
-	DialContext:         (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-	TLSHandshakeTimeout: 30 * time.Second,
-	ForceAttemptHTTP2:   true,
-	MaxIdleConns:        100,
-	IdleConnTimeout:     90 * time.Second,
-}}
+// cancellation comes from the call's context. It follows a redirect only to the same scheme and
+// host: Go drops Authorization on a redirect to another host but not x-api-key or
+// x-goog-api-key, so following one would send the account's key elsewhere.
+var client = &http.Client{
+	Transport: &http.Transport{
+		DialContext:         (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout: 30 * time.Second,
+		ForceAttemptHTTP2:   true,
+		MaxIdleConns:        100,
+		IdleConnTimeout:     90 * time.Second,
+	},
+	CheckRedirect: sameOrigin,
+}
+
+// sameOrigin refuses a redirect to another scheme or host; the redirect reply is then treated as
+// the upstream's answer.
+func sameOrigin(req *http.Request, via []*http.Request) error {
+	first := via[0].URL
+	if req.URL.Scheme != first.Scheme || req.URL.Host != first.Host {
+		return http.ErrUseLastResponse
+	}
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	return nil
+}
 
 func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	var s settings
@@ -353,6 +371,10 @@ func upstreamError(resp *http.Response) *llm.Error {
 		e.Raw = raw
 	}
 	switch s := resp.StatusCode; {
+	case s >= 300 && s < 400:
+		// A redirect sameOrigin refused to follow.
+		e.Code, e.Scope, e.Status = llm.CodeUpstream, llm.ScopeEndpoint, http.StatusBadGateway
+		e.Message = fmt.Sprintf("upstream redirected (%s) to another host; not followed", resp.Status)
 	case s == http.StatusUnauthorized:
 		e.Code, e.Scope, e.Retryable = llm.CodeAuth, llm.ScopeCredential, true
 	case s == http.StatusForbidden:

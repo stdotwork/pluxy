@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
@@ -164,9 +165,9 @@ func parseGenerationConfig(raw json.RawMessage, o *llm.Options) (json.RawMessage
 		return nil, invalid("generationConfig must be an object")
 	}
 	var g struct {
-		Temperature      *float64        `json:"temperature"`
-		TopP             *float64        `json:"topP"`
-		MaxOutputTokens  *int            `json:"maxOutputTokens"`
+		Temperature      *number         `json:"temperature"`
+		TopP             *number         `json:"topP"`
+		MaxOutputTokens  *number         `json:"maxOutputTokens"`
 		StopSequences    []string        `json:"stopSequences"`
 		ResponseMimeType string          `json:"responseMimeType"`
 		ResponseSchema   json.RawMessage `json:"responseSchema"`
@@ -176,7 +177,11 @@ func parseGenerationConfig(raw json.RawMessage, o *llm.Options) (json.RawMessage
 	if err := json.Unmarshal(b, &g); err != nil {
 		return nil, invalid("generationConfig: %v", err)
 	}
-	o.Temperature, o.TopP, o.MaxOutputTokens, o.Stop = g.Temperature, g.TopP, g.MaxOutputTokens, g.StopSequences
+	o.Temperature, o.TopP, o.Stop = g.Temperature.float(), g.TopP.float(), g.StopSequences
+	if g.MaxOutputTokens != nil {
+		n := int(*g.MaxOutputTokens)
+		o.MaxOutputTokens = &n
+	}
 	modelled := []string{"temperature", "topP", "maxOutputTokens", "stopSequences"}
 	switch strings.ToLower(strings.TrimSpace(g.ResponseMimeType)) {
 	case "application/json":
@@ -215,15 +220,16 @@ var effortBudgets = []struct {
 }{{0, "none"}, {512, "minimal"}, {1024, "low"}, {8192, "medium"}, {24576, "high"}}
 
 // reasoningEffort reads thinkingConfig: thinkingLevel as the effort it names; a thinking budget as
-// the effort it falls in, -1 (dynamic) as auto. It returns the fields the effort does not carry.
+// the effort it falls in, -1 (dynamic) as auto. It returns the fields the effort does not carry
+// (the budget among them).
 func reasoningEffort(raw json.RawMessage) (string, json.RawMessage) {
 	m := object(raw)
 	if m == nil {
 		return "", nil
 	}
 	var t struct {
-		Level  string `json:"thinkingLevel"`
-		Budget *int   `json:"thinkingBudget"`
+		Level  string  `json:"thinkingLevel"`
+		Budget *number `json:"thinkingBudget"`
 	}
 	b, _ := json.Marshal(m)
 	if json.Unmarshal(b, &t) != nil {
@@ -235,17 +241,19 @@ func reasoningEffort(raw json.RawMessage) (string, json.RawMessage) {
 	if t.Budget == nil {
 		return "", nil
 	}
+	// The budget itself is not carried by the effort: it stays in the fields returned, so a
+	// translation reports it.
 	if *t.Budget < 0 {
-		return "auto", rawjson.Rest(m, "thinkingBudget")
+		return "auto", rawjson.Encode(m)
 	}
 	effort := "xhigh"
 	for _, e := range effortBudgets {
-		if *t.Budget <= e.max {
+		if float64(*t.Budget) <= float64(e.max) {
 			effort = e.effort
 			break
 		}
 	}
-	return effort, rawjson.Rest(m, "thinkingBudget")
+	return effort, rawjson.Encode(m)
 }
 
 // parseToolConfig reads toolConfig.functionCallingConfig: AUTO, NONE, and ANY (one allowed
@@ -557,8 +565,8 @@ func (p *parser) call(pm map[string]json.RawMessage, ci, pi int, path string) (l
 }
 
 // response reads a functionResponse part. Without an id it pairs with the earliest waiting call
-// of the same name, or gets a made-up id when there is none. The output is response.content when
-// the response has one, otherwise the whole response, as JSON text (today's core does the same).
+// of the same name, or gets a made-up id when there is none. The output is the response as JSON
+// text, or its content when that is all it holds.
 func (p *parser) response(pm map[string]json.RawMessage, ci, pi int, path string) (llm.Item, error) {
 	fm := object(pm["functionResponse"])
 	if fm == nil {
@@ -574,10 +582,10 @@ func (p *parser) response(pm map[string]json.RawMessage, ci, pi int, path string
 	}
 	resp := fm["response"]
 	out := resp
-	if rm := rawjson.Object(resp); rm != nil {
-		if c, ok := rm["content"]; ok {
-			out = c
-		}
+	// A response that holds only content is sent as that content, as today's core does; any
+	// other response is sent whole, so fields such as error are not lost.
+	if rm := rawjson.Object(resp); len(rm) == 1 && rm["content"] != nil {
+		out = rm["content"]
 	}
 	id := strings.TrimSpace(fr.ID)
 	queue := p.pending[fr.Name]
@@ -660,11 +668,16 @@ func parsePart(raw json.RawMessage, pm map[string]json.RawMessage, path string) 
 // geminiTypes are the type names of Gemini's Schema, which JSON Schema spells in lower case.
 var geminiTypes = map[string]bool{"STRING": true, "NUMBER": true, "INTEGER": true, "BOOLEAN": true, "ARRAY": true, "OBJECT": true, "NULL": true}
 
-// jsonSchema returns a Gemini Schema (responseSchema, a declaration's parameters) as JSON
-// Schema: Gemini's upper-case type names in lower case, everything else as it is.
+// schemaInts are Schema fields that are int64, which ProtoJSON may write as strings.
+var schemaInts = []string{"maxItems", "minItems", "maxLength", "minLength", "maxProperties", "minProperties"}
+
+// jsonSchema returns a Gemini Schema (responseSchema, a declaration's parameters) as JSON Schema:
+// type names in lower case, nullable as a "null" type, and int64 limits written as strings as
+// numbers. It follows only the fields that hold schemas (properties, items, anyOf), so example and
+// default values are left as they are.
 //
-// shortcut: other OpenAPI forms (nullable, TYPE_UNSPECIFIED) are left as they are; convert them
-// when an upstream rejects them.
+// shortcut: other OpenAPI-only fields (propertyOrdering, format values JSON Schema does not know)
+// are left as they are; convert them when an upstream rejects them.
 func jsonSchema(raw json.RawMessage) json.RawMessage {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
@@ -672,34 +685,81 @@ func jsonSchema(raw json.RawMessage) json.RawMessage {
 	if dec.Decode(&v) != nil {
 		return raw
 	}
-	changed := false
-	var walk func(v any)
-	walk = func(v any) {
-		switch x := v.(type) {
-		case map[string]any:
-			for k, val := range x {
-				if s, ok := val.(string); ok && k == "type" && geminiTypes[s] {
-					x[k] = strings.ToLower(s)
-					changed = true
-					continue
-				}
-				walk(val)
-			}
-		case []any:
-			for _, val := range x {
-				walk(val)
-			}
-		}
-	}
-	walk(v)
-	if !changed {
+	m, ok := v.(map[string]any)
+	if !ok || !convertSchema(m) {
 		return raw
 	}
-	b, err := json.Marshal(v)
+	b, err := json.Marshal(m)
 	if err != nil {
 		return raw
 	}
 	return b
+}
+
+// convertSchema converts one schema object in place and reports whether it changed anything.
+func convertSchema(m map[string]any) bool {
+	changed := false
+	if t, ok := m["type"].(string); ok && geminiTypes[t] {
+		m["type"] = strings.ToLower(t)
+		changed = true
+	}
+	if n, ok := m["nullable"].(bool); ok {
+		if t, isString := m["type"].(string); n && isString && t != "null" {
+			m["type"] = []any{t, "null"}
+		}
+		delete(m, "nullable")
+		changed = true
+	}
+	for _, k := range schemaInts {
+		if s, ok := m[k].(string); ok {
+			if _, err := strconv.ParseInt(s, 10, 64); err == nil {
+				m[k] = json.Number(s)
+				changed = true
+			}
+		}
+	}
+	if props, ok := m["properties"].(map[string]any); ok {
+		for _, p := range props {
+			if pm, ok := p.(map[string]any); ok && convertSchema(pm) {
+				changed = true
+			}
+		}
+	}
+	if items, ok := m["items"].(map[string]any); ok && convertSchema(items) {
+		changed = true
+	}
+	if alts, ok := m["anyOf"].([]any); ok {
+		for _, a := range alts {
+			if am, ok := a.(map[string]any); ok && convertSchema(am) {
+				changed = true
+			}
+		}
+	}
+	return changed
+}
+
+// number is a JSON number that may also be written as a string, as ProtoJSON allows.
+type number float64
+
+func (n *number) UnmarshalJSON(b []byte) error {
+	var s string
+	if json.Unmarshal(b, &s) == nil {
+		b = []byte(s)
+	}
+	var f float64
+	if err := json.Unmarshal(b, &f); err != nil {
+		return fmt.Errorf("not a number: %s", b)
+	}
+	*n = number(f)
+	return nil
+}
+
+func (n *number) float() *float64 {
+	if n == nil {
+		return nil
+	}
+	f := float64(*n)
+	return &f
 }
 
 func sortedKeys(m map[string]json.RawMessage) []string {

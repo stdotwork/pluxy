@@ -23,12 +23,12 @@
     {
       "path": "upstream[0].body.model",
       "kind": "intended",
-      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: it adds model and default safetySettings that turn every filter off, renames functionDeclarations to function_declarations, parameters to parametersJsonSchema and responseSchema to responseJsonSchema, fills in empty functionResponse names, and replaces each thoughtSignature with skip_thought_signature_validator, which throws away the model's reasoning state. The new core keeps every thought signature on the part it came with."
+      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: it adds model and default safetySettings that turn every filter off, renames functionDeclarations to function_declarations, parameters to parametersJsonSchema and responseSchema to responseJsonSchema, fills in empty functionResponse names, and replaces a thoughtSignature it does not recognise as one Gemini issued (as with this case's synthetic signature) with skip_thought_signature_validator, which throws that reasoning state away. The new core keeps every thought signature on the part it came with, unchecked."
     },
     {
       "path": "upstream[0].body.safetySettings",
       "kind": "intended",
-      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: it adds model and default safetySettings that turn every filter off, renames functionDeclarations to function_declarations, parameters to parametersJsonSchema and responseSchema to responseJsonSchema, fills in empty functionResponse names, and replaces each thoughtSignature with skip_thought_signature_validator, which throws away the model's reasoning state. The new core keeps every thought signature on the part it came with."
+      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: it adds model and default safetySettings that turn every filter off, renames functionDeclarations to function_declarations, parameters to parametersJsonSchema and responseSchema to responseJsonSchema, fills in empty functionResponse names, and replaces a thoughtSignature it does not recognise as one Gemini issued (as with this case's synthetic signature) with skip_thought_signature_validator, which throws that reasoning state away. The new core keeps every thought signature on the part it came with, unchecked."
     },
     {
       "path": "upstream[0].headers.Accept",

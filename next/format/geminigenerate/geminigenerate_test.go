@@ -508,3 +508,67 @@ func TestErrorResponseGoogleShape(t *testing.T) {
 		t.Errorf("error = %+v, want code 401 and status UNAUTHENTICATED: %s", got.Error, body)
 	}
 }
+
+// A response that holds more than content is sent whole, so fields such as error are not lost.
+func TestFunctionResponseWithMoreThanContentIsWhole(t *testing.T) {
+	req := mustParse(t, `{"contents":[{"role":"user","parts":[{"functionResponse":{"name":"f",`+
+		`"response":{"content":"partial","error":"permission denied"}}}]}]}`)
+	sameJSON(t, "Output", []byte(req.Items[0].Output), `{"content":"partial","error":"permission denied"}`)
+}
+
+// Gemini Schema becomes JSON Schema: nullable as a null type, int64 limits written as strings as
+// numbers, nested schemas converted; example and default values are data and stay as they are.
+func TestGeminiSchemaToJSONSchema(t *testing.T) {
+	req := mustParse(t, `{"tools":[{"functionDeclarations":[{"name":"p","parameters":{"type":"OBJECT",`+
+		`"properties":{"s":{"type":"STRING","nullable":true,"example":{"type":"STRING"}},`+
+		`"a":{"type":"ARRAY","maxItems":"2","items":{"type":"INTEGER"},"default":[{"type":"STRING"}]},`+
+		`"u":{"anyOf":[{"type":"NUMBER"},{"type":"BOOLEAN"}]}}}}]}]}`)
+	sameJSON(t, "parameters", req.Tools[0].Parameters, `{"type":"object","properties":{`+
+		`"s":{"type":["string","null"],"example":{"type":"STRING"}},`+
+		`"a":{"type":"array","maxItems":2,"items":{"type":"integer"},"default":[{"type":"STRING"}]},`+
+		`"u":{"anyOf":[{"type":"number"},{"type":"boolean"}]}}}`)
+}
+
+// ProtoJSON lets numbers be written as strings; they read the same.
+func TestGenerationConfigQuotedNumbers(t *testing.T) {
+	req := mustParse(t, `{"generationConfig":{"maxOutputTokens":"100","temperature":"0.5","thinkingConfig":{"thinkingBudget":"1024"}}}`)
+	o := req.Options
+	if o.MaxOutputTokens == nil || *o.MaxOutputTokens != 100 {
+		t.Errorf("MaxOutputTokens = %v, want 100", o.MaxOutputTokens)
+	}
+	if o.Temperature == nil || *o.Temperature != 0.5 {
+		t.Errorf("Temperature = %v, want 0.5", o.Temperature)
+	}
+	if o.ReasoningEffort != "low" {
+		t.Errorf("ReasoningEffort = %q, want low", o.ReasoningEffort)
+	}
+}
+
+// A thinking budget is carried only as the effort it falls in, so the budget itself stays in the
+// request's Origin, where a translation reports it.
+func TestThinkingBudgetStaysInOrigin(t *testing.T) {
+	req := mustParse(t, `{"generationConfig":{"thinkingConfig":{"thinkingBudget":513}}}`)
+	if req.Options.ReasoningEffort != "low" {
+		t.Errorf("ReasoningEffort = %q, want low", req.Options.ReasoningEffort)
+	}
+	sameJSON(t, "Origin.Raw", req.Origin.Raw, `{"generationConfig":{"thinkingConfig":{"thinkingBudget":513}}}`)
+}
+
+// Function calls go to the client in the order they started, whichever finished first.
+func TestStreamWriterKeepsCallStartOrder(t *testing.T) {
+	events := []llm.Event{
+		{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{Format: llm.FormatOpenAIResponses}},
+		{Type: llm.EventItemStart, Index: 0, Item: &llm.ItemStart{Kind: llm.ItemToolCall, CallID: "a", Name: "first"}},
+		{Type: llm.EventItemStart, Index: 1, Item: &llm.ItemStart{Kind: llm.ItemToolCall, CallID: "b", Name: "second"}},
+		{Type: llm.EventItemEnd, Index: 1},
+		{Type: llm.EventItemEnd, Index: 0},
+		{Type: llm.EventFinish, Finish: &llm.Finish{Reason: llm.FinishToolCalls}},
+	}
+	got := dataLines(t, writeStream(t, events))
+	if len(got) != 1 {
+		t.Fatalf("chunks = %q, want one", got)
+	}
+	sameJSON(t, "chunk", []byte(got[0]), `{"candidates":[{"content":{"role":"model","parts":[`+
+		`{"functionCall":{"id":"a","name":"first","args":{}}},{"functionCall":{"id":"b","name":"second","args":{}}}]},`+
+		`"finishReason":"STOP","index":0}]}`)
+}
