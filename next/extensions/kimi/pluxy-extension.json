@@ -1,0 +1,13 @@
+{
+  "manifest_version": 0,
+  "id": "pluxy/kimi",
+  "version": "0.1.0",
+  "protocol": [0],
+  "programs": {
+    "linux/amd64": "kimi",
+    "linux/arm64": "kimi",
+    "darwin/amd64": "kimi",
+    "darwin/arm64": "kimi",
+    "windows/amd64": "kimi.exe"
+  }
+}

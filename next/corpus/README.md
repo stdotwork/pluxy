@@ -67,6 +67,7 @@ Providers with their own folder of cases:
 | `gemini-api-key` | Gemini extension, API key | a Gemini API key |
 | `vertex-api-key` | Gemini extension, Vertex settings and an express mode key | a `vertex` API-key entry |
 | `vertex` | Gemini extension, a Vertex service account | a Vertex service account auth file |
+| `kimi` | Kimi extension, a Kimi Code OAuth credential | a Kimi auth file |
 
 Today's core sends a ChatGPT subscription's requests to `https://chatgpt.com/backend-api/codex`,
 which no setting moves. For `codex-oauth` the runner therefore gives the old core an HTTP proxy

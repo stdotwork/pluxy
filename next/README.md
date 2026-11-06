@@ -24,6 +24,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `extensions/codex` | Provider extension for OpenAI's Codex models: an OpenAI API key or a ChatGPT subscription (sign-in in a browser or with a device code), with a fake OpenAI login server and Codex endpoint for tests (`codextest`). |
 | `extensions/claude` | Provider extension for Anthropic's Claude, with an API key or a Claude subscription login; `claudetest` is a fake Anthropic for its tests. |
 | `extensions/gemini` | Provider extension for Google's Gemini: the Gemini API with an API key, and Vertex AI with a service account or an express mode key; `geminitest` is a fake Google for its tests. |
+| `extensions/kimi` | Provider extension for Kimi Code, Moonshot AI's coding subscription, signed in with a device code; `kimitest` is a fake Kimi for its tests. |
 | `examples/scripted` | The tutorial's example extension. |
 | `examples/oauth` | An example provider that signs in by device code, browser (PKCE) or API key and renews its tokens, with a fake OAuth provider for tests (`oauthtest`). |
 | `internal/host`, `internal/server` | Core's extension host and HTTP API (client formats and the management API). |
@@ -225,6 +226,40 @@ calls it did not issue.
 Today's core can also relay Gemini requests through a browser tab signed in to AI Studio, which
 connects to core over a WebSocket. This extension does not: the extension protocol gives a
 program no listener that outlives its calls, and core stops idle programs.
+
+## Kimi
+
+The Kimi extension (`extensions/kimi`) serves Kimi Code, Moonshot AI's coding subscription. Point
+`extension.manifest` at `extensions/kimi/pluxy-extension.json`. Accounts are added by login
+through the management API (below) with method `device`: the reply's prompt carries a code and
+Kimi's page to enter it on, and the login finishes once it is approved there. The sign-in is the
+OAuth device authorization grant (RFC 8628) at Kimi's login host, with the public client of Kimi's
+own CLI, since Kimi registers no other clients. Core renews the token five minutes before it
+expires. A Kimi Code API key works too, as an account in the config; it has no login method yet:
+
+```json
+{"id": "kimi", "credential": {"kind": "api_key", "api_key": "sk-kimi-..."}}
+```
+
+| Setting | Meaning |
+| --- | --- |
+| `domain` | `kimi.com` (default) or `kimi.ai`, the site the account belongs to. |
+| `base_url` | Where Kimi Code's API is. Default `https://api.{domain}/coding`; a trailing `/v1` is taken as the same place. |
+| `auth_base_url` | Kimi's login host, for a test server. Default `https://auth.{domain}`. |
+
+Kimi Code takes Chat Completions at `{base_url}/v1/chat/completions`, Responses at
+`/v1/responses` and Messages at `/v1/messages`; each client format goes to its own, and a Gemini
+request is translated to Chat Completions. A Messages request goes with its body and Anthropic
+headers as the client wrote them, less Claude Code's billing block in the system prompt, which Kimi
+would read as prompt text. The other formats get what Kimi's API needs, as today's core sends
+them: Kimi's names for its coding models (`kimi-k2.8` is `kimi-for-coding`, and other names lose
+their `kimi-` prefix), a temperature only where Kimi takes it (1.0, or 0.6 with thinking off),
+tool schemas with their `$ref`s inlined, usage asked for on Chat streams, the reasoning effort as
+Kimi's `thinking` setting (low, high or max; none turns it off), the latest reasoning repeated on
+each Chat tool call, and a Responses batch of function call outputs moved next to its calls. Each
+request names pluxy in Kimi's device headers, with the device ID made at login (none for a key); the device's host
+name, which Kimi's CLI also sends, is left out. A 429 that says the quota is used up is reported
+as a used-up quota, not a rate limit.
 
 ## Accounts and routing
 

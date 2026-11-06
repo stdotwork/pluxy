@@ -50,8 +50,8 @@ type Provider struct {
 	NewCore func(upstreamURL string, models, keys []string) (extension string, accounts []any)
 	// OldCoreAuthFiles, when set, returns auth files to write into the old core's auth folder,
 	// by file name, one account per key. proxyURL is the intercepting proxy the files must name
-	// when Intercept is set.
-	OldCoreAuthFiles func(proxyURL string, models, keys []string) map[string]any
+	// when Intercept is set; upstreamURL is the fake upstream, for a file that names its base URL.
+	OldCoreAuthFiles func(proxyURL, upstreamURL string, models, keys []string) map[string]any
 	// Intercept runs the old core through the intercepting proxy (see InterceptHosts), for a
 	// provider whose upstream host no setting moves.
 	Intercept bool
@@ -185,7 +185,7 @@ var Providers = map[string]Provider{
 	"codex-oauth": {
 		Intercept: true,
 		OldCore:   func(string, []string, []string) map[string]any { return map[string]any{} },
-		OldCoreAuthFiles: func(proxyURL string, models, keys []string) map[string]any {
+		OldCoreAuthFiles: func(proxyURL, _ string, models, keys []string) map[string]any {
 			files := map[string]any{}
 			for i, k := range keys {
 				t := corpusTokens(k)
@@ -409,7 +409,7 @@ var Providers = map[string]Provider{
 	"vertex": {
 		Intercept: true,
 		OldCore:   func(string, []string, []string) map[string]any { return map[string]any{} },
-		OldCoreAuthFiles: func(proxyURL string, models, keys []string) map[string]any {
+		OldCoreAuthFiles: func(proxyURL, _ string, models, keys []string) map[string]any {
 			files := map[string]any{}
 			for i := range keys {
 				files[fmt.Sprintf("vertex-corpus-%d.json", i+1)] = map[string]any{
@@ -444,6 +444,50 @@ var Providers = map[string]Provider{
 			return "gemini", accounts
 		},
 	},
+	// A Kimi Code subscription: the Kimi extension with an OAuth credential against a Kimi auth
+	// file in today's core, both with base_url pointed at the fake upstream (the default is
+	// https://api.kimi.com/coding). The tokens are fake and expire in 2100, so neither core
+	// renews them; today's core serves a subscription only the models in its catalog.
+	"kimi": {
+		OldCore: func(string, []string, []string) map[string]any { return map[string]any{} },
+		OldCoreAuthFiles: func(_, upstreamURL string, models, keys []string) map[string]any {
+			files := map[string]any{}
+			for i, k := range keys {
+				files[fmt.Sprintf("kimi-corpus-%d.json", i+1)] = map[string]any{
+					"type":          "kimi",
+					"access_token":  k,
+					"refresh_token": k + "-refresh",
+					"token_type":    "Bearer",
+					"timestamp":     1767225600000,
+					"domain":        "kimi.com",
+					"base_url":      upstreamURL + "/coding",
+					"expired":       "2100-01-01T00:00:00Z",
+					"device_id":     corpusKimiDeviceID,
+				}
+			}
+			return files
+		},
+		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
+			var accounts []any
+			for i, k := range keys {
+				id := "corpus"
+				if i > 0 {
+					id = fmt.Sprintf("corpus-%d", i+1)
+				}
+				acct := map[string]any{
+					"id":       id,
+					"settings": map[string]any{"base_url": upstreamURL + "/coding"},
+					"credential": map[string]any{"kind": "oauth", "access_token": k, "refresh_token": k + "-refresh",
+						"expires_at": corpusTokenExpiry, "data": map[string]any{"device_id": corpusKimiDeviceID}},
+				}
+				if len(models) > 0 {
+					acct["models"] = models
+				}
+				accounts = append(accounts, acct)
+			}
+			return "kimi", accounts
+		},
+	},
 }
 
 // oldCoreGeminiAPIKey is today's core's Gemini API-key block, with a custom base URL.
@@ -470,6 +514,7 @@ var NewCoreExtensions = map[string]string{
 	"codex":             "./extensions/codex",
 	"claude":            "./extensions/claude",
 	"gemini":            "./extensions/gemini",
+	"kimi":              "./extensions/kimi",
 }
 
 // BuildNewCore builds the new core and its extensions into dir. moduleRoot is the next/
@@ -576,7 +621,7 @@ func StartOldCore(s OldCoreSetup) (*Core, error) {
 		return nil, err
 	}
 	if p.OldCoreAuthFiles != nil {
-		for name, f := range p.OldCoreAuthFiles(s.ProxyURL, s.Models, s.Keys) {
+		for name, f := range p.OldCoreAuthFiles(s.ProxyURL, s.UpstreamURL, s.Models, s.Keys) {
 			b, _ := json.Marshal(f)
 			if err := os.WriteFile(filepath.Join(authDir, name), b, 0o600); err != nil {
 				return nil, err
@@ -880,3 +925,6 @@ func corpusServiceAccount(i int, tokenURI string) map[string]any {
 	}
 	return sa
 }
+
+// corpusKimiDeviceID is the device ID of the corpus's Kimi accounts.
+const corpusKimiDeviceID = "corpus-device-0001"

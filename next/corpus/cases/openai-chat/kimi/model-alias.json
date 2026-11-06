@@ -1,0 +1,274 @@
+{
+  "description": "kimi-k2.8 is sent as kimi-for-coding, the name Kimi Code serves it under.",
+  "source": [
+    "core/internal/runtime/executor/kimi_executor.go:1340-1360"
+  ],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {
+      "model": "kimi-k2.8",
+      "stream": true,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Say hello"
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {
+          "data": {
+            "id": "chatcmpl-corpus",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": "gpt-test-upstream",
+            "choices": [
+              {
+                "index": 0,
+                "delta": {
+                  "role": "assistant",
+                  "content": ""
+                },
+                "finish_reason": null
+              }
+            ]
+          }
+        },
+        {
+          "data": {
+            "id": "chatcmpl-corpus",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": "gpt-test-upstream",
+            "choices": [
+              {
+                "index": 0,
+                "delta": {
+                  "reasoning_content": "Thinking..."
+                },
+                "finish_reason": null
+              }
+            ]
+          }
+        },
+        {
+          "data": {
+            "id": "chatcmpl-corpus",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": "gpt-test-upstream",
+            "choices": [
+              {
+                "index": 0,
+                "delta": {
+                  "reasoning_content": " done."
+                },
+                "finish_reason": null
+              }
+            ]
+          }
+        },
+        {
+          "data": {
+            "id": "chatcmpl-corpus",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": "gpt-test-upstream",
+            "choices": [
+              {
+                "index": 0,
+                "delta": {
+                  "content": "Hello"
+                },
+                "finish_reason": null
+              }
+            ]
+          }
+        },
+        {
+          "data": {
+            "id": "chatcmpl-corpus",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": "gpt-test-upstream",
+            "choices": [
+              {
+                "index": 0,
+                "delta": {},
+                "finish_reason": "stop"
+              }
+            ]
+          }
+        },
+        {
+          "data": "[DONE]"
+        }
+      ]
+    }
+  ],
+  "volatile": [
+    "upstream[*].headers.X-Msh-Device-Name",
+    "client.body.created",
+    "client.events[*].data.created"
+  ],
+  "account_models": [
+    "kimi-k2.8"
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "content": "",
+                  "role": "assistant"
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "chatcmpl-corpus",
+            "model": "gpt-test-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "reasoning_content": "Thinking..."
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "chatcmpl-corpus",
+            "model": "gpt-test-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "reasoning_content": " done."
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "chatcmpl-corpus",
+            "model": "gpt-test-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "content": "Hello"
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "chatcmpl-corpus",
+            "model": "gpt-test-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {},
+                "finish_reason": "stop",
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "chatcmpl-corpus",
+            "model": "gpt-test-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": "[DONE]"
+        }
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "messages": [
+            {
+              "content": "Say hello",
+              "role": "user"
+            }
+          ],
+          "model": "kimi-for-coding",
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "CLIProxyAPI/dev",
+          "X-Msh-Device-Id": "corpus-device-0001",
+          "X-Msh-Device-Model": "linux amd64",
+          "X-Msh-Device-Name": "(volatile)",
+          "X-Msh-Platform": "CLIProxyAPI",
+          "X-Msh-Version": "dev"
+        },
+        "method": "POST",
+        "path": "/coding/v1/chat/completions"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "upstream[0].headers.X-Msh-Device-Name",
+      "kind": "intended",
+      "reason": "The Kimi extension leaves out the device name header: today's core sends the machine's host name, which names the user's computer to Kimi. Kimi's other device headers (platform, version, model, device ID) are still sent.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.X-Msh-Platform",
+      "kind": "intended",
+      "reason": "The Kimi extension names itself in Kimi's device headers (platform pluxy, its own version); today's core names itself CLIProxyAPI with its build version. Neither poses as Kimi's own CLI.",
+      "want": "pluxy"
+    },
+    {
+      "path": "upstream[0].headers.X-Msh-Version",
+      "kind": "intended",
+      "reason": "The Kimi extension names itself in Kimi's device headers (platform pluxy, its own version); today's core names itself CLIProxyAPI with its build version. Neither poses as Kimi's own CLI.",
+      "want": "0.1.0"
+    }
+  ]
+}
