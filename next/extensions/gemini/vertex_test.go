@@ -160,3 +160,43 @@ func TestTokenURIPlainHTTPOnlyLocal(t *testing.T) {
 		}
 	}
 }
+
+// A token endpoint that stops answering fails the fetch instead of holding the account.
+func TestTokenFetchTimesOut(t *testing.T) {
+	tokens = &tokenCache{entries: map[string]*tokenEntry{}}
+	hung := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-hung:
+		case <-r.Context().Done():
+		}
+	}))
+	defer ts.Close()
+	defer close(hung)
+	old := tokenClient.Timeout
+	if old <= 0 || old > time.Minute {
+		t.Fatalf("token client timeout %v, want a bound of at most a minute", old)
+	}
+	tokenClient.Timeout = 200 * time.Millisecond
+	defer func() { tokenClient.Timeout = old }()
+	srv := geminitest.New(t)
+	var raw map[string]any
+	_ = json.Unmarshal(srv.ServiceAccount("p", true), &raw)
+	raw["token_uri"] = ts.URL + "/token"
+	b, _ := json.Marshal(raw)
+	sa, err := readServiceAccount(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := tokens.get(context.Background(), sa); done <- err }()
+	select {
+	case err := <-done:
+		var e *llm.Error
+		if !errors.As(err, &e) || e.Code != llm.CodeUnavailable || !e.Retryable {
+			t.Errorf("err = %v, want a retryable unavailable error", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the token fetch waits for a token endpoint that never answers")
+	}
+}

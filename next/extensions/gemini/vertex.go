@@ -277,9 +277,11 @@ func (c *tokenCache) leave(e *tokenEntry) {
 	}
 }
 
-// tokenClient fetches tokens. A token endpoint gets the same no-timeout-after-connect client as
-// the API; the call's context bounds it.
+// tokenClient fetches tokens and checks keys at login. Its timeout covers only getting a
+// credential, never a model request: a token endpoint that stops answering must not hold every
+// request of the account. It follows no redirect, which would send the assertion elsewhere.
 var tokenClient = &http.Client{
+	Timeout: 30 * time.Second,
 	Transport: &http.Transport{
 		DialContext:         (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		TLSHandshakeTimeout: 30 * time.Second,

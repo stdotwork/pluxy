@@ -59,7 +59,7 @@ func apiKeyLogin(ctx context.Context, set settings, key string) (*protocol.Grant
 		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
 	}
 	req.Header.Set("X-Goog-Api-Key", key)
-	resp, err := client.Do(req)
+	resp, err := tokenClient.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
