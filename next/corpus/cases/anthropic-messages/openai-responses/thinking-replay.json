@@ -8,7 +8,10 @@
   "client": {
     "path": "/v1/messages",
     "auth": "none",
-    "headers": {"x-api-key":"corpus-client-key","anthropic-version":"2023-06-01"},
+    "headers": {
+      "x-api-key": "corpus-client-key",
+      "anthropic-version": "2023-06-01"
+    },
     "body": {
       "model": "gpt-test",
       "max_tokens": 1024,
@@ -19,13 +22,22 @@
           "description": "Current weather",
           "input_schema": {
             "type": "object",
-            "properties": {"city":{"type":"string"}},
-            "required": ["city"]
+            "properties": {
+              "city": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "city"
+            ]
           }
         }
       ],
       "messages": [
-        {"role":"user","content":"Weather in Paris?"},
+        {
+          "role": "user",
+          "content": "Weather in Paris?"
+        },
         {
           "role": "assistant",
           "content": [
@@ -34,38 +46,275 @@
               "thinking": "Need weather.",
               "signature": "gAAAAABlU_EAY29ycHVzLWl2LTAwMDAwMGNvcnB1cy1jaXBoZXItMDBjb3JwdXMtaG1hYy1jb3JwdXMtaG1hYy1jb3JwdXMtLQ"
             },
-            {"type":"tool_use","id":"toolu_01A","name":"get_weather","input":{"city":"Paris"}}
+            {
+              "type": "tool_use",
+              "id": "toolu_01A",
+              "name": "get_weather",
+              "input": {
+                "city": "Paris"
+              }
+            }
           ]
         },
-        {"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01A","content":"21C"}]}
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "toolu_01A",
+              "content": "21C"
+            }
+          ]
+        }
       ]
     }
   },
   "upstream": [
     {
       "sse": [
-        {"event":"response.created","data":{"type":"response.created","sequence_number":0,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"in_progress","model":"gpt-test-upstream","output":[],"usage":null}}},
-        {"event":"response.output_item.added","data":{"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"msg_corpus","type":"message","status":"in_progress","role":"assistant","content":[]}}},
-        {"event":"response.content_part.added","data":{"type":"response.content_part.added","sequence_number":2,"output_index":0,"content_index":0,"item_id":"msg_corpus","part":{"type":"output_text","text":"","annotations":[]}}},
-        {"event":"response.output_text.delta","data":{"type":"response.output_text.delta","sequence_number":3,"output_index":0,"content_index":0,"item_id":"msg_corpus","delta":"It is 21C"}},
-        {"event":"response.output_text.delta","data":{"type":"response.output_text.delta","sequence_number":4,"output_index":0,"content_index":0,"item_id":"msg_corpus","delta":" in Paris."}},
-        {"event":"response.output_text.done","data":{"type":"response.output_text.done","sequence_number":5,"output_index":0,"content_index":0,"item_id":"msg_corpus","text":"It is 21C in Paris."}},
-        {"event":"response.content_part.done","data":{"type":"response.content_part.done","sequence_number":6,"output_index":0,"content_index":0,"item_id":"msg_corpus","part":{"type":"output_text","text":"It is 21C in Paris.","annotations":[]}}},
-        {"event":"response.output_item.done","data":{"type":"response.output_item.done","sequence_number":7,"output_index":0,"item":{"id":"msg_corpus","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"It is 21C in Paris.","annotations":[]}]}}},
-        {"event":"response.completed","data":{"type":"response.completed","sequence_number":8,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"completed","model":"gpt-test-upstream","output":[{"id":"msg_corpus","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"It is 21C in Paris.","annotations":[]}]}],"usage":{"input_tokens":60,"input_tokens_details":{"cached_tokens":0},"output_tokens":7,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":67}}}}
+        {
+          "event": "response.created",
+          "data": {
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": {
+              "id": "resp_corpus",
+              "object": "response",
+              "created_at": 1700000000,
+              "status": "in_progress",
+              "model": "gpt-test-upstream",
+              "output": [],
+              "usage": null
+            }
+          }
+        },
+        {
+          "event": "response.output_item.added",
+          "data": {
+            "type": "response.output_item.added",
+            "sequence_number": 1,
+            "output_index": 0,
+            "item": {
+              "id": "msg_corpus",
+              "type": "message",
+              "status": "in_progress",
+              "role": "assistant",
+              "content": []
+            }
+          }
+        },
+        {
+          "event": "response.content_part.added",
+          "data": {
+            "type": "response.content_part.added",
+            "sequence_number": 2,
+            "output_index": 0,
+            "content_index": 0,
+            "item_id": "msg_corpus",
+            "part": {
+              "type": "output_text",
+              "text": "",
+              "annotations": []
+            }
+          }
+        },
+        {
+          "event": "response.output_text.delta",
+          "data": {
+            "type": "response.output_text.delta",
+            "sequence_number": 3,
+            "output_index": 0,
+            "content_index": 0,
+            "item_id": "msg_corpus",
+            "delta": "It is 21C"
+          }
+        },
+        {
+          "event": "response.output_text.delta",
+          "data": {
+            "type": "response.output_text.delta",
+            "sequence_number": 4,
+            "output_index": 0,
+            "content_index": 0,
+            "item_id": "msg_corpus",
+            "delta": " in Paris."
+          }
+        },
+        {
+          "event": "response.output_text.done",
+          "data": {
+            "type": "response.output_text.done",
+            "sequence_number": 5,
+            "output_index": 0,
+            "content_index": 0,
+            "item_id": "msg_corpus",
+            "text": "It is 21C in Paris."
+          }
+        },
+        {
+          "event": "response.content_part.done",
+          "data": {
+            "type": "response.content_part.done",
+            "sequence_number": 6,
+            "output_index": 0,
+            "content_index": 0,
+            "item_id": "msg_corpus",
+            "part": {
+              "type": "output_text",
+              "text": "It is 21C in Paris.",
+              "annotations": []
+            }
+          }
+        },
+        {
+          "event": "response.output_item.done",
+          "data": {
+            "type": "response.output_item.done",
+            "sequence_number": 7,
+            "output_index": 0,
+            "item": {
+              "id": "msg_corpus",
+              "type": "message",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "It is 21C in Paris.",
+                  "annotations": []
+                }
+              ]
+            }
+          }
+        },
+        {
+          "event": "response.completed",
+          "data": {
+            "type": "response.completed",
+            "sequence_number": 8,
+            "response": {
+              "id": "resp_corpus",
+              "object": "response",
+              "created_at": 1700000000,
+              "status": "completed",
+              "model": "gpt-test-upstream",
+              "output": [
+                {
+                  "id": "msg_corpus",
+                  "type": "message",
+                  "status": "completed",
+                  "role": "assistant",
+                  "content": [
+                    {
+                      "type": "output_text",
+                      "text": "It is 21C in Paris.",
+                      "annotations": []
+                    }
+                  ]
+                }
+              ],
+              "usage": {
+                "input_tokens": 60,
+                "input_tokens_details": {
+                  "cached_tokens": 0
+                },
+                "output_tokens": 7,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 67
+              }
+            }
+          }
+        }
       ]
     }
   ],
   "recorded_old_core": {
     "client": {
       "events": [
-        {"data":{"message":{"content":[],"id":"resp_corpus","model":"gpt-test-upstream","role":"assistant","stop_reason":null,"stop_sequence":null,"type":"message","usage":{"input_tokens":61,"output_tokens":0}},"type":"message_start"},"event":"message_start"},
-        {"data":{"content_block":{"text":"","type":"text"},"index":0,"type":"content_block_start"},"event":"content_block_start"},
-        {"data":{"delta":{"text":"It is 21C","type":"text_delta"},"index":0,"type":"content_block_delta"},"event":"content_block_delta"},
-        {"data":{"delta":{"text":" in Paris.","type":"text_delta"},"index":0,"type":"content_block_delta"},"event":"content_block_delta"},
-        {"data":{"index":0,"type":"content_block_stop"},"event":"content_block_stop"},
-        {"data":{"delta":{"stop_reason":"end_turn","stop_sequence":null},"type":"message_delta","usage":{"input_tokens":60,"output_tokens":7,"output_tokens_details":{"thinking_tokens":0}}},"event":"message_delta"},
-        {"data":{"type":"message_stop"},"event":"message_stop"}
+        {
+          "data": {
+            "message": {
+              "content": [],
+              "id": "resp_corpus",
+              "model": "gpt-test-upstream",
+              "role": "assistant",
+              "stop_reason": null,
+              "stop_sequence": null,
+              "type": "message",
+              "usage": {
+                "input_tokens": 61,
+                "output_tokens": 0
+              }
+            },
+            "type": "message_start"
+          },
+          "event": "message_start"
+        },
+        {
+          "data": {
+            "content_block": {
+              "text": "",
+              "type": "text"
+            },
+            "index": 0,
+            "type": "content_block_start"
+          },
+          "event": "content_block_start"
+        },
+        {
+          "data": {
+            "delta": {
+              "text": "It is 21C",
+              "type": "text_delta"
+            },
+            "index": 0,
+            "type": "content_block_delta"
+          },
+          "event": "content_block_delta"
+        },
+        {
+          "data": {
+            "delta": {
+              "text": " in Paris.",
+              "type": "text_delta"
+            },
+            "index": 0,
+            "type": "content_block_delta"
+          },
+          "event": "content_block_delta"
+        },
+        {
+          "data": {
+            "index": 0,
+            "type": "content_block_stop"
+          },
+          "event": "content_block_stop"
+        },
+        {
+          "data": {
+            "delta": {
+              "stop_reason": "end_turn",
+              "stop_sequence": null
+            },
+            "type": "message_delta",
+            "usage": {
+              "input_tokens": 60,
+              "output_tokens": 7,
+              "output_tokens_details": {
+                "thinking_tokens": 0
+              }
+            }
+          },
+          "event": "message_delta"
+        },
+        {
+          "data": {
+            "type": "message_stop"
+          },
+          "event": "message_stop"
+        }
       ],
       "headers": {
         "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
@@ -81,10 +330,17 @@
     "upstream": [
       {
         "body": {
-          "include": ["reasoning.encrypted_content"],
+          "include": [
+            "reasoning.encrypted_content"
+          ],
           "input": [
             {
-              "content": [{"text":"Weather in Paris?","type":"input_text"}],
+              "content": [
+                {
+                  "text": "Weather in Paris?",
+                  "type": "input_text"
+                }
+              ],
               "role": "user",
               "type": "message"
             },
@@ -100,7 +356,11 @@
               "name": "get_weather",
               "type": "function_call"
             },
-            {"call_id":"toolu_01A","output":"21C","type":"function_call_output"}
+            {
+              "call_id": "toolu_01A",
+              "output": "21C",
+              "type": "function_call_output"
+            }
           ],
           "instructions": "",
           "max_output_tokens": 1024,
@@ -115,14 +375,23 @@
               "description": "Current weather",
               "name": "get_weather",
               "parameters": {
-                "properties": {"city":{"type":"string"}},
-                "required": ["city"],
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
                 "type": "object"
               },
               "strict": false,
               "type": "function"
             },
-            {"output_format":"png","type":"image_generation"}
+            {
+              "output_format": "png",
+              "type": "image_generation"
+            }
           ]
         },
         "headers": {
@@ -156,25 +425,6 @@
       "kind": "intended",
       "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (system as developer, empty instructions, include, store false, parallel_tool_calls, tool_choice auto, strict false on tools, prompt_cache_key and Session-Id, an image_generation tool, every request streamed). The new core's generic Responses upstream gets the translated request without them; Codex endpoint rules belong to the Codex provider extension.",
       "absent": true
-    },
-    {
-      "path": "upstream[0].body.input",
-      "kind": "gap",
-      "reason": "Today's core carries Codex reasoning through Messages clients: it puts a Responses reasoning item's encrypted_content in the thinking block's signature (a signature_delta), and turns a GPT-shaped signature in a replayed thinking block back into a reasoning item with encrypted_content, after its own signature-shape checks. The new core reports reasoning from another provider as dropped and sends rebuilt thinking blocks without a signature. Whether to carry encrypted reasoning across formats, and how to check it, is open (Codex reasoning replay, slice 9).",
-      "want": [
-        {
-          "content": [{"text":"Weather in Paris?","type":"input_text"}],
-          "role": "user",
-          "type": "message"
-        },
-        {
-          "arguments": "{\"city\":\"Paris\"}",
-          "call_id": "toolu_01A",
-          "name": "get_weather",
-          "type": "function_call"
-        },
-        {"call_id":"toolu_01A","output":"21C","type":"function_call_output"}
-      ]
     },
     {
       "path": "upstream[0].body.instructions",

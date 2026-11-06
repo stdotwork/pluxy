@@ -50,6 +50,7 @@ func build(dir string) error {
 		{"pluxy", "../cmd/pluxy"},
 		{"openai-compatible", "../extensions/openai-compatible"},
 		{filepath.Join("oauth", "oauth"), "../examples/oauth"},
+		{filepath.Join("codex", "codex"), "../extensions/codex"},
 		{"testext", "./testext"},
 	} {
 		cmd := exec.Command("go", "build", "-buildvcs=false", "-o", filepath.Join(dir, b.out), b.pkg)
@@ -69,10 +70,15 @@ func build(dir string) error {
 	if err := os.WriteFile(filepath.Join(dir, "pluxy-extension.json"), b, 0o644); err != nil {
 		return err
 	}
-	manifest["id"] = "example/oauth"
-	manifest["programs"] = map[string]string{runtime.GOOS + "/" + runtime.GOARCH: "oauth"}
-	b, _ = json.Marshal(manifest)
-	return os.WriteFile(filepath.Join(dir, "oauth", "pluxy-extension.json"), b, 0o644)
+	for id, name := range map[string]string{"example/oauth": "oauth", "pluxy/codex": "codex"} {
+		manifest["id"] = id
+		manifest["programs"] = map[string]string{runtime.GOOS + "/" + runtime.GOARCH: name}
+		b, _ = json.Marshal(manifest)
+		if err := os.WriteFile(filepath.Join(dir, name, "pluxy-extension.json"), b, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // upstream is a fake OpenAI-compatible server that records what it receives.

@@ -1,0 +1,13 @@
+{
+  "manifest_version": 0,
+  "id": "pluxy/codex",
+  "version": "0.1.0",
+  "protocol": [0],
+  "programs": {
+    "linux/amd64": "codex",
+    "linux/arm64": "codex",
+    "darwin/amd64": "codex",
+    "darwin/arm64": "codex",
+    "windows/amd64": "codex.exe"
+  }
+}

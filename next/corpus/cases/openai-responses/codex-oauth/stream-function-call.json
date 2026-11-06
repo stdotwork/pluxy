@@ -1,0 +1,356 @@
+{
+  "description": "ChatGPT subscription: a streamed function call passes through: output_item.added, argument deltas and done events, then response.completed.",
+  "source": [
+    "core/sdk/api/handlers/openai/openai_responses_handlers_stream_test.go (ForwardResponsesStream*)",
+    "core/internal/runtime/executor/codex_executor_stream_output_test.go",
+    "next/corpus/cases/openai-responses/openai-responses/stream-function-call.json (same exchange through the Responses API-key upstream)",
+    "core/internal/runtime/executor/codex_executor_request.go (subscription headers: Chatgpt-Account-Id, X-Codex-Routing-Hint)"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "body": {
+      "model": "gpt-6.1-sol",
+      "input": "Weather in Paris?",
+      "stream": true,
+      "tools": [
+        {
+          "type": "function",
+          "name": "get_weather",
+          "description": "Current weather",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "city": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {
+          "event": "response.created",
+          "data": {
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": {
+              "id": "resp_corpus",
+              "object": "response",
+              "created_at": 1700000000,
+              "status": "in_progress",
+              "model": "gpt-test-upstream",
+              "output": [],
+              "usage": null
+            }
+          }
+        },
+        {
+          "event": "response.output_item.added",
+          "data": {
+            "type": "response.output_item.added",
+            "sequence_number": 1,
+            "output_index": 0,
+            "item": {
+              "id": "fc_corpus",
+              "type": "function_call",
+              "status": "in_progress",
+              "call_id": "call_abc",
+              "name": "get_weather",
+              "arguments": ""
+            }
+          }
+        },
+        {
+          "event": "response.function_call_arguments.delta",
+          "data": {
+            "type": "response.function_call_arguments.delta",
+            "sequence_number": 2,
+            "output_index": 0,
+            "item_id": "fc_corpus",
+            "delta": "{\"city\":"
+          }
+        },
+        {
+          "event": "response.function_call_arguments.delta",
+          "data": {
+            "type": "response.function_call_arguments.delta",
+            "sequence_number": 3,
+            "output_index": 0,
+            "item_id": "fc_corpus",
+            "delta": "\"Paris\"}"
+          }
+        },
+        {
+          "event": "response.function_call_arguments.done",
+          "data": {
+            "type": "response.function_call_arguments.done",
+            "sequence_number": 4,
+            "output_index": 0,
+            "item_id": "fc_corpus",
+            "arguments": "{\"city\":\"Paris\"}"
+          }
+        },
+        {
+          "event": "response.output_item.done",
+          "data": {
+            "type": "response.output_item.done",
+            "sequence_number": 5,
+            "output_index": 0,
+            "item": {
+              "id": "fc_corpus",
+              "type": "function_call",
+              "status": "completed",
+              "call_id": "call_abc",
+              "name": "get_weather",
+              "arguments": "{\"city\":\"Paris\"}"
+            }
+          }
+        },
+        {
+          "event": "response.completed",
+          "data": {
+            "type": "response.completed",
+            "sequence_number": 6,
+            "response": {
+              "id": "resp_corpus",
+              "object": "response",
+              "created_at": 1700000000,
+              "status": "completed",
+              "model": "gpt-test-upstream",
+              "output": [
+                {
+                  "id": "fc_corpus",
+                  "type": "function_call",
+                  "status": "completed",
+                  "call_id": "call_abc",
+                  "name": "get_weather",
+                  "arguments": "{\"city\":\"Paris\"}"
+                }
+              ],
+              "usage": {
+                "input_tokens": 5,
+                "output_tokens": 2,
+                "total_tokens": 7,
+                "input_tokens_details": {
+                  "cached_tokens": 0
+                },
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[*].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."
+    },
+    {
+      "path": "upstream[*].headers.Session-Id",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    },
+    {
+      "path": "upstream[*].body.prompt_cache_key",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {
+          "data": {
+            "response": {
+              "created_at": 1700000000,
+              "id": "resp_corpus",
+              "model": "gpt-test-upstream",
+              "object": "response",
+              "output": [],
+              "status": "in_progress",
+              "usage": null
+            },
+            "sequence_number": 0,
+            "type": "response.created"
+          },
+          "event": "response.created"
+        },
+        {
+          "data": {
+            "item": {
+              "arguments": "",
+              "call_id": "call_abc",
+              "id": "fc_corpus",
+              "name": "get_weather",
+              "status": "in_progress",
+              "type": "function_call"
+            },
+            "output_index": 0,
+            "sequence_number": 1,
+            "type": "response.output_item.added"
+          },
+          "event": "response.output_item.added"
+        },
+        {
+          "data": {
+            "delta": "{\"city\":",
+            "item_id": "fc_corpus",
+            "output_index": 0,
+            "sequence_number": 2,
+            "type": "response.function_call_arguments.delta"
+          },
+          "event": "response.function_call_arguments.delta"
+        },
+        {
+          "data": {
+            "delta": "\"Paris\"}",
+            "item_id": "fc_corpus",
+            "output_index": 0,
+            "sequence_number": 3,
+            "type": "response.function_call_arguments.delta"
+          },
+          "event": "response.function_call_arguments.delta"
+        },
+        {
+          "data": {
+            "arguments": "{\"city\":\"Paris\"}",
+            "item_id": "fc_corpus",
+            "output_index": 0,
+            "sequence_number": 4,
+            "type": "response.function_call_arguments.done"
+          },
+          "event": "response.function_call_arguments.done"
+        },
+        {
+          "data": {
+            "item": {
+              "arguments": "{\"city\":\"Paris\"}",
+              "call_id": "call_abc",
+              "id": "fc_corpus",
+              "name": "get_weather",
+              "status": "completed",
+              "type": "function_call"
+            },
+            "output_index": 0,
+            "sequence_number": 5,
+            "type": "response.output_item.done"
+          },
+          "event": "response.output_item.done"
+        },
+        {
+          "data": {
+            "response": {
+              "created_at": 1700000000,
+              "id": "resp_corpus",
+              "model": "gpt-test-upstream",
+              "object": "response",
+              "output": [
+                {
+                  "arguments": "{\"city\":\"Paris\"}",
+                  "call_id": "call_abc",
+                  "id": "fc_corpus",
+                  "name": "get_weather",
+                  "status": "completed",
+                  "type": "function_call"
+                }
+              ],
+              "status": "completed",
+              "usage": {
+                "input_tokens": 5,
+                "input_tokens_details": {
+                  "cached_tokens": 0
+                },
+                "output_tokens": 2,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 7
+              }
+            },
+            "sequence_number": 6,
+            "type": "response.completed"
+          },
+          "event": "response.completed"
+        }
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": [
+            "reasoning.encrypted_content"
+          ],
+          "input": [
+            {
+              "content": [
+                {
+                  "text": "Weather in Paris?",
+                  "type": "input_text"
+                }
+              ],
+              "role": "user",
+              "type": "message"
+            }
+          ],
+          "instructions": "",
+          "model": "gpt-6.1-sol",
+          "parallel_tool_calls": true,
+          "prompt_cache_key": "5a053142-9710-5f8f-8d72-aa1ae218cdcf",
+          "store": false,
+          "stream": true,
+          "tools": [
+            {
+              "description": "Current weather",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "output_format": "png",
+              "type": "image_generation"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0NDQ4MDAsInN1YiI6ImNvcnB1c3xzay1jb3JwdXMtdXBzdHJlYW0ifQ.corpus",
+          "Chatgpt-Account-Id": "acct-sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "Originator": "codex-tui",
+          "Session-Id": "5a053142-9710-5f8f-8d72-aa1ae218cdcf",
+          "User-Agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)",
+          "X-Codex-Routing-Hint": "model=gpt-6.1-sol"
+        },
+        "method": "POST",
+        "path": "/backend-api/codex/responses"
+      }
+    ]
+  }
+}

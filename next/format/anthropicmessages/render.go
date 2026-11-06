@@ -144,6 +144,7 @@ type builder struct {
 	finish   *llm.Finish
 	usage    *llm.Usage
 	losses   []llm.Loss
+	carried  map[string]bool // encrypted reasoning a thinking block's signature holds
 }
 
 func (b *builder) lose(path, detail string) {
@@ -175,14 +176,39 @@ func (b *builder) start(r *llm.ResponseInfo) {
 }
 
 // upstreamData looks at the upstream data an event from another format carries for what a
-// Message cannot hold: opaque reasoning and annotations from a Responses upstream, for now.
-func (b *builder) upstreamData(ev llm.Event) {
+// Message cannot hold: annotations from a Responses upstream, and its opaque reasoning except
+// what a thinking block's signature holds (signature). It returns the signature for the block
+// an item.end event closes.
+func (b *builder) upstreamData(ev llm.Event) string {
 	if b.upFormat != llm.FormatOpenAIResponses || len(ev.Raw) == 0 {
-		return
+		return ""
 	}
+	sig := b.signature(ev)
+	if sig != "" {
+		if b.carried == nil {
+			b.carried = map[string]bool{}
+		}
+		b.carried[sig] = true
+	}
+	sigs := openairesponses.ReasoningSignatures(ev.Raw)
 	for _, p := range openairesponses.OpaqueOutput(ev.Raw) {
+		if s, ok := sigs[p]; ok && b.carried[s] {
+			continue
+		}
 		b.lose(p, "reply data with no place in a Message")
 	}
+	return sig
+}
+
+// signature returns the signature for the thinking block an item.end event closes: a Responses
+// upstream's encrypted reasoning, which a Messages client keeps in the block's signature and
+// replays with it, so the reasoning carries over to the next turn (see
+// openairesponses.IsEncryptedReasoning). It is "" for any other event or upstream.
+func (b *builder) signature(ev llm.Event) string {
+	if b.upFormat != llm.FormatOpenAIResponses || ev.Type != llm.EventItemEnd {
+		return ""
+	}
+	return openairesponses.ReasoningSignature(ev.Raw)
 }
 
 func (b *builder) native() {
@@ -237,6 +263,7 @@ type streamBlock struct {
 	kind, callID, name string
 	index              int      // Messages block index, set when the block starts
 	held               []string // deltas waiting while another block is open
+	signature          string   // thinking signature, written before the block's stop
 	ended              bool
 }
 
@@ -291,9 +318,19 @@ func (s *StreamWriter) open(idx int) (bool, error) {
 	blk.held = nil
 	if blk.ended {
 		delete(s.blocks, idx)
-		return false, s.emit("content_block_stop", obj{"index": blk.index})
+		return false, s.stop(blk)
 	}
 	return true, nil
+}
+
+// stop writes the end of a block: its signature, when it has one, then its stop.
+func (s *StreamWriter) stop(blk *streamBlock) error {
+	if blk.signature != "" && blk.kind == llm.ItemReasoning {
+		if err := s.emit("content_block_delta", obj{"index": blk.index, "delta": obj{"type": "signature_delta", "signature": blk.signature}}); err != nil {
+			return err
+		}
+	}
+	return s.emit("content_block_stop", obj{"index": blk.index})
 }
 
 // drain writes waiting items in order until one stays open.
@@ -372,15 +409,15 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		}
 		return s.emit("content_block_delta", obj{"index": blk.index, "delta": blockDelta(blk.kind, ev.Delta)})
 	case llm.EventItemEnd:
-		b.upstreamData(ev)
 		blk := s.blocks[ev.Index]
+		blk.signature = b.upstreamData(ev)
 		if ev.Index != s.active {
 			blk.ended = true
 			return nil
 		}
 		delete(s.blocks, ev.Index)
 		s.active = -1
-		if err := s.emit("content_block_stop", obj{"index": blk.index}); err != nil {
+		if err := s.stop(blk); err != nil {
 			return err
 		}
 		return s.drain()
@@ -404,6 +441,7 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 type aggBlock struct {
 	kind, callID, name string
 	text               strings.Builder
+	signature          string
 }
 
 // Aggregator collects events into a non-streamed Message. A reply from a Messages upstream is
@@ -451,7 +489,11 @@ func (a *Aggregator) Add(ev llm.Event) {
 	case llm.EventTextDelta, llm.EventReasoningDelta, llm.EventToolInputDelta:
 		a.blocks[ev.Index].text.WriteString(ev.Delta)
 	case llm.EventItemEnd:
-		b.upstreamData(ev)
+		sig := b.upstreamData(ev)
+		if blk := a.blocks[ev.Index]; blk != nil {
+			blk.signature = sig
+			a.size += len(blk.signature)
+		}
 	case llm.EventNative:
 		if b.upFormat != format {
 			b.native()
@@ -487,7 +529,11 @@ func (a *Aggregator) Response() ([]byte, error) {
 		case llm.ItemMessage:
 			content = append(content, obj{"type": "text", "text": blk.text.String()})
 		case llm.ItemReasoning:
-			content = append(content, obj{"type": "thinking", "thinking": blk.text.String()})
+			t := obj{"type": "thinking", "thinking": blk.text.String()}
+			if blk.signature != "" {
+				t["signature"] = blk.signature
+			}
+			content = append(content, t)
 		case llm.ItemToolCall:
 			content = append(content, obj{"type": "tool_use", "id": blk.callID, "name": blk.name,
 				"input": b.toolInput(blk.text.String(), fmt.Sprintf("content[%d].input", i))})

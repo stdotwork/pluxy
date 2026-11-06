@@ -1,0 +1,449 @@
+{
+  "description": "A prior assistant thinking block whose signature is a GPT-style encrypted reasoning payload is replayed to a Responses upstream as a reasoning input item with that encrypted_content, before the function_call it preceded; the tool_result follows as function_call_output.",
+  "source": [
+    "core/internal/translator/codex/claude/codex_claude_request.go (convertClaudeRequestToCodex: appendReasoningContent, thinking block to reasoning item with encrypted_content)",
+    "core/internal/translator/common/codex_replay_signature.go (CodexReplaySignatureForTarget, ResolveCodexReplayTargetModel)",
+    "core/internal/signature/provider_compatibility.go (DetectSignatureProvider, CompatibleSignatureForProvider)",
+    "next/corpus/cases/anthropic-messages/openai-responses/thinking-replay.json (same exchange through the Responses API-key upstream)"
+  ],
+  "client": {
+    "path": "/v1/messages",
+    "auth": "none",
+    "headers": {
+      "x-api-key": "corpus-client-key",
+      "anthropic-version": "2023-06-01"
+    },
+    "body": {
+      "model": "gpt-test",
+      "max_tokens": 1024,
+      "stream": true,
+      "tools": [
+        {
+          "name": "get_weather",
+          "description": "Current weather",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "city": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "city"
+            ]
+          }
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": "Weather in Paris?"
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "Need weather.",
+              "signature": "gAAAAABlU_EAY29ycHVzLWl2LTAwMDAwMGNvcnB1cy1jaXBoZXItMDBjb3JwdXMtaG1hYy1jb3JwdXMtaG1hYy1jb3JwdXMtLQ"
+            },
+            {
+              "type": "tool_use",
+              "id": "toolu_01A",
+              "name": "get_weather",
+              "input": {
+                "city": "Paris"
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "toolu_01A",
+              "content": "21C"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {
+          "event": "response.created",
+          "data": {
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": {
+              "id": "resp_corpus",
+              "object": "response",
+              "created_at": 1700000000,
+              "status": "in_progress",
+              "model": "gpt-test-upstream",
+              "output": [],
+              "usage": null
+            }
+          }
+        },
+        {
+          "event": "response.output_item.added",
+          "data": {
+            "type": "response.output_item.added",
+            "sequence_number": 1,
+            "output_index": 0,
+            "item": {
+              "id": "msg_corpus",
+              "type": "message",
+              "status": "in_progress",
+              "role": "assistant",
+              "content": []
+            }
+          }
+        },
+        {
+          "event": "response.content_part.added",
+          "data": {
+            "type": "response.content_part.added",
+            "sequence_number": 2,
+            "output_index": 0,
+            "content_index": 0,
+            "item_id": "msg_corpus",
+            "part": {
+              "type": "output_text",
+              "text": "",
+              "annotations": []
+            }
+          }
+        },
+        {
+          "event": "response.output_text.delta",
+          "data": {
+            "type": "response.output_text.delta",
+            "sequence_number": 3,
+            "output_index": 0,
+            "content_index": 0,
+            "item_id": "msg_corpus",
+            "delta": "It is 21C"
+          }
+        },
+        {
+          "event": "response.output_text.delta",
+          "data": {
+            "type": "response.output_text.delta",
+            "sequence_number": 4,
+            "output_index": 0,
+            "content_index": 0,
+            "item_id": "msg_corpus",
+            "delta": " in Paris."
+          }
+        },
+        {
+          "event": "response.output_text.done",
+          "data": {
+            "type": "response.output_text.done",
+            "sequence_number": 5,
+            "output_index": 0,
+            "content_index": 0,
+            "item_id": "msg_corpus",
+            "text": "It is 21C in Paris."
+          }
+        },
+        {
+          "event": "response.content_part.done",
+          "data": {
+            "type": "response.content_part.done",
+            "sequence_number": 6,
+            "output_index": 0,
+            "content_index": 0,
+            "item_id": "msg_corpus",
+            "part": {
+              "type": "output_text",
+              "text": "It is 21C in Paris.",
+              "annotations": []
+            }
+          }
+        },
+        {
+          "event": "response.output_item.done",
+          "data": {
+            "type": "response.output_item.done",
+            "sequence_number": 7,
+            "output_index": 0,
+            "item": {
+              "id": "msg_corpus",
+              "type": "message",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "It is 21C in Paris.",
+                  "annotations": []
+                }
+              ]
+            }
+          }
+        },
+        {
+          "event": "response.completed",
+          "data": {
+            "type": "response.completed",
+            "sequence_number": 8,
+            "response": {
+              "id": "resp_corpus",
+              "object": "response",
+              "created_at": 1700000000,
+              "status": "completed",
+              "model": "gpt-test-upstream",
+              "output": [
+                {
+                  "id": "msg_corpus",
+                  "type": "message",
+                  "status": "completed",
+                  "role": "assistant",
+                  "content": [
+                    {
+                      "type": "output_text",
+                      "text": "It is 21C in Paris.",
+                      "annotations": []
+                    }
+                  ]
+                }
+              ],
+              "usage": {
+                "input_tokens": 60,
+                "input_tokens_details": {
+                  "cached_tokens": 0
+                },
+                "output_tokens": 7,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 67
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "client.events[0].data.message.usage.input_tokens",
+      "kind": "gap",
+      "reason": "Today's core puts its own local estimate of the input tokens in message_start; the new core has no tokenizer and sends 0 there, as Anthropic's message_start allows, until message_delta carries the upstream's count.",
+      "want": 0
+    },
+    {
+      "path": "client.events[5].data.usage.output_tokens_details",
+      "kind": "gap",
+      "reason": "Today's core adds a non-standard usage.output_tokens_details.thinking_tokens to Messages usage from a Responses upstream; Anthropic's usage object has no such field and the new core leaves it out. Whether to keep it is open.",
+      "absent": true
+    },
+    {
+      "path": "upstream[*].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."
+    },
+    {
+      "path": "upstream[*].headers.Session-Id",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    },
+    {
+      "path": "upstream[*].body.prompt_cache_key",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    },
+    {
+      "path": "upstream[0].body.reasoning",
+      "kind": "intended",
+      "reason": "The new core sends the reasoning effort the client asked for (reasoning_effort, a Messages thinking budget's effort or a model-name suffix) whatever the model, and gives a translated request that names none the medium effort today's core gives it; today's core checks the effort against its model catalog and drops it for a model it does not list, such as gpt-test. The *-catalog-model cases and the codex-oauth cases show both cores sending it for a model today's core lists.",
+      "want": {
+        "effort": "medium"
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {
+          "data": {
+            "message": {
+              "content": [],
+              "id": "resp_corpus",
+              "model": "gpt-test-upstream",
+              "role": "assistant",
+              "stop_reason": null,
+              "stop_sequence": null,
+              "type": "message",
+              "usage": {
+                "input_tokens": 61,
+                "output_tokens": 0
+              }
+            },
+            "type": "message_start"
+          },
+          "event": "message_start"
+        },
+        {
+          "data": {
+            "content_block": {
+              "text": "",
+              "type": "text"
+            },
+            "index": 0,
+            "type": "content_block_start"
+          },
+          "event": "content_block_start"
+        },
+        {
+          "data": {
+            "delta": {
+              "text": "It is 21C",
+              "type": "text_delta"
+            },
+            "index": 0,
+            "type": "content_block_delta"
+          },
+          "event": "content_block_delta"
+        },
+        {
+          "data": {
+            "delta": {
+              "text": " in Paris.",
+              "type": "text_delta"
+            },
+            "index": 0,
+            "type": "content_block_delta"
+          },
+          "event": "content_block_delta"
+        },
+        {
+          "data": {
+            "index": 0,
+            "type": "content_block_stop"
+          },
+          "event": "content_block_stop"
+        },
+        {
+          "data": {
+            "delta": {
+              "stop_reason": "end_turn",
+              "stop_sequence": null
+            },
+            "type": "message_delta",
+            "usage": {
+              "input_tokens": 60,
+              "output_tokens": 7,
+              "output_tokens_details": {
+                "thinking_tokens": 0
+              }
+            }
+          },
+          "event": "message_delta"
+        },
+        {
+          "data": {
+            "type": "message_stop"
+          },
+          "event": "message_stop"
+        }
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": [
+            "reasoning.encrypted_content"
+          ],
+          "input": [
+            {
+              "content": [
+                {
+                  "text": "Weather in Paris?",
+                  "type": "input_text"
+                }
+              ],
+              "role": "user",
+              "type": "message"
+            },
+            {
+              "content": null,
+              "encrypted_content": "gAAAAABlU_EAY29ycHVzLWl2LTAwMDAwMGNvcnB1cy1jaXBoZXItMDBjb3JwdXMtaG1hYy1jb3JwdXMtaG1hYy1jb3JwdXMtLQ",
+              "summary": [],
+              "type": "reasoning"
+            },
+            {
+              "arguments": "{\"city\":\"Paris\"}",
+              "call_id": "toolu_01A",
+              "name": "get_weather",
+              "type": "function_call"
+            },
+            {
+              "call_id": "toolu_01A",
+              "output": "21C",
+              "type": "function_call_output"
+            }
+          ],
+          "instructions": "",
+          "max_output_tokens": 1024,
+          "model": "gpt-test",
+          "parallel_tool_calls": true,
+          "prompt_cache_key": "0ce92e26-c5e7-59bd-a0ad-e7427665e316",
+          "store": false,
+          "stream": true,
+          "tool_choice": "auto",
+          "tools": [
+            {
+              "description": "Current weather",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              },
+              "strict": false,
+              "type": "function"
+            },
+            {
+              "output_format": "png",
+              "type": "image_generation"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "Originator": "codex-tui",
+          "Session-Id": "0ce92e26-c5e7-59bd-a0ad-e7427665e316",
+          "User-Agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      }
+    ]
+  }
+}

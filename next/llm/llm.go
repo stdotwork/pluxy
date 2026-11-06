@@ -88,8 +88,9 @@ type Native struct {
 	Format string          `json:"format"`
 	Body   json.RawMessage `json:"body"`
 	// Headers are the client's request headers that belong to Format and say how to read Body,
-	// keyed by lower-case name: for Anthropic Messages, anthropic-version and anthropic-beta. An
-	// extension that passes Body through sends them with it.
+	// keyed by lower-case name: for Anthropic Messages, anthropic-version and anthropic-beta; for
+	// OpenAI Responses, the Codex CLI's session and turn headers. An extension that passes Body
+	// through sends those its upstream reads.
 	Headers map[string]string `json:"headers,omitempty"`
 }
 

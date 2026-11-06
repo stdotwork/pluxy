@@ -224,7 +224,7 @@ version 0.
 | `items` | The conversation, in order. |
 | `tools` | Function tools the model may call. `parameters` is a JSON Schema. |
 | `options` | Generation options; any field may be absent: `max_output_tokens`, `temperature`, `top_p`, `stop`, `tool_choice` (`mode`: `auto`, `none`, `required` or `tool` with `name`), `parallel_tool_calls`, `response_format` (`type`: `text`, `json_object` or `json_schema` with `name`, `description`, `schema`, `strict`), `reasoning_effort` (as the client named it). |
-| `native` | The client's original request body and its format, when core received one; `headers` holds the client's request headers that belong to that format, by lower-case name (for `anthropic.messages`: `anthropic-version` and `anthropic-beta`). |
+| `native` | The client's original request body and its format, when core received one; `headers` holds the client's request headers that belong to that format, by lower-case name (for `anthropic.messages`: `anthropic-version` and `anthropic-beta`; for `openai.responses`: the headers the Codex CLI sends, such as `session-id`, `x-codex-window-id`, `x-codex-turn-metadata`, `version` and `originator`). |
 | `origin` | The request's top-level fields that have no place in the model (see Origin below). |
 | `drop_policy` | What to do when building the upstream request would drop part of this one: `report` (default: send it and report the losses) or `reject` (refuse with `unsupported`, naming what could not be carried). |
 
@@ -299,7 +299,9 @@ and the usage `raw` (so fields such as a vendor cost survive); other clients do 
 
 For `openai.responses` and `anthropic.messages`, every event carries the upstream stream event it
 came from in `raw` (an `error` carries it in `error.raw`), and the `finish` of a non-streamed reply
-carries the whole Response or Message object. A client in that format gets those upstream events
+carries the whole Response or Message object. In a non-streamed `openai.responses` reply, each
+`item.end` carries its output item, so a client in another format can keep what the item holds
+(such as a reasoning item's encrypted content). A client in that format gets those upstream events
 and that object unchanged; events an extension adds itself (such as closing an item the upstream
 left open) carry no `raw` and are not written to it.
 
