@@ -136,13 +136,14 @@ type StreamDecoder struct {
 	text      int // open message item, or -1
 	reasoning int // open reasoning item, or -1
 	tools     map[int]int
+	extra     map[int]json.RawMessage // extra_content that came after a tool call opened, by item
 	finish    *llm.Finish
 	usage     *llm.Usage
 }
 
 // NewStreamDecoder returns a decoder for one stream.
 func NewStreamDecoder() *StreamDecoder {
-	return &StreamDecoder{text: -1, reasoning: -1, tools: map[int]int{}}
+	return &StreamDecoder{text: -1, reasoning: -1, tools: map[int]int{}, extra: map[int]json.RawMessage{}}
 }
 
 func (d *StreamDecoder) open(kind string, ev *[]llm.Event, item llm.ItemStart) int {
@@ -169,9 +170,11 @@ func (d *StreamDecoder) closeAll(ev *[]llm.Event) {
 	}
 	slices.Sort(open)
 	for _, idx := range open {
-		*ev = append(*ev, llm.Event{Type: llm.EventItemEnd, Index: idx})
+		// extra_content sent after the call opened rides on its item.end.
+		*ev = append(*ev, llm.Event{Type: llm.EventItemEnd, Index: idx, Raw: d.extra[idx]})
 	}
 	clear(d.tools)
+	clear(d.extra)
 }
 
 // Decode takes the data of one SSE event and returns the events it produces. After "[DONE]" it
@@ -247,6 +250,8 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 				idx = d.open(llm.ItemToolCall, &out, llm.ItemStart{CallID: id, Name: tc.Function.Name})
 				out[len(out)-1].Raw = extraContent(tc.ExtraContent)
 				d.tools[tc.Index] = idx
+			} else if raw := extraContent(tc.ExtraContent); raw != nil {
+				d.extra[idx] = raw
 			}
 			if tc.Function.Arguments != "" {
 				out = append(out, llm.Event{Type: llm.EventToolInputDelta, Index: idx, Delta: tc.Function.Arguments})

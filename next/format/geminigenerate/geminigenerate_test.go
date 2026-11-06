@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stdotwork/pluxy/next/format/openaichat"
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
@@ -571,4 +572,59 @@ func TestStreamWriterKeepsCallStartOrder(t *testing.T) {
 	sameJSON(t, "chunk", []byte(got[0]), `{"candidates":[{"content":{"role":"model","parts":[`+
 		`{"functionCall":{"id":"a","name":"first","args":{}}},{"functionCall":{"id":"b","name":"second","args":{}}}]},`+
 		`"finishReason":"STOP","index":0}]}`)
+}
+
+// ProtoJSON integers: exponents and zero fractions read as whole numbers; fractions, values out of
+// range and non-numbers are refused, not rounded.
+func TestProtoJSONIntegers(t *testing.T) {
+	for _, v := range []string{`"2e0"`, `"2.0"`, `2`} {
+		req := mustParse(t, `{"generationConfig":{"maxOutputTokens":`+v+`},"tools":[{"functionDeclarations":[{"name":"p",`+
+			`"parameters":{"type":"ARRAY","maxItems":`+v+`,"items":{"type":"STRING"}}}]}]}`)
+		if o := req.Options.MaxOutputTokens; o == nil || *o != 2 {
+			t.Errorf("maxOutputTokens %s = %v, want 2", v, o)
+		}
+		sameJSON(t, "parameters for maxItems "+v, req.Tools[0].Parameters, `{"type":"array","maxItems":2,"items":{"type":"string"}}`)
+	}
+	for _, v := range []string{`1.5`, `1e100`, `"null"`, `"abc"`, `2147483648`} {
+		_, err := ParseRequest("m", false, []byte(`{"generationConfig":{"maxOutputTokens":`+v+`}}`))
+		if err == nil {
+			t.Errorf("maxOutputTokens %s accepted, want invalid_request", v)
+			continue
+		}
+		wantInvalidRequest(t, err)
+	}
+}
+
+// A Chat upstream may send a call's thought signature in a later delta than the call's first one;
+// it still goes back on the call part.
+func TestLateChatSignatureReachesTheCall(t *testing.T) {
+	d := openaichat.NewStreamDecoder()
+	var events []llm.Event
+	for _, c := range []string{
+		`{"id":"x","model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"f","arguments":"{}"}}]}}]}`,
+		`{"id":"x","model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"extra_content":{"google":{"thought_signature":"sig"}}}]}}]}`,
+		`{"id":"x","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		`[DONE]`,
+	} {
+		evs, err := d.Decode([]byte(c))
+		if err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
+		events = append(events, evs...)
+	}
+	got := dataLines(t, writeStream(t, events))
+	sameJSON(t, "last chunk", []byte(got[len(got)-1]), `{"candidates":[{"content":{"role":"model","parts":[`+
+		`{"functionCall":{"id":"c1","name":"f","args":{}},"thoughtSignature":"sig"}]},"finishReason":"STOP","index":0}],`+
+		`"modelVersion":"m","responseId":"x"}`)
+	agg := NewAggregator()
+	for _, ev := range events {
+		agg.Add(ev)
+	}
+	body, err := agg.Response()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"thoughtSignature":"sig"`) {
+		t.Errorf("aggregated reply %s has no thoughtSignature", body)
+	}
 }

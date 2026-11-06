@@ -243,12 +243,18 @@ type call struct {
 	signature json.RawMessage
 }
 
-// newCall starts a tool call from its item.start event. A call from a Chat upstream that is
-// Gemini's OpenAI-compatible API carries its thought signature in the event's raw, as
-// extra_content.google.thought_signature; it goes back on the call's part.
+// newCall starts a tool call from its item.start event.
 func (b *builder) newCall(ev llm.Event) *call {
 	c := &call{id: ev.Item.CallID, name: ev.Item.Name}
-	if b.upFormat == llm.FormatOpenAIChat && len(ev.Raw) > 0 {
+	b.signature(c, ev)
+	return c
+}
+
+// signature takes a call's thought signature from an event of a Chat upstream that is Gemini's
+// OpenAI-compatible API: the call's item.start or item.end raw carries it as
+// extra_content.google.thought_signature, and it goes back on the call's part.
+func (b *builder) signature(c *call, ev llm.Event) {
+	if c != nil && b.upFormat == llm.FormatOpenAIChat && len(ev.Raw) > 0 {
 		var x struct {
 			ExtraContent struct {
 				Google struct {
@@ -260,7 +266,6 @@ func (b *builder) newCall(ev llm.Event) *call {
 			c.signature = x.ExtraContent.Google.ThoughtSignature
 		}
 	}
-	return c
 }
 
 // StreamWriter writes events to a client as a GenerateContent SSE stream. When the reply came
@@ -339,6 +344,8 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		if c := s.calls[ev.Index]; c != nil {
 			c.args.WriteString(ev.Delta)
 		}
+	case llm.EventItemEnd:
+		b.signature(s.calls[ev.Index], ev)
 	case llm.EventFinish:
 		var parts []any
 		for _, idx := range s.order {
@@ -408,6 +415,10 @@ func (a *Aggregator) Add(ev llm.Event) {
 	case llm.EventToolInputDelta:
 		if p := a.parts[ev.Index]; p != nil && p.call != nil {
 			p.call.args.WriteString(ev.Delta)
+		}
+	case llm.EventItemEnd:
+		if p := a.parts[ev.Index]; p != nil {
+			a.b.signature(p.call, ev)
 		}
 	case llm.EventFinish:
 		a.finish, a.usage = ev.Finish, ev.Usage

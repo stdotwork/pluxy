@@ -18,6 +18,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"slices"
 	"strconv"
 	"strings"
@@ -167,7 +168,7 @@ func parseGenerationConfig(raw json.RawMessage, o *llm.Options) (json.RawMessage
 	var g struct {
 		Temperature      *number         `json:"temperature"`
 		TopP             *number         `json:"topP"`
-		MaxOutputTokens  *number         `json:"maxOutputTokens"`
+		MaxOutputTokens  *int32Number    `json:"maxOutputTokens"`
 		StopSequences    []string        `json:"stopSequences"`
 		ResponseMimeType string          `json:"responseMimeType"`
 		ResponseSchema   json.RawMessage `json:"responseSchema"`
@@ -228,8 +229,8 @@ func reasoningEffort(raw json.RawMessage) (string, json.RawMessage) {
 		return "", nil
 	}
 	var t struct {
-		Level  string  `json:"thinkingLevel"`
-		Budget *number `json:"thinkingBudget"`
+		Level  string       `json:"thinkingLevel"`
+		Budget *int32Number `json:"thinkingBudget"`
 	}
 	b, _ := json.Marshal(m)
 	if json.Unmarshal(b, &t) != nil {
@@ -248,7 +249,7 @@ func reasoningEffort(raw json.RawMessage) (string, json.RawMessage) {
 	}
 	effort := "xhigh"
 	for _, e := range effortBudgets {
-		if float64(*t.Budget) <= float64(e.max) {
+		if int(*t.Budget) <= e.max {
 			effort = e.effort
 			break
 		}
@@ -712,8 +713,8 @@ func convertSchema(m map[string]any) bool {
 	}
 	for _, k := range schemaInts {
 		if s, ok := m[k].(string); ok {
-			if _, err := strconv.ParseInt(s, 10, 64); err == nil {
-				m[k] = json.Number(s)
+			if n, err := protoInt(s, 64); err == nil {
+				m[k] = json.Number(strconv.FormatInt(n, 10))
 				changed = true
 			}
 		}
@@ -738,13 +739,19 @@ func convertSchema(m map[string]any) bool {
 	return changed
 }
 
-// number is a JSON number that may also be written as a string, as ProtoJSON allows.
+// number is a floating-point field: a JSON number or, as ProtoJSON allows, a string holding one
+// (including "NaN" and "Infinity").
 type number float64
 
 func (n *number) UnmarshalJSON(b []byte) error {
 	var s string
 	if json.Unmarshal(b, &s) == nil {
-		b = []byte(s)
+		f, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return fmt.Errorf("not a number: %s", b)
+		}
+		*n = number(f)
+		return nil
 	}
 	var f float64
 	if err := json.Unmarshal(b, &f); err != nil {
@@ -752,6 +759,38 @@ func (n *number) UnmarshalJSON(b []byte) error {
 	}
 	*n = number(f)
 	return nil
+}
+
+// int32Number is an int32 field: a JSON number or a string holding one, in any form ProtoJSON
+// accepts for an integer (exponents and zero fractions included), refused when it is not a whole
+// number in range.
+type int32Number int32
+
+func (n *int32Number) UnmarshalJSON(b []byte) error {
+	s := string(b)
+	var q string
+	if json.Unmarshal(b, &q) == nil {
+		s = q
+	}
+	v, err := protoInt(s, 32)
+	if err != nil {
+		return err
+	}
+	*n = int32Number(v)
+	return nil
+}
+
+// protoInt reads s as a whole number that fits in a signed integer of the given bits.
+func protoInt(s string, bits int) (int64, error) {
+	f, _, err := big.ParseFloat(strings.TrimSpace(s), 10, 256, big.ToNearestEven)
+	if err != nil || f.IsInf() || !f.IsInt() {
+		return 0, fmt.Errorf("not a whole number: %q", s)
+	}
+	v, acc := f.Int64()
+	if acc != big.Exact || v < -(1<<(bits-1)) || v > 1<<(bits-1)-1 {
+		return 0, fmt.Errorf("out of range for int%d: %q", bits, s)
+	}
+	return v, nil
 }
 
 func (n *number) float() *float64 {
