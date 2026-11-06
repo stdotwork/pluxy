@@ -162,19 +162,22 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
     const xvfb = ["xvfb-run", "-a", "-s", "-screen 0 1280x800x24 -nolisten tcp", bin];
     const proc = spawn("dbus-run-session", ["--", ...xvfb], {
       env,
-      stdio: ["ignore", "inherit", "pipe"],
+      // Some xvfb-run versions send the program's stderr to stdout: read both.
+      stdio: ["ignore", "pipe", "pipe"],
     });
     const steps = new Map<string, Step>();
     const reached: string[] = [];
     let before = 0;
     let after = -1;
     const pid = proc.pid ?? 0;
-    if (!proc.stderr) throw new Error("the app's stderr is not piped");
-    const lines = createInterface({ input: proc.stderr });
-    lines.on("line", (line) => {
+    if (!proc.stderr || !proc.stdout) throw new Error("the app's output is not piped");
+    const log: string[] = []; // the app's last lines, shown when the run fails
+    const onLine = (line: string) => {
       const m = /^native-test: (\w+) (.*)$/.exec(line);
       if (!m) {
         if (process.env.PLUXY_APP_TEST_VERBOSE) console.error(`  ${mode} | ${line}`);
+        log.push(line);
+        if (log.length > 60) log.shift();
         return;
       }
       const [, step, json] = m as unknown as [string, string, string];
@@ -192,7 +195,8 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
           writeFileSync(quit, "");
         }, 3000);
       }
-    });
+    };
+    for (const stream of [proc.stdout, proc.stderr]) createInterface({ input: stream }).on("line", onLine);
     const code = await new Promise<number | null>((resolve) => {
       const timer = setTimeout(() => {
         problems.push(`the app did not finish within ${TIMEOUT / 1000}s`);
@@ -264,6 +268,7 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
       await Bun.sleep(1000);
       check(closed?.core_pid && !alive(closed.core_pid), "the app's core still runs after it quit");
     }
+    if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
     console.log(
       `${mode}: ${problems.length === 0 ? "ok" : "FAILED"} (web processes ${before} open, ${after} after close; ` +
         `${reached.length} commands reached, all from main: ${reached.every((w) => w === "main")})`,
