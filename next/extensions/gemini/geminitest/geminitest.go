@@ -264,6 +264,15 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 		Iat   int64  `json:"iat"`
 		Exp   int64  `json:"exp"`
 	}
+	var header struct {
+		Alg string `json:"alg"`
+		Typ string `json:"typ"`
+	}
+	hb, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil || json.Unmarshal(hb, &header) != nil || header.Alg != "RS256" || header.Typ != "JWT" {
+		refuse("Invalid JWT header.")
+		return
+	}
 	cb, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil || json.Unmarshal(cb, &claims) != nil {
 		refuse("Invalid JWT.")
@@ -279,7 +288,8 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().Unix()
-	if claims.Aud != s.URL+"/token" || claims.Scope == "" || claims.Exp <= now || claims.Exp-claims.Iat > 3600 {
+	if claims.Aud != s.URL+"/token" || claims.Scope != "https://www.googleapis.com/auth/cloud-platform" ||
+		claims.Iat > now+60 || claims.Exp <= now || claims.Exp-claims.Iat > 3600 {
 		refuse("Invalid JWT: bad audience, scope or lifetime.")
 		return
 	}
