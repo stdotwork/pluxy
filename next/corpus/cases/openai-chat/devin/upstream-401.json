@@ -1,0 +1,134 @@
+{
+  "description": "Devin: Devin's 401 for a refused session token reaches the client as an authentication error.",
+  "source": [
+    "core/internal/runtime/executor/devin_executor.go",
+    "core/internal/runtime/executor/helps/devin_wire.go",
+    "core/internal/translator/openai/interactions/chat-completions"
+  ],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {
+      "model": "devin/swe-2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Say hello"
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "status": 401,
+      "body": {
+        "code": "unauthenticated",
+        "message": "invalid session token"
+      }
+    }
+  ],
+  "volatile": [
+    "client.body.created",
+    "client.body.id",
+    "client.events[*].data.created",
+    "client.events[*].data.id",
+    "upstream[*].body.1.31",
+    "upstream[*].body.15.1",
+    "upstream[*].body.16",
+    "upstream[*].body.3[*].1",
+    "upstream[*].headers.Sentry-Trace"
+  ],
+  "exceptions": [
+    {
+      "path": "client.body.code",
+      "kind": "intended",
+      "reason": "The new core answers an upstream refusal in the client format's error shape (an OpenAI error object with code auth); today's core passes Devin's Connect error body through.",
+      "absent": true
+    },
+    {
+      "path": "client.body.error",
+      "kind": "intended",
+      "reason": "The new core answers an upstream refusal in the client format's error shape (an OpenAI error object with code auth); today's core passes Devin's Connect error body through.",
+      "want": {
+        "code": "auth",
+        "message": "invalid session token",
+        "type": "authentication_error"
+      }
+    },
+    {
+      "path": "client.body.message",
+      "kind": "intended",
+      "reason": "The new core answers an upstream refusal in the client format's error shape (an OpenAI error object with code auth); today's core passes Devin's Connect error body through.",
+      "absent": true
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "code": "unauthenticated",
+        "message": "invalid session token"
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 401
+    },
+    "upstream": [
+      {
+        "body": {
+          "1": {
+            "1": "chisel",
+            "12": "chisel",
+            "2": "3000.10.21",
+            "3": "sk-corpus-upstream",
+            "31": "(volatile)",
+            "4": "en",
+            "5": "linux",
+            "7": "3000.10.21"
+          },
+          "15": {
+            "1": "(volatile)",
+            "3": 4,
+            "4": 14
+          },
+          "16": "(volatile)",
+          "20": 1,
+          "21": "swe-2-high",
+          "3": [
+            {
+              "1": "(volatile)",
+              "2": 1,
+              "3": "Say hello"
+            }
+          ],
+          "7": 5,
+          "8": {
+            "1": 1,
+            "2": 64000,
+            "3": 400,
+            "5": {
+              "double": 1
+            },
+            "7": 40,
+            "8": {
+              "double": 0.949999988079071
+            }
+          }
+        },
+        "headers": {
+          "Accept": "*/*",
+          "Authorization": "Basic sk-corpus-upstream-sk-corpus-upstream",
+          "Connect-Protocol-Version": "1",
+          "Content-Type": "application/connect+proto",
+          "Sentry-Trace": "(volatile)"
+        },
+        "method": "POST",
+        "path": "/exa.api_server_pb.ApiServerService/GetChatMessage"
+      }
+    ]
+  }
+}

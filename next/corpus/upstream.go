@@ -92,6 +92,8 @@ func writeReply(w http.ResponseWriter, r *http.Request, rep Reply) {
 		switch {
 		case len(rep.SSE) > 0:
 			h.Set("Content-Type", "text/event-stream")
+		case len(rep.Connect) > 0:
+			h.Set("Content-Type", "application/connect+proto")
 		case len(rep.Body) > 0:
 			h.Set("Content-Type", "application/json")
 		}
@@ -116,6 +118,10 @@ func writeReply(w http.ResponseWriter, r *http.Request, rep Reply) {
 		_, _ = w.Write(buf.Bytes())
 	case rep.BodyText != nil:
 		_, _ = io.WriteString(w, *rep.BodyText)
+	case len(rep.Connect) > 0:
+		// The case was checked when it was loaded, so the frames encode.
+		b, _ := encodeConnect(rep.Connect)
+		_, _ = w.Write(b)
 	}
 	for _, ev := range rep.SSE {
 		_, _ = w.Write(encodeSSE(ev))

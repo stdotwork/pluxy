@@ -1,0 +1,514 @@
+{
+  "description": "Devin: a conversation with a tool call and its result reaches Devin as an assistant turn with the call and a tool turn answering it.",
+  "source": [
+    "core/internal/runtime/executor/devin_executor.go",
+    "core/internal/runtime/executor/helps/devin_wire.go",
+    "core/internal/translator/openai/interactions/responses"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "body": {
+      "model": "devin/swe-2",
+      "stream": true,
+      "tools": [
+        {
+          "type": "function",
+          "name": "get_weather",
+          "description": "Weather for a city",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "city": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "city"
+            ]
+          }
+        }
+      ],
+      "input": [
+        {
+          "role": "user",
+          "content": "What is the weather in Oslo?"
+        },
+        {
+          "type": "function_call",
+          "call_id": "call_1",
+          "name": "get_weather",
+          "arguments": "{\"city\":\"Oslo\"}"
+        },
+        {
+          "type": "function_call_output",
+          "call_id": "call_1",
+          "output": "{\"temp\":12}"
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "connect": [
+        {
+          "message": {
+            "3": "It is sunny in Oslo."
+          }
+        },
+        {
+          "message": {
+            "7": {
+              "2": 60,
+              "3": 8
+            },
+            "5": 4
+          }
+        },
+        {
+          "end": {}
+        }
+      ]
+    }
+  ],
+  "volatile": [
+    "client.body.created_at",
+    "client.body.id",
+    "client.body.output[*].id",
+    "client.events[*].data.item.id",
+    "client.events[*].data.item_id",
+    "client.events[*].data.response.created_at",
+    "client.events[*].data.response.id",
+    "client.events[*].data.response.output[*].id",
+    "upstream[*].body.1.31",
+    "upstream[*].body.15.1",
+    "upstream[*].body.16",
+    "upstream[*].body.3[*].1",
+    "upstream[*].headers.Sentry-Trace"
+  ],
+  "exceptions": [
+    {
+      "path": "client.events",
+      "kind": "intended",
+      "reason": "The new core writes a Responses stream with the events and fields OpenAI's API sends (response.in_progress, content parts, the done events, background, error and status fields); today's core's Interactions translator sends a shorter sequence.",
+      "want": [
+        {
+          "data": {
+            "response": {
+              "background": false,
+              "created_at": "(volatile)",
+              "error": null,
+              "id": "(volatile)",
+              "model": "devin/swe-2",
+              "object": "response",
+              "output": [],
+              "status": "in_progress"
+            },
+            "sequence_number": 1,
+            "type": "response.created"
+          },
+          "event": "response.created"
+        },
+        {
+          "data": {
+            "response": {
+              "created_at": "(volatile)",
+              "id": "(volatile)",
+              "model": "devin/swe-2",
+              "object": "response",
+              "output": [],
+              "status": "in_progress"
+            },
+            "sequence_number": 2,
+            "type": "response.in_progress"
+          },
+          "event": "response.in_progress"
+        },
+        {
+          "data": {
+            "item": {
+              "content": [],
+              "id": "(volatile)",
+              "role": "assistant",
+              "status": "in_progress",
+              "type": "message"
+            },
+            "output_index": 0,
+            "sequence_number": 3,
+            "type": "response.output_item.added"
+          },
+          "event": "response.output_item.added"
+        },
+        {
+          "data": {
+            "content_index": 0,
+            "item_id": "(volatile)",
+            "output_index": 0,
+            "part": {
+              "annotations": [],
+              "logprobs": [],
+              "text": "",
+              "type": "output_text"
+            },
+            "sequence_number": 4,
+            "type": "response.content_part.added"
+          },
+          "event": "response.content_part.added"
+        },
+        {
+          "data": {
+            "content_index": 0,
+            "delta": "It is sunny in Oslo.",
+            "item_id": "(volatile)",
+            "logprobs": [],
+            "output_index": 0,
+            "sequence_number": 5,
+            "type": "response.output_text.delta"
+          },
+          "event": "response.output_text.delta"
+        },
+        {
+          "data": {
+            "content_index": 0,
+            "item_id": "(volatile)",
+            "logprobs": [],
+            "output_index": 0,
+            "sequence_number": 6,
+            "text": "It is sunny in Oslo.",
+            "type": "response.output_text.done"
+          },
+          "event": "response.output_text.done"
+        },
+        {
+          "data": {
+            "content_index": 0,
+            "item_id": "(volatile)",
+            "output_index": 0,
+            "part": {
+              "annotations": [],
+              "logprobs": [],
+              "text": "It is sunny in Oslo.",
+              "type": "output_text"
+            },
+            "sequence_number": 7,
+            "type": "response.content_part.done"
+          },
+          "event": "response.content_part.done"
+        },
+        {
+          "data": {
+            "item": {
+              "content": [
+                {
+                  "annotations": [],
+                  "logprobs": [],
+                  "text": "It is sunny in Oslo.",
+                  "type": "output_text"
+                }
+              ],
+              "id": "(volatile)",
+              "role": "assistant",
+              "status": "completed",
+              "type": "message"
+            },
+            "output_index": 0,
+            "sequence_number": 8,
+            "type": "response.output_item.done"
+          },
+          "event": "response.output_item.done"
+        },
+        {
+          "data": {
+            "response": {
+              "background": false,
+              "created_at": "(volatile)",
+              "error": null,
+              "id": "(volatile)",
+              "model": "devin/swe-2",
+              "object": "response",
+              "output": [
+                {
+                  "content": [
+                    {
+                      "annotations": [],
+                      "logprobs": [],
+                      "text": "It is sunny in Oslo.",
+                      "type": "output_text"
+                    }
+                  ],
+                  "id": "(volatile)",
+                  "role": "assistant",
+                  "status": "completed",
+                  "type": "message"
+                }
+              ],
+              "status": "completed",
+              "tools": [
+                {
+                  "description": "Weather for a city",
+                  "name": "get_weather",
+                  "parameters": {
+                    "properties": {
+                      "city": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "city"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "function"
+                }
+              ],
+              "usage": {
+                "input_tokens": 60,
+                "input_tokens_details": {
+                  "cached_tokens": 0
+                },
+                "output_tokens": 8,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 68
+              }
+            },
+            "sequence_number": 9,
+            "type": "response.completed"
+          },
+          "event": "response.completed"
+        }
+      ]
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {
+          "data": {
+            "response": {
+              "id": "interaction_77e6301d-c16",
+              "model": "devin/swe-2",
+              "object": "response",
+              "output": [],
+              "status": "in_progress"
+            },
+            "sequence_number": 1,
+            "type": "response.created"
+          },
+          "event": "response.created"
+        },
+        {
+          "data": {
+            "item": {
+              "content": [],
+              "id": "item_c090354e-017a-483c-bb5a-65f35bc77e11_0",
+              "role": "assistant",
+              "status": "in_progress",
+              "type": "message"
+            },
+            "output_index": 0,
+            "sequence_number": 2,
+            "type": "response.output_item.added"
+          },
+          "event": "response.output_item.added"
+        },
+        {
+          "data": {
+            "content_index": 0,
+            "item_id": "item_c090354e-017a-483c-bb5a-65f35bc77e11_0",
+            "output_index": 0,
+            "part": {
+              "text": "",
+              "type": "output_text"
+            },
+            "sequence_number": 3,
+            "type": "response.content_part.added"
+          },
+          "event": "response.content_part.added"
+        },
+        {
+          "data": {
+            "content_index": 0,
+            "delta": "It is sunny in Oslo.",
+            "item_id": "item_c090354e-017a-483c-bb5a-65f35bc77e11_0",
+            "output_index": 0,
+            "sequence_number": 4,
+            "type": "response.output_text.delta"
+          },
+          "event": "response.output_text.delta"
+        },
+        {
+          "data": {
+            "content_index": 0,
+            "item_id": "item_c090354e-017a-483c-bb5a-65f35bc77e11_0",
+            "logprobs": [],
+            "output_index": 0,
+            "sequence_number": 5,
+            "text": "It is sunny in Oslo.",
+            "type": "response.output_text.done"
+          },
+          "event": "response.output_text.done"
+        },
+        {
+          "data": {
+            "content_index": 0,
+            "item_id": "item_c090354e-017a-483c-bb5a-65f35bc77e11_0",
+            "output_index": 0,
+            "part": {
+              "text": "It is sunny in Oslo.",
+              "type": "output_text"
+            },
+            "sequence_number": 6,
+            "type": "response.content_part.done"
+          },
+          "event": "response.content_part.done"
+        },
+        {
+          "data": {
+            "item": {
+              "content": [
+                {
+                  "text": "It is sunny in Oslo.",
+                  "type": "output_text"
+                }
+              ],
+              "id": "item_c090354e-017a-483c-bb5a-65f35bc77e11_0",
+              "role": "assistant",
+              "status": "completed",
+              "type": "message"
+            },
+            "output_index": 0,
+            "sequence_number": 7,
+            "type": "response.output_item.done"
+          },
+          "event": "response.output_item.done"
+        },
+        {
+          "data": {
+            "response": {
+              "id": "interaction_77e6301d-c16",
+              "model": "devin/swe-2",
+              "object": "response",
+              "output": [
+                {
+                  "content": [
+                    {
+                      "text": "It is sunny in Oslo.",
+                      "type": "output_text"
+                    }
+                  ],
+                  "id": "item_c090354e-017a-483c-bb5a-65f35bc77e11_0",
+                  "role": "assistant",
+                  "status": "completed",
+                  "type": "message"
+                }
+              ],
+              "status": "completed",
+              "usage": {
+                "input_tokens": 60,
+                "input_tokens_details": {
+                  "cached_tokens": 0
+                },
+                "output_tokens": 8,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 68
+              }
+            },
+            "sequence_number": 8,
+            "type": "response.completed"
+          },
+          "event": "response.completed"
+        }
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "1": {
+            "1": "chisel",
+            "12": "chisel",
+            "2": "3000.10.21",
+            "3": "sk-corpus-upstream",
+            "31": "(volatile)",
+            "4": "en",
+            "5": "linux",
+            "7": "3000.10.21"
+          },
+          "10": [
+            {
+              "1": "get_weather",
+              "2": "Weather for a city",
+              "3": "{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"]}"
+            }
+          ],
+          "15": {
+            "1": "(volatile)",
+            "3": 4
+          },
+          "16": "(volatile)",
+          "20": 1,
+          "21": "swe-2-high",
+          "3": [
+            {
+              "1": "(volatile)",
+              "2": 1,
+              "3": "What is the weather in Oslo?"
+            },
+            {
+              "1": "(volatile)",
+              "2": 2,
+              "3": "",
+              "6": [
+                {
+                  "1": "call_1",
+                  "2": "get_weather",
+                  "3": "{\"city\":\"Oslo\"}"
+                }
+              ]
+            },
+            {
+              "1": "(volatile)",
+              "2": 4,
+              "3": "{\"temp\":12}",
+              "7": "call_1"
+            }
+          ],
+          "7": 5,
+          "8": {
+            "1": 1,
+            "2": 64000,
+            "3": 400,
+            "5": {
+              "double": 1
+            },
+            "7": 40,
+            "8": {
+              "double": 0.949999988079071
+            }
+          }
+        },
+        "headers": {
+          "Accept": "*/*",
+          "Authorization": "Basic sk-corpus-upstream-sk-corpus-upstream",
+          "Connect-Protocol-Version": "1",
+          "Content-Type": "application/connect+proto",
+          "Sentry-Trace": "(volatile)"
+        },
+        "method": "POST",
+        "path": "/exa.api_server_pb.ApiServerService/GetChatMessage"
+      }
+    ]
+  }
+}

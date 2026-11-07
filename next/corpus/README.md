@@ -71,6 +71,7 @@ Providers with their own folder of cases:
 | `meta` | Meta extension, a Muse Code login's OAuth credential (the minted key and its device token) | a Meta auth file with the key and `base_url` |
 | `meta-api-key` | Meta extension, an API key | a `meta` group with `base-url` and an API key |
 | `antigravity` | Antigravity extension, an OAuth credential with its project | an Antigravity auth file with `base_url`, the project and saved model hints; its `fetchAvailableModels` calls are answered aside |
+| `devin` | Devin extension, a session token as an API key credential | a Devin auth file with the token and `base_url`; its `GetUserStatus` calls are answered aside. Models are named `devin/<model>`, as today's core lists them; Gemini clients write the slash as `%2F` in the path, with `account_models` naming the model |
 | `xai` | xAI extension, an API key | an `xai` group with `base-url` and an API key |
 | `codex-ws` | Codex extension, API key, `"websockets": true` in the account's settings | a Codex API key with `websockets: true` |
 
@@ -127,7 +128,8 @@ are not JSON). The runner adds `Content-Type: application/json` and `User-Agent:
 unless the case sets them.
 
 `upstream`: one reply per upstream request, in order. Each has `status` (default 200),
-`headers`, and one of `body` (JSON), `body_text` (literal) or `sse` (stream events). An SSE event
+`headers`, and one of `body` (JSON), `body_text` (literal), `sse` (stream events) or `connect`
+(Connect frames of protobuf messages, below). An SSE event
 has `data` (a JSON value, or a string written as is, such as `"[DONE]"`), optional `event` and
 `comment`, or `raw` for bytes written exactly (malformed streams). `"abort": true` drops the
 connection after the scripted body. A request beyond the script gets a 500, which shows up in
@@ -220,6 +222,15 @@ A path joins keys with `.` and puts array indexes in brackets:
    Recording also lays out the file in the corpus style (one stream event per line).
 3. Run the corpus. For each difference the report lists, fix the new core or add an exception
    with its reason.
+
+A provider whose upstream speaks Connect with protobuf messages (Devin's API server) scripts its
+replies as `connect` frames: each is `{"message": {...}}`, a data frame, or `{"end": {...}}`, the
+end frame with its JSON trailer (`{}` for a clean end). A message is written in JSON keyed by field
+number: a string is a text field, a number a varint, an object a nested message, `{"double": x}`
+a 64-bit float, `{"bytes": "base64"}` bytes that are not text, and an array a repeated field. The
+provider's `Proto` schema (`cores.go`) names its request message's nested and repeated fields, so
+a recorded protobuf request is decoded into the same JSON form and compared like any body
+(`connect.go`).
 
 A provider whose core calls the upstream on its own, outside the case (today's core probes an
 Antigravity login's models when it loads it and again later), sets `Aside` in its entry: the fake

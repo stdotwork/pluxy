@@ -1,0 +1,240 @@
+{
+  "description": "Devin: a function tool reaches Devin as a tool (name, description, JSON Schema); the reply's tool call frames (ID and name first, then the arguments in pieces) come back as the client's tool call.",
+  "source": [
+    "core/internal/runtime/executor/devin_executor.go",
+    "core/internal/runtime/executor/helps/devin_wire.go",
+    "core/internal/translator/interactions/claude"
+  ],
+  "client": {
+    "path": "/v1/messages",
+    "body": {
+      "model": "devin/swe-2",
+      "stream": true,
+      "max_tokens": 512,
+      "tools": [
+        {
+          "name": "get_weather",
+          "description": "Weather for a city",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "city": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "city"
+            ]
+          }
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": "What is the weather in Oslo?"
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "connect": [
+        {
+          "message": {
+            "6": {
+              "1": "toolu_corpus_1",
+              "2": "get_weather",
+              "3": "{\"city\":"
+            }
+          }
+        },
+        {
+          "message": {
+            "6": {
+              "3": "\"Oslo\"}"
+            }
+          }
+        },
+        {
+          "message": {
+            "7": {
+              "2": 40,
+              "3": 12
+            },
+            "5": 10
+          }
+        },
+        {
+          "end": {}
+        }
+      ]
+    }
+  ],
+  "volatile": [
+    "client.body.id",
+    "client.events[*].data.message.id",
+    "client.events[4].data.content_block.id",
+    "upstream[*].body.1.31",
+    "upstream[*].body.15.1",
+    "upstream[*].body.16",
+    "upstream[*].body.3[*].1",
+    "upstream[*].headers.Sentry-Trace"
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {
+          "data": {
+            "message": {
+              "content": [],
+              "id": "interaction_3a314630-7d6",
+              "model": "devin/swe-2",
+              "role": "assistant",
+              "stop_reason": null,
+              "stop_sequence": null,
+              "type": "message",
+              "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0
+              }
+            },
+            "type": "message_start"
+          },
+          "event": "message_start"
+        },
+        {
+          "data": {
+            "content_block": {
+              "id": "toolu_corpus_1",
+              "input": {},
+              "name": "get_weather",
+              "type": "tool_use"
+            },
+            "index": 0,
+            "type": "content_block_start"
+          },
+          "event": "content_block_start"
+        },
+        {
+          "data": {
+            "delta": {
+              "partial_json": "{\"city\":",
+              "type": "input_json_delta"
+            },
+            "index": 0,
+            "type": "content_block_delta"
+          },
+          "event": "content_block_delta"
+        },
+        {
+          "data": {
+            "delta": {
+              "partial_json": "\"Oslo\"}",
+              "type": "input_json_delta"
+            },
+            "index": 0,
+            "type": "content_block_delta"
+          },
+          "event": "content_block_delta"
+        },
+        {
+          "data": {
+            "index": 0,
+            "type": "content_block_stop"
+          },
+          "event": "content_block_stop"
+        },
+        {
+          "data": {
+            "delta": {
+              "stop_reason": "tool_use",
+              "stop_sequence": null
+            },
+            "type": "message_delta",
+            "usage": {
+              "input_tokens": 40,
+              "output_tokens": 12
+            }
+          },
+          "event": "message_delta"
+        },
+        {
+          "data": {
+            "type": "message_stop"
+          },
+          "event": "message_stop"
+        }
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "1": {
+            "1": "chisel",
+            "12": "chisel",
+            "2": "3000.10.21",
+            "3": "sk-corpus-upstream",
+            "31": "(volatile)",
+            "4": "en",
+            "5": "linux",
+            "7": "3000.10.21"
+          },
+          "10": [
+            {
+              "1": "get_weather",
+              "2": "Weather for a city",
+              "3": "{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"]}"
+            }
+          ],
+          "15": {
+            "1": "(volatile)",
+            "3": 4,
+            "4": 14
+          },
+          "16": "(volatile)",
+          "20": 1,
+          "21": "swe-2-high",
+          "3": [
+            {
+              "1": "(volatile)",
+              "2": 1,
+              "3": "What is the weather in Oslo?"
+            }
+          ],
+          "7": 5,
+          "8": {
+            "1": 1,
+            "2": 512,
+            "3": 400,
+            "5": {
+              "double": 1
+            },
+            "7": 40,
+            "8": {
+              "double": 0.949999988079071
+            }
+          }
+        },
+        "headers": {
+          "Accept": "*/*",
+          "Authorization": "Basic sk-corpus-upstream-sk-corpus-upstream",
+          "Connect-Protocol-Version": "1",
+          "Content-Type": "application/connect+proto",
+          "Sentry-Trace": "(volatile)"
+        },
+        "method": "POST",
+        "path": "/exa.api_server_pb.ApiServerService/GetChatMessage"
+      }
+    ]
+  }
+}
