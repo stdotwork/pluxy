@@ -25,7 +25,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `extensions/claude` | Provider extension for Anthropic's Claude, with an API key or a Claude subscription login; `claudetest` is a fake Anthropic for its tests. |
 | `extensions/gemini` | Provider extension for Google's Gemini: the Gemini API with an API key, and Vertex AI with a service account or an express mode key; `geminitest` is a fake Google for its tests. |
 | `extensions/kimi` | Provider extension for Kimi Code, Moonshot AI's coding subscription, signed in with a device code; `kimitest` is a fake Kimi for its tests. |
-| `extensions/xai` | Provider extension for xAI's Grok models with an API key; `xaitest` is a fake xAI for its tests. |
+| `extensions/xai` | Provider extension for xAI's Grok models: an API key, or a Grok account signed in as the Grok CLI signs in; `xaitest` is a fake xAI and xAI sign-in for its tests. |
 | `extensions/meta` | Provider extension for Meta's Muse models: a Muse Code subscription signed in with a device code, or a Meta API key; `metatest` is a fake Meta for its tests. |
 | `extensions/antigravity` | Provider extension for Google Antigravity: Gemini and Claude models through a Google account signed in to Antigravity; `agtest` is a fake Google login and Cloud Code for its tests. |
 | `extensions/devin` | Provider extension for Devin: the models a Devin account gets, signed in as Devin's CLI signs in or with a session token, over Devin's protobuf API; `devintest` is a fake Devin for its tests. |
@@ -278,26 +278,41 @@ as a used-up quota, not a rate limit.
 
 ## xAI
 
-The xAI extension (`extensions/xai`) serves xAI's Grok models with an xAI API key. Point
-`extension.manifest` at `extensions/xai/pluxy-extension.json`. Accounts come from the config, with
-the key as the credential. The extension has no login method:
+The xAI extension (`extensions/xai`) serves xAI's Grok models with an xAI API key or a Grok
+account. Point `extension.manifest` at `extensions/xai/pluxy-extension.json`. An API key comes from
+the config, with the key as the credential:
 
 ```json
 {"id": "xai", "credential": {"kind": "api_key", "api_key": "xai-..."}}
 ```
 
-It does not build Grok CLI's OAuth login or its `cli-chat-proxy.grok.com` endpoint. That path
-reaches xAI only by sending the Grok CLI's client ID and identity headers, which this extension
-does not send.
+A Grok account is added by login through the management API (below) with method `device`, as the
+Grok CLI and today's core sign in: the OAuth device authorization grant with the Grok CLI's own
+public client (it has no secret), at the endpoints xAI's OpenID discovery document
+(`https://auth.x.ai`) names, which must be HTTPS on `x.ai`. The reply's prompt carries a code and
+xAI's page to enter it on. The credential keeps the access and refresh tokens and the token
+endpoint, and the account is labelled with the ID token's e-mail address. Core renews the token 5
+minutes before it expires; a renewal keeps the refresh token when xAI sends no new one, and an
+`invalid_grant` or revoked token asks for a new login.
+
+A Grok login's requests go to the Grok CLI's chat endpoint, `https://cli-chat-proxy.grok.com/v1`,
+unless `base_url` names another address than xAI's API, as today's core routes them, and carry the
+Grok CLI's identity, which that endpoint checks: `User-Agent: xai-grok-workspace/<version>`,
+`X-XAI-Token-Auth: xai-grok-cli`, `x-grok-client-version`, `x-grok-client-identifier: grok-shell`
+and `x-authenticateresponse: authenticate-response`. The version is today's core's fallback,
+1.0.46. Today's core sends these headers only to the exact CLI endpoint address; the extension
+sends them on every request of a login.
 
 | Setting | Meaning |
 | --- | --- |
-| `base_url` | Where xAI's API lives. Default `https://api.x.ai/v1`; requests go to `{base_url}/responses`. |
+| `base_url` | Where xAI's API lives. Default `https://api.x.ai/v1`; requests go to `{base_url}/responses`. For a Grok login, the default means the Grok CLI's endpoint. |
+| `client_version` | Replaces the Grok CLI version a login's requests name (default 1.0.46). |
+| `auth_issuer` | Moves xAI's sign-in to a test server; its own address is then allowed for the login endpoints. |
 
 Every client format goes to xAI's Responses API. A Responses client's request passes through with
 the changes listed below. Chat Completions, Messages and Gemini clients are translated to
-Responses, and what the translation cannot carry is reported with the reply. The User-Agent is
-`pluxy-xai/<version>`, and no Grok CLI header is sent.
+Responses, and what the translation cannot carry is reported with the reply. An API key's
+User-Agent is `pluxy-xai/<version>`, with no Grok CLI header.
 
 What changes in a request:
 
@@ -339,6 +354,9 @@ Not built, and why:
   today's model catalog.
 - Image references, encrypted reasoning content, websockets, text to speech, image and video
   generation, `/responses/compact`, and the optional `x_search` tool.
+- For a Grok login: reading the Grok CLI's latest version from npm every 3 hours (set
+  `client_version` when xAI asks for a newer CLI), the file name and legacy-file adoption today's
+  core uses for its auth files, and opening the browser at sign-in.
 
 ## Meta
 
