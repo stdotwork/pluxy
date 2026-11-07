@@ -1,16 +1,19 @@
-// Command xai is pluxy's provider extension for xAI's Grok models, with an xAI API key.
+// Command xai is pluxy's provider extension for xAI's Grok models: an xAI API key, or a Grok
+// account signed in as the Grok CLI signs in (login.go).
 //
 // Account settings (optional):
 //
 //	{"base_url": "https://api.x.ai/v1"}
 //
-// base_url is where xAI's API lives; requests go to {base_url}/responses. Every client format is
-// sent to xAI's Responses API: a Responses client's body passes through with the changes xAI needs
-// (body.go), and the other formats are translated to Responses. The account's credential must be
-// of kind api_key; it is sent as a bearer token.
+// base_url is where xAI's API lives; requests go to {base_url}/responses. A Grok login's requests
+// go to the Grok CLI's chat endpoint (https://cli-chat-proxy.grok.com/v1) unless base_url names
+// another address, as today's core sends them. client_version replaces the Grok CLI version a
+// login's requests name; auth_issuer moves xAI's sign-in to a test server.
 //
-// The extension names itself in its User-Agent (pluxy-xai) and sends no other product's identity.
-// Grok CLI's OAuth login and its cli-chat-proxy endpoint are not built.
+// Every client format is sent to xAI's Responses API: a Responses client's body passes through
+// with the changes xAI needs (body.go), and the other formats are translated to Responses. An API
+// key's requests name this extension in their User-Agent (pluxy-xai); a login's carry the Grok
+// CLI's identity, which xAI's CLI endpoint expects.
 package main
 
 import (
@@ -46,8 +49,16 @@ const defaultBaseURL = "https://api.x.ai/v1"
 // (the 24-hour cooldown today's core applies).
 const freeUsageCooldownMS = 24 * 60 * 60 * 1000
 
+// cliChatBaseURL is the Grok CLI's chat endpoint, where a login's requests go.
+const cliChatBaseURL = "https://cli-chat-proxy.grok.com/v1"
+
+// cliVersion is the Grok CLI version a login's requests name: today's core's fallback version,
+// which it uses until it reads a newer one from npm.
+const cliVersion = "1.0.46"
+
 func main() {
-	err := sdk.Serve(sdk.Extension{ID: id, Version: version, Generate: generate})
+	err := sdk.Serve(sdk.Extension{ID: id, Version: version, Generate: generate,
+		LoginMethods: loginMethods, Login: login, Refresh: refresh})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "xai:", err)
 		os.Exit(1)
@@ -55,7 +66,9 @@ func main() {
 }
 
 type settings struct {
-	BaseURL string `json:"base_url"`
+	BaseURL       string `json:"base_url"`
+	ClientVersion string `json:"client_version"`
+	AuthIssuer    string `json:"auth_issuer"`
 }
 
 func readSettings(raw json.RawMessage) (settings, error) {
@@ -69,6 +82,12 @@ func readSettings(raw json.RawMessage) (settings, error) {
 		s.BaseURL = defaultBaseURL
 	}
 	s.BaseURL = strings.TrimRight(s.BaseURL, "/")
+	if s.ClientVersion == "" {
+		s.ClientVersion = cliVersion
+	}
+	if s.AuthIssuer = strings.TrimRight(s.AuthIssuer, "/"); s.AuthIssuer == "" {
+		s.AuthIssuer = defaultIssuer
+	}
 	return s, nil
 }
 
@@ -94,11 +113,27 @@ var client = &http.Client{
 	},
 }
 
-func apiKey(c *protocol.Credential) (string, error) {
-	if c != nil && c.Kind == protocol.CredentialAPIKey && c.APIKey != "" {
-		return c.APIKey, nil
+// target is where an account's requests go and how they are signed.
+type target struct {
+	base, token string
+	cli         bool // a Grok login: the CLI's endpoint and identity
+}
+
+// accountTarget reads an account's credential: an API key goes to base_url; a Grok login goes to
+// the Grok CLI's chat endpoint, or to base_url when it names another address than xAI's API, as
+// today's core routes it.
+func accountTarget(s settings, c *protocol.Credential) (target, error) {
+	switch {
+	case c != nil && c.Kind == protocol.CredentialAPIKey && c.APIKey != "":
+		return target{base: s.BaseURL, token: c.APIKey}, nil
+	case c != nil && c.Kind == protocol.CredentialOAuth && c.AccessToken != "":
+		base := s.BaseURL
+		if base == defaultBaseURL {
+			base = cliChatBaseURL
+		}
+		return target{base: base, token: c.AccessToken, cli: true}, nil
 	}
-	return "", &llm.Error{Code: llm.CodeAuth, Message: "the account has no xAI API key", Scope: llm.ScopeCredential}
+	return target{}, &llm.Error{Code: llm.CodeAuth, Message: "the account has no xAI API key or Grok login", Scope: llm.ScopeCredential}
 }
 
 func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
@@ -106,7 +141,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err != nil {
 		return err
 	}
-	key, err := apiKey(call.Account.Credential)
+	tg, err := accountTarget(s, call.Account.Credential)
 	if err != nil {
 		return err
 	}
@@ -116,14 +151,23 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return err
 	}
 	send := &reporting{Stream: out, tr: tr}
-	url := s.BaseURL + "/responses"
+	url := tg.base + "/responses"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+key)
-	req.Header.Set("User-Agent", "pluxy-xai/"+version)
+	req.Header.Set("Authorization", "Bearer "+tg.token)
+	if tg.cli {
+		// The Grok CLI's identity, as today's core sends it to the CLI's endpoint, which checks it.
+		req.Header.Set("User-Agent", "xai-grok-workspace/"+s.ClientVersion)
+		req.Header.Set("X-XAI-Token-Auth", "xai-grok-cli")
+		req.Header.Set("x-grok-client-version", s.ClientVersion)
+		req.Header.Set("x-grok-client-identifier", "grok-shell")
+		req.Header.Set("x-authenticateresponse", "authenticate-response")
+	} else {
+		req.Header.Set("User-Agent", "pluxy-xai/"+version)
+	}
 	if call.Request.Stream {
 		req.Header.Set("Accept", "text/event-stream")
 	} else {

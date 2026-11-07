@@ -1,8 +1,10 @@
-// Package xaitest is a fake xAI for tests of the xAI extension: its Responses API under /v1/responses.
-// It accepts only the API keys it issued and never talks to xAI.
+// Package xaitest is a fake xAI for tests of the xAI extension: its Responses API under
+// /v1/responses and the Grok CLI's sign-in (OpenID discovery, device authorization and token
+// endpoints). It accepts only the API keys and tokens it issued and never talks to xAI.
 package xaitest
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -27,16 +29,32 @@ type Server struct {
 	// Generate, if set, answers requests whose key is valid. The default replies "Hello" as a
 	// Responses message (streamed when asked) with usage 11 in, 7 out.
 	Generate func(w http.ResponseWriter, r *http.Request, req Request)
+	// DenyDevice makes every device login end with access_denied once polled.
+	DenyDevice bool
+	// TokenDown makes the token endpoint answer 503.
+	TokenDown bool
+	// Answer, if set, sees every request first; it answers one by returning true.
+	Answer func(w http.ResponseWriter, r *http.Request) bool
 
 	mu       sync.Mutex
 	n        int
-	keys     map[string]bool
+	keys     map[string]bool // API keys and access tokens
+	refresh  map[string]bool
+	devices  map[string]*device // device code to its state
 	requests []Request
 }
 
+type device struct {
+	user     string
+	approved bool
+}
+
+// Email is the e-mail address the ID tokens name.
+const Email = "grok-user@example.com"
+
 // New starts a fake that is closed when the test ends.
 func New(t testing.TB) *Server {
-	s := &Server{keys: map[string]bool{}}
+	s := &Server{keys: map[string]bool{}, refresh: map[string]bool{}, devices: map[string]*device{}}
 	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
 	t.Cleanup(s.Close)
 	return s
@@ -44,7 +62,7 @@ func New(t testing.TB) *Server {
 
 // Settings returns account settings that point the extension at the server.
 func (s *Server) Settings() json.RawMessage {
-	b, _ := json.Marshal(map[string]string{"base_url": s.URL + "/v1"})
+	b, _ := json.Marshal(map[string]string{"base_url": s.URL + "/v1", "auth_issuer": s.URL})
 	return b
 }
 
@@ -58,7 +76,34 @@ func (s *Server) Key() string {
 	return k
 }
 
-// Revoke makes the server refuse a key it issued.
+// Grant returns a new access token and refresh token, as a finished Grok login holds them.
+func (s *Server) Grant() (access, refresh string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.grant()
+}
+
+func (s *Server) grant() (string, string) {
+	s.n++
+	a, r := fmt.Sprintf("xaitest-access-%d", s.n), fmt.Sprintf("xaitest-refresh-%d", s.n)
+	s.keys[a], s.refresh[r] = true, true
+	return a, r
+}
+
+// Approve approves the device login showing userCode, as the user would on xAI's page.
+func (s *Server) Approve(userCode string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, d := range s.devices {
+		if d.user == userCode {
+			d.approved = true
+			return true
+		}
+	}
+	return false
+}
+
+// Revoke makes the server refuse a key or token it issued.
 func (s *Server) Revoke(key string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -73,6 +118,31 @@ func (s *Server) Requests() []Request {
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
+	if s.Answer != nil && s.Answer(w, r) {
+		return
+	}
+	switch {
+	case r.URL.Path == "/.well-known/openid-configuration":
+		writeJSON(w, http.StatusOK, map[string]string{"issuer": s.URL, "device_authorization_endpoint": s.URL + "/oauth2/device/code", "token_endpoint": s.URL + "/oauth2/token"})
+		return
+	case r.URL.Path == "/oauth2/device/code" && r.Method == http.MethodPost:
+		_ = r.ParseForm()
+		if r.PostForm.Get("client_id") == "" || !strings.Contains(r.PostForm.Get("scope"), "grok-cli:access") {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
+			return
+		}
+		s.mu.Lock()
+		s.n++
+		dc, uc := fmt.Sprintf("xaitest-device-%d", s.n), fmt.Sprintf("GROK-%04d", s.n)
+		s.devices[dc] = &device{user: uc}
+		s.mu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]any{"device_code": dc, "user_code": uc, "verification_uri": s.URL + "/device",
+			"verification_uri_complete": s.URL + "/device?user_code=" + uc, "expires_in": 600, "interval": 1})
+		return
+	case r.URL.Path == "/oauth2/token" && r.Method == http.MethodPost:
+		s.token(w, r)
+		return
+	}
 	if r.URL.Path != "/v1/responses" || r.Method != http.MethodPost {
 		http.NotFound(w, r)
 		return
@@ -103,6 +173,52 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	JSONText(w, "Hello")
+}
+
+func (s *Server) token(w http.ResponseWriter, r *http.Request) {
+	if s.TokenDown {
+		http.Error(w, "down", http.StatusServiceUnavailable)
+		return
+	}
+	_ = r.ParseForm()
+	f := r.PostForm
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch f.Get("grant_type") {
+	case "urn:ietf:params:oauth:grant-type:device_code":
+		d := s.devices[f.Get("device_code")]
+		switch {
+		case d == nil:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_grant"})
+		case s.DenyDevice:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "access_denied"})
+		case !d.approved:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "authorization_pending"})
+		default:
+			delete(s.devices, f.Get("device_code"))
+			a, rt := s.grant()
+			writeJSON(w, http.StatusOK, map[string]any{"access_token": a, "refresh_token": rt, "id_token": idToken(), "token_type": "Bearer", "expires_in": 3600})
+		}
+	case "refresh_token":
+		if !s.refresh[f.Get("refresh_token")] || f.Get("client_id") == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_grant", "error_description": "refresh token is invalid"})
+			return
+		}
+		delete(s.refresh, f.Get("refresh_token"))
+		a, rt := s.grant()
+		writeJSON(w, http.StatusOK, map[string]any{"access_token": a, "refresh_token": rt, "token_type": "Bearer", "expires_in": 3600})
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported_grant_type"})
+	}
+}
+
+// idToken is an unsigned ID token naming Email.
+func idToken() string {
+	enc := func(v any) string {
+		b, _ := json.Marshal(v)
+		return base64.RawURLEncoding.EncodeToString(b)
+	}
+	return enc(map[string]string{"alg": "none"}) + "." + enc(map[string]string{"sub": "user-1", "email": Email}) + ".x"
 }
 
 // Usage is the usage the default replies report.
