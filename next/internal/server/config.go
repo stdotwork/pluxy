@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/internal/host"
+	"github.com/stdotwork/pluxy/next/internal/legacy"
 	"github.com/stdotwork/pluxy/next/internal/packages"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/llm"
@@ -49,6 +50,15 @@ type Config struct {
 	// ExtensionPages says where extension pages are served: on a site of their own, never the
 	// one serving the panel (next/ui/extension-pages/README.md).
 	ExtensionPages ExtensionPagesConfig `json:"extension_pages"`
+
+	// From a config.yaml with today's core's key names (package legacy):
+	// Notices name the settings it uses that core does not support or know; core logs them
+	// at each load.
+	Notices []string `json:"-"`
+	// AuthDir is today's auth folder (oauth.auth-dir), absolute; empty when not set.
+	AuthDir string `json:"-"`
+	// Import says how accounts imported from today's auth folder are set up.
+	Import legacy.ImportOptions `json:"-"`
 }
 
 // ExtensionPagesConfig is the extension_pages section of the config.
@@ -187,10 +197,28 @@ func LoadConfig(path string) (*Config, error) {
 	return ParseConfig(b, path)
 }
 
+// IsYAML reports whether the config file at path is a config.yaml with today's core's key
+// names: its name ends in .yaml or .yml.
+func IsYAML(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	return ext == ".yaml" || ext == ".yml"
+}
+
 // ParseConfig parses and validates the contents of the config file at path. Relative paths in
-// it are relative to path's folder.
+// it are relative to path's folder. A config.yaml (IsYAML) is read with today's core's key
+// names (package legacy) and then checked as the JSON config is.
 func ParseConfig(b []byte, path string) (*Config, error) {
-	var c Config
+	c := Config{Import: legacy.DefaultImportOptions}
+	if IsYAML(path) {
+		res, err := legacy.Translate(b)
+		if err != nil {
+			return nil, fmt.Errorf("config %s: %w", path, err)
+		}
+		if b, err = json.Marshal(res.Config); err != nil {
+			return nil, fmt.Errorf("config %s: %w", path, err)
+		}
+		c.Notices, c.AuthDir, c.Import = res.Notices, res.AuthDir, res.Import
+	}
 	if err := json.Unmarshal(b, &c); err != nil {
 		return nil, fmt.Errorf("config %s: %w", path, err)
 	}
@@ -240,6 +268,17 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 	default:
 		return nil, fmt.Errorf("config: drop_policy must be %q or %q", llm.DropReport, llm.DropReject)
 	}
+	if c.AuthDir != "" {
+		// As today's core reads it, ~ is the home folder.
+		if rest, ok := strings.CutPrefix(c.AuthDir, "~"); ok && (rest == "" || rest[0] == '/' || rest[0] == filepath.Separator) {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return nil, fmt.Errorf("config: oauth.auth-dir %q: %w", c.AuthDir, err)
+			}
+			c.AuthDir = filepath.Join(home, rest)
+		}
+		c.AuthDir = rel(c.AuthDir)
+	}
 	if c.CredentialsDir == "" {
 		c.CredentialsDir = "credentials"
 	}
@@ -264,8 +303,8 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 		x.ID = id
 		c.Extensions[id] = x
 	}
-	if len(seen) == 0 && c.ManagementKey == "" {
-		return nil, errors.New("config: set at least one account unless management_key is set (accounts can then be added by login)")
+	if len(seen) == 0 && c.ManagementKey == "" && c.AuthDir == "" {
+		return nil, errors.New("config: set at least one account unless management_key is set (accounts can then be added by login) or, in a config.yaml, oauth.auth-dir (accounts can then be imported)")
 	}
 	if err := c.Routing.Validate(); err != nil {
 		return nil, fmt.Errorf("config: %w", err)

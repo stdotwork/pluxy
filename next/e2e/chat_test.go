@@ -53,6 +53,7 @@ func build(dir string) error {
 		{filepath.Join("oauth", "oauth"), "../examples/oauth"},
 		{filepath.Join("codex", "codex"), "../extensions/codex"},
 		{filepath.Join("claude", "claude"), "../extensions/claude"},
+		{filepath.Join("kimi", "kimi"), "../extensions/kimi"},
 		{"testext", "./testext"},
 	} {
 		cmd := exec.Command("go", "build", "-buildvcs=false", "-o", filepath.Join(dir, b.out), b.pkg)
@@ -221,13 +222,21 @@ func runCoreLogged(t *testing.T, cfg map[string]any) (string, *coreLog) {
 // returns its base URL, the path of its config file and its log.
 func runCoreArgs(t *testing.T, cfg map[string]any, args ...string) (string, string, *coreLog) {
 	t.Helper()
-	logs := &coreLog{}
 	dir := t.TempDir()
 	b, _ := json.Marshal(cfg)
 	path := filepath.Join(dir, "config.json")
 	if err := os.WriteFile(path, b, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	base, logs := runCoreFile(t, path, args...)
+	return base, path, logs
+}
+
+// runCoreFile runs the pluxy binary with the config file at path and extra command-line
+// arguments, and returns its base URL and its log.
+func runCoreFile(t *testing.T, path string, args ...string) (string, *coreLog) {
+	t.Helper()
+	logs := &coreLog{}
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, filepath.Join(binDir, "pluxy"), append([]string{"-config", path}, args...)...)
 	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
@@ -267,10 +276,10 @@ func runCoreArgs(t *testing.T, cfg map[string]any, args ...string) (string, stri
 		if !ok {
 			t.Fatal("core exited before listening")
 		}
-		return a, path, logs
+		return a, logs
 	case <-time.After(15 * time.Second):
 		t.Fatal("core did not report its listening address")
-		return "", "", nil
+		return "", nil
 	}
 }
 
