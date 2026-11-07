@@ -36,6 +36,18 @@ const (
 	refreshLead = 5 * time.Minute
 )
 
+// waitPoll waits d between token polls, and reports false when ctx ends first. Tests replace it.
+var waitPoll = func(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
 var loginMethods = []protocol.LoginMethod{
 	{Method: "device", Kind: protocol.LoginDevice, Label: "Grok account (device code)"},
 }
@@ -169,14 +181,8 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 	}
 	// The first poll goes at once, as today's core polls.
 	for first := true; ; first = false {
-		if !first {
-			timer := time.NewTimer(interval)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return nil, ended()
-			case <-timer.C:
-			}
+		if !first && !waitPoll(ctx, interval) {
+			return nil, ended()
 		}
 		status, body, h, err := postForm(ctx, ep.token, url.Values{"grant_type": {deviceGrant}, "device_code": {dc.DeviceCode}, "client_id": {clientID}})
 		if err != nil {
