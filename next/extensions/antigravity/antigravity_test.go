@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -196,7 +197,7 @@ type discard struct{}
 func (discard) Send(llm.Event) error { return nil }
 
 // The goroutine that forwards login input ends once the login's context is cancelled, even with
-// input waiting to be read.
+// input it cannot hand over: nothing reads the inputs after the login ends.
 func TestForwardInputsStops(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	input := func(ctx context.Context) (map[string]string, error) {
@@ -205,18 +206,19 @@ func TestForwardInputsStops(t *testing.T) {
 		}
 		return map[string]string{"redirect_url": "x"}, nil
 	}
-	inputs, _ := forwardInputs(ctx, input)
-	<-inputs
+	forwardInputs(ctx, input)
+	// Let the forwarder fill the inputs and block handing over the next one.
+	time.Sleep(50 * time.Millisecond)
 	cancel()
-	timeout := time.After(2 * time.Second)
+	deadline := time.Now().Add(2 * time.Second)
 	for {
-		select {
-		case _, ok := <-inputs:
-			if !ok {
-				return
-			}
-		case <-timeout:
+		buf := make([]byte, 1<<20)
+		if !strings.Contains(string(buf[:runtime.Stack(buf, true)]), "forwardInputs.func1") {
+			return
+		}
+		if time.Now().After(deadline) {
 			t.Fatal("the input forwarder still runs after the login was cancelled")
 		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
