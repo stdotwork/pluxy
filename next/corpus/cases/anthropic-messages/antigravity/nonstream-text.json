@@ -1,0 +1,104 @@
+{
+  "description": "Antigravity: a non-streamed Messages request to Gemini; the reply becomes a Messages message. The request goes inside Cloud Code's envelope with the account's project, and the reply comes out of its response field.",
+  "source": [
+    "core/internal/runtime/executor/antigravity_executor_request.go",
+    "core/internal/runtime/executor/antigravity_executor_stream.go",
+    "core/internal/runtime/executor/antigravity_executor_execute.go",
+    "core/internal/translator/antigravity/claude"
+  ],
+  "client": {
+    "path": "/v1/messages",
+    "body": {
+      "model": "gemini-3.8-flash-high",
+      "max_tokens": 512,
+      "messages": [{"role":"user","content":[{"type":"text","text":"Say hello"}]}]
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "response": {
+          "candidates": [
+            {
+              "content": {
+                "role": "model",
+                "parts": [{"text":"thinking...","thought":true},{"text":"Hello world"}]
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 40,
+            "cachedContentTokenCount": 8,
+            "candidatesTokenCount": 12,
+            "thoughtsTokenCount": 20,
+            "totalTokenCount": 72
+          },
+          "modelVersion": "gemini-corpus-upstream",
+          "responseId": "resp-corpus"
+        },
+        "traceId": "trace-corpus"
+      }
+    }
+  ],
+  "volatile": ["upstream[*].body.requestId"],
+  "exceptions": [
+    {
+      "path": "client.body.usage.input_tokens",
+      "kind": "intended",
+      "want": 32,
+      "reason": "Messages counts cached input apart: the new core reports input_tokens without the 8 cached tokens, which go in cache_read_input_tokens, as for every Gemini reply; today's Antigravity Messages translator puts Gemini's whole prompt count in input_tokens on a reply that is not streamed."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "content": [
+          {"thinking":"thinking...","type":"thinking"},
+          {"text":"Hello world","type":"text"}
+        ],
+        "id": "resp-corpus",
+        "model": "gemini-corpus-upstream",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "type": "message",
+        "usage": {"cache_read_input_tokens":8,"input_tokens":40,"output_tokens":32}
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "model": "gemini-3.8-flash-high",
+          "project": "corpus-project-0001",
+          "request": {
+            "contents": [{"parts":[{"text":"Say hello"}],"role":"user"}],
+            "generationConfig": {},
+            "sessionId": "-2591501683323337334"
+          },
+          "requestId": "(volatile)",
+          "requestType": "agent",
+          "userAgent": "antigravity"
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "antigravity/hub/2.29.0 (aidev_client; os_type=darwin; arch=arm64; cl=1013060670)"
+        },
+        "method": "POST",
+        "path": "/v1internal:generateContent"
+      }
+    ]
+  }
+}

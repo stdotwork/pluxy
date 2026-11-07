@@ -1,0 +1,155 @@
+{
+  "description": "Antigravity: a non-streamed Responses request to Gemini; the reply becomes a Responses response object. The request goes inside Cloud Code's envelope with the account's project, and the reply comes out of its response field.",
+  "source": [
+    "core/internal/runtime/executor/antigravity_executor_request.go",
+    "core/internal/runtime/executor/antigravity_executor_stream.go",
+    "core/internal/runtime/executor/antigravity_executor_execute.go",
+    "core/internal/translator/antigravity/openai/responses"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "body": {
+      "model": "gemini-3.8-flash-high",
+      "input": [{"role":"user","content":[{"type":"input_text","text":"Say hello"}]}]
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "response": {
+          "candidates": [
+            {
+              "content": {
+                "role": "model",
+                "parts": [{"text":"thinking...","thought":true},{"text":"Hello world"}]
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 40,
+            "cachedContentTokenCount": 8,
+            "candidatesTokenCount": 12,
+            "thoughtsTokenCount": 20,
+            "totalTokenCount": 72
+          },
+          "modelVersion": "gemini-corpus-upstream",
+          "responseId": "resp-corpus"
+        },
+        "traceId": "trace-corpus"
+      }
+    }
+  ],
+  "volatile": [
+    "client.body.created_at",
+    "client.events[*].data.response.created_at",
+    "upstream[*].body.requestId"
+  ],
+  "exceptions": [
+    {
+      "path": "client.body",
+      "kind": "intended",
+      "reason": "The new core writes a Responses object from a Gemini reply with Gemini's responseId as its id (today's core prefixes resp_) and item ids built from it; a reasoning item without a signature has no encrypted_content (today's core sends an empty one).",
+      "want": {
+        "background": false,
+        "created_at": "(volatile)",
+        "error": null,
+        "id": "resp-corpus",
+        "incomplete_details": null,
+        "model": "gemini-3.8-flash-high",
+        "object": "response",
+        "output": [
+          {
+            "id": "rs_resp-corpus_0",
+            "summary": [{"text":"thinking...","type":"summary_text"}],
+            "type": "reasoning"
+          },
+          {
+            "content": [{"annotations":[],"logprobs":[],"text":"Hello world","type":"output_text"}],
+            "id": "msg_resp-corpus_0",
+            "role": "assistant",
+            "status": "completed",
+            "type": "message"
+          }
+        ],
+        "status": "completed",
+        "usage": {
+          "input_tokens": 40,
+          "input_tokens_details": {"cached_tokens":8},
+          "output_tokens": 32,
+          "output_tokens_details": {"reasoning_tokens":20},
+          "total_tokens": 72
+        }
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "background": false,
+        "created_at": "(volatile)",
+        "error": null,
+        "id": "resp_resp-corpus",
+        "incomplete_details": null,
+        "model": "gemini-3.8-flash-high",
+        "object": "response",
+        "output": [
+          {
+            "encrypted_content": "",
+            "id": "rs_resp-corpus",
+            "summary": [{"text":"thinking...","type":"summary_text"}],
+            "type": "reasoning"
+          },
+          {
+            "content": [{"annotations":[],"logprobs":[],"text":"Hello world","type":"output_text"}],
+            "id": "msg_resp-corpus_0",
+            "role": "assistant",
+            "status": "completed",
+            "type": "message"
+          }
+        ],
+        "status": "completed",
+        "usage": {
+          "input_tokens": 40,
+          "input_tokens_details": {"cached_tokens":8},
+          "output_tokens": 32,
+          "output_tokens_details": {"reasoning_tokens":20},
+          "total_tokens": 72
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "model": "gemini-3.8-flash-high",
+          "project": "corpus-project-0001",
+          "request": {
+            "contents": [{"parts":[{"text":"Say hello"}],"role":"user"}],
+            "sessionId": "-4735095129491665140"
+          },
+          "requestId": "(volatile)",
+          "requestType": "agent",
+          "userAgent": "antigravity"
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "antigravity/hub/2.29.0 (aidev_client; os_type=darwin; arch=arm64; cl=1013060670)"
+        },
+        "method": "POST",
+        "path": "/v1internal:generateContent"
+      }
+    ]
+  }
+}

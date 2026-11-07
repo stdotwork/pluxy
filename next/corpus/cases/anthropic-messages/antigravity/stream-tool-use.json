@@ -1,0 +1,170 @@
+{
+  "description": "Antigravity: a Messages tool reaches Gemini as a function declaration; the upstream functionCall comes back as a tool_use block. The request goes inside Cloud Code's envelope with the account's project, and the reply comes out of its response field.",
+  "source": [
+    "core/internal/runtime/executor/antigravity_executor_request.go",
+    "core/internal/runtime/executor/antigravity_executor_stream.go",
+    "core/internal/runtime/executor/antigravity_executor_execute.go",
+    "core/internal/translator/antigravity/claude"
+  ],
+  "client": {
+    "path": "/v1/messages",
+    "body": {
+      "model": "gemini-3.8-flash-high",
+      "stream": true,
+      "max_tokens": 512,
+      "tools": [
+        {
+          "name": "get_weather",
+          "description": "Weather for a city",
+          "input_schema": {
+            "type": "object",
+            "properties": {"city":{"type":"string"}},
+            "required": ["city"]
+          }
+        }
+      ],
+      "messages": [{"role":"user","content":"What is the weather in Oslo?"}]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"data":{"response":{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"get_weather","args":{"city":"Oslo"}},"thoughtSignature":"CiQB0e2Kb7sigA1"}]},"index":0}],"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus"},"traceId":"trace-corpus"}},
+        {"data":{"response":{"candidates":[{"content":{"role":"model","parts":[]},"index":0,"finishReason":"STOP"}],"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus","usageMetadata":{"promptTokenCount":40,"cachedContentTokenCount":8,"candidatesTokenCount":12,"thoughtsTokenCount":20,"totalTokenCount":72}},"traceId":"trace-corpus"}}
+      ]
+    }
+  ],
+  "volatile": ["client.events[4].data.content_block.id","upstream[*].body.requestId"],
+  "exceptions": [
+    {
+      "path": "client.events",
+      "kind": "intended",
+      "reason": "The new core writes a Messages stream from a Gemini reply with each thought signature as a thinking block of its own holding the signature, before the part it came on, as today's core does, but without the empty text block today's core adds after a signature that came on an empty text part, and tool_use ids as call_<n> when Gemini sends none (today's core uses the function name and a counter). Today's Antigravity Messages translator makes the tool_use id from the time, so it is volatile here.",
+      "want": [
+        {
+          "data": {
+            "message": {
+              "content": [],
+              "id": "resp-corpus",
+              "model": "gemini-corpus-upstream",
+              "role": "assistant",
+              "stop_reason": null,
+              "stop_sequence": null,
+              "type": "message",
+              "usage": {"input_tokens":0,"output_tokens":0}
+            },
+            "type": "message_start"
+          },
+          "event": "message_start"
+        },
+        {
+          "data": {
+            "content_block": {"thinking":"","type":"thinking"},
+            "index": 0,
+            "type": "content_block_start"
+          },
+          "event": "content_block_start"
+        },
+        {
+          "data": {
+            "delta": {"signature":"CiQB0e2Kb7sigA1","type":"signature_delta"},
+            "index": 0,
+            "type": "content_block_delta"
+          },
+          "event": "content_block_delta"
+        },
+        {"data":{"index":0,"type":"content_block_stop"},"event":"content_block_stop"},
+        {
+          "data": {
+            "content_block": {"id":"(volatile)","input":{},"name":"get_weather","type":"tool_use"},
+            "index": 1,
+            "type": "content_block_start"
+          },
+          "event": "content_block_start"
+        },
+        {
+          "data": {
+            "delta": {"partial_json":"{\"city\":\"Oslo\"}","type":"input_json_delta"},
+            "index": 1,
+            "type": "content_block_delta"
+          },
+          "event": "content_block_delta"
+        },
+        {"data":{"index":1,"type":"content_block_stop"},"event":"content_block_stop"},
+        {
+          "data": {
+            "delta": {"stop_reason":"tool_use","stop_sequence":null},
+            "type": "message_delta",
+            "usage": {"cache_read_input_tokens":8,"input_tokens":32,"output_tokens":32}
+          },
+          "event": "message_delta"
+        },
+        {"data":{"type":"message_stop"},"event":"message_stop"}
+      ]
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"message":{"content":[],"id":"resp-corpus","model":"gemini-corpus-upstream","role":"assistant","stop_reason":null,"stop_sequence":null,"type":"message","usage":{"input_tokens":36,"output_tokens":0}},"type":"message_start"},"event":"message_start"},
+        {"data":{"content_block":{"thinking":"","type":"thinking"},"index":0,"type":"content_block_start"},"event":"content_block_start"},
+        {"data":{"delta":{"signature":"cpa-gemini-carrier-v1:next:function:Q2lRQjBlMktiN3NpZ0Ex","type":"signature_delta"},"index":0,"type":"content_block_delta"},"event":"content_block_delta"},
+        {"data":{"index":0,"type":"content_block_stop"},"event":"content_block_stop"},
+        {"data":{"content_block":{"id":"(volatile)","input":{},"name":"get_weather","type":"tool_use"},"index":1,"type":"content_block_start"},"event":"content_block_start"},
+        {"data":{"delta":{"partial_json":"{\"city\":\"Oslo\"}","type":"input_json_delta"},"index":1,"type":"content_block_delta"},"event":"content_block_delta"},
+        {"data":{"index":1,"type":"content_block_stop"},"event":"content_block_stop"},
+        {"data":{"delta":{"stop_reason":"tool_use","stop_sequence":null},"type":"message_delta","usage":{"cache_read_input_tokens":8,"input_tokens":32,"output_tokens":32}},"event":"message_delta"},
+        {"data":{"type":"message_stop"},"event":"message_stop"}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "model": "gemini-3.8-flash-high",
+          "project": "corpus-project-0001",
+          "request": {
+            "contents": [{"parts":[{"text":"What is the weather in Oslo?"}],"role":"user"}],
+            "generationConfig": {},
+            "sessionId": "-9029847364606954648",
+            "tools": [
+              {
+                "functionDeclarations": [
+                  {
+                    "description": "Weather for a city",
+                    "name": "get_weather",
+                    "parameters": {
+                      "properties": {"city":{"type":"string"}},
+                      "required": ["city"],
+                      "type": "object"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "requestId": "(volatile)",
+          "requestType": "agent",
+          "userAgent": "antigravity"
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "antigravity/hub/2.29.0 (aidev_client; os_type=darwin; arch=arm64; cl=1013060670)"
+        },
+        "method": "POST",
+        "path": "/v1internal:streamGenerateContent?alt=sse"
+      }
+    ]
+  }
+}

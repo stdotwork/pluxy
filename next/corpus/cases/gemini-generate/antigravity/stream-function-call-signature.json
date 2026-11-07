@@ -1,0 +1,99 @@
+{
+  "description": "Antigravity: Gemini client, same-format passthrough, streamed with tools: functionDeclarations keep their parametersJsonSchema, and two parallel functionCall parts reach the client in order with their ids; only the first carries the thoughtSignature. The request goes inside Cloud Code's envelope with the account's project, and the reply comes out of its response field.",
+  "source": [
+    "core/internal/runtime/executor/antigravity_executor_request.go",
+    "core/internal/runtime/executor/antigravity_executor_stream.go",
+    "core/internal/runtime/executor/antigravity_executor_execute.go",
+    "core/internal/translator/antigravity/gemini"
+  ],
+  "client": {
+    "path": "/v1beta/models/gemini-3.8-flash-high:streamGenerateContent?alt=sse",
+    "body": {
+      "contents": [{"role":"user","parts":[{"text":"What is the weather in Paris and Berlin?"}]}],
+      "tools": [
+        {
+          "functionDeclarations": [
+            {
+              "name": "get_weather",
+              "description": "Get the current weather for a city",
+              "parametersJsonSchema": {
+                "type": "object",
+                "properties": {"city":{"type":"string"}},
+                "required": ["city"]
+              }
+            }
+          ]
+        }
+      ],
+      "toolConfig": {"functionCallingConfig":{"mode":"AUTO"}}
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"data":{"response":{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"id":"fc-1","name":"get_weather","args":{"city":"Paris"}},"thoughtSignature":"CiQB0e2Kb7sigA1"},{"functionCall":{"id":"fc-2","name":"get_weather","args":{"city":"Berlin"}}}]},"index":0}],"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus"},"traceId":"trace-corpus"}},
+        {"data":{"response":{"candidates":[{"content":{"role":"model","parts":[]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":40,"cachedContentTokenCount":8,"candidatesTokenCount":12,"thoughtsTokenCount":20,"totalTokenCount":72},"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus"},"traceId":"trace-corpus"}}
+      ]
+    }
+  ],
+  "volatile": ["upstream[*].body.requestId"],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"candidates":[{"content":{"parts":[{"functionCall":{"args":{"city":"Paris"},"id":"fc-1","name":"get_weather"},"thoughtSignature":"CiQB0e2Kb7sigA1"},{"functionCall":{"args":{"city":"Berlin"},"id":"fc-2","name":"get_weather"}}],"role":"model"},"index":0}],"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus"}},
+        {"data":{"candidates":[{"content":{"parts":[],"role":"model"},"finishReason":"STOP","index":0}],"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus","usageMetadata":{"cachedContentTokenCount":8,"candidatesTokenCount":12,"promptTokenCount":40,"thoughtsTokenCount":20,"totalTokenCount":72}}}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "model": "gemini-3.8-flash-high",
+          "project": "corpus-project-0001",
+          "request": {
+            "contents": [
+              {"parts":[{"text":"What is the weather in Paris and Berlin?"}],"role":"user"}
+            ],
+            "sessionId": "-9208020678315570748",
+            "toolConfig": {"functionCallingConfig":{"mode":"AUTO"}},
+            "tools": [
+              {
+                "functionDeclarations": [
+                  {
+                    "description": "Get the current weather for a city",
+                    "name": "get_weather",
+                    "parameters": {
+                      "properties": {"city":{"type":"string"}},
+                      "required": ["city"],
+                      "type": "object"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "requestId": "(volatile)",
+          "requestType": "agent",
+          "userAgent": "antigravity"
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "antigravity/hub/2.29.0 (aidev_client; os_type=darwin; arch=arm64; cl=1013060670)"
+        },
+        "method": "POST",
+        "path": "/v1internal:streamGenerateContent?alt=sse"
+      }
+    ]
+  }
+}

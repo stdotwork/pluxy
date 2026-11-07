@@ -70,6 +70,11 @@
       "kind": "intended",
       "absent": true,
       "reason": "The new core passes a Responses upstream's usage to a WebSocket client as the upstream sent it, as it does for a streamed HTTP reply (today's Codex executor too fills nothing in on that path); today's core's WebSocket path fills in input_tokens_details.cached_tokens and output_tokens_details.reasoning_tokens as 0 when the upstream leaves them out."
+    },
+    {
+      "path": "upstream[*].body.request.sessionId",
+      "kind": "gap",
+      "reason": "Today's core names an Antigravity conversation from its session-affinity identity (derived from the client's key and conversation) when it has one; the protocol gives extensions no session identity yet, so the Antigravity extension always uses the fallback today's core uses without one: a hash of the first user text."
     }
   ]
 }

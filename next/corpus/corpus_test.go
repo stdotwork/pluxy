@@ -226,7 +226,7 @@ func runCase(t *testing.T, c *Case, global *Global) Result {
 func observe(t *testing.T, c *Case, label string, start func(dir, upstreamURL, proxyURL, caFile string) (*Core, error)) (Observation, error) {
 	coreSlots <- struct{}{}
 	defer func() { <-coreSlots }()
-	up := NewFakeUpstream(c.Upstream)
+	up := NewFakeUpstream(c.Upstream, Providers[c.Provider].Aside)
 	defer up.Close()
 	var proxyURL, caFile string
 	var ic *interceptor

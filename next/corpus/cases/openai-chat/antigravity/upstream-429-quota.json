@@ -1,0 +1,108 @@
+{
+  "description": "Antigravity: a 429 whose ErrorInfo reason is QUOTA_EXHAUSTED is a used-up quota; the client gets the 429.",
+  "source": ["core/internal/runtime/executor/antigravity_executor_credits.go"],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {"model":"gemini-3.8-flash-high","messages":[{"role":"user","content":"Say hello"}]}
+  },
+  "upstream": [
+    {
+      "status": 429,
+      "headers": {"Content-Type":"application/json"},
+      "body": {
+        "error": {
+          "code": 429,
+          "message": "You have exhausted your capacity on this model. Your quota will reset after 3h0m0s.",
+          "status": "RESOURCE_EXHAUSTED",
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+              "reason": "QUOTA_EXHAUSTED",
+              "domain": "cloudcode-pa.googleapis.com",
+              "metadata": {"quotaResetDelay":"3h0m0s","model":"gemini-3.8-flash-high"}
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "volatile": ["client.body.created","client.events[*].data.created","upstream[*].body.requestId"],
+  "exceptions": [
+    {
+      "path": "client.body.error.code",
+      "kind": "intended",
+      "reason": "The new core answers the client with its own format's error body for a Gemini error, error.code holding Gemini's status (RESOURCE_EXHAUSTED); today's core passes Google's error envelope through.",
+      "want": "RESOURCE_EXHAUSTED"
+    },
+    {
+      "path": "client.body.error.status",
+      "kind": "intended",
+      "reason": "The new core answers the client with its own format's error body for a Gemini error, error.code holding Gemini's status (RESOURCE_EXHAUSTED); today's core passes Google's error envelope through.",
+      "absent": true
+    },
+    {
+      "path": "client.body.error.details",
+      "kind": "intended",
+      "reason": "The new core answers the client with its own format's error body for a Gemini error, error.code holding Gemini's status (RESOURCE_EXHAUSTED); today's core passes Google's error envelope through.",
+      "absent": true
+    },
+    {
+      "path": "client.body.error.type",
+      "kind": "intended",
+      "reason": "The new core answers the client with its own format's error body for a Gemini error, error.code holding Gemini's status (RESOURCE_EXHAUSTED); today's core passes Google's error envelope through. A used-up quota is a rate_limit_error to an OpenAI client, as OpenAI reports one.",
+      "want": "rate_limit_error"
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {
+          "code": 429,
+          "details": [
+            {
+              "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+              "domain": "cloudcode-pa.googleapis.com",
+              "metadata": {"model":"gemini-3.8-flash-high","quotaResetDelay":"3h0m0s"},
+              "reason": "QUOTA_EXHAUSTED"
+            }
+          ],
+          "message": "You have exhausted your capacity on this model. Your quota will reset after 3h0m0s.",
+          "status": "RESOURCE_EXHAUSTED"
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "Retry-After": "10800",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 429
+    },
+    "upstream": [
+      {
+        "body": {
+          "model": "gemini-3.8-flash-high",
+          "project": "corpus-project-0001",
+          "request": {
+            "contents": [{"parts":[{"text":"Say hello"}],"role":"user"}],
+            "sessionId": "-4914845515845078199"
+          },
+          "requestId": "(volatile)",
+          "requestType": "agent",
+          "userAgent": "antigravity"
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "antigravity/hub/2.29.0 (aidev_client; os_type=darwin; arch=arm64; cl=1013060670)"
+        },
+        "method": "POST",
+        "path": "/v1internal:generateContent"
+      }
+    ]
+  }
+}

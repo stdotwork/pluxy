@@ -16,6 +16,7 @@ import (
 type FakeUpstream struct {
 	*httptest.Server
 	script []Reply
+	aside  func(*http.Request) (Reply, bool)
 
 	mu       sync.Mutex
 	requests []RecordedRequest
@@ -30,14 +31,22 @@ type RecordedRequest struct {
 	ws     *wsRecord // set for a WebSocket the fake upstream accepted
 }
 
-// NewFakeUpstream starts a fake upstream with the given replies.
-func NewFakeUpstream(script []Reply) *FakeUpstream {
-	u := &FakeUpstream{script: script}
+// NewFakeUpstream starts a fake upstream with the given replies. aside, when not nil, answers the
+// requests it takes (see Provider.Aside) without recording them or using up a reply.
+func NewFakeUpstream(script []Reply, aside func(*http.Request) (Reply, bool)) *FakeUpstream {
+	u := &FakeUpstream{script: script, aside: aside}
 	u.Server = httptest.NewServer(http.HandlerFunc(u.serve))
 	return u
 }
 
 func (u *FakeUpstream) serve(w http.ResponseWriter, r *http.Request) {
+	if u.aside != nil {
+		if rep, ok := u.aside(r); ok {
+			io.Copy(io.Discard, r.Body)
+			writeReply(w, r, rep)
+			return
+		}
+	}
 	body, _ := io.ReadAll(r.Body)
 	u.mu.Lock()
 	n := len(u.requests)
