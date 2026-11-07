@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/stdotwork/pluxy/next/internal/core"
+	"github.com/stdotwork/pluxy/next/internal/cred"
+	"github.com/stdotwork/pluxy/next/internal/legacy"
 	"github.com/stdotwork/pluxy/next/internal/pages"
 	"github.com/stdotwork/pluxy/next/internal/panel"
 	"github.com/stdotwork/pluxy/next/internal/server"
@@ -30,11 +32,59 @@ func main() {
 	safeMode := flag.Bool("safe-mode", false, "start no extensions: client requests fail, the management API works")
 	watch := flag.Duration("watch-interval", time.Second, "how often to look for config file changes (0: do not watch)")
 	bundled := flag.String("bundled", "", "index of the registry of bundled packages (default: bundled/index.json beside this program, when it exists)")
+	importAuth := flag.String("import-auth", "", "copy the credential files of today's core's auth folder at this path into the credential store, then exit (run it while core is stopped)")
 	flag.Parse()
+	if *importAuth != "" {
+		if err := importAuthDir(*configPath, *importAuth); err != nil {
+			log.Print(err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(*configPath, *safeMode, *watch, *bundled); err != nil {
 		log.Print(err)
 		os.Exit(1)
 	}
+}
+
+// importAuthDir copies the credential files in today's core's auth folder dir into the
+// credential store of the config at configPath, and says what it imported and skipped.
+func importAuthDir(configPath, dir string) error {
+	cfg, err := server.LoadConfig(configPath)
+	if err != nil {
+		return err
+	}
+	if err := legacy.CheckImportFolders(dir, cfg.CredentialsDir); err != nil {
+		return err
+	}
+	files, skipped, err := legacy.ReadAuthDir(dir, cfg.Import, time.Now())
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", dir, err)
+	}
+	store, err := cred.Open(cred.FileBackend{Dir: cfg.CredentialsDir})
+	if err != nil {
+		return err
+	}
+	reserved := map[string]bool{}
+	for _, a := range cfg.Accounts() {
+		reserved[strings.ToLower(a.ID)] = true
+	}
+	imported, more, err := legacy.Import(store, files, func(id string) bool { return reserved[strings.ToLower(id)] })
+	for _, f := range imported {
+		line := fmt.Sprintf("imported %s as account %s (%s)", f.File, f.Record.ID, f.Record.Extension)
+		if len(f.Ignored) > 0 {
+			line += "; not supported yet, not imported: " + strings.Join(f.Ignored, ", ")
+		}
+		fmt.Println(line)
+	}
+	for _, s := range append(skipped, more...) {
+		fmt.Printf("skipped %s: %s\n", s.File, s.Reason)
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%d imported, %d skipped, into %s\n", len(imported), len(skipped)+len(more), cfg.CredentialsDir)
+	return nil
 }
 
 // defaultBundled returns bundled/index.json beside the running program when it exists.

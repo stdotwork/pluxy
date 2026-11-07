@@ -110,6 +110,9 @@ clients may also send it in `x-goog-api-key` or the `key` query parameter.
 would drop part of it: `"report"` (the default) sends it and logs what was dropped, `"reject"`
 refuses it with a 400 that names what could not be carried.
 
+A config written for today's core, with its key names, works too: see
+[config.yaml with today's key names](#configyaml-with-todays-key-names).
+
 ## Codex
 
 The Codex provider extension (`extensions/codex`) serves OpenAI's Codex models from an OpenAI API
@@ -552,3 +555,161 @@ Package changes go through the same reload transaction as a config change: core 
 config file, prepares everything with the package change applied, and switches in one step, so
 a config file that does not load also refuses the package change. One package change runs at a
 time.
+
+## config.yaml with today's key names
+
+Core also reads a `config.yaml` written for today's core (`core/`), so an existing config moves
+over without renaming keys. A config file whose name ends in `.yaml` or `.yml` is read with
+today's key names; any other file is read as the JSON config above. Both layouts today's core
+reads work: the v8 layout of `core/config.example.yaml` (`server.port`, `access.api-keys`,
+`api-keys.codex`, ...) and the older spellings (`port`, `api-keys` as a list,
+`codex-api-key`, ...). When a file has both spellings of one setting, the v8 one wins, as in
+today's core.
+
+```bash
+./pluxy -config config.yaml
+```
+
+The JSON config stays: the desktop app writes one, and it is the form core checks and runs on.
+A `config.yaml` is turned into that form when it is loaded, so both files go through the same
+checks and hot reload, and nothing behaves differently depending on which file a setting came
+from.
+
+Each time core loads a `config.yaml`, it logs one line naming the settings the file uses that
+this core does not support yet, and one line naming the settings it ignores for good (the
+"dropped" rows below). A setting that is off, zero, empty or at today's default asks for
+nothing and is not named, nor is any setting of a feature whose `enabled` switch is off.
+Neither line stops core from starting. Settings that did nothing in today's core either (marked
+"dead") are accepted without a word. A key today's core does not know is named as unknown.
+
+Settings only this core has keep their JSON names in a `config.yaml`: `packages`, `extensions`,
+`extension`, `extension_pages`, `drop_policy` and `credentials_dir`. Provider accounts set in
+the file go to the installed package of their provider (`pluxy/codex`, `pluxy/claude`,
+`pluxy/gemini`, `pluxy/xai`, `pluxy/openai-compatible`), so those packages must be installed:
+the bundled ones are, on the first start.
+
+### Provider key sections
+
+Each key in a provider section becomes one account of that provider's extension, with the key
+as its `api_key` credential. A key with no `api-key` (today's core serves an upstream that
+needs none) is not supported yet: it adds no account and is named in the log.
+
+| Section (v8; older spelling) | Extension | Account settings |
+| --- | --- | --- |
+| `api-keys.codex` (`codex-api-key`) | `pluxy/codex` | `base-url` is `base_url`; `websockets` is `websockets`; `disable-codex-cloaking: true` is `codex_identity: false` |
+| `api-keys.claude` (`claude-api-key`) | `pluxy/claude` | `base-url` is `base_url` |
+| `api-keys.gemini` (`gemini-api-key`) | `pluxy/gemini` | `base-url` is `base_url` |
+| `api-keys.vertex` (`vertex-api-key`) | `pluxy/gemini`, Vertex AI with the key as an express mode key | `base-url` is `base_url` |
+| `api-keys.xai` (`xai-api-key`) | `pluxy/xai` | `base-url` is `base_url` |
+| `api-keys.openai-compatibility` (`openai-compatibility`) | `pluxy/openai-compatible`, one account per entry in `keys` (`api-key-entries`) | `base-url` is `base_url`; a group with `disabled: true` adds no accounts |
+
+In every section, `priority` is the account's `priority` and a key's `weight` is its `weight`.
+A group's `models` list becomes the account's `models` (each entry's `name`, the model the
+upstream knows): the account serves only those models. An account's ID is the group's `name`
+for a group with one key, and `<name>-<n>` (`n` from 1) for each key of a group with more;
+entries without a name are `<section>-<n>`, counted across the section, such as
+`codex-api-key-1`. Characters an account ID cannot hold (anything but letters, digits, `.`, `_`
+and `-`) become `-`.
+
+### What each setting does here
+
+v8 name first, older spellings in brackets. **Supported** settings work as described.
+**Later** settings are not supported yet and are named in the log when set. **Dropped** settings are ignored and named in
+the log when set, for the reason given. **Dead** settings did nothing in today's core either and
+are accepted silently.
+
+| Setting | Here | Status |
+| --- | --- | --- |
+| `config-version` | Must be 8 when present, as in today's core. | Supported |
+| `server.host` (`host`), `server.port` (`port`) | `listen` is `host:port`. An empty host listens on every interface and a port of 0 or none is 8317, as in today's core. | Supported |
+| `access.api-keys` (`api-keys` as a list) | `client_keys`. | Supported |
+| `management.secret-key` (`remote-management.secret-key`) | `management_key`, exactly as written: turns on the management API and the panel. A key already hashed with bcrypt (today's core can write one) is not supported yet: the management API stays off and the log says why. | Supported; hashed keys later |
+| `management.allow-remote` (`remote-management.allow-remote`) | The management API answers anyone who can reach `listen` and sends the key. When the management API is on and this is not `true`, the log says so. | Later |
+| `management.disable-control-panel` | The panel is on exactly when the management API is. | Dropped: the management key already turns the panel on and off |
+| `management.disable-auto-update-panel`, `management.panel-github-repository`, `server.github-token` (`github-token`) | The panel is built into core; nothing is downloaded. | Dropped: no panel download |
+| `management.base-url` | | Dropped: no terminal UI |
+| `server.max-request-body-bytes` | Request bodies are capped at 24 MiB. | Dropped: core needs a fixed cap for its request frame |
+| `server.response-compression.*` | | Later |
+| `server.trusted-proxies` (`trusted-proxies`), `server.tls.*` (`tls`) | | Later |
+| `server.commercial-mode` (`commercial-mode`) | | Dropped: it turns off features this core does not have |
+| `server.discovery.*` (`discovery`) | | Later |
+| `server.discovery.advertise-management` | | Dead |
+| `routing.strategy` | `routing.strategy`: `round-robin`, `fill-first` (also `fillfirst`, `ff`), `weighted-round-robin` (also `weightedroundrobin`, `wrr`; this core's `weighted`); this core's `weighted` and `least-active` work too. A name today's core does not know is `round-robin`, as there, and the log says so. | Supported |
+| `routing.session-affinity`, `routing.session-affinity-ttl` | `routing.session_affinity` with `ttl_ms` from the duration (default `1h`). | Supported |
+| `routing.session-affinity-subagents`, `routing.session-affinity-rebind-on` | | Later |
+| `routing.force-model-prefix` (`force-model-prefix`) and every `prefix` | Pin a request to an account with the `X-Pluxy-Account` header. | Later |
+| `routing.retry.max-retry-credentials` (`max-retry-credentials`) | `routing.max_accounts`. | Supported |
+| `routing.retry.max-retry-interval` (`max-retry-interval`) | `routing.max_wait_ms`, in seconds as in today's core, default 30. Here it bounds the whole wait of one request; today's core bounds each wait between rounds. | Supported |
+| `routing.retry.request-retry` (`request-retry`) | `0` turns off waiting for another round (`max_wait_ms` 0). Above 0, rounds are bounded by `max-retry-interval`, not counted; the log says so. | Supported for 0; the round count later |
+| `routing.cooldown.disable-cooling` (`disable-cooling`), `routing.cooldown.transient-error-cooldown-seconds` (`transient-error-cooldown-seconds`), `routing.cooldown.quota-response-mode` (`quota-cooldown-response-mode`) | | Later |
+| `routing.cooldown.save-cooldown-status` (`save-cooldown-status`) | Blocks live in memory and carry over reloads. | Dropped: no need found |
+| `quota-exceeded.switch-project`, `quota-exceeded.switch-preview-model` | | Dead |
+| `requests.proxy-url` (`proxy-url`) and every `proxy-url` | | Later |
+| `requests.payload.*` (`payload`) | | Later |
+| `requests.tls-handshake-timeout-seconds`, `requests.passthrough-headers`, `requests.nonstream-keepalive-interval`, `requests.streaming.*` (each also at the top level) | A request is retried on another account until its reply starts. | Dropped: off by default and no need found |
+| `client.codex.enable-apply-patch`, `client.codex.optimize-multi-agent-v2` (`codex.optimize-multi-agent-v2`) | | Later |
+| `client.codex.web-search-result-cache.*`, `client.claude.show-codex-commentary` | | Dropped: off by default and no need found |
+| `upstream.codex.disable-codex-cloaking` (`codex.disable-codex-cloaking`) | `codex_identity: false` on the Codex subscription accounts `-import-auth` adds. It does not change accounts already imported. | Supported when importing |
+| `upstream.codex.websocket-compression` | Always on; `false` is named in the log. | Supported (fixed on) |
+| `upstream.codex.model-level-cooling`, `upstream.claude.model-level-cooling` | Blocks are always kept per model where the upstream says the limit is per model. | Supported (fixed on) |
+| `upstream.codex.upstream-request-compression`, `-min-bytes`, `upstream.codex.stream-bootstrap-buffering`, `stream-bootstrap-timeout` | | Later |
+| `upstream.codex.response-steering`, `upstream.codex.orphan-delegation-compatibility`, `oauth.providers.codex.header-defaults.*` (`codex-header-defaults`) | | Dropped: experimental or off by default, no need found |
+| `upstream.claude.header-defaults.*`, `disable-claude-cloak-mode`, `disable-cloaking-model-list`, `session-date-pin-days` (also `claude`, `claude-code`, `claude-header-defaults`), and the Claude keys' `cloak` and `fingerprint-profile` | This core never changes how a client presents itself. | Dropped: making other clients look like Claude Code is out of scope |
+| `upstream.claude.tool-search`, the Claude keys' `native-tool-search` and `rebuild-mid-system-message` | | Later |
+| `upstream.xai.inject-x-search` (`xai`) | | Later |
+| `experimental-cch-signing` (Claude keys) | | Dead |
+| `oauth.auth-dir` (`auth-dir`) | The folder `-import-auth` reads (see below). Core never reads or writes it while it runs; at each load it logs how many credential files there are not imported yet. | Supported |
+| `oauth.auth-auto-refresh-workers` (`auth-auto-refresh-workers`) | Each account is renewed shortly before it expires. | Dropped: no need for a pool size |
+| `oauth.model-alias` (`oauth-model-alias`), `oauth.excluded-models` (`oauth-excluded-models`), and every `models[].alias`, `excluded-models` | | Later |
+| `oauth.settings` (`oauth-settings`) | | Dropped: needs a model catalog, and no page uses it |
+| `oauth.request-scoped-errors` (`oauth-request-scoped-errors`) and every `request-scoped-errors` | | Later |
+| `oauth.providers.aistudio.ws-auth` (`ws-auth`) | | Later: the AI Studio relay is not built |
+| `oauth.providers.codex.live-media-relay.*` | | Dropped: realtime and WebRTC are out of scope |
+| `oauth.providers.codex.signin-with-chatgpt-identifier` | | Later |
+| `oauth.providers.antigravity.*` (`antigravity`, `antigravity-signature-*`, `quota-exceeded.antigravity-credits`), `oauth.providers.devin.*` (`devin`) | | Later |
+| `api-keys.meta` (`meta-api-key`), `api-keys.interactions` (`interactions-api-key`) | | Later |
+| Every `headers` and `connection-pool` | | Later |
+| Every `disable-cooling` and `request-retry` on a group or key | | Dropped: no need found for per-key tuning |
+| The keys' `models[]` catalog fields (`display-name`, `max-context-length`, `force-mapping`, `is-compat`, `thinking`, `image`, `input-modalities`, `output-modalities`, `use-max-completion-tokens`, `support-configuration-update`, `openapi`) | | Later |
+| Codex keys' `alpha-search`; Vertex keys' `interactions`, `openapi`, `openapi-location`; openai-compatibility's `support-prompt-cache-key`; xAI keys' `websockets` | | Later |
+| `multimedia.disable-image-generation` (`disable-image-generation`) | `true`, `"chat"` and `"passthrough"` are `image_generation_tool: false` on Codex accounts from the file and on those `-import-auth` adds. | Supported |
+| `multimedia.gpt-image-2-base-model`, `multimedia.video-result-auth-cache-ttl` (each also at the top level) | No image or video routes yet. | Later |
+| `observability.logs.*` (`debug`, `logging-to-file`, `logs-max-total-size-mb`, `error-logs-max-files`, `request-log`), `observability.usage.*` (`usage-statistics-enabled`, `redis-usage-queue-retention-seconds`) | | Later |
+| `observability.pprof.*` (`pprof`) | | Dropped: a developer tool, off by default |
+| `models.catalog`, `models.codex-catalog`, `models.devin-catalog` | | Later |
+| `plugins.*` | Extensions are separate programs (packages), not libraries loaded into core. | Dropped: replaced by packages |
+| `credentials.*` (`credential-concurrency`, `credential-in-flight`) | | Dropped: only the Home control plane used them |
+
+Environment variables today's core reads (`MANAGEMENT_PASSWORD`, `PGSTORE_*`, `GITSTORE_*`,
+`OBJECTSTORE_*`, ...) and its `.env` file are not read.
+
+### Importing today's auth folder
+
+```bash
+./pluxy -config config.yaml -import-auth ~/.cli-proxy-api
+```
+
+`-import-auth` copies the credential files in today's auth folder (the JSON files at its top
+level, as today's core reads them) into core's credential store (`credentials_dir`), prints what
+it imported and skipped, and exits. Run it while core is stopped, then start core. Each file
+becomes an account added by login, with the file's name (less `.json`) as its ID, so running it
+again skips the files already imported. A file whose account ID the config or the store already
+uses is skipped, as is a file larger than 1 MiB. The import never changes the auth folder, and
+it refuses a `credentials_dir` that is the auth folder or inside it.
+
+Both cores renewing the same login signs one of them out: the provider replaces the refresh
+token at each renewal, and the other core's copy stops working. Once an account is imported,
+use it from one core only, or sign in again in the other.
+
+| File `type` | Becomes | Notes |
+| --- | --- | --- |
+| `codex` | `pluxy/codex` subscription account | `access_token`, `refresh_token`, `expired` (the expiry); `id_token` and `account_id` stay with the credential; `websockets` is the account's `websockets`. |
+| `claude` | `pluxy/claude` subscription account | `access_token`, `refresh_token`, `expired`. |
+| `kimi`, `kimi-ai` | `pluxy/kimi` account | `access_token`, `refresh_token`, `expired`, `device_id`; `base_url` is an account setting, and so is the site, `domain`, decided as today's core decides it: from `domain`, else `base_url`'s host, else the type (`kimi.ai` for `kimi-ai`). |
+| `vertex` | `pluxy/gemini` Vertex AI account with a service account | `service_account` is the credential; `project_id` and `location` (default `us-central1`, as in today's core) are the account's `vertex` settings. |
+| `antigravity`, `meta`, `devin`, `xai` | Skipped, named in the output | No extension signs in to these yet. |
+| anything else | Skipped, named in the output | Today's core does not load a file with no `type` or with `gemini` either. |
+
+From every file: `disabled: true` imports the account disabled, `priority` and `weight` are the
+account's, and `label` (else `email`) is its label. A file's `prefix`, `proxy_url`, `headers`,
+`excluded_models` and `model_aliases` are not supported yet and are named in the output.

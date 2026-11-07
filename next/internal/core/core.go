@@ -29,6 +29,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -36,6 +37,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/cred"
 	"github.com/stdotwork/pluxy/next/internal/extconfig"
 	"github.com/stdotwork/pluxy/next/internal/host"
+	"github.com/stdotwork/pluxy/next/internal/legacy"
 	"github.com/stdotwork/pluxy/next/internal/packages"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/internal/server"
@@ -269,7 +271,34 @@ func (c *Core) transact(force bool, why string, change func(packages.State), str
 	}
 	c.publish(next, prev, hash)
 	log.Printf("config revision %d active (%s)", rev, why)
+	for _, n := range next.Config.Notices {
+		log.Print(n)
+	}
+	c.reportPendingImport(next.Config)
 	return nil
+}
+
+// reportPendingImport logs how many credential files of today's auth folder (a config.yaml's
+// oauth.auth-dir) are not imported yet. Core never imports them while it runs: see
+// legacy.Import.
+func (c *Core) reportPendingImport(cfg *server.Config) {
+	if cfg.AuthDir == "" {
+		return
+	}
+	known := map[string]bool{}
+	for _, r := range c.creds.Records() {
+		known[strings.ToLower(r.ID)] = true
+	}
+	for _, a := range cfg.Accounts() {
+		known[strings.ToLower(a.ID)] = true
+	}
+	n, err := legacy.Pending(cfg.AuthDir, func(id string) bool { return known[strings.ToLower(id)] })
+	switch {
+	case err != nil:
+		log.Printf("config.yaml: oauth.auth-dir: %v", err)
+	case n > 0:
+		log.Printf("config.yaml: oauth.auth-dir %s holds %d credential files not imported yet; to import them, stop core and run: pluxy -config %s -import-auth %s", cfg.AuthDir, n, c.opts.ConfigPath, cfg.AuthDir)
+	}
 }
 
 // extensionSpec is one extension a snapshot runs.
