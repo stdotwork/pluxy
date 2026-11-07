@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -122,3 +123,134 @@ func TestStreamErrorEvent(t *testing.T) {
 type recorder func(llm.Event)
 
 func (r recorder) Send(ev llm.Event) error { r(ev); return nil }
+
+// A failure event is classified by the status it names, whether an error event or
+// response.failed, and whether the status is a number or a string; once the reply began
+// (response.created starts it), it is not retry-safe.
+func TestStreamFailures(t *testing.T) {
+	created := "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"output\":[]}}\n\n"
+	text := "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"m\",\"role\":\"assistant\",\"content\":[]}}\n\n" +
+		"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"item_id\":\"m\",\"delta\":\"Hi\"}\n\n"
+	for _, c := range []struct {
+		name, body string
+		code       string
+		retryable  bool
+	}{
+		{"string status first", "event: error\ndata: {\"type\":\"error\",\"error\":{\"code\":\"401\",\"message\":\"Invalid API key\"}}\n\n", llm.CodeAuth, true},
+		{"response.failed first", "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"id\":\"r\",\"status\":\"failed\",\"error\":{\"code\":429,\"message\":\"Subscription quota exhausted\"}}}\n\n", llm.CodeQuota, true},
+		{"response.failed after created", created + "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"id\":\"r\",\"status\":\"failed\",\"error\":{\"code\":429,\"message\":\"Subscription quota exhausted\"}}}\n\n", llm.CodeQuota, false},
+		{"after output", created + text + "event: error\ndata: {\"type\":\"error\",\"error\":{\"code\":429,\"message\":\"Subscription quota exhausted\"}}\n\n", llm.CodeQuota, false},
+	} {
+		err := relayStream(context.Background(), strings.NewReader(c.body), recorder(func(llm.Event) {}), "muse-spark-1.3")
+		var e *llm.Error
+		if !errors.As(err, &e) || e.Code != c.code || e.Retryable != c.retryable {
+			t.Errorf("%s: err %+v, want code %s, retryable %v", c.name, err, c.code, c.retryable)
+		}
+	}
+}
+
+// A login or renewal error that echoes the device token or device code does not carry it out:
+// core does not know them yet, so it cannot redact them.
+func TestLoginErrorsHideTokens(t *testing.T) {
+	srv := metatest.New(t)
+	set, _ := readSettings(srv.Settings())
+	srv.Answer = func(w http.ResponseWriter, r *http.Request) bool {
+		if r.URL.Path != "/muse-code/key" {
+			return false
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, `{"error":{"type":"invalid_request","message":"cannot mint for `+strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")+`"}}`)
+		return true
+	}
+	_, err := mint(context.Background(), set, "dca:secret-device-token")
+	if err == nil || strings.Contains(err.Error(), "secret-device-token") {
+		t.Errorf("mint error %v holds the device token", err)
+	}
+	srv2 := metatest.New(t)
+	srv2.Answer = func(w http.ResponseWriter, r *http.Request) bool {
+		if r.URL.Path != "/oidc/device/token/" {
+			return false
+		}
+		_ = r.ParseForm()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, `{"error":"server_error","error_description":"bad device code `+r.PostForm.Get("device_code")+`"}`)
+		return true
+	}
+	set2, _ := readSettings(srv2.Settings())
+	var code string
+	_, err = deviceLogin(context.Background(), set2, promptFunc(func(p protocol.Prompt) { code = p.UserCode }))
+	if err == nil || code == "" || strings.Contains(err.Error(), "metatest-device-") || !strings.Contains(err.Error(), "server_error") {
+		t.Errorf("poll error %v: want server_error without the device code", err)
+	}
+}
+
+type promptFunc func(protocol.Prompt)
+
+func (f promptFunc) Prompt(p protocol.Prompt) error { f(p); return nil }
+
+// A poll that gets an answer with no OAuth error, such as a plain 503, is tried again: the device
+// code is still good.
+func TestPollSurvivesOutage(t *testing.T) {
+	srv := metatest.New(t)
+	failed := false
+	srv.Answer = func(w http.ResponseWriter, r *http.Request) bool {
+		if r.URL.Path != "/oidc/device/token/" || failed {
+			return false
+		}
+		failed = true
+		http.Error(w, "upstream connect error", http.StatusServiceUnavailable)
+		return true
+	}
+	set, _ := readSettings(srv.Settings())
+	g, err := deviceLogin(context.Background(), set, promptFunc(func(p protocol.Prompt) { srv.Approve(p.UserCode) }))
+	if err != nil || g.Credential.AccessToken == "" || !failed {
+		t.Fatalf("login after an outage: grant %+v, err %v (outage seen %v)", g, err, failed)
+	}
+}
+
+// A renewal keeps the API address the credential holds when Meta's key endpoint names none.
+func TestRefreshKeepsBaseURL(t *testing.T) {
+	srv := metatest.New(t)
+	dca, key := srv.Grant()
+	srv.Answer = func(w http.ResponseWriter, r *http.Request) bool {
+		if r.URL.Path != "/muse-code/key" {
+			return false
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"api_key":"minted-without-url"}`)
+		return true
+	}
+	set := json.RawMessage(`{"auth_base_url":"` + srv.URL + `","mint_url":"` + srv.URL + `/muse-code/key"}`)
+	data, _ := json.Marshal(credentialData{BaseURL: "https://regional.example/v1"})
+	c, err := refresh(context.Background(), sdk.RefreshCall{Account: protocol.Account{Settings: set,
+		Credential: &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: key, RefreshToken: dca, Data: data}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got credentialData
+	_ = json.Unmarshal(c.Data, &got)
+	if got.BaseURL != "https://regional.example/v1" {
+		t.Errorf("renewed base_url %q, want the one the credential held", got.BaseURL)
+	}
+}
+
+// A rate-limited renewal keeps the wait Meta names, so core does not renew again before it.
+func TestRenewalRetryAfter(t *testing.T) {
+	srv := metatest.New(t)
+	srv.Answer = func(w http.ResponseWriter, r *http.Request) bool {
+		if r.URL.Path != "/muse-code/key" {
+			return false
+		}
+		w.Header().Set("Retry-After", "900")
+		http.Error(w, `{"error":{"type":"rate_limited","message":"slow down"}}`, http.StatusTooManyRequests)
+		return true
+	}
+	set, _ := readSettings(srv.Settings())
+	_, err := mint(context.Background(), set, "dca:x")
+	var e *llm.Error
+	if !errors.As(err, &e) || e.Code != llm.CodeRateLimit || e.RetryAfterMS != 900000 {
+		t.Errorf("err %+v, want a rate limit with retry_after_ms 900000", err)
+	}
+}

@@ -86,12 +86,12 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 		ExpiresIn               int64  `json:"expires_in"`
 		Interval                int64  `json:"interval"`
 	}
-	status, body, err := postForm(ctx, set.AuthBaseURL+"/oidc/device/authorization/", url.Values{"client_id": {clientID}})
+	status, body, h, err := postForm(ctx, set.AuthBaseURL+"/oidc/device/authorization/", url.Values{"client_id": {clientID}})
 	if err != nil {
 		return nil, requestError(ctx, err)
 	}
 	if status < 200 || status > 299 {
-		return nil, loginFailure(status, body)
+		return nil, loginFailure(status, body, h)
 	}
 	if json.Unmarshal(body, &dc) != nil || dc.DeviceCode == "" || dc.UserCode == "" {
 		return nil, &llm.Error{Code: llm.CodeUpstream, Message: "Meta's login sent no device code", Scope: llm.ScopeEndpoint}
@@ -130,7 +130,7 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 			return nil, expired(ctx.Err())
 		case <-timer.C:
 		}
-		status, body, err := postForm(ctx, set.AuthBaseURL+"/oidc/device/token/", url.Values{
+		status, body, h, err := postForm(ctx, set.AuthBaseURL+"/oidc/device/token/", url.Values{
 			"grant_type": {deviceGrant}, "device_code": {dc.DeviceCode}, "client_id": {clientID},
 		})
 		if err != nil {
@@ -147,7 +147,11 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 			if json.Unmarshal(body, &tok) != nil || tok.AccessToken == "" {
 				return nil, &llm.Error{Code: llm.CodeUpstream, Message: "Meta's login sent no access token", Scope: llm.ScopeEndpoint}
 			}
-			return mint(ctx, set, tok.AccessToken)
+			g, err := mint(ctx, set, tok.AccessToken)
+			if err != nil {
+				return nil, hideSecrets(err, dc.DeviceCode)
+			}
+			return g, nil
 		}
 		var e struct {
 			Error string `json:"error"`
@@ -161,8 +165,12 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 			return nil, refused("the sign-in was denied")
 		case "expired_token":
 			return nil, refused("the code expired before it was approved; start the login again")
+		case "":
+			// An answer with no OAuth error (an outage page, a 5xx) leaves the device code good:
+			// poll again at the next interval, as today's core does.
 		default:
-			return nil, loginFailure(status, body)
+			// Core does not know the device code, so it cannot redact it.
+			return nil, hideSecrets(loginFailure(status, body, h), dc.DeviceCode)
 		}
 	}
 }
@@ -181,6 +189,14 @@ func refresh(ctx context.Context, call sdk.RefreshCall) (*protocol.Credential, e
 	if err != nil {
 		return nil, err
 	}
+	// A key minted without an API address keeps the one the credential holds, as today's core
+	// keeps it.
+	var old, minted credentialData
+	_ = json.Unmarshal(c.Data, &old)
+	_ = json.Unmarshal(g.Credential.Data, &minted)
+	if minted.BaseURL == "" && old.BaseURL != "" {
+		g.Credential.Data, _ = json.Marshal(old)
+	}
 	return g.Credential, nil
 }
 
@@ -195,12 +211,13 @@ func mint(ctx context.Context, set settings, dca string) (*protocol.Grant, error
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", loginUserAgent)
-	status, body, err := do(req)
+	status, body, h, err := do(req)
 	if err != nil {
 		return nil, requestError(ctx, err)
 	}
 	if status < 200 || status > 299 {
-		return nil, loginFailure(status, body)
+		// Core may not know the device token yet (during a login), so the error is cleaned here.
+		return nil, hideSecrets(loginFailure(status, body, h), dca)
 	}
 	var minted struct {
 		APIKey    string `json:"api_key"`
@@ -219,10 +236,10 @@ func mint(ctx context.Context, set settings, dca string) (*protocol.Grant, error
 	}, nil
 }
 
-func postForm(ctx context.Context, endpoint string, form url.Values) (int, []byte, error) {
+func postForm(ctx context.Context, endpoint string, form url.Values) (int, []byte, http.Header, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
@@ -230,17 +247,17 @@ func postForm(ctx context.Context, endpoint string, form url.Values) (int, []byt
 	return do(req)
 }
 
-func do(req *http.Request) (int, []byte, error) {
+func do(req *http.Request) (int, []byte, http.Header, error) {
 	resp, err := authClient.Do(req)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
-	return resp.StatusCode, body, nil
+	return resp.StatusCode, body, resp.Header, nil
 }
 
 func requestError(ctx context.Context, err error) error {
@@ -250,8 +267,9 @@ func requestError(ctx context.Context, err error) error {
 	return &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach Meta: " + err.Error(), Retryable: true, Scope: llm.ScopeEndpoint}
 }
 
-// loginFailure turns a refusal from Meta's login or key endpoint into an error.
-func loginFailure(status int, body []byte) *llm.Error {
+// loginFailure turns a refusal from Meta's login or key endpoint into an error, with the wait a
+// 429 or 5xx names in Retry-After.
+func loginFailure(status int, body []byte, h http.Header) *llm.Error {
 	var b struct {
 		Error       json.RawMessage `json:"error"`
 		Description string          `json:"error_description"`
@@ -277,11 +295,27 @@ func loginFailure(status int, body []byte) *llm.Error {
 	case code == "invalid_grant" || code == "invalid_client" || status == http.StatusUnauthorized || status == http.StatusForbidden:
 		return &llm.Error{Code: llm.CodeAuth, Message: msg + "; log in again", Status: status, ProviderCode: code, Scope: llm.ScopeCredential}
 	case status == http.StatusTooManyRequests:
-		return &llm.Error{Code: llm.CodeRateLimit, Message: msg, Status: status, ProviderCode: code, Retryable: true, Scope: llm.ScopeCredential}
+		return &llm.Error{Code: llm.CodeRateLimit, Message: msg, Status: status, ProviderCode: code, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: retryAfter(h.Get("Retry-After"), time.Now())}
 	case status >= 500:
-		return &llm.Error{Code: llm.CodeUnavailable, Message: msg, Status: status, Retryable: true, Scope: llm.ScopeEndpoint}
+		return &llm.Error{Code: llm.CodeUnavailable, Message: msg, Status: status, Retryable: true, Scope: llm.ScopeEndpoint, RetryAfterMS: retryAfter(h.Get("Retry-After"), time.Now())}
 	}
 	return &llm.Error{Code: llm.CodeUpstream, Message: msg, Status: status, ProviderCode: code, Scope: llm.ScopeEndpoint}
+}
+
+// hideSecrets returns err with each secret in its message replaced, for errors whose message
+// carries text from Meta that may echo a token core does not know yet.
+func hideSecrets(err error, secrets ...string) error {
+	var e *llm.Error
+	if !errors.As(err, &e) {
+		return err
+	}
+	c := *e
+	for _, s := range secrets {
+		if s != "" {
+			c.Message = strings.ReplaceAll(c.Message, s, "[redacted]")
+		}
+	}
+	return &c
 }
 
 func refused(msg string) *llm.Error {

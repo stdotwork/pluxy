@@ -224,6 +224,7 @@ func (r *reporting) Send(ev llm.Event) error {
 func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Event) error }, model string) error {
 	r := sse.NewReader(body)
 	dec := openairesponses.NewStreamDecoder()
+	sent := false
 	for {
 		e, err := r.Next()
 		eof := err == io.EOF
@@ -241,11 +242,24 @@ func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Ev
 			return &llm.Error{Code: llm.CodeUpstream, Message: "upstream stream broke: " + err.Error(), Scope: llm.ScopeEndpoint, Usage: dec.Usage()}
 		default:
 			var head struct {
-				Type string `json:"type"`
+				Type     string `json:"type"`
+				Response struct {
+					Error json.RawMessage `json:"error"`
+				} `json:"response"`
 			}
 			_ = json.Unmarshal([]byte(e.Data), &head)
-			if head.Type == "error" {
-				return streamError([]byte(e.Data), model, dec.Usage())
+			failure := []byte(nil)
+			switch {
+			case head.Type == "error":
+				failure = []byte(e.Data)
+			case head.Type == "response.failed" && len(head.Response.Error) > 0 && string(head.Response.Error) != "null":
+				failure, _ = json.Marshal(map[string]json.RawMessage{"error": head.Response.Error})
+			}
+			if failure != nil {
+				fe := streamError(failure, model, dec.Usage())
+				// Once the reply began, the model ran: trying again is not safe.
+				fe.Retryable = fe.Retryable && !sent
+				return fe
 			}
 			events, err = dec.Decode([]byte(e.Data))
 			if err != nil {
@@ -256,6 +270,7 @@ func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Ev
 			if err := out.Send(ev); err != nil {
 				return err
 			}
+			sent = true
 			if ev.Terminal() {
 				return nil
 			}
@@ -268,7 +283,7 @@ func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Ev
 
 // streamError turns an error event of the stream into a structured error, with the status the
 // event names (a 502 when it names none).
-func streamError(data []byte, model string, usage *llm.Usage) error {
+func streamError(data []byte, model string, usage *llm.Usage) *llm.Error {
 	var ev struct {
 		Error struct {
 			Code any `json:"code"`
@@ -276,8 +291,16 @@ func streamError(data []byte, model string, usage *llm.Usage) error {
 	}
 	_ = json.Unmarshal(data, &ev)
 	status := http.StatusBadGateway
-	if n, ok := ev.Error.Code.(float64); ok && n >= 400 && n <= 599 {
-		status = int(n)
+	switch c := ev.Error.Code.(type) {
+	case float64:
+		if c >= 400 && c <= 599 {
+			status = int(c)
+		}
+	case string:
+		// Meta also names the status as a string ("401").
+		if n, err := strconv.Atoi(strings.TrimSpace(c)); err == nil && n >= 400 && n <= 599 {
+			status = n
+		}
 	}
 	e := upstreamError(status, data, nil, model, time.Now())
 	e.Usage = usage

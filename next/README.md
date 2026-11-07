@@ -348,7 +348,8 @@ code and Meta's page to enter it on. The sign-in is the OAuth device authorizati
 at `auth.meta.com` with Muse Code's own public client, as today's core signs in, since Meta
 registers no other clients. The device token it yields (`dca:...`) is traded at Meta's key
 endpoint (`https://api.meta.ai/muse-code/key`) for an API key; the credential keeps the key as its
-access token and the device token as its refresh token. The key does not expire on a timer: when
+access token and the device token as its refresh token. A token poll that gets an answer with no
+OAuth error (an outage) is tried again while the code is good. The key does not expire on a timer: when
 Meta refuses it, core renews the credential once, which makes a new key from the device token. A
 Meta API key works too, by login with method `api_key` or in the config; a `dca:` token is refused
 as a key:
@@ -372,7 +373,10 @@ the client set it, `reasoning.encrypted_content` is asked for, a `web_search` to
 namespace, which Meta wants on a subscription key's tool requests. Requests name Muse Code
 (1.4.14) in their User-Agent and `X-Client-Id` and carry a new Muse session ID each. A 429 that
 says the subscription quota is used up is reported as a used-up quota until Meta's `resets_at`;
-a 404 holds the account back from the model until then, or for five minutes.
+a 404 holds the account back from the model until then, or for five minutes. A failure in the
+stream (an `error` event or `response.failed`) is classified by the status it names, a number or a
+string, and is not retry-safe once the reply began. A renewal keeps the API address the credential
+holds when Meta's key endpoint names none, and a rate-limited renewal keeps Meta's `Retry-After`.
 
 Not built, from today's core: the Codex translator's defaults it adds to every request (empty
 instructions, a list input, a medium effort, `tool_choice`, `parallel_tool_calls`, `strict`
