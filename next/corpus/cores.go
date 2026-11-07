@@ -730,6 +730,46 @@ var Providers = map[string]Provider{
 	},
 	// An xAI API key: the xAI provider extension in the new core, an xai group in today's core.
 	// Both send Responses requests to {base_url}/responses with the key as a bearer token.
+	// A Grok login: the xAI extension with an OAuth credential, an xai auth file with auth_kind
+	// oauth in today's core. Both point base_url at the fake upstream, so neither sends to the
+	// Grok CLI's endpoint; today's core then sends the standard headers, the extension the CLI's.
+	"xai-cli": {
+		OldCore: func(string, []string, []string) map[string]any { return map[string]any{} },
+		OldCoreAuthFiles: func(_, upstreamURL string, models, keys []string) map[string]any {
+			files := map[string]any{}
+			for i, k := range keys {
+				files[fmt.Sprintf("xai-corpus-%d.json", i+1)] = map[string]any{
+					"type":          "xai",
+					"auth_kind":     "oauth",
+					"access_token":  k,
+					"refresh_token": "refresh-" + k,
+					"expired":       "2100-01-01T00:00:00Z",
+					"email":         fmt.Sprintf("corpus-%d@example.com", i+1),
+					"base_url":      upstreamURL + "/v1",
+				}
+			}
+			return files
+		},
+		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
+			var accounts []any
+			for i, k := range keys {
+				id := "corpus"
+				if i > 0 {
+					id = fmt.Sprintf("corpus-%d", i+1)
+				}
+				acct := map[string]any{
+					"id":         id,
+					"settings":   map[string]any{"base_url": upstreamURL + "/v1"},
+					"credential": map[string]any{"kind": "oauth", "access_token": k, "refresh_token": "refresh-" + k},
+				}
+				if len(models) > 0 {
+					acct["models"] = models
+				}
+				accounts = append(accounts, acct)
+			}
+			return "xai", accounts
+		},
+	},
 	"xai": {
 		OldCore: func(upstreamURL string, models, keys []string) map[string]any {
 			var ms []any
