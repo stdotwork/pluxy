@@ -28,6 +28,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `extensions/xai` | Provider extension for xAI's Grok models with an API key; `xaitest` is a fake xAI for its tests. |
 | `extensions/meta` | Provider extension for Meta's Muse models: a Muse Code subscription signed in with a device code, or a Meta API key; `metatest` is a fake Meta for its tests. |
 | `extensions/antigravity` | Provider extension for Google Antigravity: Gemini and Claude models through a Google account signed in to Antigravity; `agtest` is a fake Google login and Cloud Code for its tests. |
+| `extensions/devin` | Provider extension for Devin: the models a Devin account gets, signed in as Devin's CLI signs in or with a session token, over Devin's protobuf API; `devintest` is a fake Devin for its tests. |
 | `examples/scripted` | The tutorial's example extension. |
 | `examples/oauth` | An example provider that signs in by device code, browser (PKCE) or API key and renews its tokens, with a fake OAuth provider for tests (`oauthtest`). |
 | `internal/host`, `internal/server` | Core's extension host and HTTP API (client formats and the management API). |
@@ -452,6 +453,93 @@ reasoning (thought signatures travel in band, as for Gemini), the per-account mo
 pool settings (`antigravity.connection-pool.*`), the app version lookup at every start, token
 counting (core has no count-tokens route), and the placeholder property today's core adds to a
 Claude function's objects that require nothing.
+
+## Devin
+
+The Devin extension (`extensions/devin`) serves the models a Devin account gets (SWE-2, Claude,
+GPT, Gemini and others), through Devin's API server, as Devin's CLI talks to it. Point
+`extension.manifest` at `extensions/devin/pluxy-extension.json`. Accounts are added by login
+through the management API (below):
+
+- `browser`: Devin's sign-in, as its CLI and today's core sign in. The prompt carries the link to
+  `app.devin.ai`; the browser comes back to a loopback address the extension serves on this
+  machine while the login runs, or the user pastes the code Devin's page shows (or the address
+  the browser ended on) as the prompt's `code` input. The code and a PKCE verifier are traded at
+  `api.devin.ai` for a session token. Devin's login has no client ID or secret.
+- `token`: a session token (`devin-session-token$...`) the user already has, entered as the
+  `session_token` input and checked against Devin's profile endpoint.
+
+Either way the credential is the session token, kept as an API key: it does not expire and has no
+renewal, so when Devin refuses it, the user signs in again. The account is labelled with its Devin
+user name. An account written in the config holds the token the same way:
+
+```json
+{"id": "devin", "credential": {"kind": "api_key", "api_key": "devin-session-token$..."}}
+```
+
+| Setting | Meaning |
+| --- | --- |
+| `base_url` | Devin's API server (default `https://server.codeium.com`, as today's core uses). |
+| `device_seed` | Makes the device fingerprint every request carries the same each time, as today's core's `device_seed`; without it the fingerprint is random per request. |
+| `app_base_url`, `api_base_url` | Move Devin's sign-in page and login API to a test server. |
+| `callback_listen` | `false` keeps the login from listening for the browser; the user pastes the code. |
+
+Every client format is sent as Devin's chat request, a protobuf message over Connect, to
+`{base_url}/exa.api_server_pb.ApiServerService/GetChatMessage`, built as today's core builds it:
+the CLI's client metadata with the token and a device fingerprint, the system prompt, the turns
+(user, assistant with its reasoning, signature and tool calls, and tool results; a result for no
+call goes as the user's text; images as base64 data, named in the user's text as Devin's CLI names
+pasted images), the completion settings (the output limit, at most 64000; the temperature, 1 by
+default), the function tools with their JSON Schema, a new session, and the model ID. The headers
+are the CLI's: the token twice as Basic credentials, Connect's version, a Sentry trace, no
+User-Agent and no compression. What Devin has no place for is reported as dropped (and refused
+under `drop_policy` `reject`): a client's fields kept beside the model (such as a Chat message's
+`name` or `seed`), parallel tool calls turned off, strict tool arguments, and parts other than
+text and base64 images. A tool result given as content blocks keeps its text. A user turn left
+with nothing once media Devin cannot take is dropped is refused, as today's core refuses it.
+
+The reply's frames become the reply's events as they arrive: reasoning, text, tool calls and
+usage. Reasoning stays open until the reply ends or new reasoning follows other output, so
+Devin's signature, which may come after the answer began, reaches it as the reasoning's opaque
+data; a signature with no reasoning text gets a reasoning item of its own. Each tool call is
+found by its ID, so a call can continue after another one started, and starts once its name is
+known. Arguments Devin could not make JSON (its `invalid_json_str`) are passed on as text. A
+character split across frames is passed on whole.
+
+Devin names a model and its reasoning effort as one model ID (`claude-opus-5-5-medium`). A client
+names the model as today's core lists it, `devin/claude-opus-5-5` (or without the `devin/`
+prefix), and the extension adds the request's reasoning effort, or the model's default, moved to
+the nearest effort the model has, as today's core does; a name that already ends in an effort
+(`claude-opus-5-5-high`) is sent as it is. The efforts of each model come from today's core's
+Devin catalog (`models.go`); a model not in it is sent as named, with the request's effort when it
+has one. A few models name their efforts as variants, as in today's core: SWE-1.7 is sent bare
+unless `medium` is asked for, SWE-1.6 bare unless `fast` is, GLM-5.2 bare but for `none` and `max`
+(`glm-5-2-max-1m` for the long-context model), and the Claude 4.6 models as `-thinking` with any
+effort but `none`.
+
+An error in Devin's end frame is classified by its Connect code, as today's core maps it. A 429
+(or `resource_exhausted`, a demand refusal or a credit limit) holds back only that model on the
+account, unless Devin says the account's daily or weekly quota is exhausted, which holds back the
+account. A monthly or unnamed quota holds back only the model. Devin's `canceled` is a cancelled
+request (499), as in today's core. An error after Devin sent any frame (output, usage or a
+signature) is not retry-safe, and a reply that ends without its end frame is an error.
+
+Not built, from today's core: removing Claude Code's and Codex's attribution lines from the system
+prompt and `devin.sensitive-words`; rewriting tool descriptions; encoding tool call IDs (they pass
+through as given); a session's turn count (each request is a new session, as today's core sends
+for a client that names none); the account's plan and quota status (`GetUserStatus`) and a used-up
+quota's reset time; the remote model catalog refresh; Devin's names for older models
+(`claude-haiku-4-5`, `gpt-4-1`, Sonnet 4.5, Claude 4.5 Opus) and the `-fast` variants built from a
+`<effort>-fast` request; the usage fallback from response dimensions; images in tool results;
+signature types other than `sealed`; namespace tools and custom (freeform) tools such as
+`apply_patch`, which are reported as dropped, and today's core's checks and recovery of a malformed
+`apply_patch` call; and token counting (core has no count-tokens route). A replayed reasoning
+signature is sent as given, whoever issued it.
+
+Gaps outside the extension: a Messages or Gemini client gets Devin's reasoning without its
+signature, because those renderers pass on only Responses and Gemini signatures, so such a client
+cannot replay it. A Gemini client's `thoughtSignature` on a function call is reported as dropped;
+today's core sends it to Devin as a sealed signature.
 
 ## Accounts and routing
 

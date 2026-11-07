@@ -59,6 +59,9 @@ type Provider struct {
 	// a model list it fetches when it loads an account), so they are not recorded and use up no
 	// scripted reply.
 	Aside func(r *http.Request) (Reply, bool)
+	// Proto, when set, decodes the provider's protobuf requests over Connect into JSON for
+	// comparison (see connect.go).
+	Proto *ProtoSchema
 }
 
 // Providers maps a provider directory name to its setup. Later slices add theirs here.
@@ -635,6 +638,57 @@ var Providers = map[string]Provider{
 			return "meta", accounts
 		},
 	},
+	// A Devin login: the Devin extension with a session token, a devin auth file in today's
+	// core; both send Devin's protobuf chat request over Connect to
+	// {base_url}/exa.api_server_pb.ApiServerService/GetChatMessage.
+	"devin": {
+		OldCore: func(string, []string, []string) map[string]any { return map[string]any{} },
+		OldCoreAuthFiles: func(_, upstreamURL string, models, keys []string) map[string]any {
+			files := map[string]any{}
+			for i, k := range keys {
+				files[fmt.Sprintf("devin-corpus-%d.json", i+1)] = map[string]any{
+					"type":          "devin",
+					"auth_kind":     "oauth",
+					"api_key":       k,
+					"session_token": k,
+					"user_name":     fmt.Sprintf("corpus-%d", i+1),
+					"base_url":      upstreamURL,
+				}
+			}
+			return files
+		},
+		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
+			var accounts []any
+			for i, k := range keys {
+				id := "corpus"
+				if i > 0 {
+					id = fmt.Sprintf("corpus-%d", i+1)
+				}
+				acct := map[string]any{
+					"id":         id,
+					"settings":   map[string]any{"base_url": upstreamURL},
+					"credential": map[string]any{"kind": "api_key", "api_key": k},
+				}
+				if len(models) > 0 {
+					acct["models"] = models
+				}
+				accounts = append(accounts, acct)
+			}
+			return "devin", accounts
+		},
+		// Today's core asks for the account's plan and quota on its own (GetUserStatus).
+		Aside: func(r *http.Request) (Reply, bool) {
+			if strings.HasSuffix(r.URL.Path, "/GetUserStatus") {
+				empty := ""
+				return Reply{Headers: map[string]string{"Content-Type": "application/proto"}, BodyText: &empty}, true
+			}
+			return Reply{}, false
+		},
+		Proto: &ProtoSchema{
+			Messages: []string{"1", "3", "3.6", "3.10", "8", "10", "15"},
+			Repeated: []string{"3", "3.6", "3.10", "10"},
+		},
+	},
 	// A Meta API key: the Meta extension with an api_key credential, a meta group in today's
 	// core's api-keys, both sending Responses requests to {base_url}/responses.
 	"meta-api-key": {
@@ -737,6 +791,7 @@ func oldCoreGeminiAPIKey(upstreamURL string, models, keys []string) map[string]a
 var NewCoreExtensions = map[string]string{
 	"openai-compatible": "./extensions/openai-compatible",
 	"codex":             "./extensions/codex",
+	"devin":             "./extensions/devin",
 	"claude":            "./extensions/claude",
 	"gemini":            "./extensions/gemini",
 	"kimi":              "./extensions/kimi",

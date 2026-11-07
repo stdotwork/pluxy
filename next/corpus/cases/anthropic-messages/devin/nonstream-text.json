@@ -1,0 +1,149 @@
+{
+  "description": "Devin: a anthropic-messages text request becomes Devin's protobuf chat request over Connect (client metadata, one user turn, completion settings, session, model ID swe-2-high for devin/swe-2), and the reply's text frames and usage come back in the client's format.",
+  "source": [
+    "core/internal/runtime/executor/devin_executor.go",
+    "core/internal/runtime/executor/helps/devin_wire.go",
+    "core/internal/translator/interactions/claude"
+  ],
+  "client": {
+    "path": "/v1/messages",
+    "body": {
+      "model": "devin/swe-2",
+      "max_tokens": 512,
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Say hello"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "connect": [
+        {
+          "message": {
+            "3": "Hello"
+          }
+        },
+        {
+          "message": {
+            "3": " there."
+          }
+        },
+        {
+          "message": {
+            "7": {
+              "2": 21,
+              "3": 5,
+              "5": 4
+            },
+            "5": 4
+          }
+        },
+        {
+          "end": {}
+        }
+      ]
+    }
+  ],
+  "volatile": [
+    "client.body.id",
+    "client.events[*].data.message.id",
+    "upstream[*].body.1.31",
+    "upstream[*].body.15.1",
+    "upstream[*].body.16",
+    "upstream[*].body.3[*].1",
+    "upstream[*].headers.Sentry-Trace"
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "content": [
+          {
+            "text": "Hello there.",
+            "type": "text"
+          }
+        ],
+        "id": "interaction_f3685bf1-fad",
+        "model": "devin/swe-2",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "type": "message",
+        "usage": {
+          "cache_read_input_tokens": 4,
+          "input_tokens": 21,
+          "output_tokens": 5
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "1": {
+            "1": "chisel",
+            "12": "chisel",
+            "2": "3000.10.21",
+            "3": "sk-corpus-upstream",
+            "31": "(volatile)",
+            "4": "en",
+            "5": "linux",
+            "7": "3000.10.21"
+          },
+          "15": {
+            "1": "(volatile)",
+            "3": 4,
+            "4": 14
+          },
+          "16": "(volatile)",
+          "20": 1,
+          "21": "swe-2-high",
+          "3": [
+            {
+              "1": "(volatile)",
+              "2": 1,
+              "3": "Say hello"
+            }
+          ],
+          "7": 5,
+          "8": {
+            "1": 1,
+            "2": 512,
+            "3": 400,
+            "5": {
+              "double": 1
+            },
+            "7": 40,
+            "8": {
+              "double": 0.949999988079071
+            }
+          }
+        },
+        "headers": {
+          "Accept": "*/*",
+          "Authorization": "Basic sk-corpus-upstream-sk-corpus-upstream",
+          "Connect-Protocol-Version": "1",
+          "Content-Type": "application/connect+proto",
+          "Sentry-Trace": "(volatile)"
+        },
+        "method": "POST",
+        "path": "/exa.api_server_pb.ApiServerService/GetChatMessage"
+      }
+    ]
+  }
+}

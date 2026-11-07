@@ -86,10 +86,12 @@ type ClientStep struct {
 type Reply struct {
 	Status  int               `json:"status,omitempty"` // default 200
 	Headers map[string]string `json:"headers,omitempty"`
-	// One of Body (a JSON value), BodyText (literal bytes) or SSE (a stream).
+	// One of Body (a JSON value), BodyText (literal bytes), SSE (a stream) or Connect (a
+	// Connect stream of protobuf messages, see connect.go).
 	Body     json.RawMessage `json:"body,omitempty"`
 	BodyText *string         `json:"body_text,omitempty"`
 	SSE      []SSEEvent      `json:"sse,omitempty"`
+	Connect  []ConnectFrame  `json:"connect,omitempty"`
 	// Abort drops the connection after the scripted body instead of ending the reply cleanly.
 	Abort bool `json:"abort,omitempty"`
 	// Hold keeps the reply open after the scripted body until the core ends the request, as an
@@ -246,7 +248,7 @@ func (c *Case) validate() error {
 				return fmt.Errorf("upstream[%d].websocket[%d]: set exactly one of receive, send, close or drop", i, j)
 			}
 		}
-		if len(r.WebSocket) > 0 && (r.Status != 0 || len(r.Body) > 0 || r.BodyText != nil || len(r.SSE) > 0 || r.Abort || r.Hold) {
+		if len(r.WebSocket) > 0 && (r.Status != 0 || len(r.Body) > 0 || r.BodyText != nil || len(r.SSE) > 0 || len(r.Connect) > 0 || r.Abort || r.Hold) {
 			return fmt.Errorf("upstream[%d]: a websocket reply has no status, body or sse", i)
 		}
 		n := 0
@@ -259,8 +261,14 @@ func (c *Case) validate() error {
 		if len(r.SSE) > 0 {
 			n++
 		}
+		if len(r.Connect) > 0 {
+			n++
+			if _, err := encodeConnect(r.Connect); err != nil {
+				return fmt.Errorf("upstream[%d]: %w", i, err)
+			}
+		}
 		if n > 1 {
-			return fmt.Errorf("upstream[%d]: set one of body, body_text or sse", i)
+			return fmt.Errorf("upstream[%d]: set one of body, body_text, sse or connect", i)
 		}
 	}
 	for i, e := range c.Exceptions {

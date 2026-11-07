@@ -1,0 +1,332 @@
+{
+  "description": "Devin: a Chat reasoning_effort picks the model ID's effort (claude-opus-5-5 at high is claude-opus-5-5-high); the reply's reasoning frames and signature come before its text.",
+  "source": [
+    "core/internal/runtime/executor/devin_executor.go",
+    "core/internal/runtime/executor/helps/devin_wire.go",
+    "core/internal/translator/openai/interactions/chat-completions"
+  ],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {
+      "model": "devin/claude-opus-5-5",
+      "stream": true,
+      "reasoning_effort": "low",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Say hello"
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "connect": [
+        {
+          "message": {
+            "9": "Let me think."
+          }
+        },
+        {
+          "message": {
+            "9": " Done."
+          }
+        },
+        {
+          "message": {
+            "10": {
+              "bytes": "Y29ycHVzLXNpZ25hdHVyZQ=="
+            }
+          }
+        },
+        {
+          "message": {
+            "3": "42"
+          }
+        },
+        {
+          "message": {
+            "7": {
+              "2": 30,
+              "3": 9
+            },
+            "5": 4
+          }
+        },
+        {
+          "end": {}
+        }
+      ]
+    }
+  ],
+  "volatile": [
+    "client.body.created",
+    "client.body.id",
+    "client.events[*].data.created",
+    "client.events[*].data.id",
+    "upstream[*].body.1.31",
+    "upstream[*].body.15.1",
+    "upstream[*].body.16",
+    "upstream[*].body.3[*].1",
+    "upstream[*].headers.Sentry-Trace"
+  ],
+  "exceptions": [
+    {
+      "path": "client.events",
+      "kind": "intended",
+      "reason": "The new core writes a Chat stream as OpenAI's API does: content \"\" with the role in the first chunk, and usage only when the client asks for it with stream_options.include_usage (today's core leaves content out of the first chunk and always adds usage).",
+      "want": [
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "content": "",
+                  "role": "assistant"
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "(volatile)",
+            "model": "devin/claude-opus-5-5",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "reasoning_content": "Let me think."
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "(volatile)",
+            "model": "devin/claude-opus-5-5",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "reasoning_content": " Done."
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "(volatile)",
+            "model": "devin/claude-opus-5-5",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "content": "42"
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "(volatile)",
+            "model": "devin/claude-opus-5-5",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {},
+                "finish_reason": "stop",
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "(volatile)",
+            "model": "devin/claude-opus-5-5",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": "[DONE]"
+        }
+      ]
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "role": "assistant"
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "interaction_1683def0-e8e",
+            "model": "devin/claude-opus-5-5",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "reasoning_content": "Let me think."
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "interaction_1683def0-e8e",
+            "model": "devin/claude-opus-5-5",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "reasoning_content": " Done."
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "interaction_1683def0-e8e",
+            "model": "devin/claude-opus-5-5",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "content": "42"
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "interaction_1683def0-e8e",
+            "model": "devin/claude-opus-5-5",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {},
+                "finish_reason": "stop",
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "interaction_1683def0-e8e",
+            "model": "devin/claude-opus-5-5",
+            "object": "chat.completion.chunk",
+            "usage": {
+              "completion_tokens": 9,
+              "prompt_tokens": 30,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              },
+              "total_tokens": 39
+            }
+          }
+        },
+        {
+          "data": "[DONE]"
+        }
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "1": {
+            "1": "chisel",
+            "12": "chisel",
+            "2": "3000.10.21",
+            "3": "sk-corpus-upstream",
+            "31": "(volatile)",
+            "4": "en",
+            "5": "linux",
+            "7": "3000.10.21"
+          },
+          "15": {
+            "1": "(volatile)",
+            "3": 4,
+            "4": 14
+          },
+          "16": "(volatile)",
+          "20": 1,
+          "21": "claude-opus-5-5-low",
+          "3": [
+            {
+              "1": "(volatile)",
+              "2": 1,
+              "3": "Say hello"
+            }
+          ],
+          "7": 5,
+          "8": {
+            "1": 1,
+            "2": 64000,
+            "3": 400,
+            "5": {
+              "double": 1
+            },
+            "7": 40,
+            "8": {
+              "double": 0.949999988079071
+            }
+          }
+        },
+        "headers": {
+          "Accept": "*/*",
+          "Authorization": "Basic sk-corpus-upstream-sk-corpus-upstream",
+          "Connect-Protocol-Version": "1",
+          "Content-Type": "application/connect+proto",
+          "Sentry-Trace": "(volatile)"
+        },
+        "method": "POST",
+        "path": "/exa.api_server_pb.ApiServerService/GetChatMessage"
+      }
+    ]
+  }
+}

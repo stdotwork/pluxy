@@ -78,12 +78,18 @@ func Run(ctx context.Context, c *Case, base string, up *FakeUpstream) (Observati
 	}
 
 	upstream := []any{}
+	schema := Providers[c.Provider].Proto
 	for _, r := range up.Requests() {
 		o := map[string]any{
 			"method":  r.Method,
 			"path":    r.Path,
 			"headers": headerMap(r.Header),
 			"body":    bodyValue(r.Body),
+		}
+		if proto, enveloped := isConnectProto(r.Header.Get("Content-Type")); proto && schema != nil {
+			if v, ok := decodeConnectRequest(r.Body, enveloped, schema); ok {
+				o["body"] = v
+			}
 		}
 		if r.ws != nil {
 			delete(o, "body")

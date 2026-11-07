@@ -1,0 +1,13 @@
+{
+  "manifest_version": 0,
+  "id": "pluxy/devin",
+  "version": "0.1.0",
+  "protocol": [0],
+  "programs": {
+    "linux/amd64": "devin",
+    "linux/arm64": "devin",
+    "darwin/amd64": "devin",
+    "darwin/arm64": "devin",
+    "windows/amd64": "devin.exe"
+  }
+}
