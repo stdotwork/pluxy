@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -135,18 +136,9 @@ func browserLogin(ctx context.Context, set settings, secret string, s *sdk.Login
 	if err := s.Prompt(prompt); err != nil {
 		return nil, err
 	}
-	inputs := make(chan map[string]string, 1)
-	inputErr := make(chan error, 1)
-	go func() {
-		for {
-			in, err := s.Input(ctx)
-			if err != nil {
-				inputErr <- err
-				return
-			}
-			inputs <- in
-		}
-	}()
+	fwdCtx, stopInputs := context.WithCancel(ctx)
+	defer stopInputs()
+	inputs, inputErr := forwardInputs(fwdCtx, s.Input)
 	var code string
 	for code == "" {
 		var params url.Values
@@ -159,7 +151,12 @@ func browserLogin(ctx context.Context, set settings, secret string, s *sdk.Login
 			}
 			return nil, err
 		case params = <-results:
-		case in := <-inputs:
+		case in, ok := <-inputs:
+			if !ok {
+				// The forwarder stopped; its error, or ctx being done, ends the login.
+				inputs = nil
+				continue
+			}
 			if u, err := url.Parse(strings.TrimSpace(in["redirect_url"])); err == nil {
 				params = u.Query()
 			}
@@ -186,17 +183,47 @@ func browserLogin(ctx context.Context, set settings, secret string, s *sdk.Login
 		"code_verifier": {verifier},
 	})
 	if err != nil {
-		return nil, err
+		return nil, hideSecrets(err, secret)
 	}
-	email, err := fetchEmail(ctx, ep.userinfo, tr.AccessToken, set.UserAgent)
+	return finishLogin(ctx, set, secret, tr)
+}
+
+// finishLogin reads the signed-in account's e-mail address and project with the new tokens.
+// Core does not know the new tokens yet and cannot redact them, so errors are cleaned here.
+func finishLogin(ctx context.Context, set settings, secret string, tr *tokenResponse) (*protocol.Grant, error) {
+	email, err := fetchEmail(ctx, set.endpoints().userinfo, tr.AccessToken, set.UserAgent)
 	if err != nil {
-		return nil, err
+		return nil, hideSecrets(err, tr.AccessToken, tr.RefreshToken, secret)
 	}
 	project, err := findProject(ctx, set, tr.AccessToken)
 	if err != nil {
-		return nil, err
+		return nil, hideSecrets(err, tr.AccessToken, tr.RefreshToken, secret)
 	}
 	return &protocol.Grant{Credential: tr.credential(credentialData{ProjectID: project, ClientSecret: secret}, ""), Label: email}, nil
+}
+
+// forwardInputs reads the login's inputs on its own goroutine, so the login can wait for an
+// input and the browser's return at once. It stops, closing inputs, when ctx is done or reading
+// fails; a failure is sent on the error channel first.
+func forwardInputs(ctx context.Context, input func(context.Context) (map[string]string, error)) (<-chan map[string]string, <-chan error) {
+	inputs := make(chan map[string]string, 1)
+	inputErr := make(chan error, 1)
+	go func() {
+		defer close(inputs)
+		for {
+			in, err := input(ctx)
+			if err != nil {
+				inputErr <- err
+				return
+			}
+			select {
+			case inputs <- in:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return inputs, inputErr
 }
 
 // signInResult reads a browser sign-in result, the query of the address the browser was sent back
@@ -274,11 +301,12 @@ func refresh(ctx context.Context, call sdk.RefreshCall) (*protocol.Credential, e
 		"refresh_token": {c.RefreshToken},
 	})
 	if err != nil {
-		return nil, err
+		return nil, hideSecrets(err, data.ClientSecret)
 	}
 	if data.ProjectID == "" {
 		if data.ProjectID, err = findProject(ctx, set, tr.AccessToken); err != nil {
-			return nil, err
+			// Core does not know the new tokens yet and cannot redact them.
+			return nil, hideSecrets(err, tr.AccessToken, tr.RefreshToken, data.ClientSecret)
 		}
 	}
 	return tr.credential(data, c.RefreshToken), nil
@@ -534,6 +562,22 @@ func loginFailure(status int, body []byte) *llm.Error {
 		return &llm.Error{Code: llm.CodeUnavailable, Message: msg, Status: status, Retryable: true, Scope: llm.ScopeEndpoint}
 	}
 	return &llm.Error{Code: llm.CodeUpstream, Message: msg, Status: status, ProviderCode: code, Scope: llm.ScopeEndpoint}
+}
+
+// hideSecrets returns err with each secret in its message replaced, for errors whose message
+// carries text from Google that may echo a token or the client secret.
+func hideSecrets(err error, secrets ...string) error {
+	var e *llm.Error
+	if !errors.As(err, &e) {
+		return err
+	}
+	c := *e
+	for _, s := range secrets {
+		if s != "" {
+			c.Message = strings.ReplaceAll(c.Message, s, "[redacted]")
+		}
+	}
+	return &c
 }
 
 func refused(msg string) *llm.Error {

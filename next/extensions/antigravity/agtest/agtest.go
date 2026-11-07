@@ -49,6 +49,8 @@ type Server struct {
 	// onboarding takes OnboardPolls polls before it is done.
 	NoProject    bool
 	OnboardPolls int
+	// Answer, if set, sees every request first; it answers one by returning true.
+	Answer func(w http.ResponseWriter, r *http.Request) bool
 
 	mu       sync.Mutex
 	n        int
@@ -106,6 +108,9 @@ func (s *Server) Requests() []Request {
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
+	if s.Answer != nil && s.Answer(w, r) {
+		return
+	}
 	switch {
 	case r.URL.Path == "/o/oauth2/v2/auth" && r.Method == http.MethodGet:
 		s.authorize(w, r)

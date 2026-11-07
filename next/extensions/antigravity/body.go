@@ -56,12 +56,16 @@ func buildBody(req llm.Request) (map[string]json.RawMessage, *llm.Translation, e
 	delete(inner, "model")
 	delete(inner, "safetySettings")
 	if gen, ok := object(inner["generationConfig"]); ok {
+		changed := cleanResponseSchema(gen)
 		if _, has := gen["maxOutputTokens"]; has && !claude {
 			// Today's core never sends a Gemini model an output limit on Cloud Code; the model's
 			// own limit applies.
 			delete(gen, "maxOutputTokens")
-			inner["generationConfig"], _ = json.Marshal(gen)
+			changed = true
 			losses = append(losses, llm.Loss{Kind: llm.LossApproximated, Path: "max_output_tokens", Detail: "Cloud Code's Gemini models write up to their own limit"})
+		}
+		if changed {
+			inner["generationConfig"], _ = json.Marshal(gen)
 		}
 	}
 	if claude {
@@ -70,6 +74,7 @@ func buildBody(req llm.Request) (map[string]json.RawMessage, *llm.Translation, e
 		setFunctionCallingMode(inner, "VALIDATED")
 	} else {
 		functionResponsesAsModel(inner)
+		userBoundaries(inner)
 	}
 	if si, ok := object(inner["systemInstruction"]); ok && !tr.Passthrough && tr.From != llm.FormatOpenAIResponses {
 		if _, has := si["role"]; !has {
@@ -80,7 +85,10 @@ func buildBody(req llm.Request) (map[string]json.RawMessage, *llm.Translation, e
 		}
 	}
 	if raw, ok := inner["tools"]; ok {
-		inner["tools"] = cleanTools(raw)
+		// Today's core keeps titles where it marks schemas for Claude and Gemini 3 Pro.
+		m := strings.ToLower(req.Model)
+		keepTitle := claude || strings.Contains(m, "gemini-3-pro") || strings.Contains(m, "gemini-3.1-pro")
+		inner["tools"] = cleanTools(raw, claude, keepTitle)
 	}
 	tr.Losses = losses
 	if req.DropPolicy == llm.DropReject && tr.Dropped() {
@@ -183,6 +191,77 @@ func functionResponsesAsModel(inner map[string]json.RawMessage) {
 			t["role"] = json.RawMessage(`"model"`)
 			changed = true
 		}
+	}
+	if changed {
+		inner["contents"], _ = json.Marshal(turns)
+	}
+}
+
+// userBoundaries makes a Gemini model's conversation start and end with a user turn, as today's
+// core sends it: Cloud Code refuses a request that ends with a model turn ("Requests ending with
+// a model turn are not supported"). Trailing model turns of thoughts alone are dropped (keeping
+// one turn), an empty user turn goes before a leading model turn, and one goes after a trailing
+// model turn, except a turn of function responses (which the model answers) without media.
+func userBoundaries(inner map[string]json.RawMessage) {
+	var turns []map[string]json.RawMessage
+	if json.Unmarshal(inner["contents"], &turns) != nil || len(turns) == 0 {
+		return
+	}
+	role := func(t map[string]json.RawMessage) string { r, _ := stringOf(t["role"]); return r }
+	parts := func(t map[string]json.RawMessage) []map[string]json.RawMessage {
+		var p []map[string]json.RawMessage
+		_ = json.Unmarshal(t["parts"], &p)
+		return p
+	}
+	isModel := func(t map[string]json.RawMessage) bool { r := role(t); return r == "model" || r == "assistant" }
+	thoughtOnly := func(t map[string]json.RawMessage) bool {
+		ps := parts(t)
+		if !isModel(t) || len(ps) == 0 {
+			return false
+		}
+		for _, p := range ps {
+			_, call := p["functionCall"]
+			_, resp := p["functionResponse"]
+			if string(p["thought"]) != "true" || call || resp {
+				return false
+			}
+		}
+		return true
+	}
+	answersCalls := func(t map[string]json.RawMessage) bool {
+		has := false
+		for _, p := range parts(t) {
+			fr, ok := object(p["functionResponse"])
+			if !ok {
+				continue
+			}
+			has = true
+			var nested []map[string]json.RawMessage
+			_ = json.Unmarshal(fr["parts"], &nested)
+			for _, n := range nested {
+				for _, k := range []string{"inlineData", "inline_data", "fileData", "file_data"} {
+					if _, media := n[k]; media {
+						return false
+					}
+				}
+			}
+		}
+		return has
+	}
+	n := len(turns)
+	for n > 1 && thoughtOnly(turns[n-1]) {
+		n--
+	}
+	changed := n != len(turns)
+	turns = turns[:n]
+	empty := map[string]json.RawMessage{"role": json.RawMessage(`"user"`), "parts": json.RawMessage(`[{"text":""}]`)}
+	if role(turns[0]) == "model" {
+		turns = append([]map[string]json.RawMessage{empty}, turns...)
+		changed = true
+	}
+	if last := turns[len(turns)-1]; isModel(last) && !answersCalls(last) {
+		turns = append(turns, empty)
+		changed = true
 	}
 	if changed {
 		inner["contents"], _ = json.Marshal(turns)

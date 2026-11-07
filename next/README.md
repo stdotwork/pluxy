@@ -382,21 +382,28 @@ them. It goes to `{base_url}/v1internal:generateContent` (`:streamGenerateConten
 stream) inside Cloud Code's envelope, as today's core sends it: the model, the project, request
 type `agent` (`image_gen` for image models), a request ID, and a session ID hashed from the first
 user text. Safety settings are left out; a Gemini model gets no output limit and has turns of
-function responses sent as the model's; a Claude model gets function calling in `VALIDATED`
-mode; translated system instructions go as a user turn; and each function declaration's schema is
-sent as `parameters` in the subset Cloud Code takes (local `$ref`s inlined, `const` as an enum,
-other JSON Schema keywords removed). Claude models, Gemini 3 Pro and the image model are always
+function responses sent as the model's, and a conversation that starts or ends with the model gets
+an empty user turn at that end; a Claude model gets function calling in `VALIDATED` mode;
+translated system instructions go as a user turn. Each function declaration's schema is sent as
+`parameters`, and a response schema as `responseSchema`, in the subset Cloud Code takes, as today's
+core cleans them: local `$ref`s inlined, `const` as an enum, constraints and short enums moved into
+the description as hints (`minLength: 1`, `Allowed: a, b`), a type list such as
+`["string","null"]` as one nullable type, and other JSON Schema keywords removed; for a Claude
+model, a union becomes its strongest branch. Claude models, Gemini 3 Pro and the image model are always
 asked on the stream method and gathered into one reply when the client wants one. Replies are
 taken out of the envelope's `response` field. A 429 is a used-up quota when Google says
 `QUOTA_EXHAUSTED` or asks for a wait of five minutes or more, and a rate limit otherwise, with the
-wait from Google's retry details or message.
+wait from Google's retry details or message. It holds back only that model on the account, as
+today's core cools only the model that answered, except a used-up credit balance
+(`INSUFFICIENT_G1_CREDITS_BALANCE`), which holds back the account.
 
 Not built, from today's core: the paid Google AI credits fallback, its own cache of Antigravity's
 reasoning (thought signatures travel in band, as for Gemini), the per-account model probe
 (`fetchAvailableModels`), Responses compaction through Antigravity, structured output for Claude
 5.5 as prompt text, sensitive-word obfuscation (`antigravity.sensitive-words`), the connection
-pool settings (`antigravity.connection-pool.*`), the app version lookup at every start, and token
-counting (core has no count-tokens route).
+pool settings (`antigravity.connection-pool.*`), the app version lookup at every start, token
+counting (core has no count-tokens route), and the placeholder property today's core adds to a
+Claude function's objects that require nothing.
 
 ## Accounts and routing
 

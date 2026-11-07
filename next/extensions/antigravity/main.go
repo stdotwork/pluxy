@@ -246,10 +246,12 @@ func (r *reporting) Send(ev llm.Event) error {
 }
 
 // relayStream decodes the upstream stream and sends each event as soon as it is decoded. A
-// blocked send blocks the next upstream read.
+// blocked send blocks the next upstream read. An error event after the first sent event is not
+// retry-safe, as the model already ran.
 func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Event) error }) error {
 	r := sse.NewReader(body)
 	dec := geminigenerate.NewStreamDecoder()
+	sent := false
 	for {
 		e, err := r.Next()
 		eof := err == io.EOF
@@ -270,6 +272,7 @@ func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Ev
 		default:
 			if ge := streamError([]byte(e.Data)); ge != nil {
 				ge.Usage = dec.Usage()
+				ge.Retryable = ge.Retryable && !sent
 				return ge
 			}
 			events, err = dec.Decode(unwrap([]byte(e.Data)))
@@ -281,6 +284,7 @@ func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Ev
 			if err := out.Send(ev); err != nil {
 				return err
 			}
+			sent = true
 			if ev.Terminal() {
 				return nil
 			}
@@ -389,7 +393,12 @@ func classify(status int, parsed *googleError, raw []byte, model string, h http.
 		e.Code, e.Scope = llm.CodeNotFound, llm.ScopeModel
 		e.Retryable = model != "" && strings.Contains(e.Message, model)
 	case status == http.StatusTooManyRequests:
-		e.Code, e.Scope, e.Retryable = llm.CodeRateLimit, llm.ScopeCredential, true
+		// Cloud Code limits each model on its own, so a 429 holds back only the model, as today's
+		// core cools only the model that answered; a used-up credit balance is the account's.
+		e.Code, e.Scope, e.Retryable = llm.CodeRateLimit, llm.ScopeModel, true
+		if parsed.reason() == "INSUFFICIENT_G1_CREDITS_BALANCE" {
+			e.Scope = llm.ScopeCredential
+		}
 		if h != nil {
 			e.RetryAfterMS = retryAfter(h.Get("Retry-After"), time.Now())
 		}
