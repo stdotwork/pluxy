@@ -592,6 +592,88 @@ var Providers = map[string]Provider{
 				Body: json.RawMessage(`{"models":{"gemini-3.8-flash-high":{},"claude-sonnet-5-5-high":{}}}`)}, true
 		},
 	},
+	// A Muse Code login: the Meta extension with an OAuth credential (the minted API key as its
+	// access token, the device token as its refresh token) against a Meta auth file in today's
+	// core, both with base_url pointed at the fake upstream (the default is
+	// https://api.meta.ai/v1). The key is already minted, so neither core calls Meta's key
+	// endpoint; today's core serves a login only the models in its catalog.
+	"meta": {
+		OldCore: func(string, []string, []string) map[string]any { return map[string]any{} },
+		OldCoreAuthFiles: func(_, upstreamURL string, models, keys []string) map[string]any {
+			files := map[string]any{}
+			for i, k := range keys {
+				files[fmt.Sprintf("meta-corpus-%d.json", i+1)] = map[string]any{
+					"type":         "meta",
+					"auth_kind":    "oauth",
+					"access_token": k,
+					"api_key":      k,
+					"dca_token":    "dca:" + k,
+					"token_type":   "Bearer",
+					"base_url":     upstreamURL + "/v1",
+					"email":        fmt.Sprintf("corpus-%d@example.com", i+1),
+				}
+			}
+			return files
+		},
+		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
+			var accounts []any
+			for i, k := range keys {
+				id := "corpus"
+				if i > 0 {
+					id = fmt.Sprintf("corpus-%d", i+1)
+				}
+				acct := map[string]any{
+					"id":         id,
+					"settings":   map[string]any{"base_url": upstreamURL + "/v1"},
+					"credential": map[string]any{"kind": "oauth", "access_token": k, "refresh_token": "dca:" + k},
+				}
+				if len(models) > 0 {
+					acct["models"] = models
+				}
+				accounts = append(accounts, acct)
+			}
+			return "meta", accounts
+		},
+	},
+	// A Meta API key: the Meta extension with an api_key credential, a meta group in today's
+	// core's api-keys, both sending Responses requests to {base_url}/responses.
+	"meta-api-key": {
+		OldCore: func(upstreamURL string, models, keys []string) map[string]any {
+			var ms []any
+			for _, m := range models {
+				ms = append(ms, map[string]any{"name": m, "alias": m})
+			}
+			var ks []any
+			for _, k := range keys {
+				ks = append(ks, map[string]any{"api-key": k})
+			}
+			return map[string]any{"meta": []any{map[string]any{
+				"name":     "corpus",
+				"base-url": upstreamURL + "/v1",
+				"keys":     ks,
+				"models":   ms,
+			}}}
+		},
+		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
+			var accounts []any
+			for i, k := range keys {
+				id := "corpus"
+				if i > 0 {
+					id = fmt.Sprintf("corpus-%d", i+1)
+				}
+				acct := map[string]any{
+					"id":         id,
+					"settings":   map[string]any{"base_url": upstreamURL + "/v1"},
+					"credential": map[string]any{"kind": "api_key", "api_key": k},
+				}
+				if len(models) > 0 {
+					acct["models"] = models
+				}
+				accounts = append(accounts, acct)
+			}
+			return "meta", accounts
+		},
+	},
 	// An xAI API key: the xAI provider extension in the new core, an xai group in today's core.
 	// Both send Responses requests to {base_url}/responses with the key as a bearer token.
 	"xai": {
@@ -659,6 +741,7 @@ var NewCoreExtensions = map[string]string{
 	"gemini":            "./extensions/gemini",
 	"kimi":              "./extensions/kimi",
 	"antigravity":       "./extensions/antigravity",
+	"meta":              "./extensions/meta",
 	"xai":               "./extensions/xai",
 }
 

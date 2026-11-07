@@ -26,6 +26,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `extensions/gemini` | Provider extension for Google's Gemini: the Gemini API with an API key, and Vertex AI with a service account or an express mode key; `geminitest` is a fake Google for its tests. |
 | `extensions/kimi` | Provider extension for Kimi Code, Moonshot AI's coding subscription, signed in with a device code; `kimitest` is a fake Kimi for its tests. |
 | `extensions/xai` | Provider extension for xAI's Grok models with an API key; `xaitest` is a fake xAI for its tests. |
+| `extensions/meta` | Provider extension for Meta's Muse models: a Muse Code subscription signed in with a device code, or a Meta API key; `metatest` is a fake Meta for its tests. |
 | `extensions/antigravity` | Provider extension for Google Antigravity: Gemini and Claude models through a Google account signed in to Antigravity; `agtest` is a fake Google login and Cloud Code for its tests. |
 | `examples/scripted` | The tutorial's example extension. |
 | `examples/oauth` | An example provider that signs in by device code, browser (PKCE) or API key and renews its tokens, with a fake OAuth provider for tests (`oauthtest`). |
@@ -340,6 +341,50 @@ Not built, and why:
   today's model catalog.
 - Image references, encrypted reasoning content, websockets, text to speech, image and video
   generation, `/responses/compact`, and the optional `x_search` tool.
+
+## Meta
+
+The Meta extension (`extensions/meta`) serves Meta's Muse models on `api.meta.ai`. Point
+`extension.manifest` at `extensions/meta/pluxy-extension.json`. A Muse Code subscription is added
+by login through the management API (below) with method `device`: the reply's prompt carries a
+code and Meta's page to enter it on. The sign-in is the OAuth device authorization grant (RFC 8628)
+at `auth.meta.com` with Muse Code's own public client, as today's core signs in, since Meta
+registers no other clients. The device token it yields (`dca:...`) is traded at Meta's key
+endpoint (`https://api.meta.ai/muse-code/key`) for an API key; the credential keeps the key as its
+access token and the device token as its refresh token. A token poll that gets an answer with no
+OAuth error (an outage) is tried again while the code is good. The key does not expire on a timer: when
+Meta refuses it, core renews the credential once, which makes a new key from the device token. A
+Meta API key works too, by login with method `api_key` or in the config; a `dca:` token is refused
+as a key:
+
+```json
+{"id": "meta", "credential": {"kind": "api_key", "api_key": "..."}}
+```
+
+| Setting | Meaning |
+| --- | --- |
+| `base_url` | Meta's API (requests go to `{base_url}/responses`). Default: where the key endpoint said, for a login; `https://api.meta.ai/v1` otherwise. |
+| `auth_base_url` | Meta's login host, for a test server. Default `https://auth.meta.com`. |
+| `mint_url` | Meta's key endpoint, for a test server. Default `https://api.meta.ai/muse-code/key`. |
+
+Every client format goes to Meta's Responses API: a Responses body passes through, and the other
+formats are translated to Responses. As today's core sends them, every request is streamed (a
+client that wants one reply gets the stream gathered), `generate`, `prompt_cache_retention`,
+`safety_identifier`, `stream_options` and `client_metadata` are removed, `store` is false unless
+the client set it, `reasoning.encrypted_content` is asked for, a `web_search` tool loses
+`search_content_types`, and a request with tools also carries Muse Code's own `muse` tool
+namespace, which Meta wants on a subscription key's tool requests. Requests name Muse Code
+(1.4.14) in their User-Agent and `X-Client-Id` and carry a new Muse session ID each. A 429 that
+says the subscription quota is used up is reported as a used-up quota until Meta's `resets_at`;
+a 404 holds the account back from the model until then, or for five minutes. A failure in the
+stream (an `error` event or `response.failed`) is classified by the status it names, a number or a
+string, and is not retry-safe once the reply began. A renewal keeps the API address the credential
+holds when Meta's key endpoint names none, and a rate-limited renewal keeps Meta's `Retry-After`.
+
+Not built, from today's core: the Codex translator's defaults it adds to every request (empty
+instructions, a list input, a medium effort, `tool_choice`, `parallel_tool_calls`, `strict`
+false), apply_patch rewriting for Codex Desktop, dropping encrypted reasoning Meta did not issue,
+Responses compaction through Meta, and token counting.
 
 ## Antigravity
 

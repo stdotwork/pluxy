@@ -15,30 +15,17 @@
           "store": false,
           "prompt_cache_key": "corpus-ws",
           "input": [
-            {
-              "type": "message",
-              "role": "user",
-              "content": [
-                {
-                  "type": "input_text",
-                  "text": "Say hello"
-                }
-              ]
-            }
+            {"type":"message","role":"user","content":[{"type":"input_text","text":"Say hello"}]}
           ]
         }
       },
-      {
-        "read": "turn"
-      }
+      {"read":"turn"}
     ]
   },
   "upstream": [
     {
       "websocket": [
-        {
-          "receive": true
-        },
+        {"receive":true},
         {
           "send": {
             "type": "response.created",
@@ -56,22 +43,10 @@
           "send": {
             "type": "response.metadata",
             "sequence_number": 1,
-            "metadata": {
-              "moderation": {
-                "flagged": false
-              }
-            }
+            "metadata": {"moderation":{"flagged":false}}
           }
         },
-        {
-          "send": {
-            "type": "response.subscription_usage",
-            "sequence_number": 2,
-            "usage": {
-              "plan": "pro"
-            }
-          }
-        },
+        {"send":{"type":"response.subscription_usage","sequence_number":2,"usage":{"plan":"pro"}}},
         {
           "send": {
             "type": "response.output_text.delta",
@@ -92,13 +67,7 @@
               "type": "message",
               "status": "completed",
               "role": "assistant",
-              "content": [
-                {
-                  "type": "output_text",
-                  "text": "Hello",
-                  "annotations": []
-                }
-              ]
+              "content": [{"type":"output_text","text":"Hello","annotations":[]}]
             }
           }
         },
@@ -117,20 +86,10 @@
                   "type": "message",
                   "status": "completed",
                   "role": "assistant",
-                  "content": [
-                    {
-                      "type": "output_text",
-                      "text": "Hello",
-                      "annotations": []
-                    }
-                  ]
+                  "content": [{"type":"output_text","text":"Hello","annotations":[]}]
                 }
               ],
-              "usage": {
-                "input_tokens": 5,
-                "output_tokens": 1,
-                "total_tokens": 6
-              }
+              "usage": {"input_tokens":5,"output_tokens":1,"total_tokens":6}
             }
           }
         }
@@ -139,9 +98,7 @@
   ],
   "recorded_old_core": {
     "client": {
-      "headers": {
-        "Upgrade": "websocket"
-      },
+      "headers": {"Upgrade":"websocket"},
       "messages": [
         {
           "response": {
@@ -164,13 +121,7 @@
         },
         {
           "item": {
-            "content": [
-              {
-                "annotations": [],
-                "text": "Hello",
-                "type": "output_text"
-              }
-            ],
+            "content": [{"annotations":[],"text":"Hello","type":"output_text"}],
             "id": "msg_1",
             "role": "assistant",
             "status": "completed",
@@ -187,13 +138,7 @@
             "object": "response",
             "output": [
               {
-                "content": [
-                  {
-                    "annotations": [],
-                    "text": "Hello",
-                    "type": "output_text"
-                  }
-                ],
+                "content": [{"annotations":[],"text":"Hello","type":"output_text"}],
                 "id": "msg_1",
                 "role": "assistant",
                 "status": "completed",
@@ -203,13 +148,9 @@
             "status": "completed",
             "usage": {
               "input_tokens": 5,
-              "input_tokens_details": {
-                "cached_tokens": 0
-              },
+              "input_tokens_details": {"cached_tokens":0},
               "output_tokens": 1,
-              "output_tokens_details": {
-                "reasoning_tokens": 0
-              },
+              "output_tokens_details": {"reasoning_tokens":0},
               "total_tokens": 6
             }
           },
@@ -235,22 +176,13 @@
         "method": "GET",
         "path": "/v1/responses",
         "websocket": {
-          "close": {
-            "code": 1006
-          },
+          "close": {"code":1006},
           "messages": [
             {
-              "include": [
-                "reasoning.encrypted_content"
-              ],
+              "include": ["reasoning.encrypted_content"],
               "input": [
                 {
-                  "content": [
-                    {
-                      "text": "Say hello",
-                      "type": "input_text"
-                    }
-                  ],
+                  "content": [{"text":"Say hello","type":"input_text"}],
                   "role": "user",
                   "type": "message"
                 }
@@ -261,12 +193,7 @@
               "prompt_cache_key": "corpus-ws",
               "store": false,
               "stream": true,
-              "tools": [
-                {
-                  "output_format": "png",
-                  "type": "image_generation"
-                }
-              ],
+              "tools": [{"output_format":"png","type":"image_generation"}],
               "type": "response.create"
             }
           ]
