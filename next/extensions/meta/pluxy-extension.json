@@ -1,0 +1,13 @@
+{
+  "manifest_version": 0,
+  "id": "pluxy/meta",
+  "version": "0.1.0",
+  "protocol": [0],
+  "programs": {
+    "linux/amd64": "meta",
+    "linux/arm64": "meta",
+    "darwin/amd64": "meta",
+    "darwin/arm64": "meta",
+    "windows/amd64": "meta.exe"
+  }
+}
