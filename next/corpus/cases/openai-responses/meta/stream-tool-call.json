@@ -1,0 +1,203 @@
+{
+  "description": "Meta: A streamed function call: arguments arrive as deltas and the call is sent to the client.",
+  "source": [
+    "core/internal/runtime/executor/meta_executor_execute.go",
+    "core/internal/runtime/executor/meta_executor_stream.go",
+    "core/internal/runtime/executor/meta_executor.go"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "body": {
+      "model": "muse-spark-1.3",
+      "stream": true,
+      "input": "What is the weather in Oslo?",
+      "tools": [
+        {
+          "type": "function",
+          "name": "get_weather",
+          "parameters": {
+            "type": "object",
+            "properties": {"city":{"type":"string"}},
+            "required": ["city"]
+          }
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"event":"response.created","data":{"type":"response.created","sequence_number":0,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"in_progress","model":"grok-test-upstream","output":[],"usage":null}}},
+        {"event":"response.output_item.added","data":{"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"fc_corpus","type":"function_call","status":"in_progress","call_id":"call_1","name":"get_weather","arguments":""}}},
+        {"event":"response.function_call_arguments.delta","data":{"type":"response.function_call_arguments.delta","sequence_number":2,"item_id":"fc_corpus","output_index":0,"delta":"{\"city\":"}},
+        {"event":"response.function_call_arguments.delta","data":{"type":"response.function_call_arguments.delta","sequence_number":3,"item_id":"fc_corpus","output_index":0,"delta":"\"Oslo\"}"}},
+        {"event":"response.output_item.done","data":{"type":"response.output_item.done","sequence_number":4,"output_index":0,"item":{"id":"fc_corpus","type":"function_call","status":"completed","call_id":"call_1","name":"get_weather","arguments":"{\"city\":\"Oslo\"}"}}},
+        {"event":"response.completed","data":{"type":"response.completed","sequence_number":5,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"completed","model":"grok-test-upstream","output":[{"id":"fc_corpus","type":"function_call","status":"completed","call_id":"call_1","name":"get_weather","arguments":"{\"city\":\"Oslo\"}"}],"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}}}
+      ]
+    }
+  ],
+  "volatile": [
+    "upstream[*].headers.X-Meta-Ai-Gateway-Session-Id",
+    "upstream[*].headers.X-Tbh-Root-Session-Id",
+    "upstream[*].headers.X-Tbh-Session-Id",
+    "upstream[*].headers.X-Tbh-Thread-Id"
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[0].body.instructions",
+      "kind": "intended",
+      "reason": "Today's core's Codex translator sends empty instructions on every Responses request; the extension sends the request's instructions as the client wrote them.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.parallel_tool_calls",
+      "kind": "intended",
+      "reason": "Today's core's Codex translator adds this default to every Responses request with tools (tool_choice, parallel_tool_calls, strict false, additionalProperties false); the extension sends the client's tools and choices as the client wrote them.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.input",
+      "kind": "intended",
+      "reason": "Today's core's Codex translator writes a Responses input as a list of messages; the extension sends a plain string input as the client wrote it.",
+      "want": "What is the weather in Oslo?"
+    },
+    {
+      "path": "client.events[*].data.response.usage.input_tokens_details",
+      "kind": "gap",
+      "reason": "Today's core fills in zero cached and reasoning token counts when the upstream reports usage without them (EnsureResponsesUsageDetails); the new core reports Meta's usage as it comes. Whether to keep it is open.",
+      "absent": true
+    },
+    {
+      "path": "client.events[*].data.response.usage.output_tokens_details",
+      "kind": "gap",
+      "reason": "Today's core fills in zero cached and reasoning token counts when the upstream reports usage without them (EnsureResponsesUsageDetails); the new core reports Meta's usage as it comes. Whether to keep it is open.",
+      "absent": true
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"response":{"created_at":1700000000,"id":"resp_corpus","model":"grok-test-upstream","object":"response","output":[],"status":"in_progress","usage":null},"sequence_number":0,"type":"response.created"},"event":"response.created"},
+        {"data":{"item":{"arguments":"","call_id":"call_1","id":"fc_corpus","name":"get_weather","status":"in_progress","type":"function_call"},"output_index":0,"sequence_number":1,"type":"response.output_item.added"},"event":"response.output_item.added"},
+        {"data":{"delta":"{\"city\":","item_id":"fc_corpus","output_index":0,"sequence_number":2,"type":"response.function_call_arguments.delta"},"event":"response.function_call_arguments.delta"},
+        {"data":{"delta":"\"Oslo\"}","item_id":"fc_corpus","output_index":0,"sequence_number":3,"type":"response.function_call_arguments.delta"},"event":"response.function_call_arguments.delta"},
+        {"data":{"item":{"arguments":"{\"city\":\"Oslo\"}","call_id":"call_1","id":"fc_corpus","name":"get_weather","status":"completed","type":"function_call"},"output_index":0,"sequence_number":4,"type":"response.output_item.done"},"event":"response.output_item.done"},
+        {"data":{"response":{"created_at":1700000000,"id":"resp_corpus","model":"grok-test-upstream","object":"response","output":[{"arguments":"{\"city\":\"Oslo\"}","call_id":"call_1","id":"fc_corpus","name":"get_weather","status":"completed","type":"function_call"}],"status":"completed","usage":{"input_tokens":11,"input_tokens_details":{"cached_tokens":0},"output_tokens":7,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":18}},"sequence_number":5,"type":"response.completed"},"event":"response.completed"}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": ["reasoning.encrypted_content"],
+          "input": [
+            {
+              "content": [{"text":"What is the weather in Oslo?","type":"input_text"}],
+              "role": "user",
+              "type": "message"
+            }
+          ],
+          "instructions": "",
+          "model": "muse-spark-1.3",
+          "parallel_tool_calls": true,
+          "store": false,
+          "stream": true,
+          "tools": [
+            {
+              "name": "get_weather",
+              "parameters": {
+                "properties": {"city":{"type":"string"}},
+                "required": ["city"],
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "description": "Muse Code tool set.",
+              "name": "muse",
+              "tools": [
+                {
+                  "description": "Submit this reminder child's explicit decision.",
+                  "name": "submit_reminder_decision",
+                  "parameters": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "advisory_text": {
+                        "description": "Short text to deliver to the main agent when reminding.",
+                        "type": ["null","string"]
+                      },
+                      "confidence": {
+                        "description": "Confidence in the decision.",
+                        "enum": ["low","medium","high"],
+                        "type": ["null","string"]
+                      },
+                      "decision": {"enum":["remind","none"],"type":"string"},
+                      "priority": {
+                        "description": "Requested reminder priority.",
+                        "enum": ["low","normal","high"],
+                        "type": ["null","string"]
+                      },
+                      "reason": {
+                        "description": "Brief reason for reminding or staying silent.",
+                        "type": "string"
+                      },
+                      "skill_id": {
+                        "description": "The listed skill id to remind when needs_reminder is true.",
+                        "type": ["null","string"]
+                      },
+                      "visible_for_steps": {
+                        "description": "Requested ephemeral visibility length in main model steps.",
+                        "maximum": 8,
+                        "minimum": 1,
+                        "type": ["null","integer"]
+                      }
+                    },
+                    "required": [
+                      "advisory_text",
+                      "confidence",
+                      "decision",
+                      "priority",
+                      "reason",
+                      "skill_id",
+                      "visible_for_steps"
+                    ],
+                    "type": "object"
+                  },
+                  "strict": true,
+                  "type": "function"
+                }
+              ],
+              "type": "namespace"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Cache-Control": "no-cache",
+          "Content-Type": "application/json",
+          "User-Agent": "muse-build/1.4.14 (non-interactive; linux-x86_64; build dec7d7497fecdad135ec5835a8161dbc92e55b58)",
+          "X-Client-Id": "tbh:exec",
+          "X-Meta-Ai-Gateway-Session-Id": "(volatile)",
+          "X-Tbh-Agent-Role": "main",
+          "X-Tbh-Contributor-Mode": "1",
+          "X-Tbh-Root-Session-Id": "(volatile)",
+          "X-Tbh-Session-Id": "(volatile)",
+          "X-Tbh-Thread-Id": "(volatile)"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      }
+    ]
+  }
+}

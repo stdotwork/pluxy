@@ -1,0 +1,269 @@
+{
+  "description": "Meta: A turn after a tool result: the call and its output go to Meta as a function call and output.",
+  "source": [
+    "core/internal/runtime/executor/meta_executor_execute.go",
+    "core/internal/runtime/executor/meta_executor_stream.go",
+    "core/internal/runtime/executor/meta_executor.go"
+  ],
+  "client": {
+    "path": "/v1beta/models/muse-spark-1.3:generateContent",
+    "body": {
+      "contents": [
+        {"role":"user","parts":[{"text":"What is the weather in Oslo?"}]},
+        {"role":"model","parts":[{"functionCall":{"name":"get_weather","args":{"city":"Oslo"}}}]},
+        {
+          "role": "user",
+          "parts": [
+            {"functionResponse":{"name":"get_weather","response":{"temp_c":4,"sky":"cloudy"}}}
+          ]
+        }
+      ],
+      "tools": [
+        {
+          "functionDeclarations": [
+            {
+              "name": "get_weather",
+              "parameters": {
+                "type": "object",
+                "properties": {"city":{"type":"string"}},
+                "required": ["city"]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"event":"response.created","data":{"type":"response.created","sequence_number":0,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"in_progress","model":"grok-test-upstream","output":[],"usage":null}}},
+        {"event":"response.output_item.added","data":{"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"msg_corpus","type":"message","status":"in_progress","role":"assistant","content":[]}}},
+        {"event":"response.output_text.delta","data":{"type":"response.output_text.delta","sequence_number":2,"item_id":"msg_corpus","output_index":0,"content_index":0,"delta":"It is 4 degrees"}},
+        {"event":"response.output_text.delta","data":{"type":"response.output_text.delta","sequence_number":3,"item_id":"msg_corpus","output_index":0,"content_index":0,"delta":" and cloudy in Oslo."}},
+        {"event":"response.output_item.done","data":{"type":"response.output_item.done","sequence_number":4,"output_index":0,"item":{"id":"msg_corpus","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"It is 4 degrees and cloudy in Oslo.","annotations":[]}]}}},
+        {"event":"response.completed","data":{"type":"response.completed","sequence_number":5,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"completed","model":"grok-test-upstream","output":[{"id":"msg_corpus","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"It is 4 degrees and cloudy in Oslo.","annotations":[]}]}],"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}}}
+      ]
+    }
+  ],
+  "volatile": [
+    "upstream[*].headers.X-Meta-Ai-Gateway-Session-Id",
+    "upstream[*].headers.X-Tbh-Root-Session-Id",
+    "upstream[*].headers.X-Tbh-Session-Id",
+    "upstream[*].headers.X-Tbh-Thread-Id"
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[0].body.instructions",
+      "kind": "intended",
+      "reason": "Today's core's Codex translator sends empty instructions on every Responses request; the extension sends the request's instructions as the client wrote them.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.reasoning",
+      "kind": "intended",
+      "reason": "Today's core's Codex translator gives a translated request that names no effort the medium effort; the Meta extension sends the effort the client asked for (reasoning_effort, a Messages thinking budget's effort) and none when the client named none.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.tool_choice",
+      "kind": "intended",
+      "reason": "Today's core's Codex translator adds this default to every Responses request with tools (tool_choice, parallel_tool_calls, strict false, additionalProperties false); the extension sends the client's tools and choices as the client wrote them.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.parallel_tool_calls",
+      "kind": "intended",
+      "reason": "Today's core's Codex translator adds this default to every Responses request with tools (tool_choice, parallel_tool_calls, strict false, additionalProperties false); the extension sends the client's tools and choices as the client wrote them.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.tools[0].strict",
+      "kind": "intended",
+      "reason": "Today's core's Codex translator adds this default to every Responses request with tools (tool_choice, parallel_tool_calls, strict false, additionalProperties false); the extension sends the client's tools and choices as the client wrote them.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.tools[0].parameters.additionalProperties",
+      "kind": "intended",
+      "reason": "Today's core's Codex translator adds this default to every Responses request with tools (tool_choice, parallel_tool_calls, strict false, additionalProperties false); the extension sends the client's tools and choices as the client wrote them.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.input[1].call_id",
+      "kind": "intended",
+      "reason": "A Gemini function call names no ID; the new core makes a random one per request and today's core a counter. The ID only has to match the call and its output, and both do."
+    },
+    {
+      "path": "upstream[0].body.input[2].call_id",
+      "kind": "intended",
+      "reason": "A Gemini function call names no ID; the new core makes a random one per request and today's core a counter. The ID only has to match the call and its output, and both do."
+    },
+    {
+      "path": "client.body",
+      "kind": "intended",
+      "reason": "The new core writes the Gemini reply the same way for every upstream format: candidate index 0, the serving model in modelVersion, one chunk per text or thought delta, and a last chunk holding the finish reason, any function calls and usageMetadata (with Gemini's inclusion rules: promptTokenCount includes cached tokens, candidatesTokenCount leaves out thoughtsTokenCount). Today's Codex translator opens with an empty chunk, adds createTime and usageMetadata.trafficType PROVISIONED_THROUGHPUT, leaves out the candidate index and cached and thought token counts, names the requested model after the first chunk, and turns Responses encrypted reasoning into a thoughtSignature carrier on the next text part (Codex reasoning carry-over is the Codex provider's, slice 9); the new core reports the encrypted reasoning as dropped.",
+      "want": {
+        "candidates": [
+          {
+            "content": {"parts":[{"text":"It is 4 degrees and cloudy in Oslo."}],"role":"model"},
+            "finishReason": "STOP",
+            "index": 0
+          }
+        ],
+        "modelVersion": "grok-test-upstream",
+        "responseId": "resp_corpus",
+        "usageMetadata": {"candidatesTokenCount":7,"promptTokenCount":11,"totalTokenCount":18}
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "candidates": [
+          {
+            "content": {"parts":[{"text":"It is 4 degrees and cloudy in Oslo."}],"role":"model"},
+            "finishReason": "STOP"
+          }
+        ],
+        "createTime": "2023-11-14T22:13:20Z",
+        "modelVersion": "muse-spark-1.3",
+        "responseId": "resp_corpus",
+        "usageMetadata": {
+          "candidatesTokenCount": 7,
+          "promptTokenCount": 11,
+          "totalTokenCount": 18,
+          "trafficType": "PROVISIONED_THROUGHPUT"
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": ["reasoning.encrypted_content"],
+          "input": [
+            {
+              "content": [{"text":"What is the weather in Oslo?","type":"input_text"}],
+              "role": "user",
+              "type": "message"
+            },
+            {
+              "arguments": "{\"city\":\"Oslo\"}",
+              "call_id": "call_gemini_0000000000000001",
+              "name": "get_weather",
+              "type": "function_call"
+            },
+            {
+              "call_id": "call_gemini_0000000000000001",
+              "output": "{\"temp_c\":4,\"sky\":\"cloudy\"}",
+              "type": "function_call_output"
+            }
+          ],
+          "instructions": "",
+          "model": "muse-spark-1.3",
+          "parallel_tool_calls": true,
+          "reasoning": {"effort":"medium"},
+          "store": false,
+          "stream": true,
+          "tool_choice": "auto",
+          "tools": [
+            {
+              "name": "get_weather",
+              "parameters": {
+                "additionalProperties": false,
+                "properties": {"city":{"type":"string"}},
+                "required": ["city"],
+                "type": "object"
+              },
+              "strict": false,
+              "type": "function"
+            },
+            {
+              "description": "Muse Code tool set.",
+              "name": "muse",
+              "tools": [
+                {
+                  "description": "Submit this reminder child's explicit decision.",
+                  "name": "submit_reminder_decision",
+                  "parameters": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "advisory_text": {
+                        "description": "Short text to deliver to the main agent when reminding.",
+                        "type": ["null","string"]
+                      },
+                      "confidence": {
+                        "description": "Confidence in the decision.",
+                        "enum": ["low","medium","high"],
+                        "type": ["null","string"]
+                      },
+                      "decision": {"enum":["remind","none"],"type":"string"},
+                      "priority": {
+                        "description": "Requested reminder priority.",
+                        "enum": ["low","normal","high"],
+                        "type": ["null","string"]
+                      },
+                      "reason": {
+                        "description": "Brief reason for reminding or staying silent.",
+                        "type": "string"
+                      },
+                      "skill_id": {
+                        "description": "The listed skill id to remind when needs_reminder is true.",
+                        "type": ["null","string"]
+                      },
+                      "visible_for_steps": {
+                        "description": "Requested ephemeral visibility length in main model steps.",
+                        "maximum": 8,
+                        "minimum": 1,
+                        "type": ["null","integer"]
+                      }
+                    },
+                    "required": [
+                      "advisory_text",
+                      "confidence",
+                      "decision",
+                      "priority",
+                      "reason",
+                      "skill_id",
+                      "visible_for_steps"
+                    ],
+                    "type": "object"
+                  },
+                  "strict": true,
+                  "type": "function"
+                }
+              ],
+              "type": "namespace"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Cache-Control": "no-cache",
+          "Content-Type": "application/json",
+          "User-Agent": "muse-build/1.4.14 (non-interactive; linux-x86_64; build dec7d7497fecdad135ec5835a8161dbc92e55b58)",
+          "X-Client-Id": "tbh:exec",
+          "X-Meta-Ai-Gateway-Session-Id": "(volatile)",
+          "X-Tbh-Agent-Role": "main",
+          "X-Tbh-Contributor-Mode": "1",
+          "X-Tbh-Root-Session-Id": "(volatile)",
+          "X-Tbh-Session-Id": "(volatile)",
+          "X-Tbh-Thread-Id": "(volatile)"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      }
+    ]
+  }
+}

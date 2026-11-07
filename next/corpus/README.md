@@ -68,6 +68,8 @@ Providers with their own folder of cases:
 | `vertex-api-key` | Gemini extension, Vertex settings and an express mode key | a `vertex` API-key entry |
 | `vertex` | Gemini extension, a Vertex service account | a Vertex service account auth file |
 | `kimi` | Kimi extension, a Kimi Code OAuth credential | a Kimi auth file |
+| `meta` | Meta extension, a Muse Code login's OAuth credential (the minted key and its device token) | a Meta auth file with the key and `base_url` |
+| `meta-api-key` | Meta extension, an API key | a `meta` group with `base-url` and an API key |
 | `antigravity` | Antigravity extension, an OAuth credential with its project | an Antigravity auth file with `base_url`, the project and saved model hints; its `fetchAvailableModels` calls are answered aside |
 | `xai` | xAI extension, an API key | an `xai` group with `base-url` and an API key |
 | `codex-ws` | Codex extension, API key, `"websockets": true` in the account's settings | a Codex API key with `websockets: true` |
