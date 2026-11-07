@@ -1,0 +1,168 @@
+{
+  "description": "Antigravity: a conversation that ends with the assistant's turn (a prefill) gets an empty user turn appended for a Gemini model, since Cloud Code refuses a request ending with a model turn.",
+  "source": [
+    "core/internal/runtime/executor/helps/gemini_content_turns.go",
+    "core/internal/runtime/executor/antigravity_executor.go"
+  ],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {
+      "model": "gemini-3.8-flash-high",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Count to three"
+        },
+        {
+          "role": "assistant",
+          "content": "One, two,"
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "response": {
+          "candidates": [
+            {
+              "content": {
+                "role": "model",
+                "parts": [
+                  {
+                    "text": "thinking...",
+                    "thought": true
+                  },
+                  {
+                    "text": "Hello world"
+                  }
+                ]
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 40,
+            "cachedContentTokenCount": 8,
+            "candidatesTokenCount": 12,
+            "thoughtsTokenCount": 20,
+            "totalTokenCount": 72
+          },
+          "modelVersion": "gemini-corpus-upstream",
+          "responseId": "resp-corpus"
+        },
+        "traceId": "trace-corpus"
+      }
+    }
+  ],
+  "volatile": [
+    "client.body.created",
+    "upstream[*].body.requestId"
+  ],
+  "exceptions": [
+    {
+      "path": "client.body.choices[0].message.tool_calls",
+      "kind": "intended",
+      "absent": true,
+      "reason": "The new core writes a Chat completion from a Gemini reply with only the fields that are set (today's core adds tool_calls null and a non-standard native_finish_reason)."
+    },
+    {
+      "path": "client.body.choices[0].native_finish_reason",
+      "kind": "intended",
+      "absent": true,
+      "reason": "The new core writes a Chat completion from a Gemini reply with only the fields that are set (today's core adds tool_calls null and a non-standard native_finish_reason)."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "Hello world",
+              "reasoning_content": "thinking...",
+              "role": "assistant",
+              "tool_calls": null
+            },
+            "native_finish_reason": "stop"
+          }
+        ],
+        "created": "(volatile)",
+        "id": "resp-corpus",
+        "model": "gemini-corpus-upstream",
+        "object": "chat.completion",
+        "usage": {
+          "completion_tokens": 32,
+          "completion_tokens_details": {
+            "reasoning_tokens": 20
+          },
+          "prompt_tokens": 40,
+          "prompt_tokens_details": {
+            "cached_tokens": 8
+          },
+          "total_tokens": 72
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "model": "gemini-3.8-flash-high",
+          "project": "corpus-project-0001",
+          "request": {
+            "contents": [
+              {
+                "parts": [
+                  {
+                    "text": "Count to three"
+                  }
+                ],
+                "role": "user"
+              },
+              {
+                "parts": [
+                  {
+                    "text": "One, two,"
+                  }
+                ],
+                "role": "model"
+              },
+              {
+                "parts": [
+                  {
+                    "text": ""
+                  }
+                ],
+                "role": "user"
+              }
+            ],
+            "sessionId": "-7984219244663044719"
+          },
+          "requestId": "(volatile)",
+          "requestType": "agent",
+          "userAgent": "antigravity"
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "antigravity/hub/2.29.0 (aidev_client; os_type=darwin; arch=arm64; cl=1013060670)"
+        },
+        "method": "POST",
+        "path": "/v1internal:generateContent"
+      }
+    ]
+  }
+}

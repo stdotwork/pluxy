@@ -55,6 +55,10 @@ type Provider struct {
 	// Intercept runs the old core through the intercepting proxy (see InterceptHosts), for a
 	// provider whose upstream host no setting moves.
 	Intercept bool
+	// Aside, when set, answers the requests a core makes on its own, outside the case (such as
+	// a model list it fetches when it loads an account), so they are not recorded and use up no
+	// scripted reply.
+	Aside func(r *http.Request) (Reply, bool)
 }
 
 // Providers maps a provider directory name to its setup. Later slices add theirs here.
@@ -529,6 +533,65 @@ var Providers = map[string]Provider{
 			return "kimi", accounts
 		},
 	},
+	// An Antigravity login: the Antigravity extension with an OAuth credential against an
+	// Antigravity auth file in today's core, both with base_url pointed at the fake upstream (the
+	// default is https://daily-cloudcode-pa.googleapis.com) and the same Google Cloud project.
+	// The tokens are fake and expire in 2100, so neither core renews them or looks up the
+	// project; today's core serves an Antigravity login only the models in its catalog.
+	"antigravity": {
+		OldCore: func(string, []string, []string) map[string]any { return map[string]any{} },
+		OldCoreAuthFiles: func(_, upstreamURL string, models, keys []string) map[string]any {
+			files := map[string]any{}
+			for i, k := range keys {
+				files[fmt.Sprintf("antigravity-corpus-%d.json", i+1)] = map[string]any{
+					"type":          "antigravity",
+					"access_token":  k,
+					"refresh_token": k + "-refresh",
+					"expires_in":    3599,
+					"timestamp":     1767225600000,
+					"expired":       "2100-01-01T00:00:00Z",
+					"email":         fmt.Sprintf("corpus-%d@example.com", i+1),
+					"project_id":    corpusAntigravityProject,
+					"base_url":      upstreamURL,
+					// Today's core serves an Antigravity login only the models its
+					// fetchAvailableModels probe found; a saved probe result stands in for it.
+					"antigravity_capability_hints": map[string]any{
+						"project_id": corpusAntigravityProject, "endpoint": upstreamURL, "model_ids": models},
+				}
+			}
+			return files
+		},
+		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
+			var accounts []any
+			for i, k := range keys {
+				id := "corpus"
+				if i > 0 {
+					id = fmt.Sprintf("corpus-%d", i+1)
+				}
+				acct := map[string]any{
+					"id":       id,
+					"settings": map[string]any{"base_url": upstreamURL},
+					"credential": map[string]any{"kind": "oauth", "access_token": k, "refresh_token": k + "-refresh",
+						"expires_at": corpusTokenExpiry, "data": map[string]any{"project_id": corpusAntigravityProject, "client_secret": "corpus-client-secret"}},
+				}
+				if len(models) > 0 {
+					acct["models"] = models
+				}
+				accounts = append(accounts, acct)
+			}
+			return "antigravity", accounts
+		},
+		// Today's core asks Cloud Code which models each Antigravity login has
+		// (fetchAvailableModels) when it loads the account and again in the background; the
+		// answer lists the models the cases use.
+		Aside: func(r *http.Request) (Reply, bool) {
+			if r.URL.Path != "/v1internal:fetchAvailableModels" {
+				return Reply{}, false
+			}
+			return Reply{Status: http.StatusOK, Headers: map[string]string{"Content-Type": "application/json"},
+				Body: json.RawMessage(`{"models":{"gemini-3.8-flash-high":{},"claude-sonnet-5-5-high":{}}}`)}, true
+		},
+	},
 	// An xAI API key: the xAI provider extension in the new core, an xai group in today's core.
 	// Both send Responses requests to {base_url}/responses with the key as a bearer token.
 	"xai": {
@@ -595,6 +658,7 @@ var NewCoreExtensions = map[string]string{
 	"claude":            "./extensions/claude",
 	"gemini":            "./extensions/gemini",
 	"kimi":              "./extensions/kimi",
+	"antigravity":       "./extensions/antigravity",
 	"xai":               "./extensions/xai",
 }
 
@@ -1009,3 +1073,6 @@ func corpusServiceAccount(i int, tokenURI string) map[string]any {
 
 // corpusKimiDeviceID is the device ID of the corpus's Kimi accounts.
 const corpusKimiDeviceID = "corpus-device-0001"
+
+// corpusAntigravityProject is the Google Cloud project of the corpus's Antigravity accounts.
+const corpusAntigravityProject = "corpus-project-0001"

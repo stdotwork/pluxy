@@ -1,0 +1,61 @@
+{
+  "description": "Antigravity: Streamed request, upstream refuses before any stream data with 400 INVALID_ARGUMENT: the client gets the same 400 with the upstream's Google error body, not an SSE error event. The request goes inside Cloud Code's envelope with the account's project, and the reply comes out of its response field.",
+  "source": [
+    "core/internal/runtime/executor/antigravity_executor_request.go",
+    "core/internal/runtime/executor/antigravity_executor_stream.go",
+    "core/internal/runtime/executor/antigravity_executor_execute.go"
+  ],
+  "client": {
+    "path": "/v1beta/models/gemini-3.8-flash-high:streamGenerateContent?alt=sse",
+    "body": {"contents":[{"role":"user","parts":[{"text":"Say hello"}]}]}
+  },
+  "upstream": [
+    {
+      "status": 400,
+      "headers": {"Content-Type":"application/json"},
+      "body": {
+        "error": {"code":400,"message":"Invalid JSON payload received.","status":"INVALID_ARGUMENT"}
+      }
+    }
+  ],
+  "volatile": ["upstream[*].body.requestId"],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {"code":400,"message":"Invalid JSON payload received.","status":"INVALID_ARGUMENT"}
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 400
+    },
+    "upstream": [
+      {
+        "body": {
+          "model": "gemini-3.8-flash-high",
+          "project": "corpus-project-0001",
+          "request": {
+            "contents": [{"parts":[{"text":"Say hello"}],"role":"user"}],
+            "sessionId": "-2187337692185979412"
+          },
+          "requestId": "(volatile)",
+          "requestType": "agent",
+          "userAgent": "antigravity"
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "antigravity/hub/2.29.0 (aidev_client; os_type=darwin; arch=arm64; cl=1013060670)"
+        },
+        "method": "POST",
+        "path": "/v1internal:streamGenerateContent?alt=sse"
+      }
+    ]
+  }
+}

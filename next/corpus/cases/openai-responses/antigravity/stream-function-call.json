@@ -1,0 +1,310 @@
+{
+  "description": "Antigravity: a Responses function tool reaches Gemini as a function declaration; the upstream functionCall comes back as a function_call item. The request goes inside Cloud Code's envelope with the account's project, and the reply comes out of its response field.",
+  "source": [
+    "core/internal/runtime/executor/antigravity_executor_request.go",
+    "core/internal/runtime/executor/antigravity_executor_stream.go",
+    "core/internal/runtime/executor/antigravity_executor_execute.go",
+    "core/internal/translator/antigravity/openai/responses"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "body": {
+      "model": "gemini-3.8-flash-high",
+      "stream": true,
+      "tools": [
+        {
+          "type": "function",
+          "name": "get_weather",
+          "description": "Weather for a city",
+          "parameters": {
+            "type": "object",
+            "properties": {"city":{"type":"string"}},
+            "required": ["city"]
+          }
+        }
+      ],
+      "input": "What is the weather in Oslo?"
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"data":{"response":{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"get_weather","args":{"city":"Oslo"}},"thoughtSignature":"CiQB0e2Kb7sigA1"}]},"index":0}],"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus"},"traceId":"trace-corpus"}},
+        {"data":{"response":{"candidates":[{"content":{"role":"model","parts":[]},"index":0,"finishReason":"STOP"}],"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus","usageMetadata":{"promptTokenCount":40,"cachedContentTokenCount":8,"candidatesTokenCount":12,"thoughtsTokenCount":20,"totalTokenCount":72}},"traceId":"trace-corpus"}}
+      ]
+    }
+  ],
+  "volatile": [
+    "client.body.created_at",
+    "client.events[*].data.item.call_id",
+    "client.events[*].data.item.id",
+    "client.events[*].data.item_id",
+    "client.events[*].data.response.created_at",
+    "client.events[*].data.response.output[*].call_id",
+    "client.events[*].data.response.output[*].id",
+    "upstream[*].body.requestId"
+  ],
+  "exceptions": [
+    {
+      "path": "client.events",
+      "kind": "intended",
+      "reason": "The new core writes a Responses stream from a Gemini reply with Gemini's responseId as the response id (today's core prefixes it with resp_), item ids built from it, call ids as call_<n> when Gemini sends none (today's core makes them from the time), and each thought signature as its own reasoning item holding the signature unchanged in encrypted_content, before the part it came on, with an empty summary part (today's core wraps it in its own carrier string, cpa-gemini-responses-carrier-v1:, that records which part it belongs to).",
+      "want": [
+        {
+          "data": {
+            "response": {
+              "background": false,
+              "created_at": "(volatile)",
+              "error": null,
+              "id": "resp-corpus",
+              "model": "gemini-3.8-flash-high",
+              "object": "response",
+              "output": [],
+              "status": "in_progress"
+            },
+            "sequence_number": 1,
+            "type": "response.created"
+          },
+          "event": "response.created"
+        },
+        {
+          "data": {
+            "response": {
+              "created_at": "(volatile)",
+              "id": "resp-corpus",
+              "model": "gemini-3.8-flash-high",
+              "object": "response",
+              "output": [],
+              "status": "in_progress"
+            },
+            "sequence_number": 2,
+            "type": "response.in_progress"
+          },
+          "event": "response.in_progress"
+        },
+        {
+          "data": {
+            "item": {"id":"(volatile)","status":"in_progress","summary":[],"type":"reasoning"},
+            "output_index": 0,
+            "sequence_number": 3,
+            "type": "response.output_item.added"
+          },
+          "event": "response.output_item.added"
+        },
+        {
+          "data": {
+            "item_id": "(volatile)",
+            "output_index": 0,
+            "part": {"text":"","type":"summary_text"},
+            "sequence_number": 4,
+            "summary_index": 0,
+            "type": "response.reasoning_summary_part.added"
+          },
+          "event": "response.reasoning_summary_part.added"
+        },
+        {
+          "data": {
+            "item_id": "(volatile)",
+            "output_index": 0,
+            "sequence_number": 5,
+            "summary_index": 0,
+            "text": "",
+            "type": "response.reasoning_summary_text.done"
+          },
+          "event": "response.reasoning_summary_text.done"
+        },
+        {
+          "data": {
+            "item_id": "(volatile)",
+            "output_index": 0,
+            "part": {"text":"","type":"summary_text"},
+            "sequence_number": 6,
+            "summary_index": 0,
+            "type": "response.reasoning_summary_part.done"
+          },
+          "event": "response.reasoning_summary_part.done"
+        },
+        {
+          "data": {
+            "item": {
+              "encrypted_content": "CiQB0e2Kb7sigA1",
+              "id": "(volatile)",
+              "summary": [{"text":"","type":"summary_text"}],
+              "type": "reasoning"
+            },
+            "output_index": 0,
+            "sequence_number": 7,
+            "type": "response.output_item.done"
+          },
+          "event": "response.output_item.done"
+        },
+        {
+          "data": {
+            "item": {
+              "arguments": "",
+              "call_id": "(volatile)",
+              "id": "(volatile)",
+              "name": "get_weather",
+              "status": "in_progress",
+              "type": "function_call"
+            },
+            "output_index": 1,
+            "sequence_number": 8,
+            "type": "response.output_item.added"
+          },
+          "event": "response.output_item.added"
+        },
+        {
+          "data": {
+            "delta": "{\"city\":\"Oslo\"}",
+            "item_id": "(volatile)",
+            "output_index": 1,
+            "sequence_number": 9,
+            "type": "response.function_call_arguments.delta"
+          },
+          "event": "response.function_call_arguments.delta"
+        },
+        {
+          "data": {
+            "arguments": "{\"city\":\"Oslo\"}",
+            "item_id": "(volatile)",
+            "output_index": 1,
+            "sequence_number": 10,
+            "type": "response.function_call_arguments.done"
+          },
+          "event": "response.function_call_arguments.done"
+        },
+        {
+          "data": {
+            "item": {
+              "arguments": "{\"city\":\"Oslo\"}",
+              "call_id": "(volatile)",
+              "id": "(volatile)",
+              "name": "get_weather",
+              "status": "completed",
+              "type": "function_call"
+            },
+            "output_index": 1,
+            "sequence_number": 11,
+            "type": "response.output_item.done"
+          },
+          "event": "response.output_item.done"
+        },
+        {
+          "data": {
+            "response": {
+              "background": false,
+              "created_at": "(volatile)",
+              "error": null,
+              "id": "resp-corpus",
+              "model": "gemini-3.8-flash-high",
+              "object": "response",
+              "output": [
+                {
+                  "encrypted_content": "CiQB0e2Kb7sigA1",
+                  "id": "(volatile)",
+                  "summary": [{"text":"","type":"summary_text"}],
+                  "type": "reasoning"
+                },
+                {
+                  "arguments": "{\"city\":\"Oslo\"}",
+                  "call_id": "(volatile)",
+                  "id": "(volatile)",
+                  "name": "get_weather",
+                  "status": "completed",
+                  "type": "function_call"
+                }
+              ],
+              "status": "completed",
+              "tools": [
+                {
+                  "description": "Weather for a city",
+                  "name": "get_weather",
+                  "parameters": {
+                    "properties": {"city":{"type":"string"}},
+                    "required": ["city"],
+                    "type": "object"
+                  },
+                  "type": "function"
+                }
+              ],
+              "usage": {
+                "input_tokens": 40,
+                "input_tokens_details": {"cached_tokens":8},
+                "output_tokens": 32,
+                "output_tokens_details": {"reasoning_tokens":20},
+                "total_tokens": 72
+              }
+            },
+            "sequence_number": 12,
+            "type": "response.completed"
+          },
+          "event": "response.completed"
+        }
+      ]
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"response":{"background":false,"created_at":"(volatile)","error":null,"id":"resp_resp-corpus","model":"gemini-3.8-flash-high","object":"response","output":[],"status":"in_progress"},"sequence_number":1,"type":"response.created"},"event":"response.created"},
+        {"data":{"response":{"created_at":"(volatile)","id":"resp_resp-corpus","model":"gemini-3.8-flash-high","object":"response","output":[],"status":"in_progress"},"sequence_number":2,"type":"response.in_progress"},"event":"response.in_progress"},
+        {"data":{"item":{"encrypted_content":"cpa-gemini-responses-carrier-v1:next:function:Q2lRQjBlMktiN3NpZ0Ex","id":"(volatile)","status":"in_progress","summary":[],"type":"reasoning"},"output_index":0,"sequence_number":3,"type":"response.output_item.added"},"event":"response.output_item.added"},
+        {"data":{"item":{"encrypted_content":"cpa-gemini-responses-carrier-v1:next:function:Q2lRQjBlMktiN3NpZ0Ex","id":"(volatile)","summary":[],"type":"reasoning"},"output_index":0,"sequence_number":4,"type":"response.output_item.done"},"event":"response.output_item.done"},
+        {"data":{"item":{"arguments":"","call_id":"(volatile)","id":"(volatile)","name":"get_weather","status":"in_progress","type":"function_call"},"output_index":1,"sequence_number":5,"type":"response.output_item.added"},"event":"response.output_item.added"},
+        {"data":{"delta":"{\"city\":\"Oslo\"}","item_id":"(volatile)","output_index":1,"sequence_number":6,"type":"response.function_call_arguments.delta"},"event":"response.function_call_arguments.delta"},
+        {"data":{"arguments":"{\"city\":\"Oslo\"}","item_id":"(volatile)","output_index":1,"sequence_number":7,"type":"response.function_call_arguments.done"},"event":"response.function_call_arguments.done"},
+        {"data":{"item":{"arguments":"{\"city\":\"Oslo\"}","call_id":"(volatile)","id":"(volatile)","name":"get_weather","status":"completed","type":"function_call"},"output_index":1,"sequence_number":8,"type":"response.output_item.done"},"event":"response.output_item.done"},
+        {"data":{"response":{"background":false,"created_at":"(volatile)","error":null,"id":"resp_resp-corpus","model":"gemini-3.8-flash-high","object":"response","output":[{"encrypted_content":"cpa-gemini-responses-carrier-v1:next:function:Q2lRQjBlMktiN3NpZ0Ex","id":"(volatile)","summary":[],"type":"reasoning"},{"arguments":"{\"city\":\"Oslo\"}","call_id":"(volatile)","id":"(volatile)","name":"get_weather","status":"completed","type":"function_call"}],"status":"completed","tools":[{"description":"Weather for a city","name":"get_weather","parameters":{"properties":{"city":{"type":"string"}},"required":["city"],"type":"object"},"type":"function"}],"usage":{"input_tokens":40,"input_tokens_details":{"cached_tokens":8},"output_tokens":32,"output_tokens_details":{"reasoning_tokens":20},"total_tokens":72}},"sequence_number":9,"type":"response.completed"},"event":"response.completed"}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "model": "gemini-3.8-flash-high",
+          "project": "corpus-project-0001",
+          "request": {
+            "contents": [{"parts":[{"text":"What is the weather in Oslo?"}],"role":"user"}],
+            "sessionId": "-3853093844985870476",
+            "tools": [
+              {
+                "functionDeclarations": [
+                  {
+                    "description": "Weather for a city",
+                    "name": "get_weather",
+                    "parameters": {
+                      "properties": {"city":{"type":"string"}},
+                      "required": ["city"],
+                      "type": "object"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "requestId": "(volatile)",
+          "requestType": "agent",
+          "userAgent": "antigravity"
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "antigravity/hub/2.29.0 (aidev_client; os_type=darwin; arch=arm64; cl=1013060670)"
+        },
+        "method": "POST",
+        "path": "/v1internal:streamGenerateContent?alt=sse"
+      }
+    ]
+  }
+}

@@ -1,0 +1,179 @@
+{
+  "description": "Antigravity: Gemini client, same-format passthrough, non-stream: a history with a functionCall (id, thoughtSignature) answered by a functionResponse, with Gemini Schema parameters and a responseSchema, reaches the upstream as the client sent it, thought signature included; the text reply comes back unchanged. The request goes inside Cloud Code's envelope with the account's project, and the reply comes out of its response field.",
+  "source": [
+    "core/internal/runtime/executor/antigravity_executor_request.go",
+    "core/internal/runtime/executor/antigravity_executor_stream.go",
+    "core/internal/runtime/executor/antigravity_executor_execute.go",
+    "core/internal/translator/antigravity/gemini"
+  ],
+  "client": {
+    "path": "/v1beta/models/gemini-3.8-flash-high:generateContent",
+    "body": {
+      "contents": [
+        {"role":"user","parts":[{"text":"Weather in Paris?"}]},
+        {
+          "role": "model",
+          "parts": [
+            {
+              "functionCall": {"id":"fc-1","name":"get_weather","args":{"city":"Paris"}},
+              "thoughtSignature": "CiQB0e2Kb7sigA1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [{"functionResponse":{"id":"fc-1","name":"get_weather","response":{"temp":18}}}]
+        }
+      ],
+      "tools": [
+        {
+          "functionDeclarations": [
+            {
+              "name": "get_weather",
+              "description": "Get the current weather for a city",
+              "parameters": {
+                "type": "OBJECT",
+                "properties": {"city":{"type":"STRING"}},
+                "required": ["city"]
+              }
+            }
+          ]
+        }
+      ],
+      "generationConfig": {
+        "responseSchema": {
+          "type": "OBJECT",
+          "properties": {"summary":{"type":"STRING"}},
+          "required": ["summary"]
+        }
+      }
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "response": {
+          "candidates": [
+            {
+              "content": {"role":"model","parts":[{"text":"It is 18 degrees in Paris."}]},
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 40,
+            "cachedContentTokenCount": 8,
+            "candidatesTokenCount": 12,
+            "thoughtsTokenCount": 20,
+            "totalTokenCount": 72
+          },
+          "modelVersion": "gemini-corpus-upstream",
+          "responseId": "resp-corpus"
+        },
+        "traceId": "trace-corpus"
+      }
+    }
+  ],
+  "volatile": ["upstream[*].body.requestId"],
+  "exceptions": [
+    {
+      "path": "upstream[0].body.request.contents[1].parts[0].thoughtSignature",
+      "kind": "intended",
+      "want": "CiQB0e2Kb7sigA1",
+      "reason": "The new core carries thought signatures in band: a signature the client sends back goes upstream as it is. Today's core keeps its own cache of Antigravity's reasoning and, for a signature not in that cache, sends Google's skip_thought_signature_validator instead."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "candidates": [
+          {
+            "content": {"parts":[{"text":"It is 18 degrees in Paris."}],"role":"model"},
+            "finishReason": "STOP",
+            "index": 0
+          }
+        ],
+        "modelVersion": "gemini-corpus-upstream",
+        "responseId": "resp-corpus",
+        "usageMetadata": {
+          "cachedContentTokenCount": 8,
+          "candidatesTokenCount": 12,
+          "promptTokenCount": 40,
+          "thoughtsTokenCount": 20,
+          "totalTokenCount": 72
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "model": "gemini-3.8-flash-high",
+          "project": "corpus-project-0001",
+          "request": {
+            "contents": [
+              {"parts":[{"text":"Weather in Paris?"}],"role":"user"},
+              {
+                "parts": [
+                  {
+                    "functionCall": {"args":{"city":"Paris"},"id":"fc-1","name":"get_weather"},
+                    "thoughtSignature": "skip_thought_signature_validator"
+                  }
+                ],
+                "role": "model"
+              },
+              {
+                "parts": [
+                  {"functionResponse":{"id":"fc-1","name":"get_weather","response":{"temp":18}}}
+                ],
+                "role": "model"
+              }
+            ],
+            "generationConfig": {
+              "responseSchema": {
+                "properties": {"summary":{"type":"STRING"}},
+                "required": ["summary"],
+                "type": "OBJECT"
+              }
+            },
+            "sessionId": "-4214786680057866125",
+            "tools": [
+              {
+                "functionDeclarations": [
+                  {
+                    "description": "Get the current weather for a city",
+                    "name": "get_weather",
+                    "parameters": {
+                      "properties": {"city":{"type":"STRING"}},
+                      "required": ["city"],
+                      "type": "OBJECT"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "requestId": "(volatile)",
+          "requestType": "agent",
+          "userAgent": "antigravity"
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "antigravity/hub/2.29.0 (aidev_client; os_type=darwin; arch=arm64; cl=1013060670)"
+        },
+        "method": "POST",
+        "path": "/v1internal:generateContent"
+      }
+    ]
+  }
+}

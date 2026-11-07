@@ -1,0 +1,105 @@
+{
+  "description": "Antigravity: Gemini client, same-format passthrough, non-stream: systemInstruction, the user turn and generationConfig reach the upstream as the client sent them, and the upstream's candidate (with its thoughtSignature and usageMetadata) reaches the client unchanged. The request goes inside Cloud Code's envelope with the account's project, and the reply comes out of its response field.",
+  "source": [
+    "core/internal/runtime/executor/antigravity_executor_request.go",
+    "core/internal/runtime/executor/antigravity_executor_stream.go",
+    "core/internal/runtime/executor/antigravity_executor_execute.go",
+    "core/internal/translator/antigravity/gemini"
+  ],
+  "client": {
+    "path": "/v1beta/models/gemini-3.8-flash-high:generateContent",
+    "body": {
+      "systemInstruction": {"parts":[{"text":"Be brief."}]},
+      "contents": [{"role":"user","parts":[{"text":"Say hello"}]}],
+      "generationConfig": {"temperature":0.2,"maxOutputTokens":256}
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "response": {
+          "candidates": [
+            {
+              "content": {
+                "role": "model",
+                "parts": [{"text":"Hello there!","thoughtSignature":"CiQB0e2Kb7sigA1"}]
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 40,
+            "cachedContentTokenCount": 8,
+            "candidatesTokenCount": 12,
+            "thoughtsTokenCount": 20,
+            "totalTokenCount": 72
+          },
+          "modelVersion": "gemini-corpus-upstream",
+          "responseId": "resp-corpus"
+        },
+        "traceId": "trace-corpus"
+      }
+    }
+  ],
+  "volatile": ["upstream[*].body.requestId"],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [{"text":"Hello there!","thoughtSignature":"CiQB0e2Kb7sigA1"}],
+              "role": "model"
+            },
+            "finishReason": "STOP",
+            "index": 0
+          }
+        ],
+        "modelVersion": "gemini-corpus-upstream",
+        "responseId": "resp-corpus",
+        "usageMetadata": {
+          "cachedContentTokenCount": 8,
+          "candidatesTokenCount": 12,
+          "promptTokenCount": 40,
+          "thoughtsTokenCount": 20,
+          "totalTokenCount": 72
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "model": "gemini-3.8-flash-high",
+          "project": "corpus-project-0001",
+          "request": {
+            "contents": [{"parts":[{"text":"Say hello"}],"role":"user"}],
+            "generationConfig": {"temperature":0.2},
+            "sessionId": "-8918236195781160824",
+            "systemInstruction": {"parts":[{"text":"Be brief."}]}
+          },
+          "requestId": "(volatile)",
+          "requestType": "agent",
+          "userAgent": "antigravity"
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "antigravity/hub/2.29.0 (aidev_client; os_type=darwin; arch=arm64; cl=1013060670)"
+        },
+        "method": "POST",
+        "path": "/v1internal:generateContent"
+      }
+    ]
+  }
+}

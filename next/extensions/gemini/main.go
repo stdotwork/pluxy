@@ -245,7 +245,7 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 	losses = append(extra, losses...)
 	if req.Options.ReasoningEffort != "" {
 		var applied bool
-		body, applied, err = applyEffort(body, req.Model, req.Options.ReasoningEffort)
+		body, applied, err = geminigenerate.ApplyEffort(body, req.Model, req.Options.ReasoningEffort)
 		if err != nil {
 			return nil, nil, err
 		}

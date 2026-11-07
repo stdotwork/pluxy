@@ -1,0 +1,13 @@
+{
+  "manifest_version": 0,
+  "id": "pluxy/antigravity",
+  "version": "0.1.0",
+  "protocol": [0],
+  "programs": {
+    "linux/amd64": "antigravity",
+    "linux/arm64": "antigravity",
+    "darwin/amd64": "antigravity",
+    "darwin/arm64": "antigravity",
+    "windows/amd64": "antigravity.exe"
+  }
+}

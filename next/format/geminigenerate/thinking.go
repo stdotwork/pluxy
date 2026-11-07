@@ -1,4 +1,4 @@
-package main
+package geminigenerate
 
 import (
 	"encoding/json"
@@ -12,7 +12,7 @@ import (
 // generationConfig.thinkingConfig.thinkingLevel, from the levels the model has. Gemini 2.5 takes a
 // token budget: thinkingConfig.thinkingBudget, within the model's range, -1 for dynamic, 0 to turn
 // thinking off where the model allows it. Clients in other formats name an effort (OpenAI's
-// reasoning_effort, from none to xhigh), which applyEffort turns into whichever form the model
+// reasoning_effort, from none to xhigh), which ApplyEffort turns into whichever form the model
 // takes, with includeThoughts so the thought summaries come back as reasoning.
 
 // budgets are the thinking budgets for each effort on models that take a budget, as today's core
@@ -41,7 +41,7 @@ var effortLevels = map[string]string{
 
 var geminiModel = regexp.MustCompile(`^gemini-(\d+)(?:\.(\d+))?-`)
 
-// thinkingOf returns how a model takes thinking: its levels (Gemini 3 and later), or its budget
+// ThinkingOf returns how a model takes thinking: its levels (Gemini 3 and later), or its budget
 // range and whether 0 turns thinking off (Gemini 2.5 and the -latest names). ok is false for a
 // model name the extension does not know as a thinking Gemini model, which gets no thinking
 // settings.
@@ -49,7 +49,7 @@ var geminiModel = regexp.MustCompile(`^gemini-(\d+)(?:\.(\d+))?-`)
 // shortcut: decided from the model name with today's core's catalog as the reference, since
 // protocol v0 has no model capabilities. Move this to per-model capabilities when describe
 // carries them.
-func thinkingOf(model string) (levels []string, minBudget, maxBudget int, zero, ok bool) {
+func ThinkingOf(model string) (levels []string, minBudget, maxBudget int, zero, ok bool) {
 	model = strings.ToLower(strings.TrimPrefix(model, "models/"))
 	switch model {
 	case "gemini-pro-latest":
@@ -104,11 +104,11 @@ func nearestLevel(want string, levels []string) string {
 	return levels[len(levels)-1]
 }
 
-// applyEffort sets the thinking settings for effort on a GenerateContent body built for model. It
+// ApplyEffort sets the thinking settings for effort on a GenerateContent body built for model. It
 // reports false, leaving the body as it was, for an effort it does not know or a model that is not
 // a thinking Gemini model; the effort then stays reported as dropped.
-func applyEffort(body []byte, model, effort string) ([]byte, bool, error) {
-	levels, minB, maxB, zero, ok := thinkingOf(model)
+func ApplyEffort(body []byte, model, effort string) ([]byte, bool, error) {
+	levels, minB, maxB, zero, ok := ThinkingOf(model)
 	if !ok {
 		return body, false, nil
 	}

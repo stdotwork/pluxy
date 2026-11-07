@@ -68,6 +68,7 @@ Providers with their own folder of cases:
 | `vertex-api-key` | Gemini extension, Vertex settings and an express mode key | a `vertex` API-key entry |
 | `vertex` | Gemini extension, a Vertex service account | a Vertex service account auth file |
 | `kimi` | Kimi extension, a Kimi Code OAuth credential | a Kimi auth file |
+| `antigravity` | Antigravity extension, an OAuth credential with its project | an Antigravity auth file with `base_url`, the project and saved model hints; its `fetchAvailableModels` calls are answered aside |
 | `xai` | xAI extension, an API key | an `xai` group with `base-url` and an API key |
 | `codex-ws` | Codex extension, API key, `"websockets": true` in the account's settings | a Codex API key with `websockets: true` |
 
@@ -217,6 +218,11 @@ A path joins keys with `.` and puts array indexes in brackets:
    Recording also lays out the file in the corpus style (one stream event per line).
 3. Run the corpus. For each difference the report lists, fix the new core or add an exception
    with its reason.
+
+A provider whose core calls the upstream on its own, outside the case (today's core probes an
+Antigravity login's models when it loads it and again later), sets `Aside` in its entry: the fake
+upstream answers those calls with a fixed reply and neither records them nor uses up a scripted
+reply.
 
 A new provider needs an entry in `Providers` (`cores.go`): how each core's config points that
 provider at the fake upstream (for the old core, its `api-keys` block, or auth files with

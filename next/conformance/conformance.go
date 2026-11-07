@@ -41,7 +41,8 @@ const (
 	ScenarioHang Scenario = "hang"
 	// ScenarioRateLimited: the upstream refuses the request because of a rate limit and says to
 	// try again in 20 seconds. The extension must report code rate_limit, retryable, scope
-	// credential, retry_after_ms 20000.
+	// credential (or model, for a provider that limits each model on its own), retry_after_ms
+	// 20000.
 	ScenarioRateLimited Scenario = "rate_limited"
 	// ScenarioAuthFailed: the upstream refuses the credential. The extension must report code
 	// auth, retryable, scope credential.
@@ -160,7 +161,7 @@ func Run(t *testing.T, target Target) {
 	t.Run("no_stream", func(t *testing.T) { k.text(t, false) })
 	t.Run("cancel", k.cancel)
 	t.Run("errors/rate_limited", func(t *testing.T) {
-		k.wantError(t, ScenarioRateLimited, llm.Error{Code: llm.CodeRateLimit, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: 20000})
+		k.wantError(t, ScenarioRateLimited, llm.Error{Code: llm.CodeRateLimit, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: 20000}, llm.ScopeModel)
 	})
 	t.Run("errors/auth_failed", func(t *testing.T) {
 		k.wantError(t, ScenarioAuthFailed, llm.Error{Code: llm.CodeAuth, Retryable: true, Scope: llm.ScopeCredential})
@@ -355,7 +356,9 @@ func (k *kit) cancel(t *testing.T) {
 	}
 }
 
-func (k *kit) wantError(t *testing.T, s Scenario, want llm.Error) {
+// wantError checks that scenario s ends with the error want, or with want in one of the other
+// scopes given.
+func (k *kit) wantError(t *testing.T, s Scenario, want llm.Error, otherScopes ...string) {
 	ext := k.start(t)
 	setup := k.target.Prepare(t, s)
 	st := ext.Generate(context.Background(), setup.Account, request(true))
@@ -366,7 +369,8 @@ func (k *kit) wantError(t *testing.T, s Scenario, want llm.Error) {
 		t.Fatalf("ended with %s, want an error", got.Type)
 	}
 	e := got.Error
-	if e.Code != want.Code || e.Retryable != want.Retryable || e.Scope != want.Scope || e.RetryAfterMS != want.RetryAfterMS {
+	scopeOK := e.Scope == want.Scope || slices.Contains(otherScopes, e.Scope)
+	if e.Code != want.Code || e.Retryable != want.Retryable || !scopeOK || e.RetryAfterMS != want.RetryAfterMS {
 		t.Errorf("error = code %q retryable %v scope %q retry_after_ms %d; want code %q retryable %v scope %q retry_after_ms %d",
 			e.Code, e.Retryable, e.Scope, e.RetryAfterMS, want.Code, want.Retryable, want.Scope, want.RetryAfterMS)
 	}
