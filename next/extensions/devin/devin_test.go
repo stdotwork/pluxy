@@ -30,8 +30,21 @@ func TestModelID(t *testing.T) {
 		{"claude-opus-5-5", "adaptive", "claude-opus-5-5-high"},
 		{"gpt-5-5", "", "gpt-5-5-low"},
 		{"gemini-3-8-flash", "", "gemini-3-8-flash-high"},
-		{"glm-5-2", "", "glm-5-2-none"},
-		{"glm-5-2", "high", "glm-5-2-max"},
+		{"glm-5-2", "", "glm-5-2"},
+		{"glm-5-2", "high", "glm-5-2"},
+		{"glm-5-2", "max", "glm-5-2-max"},
+		{"glm-5-2", "off", "glm-5-2-none"},
+		{"glm-5-2-1m", "max", "glm-5-2-max-1m"},
+		{"glm-5-2-1m", "none", "glm-5-2-none-1m"},
+		{"glm-5-2-1m", "", "glm-5-2-1m"},
+		{"swe-1-7", "", "swe-1-7"},
+		{"swe-1-7", "high", "swe-1-7"},
+		{"swe-1-7", "medium", "swe-1-7-medium"},
+		{"swe-1-6", "fast", "swe-1-6-fast"},
+		{"claude-opus-4-6", "high", "claude-opus-4-6-thinking"},
+		{"claude-sonnet-4-6", "", "claude-sonnet-4-6"},
+		{"claude-opus-4-6-1m", "low", "claude-opus-4-6-thinking-1m"},
+		{"claude-sonnet-4-6-1m", "none", "claude-sonnet-4-6-1m"},
 		{"kimi-k3", "medium", "kimi-k3-high"},
 		{"swe-1-6", "high", "swe-1-6"},
 		{"swe-2-lightning", "", "swe-2-high-lightning"},
@@ -83,7 +96,10 @@ func TestRequestEncoding(t *testing.T) {
 			{Type: llm.ItemTypeToolResult, CallID: "call_1", Output: "sunny"},
 			{Type: llm.ItemTypeToolResult, CallID: "call_gone", Output: "late"},
 		}}
-	c := buildRequest(req)
+	c, err := buildRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
 	top := fieldsOf(t, c.encode("tok", "fp"))
 	if got := str(top, 2); got != "Be brief." {
 		t.Errorf("system prompt %q", got)
@@ -161,12 +177,12 @@ func (r *recorder) types() string {
 
 func relayFrames(frames ...[]byte) (*recorder, error) {
 	rec := &recorder{}
-	r := &relay{out: rec, model: "swe-2"}
+	r := newRelay(rec, "swe-2", nil)
 	return rec, r.run(context.Background(), bytes.NewReader(bytes.Join(frames, nil)))
 }
 
-// A reply's frames become items as they arrive: reasoning with its signature, text, and each
-// tool call by its ID, then the finish with usage.
+// A reply's frames become items as they arrive: reasoning, which stays open until the reply ends
+// so it gets its signature, text, and each tool call by its ID, then the finish with usage.
 func TestRelay(t *testing.T) {
 	sig := devintest.Frame(devintest.Bytes(nil, 10, []byte("sig")))
 	rec, err := relayFrames(devintest.Thinking("Hmm"), sig, devintest.Text("Sure."), devintest.ToolCall("call_a", "weather", `{"ci`),
@@ -174,18 +190,19 @@ func TestRelay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "response.start item.start reasoning.delta item.end item.start text.delta item.end item.start tool_input.delta tool_input.delta item.end item.start tool_input.delta item.end finish"
+	checkSequence(t, rec)
+	want := "response.start item.start reasoning.delta item.start text.delta item.end item.start tool_input.delta tool_input.delta item.start tool_input.delta item.end item.end item.end finish"
 	if got := rec.types(); got != want {
 		t.Fatalf("events\n %s\nwant\n %s", got, want)
 	}
 	ev := rec.events
-	if ev[3].Opaque == nil || ev[3].Opaque.Data != "sig" {
-		t.Errorf("reasoning end opaque %+v, want the signature", ev[3].Opaque)
+	if ev[11].Index != 0 || ev[11].Opaque == nil || ev[11].Opaque.Data != "sig" {
+		t.Errorf("reasoning end %+v, want item 0 with the signature", ev[11])
 	}
-	if it := ev[7].Item; it.CallID != "call_a" || it.Name != "weather" || ev[8].Delta+ev[9].Delta != `{"city":"Paris"}` {
-		t.Errorf("first call %+v with arguments %q", it, ev[8].Delta+ev[9].Delta)
+	if it := ev[6].Item; it.CallID != "call_a" || it.Name != "weather" || ev[7].Delta+ev[8].Delta != `{"city":"Paris"}` {
+		t.Errorf("first call %+v with arguments %q", it, ev[7].Delta+ev[8].Delta)
 	}
-	if it := ev[11].Item; it.CallID != "call_b" || it.Name != "time" {
+	if it := ev[9].Item; it.CallID != "call_b" || it.Name != "time" {
 		t.Errorf("second call %+v", it)
 	}
 	fin := ev[len(ev)-1]
@@ -213,6 +230,11 @@ func TestReplyErrors(t *testing.T) {
 		{"bad request", [][]byte{devintest.End("invalid_argument", "bad field")}, llm.CodeInvalidRequest, llm.ScopeRequest, false},
 		{"after output", [][]byte{devintest.Text("Hi"), devintest.End("resource_exhausted", "slow down")}, llm.CodeRateLimit, llm.ScopeModel, false},
 		{"truncated", [][]byte{devintest.Text("Hi")}, llm.CodeUpstream, llm.ScopeEndpoint, false},
+		{"after usage", [][]byte{devintest.Frame(devintest.Bytes(nil, 7, devintest.Varint(nil, 3, 9))), devintest.End("resource_exhausted", "slow down")}, llm.CodeRateLimit, llm.ScopeModel, false},
+		{"after a signature", [][]byte{devintest.Frame(devintest.Bytes(nil, 10, []byte("sealed.v1."))), devintest.End("resource_exhausted", "slow down")}, llm.CodeRateLimit, llm.ScopeModel, false},
+		{"cancelled", [][]byte{devintest.End("canceled", "the call was cancelled")}, llm.CodeCancelled, llm.ScopeRequest, false},
+		{"generic quota", [][]byte{devintest.End("resource_exhausted", "model quota exhausted")}, llm.CodeRateLimit, llm.ScopeModel, true},
+		{"monthly ACU quota", [][]byte{devintest.End("failed_precondition", "monthly ACU quota exhausted")}, llm.CodeRateLimit, llm.ScopeModel, true},
 	} {
 		_, err := relayFrames(c.frames...)
 		var e *llm.Error
@@ -235,6 +257,13 @@ func TestStatusErrors(t *testing.T) {
 	e = statusError(http.StatusTooManyRequests, "Weekly quota exhausted", nil, "")
 	if e.Code != llm.CodeQuota || e.Scope != llm.ScopeCredential {
 		t.Errorf("quota: %+v", e)
+	}
+	e = statusError(http.StatusTooManyRequests, "quota exhausted", nil, "")
+	if e.Code != llm.CodeRateLimit || e.Scope != llm.ScopeModel {
+		t.Errorf("quota with no period: %+v", e)
+	}
+	if e := trailerError([]byte(`{"error":{"code":"canceled","message":"x"}}`)); e.Status != 499 {
+		t.Errorf("cancelled: status %d, want 499", e.Status)
 	}
 }
 

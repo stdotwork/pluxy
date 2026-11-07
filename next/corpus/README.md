@@ -227,10 +227,10 @@ A provider whose upstream speaks Connect with protobuf messages (Devin's API ser
 replies as `connect` frames: each is `{"message": {...}}`, a data frame, or `{"end": {...}}`, the
 end frame with its JSON trailer (`{}` for a clean end). A message is written in JSON keyed by field
 number: a string is a text field, a number a varint, an object a nested message, `{"double": x}`
-a 64-bit float, `{"bytes": "base64"}` bytes that are not text, and an array a repeated field. The
-provider's `Proto` schema (`cores.go`) names its request message's nested and repeated fields, so
-a recorded protobuf request is decoded into the same JSON form and compared like any body
-(`connect.go`).
+a 64-bit float, `{"fixed32": n}` a 32-bit fixed value, `{"bytes": "base64"}` bytes that are not
+text, and an array a repeated field. The provider's `Proto` schema (`cores.go`) names its request
+message's nested and repeated fields, so a recorded protobuf request is decoded into the same JSON
+form and compared like any body (`connect.go`).
 
 A provider whose core calls the upstream on its own, outside the case (today's core probes an
 Antigravity login's models when it loads it and again later), sets `Aside` in its entry: the fake

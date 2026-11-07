@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/llm"
@@ -56,8 +57,11 @@ type toolCall struct{ id, name, args string }
 type image struct{ data, mediaType string }
 
 type turn struct {
-	source    int
-	content   string
+	source  int
+	content string
+	// emptied marks a user turn that had parts Devin cannot take and nothing else.
+	emptied   bool
+	dropped   string
 	calls     []toolCall
 	callID    string
 	images    []image
@@ -109,12 +113,46 @@ type chatRequest struct {
 	losses      []llm.Loss
 }
 
-// buildRequest turns a request into a chat request, listing what Devin has no place for.
-func buildRequest(req *llm.Request) *chatRequest {
-	c := &chatRequest{model: modelID(req.Model, req.Options.ReasoningEffort), maxTokens: maxOutputTokens, temperature: 1}
-	lose := func(kind, path, detail string) {
-		c.losses = llm.AddLoss(c.losses, llm.Loss{Kind: kind, Path: path, Detail: detail})
+func (c *chatRequest) lose(kind, path, detail string) {
+	c.losses = llm.AddLoss(c.losses, llm.Loss{Kind: kind, Path: path, Detail: detail})
+}
+
+// kept lists the fields o keeps beside the model as dropped, except the ones in used, which the
+// request takes.
+func (c *chatRequest) kept(o *llm.Origin, used ...string) {
+	if o == nil || len(o.Raw) == 0 {
+		return
 	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(o.Raw, &m) != nil {
+		return
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		if !slices.Contains(used, k) {
+			keys = append(keys, k)
+		}
+	}
+	slices.Sort(keys)
+	for _, k := range keys {
+		c.lose(llm.LossDropped, joinPath(o.Path, k), "Devin has no place for it")
+	}
+}
+
+func joinPath(path, key string) string {
+	if path == "" {
+		return key
+	}
+	return path + "." + key
+}
+
+// buildRequest turns a request into a chat request, listing what Devin has no place for. A user
+// turn left with nothing once the media Devin cannot take is dropped is refused, as today's core
+// refuses it.
+func buildRequest(req *llm.Request) (*chatRequest, error) {
+	c := &chatRequest{model: modelID(req.Model, req.Options.ReasoningEffort), maxTokens: maxOutputTokens, temperature: 1}
+	lose := c.lose
+	c.kept(req.Origin)
 	o := req.Options
 	if o.MaxOutputTokens != nil && *o.MaxOutputTokens > 0 && *o.MaxOutputTokens < maxOutputTokens {
 		c.maxTokens = *o.MaxOutputTokens
@@ -134,11 +172,19 @@ func buildRequest(req *llm.Request) *chatRequest {
 	if o.ResponseFormat != nil && o.ResponseFormat.Type != llm.ResponseFormatText {
 		lose(llm.LossDropped, "response_format", "Devin takes no response format")
 	}
-	for _, t := range req.Tools {
+	if o.ParallelToolCalls != nil && !*o.ParallelToolCalls {
+		lose(llm.LossDropped, "parallel_tool_calls", "Devin may call several tools at once")
+	}
+	for i, t := range req.Tools {
+		path := originPath(t.Origin, fmt.Sprintf("tools[%d]", i))
 		if t.Type != "" && t.Type != llm.ToolFunction || t.Name == "" {
-			lose(llm.LossDropped, originPath(t.Origin, "tools"), "Devin takes only function tools")
+			lose(llm.LossDropped, path, "Devin takes only function tools")
 			continue
 		}
+		if t.Strict != nil && *t.Strict {
+			lose(llm.LossDropped, joinPath(path, "strict"), "Devin has no strict tool arguments")
+		}
+		c.kept(t.Origin)
 		c.tools = append(c.tools, t)
 	}
 
@@ -161,7 +207,8 @@ func buildRequest(req *llm.Request) *chatRequest {
 		path := originPath(it.Origin, fmt.Sprintf("items[%d]", i))
 		switch it.Type {
 		case llm.ItemTypeMessage:
-			text, images := content(it, path, lose)
+			c.kept(it.Origin)
+			text, images, dropped := c.content(it, path)
 			switch it.Role {
 			case llm.RoleSystem, llm.RoleDeveloper:
 				if text != "" {
@@ -174,7 +221,9 @@ func buildRequest(req *llm.Request) *chatRequest {
 				}
 				t.content += text
 			default:
-				c.turns = append(c.turns, turn{source: sourceUser, content: labelImages(text, images), images: images})
+				t := turn{source: sourceUser, content: labelImages(text, images), images: images, dropped: dropped}
+				t.emptied = dropped != "" && strings.TrimSpace(t.content) == "" && len(images) == 0
+				c.turns = append(c.turns, t)
 			}
 		case llm.ItemTypeReasoning:
 			t := last()
@@ -184,35 +233,76 @@ func buildRequest(req *llm.Request) *chatRequest {
 			}
 			t.thinking = it.Text
 			t.signature = signatureOf(it.Origin)
+			c.kept(it.Origin, "signature", "encrypted_content")
 		case llm.ItemTypeToolCall:
+			c.kept(it.Origin)
 			t := assistant()
 			t.calls = append(t.calls, toolCall{id: it.CallID, name: it.Name, args: it.Arguments})
 			if it.CallID != "" {
 				pending[it.CallID] = true
 			}
 		case llm.ItemTypeToolResult:
+			out := c.resultText(it)
 			if pending[it.CallID] {
-				c.turns = append(c.turns, turn{source: sourceTool, content: it.Output, callID: it.CallID})
+				c.turns = append(c.turns, turn{source: sourceTool, content: out, callID: it.CallID})
 			} else {
 				// A result for no call in the conversation goes as the user's text, as today's
 				// core sends it.
-				c.turns = append(c.turns, turn{source: sourceUser, content: it.Output})
+				c.turns = append(c.turns, turn{source: sourceUser, content: out})
 			}
 		default:
 			lose(llm.LossDropped, path, "Devin has no place for a "+it.Type+" item")
 		}
 	}
 	c.system = strings.Join(system, "\n")
-	return c
+	if err := c.dropEmptied(); err != nil {
+		return nil, err
+	}
+	return c, nil
 }
 
-// content returns a message's text, its parts joined by a line break, and its images. Devin
-// takes images as base64 data, so an image given as a link and other parts are dropped.
-func content(it llm.Item, path string, lose func(kind, path, detail string)) (string, []image) {
+// dropEmptied refuses the request when a run of user turns (between assistant turns) has a turn
+// emptied by dropped media and nothing else to send, and otherwise removes the emptied turns, so
+// no empty user turn reaches Devin.
+func (c *chatRequest) dropEmptied() error {
+	start := 0
+	for i := 0; i <= len(c.turns); i++ {
+		if i < len(c.turns) && c.turns[i].source != sourceAssistant {
+			continue
+		}
+		dropped, alive := "", false
+		for _, t := range c.turns[start:i] {
+			if t.emptied && dropped == "" {
+				dropped = t.dropped
+			}
+			alive = alive || !t.emptied
+		}
+		if dropped != "" && !alive {
+			return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeRequest,
+				Message: "Devin cannot take the " + dropped + " content of a user turn, and the turn has nothing else"}
+		}
+		start = i + 1
+	}
+	c.turns = slices.DeleteFunc(c.turns, func(t turn) bool { return t.emptied })
+	return nil
+}
+
+// content returns a message's text, its parts joined by a line break, its images, and the type
+// of the first part it dropped. Devin takes images as base64 data, so an image given as a link
+// and other parts are dropped.
+func (c *chatRequest) content(it llm.Item, path string) (string, []image, string) {
 	var texts []string
 	var images []image
+	var dropped string
+	drop := func(typ, ppath, detail string) {
+		c.lose(llm.LossDropped, ppath, detail)
+		if dropped == "" {
+			dropped = typ
+		}
+	}
 	for j, p := range it.Content {
 		ppath := originPath(p.Origin, fmt.Sprintf("%s.content[%d]", path, j))
+		c.kept(p.Origin)
 		switch p.Type {
 		case llm.PartText:
 			texts = append(texts, p.Text)
@@ -221,12 +311,46 @@ func content(it llm.Item, path string, lose func(kind, path, detail string)) (st
 				images = append(images, img)
 				continue
 			}
-			lose(llm.LossDropped, ppath, "Devin takes images only as base64 data in a user turn")
+			drop(p.Type, ppath, "Devin takes images only as base64 data in a user turn")
 		default:
-			lose(llm.LossDropped, ppath, "Devin has no place for a "+p.Type+" part")
+			drop(p.Type, ppath, "Devin has no place for a "+p.Type+" part")
 		}
 	}
-	return strings.Join(texts, "\n"), images
+	return strings.Join(texts, "\n"), images, dropped
+}
+
+// resultText returns a tool result's text. A result the client gave as content blocks (kept
+// beside the model, in content for Messages or output for Responses) keeps its text blocks,
+// joined by a line break; its other blocks, such as images, are dropped.
+func (c *chatRequest) resultText(it llm.Item) string {
+	if it.Output != "" || it.Origin == nil {
+		c.kept(it.Origin)
+		return it.Output
+	}
+	var m map[string]json.RawMessage
+	_ = json.Unmarshal(it.Origin.Raw, &m)
+	for _, key := range []string{"content", "output"} {
+		var blocks []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(m[key], &blocks) != nil || len(blocks) == 0 {
+			continue
+		}
+		var texts []string
+		for j, b := range blocks {
+			switch b.Type {
+			case "text", "input_text", "output_text":
+				texts = append(texts, b.Text)
+			default:
+				c.lose(llm.LossDropped, fmt.Sprintf("%s[%d]", joinPath(it.Origin.Path, key), j), "Devin takes only text in a tool result")
+			}
+		}
+		c.kept(it.Origin, key)
+		return strings.Join(texts, "\n")
+	}
+	c.kept(it.Origin)
+	return ""
 }
 
 // labelImages puts a line naming each image before a user turn's text, as Devin's CLI names

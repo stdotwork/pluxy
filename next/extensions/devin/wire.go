@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"unicode/utf8"
 )
 
 // Devin's API server speaks Connect (connectrpc.com) with protobuf messages. pluxy has no
@@ -151,4 +152,36 @@ func readFrame(r io.Reader) (end bool, payload []byte, err error) {
 		}
 	}
 	return flags&flagEnd != 0, payload, nil
+}
+
+// utf8Buffer holds the bytes of a character split across frames until the rest comes, so every
+// piece passed on is whole UTF-8.
+type utf8Buffer struct{ rest []byte }
+
+// feed returns b, after what was held, up to its last whole character; an incomplete character
+// at the end is held.
+func (u *utf8Buffer) feed(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	all := append(u.rest, b...)
+	cut := len(all)
+	// Look back at most utf8.UTFMax-1 bytes for the start of an incomplete last character.
+	for i := len(all) - 1; i >= 0 && i >= len(all)-(utf8.UTFMax-1); i-- {
+		if utf8.RuneStart(all[i]) {
+			if !utf8.FullRune(all[i:]) {
+				cut = i
+			}
+			break
+		}
+	}
+	u.rest = append([]byte(nil), all[cut:]...)
+	return string(all[:cut])
+}
+
+// flush returns what is held, at the end of the reply.
+func (u *utf8Buffer) flush() string {
+	s := string(u.rest)
+	u.rest = nil
+	return s
 }

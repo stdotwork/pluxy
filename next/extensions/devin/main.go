@@ -156,7 +156,10 @@ func chat(ctx context.Context, call sdk.Call, out sender) error {
 		return &llm.Error{Code: llm.CodeAuth, Message: "the account has no Devin session token", Scope: llm.ScopeCredential}
 	}
 	req := &call.Request
-	chat := buildRequest(req)
+	chat, err := buildRequest(req)
+	if err != nil {
+		return err
+	}
 	tr := &llm.Translation{To: "devin.chat", Losses: chat.losses}
 	if req.Origin != nil {
 		tr.From = req.Origin.Format
@@ -194,8 +197,7 @@ func chat(ctx context.Context, call sdk.Call, out sender) error {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		return statusError(resp.StatusCode, connectMessage(raw), raw, resp.Header.Get("Retry-After"))
 	}
-	r := &relay{out: out, model: req.Model, tr: tr}
-	return r.run(ctx, resp.Body)
+	return newRelay(out, req.Model, tr).run(ctx, resp.Body)
 }
 
 // setHeaders sets the headers Devin's CLI sends with every call: the session token twice as
@@ -219,24 +221,52 @@ func sentryTrace() string {
 type sender interface{ Send(llm.Event) error }
 
 // relay turns the reply's Connect frames into events as they arrive. Each data frame carries
-// pieces of reasoning, text and tool calls; a new kind of piece closes the item before it.
+// pieces of reasoning, text and tool calls. Items may overlap, as the protocol allows: reasoning
+// stays open until the reply ends or new reasoning follows other output, so a signature that
+// comes after the answer began still reaches it; each tool call stays open, found by its ID, so
+// a call can continue after another one started.
 type relay struct {
 	out   sender
 	model string
 	tr    *llm.Translation
 
-	started  bool // response.start was sent
-	next     int  // index of the next item
-	open     string
-	openIdx  int
-	openCall string
-	sig      []byte
-	calls    int
-	stop     uint64
-	usage    usage
+	started bool // response.start was sent
+	ran     bool // a data frame came: Devin ran the request
+	next    int  // index of the next item
+
+	text      int // index of the open message item, or -1
+	reasoning int // index of the open reasoning item, or -1
+	// afterReasoning is set once other output came after the open reasoning item began.
+	afterReasoning bool
+	sig            []byte
+	textBuf        utf8Buffer
+	thinkBuf       utf8Buffer
+
+	calls    []*callSlot          // tool calls in the order they came
+	byID     map[string]*callSlot // tool calls by ID
+	lastCall *callSlot            // the call a piece naming no ID continues
+
+	stop  uint64
+	usage usage
 }
 
-type usage struct{ input, output, cacheWrite, cacheRead int64 }
+// callSlot is one tool call of the reply. It is started once both its ID and name are known;
+// arguments that come before are held.
+type callSlot struct {
+	id, name string
+	index    int // item index, or -1 until started
+	held     string
+	args     utf8Buffer
+}
+
+type usage struct {
+	seen                                 bool // a usage message came
+	input, output, cacheWrite, cacheRead int64
+}
+
+func newRelay(out sender, model string, tr *llm.Translation) *relay {
+	return &relay{out: out, model: model, tr: tr, text: -1, reasoning: -1, byID: map[string]*callSlot{}}
+}
 
 func (r *relay) send(ev llm.Event) error {
 	if !r.started {
@@ -249,32 +279,43 @@ func (r *relay) send(ev llm.Event) error {
 	return r.out.Send(ev)
 }
 
-// item makes sure an item of kind is open, closing the one before it, and returns its index.
-// A tool call with a different ID is a new item.
-func (r *relay) item(kind, callID, name string) (int, error) {
-	if r.open == kind && (kind != llm.ItemToolCall || callID == "" || callID == r.openCall) {
-		return r.openIdx, nil
-	}
-	if err := r.close(); err != nil {
-		return 0, err
-	}
-	r.open, r.openIdx, r.openCall = kind, r.next, callID
+// start opens a new item and returns its index.
+func (r *relay) start(kind, callID, name string) (int, error) {
+	idx := r.next
 	r.next++
-	if kind == llm.ItemToolCall {
-		r.calls++
-	}
-	return r.openIdx, r.send(llm.Event{Type: llm.EventItemStart, Index: r.openIdx, Item: &llm.ItemStart{Kind: kind, CallID: callID, Name: name}})
+	return idx, r.send(llm.Event{Type: llm.EventItemStart, Index: idx, Item: &llm.ItemStart{Kind: kind, CallID: callID, Name: name}})
 }
 
-func (r *relay) close() error {
-	if r.open == "" {
+// endText closes the open message item.
+func (r *relay) endText() error {
+	if r.text < 0 {
 		return nil
 	}
-	ev := llm.Event{Type: llm.EventItemEnd, Index: r.openIdx}
-	if r.open == llm.ItemReasoning && len(r.sig) > 0 {
+	if rest := r.textBuf.flush(); rest != "" {
+		if err := r.send(llm.Event{Type: llm.EventTextDelta, Index: r.text, Delta: rest}); err != nil {
+			return err
+		}
+	}
+	idx := r.text
+	r.text = -1
+	return r.send(llm.Event{Type: llm.EventItemEnd, Index: idx})
+}
+
+// endReasoning closes the open reasoning item with the signature it got.
+func (r *relay) endReasoning() error {
+	if r.reasoning < 0 {
+		return nil
+	}
+	if rest := r.thinkBuf.flush(); rest != "" {
+		if err := r.send(llm.Event{Type: llm.EventReasoningDelta, Index: r.reasoning, Delta: rest}); err != nil {
+			return err
+		}
+	}
+	ev := llm.Event{Type: llm.EventItemEnd, Index: r.reasoning}
+	if len(r.sig) > 0 {
 		ev.Opaque = &llm.Opaque{Format: opaqueFormat, Data: string(r.sig)}
 	}
-	r.open, r.sig = "", nil
+	r.reasoning, r.sig = -1, nil
 	return r.send(ev)
 }
 
@@ -293,13 +334,14 @@ func (r *relay) run(ctx context.Context, body io.Reader) error {
 		}
 		if end {
 			if e := trailerError(payload); e != nil {
-				// Once the reply began, the model ran: trying again is not safe.
-				e.Retryable = e.Retryable && !r.started
+				// Once Devin sent a data frame, the model ran: trying again is not safe.
+				e.Retryable = e.Retryable && !r.ran
 				e.Usage = r.usage.llm()
 				return e
 			}
 			return r.finish()
 		}
+		r.ran = true
 		if err := r.data(payload); err != nil {
 			return err
 		}
@@ -313,16 +355,16 @@ func (r *relay) data(payload []byte) error {
 	if err != nil {
 		return nil
 	}
-	var text, thinking strings.Builder
+	var text, thinking, sig []byte
 	var calls [][]byte
 	for _, f := range fields {
 		switch {
 		case f.num == 3 && f.wire == wireBytes:
-			text.Write(f.data)
+			text = append(text, f.data...)
 		case f.num == 9 && f.wire == wireBytes:
-			thinking.Write(f.data)
+			thinking = append(thinking, f.data...)
 		case f.num == 10 && f.wire == wireBytes:
-			r.sig = append(r.sig, f.data...)
+			sig = append(sig, f.data...)
 		case f.num == 6 && f.wire == wireBytes:
 			calls = append(calls, f.data)
 		case f.num == 5 && f.wire == wireVarint:
@@ -331,24 +373,30 @@ func (r *relay) data(payload []byte) error {
 			r.usage.merge(f.data)
 		}
 	}
-	if thinking.Len() > 0 {
-		sig := r.sig
-		idx, err := r.item(llm.ItemReasoning, "", "")
-		if err != nil {
-			return err
-		}
-		r.sig = sig
-		if err := r.send(llm.Event{Type: llm.EventReasoningDelta, Index: idx, Delta: thinking.String()}); err != nil {
+	if len(thinking) > 0 || len(sig) > 0 && r.reasoning < 0 {
+		if err := r.openReasoning(); err != nil {
 			return err
 		}
 	}
-	if text.Len() > 0 {
-		idx, err := r.item(llm.ItemMessage, "", "")
-		if err != nil {
+	r.sig = append(r.sig, sig...)
+	if d := r.thinkBuf.feed(thinking); d != "" {
+		if err := r.send(llm.Event{Type: llm.EventReasoningDelta, Index: r.reasoning, Delta: d}); err != nil {
 			return err
 		}
-		if err := r.send(llm.Event{Type: llm.EventTextDelta, Index: idx, Delta: text.String()}); err != nil {
-			return err
+	}
+	if len(text) > 0 {
+		if r.text < 0 {
+			idx, err := r.start(llm.ItemMessage, "", "")
+			if err != nil {
+				return err
+			}
+			r.text = idx
+		}
+		r.afterReasoning = r.reasoning >= 0
+		if d := r.textBuf.feed(text); d != "" {
+			if err := r.send(llm.Event{Type: llm.EventTextDelta, Index: r.text, Delta: d}); err != nil {
+				return err
+			}
 		}
 	}
 	for _, c := range calls {
@@ -359,14 +407,36 @@ func (r *relay) data(payload []byte) error {
 	return nil
 }
 
-// toolCall handles a piece of a tool call: its ID and name come first, then its arguments in
-// pieces.
+// openReasoning makes sure a reasoning item is open for new reasoning. Reasoning that follows
+// other output since the open item began starts a new item, after that output.
+func (r *relay) openReasoning() error {
+	if r.reasoning >= 0 && !r.afterReasoning {
+		return nil
+	}
+	if err := r.endReasoning(); err != nil {
+		return err
+	}
+	if err := r.endText(); err != nil {
+		return err
+	}
+	idx, err := r.start(llm.ItemReasoning, "", "")
+	if err != nil {
+		return err
+	}
+	r.reasoning, r.afterReasoning = idx, false
+	return nil
+}
+
+// toolCall handles a piece of a tool call: its ID and name, and a piece of its arguments, as JSON
+// (field 3) or, when Devin could not make them JSON, as text (field 4). A piece with an ID
+// continues that call or starts a new one; a piece with none continues the call last added to,
+// or starts one with a made-up ID.
 func (r *relay) toolCall(b []byte) error {
 	fields, err := parseFields(b)
 	if err != nil {
 		return nil
 	}
-	var callID, name, args string
+	var callID, name, args, invalid string
 	for _, f := range fields {
 		if f.wire != wireBytes {
 			continue
@@ -378,19 +448,55 @@ func (r *relay) toolCall(b []byte) error {
 			name = string(f.data)
 		case 3:
 			args += string(f.data)
+		case 4:
+			invalid += string(f.data)
 		}
 	}
-	if r.open != llm.ItemToolCall && callID == "" {
+	if args == "" {
+		args = invalid
+	}
+	var c *callSlot
+	switch {
+	case callID != "":
+		c = r.byID[callID]
+	case r.lastCall != nil:
+		c = r.lastCall
+	default:
 		callID = "call_" + strings.ReplaceAll(newUUID(), "-", "")[:24]
 	}
-	idx, err := r.item(llm.ItemToolCall, callID, name)
-	if err != nil {
-		return err
+	if c == nil {
+		c = &callSlot{id: callID, index: -1}
+		r.byID[callID] = c
+		r.calls = append(r.calls, c)
 	}
-	if args == "" {
+	r.lastCall = c
+	if c.name == "" {
+		c.name = name
+	}
+	if r.reasoning >= 0 {
+		r.afterReasoning = true
+	}
+	d := c.args.feed([]byte(args))
+	if c.index < 0 {
+		if c.name == "" {
+			c.held += d
+			return nil
+		}
+		// Text before the call is done; text after it is a new item, after the call.
+		if err := r.endText(); err != nil {
+			return err
+		}
+		idx, err := r.start(llm.ItemToolCall, c.id, c.name)
+		if err != nil {
+			return err
+		}
+		c.index = idx
+		d, c.held = c.held+d, ""
+	}
+	if d == "" {
 		return nil
 	}
-	return r.send(llm.Event{Type: llm.EventToolInputDelta, Index: idx, Delta: args})
+	return r.send(llm.Event{Type: llm.EventToolInputDelta, Index: c.index, Delta: d})
 }
 
 // Devin's stop reasons that end a reply early.
@@ -401,8 +507,26 @@ const (
 )
 
 func (r *relay) finish() error {
-	if err := r.close(); err != nil {
+	if err := r.endReasoning(); err != nil {
 		return err
+	}
+	if err := r.endText(); err != nil {
+		return err
+	}
+	for _, c := range r.calls {
+		if c.index < 0 {
+			return &llm.Error{Code: llm.CodeUpstream, Message: "Devin sent a tool call without a name", Scope: llm.ScopeEndpoint, Usage: r.usage.llm()}
+		}
+	}
+	for _, c := range r.calls {
+		if rest := c.args.flush(); rest != "" {
+			if err := r.send(llm.Event{Type: llm.EventToolInputDelta, Index: c.index, Delta: rest}); err != nil {
+				return err
+			}
+		}
+		if err := r.send(llm.Event{Type: llm.EventItemEnd, Index: c.index}); err != nil {
+			return err
+		}
 	}
 	f := &llm.Finish{Reason: llm.FinishStop}
 	switch r.stop {
@@ -411,7 +535,7 @@ func (r *relay) finish() error {
 	case stopContentFilter:
 		f.Reason = llm.FinishContentFilter
 	default:
-		if r.calls > 0 {
+		if len(r.calls) > 0 {
 			f.Reason = llm.FinishToolCalls
 		}
 	}
@@ -422,12 +546,14 @@ func (r *relay) finish() error {
 }
 
 // merge adds a usage message: 2 input tokens not read from a cache, 3 output tokens, 4 tokens
-// written to a cache, 5 read from one. A later non-zero count replaces an earlier one.
+// written to a cache, 5 read from one. A later non-zero count replaces an earlier one. Devin's
+// protobuf leaves zero counts out, so a usage message reports every count, zero when left out.
 func (u *usage) merge(b []byte) {
 	fields, err := parseFields(b)
 	if err != nil {
 		return
 	}
+	u.seen = true
 	for _, f := range fields {
 		if f.wire != wireVarint || f.val == 0 {
 			continue
@@ -446,7 +572,7 @@ func (u *usage) merge(b []byte) {
 }
 
 func (u usage) llm() *llm.Usage {
-	if u == (usage{}) {
+	if !u.seen {
 		return nil
 	}
 	in, out := u.input+u.cacheRead+u.cacheWrite, u.output
@@ -476,6 +602,9 @@ func trailerError(payload []byte) *llm.Error {
 	e.ProviderCode = t.Error.Code
 	return e
 }
+
+// statusCancelled is the status of a call Devin cancelled, nginx's 499, as today's core gives it.
+const statusCancelled = 499
 
 // connectStatus maps a Connect error code to the HTTP status it means, as today's core maps it:
 // a few codes depend on the message, which says whether a refusal is about quota or demand.
@@ -507,6 +636,8 @@ func connectStatus(code, msg string) int {
 		return http.StatusBadRequest
 	case "not_found":
 		return http.StatusNotFound
+	case "canceled":
+		return statusCancelled
 	}
 	return http.StatusBadGateway
 }
@@ -524,7 +655,8 @@ func connectMessage(raw []byte) string {
 
 // statusError classifies a refusal by its HTTP status. A 429 holds back only the model, as
 // today's core cools only the model, unless Devin says the account's daily or weekly quota is
-// used up.
+// used up: the period, "quota" and "exhausted" must all be in the message, so a monthly or
+// unnamed quota holds back only the model, as in today's core.
 func statusError(status int, msg string, raw []byte, retryAfterHeader string) *llm.Error {
 	if msg == "" {
 		msg = fmt.Sprintf("Devin answered %d %s", status, http.StatusText(status))
@@ -540,10 +672,12 @@ func statusError(status int, msg string, raw []byte, retryAfterHeader string) *l
 		e.Code, e.Scope, e.Retryable = llm.CodePermission, llm.ScopeCredential, true
 	case status == http.StatusNotFound:
 		e.Code, e.Scope = llm.CodeNotFound, llm.ScopeModel
+	case status == statusCancelled:
+		e.Code, e.Scope = llm.CodeCancelled, llm.ScopeRequest
 	case status == http.StatusTooManyRequests:
 		e.Code, e.Scope, e.Retryable = llm.CodeRateLimit, llm.ScopeModel, true
 		e.RetryAfterMS = retryAfter(retryAfterHeader, time.Now())
-		if m := strings.ToLower(msg); strings.Contains(m, "quota") && strings.Contains(m, "exhausted") {
+		if m := strings.ToLower(msg); strings.Contains(m, "quota") && strings.Contains(m, "exhausted") && containsAny(m, "daily", "weekly") {
 			e.Code, e.Scope = llm.CodeQuota, llm.ScopeCredential
 		}
 	case status == http.StatusServiceUnavailable:

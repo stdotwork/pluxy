@@ -7,9 +7,10 @@ import (
 )
 
 // A message written from its JSON form decodes back to the same form with the schema that names
-// its nested and repeated fields; text, varints, doubles and bytes keep their kinds.
+// its nested and repeated fields; text, varints, doubles, fixed32 values and bytes keep their
+// kinds.
 func TestConnectRoundTrip(t *testing.T) {
-	in := `{"1":{"1":"chisel","3":"token"},"3":[{"2":1,"3":"Hi"},{"2":2,"3":"Hello","12":{"bytes":"/w=="}}],"8":{"2":64000,"5":{"double":0.25}},"21":"swe-2-high"}`
+	in := `{"1":{"1":"chisel","3":"token"},"3":[{"2":1,"3":"Hi"},{"2":2,"3":"Hello","12":{"bytes":"/w=="}}],"8":{"2":64000,"5":{"double":0.25},"9":{"fixed32":7}},"21":"swe-2-high"}`
 	frames, err := encodeConnect([]ConnectFrame{{Message: json.RawMessage(in)}, {End: json.RawMessage(`{}`)}})
 	if err != nil {
 		t.Fatal(err)
@@ -31,5 +32,18 @@ func TestConnectRoundTrip(t *testing.T) {
 	_ = json.Unmarshal(g, &gotAny)
 	if !reflect.DeepEqual(gotAny, want) {
 		t.Errorf("decoded\n %s\nwant\n %s", g, in)
+	}
+}
+
+// A fixed32 field decodes differently from a varint with the same value, so a request field
+// written with the wrong wire type does not compare equal.
+func TestConnectWireTypes(t *testing.T) {
+	schema := &ProtoSchema{}
+	varint, _ := decodeConnectRequest([]byte{0x08, 0x01}, false, schema)
+	fixed, _ := decodeConnectRequest([]byte{0x0d, 0x01, 0x00, 0x00, 0x00}, false, schema)
+	a, _ := json.Marshal(varint)
+	b, _ := json.Marshal(fixed)
+	if string(a) == string(b) {
+		t.Errorf("varint %s and fixed32 %s decode the same", a, b)
 	}
 }

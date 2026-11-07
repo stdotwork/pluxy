@@ -21,8 +21,9 @@ import (
 //
 // The JSON form of a message is an object keyed by field number. A string is a length-delimited
 // field holding text, a number a varint, an object a nested message, {"double": x} a 64-bit
-// float, {"bytes": "base64"} length-delimited bytes that are not text, and an array a field that
-// repeats.
+// float, {"fixed32": n} a 32-bit fixed value, {"bytes": "base64"} length-delimited bytes that are
+// not text, and an array a field that repeats. Each wire type has its own form, so a field written
+// with the wrong one does not compare equal.
 
 // ConnectFrame is one frame of a scripted Connect reply: a data frame with Message, or the end
 // frame with End, its JSON trailer ({} for a clean end, {"error": {"code", "message"}}).
@@ -130,6 +131,13 @@ func encodeField(out []byte, n int, v any) ([]byte, error) {
 			}
 			return binary.LittleEndian.AppendUint64(tag(1), math.Float64bits(f)), nil
 		}
+		if d, ok := x["fixed32"].(json.Number); ok && len(x) == 1 {
+			u, err := strconv.ParseUint(d.String(), 10, 32)
+			if err != nil {
+				return nil, fmt.Errorf("fixed32 %s: %w", d, err)
+			}
+			return binary.LittleEndian.AppendUint32(tag(5), uint32(u)), nil
+		}
 		if s, ok := x["bytes"].(string); ok && len(x) == 1 {
 			b, err := base64.StdEncoding.DecodeString(s)
 			if err != nil {
@@ -213,7 +221,7 @@ func decodeMessage(b []byte, path string, schema *ProtoSchema) (map[string]any, 
 			if len(b) < 4 {
 				return nil, fmt.Errorf("short fixed32")
 			}
-			v, b = json.Number(strconv.FormatUint(uint64(binary.LittleEndian.Uint32(b)), 10)), b[4:]
+			v, b = map[string]any{"fixed32": json.Number(strconv.FormatUint(uint64(binary.LittleEndian.Uint32(b)), 10))}, b[4:]
 		default:
 			return nil, fmt.Errorf("wire type %d", wire)
 		}

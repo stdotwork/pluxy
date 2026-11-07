@@ -489,8 +489,19 @@ call goes as the user's text; images as base64 data, named in the user's text as
 pasted images), the completion settings (the output limit, at most 64000; the temperature, 1 by
 default), the function tools with their JSON Schema, a new session, and the model ID. The headers
 are the CLI's: the token twice as Basic credentials, Connect's version, a Sentry trace, no
-User-Agent and no compression. The reply's frames become the reply's events as they arrive:
-reasoning (with Devin's signature as the reasoning's opaque data), text, tool calls and usage.
+User-Agent and no compression. What Devin has no place for is reported as dropped (and refused
+under `drop_policy` `reject`): a client's fields kept beside the model (such as a Chat message's
+`name` or `seed`), parallel tool calls turned off, strict tool arguments, and parts other than
+text and base64 images. A tool result given as content blocks keeps its text. A user turn left
+with nothing once media Devin cannot take is dropped is refused, as today's core refuses it.
+
+The reply's frames become the reply's events as they arrive: reasoning, text, tool calls and
+usage. Reasoning stays open until the reply ends or new reasoning follows other output, so
+Devin's signature, which may come after the answer began, reaches it as the reasoning's opaque
+data; a signature with no reasoning text gets a reasoning item of its own. Each tool call is
+found by its ID, so a call can continue after another one started, and starts once its name is
+known. Arguments Devin could not make JSON (its `invalid_json_str`) are passed on as text. A
+character split across frames is passed on whole.
 
 Devin names a model and its reasoning effort as one model ID (`claude-opus-5-5-medium`). A client
 names the model as today's core lists it, `devin/claude-opus-5-5` (or without the `devin/`
@@ -498,24 +509,34 @@ prefix), and the extension adds the request's reasoning effort, or the model's d
 the nearest effort the model has, as today's core does; a name that already ends in an effort
 (`claude-opus-5-5-high`) is sent as it is. The efforts of each model come from today's core's
 Devin catalog (`models.go`); a model not in it is sent as named, with the request's effort when it
-has one.
+has one. A few models name their efforts as variants, as in today's core: SWE-1.7 is sent bare
+unless `medium` is asked for, SWE-1.6 bare unless `fast` is, GLM-5.2 bare but for `none` and `max`
+(`glm-5-2-max-1m` for the long-context model), and the Claude 4.6 models as `-thinking` with any
+effort but `none`.
 
 An error in Devin's end frame is classified by its Connect code, as today's core maps it. A 429
 (or `resource_exhausted`, a demand refusal or a credit limit) holds back only that model on the
 account, unless Devin says the account's daily or weekly quota is exhausted, which holds back the
-account. An error after the reply began is not retry-safe, and a reply that ends without its end
-frame is an error.
+account. A monthly or unnamed quota holds back only the model. Devin's `canceled` is a cancelled
+request (499), as in today's core. An error after Devin sent any frame (output, usage or a
+signature) is not retry-safe, and a reply that ends without its end frame is an error.
 
 Not built, from today's core: removing Claude Code's and Codex's attribution lines from the system
 prompt and `devin.sensitive-words`; rewriting tool descriptions; encoding tool call IDs (they pass
 through as given); a session's turn count (each request is a new session, as today's core sends
 for a client that names none); the account's plan and quota status (`GetUserStatus`) and a used-up
 quota's reset time; the remote model catalog refresh; Devin's names for older models
-(`claude-haiku-4-5`, `gpt-4-1`, Sonnet 4.5, Claude 4.5 Opus) and the `-fast` and `-thinking`
-variants built from an effort; the usage fallback from response dimensions; images in tool
-results; signature types other than `sealed`; and token counting (core has no count-tokens route).
-A Messages client gets Devin's reasoning without its signature, because the Messages renderer
-passes on only Responses and Gemini signatures.
+(`claude-haiku-4-5`, `gpt-4-1`, Sonnet 4.5, Claude 4.5 Opus) and the `-fast` variants built from a
+`<effort>-fast` request; the usage fallback from response dimensions; images in tool results;
+signature types other than `sealed`; namespace tools and custom (freeform) tools such as
+`apply_patch`, which are reported as dropped, and today's core's checks and recovery of a malformed
+`apply_patch` call; and token counting (core has no count-tokens route). A replayed reasoning
+signature is sent as given, whoever issued it.
+
+Gaps outside the extension: a Messages or Gemini client gets Devin's reasoning without its
+signature, because those renderers pass on only Responses and Gemini signatures, so such a client
+cannot replay it. A Gemini client's `thoughtSignature` on a function call is reported as dropped;
+today's core sends it to Devin as a sealed signature.
 
 ## Accounts and routing
 

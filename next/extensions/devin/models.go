@@ -88,6 +88,9 @@ func modelID(model, effort string) string {
 		return model
 	}
 	effort = normalEffort(effort)
+	if id, ok := variantID(model, effort); ok {
+		return id
+	}
 	levels, known := modelLevels[model]
 	if !known {
 		if effort == "" {
@@ -103,6 +106,47 @@ func modelID(model, effort string) string {
 		return stem + "-" + nearestEffort(effort, levels, defaultEffort(stem, levels)) + "-lightning"
 	}
 	return model + "-" + nearestEffort(effort, levels, defaultEffort(model, levels))
+}
+
+// variantID returns the ID of a model whose efforts Devin names as variants rather than as an
+// effort suffix, as today's core names them: SWE-1.7 is bare unless medium is asked for, SWE-1.6
+// bare unless fast is, GLM-5.2 bare but for none and max (before -1m on the long-context model),
+// and the Claude 4.6 models -thinking with any effort but none.
+func variantID(model, effort string) (string, bool) {
+	thinking := effort != "" && effort != "none"
+	switch model {
+	case "swe-1-7":
+		if effort == "medium" {
+			return "swe-1-7-medium", true
+		}
+		return model, true
+	case "swe-1-6":
+		if effort == "fast" {
+			return "swe-1-6-fast", true
+		}
+		return model, true
+	case "glm-5-2", "glm-5-2-1m":
+		stem, long := strings.CutSuffix(model, "-1m")
+		suffix := ""
+		if long {
+			suffix = "-1m"
+		}
+		if effort == "none" || effort == "max" {
+			return stem + "-" + effort + suffix, true
+		}
+		return model, true
+	case "claude-opus-4-6", "claude-sonnet-4-6":
+		if thinking {
+			return model + "-thinking", true
+		}
+		return model, true
+	case "claude-opus-4-6-1m", "claude-sonnet-4-6-1m":
+		if thinking {
+			return strings.TrimSuffix(model, "-1m") + "-thinking-1m", true
+		}
+		return model, true
+	}
+	return "", false
 }
 
 // normalEffort reads a request's reasoning effort as an effort Devin names.

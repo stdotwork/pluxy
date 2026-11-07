@@ -139,14 +139,14 @@
     },
     {
       "path": "upstream[0].body.3[1].12",
-      "kind": "intended",
-      "reason": "The extension replays only reasoning signatures Devin gave, from reasoning items; today's core also sends a Gemini client's thoughtSignature on a function call, which Gemini issued, as a sealed Devin signature.",
+      "kind": "gap",
+      "reason": "The extension does not read a Gemini client's thoughtSignature on a function call, and reports it as dropped; today's core sends it to Devin as a sealed signature.",
       "absent": true
     },
     {
       "path": "upstream[0].body.3[1].18",
-      "kind": "intended",
-      "reason": "The extension replays only reasoning signatures Devin gave, from reasoning items; today's core also sends a Gemini client's thoughtSignature on a function call, which Gemini issued, as a sealed Devin signature.",
+      "kind": "gap",
+      "reason": "The extension does not read a Gemini client's thoughtSignature on a function call, and reports it as dropped; today's core sends it to Devin as a sealed signature.",
       "absent": true
     }
   ],
