@@ -12,14 +12,53 @@ import (
 )
 
 // TestConformance runs the extension conformance kit against this extension, with a fake xAI that
-// acts out each scenario. The extension has no login methods: its accounts come from an API key
-// in the config.
+// acts out each scenario, for an API key and for a Grok login.
 func TestConformance(t *testing.T) {
 	manifest := conformance.BuildExtension(t, "pluxy-extension.json", ".")
-	conformance.Run(t, conformance.Target{Manifest: manifest, Prepare: prepare})
+	t.Run("api_key", func(t *testing.T) {
+		conformance.Run(t, conformance.Target{Manifest: manifest, Prepare: prepare(false), PrepareLogin: prepareLogin})
+	})
+	t.Run("login", func(t *testing.T) {
+		conformance.Run(t, conformance.Target{Manifest: manifest, Prepare: prepare(true), PrepareLogin: prepareLogin})
+	})
 }
 
-func prepare(t *testing.T, s conformance.Scenario) conformance.Setup {
+func prepareLogin(t *testing.T, s conformance.LoginScenario, method string) conformance.LoginSetup {
+	t.Helper()
+	srv := xaitest.New(t)
+	account := protocol.Account{ID: "conformance", Settings: srv.Settings()}
+	approve := func(t *testing.T, p protocol.Prompt) map[string]string {
+		if !srv.Approve(p.UserCode) {
+			t.Errorf("no device login shows code %q", p.UserCode)
+		}
+		return nil
+	}
+	switch s {
+	case conformance.LoginApproved:
+		return conformance.LoginSetup{Account: account, Act: approve}
+	case conformance.LoginDenied:
+		srv.DenyDevice = true
+		return conformance.LoginSetup{Account: account, Act: func(*testing.T, protocol.Prompt) map[string]string { return nil }}
+	case conformance.LoginAbandoned:
+		return conformance.LoginSetup{Account: account}
+	case conformance.RefreshRenewed, conformance.RefreshUnavailable:
+		srv.TokenDown = s == conformance.RefreshUnavailable
+		access, refresh := srv.Grant()
+		account.Credential = &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: access, RefreshToken: refresh}
+		return conformance.LoginSetup{Account: account}
+	case conformance.RefreshRejected:
+		account.Credential = &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: "xaitest-access-gone", RefreshToken: "xaitest-refresh-not-issued"}
+		return conformance.LoginSetup{Account: account}
+	}
+	t.Fatalf("no fixture for %s with method %q", s, method)
+	return conformance.LoginSetup{}
+}
+
+func prepare(login bool) func(t *testing.T, s conformance.Scenario) conformance.Setup {
+	return func(t *testing.T, s conformance.Scenario) conformance.Setup { return prepareCall(t, s, login) }
+}
+
+func prepareCall(t *testing.T, s conformance.Scenario, login bool) conformance.Setup {
 	t.Helper()
 	srv := xaitest.New(t)
 	cancelled := make(chan struct{})
@@ -50,12 +89,15 @@ func prepare(t *testing.T, s conformance.Scenario) conformance.Setup {
 			io.WriteString(w, `{"code":"Too many requests","error":"Rate limit reached for requests"}`)
 		}
 	}
-	key := srv.Key()
-	if s == conformance.ScenarioAuthFailed {
-		srv.Revoke(key)
+	cred := &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: srv.Key()}
+	if login {
+		access, refresh := srv.Grant()
+		cred = &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: access, RefreshToken: refresh}
 	}
-	setup := conformance.Setup{Account: protocol.Account{ID: "conformance", Settings: srv.Settings(),
-		Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: key}}}
+	if s == conformance.ScenarioAuthFailed {
+		srv.Revoke(cred.APIKey + cred.AccessToken)
+	}
+	setup := conformance.Setup{Account: protocol.Account{ID: "conformance", Settings: srv.Settings(), Credential: cred}}
 	if s == conformance.ScenarioHang {
 		setup.UpstreamCancelled = cancelled
 	}

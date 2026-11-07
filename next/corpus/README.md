@@ -73,6 +73,7 @@ Providers with their own folder of cases:
 | `antigravity` | Antigravity extension, an OAuth credential with its project | an Antigravity auth file with `base_url`, the project and saved model hints; its `fetchAvailableModels` calls are answered aside |
 | `devin` | Devin extension, a session token as an API key credential | a Devin auth file with the token and `base_url`; its `GetUserStatus` calls are answered aside. Models are named `devin/<model>`, as today's core lists them; Gemini clients write the slash as `%2F` in the path, with `account_models` naming the model |
 | `xai` | xAI extension, an API key | an `xai` group with `base-url` and an API key |
+| `xai-cli` | xAI extension, a Grok login's OAuth credential with `base_url` | an xAI auth file with `auth_kind` `oauth`, an expiry far ahead and `base_url` |
 | `codex-ws` | Codex extension, API key, `"websockets": true` in the account's settings | a Codex API key with `websockets: true` |
 
 Today's core sends a ChatGPT subscription's requests to `https://chatgpt.com/backend-api/codex`,
