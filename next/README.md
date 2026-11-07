@@ -26,6 +26,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `extensions/gemini` | Provider extension for Google's Gemini: the Gemini API with an API key, and Vertex AI with a service account or an express mode key; `geminitest` is a fake Google for its tests. |
 | `extensions/kimi` | Provider extension for Kimi Code, Moonshot AI's coding subscription, signed in with a device code; `kimitest` is a fake Kimi for its tests. |
 | `extensions/xai` | Provider extension for xAI's Grok models with an API key; `xaitest` is a fake xAI for its tests. |
+| `extensions/antigravity` | Provider extension for Google Antigravity: Gemini and Claude models through a Google account signed in to Antigravity; `agtest` is a fake Google login and Cloud Code for its tests. |
 | `examples/scripted` | The tutorial's example extension. |
 | `examples/oauth` | An example provider that signs in by device code, browser (PKCE) or API key and renews its tokens, with a fake OAuth provider for tests (`oauthtest`). |
 | `internal/host`, `internal/server` | Core's extension host and HTTP API (client formats and the management API). |
@@ -336,6 +337,66 @@ Not built, and why:
   today's model catalog.
 - Image references, encrypted reasoning content, websockets, text to speech, image and video
   generation, `/responses/compact`, and the optional `x_search` tool.
+
+## Antigravity
+
+The Antigravity extension (`extensions/antigravity`) serves the Gemini and Claude models a Google
+account gets in Google Antigravity, through Google's Cloud Code API. Point `extension.manifest` at
+`extensions/antigravity/pluxy-extension.json`. Accounts are added by login through the management
+API (below) with method `browser`: the reply's prompt carries Google's sign-in link, and the login
+finishes when the browser comes back to `http://localhost:51121/oauth-callback`, which the
+extension serves on this machine while the login runs. When core runs elsewhere, or the port is
+taken, paste the address the browser ended on as the prompt's `redirect_url` input.
+
+The sign-in is Google's OAuth for installed apps with the Antigravity app's own OAuth client and
+scopes, as today's core signs in, plus PKCE. Google's token endpoint also takes that client's
+secret, which pluxy does not ship: enter it as the login's `client_secret` input. It is the
+secret of the OAuth client the Antigravity desktop app uses (today's `core/` carries it as
+`ClientSecret` in `core/internal/auth/antigravity/constants.go`). The login keeps it in the
+account's credential, never in settings, and renewals send it again. After signing in, the
+extension asks Cloud Code for the account's Google Cloud project (`loadCodeAssist`), or has one
+made on the account's default tier (`onboardUser`); the credential keeps the project too. Core
+renews the token 30 minutes before it expires; a renewal also looks up a project the credential
+lacks.
+
+An account written in the config holds the same credential:
+
+```json
+{
+  "id": "antigravity",
+  "credential": {"kind": "oauth", "access_token": "ya29...", "refresh_token": "1//...",
+    "data": {"project_id": "my-project-123", "client_secret": "..."}}
+}
+```
+
+| Setting | Meaning |
+| --- | --- |
+| `base_url` | The Cloud Code host (default `https://daily-cloudcode-pa.googleapis.com`, the one today's core uses); the project calls go there too. |
+| `user_agent` | Replaces the Antigravity app's User-Agent (`antigravity/hub/2.29.0 (aidev_client; ...)`). |
+| `auth_base_url` | Moves Google's sign-in, token and user info endpoints to a test server. |
+| `callback_listen` | `false` keeps the login from listening on port 51121; only a pasted address finishes it. |
+
+A request is built as a Gemini GenerateContent body: a Gemini client's own, or a translation of
+any other format with its reasoning effort as thinking settings, as the Gemini extension makes
+them. It goes to `{base_url}/v1internal:generateContent` (`:streamGenerateContent?alt=sse` for a
+stream) inside Cloud Code's envelope, as today's core sends it: the model, the project, request
+type `agent` (`image_gen` for image models), a request ID, and a session ID hashed from the first
+user text. Safety settings are left out; a Gemini model gets no output limit and has turns of
+function responses sent as the model's; a Claude model gets function calling in `VALIDATED`
+mode; translated system instructions go as a user turn; and each function declaration's schema is
+sent as `parameters` in the subset Cloud Code takes (local `$ref`s inlined, `const` as an enum,
+other JSON Schema keywords removed). Claude models, Gemini 3 Pro and the image model are always
+asked on the stream method and gathered into one reply when the client wants one. Replies are
+taken out of the envelope's `response` field. A 429 is a used-up quota when Google says
+`QUOTA_EXHAUSTED` or asks for a wait of five minutes or more, and a rate limit otherwise, with the
+wait from Google's retry details or message.
+
+Not built, from today's core: the paid Google AI credits fallback, its own cache of Antigravity's
+reasoning (thought signatures travel in band, as for Gemini), the per-account model probe
+(`fetchAvailableModels`), Responses compaction through Antigravity, structured output for Claude
+5.5 as prompt text, sensitive-word obfuscation (`antigravity.sensitive-words`), the connection
+pool settings (`antigravity.connection-pool.*`), the app version lookup at every start, and token
+counting (core has no count-tokens route).
 
 ## Accounts and routing
 
