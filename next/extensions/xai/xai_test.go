@@ -372,3 +372,62 @@ func TestRefreshKeepsRefreshToken(t *testing.T) {
 		t.Errorf("renewed %+v, err %v; want the new access token and the kept refresh token", c, err)
 	}
 }
+
+// slow_down makes every later poll wait 5 seconds longer, as RFC 8628 and today's core have it.
+func TestDeviceSlowDown(t *testing.T) {
+	srv := xaitest.New(t)
+	slowed := false
+	srv.Answer = func(w http.ResponseWriter, r *http.Request) bool {
+		if r.URL.Path != "/oauth2/token" || slowed {
+			return false
+		}
+		slowed = true
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, `{"error":"slow_down"}`)
+		return true
+	}
+	set, _ := readSettings(srv.Settings())
+	var code string
+	approveLater := promptFunc(func(p protocol.Prompt) { code = p.UserCode })
+	// The waits are recorded instead of slept; the user approves during the second.
+	var waits []time.Duration
+	old := waitPoll
+	t.Cleanup(func() { waitPoll = old })
+	waitPoll = func(ctx context.Context, d time.Duration) bool {
+		waits = append(waits, d)
+		if len(waits) == 2 {
+			srv.Approve(code)
+		}
+		return ctx.Err() == nil
+	}
+	if _, err := deviceLogin(context.Background(), set, approveLater); err != nil {
+		t.Fatal(err)
+	}
+	if want := []time.Duration{10 * time.Second, 10 * time.Second}; len(waits) != 2 || waits[0] != want[0] || waits[1] != want[1] {
+		t.Errorf("waits %v, want %v", waits, want)
+	}
+}
+
+// A refused login call keeps xAI's Retry-After for a rate limit or an outage; a refused grant
+// asks for a new login and is not retried.
+func TestLoginFailure(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		status int
+		ra     string
+		body   string
+		code   string
+		retry  bool
+		ms     int64
+	}{
+		{"rate limit", 429, "30", `{"error":"slow_down"}`, llm.CodeRateLimit, true, 30000},
+		{"outage", 503, "5", ``, llm.CodeUnavailable, true, 5000},
+		{"refused grant", 400, "", `{"error":"invalid_grant"}`, llm.CodeAuth, false, 0},
+	} {
+		e := loginFailure(c.status, []byte(c.body), http.Header{"Retry-After": {c.ra}})
+		if e.Code != c.code || e.Retryable != c.retry || e.RetryAfterMS != c.ms {
+			t.Errorf("%s: %+v, want %s retryable %v after %d ms", c.name, e, c.code, c.retry, c.ms)
+		}
+	}
+}
