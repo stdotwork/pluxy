@@ -168,6 +168,10 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 			}
 			return g, nil
 		}
+		if status >= 500 {
+			// A 5xx may have run the poll, whatever its body says, so the login stops.
+			return nil, hideSecrets(loginFailure(status, body, h), dc.DeviceCode)
+		}
 		var e struct {
 			Error string `json:"error"`
 		}
@@ -181,12 +185,8 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 		case "expired_token":
 			return nil, refused("the code expired before it was approved; start the login again")
 		case "":
-			// A 5xx may have run the poll, so the login stops. Any other answer with no OAuth
-			// error (an outage page, a redirect) leaves the device code good: poll again at the
-			// next interval, as today's core does.
-			if status >= 500 {
-				return nil, hideSecrets(loginFailure(status, body, h), dc.DeviceCode)
-			}
+			// Any other answer with no OAuth error (an outage page, a redirect) leaves the device
+			// code good: poll again at the next interval, as today's core does.
 		default:
 			// Core does not know the device code, so it cannot redact it.
 			return nil, hideSecrets(loginFailure(status, body, h), dc.DeviceCode)

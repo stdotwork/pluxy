@@ -155,6 +155,11 @@ func TestDevicePollStopsWhenItMayHaveRun(t *testing.T) {
 		answer func(w http.ResponseWriter)
 	}{
 		{"503", func(w http.ResponseWriter) { http.Error(w, "upstream connect error", http.StatusServiceUnavailable) }},
+		{"503 saying pending", func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			io.WriteString(w, `{"error":"authorization_pending"}`)
+		}},
 		{"hung up", hangUp},
 	} {
 		t.Run(c.name, func(t *testing.T) {

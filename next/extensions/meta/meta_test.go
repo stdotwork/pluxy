@@ -191,23 +191,27 @@ type promptFunc func(protocol.Prompt)
 
 func (f promptFunc) Prompt(p protocol.Prompt) error { f(p); return nil }
 
-// A poll that gets a 5xx stops the login: the poll may have run, so it is not tried again.
+// A poll that gets a 5xx stops the login, whatever its body says: the poll may have run, so it is
+// not tried again.
 func TestPollStopsOnServerFailure(t *testing.T) {
-	srv := metatest.New(t)
-	var polls atomic.Int32
-	srv.Answer = func(w http.ResponseWriter, r *http.Request) bool {
-		if r.URL.Path != "/oidc/device/token/" {
-			return false
+	for _, body := range []string{"upstream connect error\n", `{"error":"authorization_pending"}`} {
+		srv := metatest.New(t)
+		var polls atomic.Int32
+		srv.Answer = func(w http.ResponseWriter, r *http.Request) bool {
+			if r.URL.Path != "/oidc/device/token/" {
+				return false
+			}
+			polls.Add(1)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			io.WriteString(w, body)
+			return true
 		}
-		polls.Add(1)
-		http.Error(w, "upstream connect error", http.StatusServiceUnavailable)
-		return true
-	}
-	set, _ := readSettings(srv.Settings())
-	_, err := deviceLogin(context.Background(), set, promptFunc(func(p protocol.Prompt) { srv.Approve(p.UserCode) }))
-	wantError(t, err, llm.CodeUnavailable, false)
-	if polls.Load() != 1 {
-		t.Errorf("%d polls reached Meta, want 1", polls.Load())
+		set, _ := readSettings(srv.Settings())
+		_, err := deviceLogin(context.Background(), set, promptFunc(func(p protocol.Prompt) { srv.Approve(p.UserCode) }))
+		wantError(t, err, llm.CodeUnavailable, false)
+		if polls.Load() != 1 {
+			t.Errorf("503 %q: %d polls reached Meta, want 1", body, polls.Load())
+		}
 	}
 }
 

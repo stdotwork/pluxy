@@ -235,25 +235,28 @@ func TestDeviceLogin(t *testing.T) {
 	}
 }
 
-// A device poll that gets a 429 with no OAuth error is tried again; one that gets another error
-// ends the login without echoing the device code.
+// A device poll that gets a 429, with no OAuth error or with xAI's own error text, is tried
+// again; one that gets another error ends the login without echoing the device code.
 func TestDevicePollErrors(t *testing.T) {
 	srv := xaitest.New(t)
-	failed := false
-	srv.Answer = func(w http.ResponseWriter, r *http.Request) bool {
-		if r.URL.Path != "/oauth2/token" || failed {
-			return false
-		}
-		failed = true
-		http.Error(w, "slow down", http.StatusTooManyRequests)
-		return true
-	}
 	old := waitPoll
 	t.Cleanup(func() { waitPoll = old })
 	waitPoll = func(ctx context.Context, _ time.Duration) bool { return ctx.Err() == nil }
 	set, _ := readSettings(srv.Settings())
-	if _, err := deviceLogin(context.Background(), set, promptFunc(func(p protocol.Prompt) { srv.Approve(p.UserCode) })); err != nil || !failed {
-		t.Fatalf("login after a 429: err %v (429 seen %v)", err, failed)
+	for _, refusal := range []string{"slow down\n", `{"code":"Too many requests","error":"Rate limit reached"}`} {
+		failed := false
+		srv.Answer = func(w http.ResponseWriter, r *http.Request) bool {
+			if r.URL.Path != "/oauth2/token" || failed {
+				return false
+			}
+			failed = true
+			w.WriteHeader(http.StatusTooManyRequests)
+			io.WriteString(w, refusal)
+			return true
+		}
+		if _, err := deviceLogin(context.Background(), set, promptFunc(func(p protocol.Prompt) { srv.Approve(p.UserCode) })); err != nil || !failed {
+			t.Fatalf("login after a 429 %q: err %v (429 seen %v)", refusal, err, failed)
+		}
 	}
 	srv.Answer = func(w http.ResponseWriter, r *http.Request) bool {
 		if r.URL.Path != "/oauth2/token" {
