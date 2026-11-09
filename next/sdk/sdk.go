@@ -1,7 +1,8 @@
 // Package sdk implements the extension side of the pluxy extension protocol for Go extensions:
 // the handshake, framing, cancellation and shutdown. An extension supplies a Generate handler,
 // Login and Refresh handlers if it signs in to accounts, a Session handler if it holds
-// sessions, a Models handler if it lists its accounts' models, and calls Serve from main. See
+// sessions, a Models handler if it lists its accounts' models, a Quota handler if it reads their
+// quota, and calls Serve from main. See
 // ../protocol/TUTORIAL.md.
 package sdk
 
@@ -90,6 +91,19 @@ type CheckCall struct {
 // be checked without a generation. Any other error is sent as code internal.
 type CheckHandler func(ctx context.Context, call CheckCall) (*protocol.CheckResult, error)
 
+// QuotaCall is one quota call.
+type QuotaCall struct {
+	ID string
+	// Account is the account whose quota to read, with its credential.
+	Account protocol.Account
+}
+
+// QuotaHandler reads what an account's plan allows and how much of it is used, from the
+// provider's own usage endpoint, as the provider's own client does (protocol minor version 5).
+// An account that has no quota to report (for example an API key) is code unsupported with scope
+// credential. An *llm.Error is sent as it is, any other error as code internal.
+type QuotaHandler func(ctx context.Context, call QuotaCall) (*protocol.Quota, error)
+
 // SessionCall is one session call: open a session of a kind on an account.
 type SessionCall struct {
 	ID      string
@@ -140,6 +154,10 @@ type Extension struct {
 	// Check, when set, checks an account without generating anything (protocol minor version
 	// 4). Core calls it when it starts, and when a reload or a login adds or changes an account.
 	Check CheckHandler
+	// Quota, when set, reads an account's quota (protocol minor version 5). Login, when set,
+	// should also report each grant's Identity (minor version 5), so core can check a new login
+	// to an existing account.
+	Quota QuotaHandler
 }
 
 // operations lists the operations ext serves.
@@ -156,6 +174,9 @@ func (ext Extension) operations() []string {
 	}
 	if ext.CountTokens != nil {
 		ops = append(ops, protocol.OpCountTokens)
+	}
+	if ext.Quota != nil {
+		ops = append(ops, protocol.OpQuota)
 	}
 	if ext.Models != nil {
 		ops = append(ops, protocol.OpModels)
@@ -297,6 +318,8 @@ func (s *server) handle(conn net.Conn) {
 		s.models(conn, call)
 	case protocol.OpCheck:
 		s.check(conn, call)
+	case protocol.OpQuota:
+		s.quota(conn, call)
 	default:
 		_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: llm.EventError, Error: &llm.Error{
 			Code: llm.CodeUnsupported, Message: fmt.Sprintf("unknown operation %q", call.Op), Scope: llm.ScopeRequest,
@@ -673,6 +696,50 @@ func (s *server) check(conn net.Conn, call protocol.Call) {
 }
 
 func runCheck(ctx context.Context, h CheckHandler, c CheckCall) (res *protocol.CheckResult, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = &llm.Error{Code: llm.CodeInternal, Message: fmt.Sprintf("the extension panicked: %v", r)}
+		}
+	}()
+	return h(ctx, c)
+}
+
+// quota answers a quota call: one quota.result or error frame.
+func (s *server) quota(conn net.Conn, call protocol.Call) {
+	ctx, cancel, ok := s.begin(conn)
+	if !ok {
+		return
+	}
+	defer cancel()
+	go func() {
+		_, _ = io.Copy(io.Discard, conn)
+		cancel()
+	}()
+	c := QuotaCall{ID: call.ID}
+	if call.Account != nil {
+		c.Account = *call.Account
+	}
+	var q *protocol.Quota
+	var err error
+	if s.ext.Quota == nil {
+		err = &llm.Error{Code: llm.CodeUnsupported, Message: "this extension does not report quota", Scope: llm.ScopeRequest}
+	} else {
+		q, err = runQuota(ctx, s.ext.Quota, c)
+	}
+	if err == nil && q == nil {
+		err = &llm.Error{Code: llm.CodeInternal, Message: "the extension reported no quota"}
+	}
+	if err == nil && q.Limits == nil {
+		q.Limits = []protocol.QuotaLimit{}
+	}
+	reply := protocol.Reply{Event: llm.Event{Type: protocol.TypeQuotaResult}, Quota: q}
+	if err != nil {
+		reply = protocol.Reply{Event: llm.Event{Type: llm.EventError, Error: asError(ctx, err)}}
+	}
+	_ = protocol.WriteFrame(conn, reply)
+}
+
+func runQuota(ctx context.Context, h QuotaHandler, c QuotaCall) (q *protocol.Quota, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = &llm.Error{Code: llm.CodeInternal, Message: fmt.Sprintf("the extension panicked: %v", r)}

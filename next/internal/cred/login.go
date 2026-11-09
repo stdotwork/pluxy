@@ -220,6 +220,9 @@ func (m *Manager) finishLogin(l *login, g *protocol.Grant) error {
 				if g.Label != "" {
 					r.Label = g.Label
 				}
+				if len(g.Identity) > 0 {
+					r.Identity = g.Identity
+				}
 			})
 			if errors.Is(err, ErrStale) {
 				continue
@@ -238,7 +241,8 @@ func (m *Manager) finishLogin(l *login, g *protocol.Grant) error {
 	if m.reserved(l.account) {
 		return fmt.Errorf("account %q is now set in core's config", l.account)
 	}
-	_, err := m.store.Create(Record{ID: l.account, Extension: l.extension, State: StateActive, Label: g.Label, Account: l.fields, Credential: *g.Credential})
+	_, err := m.store.Create(Record{ID: l.account, Extension: l.extension, State: StateActive, Label: g.Label, Identity: g.Identity,
+		Account: l.fields, Credential: *g.Credential})
 	if err != nil {
 		return err
 	}

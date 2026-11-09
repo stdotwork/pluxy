@@ -270,3 +270,30 @@ Return code `unsupported` for an account that cannot be checked without a genera
 shows it as not checked. The SDK lists `check` in describe when `Check` is set. The rules are in
 [`check`](README.md#check); the OAuth example (`examples/oauth`) checks a token with its provider.
 
+## 10. Report quota and who signed in (optional, protocol 0.5)
+
+The management API shows each account's plan and usage when someone asks
+(`GET /v0/management/accounts/{id}/quota`). Add a quota handler that reads them from the
+provider's own usage endpoint, with the account's credential and the same client identity the
+extension uses for its requests:
+
+```go
+sdk.Serve(sdk.Extension{
+	ID: "example/echo", Version: "0.1.0", Generate: generate,
+	Quota: func(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
+		used := 42.0
+		return &protocol.Quota{Plan: "pro", Limits: []protocol.QuotaLimit{
+			{ID: "five_hour", Label: "5-hour limit", UsedPercent: &used, ResetsAt: 1794268800, WindowSeconds: 18000},
+		}}, nil
+	},
+})
+```
+
+An account with no plan to report, such as an API key, returns code `unsupported` with scope
+`credential`. Never read quota with a request that spends from the plan.
+
+A login handler should also say who signed in, in the grant's `Identity`: the fields that tell
+two upstream accounts apart, such as the e-mail address and the account or workspace ID. Core
+keeps them and refuses a later login to the same account that signs in as someone else. The
+example OAuth extension (`examples/oauth`) does both. The fields are in [`quota`](README.md#quota)
+and [`login`](README.md#login).

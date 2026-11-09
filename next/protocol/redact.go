@@ -488,6 +488,9 @@ func (r *Redactor) raw(b json.RawMessage) json.RawMessage {
 	return llm.RawJSON(out)
 }
 
+// Raw returns the JSON b with the credential removed from each of its strings, still valid JSON.
+func (r *Redactor) Raw(b json.RawMessage) json.RawMessage { return r.raw(b) }
+
 // view returns b as a string without copying it, for reading while b does not change.
 func view(b []byte) string { return unsafe.String(unsafe.SliceData(b), len(b)) }
 

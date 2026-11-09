@@ -65,6 +65,7 @@ const (
 //	POST /v0/management/accounts/{id}/cooldown/reset  clear the account's cooldowns
 //	GET  /v0/management/accounts/{id}/models   the models the account serves
 //	POST /v0/management/accounts/{id}/test     send the account one small request
+//	GET  /v0/management/accounts/{id}/quota    the account's plan and usage, from its provider
 func (c *Core) handleAccounts(m *server.Management) {
 	m.Handle("GET /login-methods", func(w http.ResponseWriter, r *http.Request) {
 		s, release := c.acquire()
@@ -100,6 +101,16 @@ func (c *Core) handleAccounts(m *server.Management) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"models": models})
 	})
+	m.Handle("GET /accounts/{id}/quota", func(w http.ResponseWriter, r *http.Request) {
+		s, release := c.acquire()
+		defer release()
+		q, err := c.accountQuota(r.Context(), s, r.PathValue("id"))
+		if err != nil {
+			writeAccountError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"quota": q, "fetched_at": time.Now().UTC()})
+	})
 	m.Handle("POST /accounts/{id}/test", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Model string `json:"model"`
@@ -129,8 +140,11 @@ func writeAccountError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.As(err, &le):
 		code := http.StatusBadGateway
-		if le.Code == llm.CodeExtensionUnavailable {
+		switch le.Code {
+		case llm.CodeExtensionUnavailable:
 			code = http.StatusServiceUnavailable
+		case llm.CodeUnsupported:
+			code = http.StatusUnprocessableEntity
 		}
 		writeJSON(w, code, map[string]any{"error": route.Brief(le)})
 	case errors.Is(err, errNoAccount):
@@ -238,6 +252,33 @@ func (c *Core) listModels(ctx context.Context, s *snapshot, a route.Account) (*p
 		return nil, e
 	}
 	return list, nil
+}
+
+// accountQuota reads account id's quota through its extension. A credential the upstream refuses
+// is renewed and tried once more, as for a request.
+func (c *Core) accountQuota(ctx context.Context, s *snapshot, id string) (*protocol.Quota, error) {
+	a, ok := c.account(s, id)
+	if !ok {
+		return nil, fmt.Errorf("%w %q", errNoAccount, id)
+	}
+	g := s.exts[a.Extension]
+	if g == nil {
+		return nil, &llm.Error{Code: llm.CodeExtensionUnavailable, Message: fmt.Sprintf("extension %s does not run", a.Extension)}
+	}
+	for try := 0; ; try++ {
+		cr, version, err := c.credential(ctx, a)
+		if err != nil {
+			return nil, err
+		}
+		q, e := g.Quota(ctx, protocol.Account{ID: a.ID, Settings: a.Settings, Credential: cr})
+		if e == nil {
+			return q, nil
+		}
+		if e.Code == llm.CodeAuth && a.Managed && try == 0 && c.creds.Rejected(ctx, a.ID, version) {
+			continue
+		}
+		return nil, e
+	}
 }
 
 // testAccount sends account id one small request for model, straight to its extension: routing,
