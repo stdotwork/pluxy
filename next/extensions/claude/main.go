@@ -17,6 +17,11 @@
 // Requests in other formats (Chat Completions, Responses, Gemini) are translated to Messages,
 // with the client's reasoning effort turned into Claude's thinking settings (thinking.go).
 //
+// An account check (core's check call) of an api_key account reads Anthropic's model list,
+// GET {base_url}/v1/models with x-api-key and anthropic-version, which costs the account nothing.
+// A subscription login (oauth) has no such call here, so it is left not checked, without a
+// request.
+//
 // The extension never changes how a client presents itself: a client that is not Claude Code is
 // not made to look like Claude Code.
 package main
@@ -67,6 +72,7 @@ func main() {
 		Refresh:      refresh,
 		CountTokens:  countTokens,
 		Models:       listModels,
+		Check:        check,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "claude:", err)
@@ -244,6 +250,49 @@ func post(ctx context.Context, call sdk.Call, s settings, path string, body []by
 		return nil, upstreamError(resp, call.Request.Model)
 	}
 	return resp, nil
+}
+
+// check asks Anthropic for its model list with an API key, which costs nothing and generates
+// nothing. A credential of another kind is answered unsupported without a request.
+func check(ctx context.Context, call sdk.CheckCall) (*protocol.CheckResult, error) {
+	cred := call.Account.Credential
+	if cred != nil && cred.Kind != protocol.CredentialAPIKey {
+		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: "only an API key can be checked without a generation; a login is not checked", Scope: llm.ScopeCredential}
+	}
+	s, err := readSettings(call.Account.Settings)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.BaseURL+"/v1/models", nil)
+	if err != nil {
+		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
+	}
+	req.Header.Set("Anthropic-Version", anthropicVersion)
+	if err := authorize(req.Header, cred); err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: "the upstream has no model list to check the key with", Scope: llm.ScopeCredential}
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, upstreamError(resp, "")
+	}
+	var list struct {
+		Data []json.RawMessage `json:"data"`
+	}
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxFrame))
+	if json.Unmarshal(raw, &list) != nil || list.Data == nil {
+		return &protocol.CheckResult{Detail: "the upstream accepted the key"}, nil
+	}
+	return &protocol.CheckResult{Detail: fmt.Sprintf("the upstream lists %d models", len(list.Data))}, nil
 }
 
 // countTokens counts the request's input tokens with the Messages API's count_tokens. A

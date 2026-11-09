@@ -676,10 +676,18 @@ shows each account's last `check`:
 | `failed` | It does not; `error` is why (code `auth` for a refused key, `unavailable` for an upstream that cannot be reached). |
 | `not_checked` | The extension cannot check it without a generation, or has no check; `detail` says which. |
 
-Core also logs each result (`account "work": check passed: ...` or `check failed: ...`). The
-OpenAI-compatible extension checks with `GET {base_url}/models`; an upstream without that list
-(404) leaves the account not checked. The other bundled extensions do not check accounts yet. The
-protocol side is the [`check` operation](protocol/README.md#check).
+Core also logs each result (`account "work": check passed: ...` or `check failed: ...`). Each
+extension checks with its upstream's model list, and only accounts with an API key:
+
+| Extension | Check |
+| --- | --- |
+| `pluxy/openai-compatible` | `GET {base_url}/models`; an upstream without that list (404) leaves the account not checked. |
+| `pluxy/claude` | `GET {base_url}/v1/models`. A subscription login is not checked. |
+| `pluxy/gemini` | `GET {base_url}/v1beta/models`. A Vertex account is not checked. |
+| `pluxy/xai` | `GET {base_url}/models`. A Grok login is not checked. |
+
+The other bundled extensions do not check accounts yet. The protocol side is the
+[`check` operation](protocol/README.md#check).
 
 An account that cannot serve a request (its upstream speaks another format and the request
 cannot be translated to it, or the upstream says it does not have the model) passes the request
