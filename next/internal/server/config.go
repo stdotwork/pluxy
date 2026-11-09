@@ -88,23 +88,6 @@ type Config struct {
 	Import legacy.ImportOptions `json:"-"`
 }
 
-// exampleClientKeys are the client keys of today's example config (config.example.yaml). They
-// are public, so a config that still holds one has not set up access.
-var exampleClientKeys = []string{"your-api-key-1", "your-api-key-2", "your-api-key-3"}
-
-// ExampleClientKeys returns the client keys that are the example config's, once each in the
-// order the config lists them; today's core ignores spaces around a key when it checks.
-func (c *Config) ExampleClientKeys() []string {
-	var found []string
-	for _, k := range c.ClientKeys {
-		k = strings.TrimSpace(k)
-		if slices.Contains(exampleClientKeys, k) && !slices.Contains(found, k) {
-			found = append(found, k)
-		}
-	}
-	return found
-}
-
 // TokenCountEstimateOn reports whether a token count no account can give is answered with an
 // estimate (token_count_estimate; absent: on).
 func (c *Config) TokenCountEstimateOn() bool {
@@ -344,6 +327,23 @@ func LoadConfig(path string) (*Config, error) {
 	return ParseConfig(b, path)
 }
 
+// exampleClientKeys are the client keys of today's example config (config.example.yaml). They
+// are public, so a config that still holds one has not set up access.
+var exampleClientKeys = []string{"your-api-key-1", "your-api-key-2", "your-api-key-3"}
+
+// ExampleClientKeys returns the client keys that are the example config's, once each in the
+// order the config lists them; today's core ignores spaces around a key when it checks.
+func (c *Config) ExampleClientKeys() []string {
+	var found []string
+	for _, k := range c.ClientKeys {
+		k = strings.TrimSpace(k)
+		if slices.Contains(exampleClientKeys, k) && !slices.Contains(found, k) {
+			found = append(found, k)
+		}
+	}
+	return found
+}
+
 // IsYAML reports whether the config file at path is a config.yaml with today's core's key
 // names: its name ends in .yaml or .yml.
 func IsYAML(path string) bool {
@@ -375,6 +375,11 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 	if len(c.ClientKeys) == 0 {
 		// Today's core serves anyone without a key then; this core refuses to.
 		return nil, errors.New("config: client_keys is empty (access.api-keys in a config.yaml): set at least one client key; core serves no client without one")
+	}
+	if ex := c.ExampleClientKeys(); len(ex) > 0 {
+		// Core starts, as today's core does, so the management API stays open to fix the keys.
+		c.Notices = append(c.Notices, "client_keys still holds the example config's public keys ("+strings.Join(ex, ", ")+
+			"): every client request is refused (403 "+ExampleKeyCode+") until they are replaced")
 	}
 	if err := c.ExtensionPages.prepare(c.Listen); err != nil {
 		return nil, err
@@ -483,11 +488,6 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 	}
 	if err := c.Routing.Validate(); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
-	}
-	if ex := c.ExampleClientKeys(); len(ex) > 0 {
-		// Core starts, as today's core does, so the management API stays open to fix the keys.
-		c.Notices = append(c.Notices, "client_keys still holds the example config's public keys ("+strings.Join(ex, ", ")+
-			"): every client request is refused (403 "+ExampleKeyCode+") until they are replaced")
 	}
 	return &c, nil
 }
