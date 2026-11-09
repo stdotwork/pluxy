@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { join } from 'node:path';
 import { maskEmail, maskIdentifier, maskSensitiveText } from '../src/services/privacyMask';
 import { authFileIdentities } from '../src/services/authFiles';
 
@@ -43,4 +44,35 @@ test('collects the account identifiers of a credential record', () => {
   expect(authFileIdentities({ name: 'x.json', email: ' alice@example.com ', project_id: 'proj-1', label: 'Work' }))
     .toEqual(['alice@example.com', 'proj-1']);
   expect(authFileIdentities({ name: 'x.json' })).toEqual([]);
+});
+
+test('masks a value that starts with @ and has no local part', async () => {
+  // Without the fix these calls never return, and a synchronous loop cannot be interrupted by a
+  // test timeout, so they run in a child process that is killed after a few seconds.
+  const modulePath = join(import.meta.dir, '..', 'src', 'services', 'privacyMask');
+  const script = `import { maskEmail, maskIdentifier } from ${JSON.stringify(modulePath)};
+console.log(JSON.stringify([maskIdentifier('@alice'), maskEmail('@alice'), maskIdentifier('@ab')]));`;
+  const child = Bun.spawn([process.execPath, '-e', script], {
+    stdout: 'pipe',
+    stderr: 'pipe',
+    timeout: 5000,
+  });
+  const output = await new Response(child.stdout).text();
+  await child.exited;
+  expect(child.signalCode).toBeNull();
+  expect(JSON.parse(output)).toEqual(['@***e', '@***e', '***']);
+}, 15000);
+
+test('replacement patterns in an identity do not leak it', () => {
+  // `$&` in a string replacement would paste the whole matched identity back in.
+  const identity = '$&abcdef@example.com';
+  expect(maskSensitiveText(`account ${identity} failed`, [identity]))
+    .toBe('account $&***@e***.com failed');
+  const project = '$&abcdefghijk-project-77';
+  expect(maskSensitiveText(`project ${project} failed`, [project]))
+    .toBe('project $&***77 failed');
+  // `$'` would paste in the text after the match.
+  const other = "$'abcdefghijk-project-88";
+  expect(maskSensitiveText(`project ${other} failed`, [other]))
+    .toBe("project $'***88 failed");
 });
