@@ -6,9 +6,10 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// countFields are the fields of a Messages request that /v1/messages/count_tokens takes; it
-// refuses the others (max_tokens, stream, sampling settings).
-var countFields = []string{"model", "messages", "system", "tools", "tool_choice", "thinking", "mcp_servers"}
+// countFields are the fields of a Messages request that /v1/messages/count_tokens takes
+// (Anthropic's API reference, and mcp_servers with its beta); it refuses the others (max_tokens,
+// stream, sampling settings).
+var countFields = []string{"model", "messages", "system", "tools", "tool_choice", "thinking", "output_config", "cache_control", "speed", "mcp_servers"}
 
 // CountRequest returns the count_tokens body for a Messages request body: its fields that
 // count_tokens takes.

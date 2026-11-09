@@ -4,11 +4,11 @@ import "testing"
 
 // A rebuilt Messages request keeps only the fields count_tokens takes.
 func TestCountRequest(t *testing.T) {
-	out, err := CountRequest([]byte(`{"model":"m","max_tokens":10,"stream":true,"temperature":1,"system":"s","messages":[],"tools":[],"tool_choice":{"type":"auto"},"thinking":{"type":"adaptive"}}`))
+	out, err := CountRequest([]byte(`{"model":"m","max_tokens":10,"stream":true,"temperature":1,"system":"s","messages":[],"tools":[],"tool_choice":{"type":"auto"},"thinking":{"type":"adaptive"},"output_config":{"effort":"high"},"cache_control":{"type":"ephemeral"}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !jsonEqual(out, []byte(`{"model":"m","system":"s","messages":[],"tools":[],"tool_choice":{"type":"auto"},"thinking":{"type":"adaptive"}}`)) {
+	if !jsonEqual(out, []byte(`{"model":"m","system":"s","messages":[],"tools":[],"tool_choice":{"type":"auto"},"thinking":{"type":"adaptive"},"output_config":{"effort":"high"},"cache_control":{"type":"ephemeral"}}`)) {
 		t.Errorf("CountRequest = %s", out)
 	}
 	if n, err := DecodeCount([]byte(`{"input_tokens":42}`)); n != 42 || err != nil {
@@ -22,11 +22,11 @@ func TestCountRequest(t *testing.T) {
 // A client's own body loses only the fields count_tokens refuses; one without them is sent as it
 // came, byte for byte.
 func TestCountBody(t *testing.T) {
-	out, err := CountBody([]byte(`{"model":"m","max_tokens":10,"stream":false,"temperature":1,"metadata":{"user_id":"u"},"messages":[],"context_management":{"edits":[]}}`))
+	out, err := CountBody([]byte(`{"model":"m","max_tokens":10,"stream":false,"temperature":1,"metadata":{"user_id":"u"},"messages":[],"output_config":{"effort":"high"}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !jsonEqual(out, []byte(`{"model":"m","messages":[],"context_management":{"edits":[]}}`)) {
+	if !jsonEqual(out, []byte(`{"model":"m","messages":[],"output_config":{"effort":"high"}}`)) {
 		t.Errorf("CountBody = %s", out)
 	}
 	in := `{"model":"m",  "messages":[]}`
