@@ -254,9 +254,14 @@ func ErrorLogs(dir string) ([]LogFile, error) {
 	return files, nil
 }
 
-// IsErrorLogName reports whether name is an error log's: error-<...>.log, with no path in it.
+// requestLogName matches the names logFileName gives, with error- in front for an error log:
+// the path's characters, the time and the trace ID.
+var requestLogName = regexp.MustCompile(`^(error-)?[A-Za-z0-9._-]*-[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{6}-([0-9]{14}-[0-9a-f]{16})\.log$`)
+
+// IsErrorLogName reports whether name is an error log's, as core names them.
 func IsErrorLogName(name string) bool {
-	return strings.HasPrefix(name, "error-") && strings.HasSuffix(name, ".log") && !strings.ContainsAny(name, `/\`)
+	m := requestLogName.FindStringSubmatch(name)
+	return m != nil && m[1] != ""
 }
 
 // FindRequestLog returns the name of the newest request log in dir, plain or error, of the
@@ -272,7 +277,8 @@ func FindRequestLog(dir, id string) string {
 	var best string
 	var bestMod time.Time
 	for _, e := range entries {
-		if !e.Type().IsRegular() || !strings.HasSuffix(e.Name(), "-"+id+".log") {
+		m := requestLogName.FindStringSubmatch(e.Name())
+		if !e.Type().IsRegular() || m == nil || m[2] != id {
 			continue
 		}
 		info, err := e.Info()

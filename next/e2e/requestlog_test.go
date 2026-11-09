@@ -159,11 +159,11 @@ func TestRequestLogs(t *testing.T) {
 	// a trace ID's.
 	secret := filepath.Join(t.TempDir(), "secret.txt")
 	os.WriteFile(secret, []byte("not a log"), 0o600)
-	if err := os.Symlink(secret, filepath.Join(dir, "error-planted.log")); err != nil {
+	if err := os.Symlink(secret, filepath.Join(dir, "error-v1-x-2026-11-09T120000-20261109120000-00000000000000aa.log")); err != nil {
 		t.Skip("no symlinks here:", err)
 	}
 	os.Symlink(secret, filepath.Join(dir, "v1-x-2026-11-09T120000-20261109120000-0123456789abcdef.log"))
-	for _, path := range []string{"/request-error-logs/error-planted.log", "/request-log-by-id/20261109120000-0123456789abcdef"} {
+	for _, path := range []string{"/request-error-logs/error-v1-x-2026-11-09T120000-20261109120000-00000000000000aa.log", "/request-log-by-id/20261109120000-0123456789abcdef"} {
 		if code, b := c.call(t, http.MethodGet, path, nil); code != http.StatusNotFound || strings.Contains(string(b), "not a log") {
 			t.Fatalf("%s: %d %s", path, code, b)
 		}

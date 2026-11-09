@@ -42,7 +42,9 @@ func TestLogFileName(t *testing.T) {
 	if got := logFileName("/"+strings.Repeat("a", 300), at, "x"); len(got) > 140 {
 		t.Fatalf("long path: %d bytes", len(got))
 	}
-	for name, want := range map[string]bool{"error-v1-x.log": true, "v1-x.log": false, "error-x.txt": false, `error-a\b.log`: false, "error-../a.log": false} {
+	const ok = "error-v1-chat-completions-2026-11-09T120005-20261109120005-0123456789abcdef.log"
+	for name, want := range map[string]bool{ok: true, ok[len("error-"):]: false, "error-v1-x.log": false, "error-x.txt": false,
+		`error-a\b-2026-11-09T120005-20261109120005-0123456789abcdef.log`: false, "error-../a-2026-11-09T120005-20261109120005-0123456789abcdef.log": false} {
 		if IsErrorLogName(name) != want {
 			t.Errorf("IsErrorLogName(%q) != %v", name, want)
 		}
@@ -53,7 +55,7 @@ func TestLogFileName(t *testing.T) {
 func TestFindRequestLog(t *testing.T) {
 	dir := t.TempDir()
 	const id = "20261109120000-0123456789abcdef"
-	for _, n := range []string{"notes-abc.log", "main-abc.log", "v1-chat-completions-2026-11-09T120000-" + id + ".log"} {
+	for _, n := range []string{"notes-abc.log", "main-abc.log", "notes-" + id + ".log", "v1-chat-completions-2026-11-09T120000-" + id + ".log"} {
 		if err := os.WriteFile(filepath.Join(dir, n), []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
 		}
