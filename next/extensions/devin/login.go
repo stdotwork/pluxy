@@ -301,34 +301,40 @@ func exchange(ctx context.Context, set settings, code, verifier string) (string,
 	return formatToken(t.Token), nil
 }
 
-// grant makes the login's credential, labelled with the account's Devin user name. check makes
+// grant makes the login's credential, labelled with the account's Devin user name and identified by
+// its user ID, which unlike the name does not change. check makes
 // Devin's refusal of the token end the login, for a token the user typed; after a sign-in the
 // profile is only for the label, as in today's core.
 func grant(ctx context.Context, set settings, tok string, check bool) (*protocol.Grant, error) {
-	label, err := profileName(ctx, set, tok)
+	label, userID, err := profile(ctx, set, tok)
 	if err != nil && check {
 		return nil, err
 	}
-	return &protocol.Grant{Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: tok}, Label: label}, nil
+	g := &protocol.Grant{Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: tok}, Label: label}
+	if userID != "" {
+		g.Identity = map[string]string{"user_id": userID}
+	}
+	return g, nil
 }
 
-// profileName returns the account's user name (or user ID) from {api_base_url}/v3/self. Only a
-// refusal of the token is an error; any other failure leaves the name empty.
-func profileName(ctx context.Context, set settings, tok string) (string, error) {
+// profile returns the account's label (its user name, else its user ID) and its user ID from
+// {api_base_url}/v3/self. Only a refusal of the token is an error; any other failure leaves both
+// empty.
+func profile(ctx context.Context, set settings, tok string) (label, userID string, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, set.APIBaseURL+"/v3/self", nil)
 	if err != nil {
-		return "", nil
+		return "", "", nil
 	}
 	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("Accept", "application/json")
 	status, raw, err := do(ctx, req)
 	switch {
 	case err != nil:
-		return "", nil
+		return "", "", nil
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
-		return "", refused("Devin refused the session token; sign in again")
+		return "", "", refused("Devin refused the session token; sign in again")
 	case status != http.StatusOK:
-		return "", nil
+		return "", "", nil
 	}
 	var p struct {
 		UserName string `json:"user_name"`
@@ -336,9 +342,9 @@ func profileName(ctx context.Context, set settings, tok string) (string, error) 
 	}
 	_ = json.Unmarshal(raw, &p)
 	if p.UserName != "" {
-		return p.UserName, nil
+		return p.UserName, p.UserID, nil
 	}
-	return p.UserID, nil
+	return p.UserID, p.UserID, nil
 }
 
 func do(ctx context.Context, req *http.Request) (int, []byte, error) {

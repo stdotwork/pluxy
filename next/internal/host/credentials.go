@@ -88,15 +88,8 @@ func (l *LoginCall) Next() protocol.Reply {
 			l.fail(&llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s sent a grant whose identity %s", l.ext.manifest.ID, err)})
 			return *l.final
 		}
-		if len(r.Grant.Identity) > 0 {
-			// Identity is stored and shown in errors: it must not carry the credential.
-			redact := protocol.NewRedactor(r.Grant.Credential)
-			id := make(map[string]string, len(r.Grant.Identity))
-			for k, v := range r.Grant.Identity {
-				id[k] = redact.String(v)
-			}
-			r.Grant.Identity = id
-		}
+		// Identity is kept as it is, even a value the credential also holds (an account ID in
+		// its data): core stores it beside the credential and compares it, and never shows it.
 		done := protocol.Reply{Event: llm.Event{Type: protocol.TypeLoginDone}, Grant: r.Grant}
 		l.final = &done
 		l.Close()

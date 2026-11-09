@@ -244,7 +244,17 @@ func mint(ctx context.Context, set settings, dca string) (*protocol.Grant, error
 		// the credential once, which makes a new key.
 		Credential: &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: strings.TrimSpace(minted.APIKey), RefreshToken: dca, Data: data},
 		Label:      minted.UserEmail,
+		Identity:   identityOf(minted.UserEmail),
 	}, nil
+}
+
+// identityOf is who signed in, by the e-mail address the key endpoint names, so that core can refuse
+// a new login to an account that signs in as someone else; empty when Meta names none.
+func identityOf(email string) map[string]string {
+	if email = strings.TrimSpace(email); email != "" {
+		return map[string]string{"email": email}
+	}
+	return nil
 }
 
 func postForm(ctx context.Context, endpoint string, form url.Values) (int, []byte, http.Header, error) {

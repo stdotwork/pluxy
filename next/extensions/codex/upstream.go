@@ -126,6 +126,23 @@ func setClientHeaders(h http.Header, req llm.Request, ur *upstreamRequest, s set
 			h.Set(name, v)
 		}
 	}
+	setIdentity(h, client, s, a)
+	if a.subscription {
+		hint := "model=" + ur.model
+		var body struct {
+			ServiceTier string `json:"service_tier"`
+		}
+		if json.Unmarshal(ur.body, &body) == nil && body.ServiceTier != "" {
+			hint += ";tier=" + body.ServiceTier
+		}
+		h.Set("X-Codex-Routing-Hint", hint)
+	}
+}
+
+// setIdentity sets the headers that name the Codex client: User-Agent and Originator (see
+// settings.identity), and a subscription's ChatGPT account. client holds the Codex client's own
+// request headers, when there is a request.
+func setIdentity(h http.Header, client map[string]string, s settings, a account) {
 	switch {
 	case s.identity():
 		h.Set("User-Agent", codexUserAgent)
@@ -135,18 +152,8 @@ func setClientHeaders(h http.Header, req llm.Request, ur *upstreamRequest, s set
 	case a.subscription:
 		h.Set("Originator", codexOriginator)
 	}
-	if a.subscription {
-		if a.accountID != "" {
-			h.Set("Chatgpt-Account-Id", a.accountID)
-		}
-		hint := "model=" + ur.model
-		var body struct {
-			ServiceTier string `json:"service_tier"`
-		}
-		if json.Unmarshal(ur.body, &body) == nil && body.ServiceTier != "" {
-			hint += ";tier=" + body.ServiceTier
-		}
-		h.Set("X-Codex-Routing-Hint", hint)
+	if a.subscription && a.accountID != "" {
+		h.Set("Chatgpt-Account-Id", a.accountID)
 	}
 }
 

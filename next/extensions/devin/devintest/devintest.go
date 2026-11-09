@@ -23,6 +23,10 @@ import (
 // ChatPath is the API server's chat method.
 const ChatPath = "/exa.api_server_pb.ApiServerService/GetChatMessage"
 
+// StatusPath is the seat management server's GetUserStatus method, which reports a user's plan
+// and quota.
+const StatusPath = "/exa.seat_management_pb.SeatManagementService/GetUserStatus"
+
 // UserName is the user name the fake's profile reports.
 const UserName = "devintest-user"
 
@@ -40,6 +44,11 @@ type Server struct {
 	// Chat, if set, answers chat requests whose token is valid. The default replies "Hello" in
 	// two pieces with usage 11 in, 7 out.
 	Chat func(w http.ResponseWriter, r *http.Request, req Request)
+	// UserStatus, if set, is the protobuf body of the GetUserStatus reply; the default is
+	// DefaultUserStatus. StatusCode, if not 0, makes the method answer that status with a Connect
+	// error body instead.
+	UserStatus []byte
+	StatusCode int
 	// DenyBrowser makes the sign-in page send the browser back with access_denied.
 	DenyBrowser bool
 
@@ -48,6 +57,7 @@ type Server struct {
 	codes    map[string]string // sign-in code to its PKCE challenge
 	tokens   map[string]bool
 	requests []Request
+	status   []Request
 }
 
 // New starts a fake that is closed when the test ends.
@@ -94,6 +104,14 @@ func (s *Server) Requests() []Request {
 	return append([]Request(nil), s.requests...)
 }
 
+// StatusRequests returns the GetUserStatus requests the server answered, in order. Message is the
+// request's body, a bare protobuf message.
+func (s *Server) StatusRequests() []Request {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]Request(nil), s.status...)
+}
+
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == "/auth/cli/continue" && r.Method == http.MethodGet:
@@ -106,9 +124,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"detail": "Invalid token"})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"user_name": UserName, "user_id": "user-1", "org_id": "org-1"})
+		writeJSON(w, http.StatusOK, map[string]string{"user_name": UserName, "user_id": UserID, "org_id": "org-1"})
 	case r.URL.Path == ChatPath && r.Method == http.MethodPost:
 		s.chat(w, r)
+	case r.URL.Path == StatusPath && r.Method == http.MethodPost:
+		s.userStatus(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -179,13 +199,75 @@ func (s *Server) valid(tok string) bool {
 	return s.tokens[tok]
 }
 
-func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
+// basicOK checks the request's Basic credentials, which are a valid session token twice; it
+// answers an unauthenticated Connect error and returns false when they are not.
+func (s *Server) basicOK(w http.ResponseWriter, r *http.Request) bool {
 	basic, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Basic ")
 	half := len(basic) / 2
 	if len(basic)%2 != 1 || basic[half] != '-' || basic[:half] != basic[half+1:] || !s.valid(basic[:half]) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
 		io.WriteString(w, `{"code":"unauthenticated","message":"invalid session token"}`)
+		return false
+	}
+	return true
+}
+
+// userStatus answers GetUserStatus, a unary Connect call with a bare protobuf message.
+func (s *Server) userStatus(w http.ResponseWriter, r *http.Request) {
+	if !s.basicOK(w, r) {
+		return
+	}
+	body, _ := io.ReadAll(r.Body)
+	s.mu.Lock()
+	s.status = append(s.status, Request{Header: r.Header.Clone(), Message: body})
+	s.mu.Unlock()
+	if s.StatusCode != 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(s.StatusCode)
+		io.WriteString(w, `{"code":"internal","message":"the fake was told to fail"}`)
+		return
+	}
+	reply := s.UserStatus
+	if reply == nil {
+		reply = DefaultUserStatus()
+	}
+	w.Header().Set("Content-Type", "application/proto")
+	w.Write(reply)
+}
+
+// Plan and quota the default GetUserStatus reply reports.
+const (
+	PlanName          = "Pro"
+	PlanEnd           = 1796083200 // 2026-12-01T00:00:00Z
+	DailyRemaining    = 70
+	WeeklyRemaining   = 40
+	DailyResetAtUnix  = 1794268800 // 2026-11-10T00:00:00Z
+	WeeklyResetAtUnix = 1794787200 // 2026-11-16T00:00:00Z
+)
+
+// UserID is the user ID the fake reports, in its profile and in GetUserStatus.
+const UserID = "user-1"
+
+// DefaultUserStatus returns a GetUserStatus reply: user status (field 1) with the user's name,
+// e-mail address and ID, and a plan status with the plan, its end, and the daily and weekly quota
+// as a percent remaining and the Unix time it resets.
+func DefaultUserStatus() []byte {
+	plan := Bytes(nil, 1, Bytes(nil, 2, []byte(PlanName)))
+	plan = Bytes(plan, 3, Varint(nil, 1, PlanEnd))
+	plan = Varint(plan, 14, DailyRemaining)
+	plan = Varint(plan, 15, WeeklyRemaining)
+	plan = Varint(plan, 17, DailyResetAtUnix)
+	plan = Varint(plan, 18, WeeklyResetAtUnix)
+	us := Bytes(nil, 3, []byte(UserName))
+	us = Bytes(us, 7, []byte("user@example.com"))
+	us = Bytes(us, 13, plan)
+	us = Bytes(us, 36, []byte(UserID))
+	return Bytes(nil, 1, us)
+}
+
+func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
+	if !s.basicOK(w, r) {
 		return
 	}
 	body, _ := io.ReadAll(r.Body)

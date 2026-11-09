@@ -421,7 +421,15 @@ func grantFrom(tr *tokenResponse, old *protocol.Credential) (*protocol.Grant, er
 			c.RefreshAt = at.Unix()
 		}
 	}
-	return &protocol.Grant{Credential: c, Label: claims.email}, nil
+	// Members of one ChatGPT workspace share its account ID, so the e-mail address tells them apart.
+	identity := map[string]string{}
+	if claims.email != "" {
+		identity["email"] = claims.email
+	}
+	if d.AccountID != "" {
+		identity["account_id"] = d.AccountID
+	}
+	return &protocol.Grant{Credential: c, Label: claims.email, Identity: identity}, nil
 }
 
 // idClaims are the parts of an OpenAI ID token the extension uses.

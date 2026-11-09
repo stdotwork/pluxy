@@ -58,6 +58,7 @@ func main() {
 		Login:        login,
 		Refresh:      refresh,
 		Models:       models,
+		Quota:        quota,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "meta:", err)

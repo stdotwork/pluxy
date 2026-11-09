@@ -1,6 +1,6 @@
 // Package claudetest is a fake Anthropic for tests of the Claude extension: the Messages API, the
-// models list that checks an API key, and Claude's OAuth sign-in page and token endpoint. It
-// issues made-up tokens and never talks to Anthropic.
+// models list that checks an API key, a subscription's usage and profile endpoints, and Claude's
+// OAuth sign-in page and token endpoint. It issues made-up tokens and never talks to Anthropic.
 //
 // Messages and models are served under any path prefix ({prefix}/v1/messages), so one server can
 // act out several upstream behaviours: the prefix is passed to the Messages handler.
@@ -28,6 +28,30 @@ const ClientID = "claudetest-client"
 // Email is the account e-mail the token endpoint reports.
 const Email = "user@claudetest.example"
 
+// AccountUUID and OrganizationUUID are the account and organization the token endpoint reports.
+const (
+	AccountUUID      = "11111111-1111-4111-8111-111111111111"
+	OrganizationUUID = "22222222-2222-4222-8222-222222222222"
+)
+
+// DefaultUsage and DefaultProfile are what the subscription's usage and profile endpoints answer by
+// default, in the shape of Anthropic's: a Max 5x plan with a 5-hour and a weekly window, a weekly
+// Sonnet window with no use yet, a window Claude has no use for, and extra usage in cents.
+const (
+	DefaultUsage = `{
+  "five_hour": {"utilization": 37.0, "resets_at": "2026-11-09T15:00:00.123456+00:00"},
+  "seven_day": {"utilization": 12.5, "resets_at": "2026-11-14T09:00:00+00:00"},
+  "seven_day_oauth_apps": null,
+  "seven_day_opus": null,
+  "seven_day_sonnet": {"utilization": 0.0, "resets_at": "2026-11-14T09:00:00+00:00"},
+  "extra_usage": {"is_enabled": true, "monthly_limit": 5000, "used_credits": 1250.0, "utilization": 25.0, "currency": "USD"}
+}`
+	DefaultProfile = `{
+  "account": {"uuid": "` + AccountUUID + `", "email": "` + Email + `", "has_claude_max": true, "has_claude_pro": false},
+  "organization": {"uuid": "` + OrganizationUUID + `", "organization_type": "claude_max", "rate_limit_tier": "default_claude_max_5x", "subscription_status": "active"}
+}`
+)
+
 // TokenLifetime is the expires_in the token endpoint gives, in seconds.
 const TokenLifetime = 8 * 3600
 
@@ -45,6 +69,11 @@ type Server struct {
 	// Messages, if set, answers Messages requests whose credential is valid. The default replies
 	// "Hello" (streamed when the request asks) with usage 11 in, 7 out.
 	Messages func(w http.ResponseWriter, r *http.Request, req Request)
+	// Usage and Profile, if set, are the bodies of the usage and profile endpoints' replies (the
+	// defaults are DefaultUsage and DefaultProfile). ProfileStatus, if set, is the profile
+	// endpoint's status instead of a reply.
+	Usage, Profile string
+	ProfileStatus  int
 	// DenySignIn makes the sign-in page refuse (redirect with error=access_denied).
 	DenySignIn bool
 	// TokenDown makes the token endpoint answer 503.
@@ -59,6 +88,7 @@ type Server struct {
 	requests []Request
 	renewals int
 	listings int
+	oauth    []Request
 }
 
 type codeGrant struct{ challenge, redirect, state string }
@@ -130,6 +160,14 @@ func (s *Server) ModelRequests() int {
 	return s.listings
 }
 
+// OAuthRequests returns the requests the usage and profile endpoints received so far, with their
+// paths in Prefix.
+func (s *Server) OAuthRequests() []Request {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]Request(nil), s.oauth...)
+}
+
 // Renewals returns how many refresh grants the token endpoint has honoured.
 func (s *Server) Renewals() int {
 	s.mu.Lock()
@@ -161,6 +199,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.authorize(w, r)
 	case p == "/v1/oauth/token" && r.Method == http.MethodPost:
 		s.token(w, r)
+	case (p == "/api/oauth/usage" || p == "/api/oauth/profile") && r.Method == http.MethodGet:
+		s.account(w, r)
 	case strings.HasSuffix(p, "/v1/models") && r.Method == http.MethodGet:
 		s.models(w, r)
 	case strings.HasSuffix(p, "/v1/messages") && r.Method == http.MethodPost:
@@ -237,7 +277,8 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"token_type": "Bearer", "access_token": a, "refresh_token": rt, "expires_in": TokenLifetime,
-		"account": map[string]any{"uuid": "11111111-1111-4111-8111-111111111111", "email_address": Email},
+		"account":      map[string]any{"uuid": AccountUUID, "email_address": Email},
+		"organization": map[string]any{"uuid": OrganizationUUID, "name": "claudetest"},
 	})
 }
 
@@ -286,6 +327,37 @@ func (s *Server) messages(w http.ResponseWriter, r *http.Request, prefix string)
 	io.WriteString(w, `{"id":"msg_claudetest","type":"message","role":"assistant","model":"claude-test",`+
 		`"content":[{"type":"text","text":"Hello"}],"stop_reason":"end_turn","stop_sequence":null,`+
 		`"usage":{"input_tokens":11,"output_tokens":7}}`)
+}
+
+// account answers the usage and profile endpoints for an OAuth access token the fake issued, sent
+// with the OAuth beta as Anthropic requires. An API key is refused: only a subscription has a plan.
+func (s *Server) account(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	s.oauth = append(s.oauth, Request{Prefix: r.URL.Path, Header: r.Header.Clone()})
+	bearer, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	ok := found && s.access[bearer] && strings.Contains(r.Header.Get("Anthropic-Beta"), "oauth-2025-04-20")
+	usage, profile, status := s.Usage, s.Profile, s.ProfileStatus
+	s.mu.Unlock()
+	if !ok {
+		apiError(w, http.StatusUnauthorized, "authentication_error", "invalid bearer token")
+		return
+	}
+	body, fail := usage, 0
+	if body == "" {
+		body = DefaultUsage
+	}
+	if r.URL.Path == "/api/oauth/profile" {
+		body, fail = profile, status
+		if body == "" {
+			body = DefaultProfile
+		}
+	}
+	if fail != 0 {
+		apiError(w, fail, "api_error", "profile unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	io.WriteString(w, body)
 }
 
 // StreamText writes a Messages stream of the given text pieces, flushing after each, that ends

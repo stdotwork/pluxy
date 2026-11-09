@@ -19,6 +19,7 @@ import (
 
 // Request is an API request the server answered with a valid token.
 type Request struct {
+	Method string
 	Path   string
 	Header http.Header
 	Body   []byte
@@ -31,6 +32,11 @@ type Server struct {
 	// Generate, if set, answers API requests whose token is valid. The default replies "Hello"
 	// as a Chat completion (streamed when asked) with usage 11 in, 7 out.
 	Generate func(w http.ResponseWriter, r *http.Request, req Request)
+	// Usage and Me, if set, are the bodies of GET /coding/v1/usages and /coding/v1/me for a valid
+	// token; the defaults are DefaultUsage and DefaultMe. A status other than 0 makes the endpoint
+	// answer with it and an error body instead (UsageStatus, MeStatus).
+	Usage, Me             string
+	UsageStatus, MeStatus int
 	// Deny makes every device login end with access_denied once polled.
 	Deny bool
 	// TokenDown makes the token endpoint answer 503.
@@ -130,6 +136,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			"verification_uri_complete": s.URL + "/device?user_code=" + uc, "expires_in": life, "interval": 1})
 	case r.URL.Path == "/api/oauth/token" && r.Method == http.MethodPost:
 		s.token(w, r)
+	case (r.URL.Path == "/coding/v1/usages" || r.URL.Path == "/coding/v1/me") && r.Method == http.MethodGet:
+		s.account(w, r)
 	case strings.HasPrefix(r.URL.Path, "/coding/v1/") && r.Method == http.MethodPost:
 		tok, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		s.mu.Lock()
@@ -139,7 +147,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]string{"message": "Invalid Authentication", "type": "invalid_authentication_error"}})
 			return
 		}
-		req := Request{Path: r.URL.Path, Header: r.Header.Clone()}
+		req := Request{Method: r.Method, Path: r.URL.Path, Header: r.Header.Clone()}
 		req.Body, _ = io.ReadAll(r.Body)
 		s.mu.Lock()
 		s.requests = append(s.requests, req)
@@ -161,6 +169,47 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	}
 }
+
+// account answers the account endpoints, usage and profile, which a valid token reads.
+func (s *Server) account(w http.ResponseWriter, r *http.Request) {
+	tok, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	s.mu.Lock()
+	ok := s.access[tok]
+	if ok {
+		s.requests = append(s.requests, Request{Method: r.Method, Path: r.URL.Path, Header: r.Header.Clone()})
+	}
+	s.mu.Unlock()
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]string{"message": "Invalid Authentication", "type": "invalid_authentication_error"}})
+		return
+	}
+	body, status := s.Usage, s.UsageStatus
+	if body == "" {
+		body = DefaultUsage
+	}
+	if r.URL.Path == "/coding/v1/me" {
+		body, status = s.Me, s.MeStatus
+		if body == "" {
+			body = DefaultMe
+		}
+	}
+	if status != 0 {
+		writeJSON(w, status, map[string]any{"error": map[string]string{"message": "the fake was told to fail", "type": "fake_error"}})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	io.WriteString(w, body)
+}
+
+// DefaultUsage is the default body of GET /coding/v1/usages, in the shape Kimi sends: counts as
+// strings, windows with protobuf-style units, and monthly ratios.
+const DefaultUsage = `{"user":{"userId":"u-fake"},
+"usage":{"limit":"100","used":"40","remaining":"60","resetTime":"2026-11-14T00:00:00.123456789Z"},
+"limits":[{"window":{"duration":300,"timeUnit":"TIME_UNIT_MINUTE"},"detail":{"limit":"50","used":"10","remaining":"40","resetTime":"2026-11-09T15:00:00Z"}}],
+"usages":{"limit_month_total":{"used_ratio":0.25,"reset_time":"2026-12-01T00:00:00Z"},"limit_month_code":{"used_ratio":0.5,"reset_time":"2026-12-01T00:00:00Z"}}}`
+
+// DefaultMe is the default body of GET /coding/v1/me.
+const DefaultMe = `{"user_id":"u-fake","user_level_name":"Andante"}`
 
 func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 	if s.TokenDown {

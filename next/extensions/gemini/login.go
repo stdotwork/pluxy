@@ -115,5 +115,17 @@ func serviceAccountLogin(ctx context.Context, set settings, key string) (*protoc
 		data["token_uri"] = sa.TokenURI
 	}
 	b, _ := json.Marshal(data)
-	return &protocol.Grant{Credential: &protocol.Credential{Kind: CredentialServiceAccount, Data: b}}, nil
+	return &protocol.Grant{
+		Credential: &protocol.Credential{Kind: CredentialServiceAccount, Data: b},
+		Identity:   serviceAccountIdentity(sa.ClientEmail),
+	}, nil
+}
+
+// serviceAccountIdentity names the service account a login signed in as, by the key's
+// client_email, so that core can refuse a new login to an account that signs in as another one.
+func serviceAccountIdentity(clientEmail string) map[string]string {
+	if clientEmail = strings.TrimSpace(clientEmail); clientEmail == "" {
+		return nil
+	}
+	return map[string]string{"client_email": clientEmail}
 }
