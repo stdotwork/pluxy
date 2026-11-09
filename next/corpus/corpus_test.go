@@ -158,7 +158,7 @@ func runCase(t *testing.T, c *Case, global *Global) Result {
 	volatile = append(volatile, c.Volatile...)
 
 	newObs, err := observe(t, c, "new", func(dir, upstreamURL, _, _ string) (*Core, error) {
-		return StartNewCore(binDir, dir, c.Provider, upstreamURL, newCoreModels(c), UpstreamKeys(c.Accounts), c.NewCoreConfig, c.NewCore)
+		return StartNewCore(binDir, dir, c.Provider, upstreamURL, newCoreModels(c), UpstreamKeys(c.Accounts), c.NewCoreConfig, c.NewCore, managementKey(c))
 	})
 	if err != nil {
 		res.Err = fmt.Errorf("new core: %w", err)
@@ -195,7 +195,7 @@ func runCase(t *testing.T, c *Case, global *Global) Result {
 	if liveOld {
 		oldObs, err := observe(t, c, "old", func(dir, upstreamURL, proxyURL, caFile string) (*Core, error) {
 			return StartOldCore(OldCoreSetup{Binary: oldBinary, WorkDir: dir, Provider: c.Provider, UpstreamURL: upstreamURL, Models: caseModels(c), Keys: UpstreamKeys(c.Accounts),
-				ProxyURL: proxyURL, CAFile: caFile, Override: c.OldCore})
+				ProxyURL: proxyURL, CAFile: caFile, Override: c.OldCore, ManagementKey: managementKey(c)})
 		})
 		if err != nil {
 			res.Err = fmt.Errorf("old core: %w", err)
@@ -270,7 +270,11 @@ func observe(t *testing.T, c *Case, label string, start func(dir, upstreamURL, p
 	defer core.Stop()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	obs, err := Run(ctx, c, core.URL, up)
+	run := Run
+	if label == "old" {
+		run = RunOld
+	}
+	obs, err := run(ctx, c, core.URL, up)
 	if err != nil {
 		return nil, fmt.Errorf("%w\ncore output:\n%s", err, core.Logs())
 	}
@@ -294,6 +298,15 @@ func newCoreModels(c *Case) []string {
 		return c.AccountModels
 	}
 	return caseModels(c)
+}
+
+// managementKey is the management key both cores get for the case: the corpus's when the case
+// calls a management API, else none (the management API is off).
+func managementKey(c *Case) string {
+	if c.UsesManagement() {
+		return ManagementKey
+	}
+	return ""
 }
 
 // caseModels returns the models the old core lists for the case: AccountModels, or else the

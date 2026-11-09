@@ -50,11 +50,12 @@ The generated config is the same for every case:
 - routing that never waits: the old core has no extra retry rounds (`request-retry: 0`), no
   waits (`max-retry-interval: 0`) and no cooldowns; the new core runs its default routing,
   which also never waits. Both still move a request on to another account within one round;
-- for the old core: management and the bundled panel off, response compression off, the
-  embedded model catalog (`-local-model`), and the request's model listed for the account (the
-  old core serves only listed models; `account_models` in a case overrides this for both cores).
-  A provider set up from the old core's `api-keys` block lists the same model for the new
-  core's account, since both cores serve an account without a list only its provider's catalog.
+- for the old core: the bundled panel off, management off unless the case calls a management API
+  (see [Management API cases](#management-api-cases)), response compression off, the embedded
+  model catalog (`-local-model`), and the request's model listed for the account (the old core
+  serves only listed models; `account_models` in a case overrides this for both cores). A provider
+  set up from the old core's `api-keys` block lists the same model for the new core's account,
+  since both cores serve an account without a list only its provider's catalog.
 
 The client sends no `Accept-Encoding`, so replies are observed as the core sent them.
 
@@ -77,13 +78,16 @@ Providers with their own folder of cases:
 | `xai` | xAI extension, an API key | an `xai` group with `base-url` and an API key |
 | `xai-cli` | xAI extension, a Grok login's OAuth credential with `base_url` | an xAI auth file with `auth_kind` `oauth`, an expiry far ahead and `base_url` |
 | `codex-ws` | Codex extension, API key, `"websockets": true` in the account's settings | a Codex API key with `websockets: true` |
+| `claude-oauth` | Claude extension, a subscription's OAuth credential with `base_url` | a Claude auth file with an access token expiring far ahead. Today's core sends a subscription's requests to `api.anthropic.com` whatever the file says, so only the management cases (below) reach the fake upstream with this provider |
 
 Today's core sends a ChatGPT subscription's requests to `https://chatgpt.com/backend-api/codex`,
 which no setting moves. For `codex-oauth` the runner therefore gives the old core an HTTP proxy
 (the auth file's `proxy_url`) that accepts `CONNECT` only to `chatgpt.com:443`, ends the TLS
 connection itself with a certificate from a test authority made for the run (the old core
-trusts it through `SSL_CERT_FILE`), and hands the requests to the fake upstream. A `CONNECT` to
-any other host is refused and fails the case, so nothing reaches the internet: this is how the
+trusts it through `SSL_CERT_FILE`), and hands the requests to the fake upstream. A plain
+request for the fake upstream's own address (the old core's management `api-call` sends a quota
+request there through the auth file's proxy) is passed to it. A `CONNECT` to any other host is
+refused and fails the case, so nothing reaches the internet: this is how the
 corpus noticed that today's core renews a subscription's token at `auth.openai.com` on a 401,
 which the corpus does not fake (no `codex-oauth` case answers 401). The fake tokens are
 unsigned JWTs that expire in 2100, so neither core renews them, and the old core is given time
@@ -126,12 +130,12 @@ settings for every case.
 ```
 
 `client`: `method` (default `POST`), `path`, `headers`, `auth` (`client-key` by default,
-`none`, or a literal token), and `body` (JSON) or `body_text` (literal text, for bodies that
-are not JSON). `then` lists more requests of the same form, sent one after another once the
-reply before has ended, for behaviour that shows across requests (which account each one goes
-to, a cooldown a failure leaves); their replies are the observation's `then`, and the global
-exceptions and volatile paths for `client` apply to each of them. The runner adds `Content-Type: application/json` and `User-Agent: pluxy-corpus/0`
-unless the case sets them.
+`management-key`, `none`, or a literal token), and `body` (JSON) or `body_text` (literal text,
+for bodies that are not JSON). `then` lists more requests of the same form, sent one after
+another once the reply before has ended, for behaviour that shows across requests (which account
+each one goes to, a cooldown a failure leaves); their replies are the observation's `then`, and
+the global exceptions and volatile paths for `client` apply to each of them. The runner adds
+`Content-Type: application/json` and `User-Agent: pluxy-corpus/0` unless the case sets them.
 
 `upstream`: one reply per upstream request, in order. Each has `status` (default 200),
 `headers`, and one of `body` (JSON), `body_text` (literal), `sse` (stream events) or `connect`
@@ -160,6 +164,8 @@ right after its last message, and the client would otherwise race the drop. Ever
 sends is recorded, whenever it arrives; after the last step the fake upstream reads on until the
 core closes the socket. A `hold` reply (HTTP) keeps the response open after its body until the core
 ends the request, like an upstream still generating.
+
+`old_client` and `old_client_more`: see [Management API cases](#management-api-cases).
 
 `account_models`: models the account lists in both cores (see above).
 
@@ -235,6 +241,48 @@ An observation is JSON:
 A path joins keys with `.` and puts array indexes in brackets:
 `client.events[2].data.choices[0].delta`, `upstream[0].headers.User-Agent`. In exceptions and
 `volatile`, `*` matches any key and `[*]` any index. Header names match case-insensitively.
+
+## Management API cases
+
+The two cores manage accounts through different APIs, so a case about one of their account calls
+sends each core its own request. Both cores run with the management API on and the corpus
+management key `corpus-management-key` (not a secret) when a request has `"auth":
+"management-key"`; the new core's `management_key` and the old core's `management.secret-key`
+are set to it.
+
+- `client` goes to the new core. `old_client`, when set, goes to the old core instead, in the
+  same schema. `old_client_more` lists further requests the old core gets after it, in order, one
+  reply each.
+- In the old core's requests, `{{upstream}}` stands for the fake upstream's base URL, and
+  `{{auth_index}}` for the `auth_index` the old core gives its one auth file (a hash of the file's
+  path, so it changes every run; the runner reads it from the old core's `GET
+  /v0/management/auth-files`). The old core's `POST /v0/management/api-call` relay needs both: it
+  calls an absolute URL and puts the account's token where a header or the body says `$TOKEN$`.
+- The old core's reply to `old_client` is the case's `client`; the replies to `old_client_more`
+  are `client_more`, which the new core's observation does not have.
+
+`account-quota/<provider>/usage.json` compares the new core's `GET
+/v0/management/accounts/{id}/quota` with the quota requests today's panel makes through the
+relay (`extensions/panel/src/features/quota/`). Today's core fetches no quota on its own; the old
+core's `old_client` replays the panel's requests for the provider, in the order the new core makes
+its own, with the panel's URLs moved to the fake upstream. What is compared is the upstream
+requests: method, path, headers, body and the token. Only these are compared, not the panel's
+reading of the replies, which is TypeScript in the panel. The client's replies differ by design (the
+relay's wrapper against the new quota shape), and the new quota is pinned in the case. Each
+provider's client identity headers differ by design as well: the quota fetchers use the provider's
+own client identity, not the panel's pinned one. The Meta extension honours a `mint_url` setting,
+where its quota call goes, only when core runs with `PLUXY_TEST_LOGIN_HOSTS=1`; the runner sets it
+for a case that calls the management API, and the Meta account's `mint_url` points at the fake
+upstream. Devin has no quota case: its new call and the panel's differ in encoding (protobuf against
+JSON), so every part of them would be an exception, and today's core makes its own protobuf
+`GetUserStatus` call only as a background refresh, which the runner cannot trigger and answers
+aside.
+
+`account-models/<provider>/catalog-list.json` compares the new core's `GET
+/v0/management/accounts/{id}/models` with the old core's `GET
+/v0/management/auth-files/models?name=<auth file>` for the same login. Model ids, display names and
+owners must be equal and in the same order; the fields only one list has are exceptions, each
+pinned or covered by a `*` path.
 
 ## Adding cases
 

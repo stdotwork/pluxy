@@ -25,7 +25,7 @@ import (
 // InterceptHosts, ends the TLS connection itself with a certificate from a test authority made
 // for this run, and hands the requests inside to the fake upstream. The core under test trusts
 // that authority through SSL_CERT_FILE. A CONNECT to any other host is refused, so nothing
-// reaches the internet.
+// reaches the internet. A plain request for the fake upstream's own address is passed to it.
 
 // InterceptHosts are the hosts (host:port) the intercepting proxy serves.
 var InterceptHosts = []string{"chatgpt.com:443", "aiplatform.googleapis.com:443", "oauth2.googleapis.com:443"}
@@ -137,6 +137,13 @@ func (ic *interceptor) Refused() []string {
 }
 
 func (ic *interceptor) serve(w http.ResponseWriter, r *http.Request) {
+	// A plain request for the fake upstream itself (the old core's management api-call sends a
+	// quota request to an absolute URL on the fake upstream through the account's proxy) goes
+	// straight to it.
+	if r.Method != http.MethodConnect && r.Host == ic.up.Listener.Addr().String() {
+		ic.up.serve(w, r)
+		return
+	}
 	allowed := false
 	for _, h := range InterceptHosts {
 		allowed = allowed || r.Host == h

@@ -28,6 +28,14 @@ type Case struct {
 	// reply to the one before has ended: for behaviour that shows across requests, such as which
 	// account each request goes to or a cooldown a failure leaves. Not WebSocket requests.
 	Then []ClientRequest `json:"then,omitempty"`
+	// OldClient, when set, is sent to the old core instead of Client, for a call the two cores
+	// make through different management routes. OldClientMore are further requests sent to the old
+	// core after it, in order, one reply each (the panel's quota fetch makes several calls where
+	// the new core's quota call makes them itself). In these requests {{upstream}} stands for the
+	// fake upstream's base URL and {{auth_index}} for the auth_index the old core gives its one
+	// auth file. The old core's replies are observed as client (OldClient's) and client_more.
+	OldClient     *ClientRequest  `json:"old_client,omitempty"`
+	OldClientMore []ClientRequest `json:"old_client_more,omitempty"`
 	// AccountModels, when set, are the models the provider account lists in both cores. By
 	// default the old core lists the request's model (it serves only listed models), and so
 	// does the new core for a provider the old core takes from its api-keys block; for one set
@@ -76,8 +84,9 @@ type ClientRequest struct {
 	// Headers are sent as given. The runner adds Content-Type: application/json and a fixed
 	// User-Agent unless set here.
 	Headers map[string]string `json:"headers,omitempty"`
-	// Auth is "client-key" (default: the corpus client key as a bearer token), "none", or
-	// any other value, sent as the bearer token.
+	// Auth is "client-key" (default: the corpus client key as a bearer token), "management-key"
+	// (the corpus management key; a case that sends it turns the management API on in both
+	// cores), "none", or any other value, sent as the bearer token.
 	Auth string `json:"auth,omitempty"`
 	// Body is a JSON body. BodyText is a literal body, for requests that are not valid JSON.
 	Body     json.RawMessage `json:"body,omitempty"`
@@ -313,6 +322,23 @@ func (c *Case) validate() error {
 			return fmt.Errorf("client.websocket[%d]: set exactly one of send, send_text, read, await_drop, close or drop", i)
 		}
 	}
+	if c.OldClient == nil && len(c.OldClientMore) > 0 {
+		return fmt.Errorf("old_client_more needs old_client")
+	}
+	for i, r := range c.oldRequests() {
+		if c.OldClient == nil {
+			break
+		}
+		if r.Path == "" {
+			return fmt.Errorf("old_client[%d]: path is required", i)
+		}
+		if len(r.WebSocket) > 0 {
+			return fmt.Errorf("old_client[%d]: a websocket script is not supported", i)
+		}
+		if len(r.Body) > 0 && r.BodyText != nil {
+			return fmt.Errorf("old_client[%d]: set body or body_text, not both", i)
+		}
+	}
 	for i, r := range c.Upstream {
 		for j, s := range r.WebSocket {
 			if n := count(s.Receive, len(s.Send) > 0, s.Close != nil, s.Drop); n != 1 {
@@ -354,6 +380,31 @@ func (c *Case) validate() error {
 	}
 	return nil
 }
+
+// oldRequests returns the requests the old core gets: OldClient and OldClientMore, or Client alone.
+func (c *Case) oldRequests() []ClientRequest {
+	if c.OldClient == nil {
+		return []ClientRequest{c.Client}
+	}
+	return append([]ClientRequest{*c.OldClient}, c.OldClientMore...)
+}
+
+// UsesManagement reports whether the case calls the management API of either core, which
+// then runs with the corpus management key.
+func (c *Case) UsesManagement() bool {
+	if c.Client.Auth == AuthManagementKey {
+		return true
+	}
+	for _, r := range append(c.oldRequests(), c.Then...) {
+		if r.Auth == AuthManagementKey {
+			return true
+		}
+	}
+	return false
+}
+
+// AuthManagementKey is ClientRequest.Auth for the corpus management key.
+const AuthManagementKey = "management-key"
 
 func count(conds ...bool) int {
 	n := 0
