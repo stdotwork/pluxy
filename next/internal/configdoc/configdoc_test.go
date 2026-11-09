@@ -616,8 +616,8 @@ func TestEditJSONKeepsIndent(t *testing.T) {
 		})
 	}
 	// A document on one line stays on one line.
-	got := edited(t, `{"listen":"127.0.0.1:8400","management_key":"fake-m"}`, false, func(d *Doc) error { return d.SetManagementKey("fake-n") })
-	if got != "{\"listen\":\"127.0.0.1:8400\",\"management_key\":\"fake-n\"}\n" {
+	got := edited(t, `{"listen":"127.0.0.1:8400","client_keys":["fake-c"],"management_key":"fake-m"}`, false, func(d *Doc) error { return d.SetManagementKey("fake-n") })
+	if got != "{\"listen\":\"127.0.0.1:8400\",\"client_keys\":[\"fake-c\"],\"management_key\":\"fake-n\"}\n" {
 		t.Errorf("got %q", got)
 	}
 }
@@ -838,16 +838,23 @@ func TestEditYAMLKeepsCommentsAndOrder(t *testing.T) {
 				t.Errorf("a v8 section was added to the older layout:\n%s", got)
 			}
 
-			left := -1
-			got = edited(t, got, true, func(d *Doc) (err error) {
-				left, err = d.RemoveClientKeys(func(k string) bool { return strings.HasPrefix(k, "fake-key-") || strings.HasPrefix(k, "fake-old-one") })
-				return
-			})
+			// Not edited(): core does not load the document this leaves (no client keys).
+			d := mustParse(t, got, true)
+			left, err := d.RemoveClientKeys(func(k string) bool { return strings.HasPrefix(k, "fake-key-") || strings.HasPrefix(k, "fake-old-one") })
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, err := d.Bytes()
+			if err != nil {
+				t.Fatal(err)
+			}
+			got = string(b)
 			if left != 0 {
 				t.Errorf("left = %d", left)
 			}
-			if keys := loads(t, got, true).ClientKeys; len(keys) != 0 {
-				t.Errorf("client keys = %q in\n%s", keys, got)
+			// Core refuses a config without client keys, which shows they are all gone.
+			if _, err := server.ParseConfig([]byte(got), "config.yaml"); err == nil || !strings.Contains(err.Error(), "client_keys is empty") {
+				t.Errorf("ParseConfig = %v, want the refusal of no client keys, in\n%s", err, got)
 			}
 			indexOrder(t, got, tc.order...)
 		})
@@ -872,7 +879,7 @@ func TestEditYAMLCreatesMissingSections(t *testing.T) {
 		t.Errorf("client keys = %q in\n%s", cfg.ClientKeys, got)
 	}
 	// No management key anywhere: the v8 one is added.
-	got = edited(t, "server:\n  host: 127.0.0.1\n  port: 8400\n"+editYAMLTail, true, func(d *Doc) error { return d.SetManagementKey("fake-m") })
+	got = edited(t, "server:\n  host: 127.0.0.1\n  port: 8400\naccess:\n  api-keys:\n    - fake-c\n"+editYAMLTail, true, func(d *Doc) error { return d.SetManagementKey("fake-m") })
 	if k := loads(t, got, true).ManagementKey; k != "fake-m" || !strings.Contains(got, "management:") {
 		t.Errorf("management key = %q in\n%s", k, got)
 	}

@@ -71,7 +71,7 @@ func preflight(origin string) *http.Request {
 // Without allowed origins core sends no CORS headers and does not answer preflight requests:
 // today's core allowed every origin, which this core does not carry over.
 func TestCORSOffByDefault(t *testing.T) {
-	h := testHandler(t, &Config{}, hello)
+	h := testHandler(t, &Config{ClientKeys: []string{"k"}}, hello)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, preflight("https://app.example.test"))
 	if w.Code == http.StatusNoContent || w.Header().Get("Access-Control-Allow-Origin") != "" {
@@ -79,6 +79,7 @@ func TestCORSOffByDefault(t *testing.T) {
 	}
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(chatBody))
 	r.Header.Set("Origin", "https://app.example.test")
+	r.Header.Set("Authorization", "Bearer k")
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusOK || w.Header().Get("Access-Control-Allow-Origin") != "" || w.Header().Get("Vary") != "" {
@@ -131,9 +132,11 @@ func TestCORSListedOrigin(t *testing.T) {
 
 // "*" allows every origin, as today's core does, and the headers go on every reply.
 func TestCORSEveryOrigin(t *testing.T) {
-	h := testHandler(t, &Config{CORS: CORSConfig{AllowedOrigins: []string{"*"}}}, hello)
+	h := testHandler(t, &Config{ClientKeys: []string{"k"}, CORS: CORSConfig{AllowedOrigins: []string{"*"}}}, hello)
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(chatBody)))
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(chatBody))
+	r.Header.Set("Authorization", "Bearer k")
+	h.ServeHTTP(w, r)
 	if w.Code != http.StatusOK || w.Header().Get("Access-Control-Allow-Origin") != "*" || w.Header().Get("Vary") != "" {
 		t.Errorf("answered %d with %v", w.Code, w.Header())
 	}
@@ -176,5 +179,22 @@ func TestTraceHeader(t *testing.T) {
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(chatBody)))
 	if w.Code != http.StatusUnauthorized || w.Header().Get(TraceHeader) != "" {
 		t.Errorf("a request without a key answered %d with trace %q", w.Code, w.Header().Get(TraceHeader))
+	}
+}
+
+// A config with no client keys never gets this far (ParseConfig refuses it); if one did, no
+// request would be served.
+func TestNoClientKeysAuthorizesNothing(t *testing.T) {
+	h := testHandler(t, &Config{}, hello)
+	for _, key := range []string{"", "anything"} {
+		r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(chatBody))
+		if key != "" {
+			r.Header.Set("Authorization", "Bearer "+key)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("key %q: answered %d, want 401", key, w.Code)
+		}
 	}
 }

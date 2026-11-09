@@ -179,11 +179,8 @@ func NewHandler(src Source) http.Handler {
 
 // authorized reports whether the request carries a client key: as a bearer token, or in
 // x-api-key as Anthropic clients send it; with googleKeys also in x-goog-api-key or the key
-// query parameter, as Google's clients send it.
+// query parameter, as Google's clients send it. With no client keys nothing is authorized.
 func authorized(cfg *Config, r *http.Request, googleKeys bool) bool {
-	if len(cfg.ClientKeys) == 0 {
-		return true
-	}
 	token := clientToken(r, googleKeys)
 	if token == "" {
 		return false

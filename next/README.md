@@ -152,7 +152,13 @@ choices with `text`. Several prompts in one request are refused; `n`, `suffix`, 
 rest are left out.
 
 Clients send the client key as a bearer token or, as Anthropic clients do, in `x-api-key`; Gemini
-clients may also send it in `x-goog-api-key` or the `key` query parameter.
+clients may also send it in `x-goog-api-key` or the `key` query parameter. Today's core takes
+the key in the `key` and `auth_token` query parameters on every route; here only the Gemini routes
+take `key`, since some Gemini clients send it there (n8n's Gemini credential does), and a key in a
+URL ends up in logs and browser history. `client_keys` must hold
+at least one key: core does not start on a config without one, and a reload or a management
+change that would leave none is refused, keeping the running config. Today's core serves anyone
+who reaches it when it has no client keys.
 
 Web pages may call the client API from a browser only from the origins listed in
 `cors.allowed_origins` (each `scheme://host[:port]`, or `"*"` for every origin): core then adds
@@ -909,7 +915,7 @@ its keys and its indent. `PUT /config` writes the document as sent.
 | `PUT /v0/management/config` | `{"content": "...", "base_hash": "..."}`: replaces the file with the document and applies it. 200 with the file as `GET /config` shows it; 409 when `base_hash` is set and the file has changed since; 422 with `error` when core refuses the document. |
 | `GET /v0/management/client-keys` | The client keys: each one's `id` and `masked` form (first and last two characters, as today's panel shows them; a key shorter than 8 characters is hidden whole). |
 | `POST /v0/management/client-keys` | Adds a new random client key (`sk-` and 26 random characters). 201 with the key's `id` and `masked` form and its `value`, which no later call shows. |
-| `DELETE /v0/management/client-keys/{id}` | Removes the client key. 204; 404 when no key has the ID; 409 for the last key, since without client keys anyone who reaches core could use it. |
+| `DELETE /v0/management/client-keys/{id}` | Removes the client key. 204; 404 when no key has the ID; 409 for the last key, since core refuses a config without client keys. |
 | `POST /v0/management/management-key/rotate` | Replaces the management key with a new random one and returns it as `value`. The old key stops working as the reply is sent. |
 | `GET /v0/management/settings` | The basic and routing settings, by today's core's names (below). |
 | `PATCH /v0/management/settings` | Changes the settings the body names (`{"routing": {"strategy": "fill-first"}}`) and replies with them all. 400 for a name or value it does not take. |
@@ -1084,7 +1090,7 @@ are accepted silently.
 | --- | --- | --- |
 | `config-version` | Must be 8 when present, as in today's core. | Supported |
 | `server.host` (`host`), `server.port` (`port`) | `listen` is `host:port`. An empty host listens on every interface and a port of 0 or none is 8317, as in today's core. | Supported |
-| `access.api-keys` (`api-keys` as a list) | `client_keys`. | Supported |
+| `access.api-keys` (`api-keys` as a list) | `client_keys`. At least one key is required; today's core serves anyone when the list is empty. | Supported |
 | `management.secret-key` (`remote-management.secret-key`) | `management_key`, exactly as written: turns on the management API and the panel. A key already hashed with bcrypt (today's core can write one) is not supported yet: the management API stays off and the log says why. | Supported; hashed keys later |
 | `management.allow-remote` (`remote-management.allow-remote`) | The management API answers anyone who can reach `listen` and sends the key. When the management API is on and this is not `true`, the log says so. | Later |
 | `management.disable-control-panel` | The panel is on exactly when the management API is. | Dropped: the management key already turns the panel on and off |

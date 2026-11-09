@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -333,6 +335,29 @@ func TestFailedReloadKeepsActiveConfig(t *testing.T) {
 	elsewhere["credentials_dir"] = filepath.Join(t.TempDir(), "elsewhere")
 	writeConfig(t, path, elsewhere)
 	check("credentials folder change", 5, "credentials_dir")
+
+	open := lifecycleConfig(v1, g, nil)
+	delete(open, "client_keys")
+	writeConfig(t, path, open)
+	check("no client keys", 6, "client_keys is empty")
+}
+
+// Core does not start on a config without client keys: it would serve anyone who reaches it.
+func TestStartRefusesConfigWithoutClientKeys(t *testing.T) {
+	cfg := lifecycleConfig(testPackage(t, "0.1.0"), newGate(t), nil)
+	cfg["client_keys"] = []string{}
+	b, _ := json.Marshal(cfg)
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, filepath.Join(binDir, "pluxy"), "-config", path).CombinedOutput()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 1 || !strings.Contains(string(out), "client_keys is empty") || strings.Contains(string(out), "listening on") {
+		t.Errorf("core exited with %v:\n%s\nwant exit status 1 naming client_keys, before listening", err, out)
+	}
 }
 
 // A reload may switch the config's extension to another one: the new one serves new requests
