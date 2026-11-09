@@ -1,6 +1,7 @@
 package route
 
 import (
+	"container/heap"
 	"math/rand/v2"
 	"sync"
 	"time"
@@ -48,15 +49,21 @@ type block struct {
 	until time.Time
 	// level is the backoff exponent for blocks without a reset time from the upstream.
 	level int
-	// mark is the attempt sequence number current when the block was recorded. Only a success
-	// from an attempt that started after it (a higher sequence number) may clear the block: an
-	// older success says nothing about the newer failure.
+	// mark is the sequence number of the latest-started attempt whose failure the block holds.
+	// Results count in the order their attempts started: only a success from an attempt that
+	// started after it (a higher sequence number) may clear the block, since an older success
+	// says nothing about the newer failure.
 	mark   uint64
 	reason *llm.Error
 }
 
 type scopeState struct {
 	blocks [numBlockKinds]block
+	// won is the sequence number of the latest-started attempt that succeeded on the scope,
+	// kept while an attempt that started before it is still running. That attempt's failure,
+	// when it comes, is older news than the success and records nothing: a stale failure does
+	// not block a scope that has since worked.
+	won uint64
 }
 
 // Backoff settings for failures that carry no reset time.
@@ -108,7 +115,49 @@ type State struct {
 	// last holds, per account ID, the latest failure an attempt on the account recorded a
 	// block for, until an attempt that started after it was recorded succeeds (block.mark's rule).
 	last map[string]lastFailure
-	rand func() float64
+	// running holds the sequence numbers of the attempts reserved and not yet ended, and order
+	// the same numbers as a min-heap (with numbers already ended removed lazily), so the oldest
+	// running attempt is found quickly.
+	running map[uint64]struct{}
+	order   seqHeap
+	rand    func() float64
+}
+
+// seqHeap is a min-heap of attempt sequence numbers.
+type seqHeap []uint64
+
+func (h seqHeap) Len() int           { return len(h) }
+func (h seqHeap) Less(i, j int) bool { return h[i] < h[j] }
+func (h seqHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *seqHeap) Push(x any)        { *h = append(*h, x.(uint64)) }
+func (h *seqHeap) Pop() any {
+	old := *h
+	x := old[len(old)-1]
+	*h = old[:len(old)-1]
+	return x
+}
+
+// oldest returns the sequence number of the oldest running attempt, or 0 when none runs.
+// Call with s.mu held.
+func (s *State) oldest() uint64 {
+	for len(s.order) > 0 {
+		if _, ok := s.running[s.order[0]]; ok {
+			return s.order[0]
+		}
+		heap.Pop(&s.order)
+	}
+	return 0
+}
+
+// needed reports whether st must be kept: a block or backoff step is live within the idle
+// window, or its won mark may still turn away the failure of an older running attempt. Call
+// with s.mu held.
+func (s *State) needed(st *scopeState, cutoff time.Time) bool {
+	if st.lastEnd().After(cutoff) {
+		return true
+	}
+	o := s.oldest()
+	return st.won != 0 && o != 0 && o < st.won
 }
 
 // lastFailure is the latest failure recorded about an account.
@@ -140,10 +189,11 @@ func (s *State) drop(k scopeKey) {
 	}
 }
 
-// sweep drops entries whose blocks all ended before cutoff. Call with s.mu held.
+// sweep drops entries whose blocks all ended before cutoff and whose won mark no running
+// attempt is older than. Call with s.mu held.
 func (s *State) sweep(cutoff time.Time) {
 	for k, st := range s.scopes {
-		if !st.lastEnd().After(cutoff) {
+		if !s.needed(st, cutoff) {
 			s.drop(k)
 		}
 	}
@@ -175,13 +225,15 @@ func (s *State) reserve(a *Account, model string, now time.Time) (uint64, bool) 
 	}
 	s.seq++
 	s.active[a.ID]++
+	s.running[s.seq] = struct{}{}
+	heap.Push(&s.order, s.seq)
 	return s.seq, true
 }
 
 // NewState returns empty state.
 func NewState() *State {
 	return &State{scopes: map[scopeKey]*scopeState{}, active: map[string]int{}, affinity: newAffinity(), rotation: newRotation(),
-		since: map[scopeKey]uint64{}, last: map[string]lastFailure{}, rand: rand.Float64}
+		since: map[scopeKey]uint64{}, last: map[string]lastFailure{}, running: map[uint64]struct{}{}, rand: rand.Float64}
 }
 
 // nextGen returns the generation for a new router.
@@ -265,10 +317,20 @@ func (s *State) stale(key scopeKey, gen uint64) bool {
 	return gen < s.since[key]
 }
 
-// end releases the reservation begin made. Call it exactly once per begin.
-func (s *State) end(a *Account) {
+// end releases the reservation reserve made for the attempt with sequence number seq on
+// account a. Call it exactly once per reservation, after recording the attempt's outcome.
+func (s *State) end(a *Account, seq uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	delete(s.running, seq)
+	if len(s.order) > 2*len(s.running)+64 {
+		// Numbers that ended under a long-running older attempt pile up behind it: rebuild.
+		s.order = s.order[:0]
+		for n := range s.running {
+			s.order = append(s.order, n)
+		}
+		heap.Init(&s.order)
+	}
 	if s.active[a.ID] <= 1 {
 		delete(s.active, a.ID)
 	} else {
@@ -324,10 +386,12 @@ func (s *State) availability(a *Account, model string, now time.Time) (until tim
 	return until, reason, busy
 }
 
-// failure records what a failed attempt on account a for model says about the account.
-// Failures about the request or the caller record nothing. transient replaces the backoff for
-// a failing upstream or endpoint: above 0 it is the block's length, below 0 no block is kept.
-func (s *State) failure(a *Account, model string, e *llm.Error, now time.Time, transient time.Duration) {
+// failure records what the failed attempt with sequence number seq on account a for model says
+// about the account. Failures about the request or the caller record nothing, and so does a
+// failure on a scope where an attempt that started after this one has already succeeded: the
+// newest result wins. transient replaces the backoff for a failing upstream or endpoint: above
+// 0 it is the block's length, below 0 no block is kept.
+func (s *State) failure(a *Account, model string, seq uint64, e *llm.Error, now time.Time, transient time.Duration) {
 	kind, scope, fixed, base, max := classify(e)
 	if kind == "" {
 		return
@@ -356,9 +420,12 @@ func (s *State) failure(a *Account, model string, e *llm.Error, now time.Time, t
 	if s.stale(key, a.gen) {
 		return
 	}
-	s.last[a.ID] = lastFailure{at: now, mark: s.seq, err: e}
-	s.maybeSweep(now)
 	st := s.scopes[key]
+	if st != nil && st.won > seq {
+		return // a newer attempt has succeeded on this scope since this one started
+	}
+	s.maybeSweep(now)
+	st = s.scopes[key]
 	if st == nil {
 		if key.kind == scopeModel && s.models >= maxModelKeys {
 			s.sweep(now) // make room from blocks that have ended
@@ -373,6 +440,13 @@ func (s *State) failure(a *Account, model string, e *llm.Error, now time.Time, t
 		s.scopes[key] = st
 		if key.kind == scopeModel {
 			s.models++
+		}
+	}
+	// The block is kept, so the failure is the account's last error, unless an attempt on the
+	// account that started after this one has since succeeded.
+	if cred := s.scopes[scopeKey{kind: scopeCredential, id: a.ID}]; cred == nil || cred.won <= seq {
+		if l, ok := s.last[a.ID]; !ok || l.mark <= seq {
+			s.last[a.ID] = lastFailure{at: now, mark: seq, err: e}
 		}
 	}
 	b := &st.blocks[kindIndex(kind)]
@@ -407,22 +481,43 @@ func (s *State) failure(a *Account, model string, e *llm.Error, now time.Time, t
 	if until.After(b.until) {
 		b.until = until
 	}
-	b.mark = s.seq
-	b.reason = e
+	if seq >= b.mark {
+		b.mark, b.reason = seq, e
+	}
 }
 
 // success records that the attempt with sequence number seq on account a for model succeeded.
-// It clears blocks on the attempt's scopes, except blocks recorded after the attempt started.
+// It clears blocks on the attempt's scopes that failures of attempts started before it left,
+// and, while such an attempt is still running, marks the scopes so that its failure records
+// nothing when it comes.
 func (s *State) success(a *Account, model string, seq uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if l, ok := s.last[a.ID]; ok && l.mark < seq && !s.stale(scopeKey{kind: scopeCredential, id: a.ID}, a.gen) {
 		delete(s.last, a.ID)
 	}
+	o := s.oldest()
+	older := o != 0 && o < seq // an attempt that started before this one is still running
 	for _, k := range keysFor(a, model) {
-		st := s.scopes[k]
-		if st == nil || s.stale(k, a.gen) {
+		if s.stale(k, a.gen) {
 			continue
+		}
+		st := s.scopes[k]
+		if st == nil {
+			if !older {
+				continue
+			}
+			if k.kind == scopeModel && s.models >= maxModelKeys {
+				// shortcut: with the table full of live model blocks the mark is not kept, so
+				// an older attempt's failure on this model may still block it; raise
+				// maxModelKeys if real pools serve more models than this at once.
+				continue
+			}
+			st = &scopeState{}
+			s.scopes[k] = st
+			if k.kind == scopeModel {
+				s.models++
+			}
 		}
 		empty := true
 		for i := range st.blocks {
@@ -434,7 +529,10 @@ func (s *State) success(a *Account, model string, seq uint64) {
 				empty = false
 			}
 		}
-		if empty {
+		if older && seq > st.won {
+			st.won = seq
+		}
+		if empty && !s.needed(st, time.Time{}) {
 			s.drop(k)
 		}
 	}

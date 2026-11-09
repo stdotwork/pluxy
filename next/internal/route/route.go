@@ -315,7 +315,7 @@ func (c *call) Next() llm.Event {
 		if ev.Type == llm.EventFinish {
 			c.r.state.success(c.acct, c.upstream[c.acct.ID], c.seq)
 		} else {
-			c.r.failure(c.acct, c.upstream[c.acct.ID], ev.Error)
+			c.r.failure(c.acct, c.upstream[c.acct.ID], c.seq, ev.Error)
 		}
 		c.release()
 	}
@@ -332,7 +332,7 @@ func (c *call) Close() {
 func (c *call) release() {
 	if !c.ended {
 		c.ended = true
-		c.r.state.end(c.acct)
+		c.r.state.end(c.acct, c.seq)
 	}
 }
 
@@ -543,8 +543,8 @@ func (c *call) try(a *Account, seq uint64) (ev llm.Event, started bool) {
 			call.Credential, version, e = c.creds.Credential(c.ctx, a.Extension, a.ID)
 		}
 		if e != nil {
-			r.failure(a, c.upstream[a.ID], e)
-			r.state.end(a)
+			r.failure(a, c.upstream[a.ID], seq, e)
+			r.state.end(a, seq)
 			return errorEvent(e), false
 		}
 	}
@@ -565,12 +565,12 @@ func (c *call) try(a *Account, seq uint64) (ev llm.Event, started bool) {
 			c.renewed[a.ID] = true
 			if c.creds.Rejected(c.ctx, a.ID, version) {
 				c.fresh = true
-				r.state.end(a)
+				r.state.end(a, seq)
 				return ev, false
 			}
 		}
-		r.failure(a, c.upstream[a.ID], ev.Error)
-		r.state.end(a)
+		r.failure(a, c.upstream[a.ID], seq, ev.Error)
+		r.state.end(a, seq)
 		return ev, false
 	}
 	c.cur, c.acct, c.seq = s, a, seq
@@ -597,13 +597,13 @@ func (r *Router) cooling(a *Account) bool {
 	return !r.cfg.DisableCooling
 }
 
-// failure records a failed attempt on account a for model in the routing state, by the
-// router's cooldown settings.
-func (r *Router) failure(a *Account, model string, e *llm.Error) {
+// failure records the failed attempt with sequence number seq on account a for model in the
+// routing state, by the router's cooldown settings.
+func (r *Router) failure(a *Account, model string, seq uint64, e *llm.Error) {
 	if !r.cooling(a) {
 		return
 	}
-	r.state.failure(a, model, e, r.now(), time.Duration(r.cfg.TransientErrorCooldownMS)*time.Millisecond)
+	r.state.failure(a, model, seq, e, r.now(), time.Duration(r.cfg.TransientErrorCooldownMS)*time.Millisecond)
 }
 
 // retrySafe reports whether a failed attempt may be tried again elsewhere: the extension says
