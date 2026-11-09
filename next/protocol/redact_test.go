@@ -312,3 +312,26 @@ func TestRedactorMultilineSecret(t *testing.T) {
 		}
 	}
 }
+
+// The identifiers an upstream names its reply with reach the client as they are (a Chat reply's
+// id and model, a tool call's ID), so an upstream that echoes the credential in them has it
+// removed there too. Tool names and text are the reply itself and are left alone.
+func TestRedactorReplyIdentifiers(t *testing.T) {
+	r := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: "sk-secret-123"})
+	start := r.Event(llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "chatcmpl-sk-secret-123", Model: "sk-secret-123"}})
+	if start.Response.ID != "chatcmpl-[redacted]" || start.Response.Model != "[redacted]" {
+		t.Errorf("response = %+v", start.Response)
+	}
+	item := r.Event(llm.Event{Type: llm.EventItemStart, Item: &llm.ItemStart{Kind: llm.ItemToolCall, CallID: "call_sk-secret-123", Name: "sk-secret-123"}})
+	if item.Item.CallID != "call_[redacted]" || item.Item.Name != "sk-secret-123" {
+		t.Errorf("item = %+v", item.Item)
+	}
+	fin := r.Event(llm.Event{Type: llm.EventFinish, Finish: &llm.Finish{Reason: llm.FinishOther, RawReason: "sk-secret-123"}})
+	if fin.Finish.RawReason != "[redacted]" || fin.Finish.Reason != llm.FinishOther {
+		t.Errorf("finish = %+v", fin.Finish)
+	}
+	delta := r.Event(llm.Event{Type: llm.EventTextDelta, Delta: "sk-secret-123"})
+	if delta.Delta != "sk-secret-123" {
+		t.Errorf("delta = %q, want generated text left alone", delta.Delta)
+	}
+}
