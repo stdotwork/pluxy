@@ -338,12 +338,15 @@ func loginFailure(status int, body []byte, h http.Header) *llm.Error {
 		Description string `json:"error_description"`
 	}
 	_ = json.Unmarshal(body, &b)
+	// The code and the description are the provider's text, shown to the client before any
+	// credential exists for core to redact: both are bounded and cleaned.
+	code := sdk.LoginCode(b.Error)
 	msg := fmt.Sprintf("xAI's login answered %d", status)
-	if b.Error != "" {
-		msg += " (" + b.Error + ")"
+	if code != "" {
+		msg += " (" + code + ")"
 	}
-	if b.Description != "" {
-		msg += ": " + b.Description
+	if d := sdk.LoginText(b.Description); d != "" {
+		msg += ": " + d
 	}
 	terminal := false
 	for _, t := range terminalGrantErrors {
@@ -354,13 +357,13 @@ func loginFailure(status int, body []byte, h http.Header) *llm.Error {
 	wait := retryAfter(h.Get("Retry-After"), time.Now())
 	switch {
 	case terminal || status == http.StatusUnauthorized || status == http.StatusForbidden:
-		return &llm.Error{Code: llm.CodeAuth, Message: msg + "; log in again", Status: status, ProviderCode: b.Error, Scope: llm.ScopeCredential}
+		return &llm.Error{Code: llm.CodeAuth, Message: msg + "; log in again", Status: status, ProviderCode: code, Scope: llm.ScopeCredential}
 	case status == http.StatusTooManyRequests:
-		return &llm.Error{Code: llm.CodeRateLimit, Message: msg, Status: status, ProviderCode: b.Error, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: wait}
+		return &llm.Error{Code: llm.CodeRateLimit, Message: msg, Status: status, ProviderCode: code, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: wait}
 	case status >= 500:
 		return &llm.Error{Code: llm.CodeUnavailable, Message: msg, Status: status, Retryable: true, Scope: llm.ScopeEndpoint, RetryAfterMS: wait}
 	}
-	return &llm.Error{Code: llm.CodeUpstream, Message: msg, Status: status, ProviderCode: b.Error, Scope: llm.ScopeEndpoint}
+	return &llm.Error{Code: llm.CodeUpstream, Message: msg, Status: status, ProviderCode: code, Scope: llm.ScopeEndpoint}
 }
 
 // hideSecrets returns err with each secret in its message replaced, for errors whose message

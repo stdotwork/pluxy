@@ -503,6 +503,7 @@ func loginFailure(status int, body []byte) *llm.Error {
 			code = o.Type
 		}
 	}
+	code = sdk.LoginCode(code)
 	for _, r := range grantRefusals {
 		if code == r {
 			return &llm.Error{Code: llm.CodeAuth, Message: "OpenAI refused the sign-in (" + code + "); sign in again", Status: status, ProviderCode: code, Scope: llm.ScopeCredential}

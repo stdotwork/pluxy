@@ -259,6 +259,7 @@ func tokenPost(ctx context.Context, endpoint string, fields map[string]string, o
 			// Anthropic's API error shape: {"error": {"type": ..., "message": ...}}.
 			f.code, _ = v["type"].(string)
 		}
+		f.code = sdk.LoginCode(f.code)
 		return f
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(out); err != nil {

@@ -219,7 +219,7 @@ func oauthPost(ctx context.Context, endpoint, deviceID string, form url.Values, 
 			Error string `json:"error"`
 		}
 		_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
-		return &oauthFailure{status: resp.StatusCode, code: e.Error, retryAfterMS: retryAfter(resp.Header.Get("Retry-After"), time.Now())}
+		return &oauthFailure{status: resp.StatusCode, code: sdk.LoginCode(e.Error), retryAfterMS: retryAfter(resp.Header.Get("Retry-After"), time.Now())}
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(out); err != nil {
 		return &oauthFailure{status: resp.StatusCode, err: fmt.Errorf("the reply is not valid JSON: %w", err)}

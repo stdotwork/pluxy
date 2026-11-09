@@ -23,6 +23,7 @@ import (
 
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
+	"github.com/stdotwork/pluxy/next/sdk"
 )
 
 // Vertex AI serves Gemini under a Google Cloud project. An account with "vertex" in its settings
@@ -329,15 +330,18 @@ func fetchToken(ctx context.Context, sa *serviceAccount) (string, time.Time, err
 	case resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests:
 		return "", time.Time{}, &llm.Error{Code: llm.CodeUnavailable, Status: resp.StatusCode, Message: fmt.Sprintf("service account token endpoint answered %s", resp.Status), Scope: llm.ScopeCredential, Retryable: true}
 	}
+	// The code and the description are the endpoint's text, shown to the client at login, before
+	// any credential exists for core to redact: both are bounded and cleaned.
+	code := sdk.LoginCode(tr.Error)
 	msg := "the token endpoint refused the service account key"
-	if tr.Error != "" {
-		msg += ": " + tr.Error
-		if tr.Description != "" {
-			msg += " (" + tr.Description + ")"
+	if code != "" {
+		msg += ": " + code
+		if d := sdk.LoginText(tr.Description); d != "" {
+			msg += " (" + d + ")"
 		}
 	}
 	// The key itself was refused (invalid_grant and the like): no request reached the model.
-	return "", time.Time{}, &llm.Error{Code: llm.CodeAuth, Message: msg, Scope: llm.ScopeCredential, Retryable: true, ProviderCode: tr.Error}
+	return "", time.Time{}, &llm.Error{Code: llm.CodeAuth, Message: msg, Scope: llm.ScopeCredential, Retryable: true, ProviderCode: code}
 }
 
 // signAssertion returns the JWT a service account presents to its token endpoint (Google's

@@ -544,12 +544,15 @@ func loginFailure(status int, body []byte) *llm.Error {
 		_ = json.Unmarshal(b.Error, &o)
 		code, b.Description = o.Status, o.Message
 	}
+	// The code and the description are the provider's text, shown to the client before any
+	// credential exists for core to redact: both are bounded and cleaned.
+	code = sdk.LoginCode(code)
 	msg := fmt.Sprintf("Google answered %d", status)
 	if code != "" {
 		msg += " (" + code + ")"
 	}
-	if b.Description != "" {
-		msg += ": " + b.Description
+	if d := sdk.LoginText(b.Description); d != "" {
+		msg += ": " + d
 	}
 	switch {
 	case code == "invalid_grant" || code == "invalid_client" || code == "unauthorized_client":
