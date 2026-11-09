@@ -53,6 +53,7 @@ type AccountView struct {
 	Weight         *int               `json:"weight,omitempty"`
 	DisableCooling *bool              `json:"disable_cooling,omitempty"`
 	MaxConcurrency int                `json:"max_concurrency,omitempty"`
+	RequestRetry   *int               `json:"request_retry,omitempty"`
 	Prefix         string             `json:"prefix,omitempty"`
 	Models         []route.ModelEntry `json:"models,omitempty"`
 	ExcludedModels []string           `json:"excluded_models,omitempty"`
@@ -96,7 +97,7 @@ type AccountCheck struct {
 // fields sets v's routing fields from a and its runtime state from state.
 func (v *AccountView) fields(a route.Account, state *route.State) {
 	v.Priority, v.Weight, v.MaxConcurrency, v.Prefix = a.Priority, a.Weight, a.MaxConcurrency, a.Prefix
-	v.DisableCooling = a.DisableCooling
+	v.DisableCooling, v.RequestRetry = a.DisableCooling, a.RequestRetry
 	v.Models, v.ExcludedModels, v.ModelAlias, v.Endpoint = a.Models, a.ExcludedModels, a.ModelAlias, a.Endpoint
 	if state == nil {
 		return
@@ -285,6 +286,10 @@ func (m *Management) add(w http.ResponseWriter, r *http.Request) {
 		writeManagementError(w, http.StatusBadRequest, "invalid_request", "max_concurrency must not be negative")
 		return
 	}
+	if req.RequestRetry != nil && *req.RequestRetry < 0 {
+		writeManagementError(w, http.StatusBadRequest, "invalid_request", "request_retry must not be negative")
+		return
+	}
 	m.startLogin(w, r, cred.LoginRequest{Account: req.Account, Extension: req.Extension, Method: req.Method, Input: req.Input})
 }
 
@@ -372,6 +377,10 @@ var patchFields = map[string]func(a *route.Account, raw json.RawMessage) error{
 	"max_concurrency": func(a *route.Account, raw json.RawMessage) error {
 		a.MaxConcurrency = 0
 		return unmarshalSet(raw, &a.MaxConcurrency)
+	},
+	"request_retry": func(a *route.Account, raw json.RawMessage) error {
+		a.RequestRetry = nil
+		return unmarshalSet(raw, &a.RequestRetry)
 	},
 	"prefix": func(a *route.Account, raw json.RawMessage) error { a.Prefix = ""; return unmarshalSet(raw, &a.Prefix) },
 	"models": func(a *route.Account, raw json.RawMessage) error { a.Models = nil; return unmarshalSet(raw, &a.Models) },

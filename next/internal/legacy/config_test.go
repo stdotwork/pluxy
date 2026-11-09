@@ -120,19 +120,19 @@ func TestExampleProviderSections(t *testing.T) {
 	}
 	vertex := exts[Gemini].(map[string]any)["accounts"].([]any)[3]
 	equalJSON(t, vertex, `{
-		"id": "vertex-1", "weight": 5, "prefix": "test", "disable_cooling": false,
+		"id": "vertex-1", "weight": 5, "prefix": "test", "disable_cooling": false, "request_retry": 3,
 		"models": [{"name": "gemini-2.5-flash", "alias": "vertex-flash"}, {"name": "gemini-2.5-pro", "alias": "vertex-pro"}],
 		"excluded_models": ["imagen-3.0-generate-002", "imagen-*"],
 		"settings": {"base_url": "https://example.com/api", "vertex": {}},
 		"credential": {"kind": "api_key", "api_key": "vk-123..."}
 	}`)
-	// A key's null fields inherit the group's; its own weight and proxy are its own, and its
-	// empty excluded-models clears the group's.
+	// A key's null fields inherit the group's; its own weight, proxy and request-retry are its
+	// own, and its empty excluded-models clears the group's.
 	first := exts[Gemini].(map[string]any)["accounts"].([]any)[0].(map[string]any)
 	equalJSON(t, first["excluded_models"], `["gemini-2.5-pro", "gemini-2.5-*", "*-preview", "*flash*"]`)
 	second := exts[Gemini].(map[string]any)["accounts"].([]any)[1]
 	equalJSON(t, second, `{
-		"id": "gemini-1-2", "priority": 0, "weight": 2, "prefix": "test", "disable_cooling": false,
+		"id": "gemini-1-2", "priority": 0, "weight": 2, "prefix": "test", "disable_cooling": false, "request_retry": 0,
 		"models": [{"name": "gemini-2.5-flash", "alias": "gemini-flash"}],
 		"settings": {"base_url": "https://generativelanguage.googleapis.com"},
 		"credential": {"kind": "api_key", "api_key": "replace-with-second-gemini-key"}
@@ -569,5 +569,47 @@ func TestQuotaResponseMode(t *testing.T) {
 	}
 	if _, err := Translate([]byte("routing: {cooldown: {quota-response-mode: stop}}")); err == nil || !strings.Contains(err.Error(), "quota-response-mode") {
 		t.Errorf("an unknown mode loaded: %v", err)
+	}
+}
+
+// A key's request-retry is its account's request_retry; a group's counts for keys that set none;
+// an openai-compatibility group's counts for all its keys, which have none of their own; a
+// negative one inherits routing's count.
+func TestKeyRequestRetry(t *testing.T) {
+	r := translate(t, `
+api-keys:
+  codex:
+    - request-retry: 2
+      keys:
+        - api-key: a
+        - api-key: b
+          request-retry: 0
+        - api-key: c
+          request-retry: -1
+  openai-compatibility:
+    - name: group
+      base-url: http://127.0.0.1:1/v1
+      request-retry: 3
+      keys:
+        - api-key: d
+          request-retry: 1
+`)
+	got := map[string]any{}
+	for _, ext := range []string{"pluxy/codex", "pluxy/openai-compatible"} {
+		x := asJSON(t, r.Config["extensions"]).(map[string]any)[ext].(map[string]any)
+		for _, a := range x["accounts"].([]any) {
+			a := a.(map[string]any)
+			got[a["credential"].(map[string]any)["api_key"].(string)] = a["request_retry"]
+		}
+	}
+	want := map[string]any{"a": 2.0, "b": 0.0, "c": nil, "d": 3.0} // c: a key's own negative count inherits routing's, not its group's
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("request_retry by key = %v, want %v", got, want)
+	}
+	if strings.Contains(notices(r), "request-retry") {
+		t.Errorf("notices name it:\n%s", notices(r))
+	}
+	if _, err := Translate([]byte("codex-api-key: [{api-key: k, request-retry: soon}]")); err == nil {
+		t.Error("a request-retry that is not a number loaded")
 	}
 }

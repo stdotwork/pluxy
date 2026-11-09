@@ -286,7 +286,7 @@ var rules = map[string]rule{
 	"api-keys.*[].connection-pool":                             {later, ""},
 	"api-keys.*[].request-scoped-errors":                       {later, ""},
 	"api-keys.*[].disable-cooling":                             {supported, ""},
-	"api-keys.*[].request-retry":                               {dropped, "no need found for per-key tuning"},
+	"api-keys.*[].request-retry":                               {supported, ""},
 	"api-keys.codex[].websockets":                              {supported, ""},
 	"api-keys.codex[].disable-codex-cloaking":                  {supported, ""},
 	"api-keys.codex[].alpha-search":                            {later, ""},
@@ -850,6 +850,20 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 			return nil, fmt.Errorf("%s.disable-cooling must be true or false", path)
 		}
 		a["disable_cooling"] = on
+	}
+	// An openai-compatibility group's count is its keys', which have none of their own there.
+	rr := field(g, k, "request-retry")
+	if f.v8 == "openai-compatibility" {
+		rr = g["request-retry"]
+	}
+	if rr != nil {
+		n, ok := rr.(int)
+		if !ok {
+			return nil, fmt.Errorf("%s.request-retry must be a whole number", path)
+		}
+		if n >= 0 { // negative inherits routing's count, as in today's core
+			a["request_retry"] = n
+		}
 	}
 	if w := k["weight"]; w != nil {
 		n, ok := w.(int)

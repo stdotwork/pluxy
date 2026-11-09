@@ -1204,3 +1204,58 @@ func TestQuotaResponseModeValidates(t *testing.T) {
 		}
 	}
 }
+
+// An account's own request_retry counts for it: it leaves a request's rounds past its own count,
+// and a count above routing's runs more rounds for it alone (today's per-key request-retry).
+func TestAccountRequestRetry(t *testing.T) {
+	withRetry := func(id string, n *int) Account { return Account{ID: id, RequestRetry: n} }
+	// Lower than routing's: a takes part in round 0, b in rounds 0-1, c (routing's 2) in 0-2.
+	h := newHarness(t, Config{Strategy: StrategyFillFirst, RequestRetry: rounds(2), DisableCooling: true},
+		withRetry("a", rounds(0)), withRetry("b", rounds(1)), withRetry("c", nil))
+	for _, id := range []string{"a", "b", "c"} {
+		h.on(id, rateLimited(0))
+	}
+	if evs := h.run(h.req("m")); evs[0].Error == nil || evs[0].Error.Code != llm.CodeRateLimit {
+		t.Errorf("got %+v, want the last rate limit", evs[0])
+	}
+	h.wantAttempts("a", "b", "c", "b", "c", "c")
+
+	// Higher than routing's: a runs rounds 0-3 while b stops after routing's 1.
+	h = newHarness(t, Config{Strategy: StrategyFillFirst, RequestRetry: rounds(1), DisableCooling: true},
+		withRetry("a", rounds(3)), withRetry("b", nil))
+	h.on("a", rateLimited(0))
+	h.on("b", rateLimited(0))
+	h.run(h.req("m"))
+	h.wantAttempts("a", "b", "a", "b", "a", "a")
+
+	// Routing sets no rounds: an account's own count runs them, and the others take none.
+	h = newHarness(t, Config{Strategy: StrategyFillFirst, DisableCooling: true}, withRetry("a", rounds(2)), withRetry("b", nil))
+	h.on("a", rateLimited(0), rateLimited(0), ok())
+	h.on("b", rateLimited(0))
+	h.runOK("m")
+	h.wantAttempts("a", "b", "a", "a")
+	if len(h.slept) != 0 {
+		t.Errorf("slept %v, want no wait without blocks", h.slept)
+	}
+}
+
+// The wait before a round counts only the accounts that take part in it: a's block, shorter
+// than b's, does not end the wait, as a has no rounds past the first.
+func TestAccountRequestRetryWaitsForTheNextRoundsAccounts(t *testing.T) {
+	h := newHarness(t, Config{Strategy: StrategyFillFirst, RequestRetry: rounds(1), MaxWaitMS: time.Hour.Milliseconds()},
+		Account{ID: "a", RequestRetry: rounds(0)}, Account{ID: "b"})
+	h.on("a", rateLimited(10*time.Second))
+	h.on("b", rateLimited(time.Minute), ok())
+	h.runOK("m")
+	h.wantAttempts("a", "b", "b")
+	if len(h.slept) != 1 || h.slept[0] != time.Minute {
+		t.Errorf("slept %v, want one wait of 1m0s for b", h.slept)
+	}
+}
+
+func TestAccountRequestRetryMustNotBeNegative(t *testing.T) {
+	a := Account{ID: "a", RequestRetry: rounds(-1)}
+	if err := a.Check(); err == nil {
+		t.Error("a negative request_retry passed the check")
+	}
+}

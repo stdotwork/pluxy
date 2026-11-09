@@ -247,6 +247,9 @@ func (x ExtensionConfig) validate(name string, seen map[string]bool) error {
 		if a.MaxConcurrency < 0 {
 			return fmt.Errorf("config: %s.accounts[%d].max_concurrency must not be negative", name, i)
 		}
+		if a.RequestRetry != nil && *a.RequestRetry < 0 {
+			return fmt.Errorf("config: %s.accounts[%d].request_retry must not be negative", name, i)
+		}
 	}
 	for _, ms := range []*int64{x.IdleStopMS, x.DrainTimeoutMS, &x.Restart.BackoffMS, &x.Restart.MaxBackoffMS, &x.Restart.StableMS} {
 		if ms != nil && (*ms < 0 || *ms > maxTimingMS) {

@@ -332,3 +332,39 @@ func TestCheckImportFolders(t *testing.T) {
 		}
 	}
 }
+
+// A credential file's request_retry (or request-retry), a number or a numeric text, is its
+// account's request_retry, as today's core reads it: request_retry first, a negative one
+// inherits routing's count, and one that is not a number gives way to request-retry.
+func TestAuthFileRequestRetry(t *testing.T) {
+	file := func(fields map[string]any) map[string]any {
+		f := map[string]any{"type": "codex", "access_token": "fake-codex-access", "email": "user@example.com"}
+		for k, v := range fields {
+			f[k] = v
+		}
+		return f
+	}
+	dir := writeFiles(t, map[string]any{
+		"codex-a.json": file(map[string]any{"request_retry": 3}),
+		"codex-b.json": file(map[string]any{"request_retry": " 0 "}),
+		"codex-c.json": file(map[string]any{"request_retry": -1, "request-retry": 5}),
+		"codex-d.json": file(map[string]any{"request_retry": "soon", "request-retry": 2}),
+		"codex-e.json": file(nil),
+	})
+	files, _, err := ReadAuthDir(dir, ImportOptions{}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]any{}
+	for _, f := range files {
+		var v any
+		if n := f.Record.Account.RequestRetry; n != nil {
+			v = *n
+		}
+		got[f.Record.ID] = v
+	}
+	want := map[string]any{"codex-a": 3, "codex-b": 0, "codex-c": nil, "codex-d": 2, "codex-e": nil}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("request_retry by file = %v, want %v", got, want)
+	}
+}
