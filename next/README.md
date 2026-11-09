@@ -109,11 +109,12 @@ Gemini clients call `POST /v1beta/models/{model}:generateContent` or `:streamGen
 (a stream is server-sent events, with or without `alt=sse`), and `:countTokens`.
 
 Token counts (Anthropic's `POST /v1/messages/count_tokens` and Gemini's `:countTokens`) come from
-the upstream's own count endpoint: Anthropic's for a Claude account or an OpenAI-compatible account
-with `"wire_api": "messages"`, Gemini's for a Gemini account (Gemini API or Vertex AI) or one with
+the upstream's own count endpoint: Anthropic's for a Claude account on Anthropic's own API (base URL
+`https://api.anthropic.com`, the default) or an OpenAI-compatible account with `"wire_api": "messages"`, Gemini's for a Gemini account (Gemini API or Vertex AI) or one with
 `"wire_api": "gemini"`. A count from an upstream of the client's own kind comes back as the upstream sent it;
 otherwise core answers with the count in the client's shape. An account whose upstream has no count
-endpoint (Codex, xAI, Kimi, Meta, Devin, Antigravity, and Chat or Responses accounts) cannot count:
+endpoint (Codex, xAI, Kimi, Meta, Devin, Antigravity, and Chat or Responses accounts), and a Claude
+account whose `base_url` is not Anthropic's own (today's core draws the same line), cannot count:
 core tries the model's next account, and when none can, it answers with its own estimate in the
 client's shape, as today's core does with a tokenizer for those accounts. The estimate is a
 heuristic written with the standard library, not a tokenizer: it splits the text the way OpenAI's
@@ -287,7 +288,7 @@ Anthropic. Core renews a subscription's token an hour before it expires.
 
 | Setting | Meaning |
 | --- | --- |
-| `base_url` | Where the Messages API is. Default `https://api.anthropic.com`; requests go to `{base_url}/v1/messages`. |
+| `base_url` | Where the Messages API is. Default `https://api.anthropic.com`; requests go to `{base_url}/v1/messages`. A token count goes to `{base_url}/v1/messages/count_tokens` only when this is Anthropic's own origin (`https` and the host `api.anthropic.com`, port 443 or none, no user info); with any other base the account cannot count and core estimates the count. |
 | `client_id` | Claude's OAuth client. Default is Claude's. |
 
 A Messages request goes to Anthropic unchanged: its body, so thinking blocks, signatures and
