@@ -81,13 +81,14 @@ func TestCORSOffByDefault(t *testing.T) {
 	r.Header.Set("Origin", "https://app.example.test")
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, r)
-	if w.Code != http.StatusOK || w.Header().Get("Access-Control-Allow-Origin") != "" {
+	if w.Code != http.StatusOK || w.Header().Get("Access-Control-Allow-Origin") != "" || w.Header().Get("Vary") != "" {
 		t.Errorf("request answered %d with %v, want 200 without CORS headers", w.Code, w.Header())
 	}
 }
 
 // A listed origin gets its preflight answered before the client key is checked, and its own
-// origin back (not "*"); an origin not listed gets nothing.
+// origin back (not "*"); an origin not listed, or no origin, gets no CORS headers. Every reply
+// says it varies with Origin.
 func TestCORSListedOrigin(t *testing.T) {
 	h := testHandler(t, &Config{ClientKeys: []string{"k"}, CORS: CORSConfig{AllowedOrigins: []string{"HTTPS://App.Example.test"}}}, hello)
 	w := httptest.NewRecorder()
@@ -108,8 +109,14 @@ func TestCORSListedOrigin(t *testing.T) {
 
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, preflight("https://other.example.test"))
-	if w.Code == http.StatusNoContent || w.Header().Get("Access-Control-Allow-Origin") != "" {
-		t.Errorf("an origin not listed got %d with %v", w.Code, w.Header())
+	if w.Code == http.StatusNoContent || w.Header().Get("Access-Control-Allow-Origin") != "" || w.Header().Get("Vary") != "Origin" {
+		t.Errorf("an origin not listed got %d with %v, want no CORS headers but Vary: Origin", w.Code, w.Header())
+	}
+
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(chatBody)))
+	if w.Header().Get("Access-Control-Allow-Origin") != "" || w.Header().Get("Vary") != "Origin" {
+		t.Errorf("a request without an origin got %v, want no CORS headers but Vary: Origin", w.Header())
 	}
 
 	// A request from the listed origin still needs the client key.

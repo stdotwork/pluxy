@@ -57,6 +57,12 @@ func (c *CORSConfig) allow(origin string) string {
 	return ""
 }
 
+// perOrigin reports whether replies depend on the request's origin: some origins are listed, and
+// not every origin.
+func (c *CORSConfig) perOrigin() bool {
+	return len(c.AllowedOrigins) > 0 && !slices.Contains(c.AllowedOrigins, "*")
+}
+
 // withCORS answers CORS for the client API: it adds the CORS headers to replies to allowed
 // origins and answers their preflight requests itself (204, before the client key is checked,
 // since browsers send no credentials with a preflight). Requests from other origins, and every
@@ -65,16 +71,19 @@ func withCORS(src Source, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		g, release := src.Acquire()
 		allow := g.Config.CORS.allow(r.Header.Get("Origin"))
+		perOrigin := g.Config.CORS.perOrigin()
 		release()
+		h := w.Header()
+		if perOrigin {
+			// Whether the reply has CORS headers depends on Origin, also when it has none, so
+			// a shared cache must not give one origin's reply to another.
+			h.Add("Vary", "Origin")
+		}
 		if allow == "" {
 			next.ServeHTTP(w, r)
 			return
 		}
-		h := w.Header()
 		h.Set("Access-Control-Allow-Origin", allow)
-		if allow != "*" {
-			h.Add("Vary", "Origin")
-		}
 		h.Set("Access-Control-Allow-Methods", corsMethods)
 		h.Set("Access-Control-Allow-Headers", allowHeaders(r.Header.Values("Access-Control-Request-Headers")))
 		h.Set("Access-Control-Expose-Headers", corsExposeHeaders)
