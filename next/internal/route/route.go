@@ -51,7 +51,9 @@ type Config struct {
 	// this budget.
 	MaxWaitMS int64 `json:"max_wait_ms,omitempty"`
 	// RequestRetry, when set, runs a request's rounds as today's core's request-retry does: at
-	// most this many rounds after the first, each trying every eligible account again. A
+	// most this many rounds after the first, each trying every eligible account again (an
+	// account's own RequestRetry, when set, counts for it instead; setting it on any account
+	// runs rounds too, with 0 for accounts that set none). A
 	// round starts at once when no account is blocked, or else when the first block ends if
 	// that is within MaxWaitMS; an account refused for rate or quota in this request waits at
 	// least 10 seconds. A refused key (401) or a missing model (404) starts no round. Unset,
@@ -415,8 +417,19 @@ func (c *call) attempts() llm.Event {
 	tried := map[string]bool{} // this round
 	used := map[string]bool{}  // this request
 	attempts, rounds := 0, 0
-	rounded := r.cfg.RequestRetry != nil // today's request-retry rounds
-	limited := map[string]time.Time{}    // with rounds: when each account refused for rate or quota
+	// Today's request-retry rounds, set for routing or for an account. limit is how many rounds
+	// after the first an account takes part in: its own count, else routing's, else none.
+	rounded := r.cfg.RequestRetry != nil || slices.ContainsFunc(capable, func(a *Account) bool { return a.RequestRetry != nil })
+	limit := func(a *Account) int {
+		if a.RequestRetry != nil {
+			return *a.RequestRetry
+		}
+		if r.cfg.RequestRetry != nil {
+			return *r.cfg.RequestRetry
+		}
+		return 0
+	}
+	limited := map[string]time.Time{} // with rounds: when each account refused for rate or quota
 	budget := time.Duration(r.cfg.MaxWaitMS) * time.Millisecond
 	var last *llm.Error
 	for {
@@ -424,10 +437,17 @@ func (c *call) attempts() llm.Event {
 		var cands []*Account
 		var next time.Time // earliest time an account is eligible again, ignoring this round
 		var nextReason *llm.Error
+		// With rounds: the earliest time an account that takes part in the next round is
+		// eligible again; more is false when none does.
+		var nextRound time.Time
+		more := false
 		busy := false
 		for _, a := range capable {
 			if r.cfg.MaxAccounts > 0 && len(used) >= r.cfg.MaxAccounts && !used[a.ID] {
 				continue
+			}
+			if rounded && limit(a) < rounds {
+				continue // past its own rounds
 			}
 			until, reason, full := r.state.availability(a, c.upstream[a.ID], now)
 			if at, ok := limited[a.ID]; ok && r.cooling(a) {
@@ -446,8 +466,15 @@ func (c *call) attempts() llm.Event {
 				}
 			case tried[a.ID]:
 				next, nextReason = now, nil
+				until = now
 			default:
 				cands = append(cands, a)
+			}
+			if rounded && !full && !until.IsZero() && limit(a) > rounds {
+				if !more || until.Before(nextRound) {
+					nextRound = until
+				}
+				more = true
 			}
 		}
 		if r.cfg.MaxAttempts > 0 && attempts >= r.cfg.MaxAttempts {
@@ -506,12 +533,14 @@ func (c *call) attempts() llm.Event {
 		if rounded {
 			// Today's request-retry: a bounded number of rounds, each waiting at most the
 			// budget; a refused key or a missing model starts none.
-			if rounds >= *r.cfg.RequestRetry || last != nil && (last.Code == llm.CodeAuth || last.Code == llm.CodeNotFound) {
+			// The next round takes the accounts whose own count reaches it.
+			if !more || last != nil && (last.Code == llm.CodeAuth || last.Code == llm.CodeNotFound) {
 				if last != nil {
 					return errorEvent(last)
 				}
 				return errorEvent(coolingError(model, wait, nextReason))
 			}
+			wait = max(nextRound.Sub(now), 0)
 			budget = time.Duration(r.cfg.MaxWaitMS) * time.Millisecond
 		} else if wait <= 0 && last != nil {
 			// Every eligible account was tried this round and none is blocked: trying them

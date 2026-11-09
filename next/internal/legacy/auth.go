@@ -262,6 +262,16 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (Aut
 			break
 		}
 	}
+	// request_retry (or request-retry), as today's core reads it: the first that is a whole
+	// number counts, and a negative one inherits routing's count.
+	for _, k := range []string{"request_retry", "request-retry"} {
+		if n, ok := wholeNumber(m[k]); ok {
+			if n >= 0 {
+				r.Account.RequestRetry = &n
+			}
+			break
+		}
+	}
 	r.Account.ExcludedModels = authExcluded(m)
 	r.Account.ModelAlias = authAliases(m)
 	for _, k := range []string{"proxy_url", "proxy-url", "headers"} {
@@ -425,6 +435,19 @@ func parseBool(v any) (on, ok bool) {
 		return b, err == nil
 	}
 	return false, false
+}
+
+// wholeNumber reads a whole number written as a number (a fraction is cut off) or as text, as
+// today's core reads request_retry; ok is false for anything else.
+func wholeNumber(v any) (n int, ok bool) {
+	switch v := v.(type) {
+	case float64:
+		return int(v), true
+	case string:
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		return n, err == nil
+	}
+	return 0, false
 }
 
 // number reads a whole number written as a number or as text, as today's core reads priority

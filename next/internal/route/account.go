@@ -32,6 +32,10 @@ type Account struct {
 	DisableCooling *bool `json:"disable_cooling,omitempty"`
 	// MaxConcurrency limits attempts running at once on this account. 0 means no limit.
 	MaxConcurrency int `json:"max_concurrency,omitempty"`
+	// RequestRetry, when set, is how many rounds after the first this account takes part in,
+	// in place of routing's RequestRetry (today's per-key request-retry): the account leaves a
+	// request's rounds past its own count, and a count above routing's runs more rounds for it.
+	RequestRetry *int `json:"request_retry,omitempty"`
 	// Endpoint names the upstream endpoint this account calls. Accounts that name the same
 	// endpoint share endpoint-scoped state (an outage of one endpoint blocks them all).
 	// Default: the account's own ID.
@@ -55,6 +59,9 @@ type Account struct {
 func (a *Account) Check() error {
 	if a.MaxConcurrency < 0 {
 		return errors.New("max_concurrency must not be negative")
+	}
+	if a.RequestRetry != nil && *a.RequestRetry < 0 {
+		return errors.New("request_retry must not be negative")
 	}
 	return a.checkNames()
 }

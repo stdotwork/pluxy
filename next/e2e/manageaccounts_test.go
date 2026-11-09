@@ -27,6 +27,7 @@ type accountView struct {
 	Prefix            string
 	ExcludedModels    []string   `json:"excluded_models"`
 	MaxConcurrency    int        `json:"max_concurrency"`
+	RequestRetry      *int       `json:"request_retry"`
 	CooldownUntil     *time.Time `json:"cooldown_until"`
 	Cooldowns         []cooldownView
 	LastError         *struct{ Code, Message string } `json:"last_error"`
@@ -150,22 +151,24 @@ func TestManageAccountFields(t *testing.T) {
 	var reply struct{ Account accountView }
 	if code := manage(t, base, "PATCH", "/accounts/work", map[string]any{
 		"priority": 3, "weight": 2, "prefix": "w", "excluded_models": []string{"x-*"}, "max_concurrency": 4, "disabled": true,
-		"disable_cooling": true,
+		"disable_cooling": true, "request_retry": 0,
 	}, &reply); code != http.StatusOK {
 		t.Fatalf("PATCH: %d", code)
 	}
 	a := reply.Account
 	if a.Priority != 3 || a.Weight == nil || *a.Weight != 2 || a.Prefix != "w" || !slices.Equal(a.ExcludedModels, []string{"x-*"}) ||
-		a.MaxConcurrency != 4 || !a.Disabled || a.DisableCooling == nil || !*a.DisableCooling {
+		a.MaxConcurrency != 4 || !a.Disabled || a.DisableCooling == nil || !*a.DisableCooling || a.RequestRetry == nil || *a.RequestRetry != 0 {
 		t.Fatalf("after PATCH: %+v", a)
 	}
-	if a := getAccount(t, base, "work"); a.Priority != 3 || a.Prefix != "w" || !a.Disabled {
+	if a := getAccount(t, base, "work"); a.Priority != 3 || a.Prefix != "w" || !a.Disabled || a.RequestRetry == nil || *a.RequestRetry != 0 {
 		t.Fatalf("listed after PATCH: %+v", a)
 	}
 
 	for _, bad := range []map[string]any{
 		{"prefix": "a/b", "priority": 9},
 		{"max_concurrency": -1},
+		{"request_retry": -1},
+		{"request_retry": "2"},
 		{"priority": "high"},
 		{"settings": map[string]string{"base_url": "https://elsewhere.example"}},
 		{"disabled": nil},
@@ -180,10 +183,10 @@ func TestManageAccountFields(t *testing.T) {
 	}
 
 	var cleared struct{ Account accountView }
-	if code := manage(t, base, "PATCH", "/accounts/work", map[string]any{"weight": nil, "prefix": nil, "disable_cooling": nil, "disabled": false}, &cleared); code != http.StatusOK {
+	if code := manage(t, base, "PATCH", "/accounts/work", map[string]any{"weight": nil, "prefix": nil, "disable_cooling": nil, "request_retry": nil, "disabled": false}, &cleared); code != http.StatusOK {
 		t.Fatalf("PATCH with nulls: %d", code)
 	}
-	if a := cleared.Account; a.Weight != nil || a.Prefix != "" || a.DisableCooling != nil || a.Disabled || a.Priority != 3 {
+	if a := cleared.Account; a.Weight != nil || a.Prefix != "" || a.DisableCooling != nil || a.RequestRetry != nil || a.Disabled || a.Priority != 3 {
 		t.Fatalf("after nulls: %+v", a)
 	}
 }
