@@ -82,6 +82,7 @@ func serveCount(w http.ResponseWriter, r *http.Request, g *Generation, f countFo
 		}
 		return
 	}
+	keepBody(r, body)
 	req, err := f.parse(r, body)
 	if err != nil {
 		f.writeError(w, asLLMError(err))
@@ -92,8 +93,7 @@ func serveCount(w http.ResponseWriter, r *http.Request, g *Generation, f countFo
 	takeThinkingSuffix(&req)
 	f.nativeHeaders(r, &req)
 
-	t := newTrace()
-	r = withTrace(r, t)
+	r, t := requestTrace(r)
 	rr := routeRequest(r, req, body)
 	rr.Attempt = g.Count
 	rr.Attempting = func(a route.Attempt) { t.account = a.Account }

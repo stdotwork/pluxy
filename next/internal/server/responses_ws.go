@@ -140,6 +140,10 @@ type wsSocket struct {
 
 	mu   sync.Mutex
 	turn *wsTurn // the running turn, for interrupts
+
+	// capture keeps the messages sent during the running turn for its request log; nil when
+	// none is kept.
+	capture atomic.Pointer[capture]
 }
 
 // wsMessage is a client message waiting for the turn loop.
@@ -195,6 +199,10 @@ func (s *wsSocket) close() {
 
 // send writes one text message.
 func (s *wsSocket) send(data []byte) error {
+	if c := s.capture.Load(); c != nil {
+		_, _ = c.Write(data)
+		_, _ = c.Write([]byte("\n"))
+	}
 	return s.conn.Write(s.ctx, websocket.MessageText, data)
 }
 
@@ -343,6 +351,19 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 	}
 	native["model"], _ = json.Marshal(model)
 	nativeBody, _ := json.Marshal(native)
+	// The turn's request log holds the client's message and what was sent back, as a request's
+	// holds its body and reply.
+	var turnTrace *trace
+	if g.RequestLog != nil {
+		turnLog := g.RequestLog.newCapture()
+		turnTrace = newTrace()
+		s.capture.Store(turnLog)
+		defer func() {
+			s.capture.Store(nil)
+			g.RequestLog.write(&requestEntry{at: arrived, method: s.r.Method, url: s.r.URL, headers: s.r.Header, body: nativeBody,
+				trace: turnTrace, reply: turnLog.bytes(), replyTitle: "WEBSOCKET MESSAGES"})
+		}()
+	}
 	sessReq, err := openairesponses.ParseRequest(nativeBody)
 	if err != nil {
 		return s.sendError(asLLMError(err)) == nil
@@ -450,7 +471,12 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 	turnReq := sessReq
 	turnReq.Stream = true
 	m := g.newMeter(s.r, arrived, turnReq, clientToken(s.r, false))
-	rr.Attempting = func(a route.Attempt) { m.attempt(a, "") }
+	rr.Attempting = func(a route.Attempt) {
+		m.attempt(a, "")
+		if turnTrace != nil {
+			turnTrace.account = a.Account
+		}
+	}
 	stream := meterStream(g.Router.Generate(ctx, rr), m)
 	defer stream.Close()
 	ev := stream.Next()
@@ -530,6 +556,9 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 				}
 				status, _ := openaichat.ErrorResponse(ev.Error)
 				m.fail(ev.Error, status)
+				if turnTrace != nil && ev.Error.Code != llm.CodeCancelled {
+					turnTrace.failed = true
+				}
 				return s.turnFailed(ev.Error)
 			}
 			m.fail(ev.Error, http.StatusOK)

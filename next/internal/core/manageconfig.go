@@ -249,6 +249,8 @@ type observabilityView struct {
 type logsView struct {
 	LoggingToFile      bool `json:"logging-to-file"`
 	LogsMaxTotalSizeMB int  `json:"logs-max-total-size-mb"`
+	RequestLog         bool `json:"request-log"`
+	ErrorLogsMaxFiles  int  `json:"error-logs-max-files"`
 }
 
 type usageView struct {
@@ -299,7 +301,8 @@ func settings(cfg *server.Config) settingsView {
 	}
 	v.SessionAffinityTTL = shortDuration(ttl)
 	return settingsView{Routing: v, Observability: observabilityView{
-		Logs:  logsView{LoggingToFile: cfg.Logs.ToFile, LogsMaxTotalSizeMB: cfg.Logs.MaxTotalSizeMB},
+		Logs: logsView{LoggingToFile: cfg.Logs.ToFile, LogsMaxTotalSizeMB: cfg.Logs.MaxTotalSizeMB,
+			RequestLog: cfg.Logs.RequestLog, ErrorLogsMaxFiles: cfg.Logs.ErrorLogs()},
 		Usage: usageView{UsageStatisticsEnabled: cfg.Usage.On()}}}
 }
 

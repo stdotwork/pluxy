@@ -185,12 +185,15 @@ func TestLogFileRotationAndCap(t *testing.T) {
 		t.Fatalf("across files: %d lines, first %q", l.Count, l.Lines[0])
 	}
 
-	// A 1 MB cap removes the old request log first, then the rotated file; main.log stays.
+	// A 1 MB cap removes the old request log first, then the rotated file; main.log stays, and so
+	// does the small error log the refused request above left.
 	c.expect(t, http.StatusOK, http.MethodPatch, "/settings", `{"observability": {"logs": {"logs-max-total-size-mb": 1}}}`)
 	entries, _ = os.ReadDir(dir)
 	var left []string
 	for _, e := range entries {
-		left = append(left, e.Name())
+		if !strings.HasPrefix(e.Name(), "error-") {
+			left = append(left, e.Name())
+		}
 	}
 	if !slices.Equal(left, []string{"main.log"}) {
 		t.Fatalf("after a 1 MB cap: %v", left)

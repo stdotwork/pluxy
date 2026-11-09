@@ -144,6 +144,8 @@ type Generation struct {
 	Count route.AttemptFunc
 	// OpenSession opens a session on an extension; nil when sessions are not served.
 	OpenSession OpenSessionFunc
+	// RequestLog writes request logs; nil: none.
+	RequestLog *RequestLog
 	// Usage is the usage record requests are added to; nil while usage statistics are off.
 	Usage *usage.Store
 	// KeyID returns the ID the management API lists a client key under.
@@ -167,7 +169,7 @@ func NewHandler(src Source) http.Handler {
 				f.writeError(w, &llm.Error{Code: llm.CodeAuth, Message: "missing or invalid API key", Status: http.StatusUnauthorized, ProviderCode: "invalid_api_key"})
 				return
 			}
-			h(w, r, g)
+			logged(w, r, g, func(w http.ResponseWriter, r *http.Request) { h(w, r, g) })
 		})
 	}
 	for path, f := range map[string]clientFormat{"/v1/chat/completions": chatFormat, "/v1/completions": completionsFormat,
@@ -243,6 +245,7 @@ func serve(w http.ResponseWriter, r *http.Request, g *Generation, f clientFormat
 		}
 		return // the client went away
 	}
+	keepBody(r, body)
 	req, err := f.parse(r, body)
 	if err != nil {
 		f.writeError(w, asLLMError(err))
@@ -251,8 +254,7 @@ func serve(w http.ResponseWriter, r *http.Request, g *Generation, f clientFormat
 	req.DropPolicy = g.Config.DropPolicy
 	takeThinkingSuffix(&req)
 	f.nativeHeaders(r, &req)
-	t := newTrace()
-	r = withTrace(r, t)
+	r, t := requestTrace(r)
 	m := g.newMeter(r, arrived, req, clientToken(r, f.googleKeys))
 	rr := routeRequest(r, req, body)
 	rr.Attempting = func(a route.Attempt) {
@@ -420,6 +422,9 @@ func logTranslation(r *http.Request, request *llm.Translation, reply any) {
 func logFailure(r *http.Request, e *llm.Error) {
 	if e.Code == llm.CodeCancelled {
 		return
+	}
+	if t := traceOf(r); t != nil {
+		t.failed = true
 	}
 	log.Printf("%s: %s", logPrefix(r), e.Error())
 }
