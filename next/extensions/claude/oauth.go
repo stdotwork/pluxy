@@ -21,8 +21,9 @@ import (
 
 // Claude subscription login is OAuth's authorization code grant with PKCE (RFC 6749, RFC 7636),
 // with Claude's endpoints and client. The token endpoint takes and returns JSON. Account
-// settings can name other endpoints and another client (authorize_url, token_url, client_id),
-// which tests use to sign in to a fake server.
+// settings can name another client (client_id). They can name other endpoints (authorize_url,
+// token_url) only under test (sdk.TestLoginHost): a stored account must not choose where the
+// code and refresh token go.
 const (
 	defaultAuthorizeURL = "https://claude.ai/oauth/authorize"
 	defaultTokenURL     = "https://platform.claude.com/v1/oauth/token"

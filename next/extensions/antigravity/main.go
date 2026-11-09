@@ -8,8 +8,8 @@
 //
 // base_url is the Cloud Code host; requests go to {base_url}/v1internal:generateContent, or
 // :streamGenerateContent?alt=sse for a stream, as Antigravity sends them. user_agent replaces the
-// Antigravity app's User-Agent. auth_base_url moves Google's login to a test server, and
-// callback_listen false keeps the login from listening for the browser's return.
+// Antigravity app's User-Agent. Tests move Google's login to a fake with auth_base_url
+// (sdk.TestLoginHost); in a normal run it is ignored. callback_listen false keeps the login from listening for the browser's return.
 //
 // A request is built as a Gemini GenerateContent body (a Gemini client's own body, or a
 // translation of any other format) and sent inside Cloud Code's envelope with the account's
@@ -92,7 +92,7 @@ func readSettings(raw json.RawMessage) (settings, error) {
 	if s.BaseURL == "" {
 		s.BaseURL = defaultBaseURL
 	}
-	s.AuthBaseURL = strings.TrimRight(s.AuthBaseURL, "/")
+	s.AuthBaseURL = strings.TrimRight(sdk.TestLoginHost(s.AuthBaseURL), "/")
 	if s.UserAgent == "" {
 		s.UserAgent = userAgent
 	}

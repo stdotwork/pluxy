@@ -87,6 +87,7 @@ func TestThinkingSuffix(t *testing.T) {
 // A login server reply that redirects is not followed: following a 307 would send the refresh
 // token (or an authorization code and its verifier) to wherever the redirect points.
 func TestTokenEndpointRedirectIsNotFollowed(t *testing.T) {
+	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	var reached atomic.Int32
 	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached.Add(1) }))
 	defer elsewhere.Close()

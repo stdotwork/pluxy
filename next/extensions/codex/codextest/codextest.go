@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/stdotwork/pluxy/next/conformance"
+	"github.com/stdotwork/pluxy/next/protocol"
 )
 
 // ClientID is the OAuth client the extension must identify as.
@@ -75,6 +76,8 @@ type device struct {
 
 // New starts a fake; it stops when the test ends.
 func New(t testing.TB) *Server {
+	// The extension honours the fake's address in account settings only under this variable.
+	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	s := &Server{
 		codes: map[string]codeGrant{}, devices: map[string]*device{}, refresh: map[string]bool{},
 		access: map[string]string{}, hangs: map[string]chan struct{}{}, started: make(chan struct{}),

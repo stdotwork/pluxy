@@ -153,6 +153,13 @@ The extension then:
 
    The fields are a fixed marker, the chosen protocol version, the network type and the address.
 
+One more variable is passed on when core's own environment holds it: `PLUXY_TEST_LOGIN_HOSTS`.
+Only tests set it. With it set to `1`, an extension may take the address of its provider's login
+or token endpoint from an account's settings, so a test can point it at a fake provider; without
+it the extension must use the provider's own hosts, because account settings are data a stored
+account carries and must not decide where a login's codes or a refresh token are sent. The Go
+SDK's `sdk.TestLoginHost` applies the rule.
+
 If `PLUXY_PROTOCOL_VERSIONS` is not set, the program was not started by pluxy: it should say so on
 stderr and exit with a non-zero status.
 

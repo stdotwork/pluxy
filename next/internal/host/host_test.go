@@ -49,6 +49,7 @@ func fakeExtension(mode string) {
 	}
 	if mode != "sleep-child" { // the child shares its parent's folder
 		_ = os.WriteFile("pid", []byte(strconv.Itoa(os.Getpid())), 0o644)
+		_ = os.WriteFile("env", []byte(strings.Join(os.Environ(), "\n")), 0o644)
 	}
 	switch mode {
 	case "close-stdout":
@@ -357,5 +358,34 @@ func TestLongOutputLineIsNotSplit(t *testing.T) {
 	}
 	if got := out.String(); strings.Contains(got, "xxxx") || !strings.Contains(got, "not logged") {
 		t.Errorf("log = %.200q..., want only a note", got)
+	}
+}
+
+// Core clears an extension's environment, except for the variable that lets tests move an
+// extension's login hosts, and only when core itself holds it.
+func TestStartPassesOnlyTheTestLoginHostsVariable(t *testing.T) {
+	t.Setenv("PLUXY_HOSTTEST_OTHER", "leaks")
+	for _, tc := range []struct {
+		value string
+		want  bool
+	}{{"1", true}, {"", false}} {
+		t.Setenv(protocol.EnvTestLoginHosts, tc.value)
+		dir := fakePackage(t, "serve")
+		ext, err := Start(filepath.Join(dir, ManifestFile), Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ext.Stop()
+		b, err := os.ReadFile(filepath.Join(dir, "env"))
+		if err != nil {
+			t.Fatalf("the fake extension wrote no env file: %v", err)
+		}
+		env := "\n" + string(b) + "\n"
+		if got := strings.Contains(env, "\n"+protocol.EnvTestLoginHosts+"=1\n"); got != tc.want {
+			t.Errorf("with %s=%q in core's environment, extension has it = %v, want %v:\n%s", protocol.EnvTestLoginHosts, tc.value, got, tc.want, b)
+		}
+		if strings.Contains(env, "PLUXY_HOSTTEST_OTHER") {
+			t.Errorf("another variable of core's reached the extension:\n%s", b)
+		}
 	}
 }

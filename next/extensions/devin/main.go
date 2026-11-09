@@ -9,8 +9,9 @@
 // base_url is Devin's API server; chat requests go to
 // {base_url}/exa.api_server_pb.ApiServerService/GetChatMessage. device_seed makes the device
 // fingerprint each request carries the same every time; without it the fingerprint is random, as
-// today's core sends it. app_base_url and api_base_url move Devin's sign-in page and login API
-// to a test server; callback_listen false keeps the login from listening for the browser's
+// today's core sends it. Tests move Devin's sign-in page and login API to a fake with
+// app_base_url and api_base_url (sdk.TestLoginHost); in a normal run they are ignored.
+// callback_listen false keeps the login from listening for the browser's
 // return.
 //
 // Every client format is sent as Devin's protobuf chat request over Connect (request.go,
@@ -87,8 +88,8 @@ func readSettings(raw json.RawMessage) (settings, error) {
 		return v
 	}
 	s.BaseURL = trim(s.BaseURL, defaultBaseURL)
-	s.AppBaseURL = trim(s.AppBaseURL, defaultAppBaseURL)
-	s.APIBaseURL = trim(s.APIBaseURL, defaultAPIBaseURL)
+	s.AppBaseURL = trim(sdk.TestLoginHost(s.AppBaseURL), defaultAppBaseURL)
+	s.APIBaseURL = trim(sdk.TestLoginHost(s.APIBaseURL), defaultAPIBaseURL)
 	return s, nil
 }
 

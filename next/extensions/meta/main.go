@@ -7,7 +7,8 @@
 //
 // base_url is where Meta's API lives; requests go to {base_url}/responses. Without it a login's
 // requests go where Meta said when the key was made, and a key's to https://api.meta.ai/v1.
-// auth_base_url and mint_url move Meta's login and its key endpoint to a test server.
+// Tests move Meta's login and its key endpoint to a fake with auth_base_url and mint_url
+// (sdk.TestLoginHost); in a normal run they are ignored.
 //
 // Every client format is sent to Meta's Responses API, always as a stream, as Muse Code sends it
 // and today's core does: a Responses client's body passes through with the changes Meta needs
@@ -77,11 +78,11 @@ func readSettings(raw json.RawMessage) (settings, error) {
 		}
 	}
 	s.BaseURL = strings.TrimRight(s.BaseURL, "/")
-	s.AuthBaseURL = strings.TrimRight(s.AuthBaseURL, "/")
+	s.AuthBaseURL = strings.TrimRight(sdk.TestLoginHost(s.AuthBaseURL), "/")
 	if s.AuthBaseURL == "" {
 		s.AuthBaseURL = defaultAuthBaseURL
 	}
-	if s.MintURL == "" {
+	if s.MintURL = sdk.TestLoginHost(s.MintURL); s.MintURL == "" {
 		s.MintURL = defaultMintURL
 	}
 	return s, nil
