@@ -484,6 +484,10 @@ func upstreamError(resp *http.Response, model string) *llm.Error {
 		e.Retryable = model != "" && strings.Contains(e.Message, model)
 	case s == http.StatusTooManyRequests:
 		e.Code, e.Scope, e.Retryable = llm.CodeRateLimit, llm.ScopeCredential, true
+		if parsed.Error.Status == "RESOURCE_EXHAUSTED" && parsed.reason() == "QUOTA_EXHAUSTED" {
+			// A quota is used up, not a request rate exceeded (RATE_LIMIT_EXCEEDED).
+			e.Code = llm.CodeQuota
+		}
 		e.RetryAfterMS = retryAfter(resp.Header.Get("Retry-After"), time.Now())
 		if e.RetryAfterMS == 0 {
 			e.RetryAfterMS = parsed.retryDelay()
