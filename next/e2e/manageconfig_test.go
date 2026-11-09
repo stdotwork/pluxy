@@ -281,6 +281,11 @@ func TestManageConfigNeedsManagementKey(t *testing.T) {
 				t.Errorf("%s %s with key %q: status %d, want 401: %s", call.method, call.path, key, code, b)
 			}
 		}
+		// The right key clears the count, so these three failures never add up to the five that
+		// block this address.
+		if code, b := mcall(t, c.base, managementKey, http.MethodGet, "/status", nil); code != http.StatusOK {
+			t.Fatalf("GET /status with the management key: %d %s", code, b)
+		}
 	}
 	// A rejected call changed nothing: the keys still work.
 	if code := chatStatus(t, c.base, clientKey); code != http.StatusOK {
