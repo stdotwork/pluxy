@@ -42,7 +42,9 @@ type Config struct {
 	// limit: each account is still tried at most once per round, and a new round needs a
 	// wait that fits MaxWaitMS.
 	MaxAttempts int `json:"max_attempts,omitempty"`
-	// MaxAccounts bounds how many distinct accounts one request tries. 0 means no limit.
+	// MaxAccounts bounds how many distinct accounts one request tries in a round (today's
+	// max-retry-credentials), and every round gets its own count. An account the limit left out
+	// takes part in a later round. 0 means no limit.
 	MaxAccounts int `json:"max_accounts,omitempty"`
 	// MaxWaitMS is the longest one request waits, in total, for a blocked account to become
 	// eligible again; with RequestRetry set, the longest it waits before each extra round. 0
@@ -415,7 +417,7 @@ func (c *call) attempts() llm.Event {
 	c.capable = capable
 
 	tried := map[string]bool{} // this round
-	used := map[string]bool{}  // this request
+	used := map[string]bool{}  // this round
 	attempts, rounds := 0, 0
 	// Today's request-retry rounds, set for routing or for an account. limit is how many rounds
 	// after the first an account takes part in: its own count, else routing's, else none.
@@ -443,9 +445,6 @@ func (c *call) attempts() llm.Event {
 		more := false
 		busy := false
 		for _, a := range capable {
-			if r.cfg.MaxAccounts > 0 && len(used) >= r.cfg.MaxAccounts && !used[a.ID] {
-				continue
-			}
 			if rounded && limit(a) < rounds {
 				continue // past its own rounds
 			}
@@ -464,7 +463,8 @@ func (c *call) attempts() llm.Event {
 				if next.IsZero() || until.Before(next) {
 					next, nextReason = until, reason
 				}
-			case tried[a.ID]:
+			case tried[a.ID] || r.cfg.MaxAccounts > 0 && len(used) >= r.cfg.MaxAccounts && !used[a.ID]:
+				// Tried this round, or left out of it by the account limit: it waits for the next.
 				next, nextReason = now, nil
 				until = now
 			default:
@@ -565,6 +565,7 @@ func (c *call) attempts() llm.Event {
 		budget -= wait
 		rounds++
 		clear(tried)
+		clear(used)
 	}
 }
 

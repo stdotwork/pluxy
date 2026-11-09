@@ -565,10 +565,53 @@ func TestAttemptAndAccountLimits(t *testing.T) {
 	h.run(h.req("m"))
 	h.wantAttempts("a", "b")
 
+	// The account limit is for one round (today's max-retry-credentials). A request without
+	// rounds ends with it, though a is blocked for only a second and the wait fits.
 	h = newHarness(t, Config{MaxAccounts: 1, MaxWaitMS: 120_000}, accts("a", "b")...)
 	h.on("a", rateLimited(time.Second), ok())
-	h.runOK("m") // a refuses; b is beyond the account limit, so wait for a
-	h.wantAttempts("a", "a")
+	if evs := h.run(h.req("m")); evs[0].Error == nil || evs[0].Error.Code != llm.CodeRateLimit {
+		t.Errorf("got %+v, want a's rate limit", evs[0])
+	}
+	h.wantAttempts("a")
+	if len(h.slept) != 0 {
+		t.Errorf("slept %v, want no wait", h.slept)
+	}
+}
+
+// max_accounts limits the accounts one round tries, and every round gets its own count
+// (today's max-retry-credentials).
+func TestMaxAccountsIsPerRound(t *testing.T) {
+	refuse := rateLimited(0)
+	// Each of the two rounds tries two of the three accounts: round 0 a and b, round 1 the
+	// next in turn, c, and a.
+	h := newHarness(t, Config{MaxAccounts: 2, RequestRetry: rounds(1), DisableCooling: true}, accts("a", "b", "c")...)
+	for _, id := range []string{"a", "b", "c"} {
+		h.on(id, refuse)
+	}
+	if evs := h.run(h.req("m")); evs[0].Error == nil || evs[0].Error.Code != llm.CodeRateLimit {
+		t.Errorf("got %+v, want the last rate limit", evs[0])
+	}
+	h.wantAttempts("a", "b", "c", "a")
+
+	// An account that leaves a round (its own request_retry is spent) takes no place in it and
+	// is not counted: round 1 tries a and c, round 2 only a.
+	retry := func(id string, n *int) Account { return Account{ID: id, RequestRetry: n} }
+	h = newHarness(t, Config{Strategy: StrategyFillFirst, MaxAccounts: 2, RequestRetry: rounds(1), DisableCooling: true},
+		retry("a", rounds(2)), retry("b", rounds(0)), retry("c", nil))
+	for _, id := range []string{"a", "b", "c"} {
+		h.on(id, refuse)
+	}
+	h.run(h.req("m"))
+	h.wantAttempts("a", "b", "a", "c", "a")
+
+	// An account the limit left out of a round still takes part in the next one: b's own count
+	// runs a second round for it alone, though a's round used up the limit.
+	h = newHarness(t, Config{Strategy: StrategyFillFirst, MaxAccounts: 1, DisableCooling: true},
+		retry("a", rounds(0)), retry("b", rounds(1)))
+	h.on("a", refuse)
+	h.on("b", ok())
+	h.runOK("m")
+	h.wantAttempts("a", "b")
 }
 
 func TestConcurrencyLimit(t *testing.T) {
