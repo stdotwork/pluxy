@@ -1,0 +1,516 @@
+{
+  "description": "A Claude subscription login whose config lists no models: the new core's GET /v0/management/accounts/{id}/models against the old core's GET /v0/management/auth-files/models for the same account.",
+  "source": [
+    "core/internal/api/handlers/management/auth_files.go GetAuthFileModels",
+    "core/sdk/cliproxy/service_models.go",
+    "core/internal/registry/models/ catalog for claude"
+  ],
+  "client": {"method":"GET","path":"/v0/management/accounts/corpus/models","auth":"management-key"},
+  "old_client": {
+    "method": "GET",
+    "path": "/v0/management/auth-files/models?name=claude-corpus-1.json",
+    "auth": "management-key"
+  },
+  "account_models": ["claude-sonnet-4-6"],
+  "old_core": {"account":{"models":null}},
+  "new_core": {"account":{"models":null}},
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "models": [
+          {
+            "display_name": "Claude 4.5 Haiku",
+            "id": "claude-haiku-4-5-20251001",
+            "owned_by": "anthropic",
+            "type": "claude"
+          },
+          {
+            "display_name": "Claude 4.5 Sonnet",
+            "id": "claude-sonnet-4-5-20250929",
+            "owned_by": "anthropic",
+            "type": "claude"
+          },
+          {
+            "display_name": "Claude 4.6 Sonnet",
+            "id": "claude-sonnet-4-6",
+            "owned_by": "anthropic",
+            "type": "claude"
+          },
+          {
+            "display_name": "Claude 4.6 Opus",
+            "id": "claude-opus-4-6",
+            "owned_by": "anthropic",
+            "type": "claude"
+          },
+          {
+            "display_name": "Claude Opus 4.7",
+            "id": "claude-opus-4-7",
+            "owned_by": "anthropic",
+            "type": "claude"
+          },
+          {
+            "display_name": "Claude Opus 4.8",
+            "id": "claude-opus-4-8",
+            "owned_by": "anthropic",
+            "type": "claude"
+          },
+          {
+            "display_name": "Claude Opus 5",
+            "id": "claude-opus-5",
+            "owned_by": "anthropic",
+            "type": "claude"
+          },
+          {
+            "display_name": "Claude Sonnet 5",
+            "id": "claude-sonnet-5",
+            "owned_by": "anthropic",
+            "type": "claude"
+          },
+          {
+            "display_name": "Claude Fable 5",
+            "id": "claude-fable-5",
+            "owned_by": "anthropic",
+            "type": "claude"
+          },
+          {
+            "display_name": "Claude Fable 5.1",
+            "id": "claude-fable-5-1",
+            "owned_by": "anthropic",
+            "type": "claude"
+          },
+          {
+            "display_name": "Claude Opus 5.5",
+            "id": "claude-opus-5-5",
+            "owned_by": "anthropic",
+            "type": "claude"
+          },
+          {
+            "display_name": "Claude Sonnet 5.5",
+            "id": "claude-sonnet-5-5",
+            "owned_by": "anthropic",
+            "type": "claude"
+          },
+          {
+            "display_name": "Claude Haiku 5.5",
+            "id": "claude-haiku-5-5",
+            "owned_by": "anthropic",
+            "type": "claude"
+          },
+          {
+            "display_name": "Claude 4.5 Opus",
+            "id": "claude-opus-4-5-20251101",
+            "owned_by": "anthropic",
+            "type": "claude"
+          },
+          {
+            "display_name": "Claude 4.1 Opus",
+            "id": "claude-opus-4-1-20250805",
+            "owned_by": "anthropic",
+            "type": "claude"
+          },
+          {
+            "display_name": "Claude 4 Opus",
+            "id": "claude-opus-4-20250514",
+            "owned_by": "anthropic",
+            "type": "claude"
+          },
+          {
+            "display_name": "Claude 4 Sonnet",
+            "id": "claude-sonnet-4-20250514",
+            "owned_by": "anthropic",
+            "type": "claude"
+          },
+          {
+            "display_name": "Claude 3.7 Sonnet",
+            "id": "claude-3-7-sonnet-20250219",
+            "owned_by": "anthropic",
+            "type": "claude"
+          },
+          {
+            "display_name": "Claude 3.5 Haiku",
+            "id": "claude-3-5-haiku-20241022",
+            "owned_by": "anthropic",
+            "type": "claude"
+          }
+        ]
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8",
+        "X-Cpa-Build-Date": "unknown",
+        "X-Cpa-Commit": "none",
+        "X-Cpa-Support-Plugin": "1",
+        "X-Cpa-Version": "dev"
+      },
+      "status": 200
+    },
+    "upstream": []
+  },
+  "exceptions": [
+    {
+      "path": "client.headers.Content-Type",
+      "kind": "intended",
+      "want": "application/json",
+      "reason": "Different management API by design: the new management API answers application/json; today's core's gin handlers add a charset."
+    },
+    {
+      "path": "client.body.models[*].type",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The old list's type is not carried."
+    },
+    {
+      "path": "client.body.models[*].context_length",
+      "kind": "intended",
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's context_length is not in the old list."
+    },
+    {
+      "path": "client.body.models[*].created",
+      "kind": "intended",
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's created is not in the old list."
+    },
+    {
+      "path": "client.body.models[*].description",
+      "kind": "intended",
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's description is not in the old list."
+    },
+    {
+      "path": "client.body.models[0].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[1].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[2].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[3].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[4].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[5].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[6].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[7].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[8].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[9].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[10].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[11].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[12].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[13].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[14].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[15].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[16].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[17].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[*].max_completion_tokens",
+      "kind": "intended",
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's max_completion_tokens is not in the old list."
+    },
+    {
+      "path": "client.body.models[0].names",
+      "kind": "intended",
+      "want": ["claude-haiku-4-5-20251001"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[1].names",
+      "kind": "intended",
+      "want": ["claude-sonnet-4-5-20250929"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[2].names",
+      "kind": "intended",
+      "want": ["claude-sonnet-4-6"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[3].names",
+      "kind": "intended",
+      "want": ["claude-opus-4-6"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[4].names",
+      "kind": "intended",
+      "want": ["claude-opus-4-7"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[5].names",
+      "kind": "intended",
+      "want": ["claude-opus-4-8"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[6].names",
+      "kind": "intended",
+      "want": ["claude-opus-5"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[7].names",
+      "kind": "intended",
+      "want": ["claude-sonnet-5"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[8].names",
+      "kind": "intended",
+      "want": ["claude-fable-5"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[9].names",
+      "kind": "intended",
+      "want": ["claude-fable-5-1"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[10].names",
+      "kind": "intended",
+      "want": ["claude-opus-5-5"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[11].names",
+      "kind": "intended",
+      "want": ["claude-sonnet-5-5"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[12].names",
+      "kind": "intended",
+      "want": ["claude-haiku-5-5"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[13].names",
+      "kind": "intended",
+      "want": ["claude-opus-4-5-20251101"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[14].names",
+      "kind": "intended",
+      "want": ["claude-opus-4-1-20250805"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[15].names",
+      "kind": "intended",
+      "want": ["claude-opus-4-20250514"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[16].names",
+      "kind": "intended",
+      "want": ["claude-sonnet-4-20250514"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[17].names",
+      "kind": "intended",
+      "want": ["claude-3-7-sonnet-20250219"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[18].names",
+      "kind": "intended",
+      "want": ["claude-3-5-haiku-20241022"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[0].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[1].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[2].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[3].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[4].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[5].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[6].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[7].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[8].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[9].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[10].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[11].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[12].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[13].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[14].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[15].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[16].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[17].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    }
+  ]
+}

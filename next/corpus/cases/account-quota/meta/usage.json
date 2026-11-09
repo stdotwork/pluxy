@@ -1,0 +1,165 @@
+{
+  "description": "A Muse Code login's quota: the new core's GET /v0/management/accounts/{id}/quota against the key-endpoint request today's panel sends through the old core's api-call relay.",
+  "source": [
+    "extensions/panel/src/features/quota/providers/meta/requests.ts createMetaQuotaFetcher",
+    "core/internal/api/handlers/management/api_tools.go APICall"
+  ],
+  "client": {"method":"GET","path":"/v0/management/accounts/corpus/quota","auth":"management-key"},
+  "old_client": {
+    "path": "/v0/management/api-call",
+    "auth": "management-key",
+    "body": {
+      "auth_index": "{{auth_index}}",
+      "method": "POST",
+      "url": "{{upstream}}/muse-code/key",
+      "header": {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Authorization": "Bearer dca:sk-corpus-upstream",
+        "x-api-version": "1.0.0"
+      },
+      "data": "{}"
+    }
+  },
+  "account_models": ["muse-spark-1.3"],
+  "upstream": [
+    {
+      "body": {
+        "api_key": "corpus-minted-key",
+        "subs_tier_name": "Muse Plus",
+        "is_subs_active": true,
+        "subs_usage": {
+          "tier": "plus",
+          "window": {"used_percent":20,"resets_at":1893474000,"window_duration_mins":300},
+          "weekly": {"used_percent":5,"resets_at":1894060800}
+        }
+      }
+    }
+  ],
+  "volatile": [
+    "client.body.fetched_at",
+    "client.body.header.Date",
+    "client_more[*].body.header.Date",
+    "upstream[0].headers.X-Meta-Ai-Gateway-Session-Id",
+    "upstream[0].headers.X-Tbh-Root-Session-Id",
+    "upstream[0].headers.X-Tbh-Session-Id",
+    "upstream[0].headers.X-Tbh-Thread-Id"
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "body": "{\"api_key\":\"corpus-minted-key\",\"subs_tier_name\":\"Muse Plus\",\"is_subs_active\":true,\"subs_usage\":{\"tier\":\"plus\",\"window\":{\"used_percent\":20,\"resets_at\":1893474000,\"window_duration_mins\":300},\"weekly\":{\"used_percent\":5,\"resets_at\":1894060800}}}",
+        "header": {"Content-Length":["241"],"Content-Type":["application/json"],"Date":"(volatile)"},
+        "status_code": 200
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8",
+        "X-Cpa-Build-Date": "unknown",
+        "X-Cpa-Commit": "none",
+        "X-Cpa-Support-Plugin": "1",
+        "X-Cpa-Version": "dev"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {},
+        "headers": {
+          "Accept": "application/json",
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer dca:sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1",
+          "X-Api-Version": "1.0.0"
+        },
+        "method": "POST",
+        "path": "/muse-code/key"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "client.body",
+      "kind": "intended",
+      "want": {
+        "fetched_at": "(volatile)",
+        "quota": {
+          "limits": [
+            {
+              "id": "window",
+              "label": "Usage limit",
+              "resets_at": 1893474000,
+              "used_percent": 20,
+              "window_seconds": 18000
+            },
+            {"id":"weekly","label":"Weekly limit","resets_at":1894060800,"used_percent":5}
+          ],
+          "plan": "Muse Plus",
+          "raw": {
+            "is_subs_active": true,
+            "subs_tier_name": "Muse Plus",
+            "subs_usage": {
+              "tier": "plus",
+              "weekly": {"resets_at":1894060800,"used_percent":5},
+              "window": {"resets_at":1893474000,"used_percent":20,"window_duration_mins":300}
+            }
+          }
+        }
+      },
+      "reason": "Different management API by design: the old core's api-call relay answers with the upstream's reply wrapped as {status_code, header, body} for the panel to read, and the panel works out the plan and limits itself; the new core's quota call reads the account's quota itself and answers {quota, fetched_at}. The want pins the new quota for this upstream reply."
+    },
+    {
+      "path": "client.headers.Content-Type",
+      "kind": "intended",
+      "want": "application/json",
+      "reason": "Different management API by design: the new management API answers application/json; today's core's gin handlers add a charset."
+    },
+    {
+      "path": "upstream[*].headers.User-Agent",
+      "kind": "intended",
+      "reason": "Quota fetchers use each provider's own client identity for its own subscription (a decision on record): the new core sends Muse Code's own User-Agent; the panel's request sets none, so the relay sends Go's default."
+    },
+    {
+      "path": "upstream[*].headers.X-Client-Id",
+      "kind": "intended",
+      "reason": "The new core sends Muse Code's client identity headers on the key-endpoint call (README: Meta, Quota); the panel's request sends only Accept, Content-Type, Authorization and x-api-version.",
+      "want": "tbh:exec"
+    },
+    {
+      "path": "upstream[*].headers.X-Tbh-Agent-Role",
+      "kind": "intended",
+      "reason": "The new core sends Muse Code's client identity headers on the key-endpoint call (README: Meta, Quota); the panel's request sends only Accept, Content-Type, Authorization and x-api-version.",
+      "want": "main"
+    },
+    {
+      "path": "upstream[*].headers.X-Tbh-Contributor-Mode",
+      "kind": "intended",
+      "reason": "The new core sends Muse Code's client identity headers on the key-endpoint call (README: Meta, Quota); the panel's request sends only Accept, Content-Type, Authorization and x-api-version.",
+      "want": "1"
+    },
+    {
+      "path": "upstream[*].headers.X-Meta-Ai-Gateway-Session-Id",
+      "kind": "intended",
+      "reason": "The new core sends Muse Code's client identity headers on the key-endpoint call (README: Meta, Quota); the panel's request sends only Accept, Content-Type, Authorization and x-api-version. The session IDs are made at random for each run (masked as volatile)."
+    },
+    {
+      "path": "upstream[*].headers.X-Tbh-Root-Session-Id",
+      "kind": "intended",
+      "reason": "The new core sends Muse Code's client identity headers on the key-endpoint call (README: Meta, Quota); the panel's request sends only Accept, Content-Type, Authorization and x-api-version. The session IDs are made at random for each run (masked as volatile)."
+    },
+    {
+      "path": "upstream[*].headers.X-Tbh-Session-Id",
+      "kind": "intended",
+      "reason": "The new core sends Muse Code's client identity headers on the key-endpoint call (README: Meta, Quota); the panel's request sends only Accept, Content-Type, Authorization and x-api-version. The session IDs are made at random for each run (masked as volatile)."
+    },
+    {
+      "path": "upstream[*].headers.X-Tbh-Thread-Id",
+      "kind": "intended",
+      "reason": "The new core sends Muse Code's client identity headers on the key-endpoint call (README: Meta, Quota); the panel's request sends only Accept, Content-Type, Authorization and x-api-version. The session IDs are made at random for each run (masked as volatile)."
+    }
+  ]
+}

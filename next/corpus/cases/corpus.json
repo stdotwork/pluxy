@@ -70,6 +70,36 @@
       "path": "upstream[*].body.request.sessionId",
       "kind": "gap",
       "reason": "Today's core names an Antigravity conversation from its session-affinity identity (derived from the client's key and conversation) when it has one; the protocol gives extensions no session identity yet, so the Antigravity extension always uses the fallback today's core uses without one: a hash of the first user text."
+    },
+    {
+      "path": "client.headers.X-Cpa-Version",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Different management API by design: today's core stamps every management reply with X-CPA-VERSION (its build and plugin support); the new management API sends no build information."
+    },
+    {
+      "path": "client.headers.X-Cpa-Commit",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Different management API by design: today's core stamps every management reply with X-CPA-COMMIT (its build and plugin support); the new management API sends no build information."
+    },
+    {
+      "path": "client.headers.X-Cpa-Build-Date",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Different management API by design: today's core stamps every management reply with X-CPA-BUILD-DATE (its build and plugin support); the new management API sends no build information."
+    },
+    {
+      "path": "client.headers.X-Cpa-Support-Plugin",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Different management API by design: today's core stamps every management reply with X-CPA-SUPPORT-PLUGIN (its build and plugin support); the new management API sends no build information."
+    },
+    {
+      "path": "client.headers.Cache-Control",
+      "kind": "intended",
+      "want": "no-store",
+      "reason": "Different management API by design: the new management API marks every reply Cache-Control: no-store; today's core's management replies carry no Cache-Control."
     }
   ]
 }
