@@ -50,6 +50,8 @@ type Config struct {
 	// ExtensionPages says where extension pages are served: on a site of their own, never the
 	// one serving the panel (next/ui/extension-pages/README.md).
 	ExtensionPages ExtensionPagesConfig `json:"extension_pages"`
+	// CORS says which web pages may call the client API from a browser. Default: none.
+	CORS CORSConfig `json:"cors"`
 
 	// From a config.yaml with today's core's key names (package legacy):
 	// Notices name the settings it uses that core does not support or know; core logs them
@@ -262,6 +264,9 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 		if err := packages.CheckLocation(r.URL); err != nil {
 			return nil, fmt.Errorf("config: packages.registries[%d]: %w", i, err)
 		}
+	}
+	if err := c.CORS.prepare(); err != nil {
+		return nil, err
 	}
 	switch c.DropPolicy {
 	case "", llm.DropReport, llm.DropReject:

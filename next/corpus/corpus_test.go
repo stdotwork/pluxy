@@ -153,7 +153,7 @@ func runCase(t *testing.T, c *Case, global *Global) Result {
 	volatile := append(append([]string(nil), global.Volatile...), c.Volatile...)
 
 	newObs, err := observe(t, c, "new", func(dir, upstreamURL, _, _ string) (*Core, error) {
-		return StartNewCore(binDir, dir, c.Provider, upstreamURL, c.AccountModels, UpstreamKeys(c.Accounts))
+		return StartNewCore(binDir, dir, c.Provider, upstreamURL, c.AccountModels, UpstreamKeys(c.Accounts), c.NewCoreConfig)
 	})
 	if err != nil {
 		res.Err = fmt.Errorf("new core: %w", err)

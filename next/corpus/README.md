@@ -153,6 +153,10 @@ ends the request, like an upstream still generating.
 
 `account_models`: models the account lists in both cores (see above).
 
+`new_core_config`: settings added to the new core's config, by top-level key, for a behaviour
+today's core has by default and the new core only when configured (CORS, for example). Today's
+core runs with its usual config.
+
 `accounts`: how many provider accounts both cores have (default 1). The old core's first pick
 between equal accounts changes from run to run, so multi-account cases mark
 `upstream[*].headers.Authorization` volatile; which account the new core picks is pinned by

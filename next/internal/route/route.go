@@ -93,6 +93,9 @@ type Request struct {
 	// Attempt, when set, runs this request's attempts in place of the router's AttemptFunc (a
 	// WebSocket turn that goes to an open session). Routing, state and retries are the same.
 	Attempt AttemptFunc
+	// Attempting, when set, is called with the account's ID each time an account is chosen for
+	// an attempt, before the attempt starts, on the goroutine that called Next.
+	Attempting func(account string)
 }
 
 // Credentials supplies the credentials of managed accounts (Account.Managed): core's
@@ -447,6 +450,9 @@ func (c *call) affinityKey() affinityKey {
 // started is true when the reply began; the attempt then belongs to the call.
 func (c *call) try(a *Account, seq uint64) (ev llm.Event, started bool) {
 	r := c.r
+	if c.req.Attempting != nil {
+		c.req.Attempting(a.ID)
+	}
 	call := a.call()
 	var version uint64
 	if a.Managed {

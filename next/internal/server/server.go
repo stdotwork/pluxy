@@ -155,7 +155,7 @@ func NewHandler(src Source) http.Handler {
 		})
 	}
 	mux.HandleFunc("GET /v1/responses", func(w http.ResponseWriter, r *http.Request) { serveResponsesWebSocket(w, r, src) })
-	return mux
+	return withCORS(src, mux)
 }
 
 // authorized reports whether the request carries a client key: as a bearer token, or in
@@ -234,12 +234,17 @@ func serve(w http.ResponseWriter, r *http.Request, cfg *Config, router *route.Ro
 			}
 		}
 	}
-	stream := router.Generate(r.Context(), routeRequest(r, req, body))
+	t := newTrace()
+	r = withTrace(r, t)
+	rr := routeRequest(r, req, body)
+	rr.Attempting = func(account string) { t.account = account }
+	stream := router.Generate(r.Context(), rr)
 	defer stream.Close()
 
 	// Nothing is sent to the client until the first event, so an error before it becomes a
-	// proper HTTP error response.
+	// proper HTTP error response. By then the request has gone to its account, if any.
 	ev := stream.Next()
+	t.setHeader(w)
 	if ev.Type == llm.EventError {
 		logFailure(r, ev.Error)
 		f.writeError(w, ev.Error)
@@ -373,7 +378,7 @@ func logTranslation(r *http.Request, request *llm.Translation, reply any) {
 		if n > len(parts) {
 			line += fmt.Sprintf("; and %d more", n-len(parts))
 		}
-		log.Printf("%s %s: translation: %s", r.Method, logField(r.URL.Path), line)
+		log.Printf("%s: translation: %s", logPrefix(r), line)
 	}
 }
 
@@ -381,5 +386,5 @@ func logFailure(r *http.Request, e *llm.Error) {
 	if e.Code == llm.CodeCancelled {
 		return
 	}
-	log.Printf("%s %s: %s", r.Method, r.URL.Path, e.Error())
+	log.Printf("%s: %s", logPrefix(r), e.Error())
 }

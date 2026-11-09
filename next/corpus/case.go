@@ -31,6 +31,10 @@ type Case struct {
 	// Accounts is how many provider accounts both cores have, all pointed at the fake
 	// upstream, each with its own key (see UpstreamKeys). Default 1.
 	Accounts int `json:"accounts,omitempty"`
+	// NewCoreConfig holds settings added to the new core's config (top-level keys of its JSON
+	// config), for a behaviour that today's core has by default and the new core only when
+	// configured (such as CORS). Today's core is run as usual.
+	NewCoreConfig map[string]json.RawMessage `json:"new_core_config,omitempty"`
 	// Upstream lists the fake upstream's replies, one per upstream request, in order.
 	Upstream []Reply `json:"upstream,omitempty"`
 	// Volatile lists observation paths whose values change from run to run; they are masked

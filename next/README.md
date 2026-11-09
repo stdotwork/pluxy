@@ -109,6 +109,22 @@ socket. `response.append`,
 Clients send the client key as a bearer token or, as Anthropic clients do, in `x-api-key`; Gemini
 clients may also send it in `x-goog-api-key` or the `key` query parameter.
 
+Web pages may call the client API from a browser only from the origins listed in
+`cors.allowed_origins` (each `scheme://host[:port]`, or `"*"` for every origin): core then adds
+the CORS headers to their replies and answers their preflight `OPTIONS` requests with 204 before
+checking the client key. The list is empty by default, so no page can. Today's core allows every
+origin on every route; here CORS covers the client API only, never the panel or the management API.
+
+```json
+{"cors": {"allowed_origins": ["http://localhost:5173"]}}
+```
+
+A reply to a request that went to an account carries `X-CPA-TRACE-ID`, as today's core sends it:
+the time and a random part, such as `20261109061500-3f9a0c2e5b7d4e18`. Core's log lines about the
+request (a failure, what translation lost) carry the same ID and the account, so a reply can be
+matched with them. A request refused before that (no client key, a body that does not parse, no
+account for the model) gets none.
+
 `drop_policy` (top level) says what happens when translating a request to the upstream's format
 would drop part of it: `"report"` (the default) sends it and logs what was dropped, `"reject"`
 refuses it with a 400 that names what could not be carried.
@@ -801,7 +817,8 @@ Neither line stops core from starting. Settings that did nothing in today's core
 "dead") are accepted without a word. A key today's core does not know is named as unknown.
 
 Settings only this core has keep their JSON names in a `config.yaml`: `packages`, `extensions`,
-`extension`, `extension_pages`, `drop_policy` and `credentials_dir`. Provider accounts set in
+`extension`, `extension_pages`, `drop_policy`, `credentials_dir` and `cors` (today's core has no
+CORS setting: it allows every origin). Provider accounts set in
 the file go to the installed package of their provider (`pluxy/codex`, `pluxy/claude`,
 `pluxy/gemini`, `pluxy/xai`, `pluxy/openai-compatible`), so those packages must be installed:
 the bundled ones are, on the first start.

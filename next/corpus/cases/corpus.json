@@ -6,32 +6,27 @@
   "exceptions": [
     {
       "path": "client.headers.Access-Control-Allow-Headers",
-      "kind": "gap",
+      "kind": "intended",
       "absent": true,
-      "reason": "The old core adds CORS headers to every reply; the new core sends none yet."
+      "reason": "Today's core allows every origin on every route (Access-Control-Allow-Origin: *), an unsafe default this core does not carry over: it sends CORS headers only to the origins listed in cors.allowed_origins, none by default."
     },
     {
       "path": "client.headers.Access-Control-Allow-Methods",
-      "kind": "gap",
+      "kind": "intended",
       "absent": true,
-      "reason": "The old core adds CORS headers to every reply; the new core sends none yet."
+      "reason": "Today's core allows every origin on every route (Access-Control-Allow-Origin: *), an unsafe default this core does not carry over: it sends CORS headers only to the origins listed in cors.allowed_origins, none by default."
     },
     {
       "path": "client.headers.Access-Control-Allow-Origin",
-      "kind": "gap",
+      "kind": "intended",
       "absent": true,
-      "reason": "The old core adds CORS headers to every reply; the new core sends none yet."
+      "reason": "Today's core allows every origin on every route (Access-Control-Allow-Origin: *), an unsafe default this core does not carry over: it sends CORS headers only to the origins listed in cors.allowed_origins, none by default."
     },
     {
       "path": "client.headers.Access-Control-Expose-Headers",
-      "kind": "gap",
+      "kind": "intended",
       "absent": true,
-      "reason": "The old core adds CORS headers to every reply; the new core sends none yet."
-    },
-    {
-      "path": "client.headers.X-Cpa-Trace-Id",
-      "kind": "gap",
-      "reason": "The old core adds a trace ID header to every reply; the new core has no request IDs yet."
+      "reason": "Today's core allows every origin on every route (Access-Control-Allow-Origin: *), an unsafe default this core does not carry over: it sends CORS headers only to the origins listed in cors.allowed_origins, none by default."
     },
     {
       "path": "client.headers.X-Accel-Buffering",
