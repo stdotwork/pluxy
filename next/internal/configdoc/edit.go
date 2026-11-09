@@ -127,8 +127,10 @@ type RoutingPatch struct {
 	SessionAffinity *bool `json:"session-affinity"`
 	// SessionAffinityTTL is how long a session stays bound after its last request, such as
 	// "1h".
-	SessionAffinityTTL *string     `json:"session-affinity-ttl"`
-	Retry              *RetryPatch `json:"retry"`
+	SessionAffinityTTL *string `json:"session-affinity-ttl"`
+	// ForceModelPrefix makes an account with a prefix serve its models only under the prefix.
+	ForceModelPrefix *bool       `json:"force-model-prefix"`
+	Retry            *RetryPatch `json:"retry"`
 }
 
 // RetryPatch is a change to the retry settings.
@@ -188,6 +190,11 @@ func (d *Doc) ApplySettings(p SettingsPatch) error {
 			err = d.Set(Int(max(ttl, time.Second).Milliseconds()), "routing", "session_affinity", "ttl_ms")
 		}
 		if err != nil {
+			return err
+		}
+	}
+	if r.ForceModelPrefix != nil {
+		if err := d.Set(Bool(*r.ForceModelPrefix), d.place("routing.force_model_prefix", "routing.force-model-prefix", "force-model-prefix")...); err != nil {
 			return err
 		}
 	}

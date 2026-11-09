@@ -215,6 +215,7 @@ type routingView struct {
 	Strategy           string    `json:"strategy"`
 	SessionAffinity    bool      `json:"session-affinity"`
 	SessionAffinityTTL string    `json:"session-affinity-ttl"`
+	ForceModelPrefix   bool      `json:"force-model-prefix"`
 	Retry              retryView `json:"retry"`
 }
 
@@ -227,7 +228,7 @@ type retryView struct {
 // settings returns the active config's settings by today's core's names.
 func settings(cfg *server.Config) settingsView {
 	r := cfg.Routing
-	v := routingView{Strategy: r.Strategy, Retry: retryView{MaxRetryCredentials: r.MaxAccounts, MaxRetryInterval: float64(r.MaxWaitMS) / 1000}}
+	v := routingView{Strategy: r.Strategy, ForceModelPrefix: r.ForceModelPrefix, Retry: retryView{MaxRetryCredentials: r.MaxAccounts, MaxRetryInterval: float64(r.MaxWaitMS) / 1000}}
 	switch r.Strategy {
 	case "":
 		v.Strategy = route.StrategyRoundRobin

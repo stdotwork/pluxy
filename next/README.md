@@ -866,6 +866,7 @@ to `management.secret-key`, or `remote-management.secret-key` when only that is 
 | `routing.strategy` | `routing.strategy` (`weighted` for `weighted-round-robin`) | `round-robin`, `fill-first`, `weighted-round-robin`, `least-active`; today's other spellings (`wrr`, `ff`, ...) are taken too. |
 | `routing.session-affinity` | `routing.session_affinity` there or not | `true` or `false`. |
 | `routing.session-affinity-ttl` | `routing.session_affinity.ttl_ms` | A duration such as `1h` (default) or `30m`. In a JSON config it needs session affinity on. |
+| `routing.force-model-prefix` | `routing.force_model_prefix` | `true`: an account with a `prefix` serves its models only under the prefix. |
 | `routing.retry.max-retry-credentials` | `routing.max_accounts` | Accounts one request may try; 0 is no limit. |
 | `routing.retry.max-retry-interval` | `routing.max_wait_ms` (seconds × 1000) | Seconds one request may wait for a blocked account. In a `config.yaml`, `request-retry: 0` turns waiting off whatever this says, as in today's core. |
 

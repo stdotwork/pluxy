@@ -637,11 +637,12 @@ func TestApplySettingsJSON(t *testing.T) {
 				Strategy:           str("weighted-round-robin"),
 				SessionAffinity:    flag(true),
 				SessionAffinityTTL: str("2h"),
+				ForceModelPrefix:   flag(true),
 				Retry:              &RetryPatch{MaxRetryCredentials: num(2), MaxRetryInterval: num(5)},
 			}})
 		})
 		r := loads(t, got, false).Routing
-		if r.Strategy != "weighted" || r.MaxAccounts != 2 || r.MaxWaitMS != 5000 || r.SessionAffinity == nil || r.SessionAffinity.TTLMS != 7200000 {
+		if r.Strategy != "weighted" || r.MaxAccounts != 2 || r.MaxWaitMS != 5000 || r.SessionAffinity == nil || r.SessionAffinity.TTLMS != 7200000 || !r.ForceModelPrefix {
 			t.Errorf("routing = %+v (affinity %+v) in\n%s", r, r.SessionAffinity, got)
 		}
 		var raw struct {
@@ -650,7 +651,7 @@ func TestApplySettingsJSON(t *testing.T) {
 		if err := json.Unmarshal([]byte(got), &raw); err != nil {
 			t.Fatal(err)
 		}
-		if raw.Routing["strategy"] != "weighted" || raw.Routing["max_accounts"] != float64(2) || raw.Routing["max_wait_ms"] != float64(5000) {
+		if raw.Routing["strategy"] != "weighted" || raw.Routing["max_accounts"] != float64(2) || raw.Routing["max_wait_ms"] != float64(5000) || raw.Routing["force_model_prefix"] != true {
 			t.Errorf("routing keys = %v, want the JSON names", raw.Routing)
 		}
 		if !strings.HasPrefix(got, "{\n  \"listen\"") || strings.Index(got, `"listen"`) > strings.Index(got, `"routing"`) {
@@ -868,6 +869,7 @@ func TestApplySettingsYAML(t *testing.T) {
 		Strategy:           str("weighted"),
 		SessionAffinity:    flag(true),
 		SessionAffinityTTL: str("2h"),
+		ForceModelPrefix:   flag(true),
 		Retry:              &RetryPatch{MaxRetryCredentials: num(2), MaxRetryInterval: num(5)},
 	}}
 	t.Run("v8 paths", func(t *testing.T) {
@@ -881,6 +883,7 @@ func TestApplySettingsYAML(t *testing.T) {
 				Strategy string         `yaml:"strategy"`
 				Affinity bool           `yaml:"session-affinity"`
 				TTL      string         `yaml:"session-affinity-ttl"`
+				Force    bool           `yaml:"force-model-prefix"`
 				Retry    map[string]int `yaml:"retry"`
 			} `yaml:"routing"`
 		}
@@ -888,7 +891,7 @@ func TestApplySettingsYAML(t *testing.T) {
 			t.Fatal(err)
 		}
 		x := raw.Routing
-		if x.Strategy != "weighted-round-robin" || !x.Affinity || x.TTL != "2h" || x.Retry["max-retry-credentials"] != 2 || x.Retry["max-retry-interval"] != 5 {
+		if x.Strategy != "weighted-round-robin" || !x.Affinity || x.TTL != "2h" || !x.Force || x.Retry["max-retry-credentials"] != 2 || x.Retry["max-retry-interval"] != 5 {
 			t.Errorf("routing keys = %+v, want today's names with seconds", x)
 		}
 		if !strings.Contains(got, "# default") || !strings.Contains(got, "# my config") {
@@ -910,6 +913,14 @@ func TestApplySettingsYAML(t *testing.T) {
 		}
 		if !strings.Contains(got, "max-retry-credentials: 2") || !strings.Contains(got, "max-retry-interval: 5") {
 			t.Errorf("older keys not updated in place:\n%s", got)
+		}
+	})
+	t.Run("older force-model-prefix at the root", func(t *testing.T) {
+		got := edited(t, editYAMLOld+"force-model-prefix: false # old spelling\n", true, func(d *Doc) error {
+			return d.ApplySettings(SettingsPatch{Routing: &RoutingPatch{ForceModelPrefix: flag(true)}})
+		})
+		if !loads(t, got, true).Routing.ForceModelPrefix || strings.Count(got, "force-model-prefix:") != 1 || !strings.Contains(got, "force-model-prefix: true # old spelling") {
+			t.Errorf("force-model-prefix not set in place:\n%s", got)
 		}
 	})
 	t.Run("the v8 path wins when both exist", func(t *testing.T) {

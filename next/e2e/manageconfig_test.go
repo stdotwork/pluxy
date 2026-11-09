@@ -692,6 +692,7 @@ type settingsReply struct {
 		Strategy           string `json:"strategy"`
 		SessionAffinity    bool   `json:"session-affinity"`
 		SessionAffinityTTL string `json:"session-affinity-ttl"`
+		ForceModelPrefix   bool   `json:"force-model-prefix"`
 		Retry              struct {
 			MaxRetryCredentials int     `json:"max-retry-credentials"`
 			MaxRetryInterval    float64 `json:"max-retry-interval"`
@@ -709,7 +710,7 @@ func (c *mcore) settings(t *testing.T) settingsReply {
 }
 
 func TestManageSettings(t *testing.T) {
-	const patch = `{"routing": {"strategy": "fill-first", "session-affinity": true, "session-affinity-ttl": "2h", "retry": {"max-retry-credentials": 2, "max-retry-interval": 5}}}`
+	const patch = `{"routing": {"strategy": "fill-first", "session-affinity": true, "session-affinity-ttl": "2h", "force-model-prefix": true, "retry": {"max-retry-credentials": 2, "max-retry-interval": 5}}}`
 	for _, f := range formats() {
 		t.Run(f.name, func(t *testing.T) {
 			c := startManaged(t, f.yaml)
@@ -730,7 +731,7 @@ func TestManageSettings(t *testing.T) {
 			}
 			for name, got := range map[string]settingsReply{"reply": reply, "a following GET": c.settings(t)} {
 				r := got.Routing
-				if r.Strategy != "fill-first" || !r.SessionAffinity || r.SessionAffinityTTL != "2h" || r.Retry.MaxRetryCredentials != 2 || r.Retry.MaxRetryInterval != 5 {
+				if r.Strategy != "fill-first" || !r.SessionAffinity || r.SessionAffinityTTL != "2h" || !r.ForceModelPrefix || r.Retry.MaxRetryCredentials != 2 || r.Retry.MaxRetryInterval != 5 {
 					t.Errorf("%s = %+v", name, got)
 				}
 			}
@@ -745,6 +746,7 @@ func TestManageSettings(t *testing.T) {
 						Strategy string         `yaml:"strategy"`
 						Affinity bool           `yaml:"session-affinity"`
 						TTL      string         `yaml:"session-affinity-ttl"`
+						Force    bool           `yaml:"force-model-prefix"`
 						Retry    map[string]int `yaml:"retry"`
 					} `yaml:"routing"`
 				}
@@ -752,7 +754,7 @@ func TestManageSettings(t *testing.T) {
 					t.Fatal(err)
 				}
 				r := doc.Routing
-				if r.Strategy != "fill-first" || !r.Affinity || r.TTL != "2h" || r.Retry["max-retry-credentials"] != 2 || r.Retry["max-retry-interval"] != 5 {
+				if r.Strategy != "fill-first" || !r.Affinity || r.TTL != "2h" || !r.Force || r.Retry["max-retry-credentials"] != 2 || r.Retry["max-retry-interval"] != 5 {
 					t.Errorf("config.yaml routing = %+v in\n%s", r, c.file(t))
 				}
 				for _, comment := range []string{"# core config for the e2e test", "# how accounts are picked"} {
@@ -769,13 +771,14 @@ func TestManageSettings(t *testing.T) {
 						} `json:"session_affinity"`
 						MaxAccounts int   `json:"max_accounts"`
 						MaxWaitMS   int64 `json:"max_wait_ms"`
+						Force       bool  `json:"force_model_prefix"`
 					} `json:"routing"`
 				}
 				if err := json.Unmarshal([]byte(c.file(t)), &doc); err != nil {
 					t.Fatal(err)
 				}
 				r := doc.Routing
-				if r.Strategy != "fill-first" || r.Affinity.TTLMS != 7200000 || r.MaxAccounts != 2 || r.MaxWaitMS != 5000 {
+				if r.Strategy != "fill-first" || !r.Force || r.Affinity.TTLMS != 7200000 || r.MaxAccounts != 2 || r.MaxWaitMS != 5000 {
 					t.Errorf("config.json routing = %+v in\n%s", r, c.file(t))
 				}
 			}
