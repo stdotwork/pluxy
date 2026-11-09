@@ -29,3 +29,22 @@ func TestCountBody(t *testing.T) {
 		}
 	}
 }
+
+// Vertex AI gets a wrapped countTokens body's contents, system instruction and tools; a body of
+// contents alone goes as it came.
+func TestUnwrapCount(t *testing.T) {
+	out, err := unwrapCount([]byte(`{"generateContentRequest":{"model":"models/gemini-x","contents":[{"role":"user","parts":[{"text":"hi"}]}],"systemInstruction":{"parts":[{"text":"s"}]},"generationConfig":{"temperature":1}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got, want any
+	_ = json.Unmarshal(out, &got)
+	_ = json.Unmarshal([]byte(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"systemInstruction":{"parts":[{"text":"s"}]}}`), &want)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("unwrapCount = %s", out)
+	}
+	plain := `{"contents": [{"role":"user","parts":[{"text":"hi"}]}]}`
+	if out, _ := unwrapCount([]byte(plain)); string(out) != plain {
+		t.Errorf("unwrapCount changed a plain body: %s", out)
+	}
+}

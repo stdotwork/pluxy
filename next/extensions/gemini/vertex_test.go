@@ -200,3 +200,23 @@ func TestTokenFetchTimesOut(t *testing.T) {
 		t.Fatal("the token fetch waits for a token endpoint that never answers")
 	}
 }
+
+// A Gemini client's countTokens body that wraps a whole request reaches Vertex AI as that
+// request's contents, since Vertex AI takes no generateContentRequest.
+func TestVertexCountUnwraps(t *testing.T) {
+	tokens = &tokenCache{entries: map[string]*tokenEntry{}}
+	srv := geminitest.New(t)
+	srv.Generate = func(w http.ResponseWriter, r *http.Request, _ geminitest.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}
+	call := vertexCall(t, srv)
+	call.Request.Native.Body = []byte(`{"generateContentRequest":{"model":"models/gemini-x","contents":[{"role":"user","parts":[{"text":"hi"}]}]}}`)
+	_ = countTokens(context.Background(), call, nil)
+	reqs := srv.Requests()
+	if len(reqs) != 1 || reqs[0].Kind != "vertex" || reqs[0].Method != "countTokens" {
+		t.Fatalf("requests = %+v", reqs)
+	}
+	if got := string(reqs[0].Body); got != `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}` {
+		t.Errorf("Vertex got %s", got)
+	}
+}

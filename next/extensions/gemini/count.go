@@ -11,10 +11,10 @@ import (
 )
 
 // countTokens counts the request's input tokens with the model's countTokens method. A Gemini
-// client's countTokens body is sent as it came; a request in another format is rebuilt as
-// GenerateContent and counted whole: for the Gemini API under generateContentRequest, for
-// Vertex AI (which takes no generateContentRequest) as its contents, system instruction and
-// tools.
+// client's countTokens body is sent as it came, except that Vertex AI, which takes no
+// generateContentRequest, gets a wrapped request's contents, system instruction and tools; a
+// request in another format is rebuilt as GenerateContent and counted whole: for the Gemini API
+// under generateContentRequest, for Vertex AI as its contents, system instruction and tools.
 func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
@@ -24,10 +24,14 @@ func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error
 	if err != nil {
 		return err
 	}
-	if !tr.Passthrough {
-		if body, err = countBody(body, call.Request.Model, s.Vertex != nil); err != nil {
-			return err
-		}
+	switch {
+	case !tr.Passthrough:
+		body, err = countBody(body, call.Request.Model, s.Vertex != nil)
+	case s.Vertex != nil:
+		body, err = unwrapCount(body)
+	}
+	if err != nil {
+		return err
 	}
 	t, err := resolveMethod(ctx, s, call.Account.Credential, call.Request.Model, ":countTokens")
 	if err != nil {
@@ -83,4 +87,17 @@ func countBody(body []byte, model string, vertex bool) ([]byte, error) {
 	}
 	m["model"], _ = json.Marshal("models/" + model)
 	return json.Marshal(map[string]any{"generateContentRequest": m})
+}
+
+// unwrapCount returns a Gemini client's countTokens body for Vertex AI: a body that wraps a whole
+// request in generateContentRequest becomes that request's contents, system instruction and
+// tools; any other body is returned as it came.
+func unwrapCount(body []byte) ([]byte, error) {
+	var w struct {
+		GenerateContentRequest json.RawMessage `json:"generateContentRequest"`
+	}
+	if json.Unmarshal(body, &w) != nil || len(w.GenerateContentRequest) == 0 || string(w.GenerateContentRequest) == "null" {
+		return body, nil
+	}
+	return countBody(w.GenerateContentRequest, "", true)
 }
