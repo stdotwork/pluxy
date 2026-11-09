@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/core"
 	"github.com/stdotwork/pluxy/next/internal/cred"
 	"github.com/stdotwork/pluxy/next/internal/legacy"
+	"github.com/stdotwork/pluxy/next/internal/logfile"
 	"github.com/stdotwork/pluxy/next/internal/pages"
 	"github.com/stdotwork/pluxy/next/internal/panel"
 	"github.com/stdotwork/pluxy/next/internal/server"
@@ -106,7 +108,10 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string) 
 	} else if abs, err := filepath.Abs(bundled); err == nil {
 		bundled = abs
 	}
-	c, err := core.Start(core.Options{ConfigPath: configPath, SafeMode: safeMode, Bundled: bundled})
+	// Core's log goes to standard error and, while the config says so, to its logs folder.
+	logs := logfile.New(core.LogsDir(configPath))
+	log.SetOutput(io.MultiWriter(os.Stderr, logs))
+	c, err := core.Start(core.Options{ConfigPath: configPath, SafeMode: safeMode, Bundled: bundled, Logs: logs})
 	if err != nil {
 		if !safeMode {
 			err = fmt.Errorf("%w (start with -safe-mode to run without extensions)", err)

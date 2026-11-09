@@ -248,6 +248,9 @@ var rules = map[string]rule{
 	"multimedia.gpt-image-2-base-model":                       {later, ""},
 	"multimedia.video-result-auth-cache-ttl":                  {later, ""},
 	"observability.logs":                                      {later, ""},
+	"observability.logs.logging-to-file":                      {supported, ""},
+	"observability.logs.logs-max-total-size-mb":               {supported, ""},
+	"observability.logs.debug":                                {dropped, "this core writes no debug-level log lines"},
 	"observability.usage.usage-statistics-enabled":            {supported, ""},
 	"observability.usage.redis-usage-queue-retention-seconds": {dropped, "reading usage no longer removes it; the record keeps requests by usage.max_events and usage.max_age_ms"},
 	"observability.pprof":                                     {dropped, "a developer tool, off by default"},
@@ -427,6 +430,7 @@ var readPaths = []string{
 	"routing.force-model-prefix", "oauth.model-alias", "oauth.excluded-models",
 	"upstream.codex.disable-codex-cloaking", "upstream.codex.websocket-compression",
 	"multimedia.disable-image-generation", "oauth.auth-dir", "observability.usage.usage-statistics-enabled",
+	"observability.logs.logging-to-file", "observability.logs.logs-max-total-size-mb",
 }
 
 // mappingsOn checks that every value on the way to path, below the root, is a mapping or
@@ -617,8 +621,23 @@ func (x *translator) options() error {
 	return nil
 }
 
-// observability reads the usage settings.
+// observability reads the log and usage settings.
 func (x *translator) observability() error {
+	logs := tree{}
+	if on, err := flag(x.t, "observability.logs.logging-to-file"); err != nil {
+		return err
+	} else if on {
+		logs["to_file"] = true
+	}
+	// As in today's core, a negative cap is none.
+	if n, err := integer(x.t, "observability.logs.logs-max-total-size-mb"); err != nil {
+		return err
+	} else if n > 0 {
+		logs["max_total_size_mb"] = n
+	}
+	if len(logs) > 0 {
+		x.out["logs"] = logs
+	}
 	if v, ok := get(x.t, "observability.usage.usage-statistics-enabled"); ok && v != nil {
 		on, err := boolean_(v, "observability.usage.usage-statistics-enabled")
 		if err != nil {

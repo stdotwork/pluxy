@@ -122,7 +122,16 @@ type SettingsPatch struct {
 
 // ObservabilityPatch is a change to the usage and log settings.
 type ObservabilityPatch struct {
+	Logs  *LogsPatch  `json:"logs"`
 	Usage *UsagePatch `json:"usage"`
+}
+
+// LogsPatch is a change to the log settings.
+type LogsPatch struct {
+	// LoggingToFile also writes core's log to files.
+	LoggingToFile *bool `json:"logging-to-file"`
+	// LogsMaxTotalSizeMB caps the logs folder's size; 0 is no cap.
+	LogsMaxTotalSizeMB *int64 `json:"logs-max-total-size-mb"`
 }
 
 // UsagePatch is a change to the usage settings.
@@ -178,6 +187,21 @@ func (d *Doc) ApplySettings(p SettingsPatch) error {
 func (d *Doc) applyObservability(o *ObservabilityPatch) error {
 	if o == nil {
 		return nil
+	}
+	if l := o.Logs; l != nil {
+		if l.LoggingToFile != nil {
+			if err := d.Set(Bool(*l.LoggingToFile), d.place("logs.to_file", "observability.logs.logging-to-file", "logging-to-file")...); err != nil {
+				return err
+			}
+		}
+		if n := l.LogsMaxTotalSizeMB; n != nil {
+			if *n < 0 || *n > 1<<20 {
+				return fmt.Errorf("%w: observability.logs.logs-max-total-size-mb must be between 0 (no cap) and 1048576", ErrInvalid)
+			}
+			if err := d.Set(Int(*n), d.place("logs.max_total_size_mb", "observability.logs.logs-max-total-size-mb", "logs-max-total-size-mb")...); err != nil {
+				return err
+			}
+		}
 	}
 	if u := o.Usage; u != nil && u.UsageStatisticsEnabled != nil {
 		if err := d.Set(Bool(*u.UsageStatisticsEnabled), d.place("usage.enabled", "observability.usage.usage-statistics-enabled", "usage-statistics-enabled")...); err != nil {

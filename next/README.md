@@ -36,6 +36,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `internal/packages` | Registries, release archives and the record of installed packages. |
 | `internal/panel` | Serves the web panel at `/panel/`, embedded in core's binary. |
 | `internal/pages` | Serves extension pages on a site of their own ([extension pages](ui/extension-pages/README.md)). |
+| `internal/logfile` | Core's [log files](#log-files): `main.log`, its rotation, the folder's size cap, reading lines back. |
 | `internal/usage` | The [usage record](#usage-statistics): one event per request, kept in memory within limits. |
 | `internal/extconfig` | Extensions' settings: the schema from the manifest, checking values, and the store core keeps them in. |
 | `ui/` | The UI kit the panel and the desktop app share, the panel's browser build, and the [theme contract](ui/themes/README.md) ([README](ui/README.md)). |
@@ -997,11 +998,13 @@ to `management.secret-key`, or `remote-management.secret-key` when only that is 
 | `routing.retry.request-retry` | `routing.request_retry` | Rounds a request may run after its first, as in today's core. `null` while a JSON config leaves rounds to this core's own rules; a `config.yaml` always has a number (default 0). |
 | `routing.cooldown.disable-cooling` | `routing.disable_cooling` | `true`: failures leave no cooldown. An account's own `disable_cooling` wins. |
 | `routing.cooldown.transient-error-cooldown-seconds` | `routing.transient_error_cooldown_ms` (seconds × 1000) | Seconds a failing upstream cools down: 0 for this core's backoff (1 second doubling to a minute), -1 for none. |
+| `observability.logs.logging-to-file` | `logs.to_file` | `true` or `false`: whether core also writes its log to [files](#log-files). |
+| `observability.logs.logs-max-total-size-mb` | `logs.max_total_size_mb` | Megabytes the logs folder's `.log` files may take; 0 (the default) is no cap. |
 | `observability.usage.usage-statistics-enabled` | `usage.enabled` | `true` or `false`: whether core keeps the [usage record](#usage-statistics). On unless the config turns it off. |
 
-The settings shown are those of the running config. Today's other basic settings (`debug`,
-logging to file, the request log, `proxy-url`, `ws-auth` and
-`quota-response-mode`) do not exist in this core yet; `max_attempts`, which today's core has no
+The settings shown are those of the running config. Today's other basic settings (the request
+log, `proxy-url`, `ws-auth` and `quota-response-mode`) do not exist in this core yet, and `debug`
+is dropped (this core writes no debug-level lines); `max_attempts`, which today's core has no
 name for, is changed in the document.
 
 ## Usage statistics
@@ -1042,6 +1045,39 @@ requests are not recorded and what was recorded stays readable.
 Both calls take the filters `since` (an RFC 3339 time, or a duration back from now such as
 `24h`), `until` (an RFC 3339 time), `model`, `provider`, `account`, `key_id` and `failed`
 (`true` or `false`). A filter that does not parse is a 400.
+
+## Log files
+
+Core writes its log to standard error. With `logs.to_file` on (today's `logging-to-file`), it
+also writes it to `main.log` in its logs folder, the folder `logs` beside the config file, each
+line with its time and level in front as today's core writes them:
+
+```text
+[2026-11-09 12:00:00.123] [info ] config revision 2 active (management API: settings)
+[2026-11-09 12:00:01.456] [warn ] warning: no client_keys set; anyone who can reach ...
+```
+
+Lines are `info`, or `warn` for warnings; core has no debug lines, so today's `debug` setting is
+dropped. Today's core writes only to the file while the setting is on; this core keeps writing
+to standard error too. `main.log` is rotated when it reaches 10 MB, as in today's core: it is
+renamed `main-<time>.log` and a new one begins. `logs.max_total_size_mb` (today's
+`logs-max-total-size-mb`) caps the folder: when its `.log` files take more, the oldest are deleted
+first, `main.log` never; 0 (the default) is no cap. The cap is applied when a file is rotated and
+when the setting changes. A change of either setting takes effect at the reload that makes it.
+
+```json
+{"logs": {"to_file": true, "max_total_size_mb": 100}}
+```
+
+| Call | What it does |
+| --- | --- |
+| `GET /v0/management/logs` | Lines of `main.log` and its rotated files, oldest first: with `after` (a time in Unix seconds, such as a reply's `latest-timestamp`), the oldest `limit` lines written after it, so a reader can page forward; without it, the newest `limit` lines. `limit` defaults to 1000, at most 10000. The reply holds `lines`, `line-count` and `latest-timestamp` (the newest returned line's time, in seconds with milliseconds; `after` itself when there is none). A line with no time of its own counts as written with the line before it. |
+| `DELETE /v0/management/logs` | Empties `main.log` and deletes its rotated files; replies with `removed`, how many files it deleted. Request logs stay. |
+
+Both answer 400 while logging to file is off, as today's core does. Today's core also takes a
+`cursor` for the logs page; here `after` serves to page forward, with the time to the
+millisecond, so lines written in the same millisecond as `latest-timestamp` after it was read
+are not returned.
 
 ## Packages
 
@@ -1240,7 +1276,9 @@ are accepted silently.
 | Codex keys' `alpha-search`; Vertex keys' `interactions`, `openapi`, `openapi-location`; openai-compatibility's `support-prompt-cache-key`; xAI keys' `websockets` | | Later |
 | `multimedia.disable-image-generation` (`disable-image-generation`) | `true`, `"chat"` and `"passthrough"` are `image_generation_tool: false` on Codex accounts from the file and on those `-import-auth` adds. | Supported |
 | `multimedia.gpt-image-2-base-model`, `multimedia.video-result-auth-cache-ttl` (each also at the top level) | No image or video routes yet. | Later |
-| `observability.logs.*` (`debug`, `logging-to-file`, `logs-max-total-size-mb`, `error-logs-max-files`, `request-log`) | | Later |
+| `observability.logs.logging-to-file` (`logging-to-file`), `observability.logs.logs-max-total-size-mb` (`logs-max-total-size-mb`) | `logs.to_file` and `logs.max_total_size_mb`: [log files](#log-files). A negative cap is none, as in today's core. | Supported |
+| `observability.logs.debug` (`debug`) | | Dropped: this core writes no debug-level lines |
+| `observability.logs.request-log` (`request-log`), `observability.logs.error-logs-max-files` (`error-logs-max-files`) | | Later |
 | `observability.usage.usage-statistics-enabled` (`usage-statistics-enabled`) | `usage.enabled`: the [usage record](#usage-statistics). Today's example config sets it to `false`, which turns the record off here too. | Supported |
 | `observability.usage.redis-usage-queue-retention-seconds` (`redis-usage-queue-retention-seconds`) | The record keeps requests by `usage.max_events` and `usage.max_age_ms`. | Dropped: it was how long a queued usage record waited for a reader that removed it; reading the record here removes nothing, and its default of 60 seconds would leave little to read |
 | `observability.pprof.*` (`pprof`) | | Dropped: a developer tool, off by default |

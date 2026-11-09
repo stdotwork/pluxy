@@ -47,6 +47,8 @@ const maxManagementBody = 1 << 20
 //	POST   /v0/management/accounts/{id}/test  send an account one small request
 //	GET    /v0/management/usage     usage totals, breakdowns and a time series (handleUsage)
 //	GET    /v0/management/usage/events  the recorded requests, a page at a time
+//	GET    /v0/management/logs      lines of core's log files (handleLogs)
+//	DELETE /v0/management/logs      empty main.log and delete its rotated files
 //
 // Every call needs the active config's management_key as a bearer token. Without a key in the
 // config the API is not served.
@@ -94,6 +96,7 @@ func (c *Core) Management() http.Handler {
 	c.handleAccounts(m)
 	c.handleConfig(m)
 	c.handleUsage(m)
+	c.handleLogs(m)
 	return m
 }
 
