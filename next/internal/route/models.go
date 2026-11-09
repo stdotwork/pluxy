@@ -20,6 +20,10 @@ type CatalogFunc func(ctx context.Context, a Account, credential *protocol.Crede
 // asked for again.
 var catalogRetry = time.Minute
 
+// catalogTimeout bounds one read of an account's model list: a read that takes longer counts as
+// failed, so requests waiting for it go on with the list unknown.
+var catalogTimeout = 15 * time.Second
+
 // catalogs keeps each account's model list from its extension, so it is asked once per
 // account: for the model lists clients ask for, and for routing, which sends an account
 // without models of its own only the models its list names. Lists are kept until the
@@ -29,8 +33,10 @@ var catalogRetry = time.Minute
 // renewal that changes what the account may use (a Codex plan) shows on the next change of
 // accounts; key entries by credential version if that matters.
 type catalogs struct {
-	mu      sync.Mutex
-	entries map[string]*catalogEntry // by account ID
+	mu sync.Mutex
+	// entries are by account: the router's copy of it, which SetAccounts replaces, so a request
+	// still routing over the accounts set before cannot leave its list for their successors.
+	entries map[*Account]*catalogEntry
 }
 
 type catalogEntry struct {
@@ -63,19 +69,22 @@ func (r *Router) listOf(ctx context.Context, a *Account, creds Credentials, cata
 	}
 	c := &r.lists
 	c.mu.Lock()
-	e := c.entries[a.ID]
+	e := c.entries[a]
 	if e != nil && isClosed(e.done) && e.list == nil && now.Sub(e.at) >= catalogRetry {
 		e = nil
 	}
 	if e == nil {
 		e = &catalogEntry{done: make(chan struct{})}
 		if c.entries == nil {
-			c.entries = map[string]*catalogEntry{}
+			c.entries = map[*Account]*catalogEntry{}
 		}
-		c.entries[a.ID] = e
-		// One read serves every request waiting for it, so a request that ends does not end it.
+		c.entries[a] = e
+		// One read serves every request waiting for it, so a request that ends does not end it;
+		// it has a time limit of its own instead.
 		go func(a Account) {
-			e.list = r.readList(context.WithoutCancel(ctx), &a, creds, catalog)
+			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), catalogTimeout)
+			defer cancel()
+			e.list = r.readList(rctx, &a, creds, catalog)
 			if e.list == nil {
 				e.at = r.now()
 			}

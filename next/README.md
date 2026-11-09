@@ -718,7 +718,8 @@ version 0.3), under the account's naming rules below; an extension that cannot s
 for it. The same list decides which models such an account serves: a request for a model no
 account serves is refused without calling an upstream, as today's core refuses it (404
 `model_not_found`; today's core answers 400). An account whose extension has no list, an empty
-one, or one it could not read serves any model, and core asks again a minute later. Core asks an
+one, or one it could not read within 15 seconds serves any model, and core asks again a minute
+later. Core asks an
 extension once per account and keeps the answer until the accounts change: a reload, or an
 account added, removed or signed in again.
 

@@ -267,3 +267,44 @@ func TestModelListsAreKept(t *testing.T) {
 		t.Errorf("%d reads after the accounts were set again, want 3", calls)
 	}
 }
+
+// A model list read that never ends is given up after catalogTimeout: the request goes on with
+// the list unknown (any model) instead of waiting with it.
+func TestModelListReadHasATimeLimit(t *testing.T) {
+	old := catalogTimeout
+	catalogTimeout = 50 * time.Millisecond
+	defer func() { catalogTimeout = old }()
+	h := newHarness(t, Config{}, Account{ID: "a"})
+	h.r.UseCatalog(func(ctx context.Context, _ Account, _ *protocol.Credential) (*protocol.ModelList, *llm.Error) {
+		<-ctx.Done()
+		return nil, &llm.Error{Code: llm.CodeCancelled, Message: "cancelled"}
+	})
+	done := make(chan []llm.Event, 1)
+	go func() { done <- h.run(h.req("any")) }()
+	select {
+	case evs := <-done:
+		if last := evs[len(evs)-1]; last.Type != llm.EventFinish {
+			t.Fatalf("request failed: %+v", last.Error)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the request waited for a model list read that never ends")
+	}
+}
+
+// A request still routing over the accounts set before a change cannot leave its account's list
+// for the account that replaced it under the same ID.
+func TestOldAccountsLeaveNoModelList(t *testing.T) {
+	h := newHarness(t, Config{}, Account{ID: "a", Settings: json.RawMessage(`{"v":1}`)})
+	h.r.UseCatalog(func(_ context.Context, a Account, _ *protocol.Credential) (*protocol.ModelList, *llm.Error) {
+		return &protocol.ModelList{Models: []protocol.Model{{ID: "m" + string(a.Settings[5])}}}, nil
+	})
+	accounts, creds := h.r.snapshot()
+	if err := h.r.SetAccounts([]Account{{ID: "a", Settings: json.RawMessage(`{"v":2}`)}}); err != nil {
+		t.Fatal(err)
+	}
+	// The old account's list is read after the change, as by a request that started before it.
+	if l := h.r.listOf(context.Background(), accounts[0], creds, h.r.catalogFunc(), h.now); l == nil || l.Models[0].ID != "m1" {
+		t.Fatalf("old account's list = %+v, want m1", l)
+	}
+	h.runOK("m2")
+}
