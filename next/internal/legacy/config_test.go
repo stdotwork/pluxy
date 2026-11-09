@@ -201,6 +201,7 @@ openai-compatibility:
 		"listen": "127.0.0.1:9000",
 		"client_keys": ["client-a"],
 		"management_key": "manage-me",
+		"management_allow_remote": true,
 		"routing": {"strategy": "weighted", "max_accounts": 2, "request_retry": 0, "session_affinity": {"ttl_ms": 600000}},
 		"extensions": {
 			"pluxy/codex": {"accounts": [{
@@ -250,6 +251,7 @@ api-keys:
 	equalJSON(t, r.Config, `{
 		"listen": ":9001",
 		"management_key": "new",
+		"management_allow_remote": true,
 		"routing": {"request_retry": 0},
 		"extensions": {"pluxy/codex": {"accounts": [{"id": "c", "credential": {"kind": "api_key", "api_key": "new-key"}}]}}
 	}`)
@@ -285,7 +287,6 @@ observability:
 		"not supported yet, ignored: observability.logs, routing.session-affinity-rebind-on, upstream.claude.tool-search\n",
 		"dropped, ignored: plugins (replaced by packages), server.commercial-mode (it turns off features this core does not have), upstream.claude.session-date-pin-days (making other clients look like Claude Code is out of scope)\n",
 		"unknown keys, ignored: server.discovery-typo\n",
-		"management.allow-remote is not supported yet",
 		"websocket-compression: false is not supported",
 	} {
 		if !strings.Contains(n+"\n", want) {
@@ -405,6 +406,7 @@ claude-api-key:
 		"listen": ":8317", "routing": {"request_retry": 0},
 		"client_keys": ["123456"],
 		"management_key": " spaced ",
+		"management_allow_remote": true,
 		"extensions": {"pluxy/claude": {"accounts": [{"id": "claude-api-key-1", "credential": {"kind": "api_key", "api_key": "987654"}}]}}
 	}`)
 }

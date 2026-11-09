@@ -149,9 +149,16 @@ func (m *Management) Handle(pattern string, h http.HandlerFunc) {
 }
 
 func (m *Management) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	key := m.cfg().ManagementKey
+	cfg := m.cfg()
+	key := cfg.ManagementKey
 	if key == "" {
 		http.NotFound(w, r)
+		return
+	}
+	// The gate comes first, so calls it refuses are not counted for the lockout.
+	if !cfg.ManagementAllowRemote && !FromThisMachine(r) {
+		writeManagementError(w, http.StatusForbidden, "remote_disabled",
+			"remote management is off: the management API answers only this machine (management_allow_remote turns on other machines)")
 		return
 	}
 	client := ClientIP(r)

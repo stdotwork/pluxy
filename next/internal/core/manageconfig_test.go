@@ -196,6 +196,7 @@ func TestRefusedSettingsReplyShowsNoFileSecret(t *testing.T) {
 		"extension": {"manifest": "missing.json", "accounts": [{"id": "a", "credential": {"kind": "api_key", "api_key": "fake-provider-secret"}}]}}`+"\n")
 	req := httptest.NewRequest(http.MethodPatch, ManagementPrefix+"settings", strings.NewReader(`{"routing": {"strategy": "fake-provider-secret"}}`))
 	req.Header.Set("Authorization", "Bearer fake-management-key")
+	req.RemoteAddr = "127.0.0.1:1234" // management answers only this machine
 	rec := httptest.NewRecorder()
 	c.Management().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "pluxy-redacted-") || strings.Contains(rec.Body.String(), "fake-provider-secret") {

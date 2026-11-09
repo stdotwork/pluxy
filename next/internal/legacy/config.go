@@ -174,7 +174,7 @@ var rules = map[string]rule{
 	"server.host":    {supported, ""}, "server.port": {supported, ""},
 	"access.api-keys":                       {supported, ""},
 	"management.secret-key":                 {supported, ""},
-	"management.allow-remote":               {supported, ""}, // reported in translate
+	"management.allow-remote":               {supported, ""},
 	"management.disable-control-panel":      {dropped, "the management key turns the panel on and off"},
 	"management.disable-auto-update-panel":  {dropped, "the panel is built into core"},
 	"management.panel-github-repository":    {dropped, "the panel is built into core"},
@@ -505,11 +505,11 @@ func (x *translator) server() error {
 		x.notes = append(x.notes, "config.yaml: management.secret-key is a bcrypt hash, which is not supported yet: the management API stays off; set the key itself")
 	case secret != "":
 		x.out["management_key"] = secret
-		if remote, err := flag(x.t, "management.allow-remote"); err != nil {
-			return err
-		} else if !remote {
-			x.notes = append(x.notes, "config.yaml: management.allow-remote is not supported yet: the management API answers any address that reaches listen and sends the key")
-		}
+	}
+	if remote, err := flag(x.t, "management.allow-remote"); err != nil {
+		return err
+	} else if remote {
+		x.out["management_allow_remote"] = true
 	}
 	return nil
 }

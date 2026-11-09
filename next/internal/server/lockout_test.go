@@ -124,7 +124,7 @@ func TestLockoutKeepsBlockedClientsWhenFull(t *testing.T) {
 // The management API refuses a client after lockoutFailures wrong keys, even with the right
 // key, says when to try again, and still serves other clients.
 func TestManagementLockout(t *testing.T) {
-	cfg := &Config{ManagementKey: "right-key"}
+	cfg := &Config{ManagementKey: "right-key", ManagementAllowRemote: true}
 	m := NewManagement(func() *Config { return cfg }, nil, nil)
 	m.Handle("GET /ping", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	call := func(from, key string) *httptest.ResponseRecorder {

@@ -111,6 +111,7 @@ func managementFrom(t *testing.T, base, forwardedFor, key string) *http.Response
 func TestManagementLockout(t *testing.T) {
 	cfg := accessConfig(newUpstream(t))
 	cfg["trusted_proxies"] = []string{"127.0.0.1"}
+	cfg["management_allow_remote"] = true // the clients below are other machines
 	base, _, logs := runCoreArgs(t, cfg, noWatch...)
 
 	const attacker, owner = "198.51.100.66", "198.51.100.1"
@@ -130,5 +131,65 @@ func TestManagementLockout(t *testing.T) {
 	// The proxy itself (no forwarded address) is another client too.
 	if resp := managementFrom(t, base, "", managementKey); resp.StatusCode != http.StatusOK {
 		t.Errorf("the proxy's own address answered %d, want 200", resp.StatusCode)
+	}
+}
+
+// The management API answers only this machine unless management_allow_remote is on. A request
+// a proxy on this machine forwards from elsewhere is not from this machine: when core does not
+// trust the proxy, any forwarding header says so; when it does, the forwarded client decides.
+func TestManagementRemoteGate(t *testing.T) {
+	cfg := accessConfig(newUpstream(t))
+	base, path, _ := runCoreArgs(t, cfg, noWatch...)
+
+	if resp := managementFrom(t, base, "", managementKey); resp.StatusCode != http.StatusOK {
+		t.Fatalf("from this machine: %d, want 200", resp.StatusCode)
+	}
+	if resp := managementFrom(t, base, "198.51.100.9", managementKey); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("forwarded by a proxy core does not trust: %d, want 403", resp.StatusCode)
+	}
+
+	cfg["trusted_proxies"] = []string{"127.0.0.1"}
+	writeConfig(t, path, cfg)
+	if code, s := reload(t, base); code != http.StatusOK {
+		t.Fatalf("reload: %d %+v", code, s)
+	}
+	if resp := managementFrom(t, base, "198.51.100.9", managementKey); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("another machine behind a trusted proxy: %d, want 403", resp.StatusCode)
+	}
+	if resp := managementFrom(t, base, "::1", managementKey); resp.StatusCode != http.StatusOK {
+		t.Errorf("this machine behind a trusted proxy: %d, want 200", resp.StatusCode)
+	}
+	// A trusted proxy that names the client only in RFC 7239 Forwarded, which core does not
+	// read, does not make the call local.
+	req, _ := http.NewRequest(http.MethodGet, base+"/v0/management/status", nil)
+	req.Header.Set("Authorization", "Bearer "+managementKey)
+	req.Header.Set("Forwarded", "for=198.51.100.9")
+	if resp, err := http.DefaultClient.Do(req); err != nil {
+		t.Fatal(err)
+	} else {
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("Forwarded through a trusted proxy: %d, want 403", resp.StatusCode)
+		}
+	}
+	// The client API is not gated.
+	if code := postFrom(t, base, "198.51.100.9"); code == http.StatusForbidden || code == http.StatusUnauthorized {
+		t.Errorf("client API from another machine answered %d", code)
+	}
+
+	// A remote client's wrong keys are refused by the gate and not counted for the lockout.
+	for range 6 {
+		managementFrom(t, base, "198.51.100.10", "wrong-key")
+	}
+	cfg["management_allow_remote"] = true
+	writeConfig(t, path, cfg)
+	if code, s := reload(t, base); code != http.StatusOK {
+		t.Fatalf("reload: %d %+v", code, s)
+	}
+	if resp := managementFrom(t, base, "198.51.100.10", managementKey); resp.StatusCode != http.StatusOK {
+		t.Errorf("with management_allow_remote, another machine: %d, want 200", resp.StatusCode)
+	}
+	if resp := managementFrom(t, base, "198.51.100.11", "wrong-key"); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("with management_allow_remote, a wrong key: %d, want 401", resp.StatusCode)
 	}
 }

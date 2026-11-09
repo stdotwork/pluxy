@@ -914,6 +914,21 @@ config can still be checked and reloaded through management.
 Beside the account calls [above](#accounts-added-by-login), management serves these. Every call
 needs `Authorization: Bearer <management_key>`.
 
+The management API answers only this machine: a call from a loopback address (`127.0.0.1`,
+`::1`). Any other client gets a 403 with the code `remote_disabled`, before its key is looked at
+(so its keys do not count for the lockout below),
+unless `management_allow_remote` is `true`, as today's `management.allow-remote`. The client is
+the address [`trusted_proxies`](#run-it) gives. A call that names another client in
+`X-Forwarded-For`, `X-Real-IP` or `Forwarded` does not count as this machine unless core took the
+client from that header (a trusted proxy's `X-Forwarded-For` or `X-Real-IP`; core does not read
+`Forwarded`), so a tunnel or proxy on this machine that forwards calls from elsewhere does not
+open the management API; today's core counts those calls as local. The client API and the panel's
+page are not gated; the panel's calls are.
+
+```json
+{"management_key": "choose-a-management-key", "management_allow_remote": true}
+```
+
 A client that sends a missing or wrong management key 5 times in a row is refused for 30 minutes,
 with a 403 and `Retry-After`, even when it then sends the right key; core logs a line naming it.
 A right key clears its count, and a count is forgotten after 2 hours without a failure. These are
@@ -1130,7 +1145,7 @@ are accepted silently.
 | `server.host` (`host`), `server.port` (`port`) | `listen` is `host:port`. An empty host listens on every interface and a port of 0 or none is 8317, as in today's core. | Supported |
 | `access.api-keys` (`api-keys` as a list) | `client_keys`. At least one key is required; today's core serves anyone when the list is empty. | Supported |
 | `management.secret-key` (`remote-management.secret-key`) | `management_key`, exactly as written: turns on the management API and the panel. A key already hashed with bcrypt (today's core can write one) is not supported yet: the management API stays off and the log says why. | Supported; hashed keys later |
-| `management.allow-remote` (`remote-management.allow-remote`) | The management API answers anyone who can reach `listen` and sends the key. When the management API is on and this is not `true`, the log says so. | Later |
+| `management.allow-remote` (`remote-management.allow-remote`) | `management_allow_remote`: without it the management API answers only this machine, as in today's core. | Supported |
 | `management.disable-control-panel` | The panel is on exactly when the management API is. | Dropped: the management key already turns the panel on and off |
 | `management.disable-auto-update-panel`, `management.panel-github-repository`, `server.github-token` (`github-token`) | The panel is built into core; nothing is downloaded. | Dropped: no panel download |
 | `management.base-url` | | Dropped: no terminal UI |
