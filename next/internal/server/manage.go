@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -373,7 +374,9 @@ func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 		}
 		set, ok := patchFields[name]
 		if !ok {
-			continue
+			writeManagementError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("%q cannot be changed here: send disabled or any of %s",
+				name, strings.Join(slices.Sorted(maps.Keys(patchFields)), ", ")))
+			return
 		}
 		changes = append(changes, func(a *route.Account) error {
 			if err := set(a, raw); err != nil {
