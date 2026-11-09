@@ -26,14 +26,6 @@
       }
     }
   ],
-  "exceptions": [
-    {
-      "path": "upstream[0].body.reasoning_effort",
-      "kind": "gap",
-      "reason": "The old core clamps a level above the model's thinking levels (default low, medium, high for an openai-compatibility model) to the highest; the new core passes reasoning_effort through unchanged.",
-      "want": "xhigh"
-    }
-  ],
   "recorded_old_core": {
     "client": {
       "body": {

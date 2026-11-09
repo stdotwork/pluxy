@@ -10,7 +10,10 @@
 // wire_api is the API the upstream speaks: "chat" (the default, POST {base_url}/chat/completions),
 // "responses" (POST {base_url}/responses), "messages" (POST {base_url}/messages) or "gemini"
 // (POST {base_url}/models/{model}:generateContent, or :streamGenerateContent?alt=sse; base_url
-// ends in /v1beta). The name follows the Codex CLI's model provider setting. A request in the
+// ends in /v1beta). The name follows the Codex CLI's model provider setting. reasoning_levels
+// (default ["low", "medium", "high"]) are the reasoning efforts a Chat or Responses upstream
+// accepts: an effort outside them moves to the nearest, as today's core clamps xhigh to high for
+// a model it has no thinking settings for. A request in the
 // upstream's own format is sent unchanged; a request in another format is translated where a
 // translation exists, and what the translation could not carry is reported with the reply. The
 // account's credential must be of kind api_key; it is sent as a bearer token, for a Messages
@@ -58,6 +61,9 @@ func main() {
 type settings struct {
 	BaseURL string `json:"base_url"`
 	WireAPI string `json:"wire_api"`
+	// ReasoningLevels are the reasoning efforts the upstream accepts; an effort outside them
+	// moves to the nearest. Default low, medium and high.
+	ReasoningLevels []string `json:"reasoning_levels"`
 }
 
 // Wire APIs.
@@ -158,7 +164,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err != nil {
 		return err
 	}
-	if body, err = applyReasoning(body, call.Request, wire.format); err != nil {
+	if body, err = applyReasoning(body, call.Request, wire.format, s.ReasoningLevels); err != nil {
 		return err
 	}
 	// The report travels on the reply's first event.

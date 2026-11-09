@@ -93,6 +93,12 @@ or `:streamGenerateContent?alt=sse`, with the key in `x-goog-api-key`); the defa
 Responses account serves Responses, Messages and Gemini clients; a Messages account serves Messages
 and Gemini clients; a Gemini account serves only Gemini clients for now.
 
+A Chat or Responses account sends a reasoning effort the upstream may not take as the nearest one
+it does, as today's core does: `"reasoning_levels"` in its `settings` lists the efforts the
+upstream accepts (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`), by default `low`,
+`medium` and `high`, so `xhigh` and `max` go as `high`, `minimal` and `none` as `low`, and `auto`
+as `medium`. Today's core refuses `minimal` with a 400 instead.
+
 Gemini clients call `POST /v1beta/models/{model}:generateContent` or `:streamGenerateContent`
 (a stream is server-sent events, with or without `alt=sse`), and `:countTokens`.
 
