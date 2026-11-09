@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.5
+# pluxy extension protocol, version 0.6
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -11,9 +11,10 @@ thinking suffix of a model name (`options.thinking_suffix`). Version 0.3 adds
 Version 0.4 adds [account checks](#check): whether an account works, asked without generating.
 Version 0.5 adds [quota](#quota), what an account's plan allows and how much of it is used, and
 the identity of a login's grant, so core can check that a new login to an account signs in to
-the same upstream account. It is deliberately small; later versions add capabilities and more operations without changing
+the same upstream account. Version 0.6 adds an error's `quota_window_minutes`: how long the
+usage window that ran out is. It is deliberately small; later versions add capabilities and more operations without changing
 what is described here. An extension written for version 0 works unchanged with a core that
-speaks 0.5 (see [Versioning](#versioning)).
+speaks 0.6 (see [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
 the details. A Go SDK (`github.com/stdotwork/pluxy/next/sdk`) implements the extension side of
@@ -615,6 +616,7 @@ Usage, in `finish.usage`; a field that is absent was not reported, which is diff
 | `retry_after_ms` | When the upstream said to try again, in milliseconds from now. |
 | `raw` | The upstream's error body, unchanged. |
 | `usage` | Usage the upstream reported before the failure, in the same form as `finish.usage`; absent when it reported none. A reply that fails partway may still have cost tokens. |
+| `quota_window_minutes` | Version 0.6. For code `quota`: the length, in minutes, of the usage window that is used up, when the upstream said (such as 300 for a five-hour window). Core passes it on in its [usage-limit reply](../README.md#accounts-and-routing). |
 
 Codes an extension sends:
 
@@ -861,7 +863,7 @@ removes `previous_response_id`.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.5. An extension reports the minor version it
+raise the minor version: this document is version 0.6. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -874,8 +876,9 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.3 | [Model lists](#models): the `models` operation and its `models.result` frame. |
 | 0.4 | [Account checks](#check): the `check` operation and its `check.result` frame. |
 | 0.5 | [Quota](#quota): the `quota` operation and its `quota.result` frame. A login grant's `identity`. |
+| 0.6 | An error's `quota_window_minutes`. |
 
-## What version 0.5 leaves out
+## What version 0.6 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

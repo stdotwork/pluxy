@@ -55,6 +55,11 @@ type block struct {
 	// says nothing about the newer failure.
 	mark   uint64
 	reason *llm.Error
+	// told is true when until is a quota reset the upstream named, and window the length in
+	// minutes of the usage window that ran out, when it said: the evidence the usage-limit
+	// reply needs.
+	told   bool
+	window int64
 }
 
 type scopeState struct {
@@ -480,10 +485,56 @@ func (s *State) failure(a *Account, model string, seq uint64, e *llm.Error, now 
 	// A deadline only ever moves later; a new failure never shortens a live block.
 	if until.After(b.until) {
 		b.until = until
+		b.told = kind == blockQuota && e.RetryAfterMS > 0
+		b.window = e.QuotaWindowMinutes
 	}
 	if seq >= b.mark {
 		b.mark, b.reason = seq, e
 	}
+}
+
+// quotaOut reports whether what keeps account a from serving model at now is a quota block
+// whose end the upstream named, as today's core decides it. Among a set of blocks, the one
+// that ends last decides, and a block of another kind that ends as late keeps the account out
+// of the count. The credential's own blocks are looked at first and decide alone, so a quota
+// block there wins over model and endpoint blocks; otherwise every scope's blocks count. until
+// is the quota block's end, window the length of the window that ran out (0 when not known),
+// and reason the failure that set it.
+func (s *State) quotaOut(a *Account, model string, now time.Time) (until time.Time, window int64, reason *llm.Error, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	keys := keysFor(a, model)
+	if b, ok := s.quotaLast(keys[:1], now); ok {
+		return b.until, b.window, b.reason, true
+	}
+	if b, ok := s.quotaLast(keys[:], now); ok {
+		return b.until, b.window, b.reason, true
+	}
+	return time.Time{}, 0, nil, false
+}
+
+// quotaLast returns the named quota block on the scopes keys that ends last, if it ends after
+// every live block of another kind on them.
+func (s *State) quotaLast(keys []scopeKey, now time.Time) (last block, ok bool) {
+	var other time.Time // the latest end of a live block that is not a named quota block
+	for _, k := range keys {
+		st := s.scopes[k]
+		if st == nil {
+			continue
+		}
+		for i, b := range st.blocks {
+			switch {
+			case !b.until.After(now):
+			case i == kindIndex(blockQuota) && b.told:
+				if b.until.After(last.until) {
+					last = b
+				}
+			case b.until.After(other):
+				other = b.until
+			}
+		}
+	}
+	return last, !last.until.IsZero() && last.until.After(other)
 }
 
 // success records that the attempt with sequence number seq on account a for model succeeded.

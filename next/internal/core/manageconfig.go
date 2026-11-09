@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -278,14 +279,17 @@ type cooldownView struct {
 	DisableCooling bool `json:"disable-cooling"`
 	// TransientErrorCooldownSeconds is 0 for this core's backoff, -1 for none.
 	TransientErrorCooldownSeconds float64 `json:"transient-error-cooldown-seconds"`
+	// QuotaResponseMode is retryable (the default) or usage-limit.
+	QuotaResponseMode string `json:"quota-response-mode"`
 }
 
 // settings returns the active config's settings by today's core's names.
 func settings(cfg *server.Config) settingsView {
 	r := cfg.Routing
 	v := routingView{Strategy: r.Strategy, ForceModelPrefix: r.ForceModelPrefix,
-		Retry:    retryView{RequestRetry: r.RequestRetry, MaxRetryCredentials: r.MaxAccounts, MaxRetryInterval: float64(r.MaxWaitMS) / 1000},
-		Cooldown: cooldownView{DisableCooling: r.DisableCooling, TransientErrorCooldownSeconds: float64(max(r.TransientErrorCooldownMS, -1000)) / 1000}}
+		Retry: retryView{RequestRetry: r.RequestRetry, MaxRetryCredentials: r.MaxAccounts, MaxRetryInterval: float64(r.MaxWaitMS) / 1000},
+		Cooldown: cooldownView{DisableCooling: r.DisableCooling, TransientErrorCooldownSeconds: float64(max(r.TransientErrorCooldownMS, -1000)) / 1000,
+			QuotaResponseMode: cmp.Or(r.QuotaResponseMode, route.QuotaRetryable)}}
 	switch r.Strategy {
 	case "":
 		v.Strategy = route.StrategyRoundRobin

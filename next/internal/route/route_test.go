@@ -2,8 +2,10 @@ package route
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1041,5 +1043,164 @@ func TestDroppedBlockSetsNoLastError(t *testing.T) {
 	}
 	if rt := st.Runtime(*a, now); rt.LastError == nil || rt.LastError.Message != "m1 limited" {
 		t.Errorf("last error = %+v, want m1's: m2's failure set no block", rt.LastError)
+	}
+}
+
+// usageLimited is a Codex usage_limit_reached refusal as the Codex extension reports it: a
+// quota error whose reset the upstream named, with the five-hour window.
+func usageLimited(reset time.Duration) script {
+	return fail(llm.Error{Code: llm.CodeQuota, Status: 429, Retryable: true, Scope: llm.ScopeCredential, ProviderCode: "usage_limit_reached",
+		Message: "The usage limit has been reached", RetryAfterMS: reset.Milliseconds(), QuotaWindowMinutes: 300,
+		Raw: json.RawMessage(`{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached"}}`)})
+}
+
+// In the usage-limit quota response mode, a request that finds every account out of quota until
+// a reset more than 5 minutes away ends with the usage-limit reply: on the request that used up
+// the last account and on the next one, which reaches no account.
+func TestUsageLimitWhenEveryAccountIsOutOfQuota(t *testing.T) {
+	h := newHarness(t, Config{QuotaResponseMode: QuotaUsageLimit},
+		Account{ID: "a", Extension: "pluxy/codex"}, Account{ID: "b", Extension: "pluxy/codex"})
+	h.on("a", usageLimited(3*time.Hour))
+	h.on("b", usageLimited(2*time.Hour))
+	for i := range 2 {
+		evs := h.run(h.req("gpt-x"))
+		e := evs[0].Error
+		if e == nil || e.UsageLimit == nil {
+			t.Fatalf("request %d: %+v, want the usage-limit reply", i, evs[0])
+		}
+		u := e.UsageLimit
+		if !u.ResetsAt.Equal(h.now.Add(2*time.Hour)) || u.WindowMinutes != 300 || u.Provider != "codex" || u.Model != "gpt-x" ||
+			u.LastError != "usage_limit_reached: The usage limit has been reached" {
+			t.Errorf("request %d: usage limit = %+v, want the first reset (b's), its window, provider codex and the last error", i, u)
+		}
+		if e.Retryable || e.Status != 429 || e.Code != llm.CodeQuota || e.RetryAfterMS != (2*time.Hour).Milliseconds() {
+			t.Errorf("request %d: error = %+v", i, e)
+		}
+	}
+	h.wantAttempts("a", "b") // the second request reached no account
+}
+
+// The usage-limit reply needs every account out of quota until a reset the upstream named,
+// more than 5 minutes away, and the mode on; otherwise the retryable replies stay.
+func TestUsageLimitOnlyWhenEveryAccountQualifies(t *testing.T) {
+	quotaNoReset := fail(llm.Error{Code: llm.CodeQuota, Status: 429, Retryable: true, Scope: llm.ScopeCredential})
+	for _, tc := range []struct {
+		name string
+		mode string
+		a, b script
+	}{
+		{"retryable mode", QuotaRetryable, usageLimited(2 * time.Hour), usageLimited(2 * time.Hour)},
+		{"default mode", "", usageLimited(2 * time.Hour), usageLimited(2 * time.Hour)},
+		{"near reset", QuotaUsageLimit, usageLimited(2 * time.Hour), usageLimited(5 * time.Minute)},
+		{"one only rate-limited", QuotaUsageLimit, usageLimited(2 * time.Hour), rateLimited(2 * time.Hour)},
+		{"quota without a reset", QuotaUsageLimit, usageLimited(2 * time.Hour), quotaNoReset},
+		{"one serves", QuotaUsageLimit, usageLimited(2 * time.Hour), ok()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, Config{QuotaResponseMode: tc.mode, Strategy: StrategyFillFirst}, accts("a", "b")...)
+			h.on("a", tc.a)
+			h.on("b", tc.b)
+			for i := range 2 {
+				evs := h.run(h.req("m"))
+				if e := evs[0].Error; e != nil && e.UsageLimit != nil {
+					t.Fatalf("request %d got the usage-limit reply: %+v", i, e.UsageLimit)
+				}
+			}
+		})
+	}
+}
+
+// A reply that started and then ends with the last account's quota refusal ends with the
+// usage-limit reply; the provider is named only when every account belongs to one extension, and
+// a pool without a known window has none.
+func TestUsageLimitAfterTheReplyStarted(t *testing.T) {
+	h := newHarness(t, Config{QuotaResponseMode: QuotaUsageLimit, Strategy: StrategyFillFirst},
+		Account{ID: "a", Extension: "pluxy/codex"}, Account{ID: "b", Extension: "pluxy/openai-compatible"})
+	h.r.state.failure(h.r.accounts[1], "m", 0, &llm.Error{Code: llm.CodeQuota, RetryAfterMS: time.Hour.Milliseconds(), Message: "used up"}, h.now, 0)
+	quota := llm.Error{Code: llm.CodeQuota, Status: 429, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: (3 * time.Hour).Milliseconds(),
+		ProviderCode: "usage_limit_reached", Message: "The usage limit has been reached"}
+	h.on("a", script{start(), {Type: llm.EventError, Error: &quota}})
+	evs := h.run(h.req("m"))
+	last := evs[len(evs)-1]
+	if last.Type != llm.EventError || last.Error.UsageLimit == nil {
+		t.Fatalf("stream ended with %+v, want the usage-limit reply", last)
+	}
+	if u := last.Error.UsageLimit; u.Provider != "" || u.WindowMinutes != 0 || !u.ResetsAt.Equal(h.now.Add(time.Hour)) ||
+		u.LastError != "usage_limit_reached: The usage limit has been reached" {
+		t.Errorf("usage limit = %+v, want no provider, no window, b's reset and a's failure", u)
+	}
+	h.wantAttempts("a")
+}
+
+// The summary of the last upstream failure is today's core's "code: message", from the upstream's
+// error body when it has one.
+func TestErrorSummary(t *testing.T) {
+	for _, tc := range []struct {
+		e    llm.Error
+		want string
+	}{
+		{llm.Error{ProviderCode: "rate_limit_exceeded", Message: "Rate limit reached"}, "rate_limit_exceeded: Rate limit reached"},
+		{llm.Error{ProviderCode: "x", Message: "m", Raw: json.RawMessage(`{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached"}}`)},
+			"usage_limit_reached: The usage limit has been reached"},
+		{llm.Error{Raw: json.RawMessage(`{"error":"plain text"}`)}, "plain text"},
+		{llm.Error{ProviderCode: "quota", Message: "quota exceeded"}, "quota exceeded"},
+		{llm.Error{ProviderCode: "only_code"}, "only_code"},
+		{llm.Error{Message: strings.Repeat("é", 300)}, strings.Repeat("é", 253) + "..."},
+		{llm.Error{ProviderCode: "x", Raw: json.RawMessage(`{"code":"quota_exceeded","message":"Quota exceeded"}`)}, "quota_exceeded: Quota exceeded"},
+		{llm.Error{ProviderCode: "x", Raw: json.RawMessage(`{"error":{},"type":"overloaded","message":"Try later"}`)}, "overloaded: Try later"},
+		{llm.Error{ProviderCode: "RESOURCE_EXHAUSTED", Message: "m", Raw: json.RawMessage(`{"error":{"code":429,"message":"Resource has been exhausted","status":"RESOURCE_EXHAUSTED"}}`)},
+			"429: Resource has been exhausted"},
+		{llm.Error{ProviderCode: "x", Message: "kept", Raw: json.RawMessage(`[1]`)}, "x: kept"},
+	} {
+		if got := errorSummary(&tc.e); got != tc.want {
+			t.Errorf("errorSummary(%+v) = %q, want %q", tc.e, got, tc.want)
+		}
+	}
+}
+
+// An account counts as out of quota as today's core counts it: a named quota block on the
+// credential decides alone; otherwise the block that ends last must be a named quota block, and
+// a block of another kind that ends as late keeps the account out of the count.
+func TestQuotaOutFollowsTodaysPrecedence(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	quota := func(scope string, d time.Duration) *llm.Error {
+		return &llm.Error{Code: llm.CodeQuota, Scope: scope, RetryAfterMS: d.Milliseconds()}
+	}
+	limit := func(scope string, d time.Duration) *llm.Error {
+		return &llm.Error{Code: llm.CodeRateLimit, Scope: scope, RetryAfterMS: d.Milliseconds()}
+	}
+	for _, c := range []struct {
+		name  string
+		fails []*llm.Error
+		until time.Duration // 0: not out of quota
+	}{
+		{"model quota ends last", []*llm.Error{quota(llm.ScopeModel, 3*time.Hour), limit(llm.ScopeModel, time.Hour)}, 3 * time.Hour},
+		{"rate limit ends last", []*llm.Error{quota(llm.ScopeModel, time.Hour), limit(llm.ScopeModel, 3*time.Hour)}, 0},
+		{"rate limit ends as late", []*llm.Error{quota(llm.ScopeModel, 2*time.Hour), limit(llm.ScopeModel, 2*time.Hour)}, 0},
+		{"endpoint limit ends as late", []*llm.Error{quota(llm.ScopeModel, 2*time.Hour), limit(llm.ScopeEndpoint, 2*time.Hour)}, 0},
+		{"endpoint cooldown ends last", []*llm.Error{quota(llm.ScopeModel, 2*time.Hour), limit(llm.ScopeEndpoint, 3*time.Hour)}, 0},
+		{"credential quota over a later model limit", []*llm.Error{quota(llm.ScopeCredential, 2*time.Hour), limit(llm.ScopeModel, 3*time.Hour)}, 2 * time.Hour},
+		{"credential quota over a later model quota", []*llm.Error{quota(llm.ScopeCredential, 2*time.Hour), quota(llm.ScopeModel, 3*time.Hour)}, 2 * time.Hour},
+		{"credential limit as late as credential quota", []*llm.Error{quota(llm.ScopeCredential, 2*time.Hour), limit(llm.ScopeCredential, 2*time.Hour)}, 0},
+		{"no reset named", []*llm.Error{{Code: llm.CodeQuota, Scope: llm.ScopeModel}}, 0},
+	} {
+		st := NewState()
+		a := &Account{ID: "a"}
+		for i, e := range c.fails {
+			st.failure(a, "m", uint64(i+1), e, now, 0)
+		}
+		until, _, _, ok := st.quotaOut(a, "m", now)
+		if want := c.until != 0; ok != want || (ok && !until.Equal(now.Add(c.until))) {
+			t.Errorf("%s: quotaOut = %v, %v; want out %v until now+%v", c.name, until, ok, want, c.until)
+		}
+	}
+}
+
+func TestQuotaResponseModeValidates(t *testing.T) {
+	for mode, ok := range map[string]bool{"": true, QuotaRetryable: true, QuotaUsageLimit: true, "Usage-Limit": false, "stop": false} {
+		c := Config{QuotaResponseMode: mode}
+		if err := c.Validate(); (err == nil) != ok {
+			t.Errorf("mode %q: Validate = %v", mode, err)
+		}
 	}
 }

@@ -544,3 +544,30 @@ func TestTrustedProxies(t *testing.T) {
 		t.Error("trusted-proxies that is not a list was accepted")
 	}
 }
+
+// quota-response-mode, under its v8 name or the older spelling, letter case and spaces aside, as
+// today's core reads it; retryable is the default and adds nothing; another value fails the load.
+func TestQuotaResponseMode(t *testing.T) {
+	for in, want := range map[string]any{
+		"routing: {cooldown: {quota-response-mode: usage-limit}}":     "usage-limit",
+		"routing: {cooldown: {quota-response-mode: ' Usage-Limit '}}": "usage-limit",
+		"quota-cooldown-response-mode: usage-limit":                   "usage-limit",
+		"routing: {cooldown: {quota-response-mode: retryable}}":       nil,
+		"routing: {cooldown: {quota-response-mode: ''}}":              nil,
+	} {
+		r := translate(t, in)
+		var got any
+		if m, ok := asJSON(t, r.Config["routing"]).(map[string]any); ok {
+			got = m["quota_response_mode"]
+		}
+		if got != want {
+			t.Errorf("%s: quota_response_mode = %v, want %v", in, got, want)
+		}
+		if strings.Contains(notices(r), "quota-response-mode") {
+			t.Errorf("%s: notices name it:\n%s", in, notices(r))
+		}
+	}
+	if _, err := Translate([]byte("routing: {cooldown: {quota-response-mode: stop}}")); err == nil || !strings.Contains(err.Error(), "quota-response-mode") {
+		t.Errorf("an unknown mode loaded: %v", err)
+	}
+}

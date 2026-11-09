@@ -266,7 +266,12 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		return err
 	case llm.EventError:
 		_, body := ErrorResponse(ev.Error)
-		return sse.WriteData(s.w, body)
+		if err := sse.WriteData(s.w, body); err != nil || ev.Error.UsageLimit == nil {
+			return err
+		}
+		// As in today's core, a stream that ends in the usage-limit reply is closed with [DONE].
+		_, err := io.WriteString(s.w, "data: [DONE]\n\n")
+		return err
 	}
 	return nil
 }
@@ -565,8 +570,13 @@ func (a *Aggregator) Response() ([]byte, error) {
 	return a.up.withFields(b), nil
 }
 
-// ErrorResponse returns the HTTP status and OpenAI-style error body for e.
+// ErrorResponse returns the HTTP status and OpenAI-style error body for e. The usage-limit
+// reply has today's core's body.
 func ErrorResponse(e *llm.Error) (int, []byte) {
+	if u := e.UsageLimit; u != nil {
+		body, _ := json.Marshal(map[string]any{"error": u.ErrorObject()})
+		return http.StatusTooManyRequests, body
+	}
 	status := e.Status
 	if status < 400 || status > 599 {
 		status = map[string]int{

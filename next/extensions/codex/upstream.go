@@ -337,6 +337,11 @@ func statusError(resp *http.Response, model string) *llm.Error {
 		// The plan's usage allowance is used up until it resets.
 		e.Code, e.Scope, e.Retryable, e.Status = llm.CodeQuota, llm.ScopeCredential, true, http.StatusTooManyRequests
 		e.RetryAfterMS = resetMS(ce, resp.Header.Get("Retry-After"))
+		var windowReset int64
+		e.QuotaWindowMinutes, windowReset = exhaustedWindow(resp.Header, time.Now())
+		if e.RetryAfterMS == 0 {
+			e.RetryAfterMS = windowReset
+		}
 	case s >= 300 && s < 400:
 		e.Code, e.Scope, e.Status = llm.CodeUpstream, llm.ScopeEndpoint, http.StatusBadGateway
 		e.Message = fmt.Sprintf("upstream redirected (%s) to another host; not followed", resp.Status)
@@ -404,6 +409,45 @@ func resetMS(ce codexError, retryAfterHeader string) int64 {
 		return ce.ResetsInSeconds * 1000
 	}
 	return retryAfter(retryAfterHeader)
+}
+
+// exhaustedWindow reads Codex's rate-limit headers (x-codex-primary-* and x-codex-secondary-*)
+// on a usage_limit_reached reply: of the windows at 100% use, the one that resets last, since the
+// account stays out until then. It returns that window's length in minutes, and when it resets
+// in milliseconds from now if the headers say (reset-at in Unix seconds, or reset-after-seconds);
+// 0 for what they do not say. Today's core reads them the same way.
+func exhaustedWindow(h http.Header, now time.Time) (minutes, resetMS int64) {
+	num := func(name string) (float64, bool) {
+		v, err := strconv.ParseFloat(strings.TrimSpace(h.Get(name)), 64)
+		return v, err == nil
+	}
+	at := float64(now.UnixMilli()) / 1000
+	var best, bestReset float64
+	var explicit bool
+	for _, slot := range []string{"primary", "secondary"} {
+		prefix := "X-Codex-" + slot + "-"
+		used, okUsed := num(prefix + "used-percent")
+		length, okLength := num(prefix + "window-minutes")
+		if !okUsed || used < 100 || !okLength || length <= 0 {
+			continue
+		}
+		reset, told := num(prefix + "reset-at")
+		if !told {
+			var after float64
+			if after, told = num(prefix + "reset-after-seconds"); told {
+				reset = at + after
+			} else {
+				reset = at + length*60 // without a reset time, the longer window ends later
+			}
+		}
+		if best == 0 || reset > bestReset {
+			best, bestReset, explicit = length, reset, told
+		}
+	}
+	if explicit && bestReset > at {
+		resetMS = int64((bestReset - at) * 1000)
+	}
+	return int64(best), resetMS
 }
 
 // retryAfter reads a Retry-After header: delay seconds or an HTTP date.

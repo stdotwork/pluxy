@@ -199,7 +199,7 @@ var rules = map[string]rule{
 	"routing.retry.request-retry":                       {supported, ""},
 	"routing.cooldown.disable-cooling":                  {supported, ""},
 	"routing.cooldown.transient-error-cooldown-seconds": {supported, ""},
-	"routing.cooldown.quota-response-mode":              {later, ""},
+	"routing.cooldown.quota-response-mode":              {supported, ""},
 	"routing.cooldown.save-cooldown-status":             {dropped, "no need found"},
 	"quota-exceeded.switch-project":                     {dead, ""},
 	"quota-exceeded.switch-preview-model":               {dead, ""},
@@ -588,6 +588,14 @@ func (x *translator) routing() error {
 		r["transient_error_cooldown_ms"] = int64(n) * 1000
 	} else if n < 0 {
 		r["transient_error_cooldown_ms"] = -1
+	}
+	// Read as today's core reads it: letter case and spaces aside; anything else is an error.
+	if s, err := str(x.t, "routing.cooldown.quota-response-mode"); err != nil {
+		return err
+	} else if mode := strings.ToLower(strings.TrimSpace(s)); mode == "usage-limit" {
+		r["quota_response_mode"] = mode
+	} else if mode != "" && mode != "retryable" {
+		return fmt.Errorf("invalid routing.cooldown.quota-response-mode %q: want \"retryable\" or \"usage-limit\"", s)
 	}
 	if len(r) > 0 {
 		x.out["routing"] = r
@@ -1150,7 +1158,6 @@ var defaults = map[string]any{
 	"management.panel-github-repository":                      "https://github.com/router-for-me/Cli-Proxy-API-Management-Center",
 	"routing.session-affinity-subagents":                      true,
 	"routing.session-affinity-rebind-on":                      "any",
-	"routing.cooldown.quota-response-mode":                    "retryable",
 	"upstream.codex.upstream-request-compression-min-bytes":   1024,
 	"upstream.claude.session-date-pin-days":                   7,
 	"oauth.providers.aistudio.ws-auth":                        true,

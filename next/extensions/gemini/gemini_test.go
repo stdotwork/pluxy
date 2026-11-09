@@ -43,6 +43,18 @@ func TestUpstreamErrors(t *testing.T) {
 	if e := upstreamError(resp, "m"); e.Code != llm.CodeRateLimit || !e.Retryable || e.RetryAfterMS != 7000 || e.ProviderCode != "RESOURCE_EXHAUSTED" {
 		t.Errorf("429 with RetryInfo 7s = %+v", e)
 	}
+	// A used-up quota (ErrorInfo reason QUOTA_EXHAUSTED) is a quota error, not a rate limit.
+	srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		io.WriteString(w, `{"error":{"code":429,"message":"Quota exceeded","status":"RESOURCE_EXHAUSTED","details":[`+
+			`{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"QUOTA_EXHAUSTED"},`+
+			`{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"3600s"}]}}`)
+	}
+	resp = post(t, srv.URL+"/v1beta/models/m:generateContent", key)
+	if e := upstreamError(resp, "m"); e.Code != llm.CodeQuota || !e.Retryable || e.RetryAfterMS != 3_600_000 {
+		t.Errorf("429 QUOTA_EXHAUSTED = %+v, want a retryable quota error with the retry delay", e)
+	}
 	resp = post(t, srv.URL+"/v1beta/models/m:generateContent", "not-a-key")
 	if e := upstreamError(resp, "m"); e.Code != llm.CodeAuth || !e.Retryable || e.Scope != llm.ScopeCredential || e.Status != http.StatusBadRequest {
 		t.Errorf("400 API_KEY_INVALID = %+v, want a retryable auth error with Google's status", e)

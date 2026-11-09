@@ -224,9 +224,15 @@ func (f clientFormat) writeError(w http.ResponseWriter, e *llm.Error) int {
 	}
 	status, body := errorBody(e)
 	w.Header().Set("Content-Type", "application/json")
-	// Tell a rate-limited client when to try again, in whole seconds rounded up (RFC 9110
-	// section 10.2.3, RFC 6585 section 4).
-	if status == http.StatusTooManyRequests && e.RetryAfterMS > 0 {
+	switch {
+	case e.UsageLimit != nil:
+		// The usage-limit reply tells the client to stop until the reset, not when to retry.
+		for _, h := range e.UsageLimit.Headers() {
+			w.Header().Set(h[0], h[1])
+		}
+	case status == http.StatusTooManyRequests && e.RetryAfterMS > 0:
+		// Tell a rate-limited client when to try again, in whole seconds rounded up (RFC 9110
+		// section 10.2.3, RFC 6585 section 4).
 		w.Header().Set("Retry-After", strconv.FormatInt((e.RetryAfterMS+999)/1000, 10))
 	}
 	w.WriteHeader(status)

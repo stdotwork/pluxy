@@ -551,7 +551,14 @@ func status(e *llm.Error) int {
 // ErrorResponse returns the HTTP status and Google error body for e:
 // {"error": {"code", "message", "status"}}. An upstream Google error keeps its status name and
 // its details (retry info and the like).
+//
+// The usage-limit reply has today's core's body, which is the same for every client but
+// Anthropic's.
 func ErrorResponse(e *llm.Error) (int, []byte) {
+	if u := e.UsageLimit; u != nil {
+		b, _ := json.Marshal(obj{"error": u.ErrorObject()})
+		return http.StatusTooManyRequests, b
+	}
 	st := status(e)
 	msg := e.Message
 	if msg == "" {
