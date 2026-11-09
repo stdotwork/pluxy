@@ -32,10 +32,10 @@ type Runtime struct {
 	// CooldownUntil is when the latest block that covers the whole account (its credential
 	// or its endpoint) ends; zero when none does.
 	CooldownUntil time.Time
-	// LastError is the latest failure an attempt on the account recorded a block for, and
-	// LastErrorAt when; nil once an attempt that started after it was recorded succeeds. As with
+	// LastError is the failure of the latest-started attempt on the account that recorded a
+	// block, and LastErrorAt when; nil once an attempt that started after it succeeds. As with
 	// blocks, a success from an attempt that started earlier does not clear it, and a failure
-	// that arrives after a success is recorded.
+	// from an attempt that started before a success on the account is not recorded.
 	LastError   *llm.Error
 	LastErrorAt time.Time
 	// Active counts the attempts running on the account.

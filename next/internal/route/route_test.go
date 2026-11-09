@@ -313,6 +313,130 @@ func TestOlderSuccessKeepsNewerCooldown(t *testing.T) {
 	h.wantAttempts("a", "a", "b", "b")
 }
 
+// The newest result wins: a failure from an attempt that started before a success on the same
+// account, and ends after it, leaves no block and no last error. Here the older request's reply
+// has started and then breaks with a quota error after a newer request on the account succeeded.
+func TestStaleFailureAfterNewerSuccess(t *testing.T) {
+	h := newHarness(t, Config{Strategy: StrategyFillFirst}, accts("a", "b")...)
+	quota := llm.Error{Code: llm.CodeQuota, Status: 429, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: 3_600_000}
+	h.on("a", script{start(), {Type: llm.EventError, Error: &quota}}, ok())
+	older := h.r.Generate(context.Background(), h.req("m"))
+	if ev := older.Next(); ev.Type != llm.EventResponseStart { // attempt 1 on a: reply started
+		t.Fatalf("first event = %+v", ev)
+	}
+	h.runOK("m") // attempt 2 on a starts after attempt 1 and succeeds
+	if ev := older.Next(); ev.Type != llm.EventError {
+		t.Fatalf("older request ended with %+v, want its quota error", ev)
+	} // attempt 1 fails after the newer success
+	older.Close()
+	if rt := h.r.state.Runtime(Account{ID: "a"}, h.now); len(rt.Cooldowns) != 0 || rt.LastError != nil {
+		t.Errorf("a stale failure left %+v", rt)
+	}
+	h.runOK("m") // a still serves
+	h.wantAttempts("a", "a", "a")
+	if n := len(h.r.state.scopes); n != 0 {
+		t.Errorf("state holds %d scopes once no older attempt runs, want none", n)
+	}
+}
+
+// A newer success clears what an older failure would set only on the scopes the success covers:
+// a success on one model says nothing about an older failure on another model of the account,
+// and a success on another account that shares the endpoint turns away an older endpoint
+// failure.
+func TestStaleFailureOnlyOnScopesTheSuccessCovers(t *testing.T) {
+	st := NewState()
+	a, b := &Account{ID: "a", Endpoint: "e"}, &Account{ID: "b", Endpoint: "e"}
+	now := time.Unix(1_800_000_000, 0)
+	notFound := &llm.Error{Code: llm.CodeNotFound, Scope: llm.ScopeModel}
+	down := &llm.Error{Code: llm.CodeUnavailable, Scope: llm.ScopeEndpoint, RetryAfterMS: 60_000}
+
+	older, _ := st.reserve(a, "m1", now)
+	newer, _ := st.reserve(a, "m2", now)
+	st.success(a, "m2", newer)
+	st.end(a, newer)
+	st.failure(a, "m1", older, notFound, now, 0)
+	st.end(a, older)
+	if until, _, _ := st.availability(a, "m1", now); until.IsZero() {
+		t.Error("an older failure on m1 was turned away by a success on m2")
+	}
+	if rt := st.Runtime(*a, now); rt.LastError != nil {
+		t.Errorf("last error = %+v, want none: a newer attempt on the account succeeded", rt.LastError)
+	}
+
+	older, _ = st.reserve(a, "m2", now)
+	other, _ := st.reserve(b, "m2", now)
+	st.success(b, "m2", other)
+	st.end(b, other)
+	st.failure(a, "m2", older, down, now, 0)
+	st.end(a, older)
+	if until, _, _ := st.availability(a, "m2", now); !until.IsZero() {
+		t.Errorf("an older endpoint failure blocked the endpoint until %v after a newer success on it", until)
+	}
+}
+
+// The mark that turns away a stale failure outlives the idle sweep while the older attempt runs,
+// and goes once no attempt older than it runs; ended attempt numbers do not pile up behind a
+// long-running one.
+func TestStaleFailureMarkLifetime(t *testing.T) {
+	st := NewState()
+	a := &Account{ID: "a"}
+	now := time.Unix(1_800_000_000, 0)
+	older, _ := st.reserve(a, "m", now)
+	for range 1000 {
+		seq, _ := st.reserve(a, "m", now)
+		st.success(a, "m", seq)
+		st.end(a, seq)
+	}
+	if n := len(st.order); n > 2*len(st.running)+64 {
+		t.Errorf("%d attempt numbers kept for %d running attempts", n, len(st.running))
+	}
+	later := now.Add(stateIdle + 2*sweepEvery)
+	st.maybeSweep(later)
+	st.failure(a, "m", older, &llm.Error{Code: llm.CodeRateLimit, Retryable: true, RetryAfterMS: 60_000}, later, 0)
+	st.end(a, older)
+	if until, _, _ := st.availability(a, "m", later); !until.IsZero() {
+		t.Errorf("a stale failure blocked the account after the sweep, until %v", until)
+	}
+	st.maybeSweep(later.Add(2 * sweepEvery))
+	if n := len(st.scopes); n != 0 {
+		t.Errorf("state holds %d scopes once no older attempt runs, want none", n)
+	}
+}
+
+// Under concurrent attempts the routing state stays consistent: every reservation is released and
+// no attempt number is left running.
+func TestOutcomesUnderRace(t *testing.T) {
+	st := NewState()
+	accounts := []*Account{{ID: "a", Endpoint: "e"}, {ID: "b", Endpoint: "e"}}
+	now := time.Unix(1_800_000_000, 0)
+	var wg sync.WaitGroup
+	for g := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range 500 {
+				a := accounts[(g+i)%2]
+				model := fmt.Sprintf("m%d", i%3)
+				seq, ok := st.reserve(a, model, now)
+				if !ok {
+					st.Reset(*a, now)
+					continue
+				}
+				if i%4 == 0 {
+					st.failure(a, model, seq, &llm.Error{Code: llm.CodeUpstream, Retryable: true}, now, -1)
+				} else {
+					st.success(a, model, seq)
+				}
+				st.end(a, seq)
+			}
+		}()
+	}
+	wg.Wait()
+	if len(st.running) != 0 || len(st.active) != 0 || st.oldest() != 0 {
+		t.Errorf("after every attempt ended: running %d, active %v, oldest %d", len(st.running), st.active, st.oldest())
+	}
+}
+
 // A success from an attempt that started after the block clears it (and the backoff step).
 func TestNewerSuccessClearsBlock(t *testing.T) {
 	h := newHarness(t, Config{Strategy: StrategyFillFirst}, accts("a", "b")...)
@@ -336,13 +460,13 @@ func TestBackoffWithoutRetryAfter(t *testing.T) {
 	e := &llm.Error{Code: llm.CodeRateLimit, Retryable: true}
 	var got []time.Duration
 	for range 3 {
-		st.failure(a, "m", e, now, 0)
+		st.failure(a, "m", 0, e, now, 0)
 		until, _, _ := st.availability(a, "m", now)
 		got = append(got, until.Sub(now))
 		now = until
 	}
-	st.failure(a, "m", e, now, 0) // step 4 starts at now: 8s step, 4s block
-	st.failure(a, "m", e, now, 0) // while live: same step, deadline unchanged
+	st.failure(a, "m", 0, e, now, 0) // step 4 starts at now: 8s step, 4s block
+	st.failure(a, "m", 0, e, now, 0) // while live: same step, deadline unchanged
 	until, _, _ := st.availability(a, "m", now)
 	got = append(got, until.Sub(now))
 	want := []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second}
@@ -356,8 +480,8 @@ func TestBlockOnlyExtends(t *testing.T) {
 	st := NewState()
 	a := &Account{ID: "a"}
 	now := time.Unix(0, 0)
-	st.failure(a, "m", &llm.Error{Code: llm.CodeRateLimit, RetryAfterMS: 60_000}, now, 0)
-	st.failure(a, "m", &llm.Error{Code: llm.CodeRateLimit, RetryAfterMS: 1_000}, now, 0)
+	st.failure(a, "m", 0, &llm.Error{Code: llm.CodeRateLimit, RetryAfterMS: 60_000}, now, 0)
+	st.failure(a, "m", 0, &llm.Error{Code: llm.CodeRateLimit, RetryAfterMS: 1_000}, now, 0)
 	if until, _, _ := st.availability(a, "m", now); until.Sub(now) != time.Minute {
 		t.Errorf("block = %v, want 1m", until.Sub(now))
 	}
@@ -664,7 +788,7 @@ func TestRetainDropsWhatBelongedToChangedAccounts(t *testing.T) {
 	h := newHarness(t, Config{SessionAffinity: &AffinityConfig{}}, ep("a", "shared"), ep("b", "solo"))
 	s1 := Request{LLM: llm.Request{Model: "m"}, Tenant: "t", Session: "s1"}
 	h.run(s1) // a, bound
-	h.r.state.failure(h.r.accounts[0], "m", &llm.Error{Code: llm.CodeUpstream, Scope: llm.ScopeEndpoint, RetryAfterMS: 60_000}, h.now, 0)
+	h.r.state.failure(h.r.accounts[0], "m", 0, &llm.Error{Code: llm.CodeUpstream, Scope: llm.ScopeEndpoint, RetryAfterMS: 60_000}, h.now, 0)
 
 	// a changes; a new account c joins the "shared" label. The outage on "shared" was a's
 	// endpoint, so c starts unblocked, and s1 is no longer bound to the changed a.

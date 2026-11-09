@@ -16,10 +16,10 @@ func TestRuntimeAndReset(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	a := Account{ID: "a"}
 	other := Account{ID: "b"}
-	s.failure(&a, "m1", &llm.Error{Code: llm.CodeRateLimit, Message: "slow down", RetryAfterMS: 60_000, Raw: json.RawMessage(`{"x":1}`)}, now, 0)
-	s.failure(&a, "m2", &llm.Error{Code: llm.CodeNotFound, Message: "no such model"}, now, 0)
-	s.failure(&a, "m1", &llm.Error{Code: llm.CodeUpstream, Message: "bad gateway", Status: 502}, now, 0)
-	s.failure(&other, "m1", &llm.Error{Code: llm.CodeQuota, Message: "used up", RetryAfterMS: 3_600_000}, now, 0)
+	s.failure(&a, "m1", 0, &llm.Error{Code: llm.CodeRateLimit, Message: "slow down", RetryAfterMS: 60_000, Raw: json.RawMessage(`{"x":1}`)}, now, 0)
+	s.failure(&a, "m2", 0, &llm.Error{Code: llm.CodeNotFound, Message: "no such model"}, now, 0)
+	s.failure(&a, "m1", 0, &llm.Error{Code: llm.CodeUpstream, Message: "bad gateway", Status: 502}, now, 0)
+	s.failure(&other, "m1", 0, &llm.Error{Code: llm.CodeQuota, Message: "used up", RetryAfterMS: 3_600_000}, now, 0)
 
 	rt := s.Runtime(a, now.Add(100*time.Millisecond))
 	if len(rt.Cooldowns) != 3 {
@@ -56,7 +56,7 @@ func TestRuntimeAndReset(t *testing.T) {
 	}
 	// The backoff step went with the block: the next transient failure starts from the bottom.
 	s.rand = func() float64 { return 1 }
-	s.failure(&a, "m1", &llm.Error{Code: llm.CodeUpstream, Message: "again"}, now.Add(2*time.Second), 0)
+	s.failure(&a, "m1", 0, &llm.Error{Code: llm.CodeUpstream, Message: "again"}, now.Add(2*time.Second), 0)
 	if rt := s.Runtime(a, now.Add(2*time.Second)); len(rt.Cooldowns) != 1 || rt.Cooldowns[0].BackoffLevel != 1 {
 		t.Errorf("after a new failure: %+v, want one block at backoff level 1", rt.Cooldowns)
 	}
@@ -72,22 +72,24 @@ func TestLastErrorClearedBySuccess(t *testing.T) {
 	now := time.Now()
 	a := Account{ID: "a"}
 	early, _ := s.reserve(&a, "m", now)
-	s.end(&a)
-	s.failure(&a, "m", &llm.Error{Code: llm.CodeRateLimit, Message: "slow down"}, now, 0)
+	newer, _ := s.reserve(&a, "m", now)
+	s.failure(&a, "m", newer, &llm.Error{Code: llm.CodeRateLimit, Message: "slow down"}, now, 0)
+	s.end(&a, newer)
 	s.success(&a, "m", early)
+	s.end(&a, early)
 	if rt := s.Runtime(a, now); rt.LastError == nil {
 		t.Fatal("an older success cleared the last error")
 	}
 	s.Reset(a, now)
-	s.failure(&a, "m", &llm.Error{Code: llm.CodeRateLimit, Message: "slow down"}, now, 0)
+	s.failure(&a, "m", 0, &llm.Error{Code: llm.CodeRateLimit, Message: "slow down"}, now, 0)
 	late, _ := s.reserve(&a, "m", now.Add(time.Hour))
 	s.success(&a, "m", late)
-	s.end(&a)
+	s.end(&a, late)
 	if rt := s.Runtime(a, now); rt.LastError != nil || len(rt.Cooldowns) != 0 {
 		t.Fatalf("a later success left %+v", rt)
 	}
 	// A failure that is about the request records no last error.
-	s.failure(&a, "m", &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad request"}, now, 0)
+	s.failure(&a, "m", 0, &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad request"}, now, 0)
 	if rt := s.Runtime(a, now); rt.LastError != nil {
 		t.Fatalf("a request failure was recorded: %+v", rt.LastError)
 	}

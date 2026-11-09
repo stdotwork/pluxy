@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -142,6 +143,64 @@ func TestNoRetryAfterFirstByte(t *testing.T) {
 	}
 	if got := usedKeys(u); !slices.Equal(got, []string{"sk-a"}) {
 		t.Errorf("upstream keys = %v, want only [sk-a]: no retry after the reply started", got)
+	}
+}
+
+// The newest result wins: a streamed reply that started before a newer request succeeded on
+// the same account, and breaks after that success, leaves the account without a cooldown or a
+// last error, so the account keeps serving.
+func TestStaleFailureLeavesNoCooldown(t *testing.T) {
+	u := newUpstream(t)
+	var streams atomic.Int32
+	u.respond = func(w http.ResponseWriter, r *http.Request, body []byte) {
+		if !strings.Contains(string(body), `"stream":true`) {
+			okReply(w)
+			return
+		}
+		streams.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		const head = `"id":"chatcmpl-a","object":"chat.completion.chunk","created":1700000000,"model":"gpt-test"`
+		io.WriteString(w, `data: {`+head+`,"choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"},"finish_reason":null}]}`+"\n\n")
+		w.(http.Flusher).Flush()
+		<-u.release
+		panic(http.ErrAbortHandler) // the upstream connection breaks mid-reply
+	}
+	base := runCore(t, map[string]any{
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
+		// A broken upstream would block the account for 10 minutes.
+		"routing": map[string]any{"transient_error_cooldown_ms": 600_000},
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "pluxy-extension.json"),
+			"accounts": []any{map[string]any{"id": "acct-a", "settings": map[string]any{"base_url": u.URL + "/v1"},
+				"credential": map[string]any{"kind": "api_key", "api_key": "sk-a"}}},
+		},
+	})
+
+	older := post(t, context.Background(), base, clientKey, `{"model":"gpt-test","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	defer older.Body.Close()
+	rd := bufio.NewReader(older.Body)
+	for {
+		line, err := rd.ReadString('\n')
+		if err != nil {
+			t.Fatalf("older stream ended before its first chunk: %v", err)
+		}
+		if strings.Contains(line, `"Hello"`) {
+			break
+		}
+	}
+	postOK(t, base, plainBody) // a newer request on the account succeeds
+	close(u.release)           // then the older reply breaks
+	if rest, _ := io.ReadAll(rd); !strings.Contains(string(rest), `"error"`) {
+		t.Fatalf("older stream ended with %q, want an error", rest)
+	}
+	if a := getAccount(t, base, "acct-a"); len(a.Cooldowns) != 0 || a.LastError != nil {
+		t.Fatalf("after a stale failure: cooldowns %+v, last error %+v; want none", a.Cooldowns, a.LastError)
+	}
+	postOK(t, base, plainBody) // the only account still serves
+	if n := streams.Load(); n != 1 {
+		t.Errorf("streamed requests upstream = %d, want 1", n)
 	}
 }
 
