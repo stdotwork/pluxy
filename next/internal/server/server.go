@@ -83,6 +83,16 @@ var chatFormat = clientFormat{
 	aggregate: func(llm.Request) aggregator { return openaichat.NewAggregator() },
 }
 
+// completionsFormat serves OpenAI's legacy text completions as Chat Completions (see
+// openaichat.ParseCompletionsRequest).
+var completionsFormat = clientFormat{
+	parse: bodyOnly(openaichat.ParseCompletionsRequest),
+	stream: func(w io.Writer, req llm.Request) eventWriter {
+		return openaichat.NewCompletionsStreamWriter(w, openaichat.WantsStreamUsage(req))
+	},
+	aggregate: func(llm.Request) aggregator { return openaichat.NewCompletionsAggregator() },
+}
+
 var responsesFormat = clientFormat{
 	parse:     bodyOnly(openairesponses.ParseRequest),
 	stream:    func(w io.Writer, req llm.Request) eventWriter { return openairesponses.NewStreamWriter(w, req) },
@@ -141,7 +151,7 @@ type Source interface {
 // src when it starts and keeps it until it ends.
 func NewHandler(src Source) http.Handler {
 	mux := http.NewServeMux()
-	formats := map[string]clientFormat{"/v1/chat/completions": chatFormat, "/v1/responses": responsesFormat, "/v1/messages": messagesFormat,
+	formats := map[string]clientFormat{"/v1/chat/completions": chatFormat, "/v1/completions": completionsFormat, "/v1/responses": responsesFormat, "/v1/messages": messagesFormat,
 		"/v1beta/models/{action...}": geminiFormat}
 	for path, f := range formats {
 		mux.HandleFunc("POST "+path, func(w http.ResponseWriter, r *http.Request) {

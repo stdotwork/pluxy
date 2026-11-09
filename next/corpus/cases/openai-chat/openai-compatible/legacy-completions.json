@@ -15,38 +15,6 @@
       }
     }
   ],
-  "exceptions": [
-    {
-      "path": "client.status",
-      "kind": "gap",
-      "reason": "The new core does not serve the legacy /v1/completions endpoint; whether to keep it is not decided.",
-      "want": 404
-    },
-    {
-      "path": "client.body",
-      "kind": "gap",
-      "reason": "The new core does not serve the legacy /v1/completions endpoint; whether to keep it is not decided.",
-      "want": "404 page not found\n"
-    },
-    {
-      "path": "client.headers.Content-Type",
-      "kind": "gap",
-      "reason": "The new core does not serve the legacy /v1/completions endpoint; whether to keep it is not decided. The reply is the mux default 404, so its content type differs.",
-      "want": "text/plain; charset=utf-8"
-    },
-    {
-      "path": "client.headers.X-Content-Type-Options",
-      "kind": "gap",
-      "reason": "The new core does not serve the legacy /v1/completions endpoint; whether to keep it is not decided. The reply is the mux default 404, which adds nosniff.",
-      "want": "nosniff"
-    },
-    {
-      "path": "upstream[0]",
-      "kind": "gap",
-      "reason": "Follows from the endpoint not being served: no upstream request is made.",
-      "absent": true
-    }
-  ],
   "recorded_old_core": {
     "client": {
       "body": {

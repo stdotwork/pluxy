@@ -106,6 +106,13 @@ each turn is a request that carries the whole conversation so far, which core ke
 socket. `response.append`,
 `response.interrupt` and warmups (`"generate": false`) are served as today's core serves them.
 
+OpenAI's legacy text completions (`POST /v1/completions`) are served as Chat Completions, as
+today's core serves them: the prompt (a string, or a list of one string) becomes one user message,
+with `max_tokens`, `temperature`, `top_p`, `frequency_penalty`, `presence_penalty`, `stop`,
+`stream`, `logprobs`, `top_logprobs` and `echo`, and the reply comes back as `text_completion`
+choices with `text`. Several prompts in one request are refused; `n`, `suffix`, `best_of` and the
+rest are left out.
+
 Clients send the client key as a bearer token or, as Anthropic clients do, in `x-api-key`; Gemini
 clients may also send it in `x-goog-api-key` or the `key` query parameter.
 
