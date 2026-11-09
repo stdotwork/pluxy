@@ -287,6 +287,9 @@ sent them: a `pattern` or
 bound that is a whole number outside the 64-bit integer range is removed, and a property whose
 `oneOf` or `anyOf` has eight or more branches that are only distinct constants becomes an `enum`.
 Today's core also turns `number` into `integer` for named tools of the Codex app; that is not built.
+A Responses request (compaction too) that replays `web_search_call` items in `input` but declares
+no web search tool gets `{"type":"web_search"}` added to `tools`, because the upstream refuses such
+a history without one; a Responses-lite request has those items removed instead.
 Account `settings`, all optional:
 
 | Field | Meaning |
