@@ -97,7 +97,7 @@ func subscriptionLogin(ctx context.Context, set settings, s *sdk.LoginSession) (
 	code, gotState, failure := readCallback(in["redirect_url"])
 	switch {
 	case failure != "":
-		return nil, refused("Claude refused the sign-in: " + failure)
+		return nil, callbackRefusal(failure)
 	case code == "":
 		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "the pasted text has no code", Scope: llm.ScopeRequest}
 	case gotState != state:
@@ -304,6 +304,13 @@ func tokenError(f *tokenFailure) error {
 	default:
 		return &llm.Error{Code: llm.CodeUpstream, Message: fmt.Sprintf("the token endpoint answered %d (%s)", f.status, f.code), Status: f.status, ProviderCode: f.code, Scope: llm.ScopeEndpoint}
 	}
+}
+
+// callbackRefusal is the error of a pasted address that holds an error. The text is the user's to
+// paste and reaches the client before any credential exists for core to redact, so it is bounded
+// and cleaned.
+func callbackRefusal(failure string) error {
+	return refused("Claude refused the sign-in: " + sdk.LoginText(failure))
 }
 
 // refused is the error for a sign-in the user or Claude turned down.

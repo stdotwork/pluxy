@@ -52,3 +52,8 @@ func TestLoginErrorTextIsBounded(t *testing.T) {
 		checkLoginError(t, "code "+code[:min(len(code), 10)], tokenError(f), code == hostileCode)
 	}
 }
+
+// The error a pasted address carries is the user's to paste: it is bounded and cleaned too.
+func TestCallbackErrorTextIsBounded(t *testing.T) {
+	checkLoginError(t, "pasted error", callbackRefusal(hostileCode+": "+hostileText()), true)
+}

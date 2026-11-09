@@ -234,7 +234,7 @@ func signInResult(params url.Values, state string) (code string, ok bool, err er
 		return "", false, nil
 	}
 	if e := params.Get("error"); e != "" {
-		return "", true, refused("sign-in was refused: " + e)
+		return "", true, refused("sign-in was refused: " + sdk.LoginText(e))
 	}
 	if code = params.Get("code"); code == "" {
 		return "", true, refused("the sign-in result has no authorization code")

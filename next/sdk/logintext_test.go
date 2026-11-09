@@ -17,6 +17,8 @@ func TestLoginText(t *testing.T) {
 		{"a bearer value", "Authorization: Bearer shortvalue", "Authorization: Bearer [redacted]"},
 		{"a named field", `invalid request: access_token=abc123 and "client_secret": "s3cr3t"`, `invalid request: access_token=[redacted] and "client_secret": "[redacted]"`},
 		{"a device code", "device_code: 4f5g6h", "device_code: [redacted]"},
+		{"an authorization code", "bad authorization_code=abc123 given", "bad authorization_code=[redacted] given"},
+		{"a code verifier", `code_verifier":"short1"`, `code_verifier":"[redacted]"`},
 	} {
 		if got := LoginText(tc.in); got != tc.want {
 			t.Errorf("%s: LoginText(%q) = %q, want %q", tc.name, tc.in, got, tc.want)

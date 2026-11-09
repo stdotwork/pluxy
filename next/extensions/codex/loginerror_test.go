@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -41,4 +42,11 @@ func TestLoginErrorTextIsBounded(t *testing.T) {
 	checkLoginError(t, "long code", loginFailure(400, long), false)
 	withJWT, _ := json.Marshal(map[string]any{"error": map[string]string{"code": hostileJWT}})
 	checkLoginError(t, "token as code", loginFailure(400, withJWT), false)
+}
+
+// The error a browser callback carries reaches the client before any credential exists: it is
+// bounded and cleaned too.
+func TestCallbackErrorTextIsBounded(t *testing.T) {
+	_, _, err := signInResult(url.Values{"state": {"s"}, "error": {hostileCode + ": " + hostileText()}}, "s")
+	checkLoginError(t, "callback error", err, true)
 }

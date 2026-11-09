@@ -16,7 +16,7 @@ var (
 	// bearerValue matches what follows "Bearer" or "Basic".
 	bearerValue = regexp.MustCompile(`(?i)\b(bearer|basic)\s+[^\s"',;]+`)
 	// secretPair matches name=value or name: value for a name that carries a secret.
-	secretPair = regexp.MustCompile(`(?i)\b(access_token|refresh_token|id_token|device_code|client_secret|api[_-]?key|password|secret)\b(["']?\s*[:=]\s*["']?)[^\s"',;&]+`)
+	secretPair = regexp.MustCompile(`(?i)\b(access_token|refresh_token|id_token|device_code|authorization_code|user_code|code_verifier|client_secret|api[_-]?key|password|secret)\b(["']?\s*[:=]\s*["']?)[^\s"',;&]+`)
 )
 
 // LoginText returns provider text for a login error: one line of at most MaxLoginText characters
