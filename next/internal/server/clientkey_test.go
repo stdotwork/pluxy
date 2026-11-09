@@ -37,38 +37,49 @@ func TestAuthorizedMatchesClientKeys(t *testing.T) {
 	}
 }
 
-// How long a check takes must not show how long a configured key is. The same wrong token is
-// checked against a config with a short key and one with a huge key. A comparison of the raw
-// strings takes milliseconds when the lengths are equal and nanoseconds when they differ; hashing
-// the configured key on each request takes time that grows with its length. The check here takes
-// the same time either way: it hashes the token and compares fixed-size digests prepared when the
-// config was loaded. The key is large enough that the gap is not measurement noise.
+// How long a check takes must not show how long the configured keys are. The same wrong token is
+// checked against a config with four 1-byte keys and one with four 4 MiB keys, by a 1-byte token
+// and by a 4 MiB one. Hashing each configured key on each request (an earlier version of the
+// check) costs tens of milliseconds for the long keys against microseconds for the short ones when
+// the token is short; comparing the raw strings (the version before) takes milliseconds for the
+// long keys when the token is as long and nanoseconds for the short ones. This check hashes only
+// the token, once, and compares digests prepared when the config was loaded, so the keys' length
+// costs nothing. The two sides run alternately and each keeps its fastest of ten, so a loaded
+// machine's noise falls on both; only a long-key check clearly slower than the short-key one fails.
 func TestAuthorizedTimeDoesNotShowKeyLength(t *testing.T) {
-	huge := strings.Repeat("k", 8<<20)
-	request := func(token string) *http.Request {
-		r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-		r.Header.Set("Authorization", "Bearer "+token)
-		return r
-	}
-	token := request(strings.Repeat("x", len(huge)))
-	fastest := func(key string) time.Duration {
-		cfg := &Config{ClientKeys: []string{key}}
+	// Four keys of n bytes each, the token's length when it is n bytes long.
+	prepared := func(n int) *Config {
+		pad := strings.Repeat("k", n-1)
+		cfg := &Config{ClientKeys: []string{pad + "1", pad + "2", pad + "3", pad + "4"}}
 		cfg.prepareClientKeys()
-		best := time.Duration(1<<63 - 1)
-		for range 5 {
+		return cfg
+	}
+	short, long := prepared(1), prepared(4<<20)
+	for _, tc := range []struct {
+		name  string
+		token string
+		slow  func(short, long time.Duration) bool
+	}{
+		{"1-byte token", "x", func(short, long time.Duration) bool { return long > short+5*time.Millisecond }},
+		{"4 MiB token", strings.Repeat("x", 4<<20), func(short, long time.Duration) bool { return long > 2*short }},
+	} {
+		r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		r.Header.Set("Authorization", "Bearer "+tc.token)
+		timeIt := func(cfg *Config) time.Duration {
 			start := time.Now()
-			if authorized(cfg, token, false) {
+			if authorized(cfg, r, false) {
 				t.Fatal("a wrong token was authorized")
 			}
-			best = min(best, time.Since(start))
+			return time.Since(start)
 		}
-		return best
-	}
-	short, long := fastest("k"), fastest(huge)
-	// Equal up to noise; a raw comparison differs by a factor of 10^4 or more, and hashing the
-	// key on each request makes the long key cost about twice the short one.
-	if short < long*7/10 || long < short*7/10 {
-		t.Errorf("checking an 8 MiB token took %v against a 1-byte key and %v against an 8 MiB key: the time shows the key's length", short, long)
+		timeIt(short) // warm up
+		fastShort, fastLong := time.Duration(1<<63-1), time.Duration(1<<63-1)
+		for range 10 {
+			fastShort, fastLong = min(fastShort, timeIt(short)), min(fastLong, timeIt(long))
+		}
+		if tc.slow(fastShort, fastLong) {
+			t.Errorf("%s: a check took %v against four 1-byte keys and %v against four 4 MiB keys: the time shows the keys' length", tc.name, fastShort, fastLong)
+		}
 	}
 }
 
