@@ -186,13 +186,7 @@ func alphaSearch(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		e := statusError(resp, req.Model)
-		if e.Code == llm.CodeNotFound && !e.Retryable {
-			// The upstream has no such endpoint (it did not name a missing model). That says
-			// nothing about the model's generation on this account, which a model block would stop.
-			e.Scope = llm.ScopeRequest
-		}
-		return e
+		return endpointStatusError(resp, req.Model)
 	}
 	reply, err := readReply(ctx, resp, "search")
 	if err != nil {
