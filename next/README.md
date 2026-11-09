@@ -173,6 +173,13 @@ at least one key: core does not start on a config without one, and a reload or a
 change that would leave none is refused, keeping the running config. Today's core serves anyone
 who reaches it when it has no client keys.
 
+The example config's client keys (`your-api-key-1`, `your-api-key-2` and `your-api-key-3`) are
+public, so as in today's core (its example API-key safe mode) core starts with one in
+`client_keys` but refuses every client request, with a 403 whose code is `unsafe_example_api_key`,
+until none is left; it logs that at every load, and the management API stays open, so the keys
+can be replaced there. The refusal goes to a request that carries a configured key; a request
+without one gets the 401 it always gets, where today's core answers every request with the 403.
+
 Web pages may call the client API from a browser only from the origins listed in
 `cors.allowed_origins` (each `scheme://host[:port]`, or `"*"` for every origin): core then adds
 the CORS headers to their replies and answers their preflight `OPTIONS` requests with 204 before

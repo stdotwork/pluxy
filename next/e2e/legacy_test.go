@@ -227,13 +227,35 @@ openai-compatibility:
 	if all := logs.waitFor(t, "config revision 1 active"); strings.Contains(all, "not supported yet, ignored") {
 		t.Errorf("core named settings it does not support:\n%s", all)
 	}
-	clientKey := "your-api-key-1" // the example's first client key
-
-	// A request through the provider section's account.
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	resp := post(t, ctx, base, clientKey, `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`)
+
+	// The example's own client keys are public: core starts, says so, and refuses every client
+	// request while one is configured (today's core's example API-key safe mode).
+	resp := post(t, ctx, base, "your-api-key-1", `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`)
 	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "unsafe_example_api_key") {
+		t.Fatalf("an example key: status %d: %s, want 403 unsafe_example_api_key", resp.StatusCode, body)
+	}
+	if !strings.Contains(logs.waitFor(t, ""), "client_keys still holds the example config's public keys") {
+		t.Error("core did not log that the example keys are configured")
+	}
+	// With the keys replaced, a reload serves.
+	clientKey := "e2e-client-key"
+	cfg = replaceOnce(t, cfg, "\n    - \"your-api-key-1\"\n", "\n    - \""+clientKey+"\"\n")
+	cfg = replaceOnce(t, cfg, "\n    - \"your-api-key-2\"\n", "\n")
+	cfg = replaceOnce(t, cfg, "\n    - \"your-api-key-3\"\n", "\n")
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := manage(t, base, http.MethodPost, "/reload", nil, nil); code != http.StatusOK {
+		t.Fatalf("POST /reload: %d", code)
+	}
+
+	// A request through the provider section's account.
+	resp = post(t, ctx, base, clientKey, `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`)
+	body, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("gpt-4o: status %d: %s", resp.StatusCode, body)
