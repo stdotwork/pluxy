@@ -237,7 +237,16 @@ func maskKey(k string) string {
 
 // settingsView is the basic and routing settings, by today's core's names.
 type settingsView struct {
-	Routing routingView `json:"routing"`
+	Routing       routingView       `json:"routing"`
+	Observability observabilityView `json:"observability"`
+}
+
+type observabilityView struct {
+	Usage usageView `json:"usage"`
+}
+
+type usageView struct {
+	UsageStatisticsEnabled bool `json:"usage-statistics-enabled"`
 }
 
 type routingView struct {
@@ -283,7 +292,7 @@ func settings(cfg *server.Config) settingsView {
 		}
 	}
 	v.SessionAffinityTTL = shortDuration(ttl)
-	return settingsView{Routing: v}
+	return settingsView{Routing: v, Observability: observabilityView{Usage: usageView{UsageStatisticsEnabled: cfg.Usage.On()}}}
 }
 
 // shortDuration writes d as today's config does, such as 1h or 1h30m rather than 1h0m0s.

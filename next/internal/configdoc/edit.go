@@ -116,7 +116,19 @@ var strategies = map[string]string{
 // SettingsPatch is a change to the basic and routing settings, with today's core's names for
 // them. A field left out stays as it is.
 type SettingsPatch struct {
-	Routing *RoutingPatch `json:"routing"`
+	Routing       *RoutingPatch       `json:"routing"`
+	Observability *ObservabilityPatch `json:"observability"`
+}
+
+// ObservabilityPatch is a change to the usage and log settings.
+type ObservabilityPatch struct {
+	Usage *UsagePatch `json:"usage"`
+}
+
+// UsagePatch is a change to the usage settings.
+type UsagePatch struct {
+	// UsageStatisticsEnabled turns the usage record on or off.
+	UsageStatisticsEnabled *bool `json:"usage-statistics-enabled"`
 }
 
 // RoutingPatch is a change to the routing settings.
@@ -156,7 +168,27 @@ type RetryPatch struct {
 // ApplySettings writes a settings change into the document, in the file's own names: a JSON
 // config's, or in a config.yaml today's core's.
 func (d *Doc) ApplySettings(p SettingsPatch) error {
-	r := p.Routing
+	if err := d.applyRouting(p.Routing); err != nil {
+		return err
+	}
+	return d.applyObservability(p.Observability)
+}
+
+// applyObservability writes a change to the usage and log settings.
+func (d *Doc) applyObservability(o *ObservabilityPatch) error {
+	if o == nil {
+		return nil
+	}
+	if u := o.Usage; u != nil && u.UsageStatisticsEnabled != nil {
+		if err := d.Set(Bool(*u.UsageStatisticsEnabled), d.place("usage.enabled", "observability.usage.usage-statistics-enabled", "usage-statistics-enabled")...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// applyRouting writes a change to the routing settings.
+func (d *Doc) applyRouting(r *RoutingPatch) error {
 	if r == nil {
 		return nil
 	}
