@@ -1000,11 +1000,13 @@ to `management.secret-key`, or `remote-management.secret-key` when only that is 
 | `routing.cooldown.transient-error-cooldown-seconds` | `routing.transient_error_cooldown_ms` (seconds × 1000) | Seconds a failing upstream cools down: 0 for this core's backoff (1 second doubling to a minute), -1 for none. |
 | `observability.logs.logging-to-file` | `logs.to_file` | `true` or `false`: whether core also writes its log to [files](#log-files). |
 | `observability.logs.logs-max-total-size-mb` | `logs.max_total_size_mb` | Megabytes the logs folder's `.log` files may take; 0 (the default) is no cap. |
+| `observability.logs.request-log` | `logs.request_log` | `true` or `false`: whether every client request is written to a [request log](#request-logs). |
+| `observability.logs.error-logs-max-files` | `logs.error_logs_max_files` | How many error logs are kept, the newest; 0 keeps all. Default 10. |
 | `observability.usage.usage-statistics-enabled` | `usage.enabled` | `true` or `false`: whether core keeps the [usage record](#usage-statistics). On unless the config turns it off. |
 
-The settings shown are those of the running config. Today's other basic settings (the request
-log, `proxy-url`, `ws-auth` and `quota-response-mode`) do not exist in this core yet, and `debug`
-is dropped (this core writes no debug-level lines); `max_attempts`, which today's core has no
+The settings shown are those of the running config. Today's other basic settings (`proxy-url`,
+`ws-auth` and `quota-response-mode`) do not exist in this core yet, and `debug` is dropped (this
+core writes no debug-level lines); `max_attempts`, which today's core has no
 name for, is changed in the document.
 
 ## Usage statistics
@@ -1062,8 +1064,8 @@ dropped. Today's core writes only to the file while the setting is on; this core
 to standard error too. `main.log` is rotated when it reaches 10 MB, as in today's core: it is
 renamed `main-<time>.log` and a new one begins. `logs.max_total_size_mb` (today's
 `logs-max-total-size-mb`) caps the folder: when its `.log` files take more, the oldest are deleted
-first, `main.log` never; 0 (the default) is no cap. The cap is applied when a file is rotated and
-when the setting changes. A change of either setting takes effect at the reload that makes it.
+first, `main.log` never; 0 (the default) is no cap. The cap is applied when a file is rotated, when a
+request log is written and when the setting changes. A change of either setting takes effect at the reload that makes it.
 
 ```json
 {"logs": {"to_file": true, "max_total_size_mb": 100}}
@@ -1071,13 +1073,54 @@ when the setting changes. A change of either setting takes effect at the reload 
 
 | Call | What it does |
 | --- | --- |
-| `GET /v0/management/logs` | Lines of `main.log` and its rotated files, oldest first: with `after` (a time in Unix seconds, such as a reply's `latest-timestamp`), the oldest `limit` lines written after it, so a reader can page forward; without it, the newest `limit` lines. `limit` defaults to 1000, at most 10000. The reply holds `lines`, `line-count` and `latest-timestamp` (the newest returned line's time, in seconds with milliseconds; `after` itself when there is none). A line with no time of its own counts as written with the line before it. |
+| `GET /v0/management/logs` | Lines of `main.log` and its rotated files (not the request logs), oldest first: with `after` (a time in Unix seconds, such as a reply's `latest-timestamp`), the oldest `limit` lines written after it, so a reader can page forward; without it, the newest `limit` lines. `limit` defaults to 1000, at most 10000. The reply holds `lines`, `line-count` and `latest-timestamp` (the newest returned line's time, in seconds with milliseconds; `after` itself when there is none). A line with no time of its own counts as written with the line before it. |
 | `DELETE /v0/management/logs` | Empties `main.log` and deletes its rotated files; replies with `removed`, how many files it deleted. Request logs stay. |
 
 Both answer 400 while logging to file is off, as today's core does. Today's core also takes a
 `cursor` for the logs page; here `after` serves to page forward, with the time to the
 millisecond, so lines written in the same millisecond as `latest-timestamp` after it was read
 are not returned.
+
+## Request logs
+
+With `logs.request_log` on (today's `request-log`), core writes each client request that passed
+the client key check, and its reply, to a file in its logs folder (the folder `logs` beside the
+config file), as today's core does. The file is named after the request's path, its time and its
+trace ID, such as `v1-chat-completions-2026-11-09T120000-20261109120000-3f9a0c2e5b7d4e18.log`,
+and holds today's core's sections: `=== REQUEST INFO ===` (URL, method, time, trace ID and the
+account its last attempt went to), `=== HEADERS ===`, `=== REQUEST BODY ===` and `=== RESPONSE
+===` (status, headers and body). A Responses WebSocket turn is written as one request: the
+client's `response.create` message as its body and, under `=== WEBSOCKET MESSAGES ===`, the
+messages sent back, one per line. A reply over 1 MiB keeps its first 256 KiB and its last 768
+KiB, with a line saying how many bytes were left out between them. While only error logs are
+written, every request keeps its reply's start and end until it ends, in case it fails, so an
+error log keeps less of a reply: the first 32 KiB and the last 96 KiB.
+
+With `logs.request_log` off (the default), core writes only the requests that fail, as
+`error-<name>.log`, as today's core does: a reply status of 400 or more, or a streamed reply that
+fails after it began; a client that goes away is not a failure. `logs.error_logs_max_files`
+(today's `error-logs-max-files`, default 10) keeps the newest of them; 0 keeps them all. Request
+logs count toward `logs.max_total_size_mb`, which is applied after each file is written.
+
+Secrets are left out of every request log: values of headers and query parameters whose names
+hold `authorization`, `api-key`, `apikey`, `api_key`, `token`, `secret`, `cookie` or `password`,
+and `key` (an authorization header keeps its scheme, as in `Bearer [redacted]`), and, anywhere in
+the file, every client key, the management key and every config account's credential, in the
+forms the credential redaction finds (JSON escapes, percent-encoding and the rest). Replies come
+from the extension with the account's own credential already removed. Today's core writes the
+reply's headers unmasked, logs requests that fail the client key check, and also writes what it
+sent to the upstream and what came back; here the upstream exchange happens in the provider
+extension, so request logs hold what the client sent and received.
+
+```json
+{"logs": {"request_log": true, "error_logs_max_files": 10}}
+```
+
+| Call | What it does |
+| --- | --- |
+| `GET /v0/management/request-error-logs` | The error logs, newest first: `files`, each with `name`, `size` and `modified` (Unix seconds). |
+| `GET /v0/management/request-error-logs/{name}` | One error log, as a download. 400 for a name that is not `error-<...>.log`, 404 when there is none. |
+| `GET /v0/management/request-log-by-id/{id}` | The newest request log, plain or error, of the request with that trace ID (the `X-CPA-TRACE-ID` of its reply), as a download; 404 when there is none. |
 
 ## Packages
 
@@ -1278,7 +1321,7 @@ are accepted silently.
 | `multimedia.gpt-image-2-base-model`, `multimedia.video-result-auth-cache-ttl` (each also at the top level) | No image or video routes yet. | Later |
 | `observability.logs.logging-to-file` (`logging-to-file`), `observability.logs.logs-max-total-size-mb` (`logs-max-total-size-mb`) | `logs.to_file` and `logs.max_total_size_mb`: [log files](#log-files). A negative cap is none, as in today's core. | Supported |
 | `observability.logs.debug` (`debug`) | | Dropped: this core writes no debug-level lines |
-| `observability.logs.request-log` (`request-log`), `observability.logs.error-logs-max-files` (`error-logs-max-files`) | | Later |
+| `observability.logs.request-log` (`request-log`), `observability.logs.error-logs-max-files` (`error-logs-max-files`) | `logs.request_log` and `logs.error_logs_max_files`: [request logs](#request-logs). A negative count is the default, 10, as in today's core. | Supported |
 | `observability.usage.usage-statistics-enabled` (`usage-statistics-enabled`) | `usage.enabled`: the [usage record](#usage-statistics). Today's example config sets it to `false`, which turns the record off here too. | Supported |
 | `observability.usage.redis-usage-queue-retention-seconds` (`redis-usage-queue-retention-seconds`) | The record keeps requests by `usage.max_events` and `usage.max_age_ms`. | Dropped: it was how long a queued usage record waited for a reader that removed it; reading the record here removes nothing, and its default of 60 seconds would leave little to read |
 | `observability.pprof.*` (`pprof`) | | Dropped: a developer tool, off by default |

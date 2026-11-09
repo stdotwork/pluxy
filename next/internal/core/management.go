@@ -49,6 +49,8 @@ const maxManagementBody = 1 << 20
 //	GET    /v0/management/usage/events  the recorded requests, a page at a time
 //	GET    /v0/management/logs      lines of core's log files (handleLogs)
 //	DELETE /v0/management/logs      empty main.log and delete its rotated files
+//	GET    /v0/management/request-error-logs  the error logs; .../{name} one of them
+//	GET    /v0/management/request-log-by-id/{id}  the request log of a trace ID
 //
 // Every call needs the active config's management_key as a bearer token. Without a key in the
 // config the API is not served.

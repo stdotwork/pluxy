@@ -4,7 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 
 	"github.com/stdotwork/pluxy/next/internal/logfile"
@@ -21,7 +24,34 @@ const (
 //
 //	GET    /v0/management/logs  lines of core's log files
 //	DELETE /v0/management/logs  empty main.log and delete its rotated files
+//	GET    /v0/management/request-error-logs  the error logs, newest first
+//	GET    /v0/management/request-error-logs/{name}  one error log's file
+//	GET    /v0/management/request-log-by-id/{id}  the request log of the request with a trace ID
 func (c *Core) handleLogs(m *server.Management) {
+	m.Handle("GET /request-error-logs", func(w http.ResponseWriter, r *http.Request) {
+		files, err := server.ErrorLogs(c.logs.Dir())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]string{"code": "internal", "message": err.Error()}})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"files": files})
+	})
+	m.Handle("GET /request-error-logs/{name}", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		if !server.IsErrorLogName(name) {
+			writeLogsError(w, fmt.Errorf("%q is not an error log's name (error-<...>.log)", name))
+			return
+		}
+		c.serveLogFile(w, r, name)
+	})
+	m.Handle("GET /request-log-by-id/{id}", func(w http.ResponseWriter, r *http.Request) {
+		name := server.FindRequestLog(c.logs.Dir(), r.PathValue("id"))
+		if name == "" {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]string{"code": "not_found", "message": "no request log has this trace ID"}})
+			return
+		}
+		c.serveLogFile(w, r, name)
+	})
 	m.Handle("GET /logs", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		var after float64
@@ -59,6 +89,25 @@ func (c *Core) handleLogs(m *server.Management) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"removed": removed})
 	})
+}
+
+// serveLogFile sends the file name in the logs folder as a download.
+func (c *Core) serveLogFile(w http.ResponseWriter, r *http.Request, name string) {
+	f, err := os.Open(filepath.Join(c.logs.Dir(), name))
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]string{"code": "not_found", "message": "no log file of that name"}})
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]string{"code": "not_found", "message": "no log file of that name"}})
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	http.ServeContent(w, r, "", info.ModTime(), f)
 }
 
 func writeLogsError(w http.ResponseWriter, err error) {
