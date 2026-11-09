@@ -46,6 +46,7 @@ func TestDeviceCodeExpiryStopsPolling(t *testing.T) {
 
 // A login host that stops answering fails a renewal instead of holding it.
 func TestRenewalTimesOut(t *testing.T) {
+	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	hung := make(chan struct{})
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
@@ -78,6 +79,7 @@ func TestRenewalTimesOut(t *testing.T) {
 
 // A renewal that fails for now keeps the login host's Retry-After, in seconds or as a date.
 func TestRenewalRetryAfter(t *testing.T) {
+	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	for _, c := range []struct {
 		status int
 		header string

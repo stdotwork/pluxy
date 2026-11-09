@@ -6,7 +6,7 @@
 // Account settings, all optional:
 //
 //	{"base_url": "https://api.openai.com/v1", "codex_identity": true, "image_generation_tool": true,
-//	 "auth_base_url": "https://auth.openai.com", "callback_listen": true, "websockets": false}
+//	 "callback_listen": true, "websockets": false}
 //
 // base_url is where requests go ({base_url}/responses); the default is
 // https://api.openai.com/v1 for an API key and https://chatgpt.com/backend-api/codex for a
@@ -14,7 +14,8 @@
 // Codex terminal client in place of the client's own. image_generation_tool (default true) offers
 // the model the hosted image_generation tool (never to a free plan or a -spark model); both
 // follow what today's core sends.
-// auth_base_url is OpenAI's login server; it is for tests. callback_listen (default true) lets
+// Tests move OpenAI's login to a fake with auth_base_url (sdk.TestLoginHost); in a normal run it is
+// ignored. callback_listen (default true) lets
 // the browser login listen for its redirect on localhost:1455; off, the user pastes the address
 // the browser ended on, as they must when core runs on another machine. websockets (default
 // false, as in today's core) holds sessions for WebSocket clients: their turns go over the
@@ -82,8 +83,8 @@ func (s settings) identity() bool  { return s.CodexIdentity == nil || *s.CodexId
 func (s settings) imageTool() bool { return s.ImageGenerationTool == nil || *s.ImageGenerationTool }
 
 func (s settings) authBase() string {
-	if s.AuthBaseURL != "" {
-		return s.AuthBaseURL
+	if v := sdk.TestLoginHost(s.AuthBaseURL); v != "" {
+		return v
 	}
 	return defaultAuthBaseURL
 }

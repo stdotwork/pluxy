@@ -34,6 +34,11 @@ const (
 	EnvExtensionID      = "PLUXY_EXTENSION_ID"
 )
 
+// EnvTestLoginHosts, set to 1 in core's environment, lets account settings move an extension's
+// login and token endpoints to a test server. Only tests set it. Core passes it on to extensions
+// when it is set; an extension honours such settings only when it holds it (sdk.TestLoginHost).
+const EnvTestLoginHosts = "PLUXY_TEST_LOGIN_HOSTS"
+
 // HandshakeMarker starts the handshake line.
 const HandshakeMarker = "pluxy"
 

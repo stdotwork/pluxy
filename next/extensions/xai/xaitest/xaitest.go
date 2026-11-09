@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/stdotwork/pluxy/next/protocol"
 )
 
 // Request is an API request the server answered with a valid key.
@@ -54,6 +56,8 @@ const Email = "grok-user@example.com"
 
 // New starts a fake that is closed when the test ends.
 func New(t testing.TB) *Server {
+	// The extension honours the fake's address in account settings only under this variable.
+	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	s := &Server{keys: map[string]bool{}, refresh: map[string]bool{}, devices: map[string]*device{}}
 	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
 	t.Cleanup(s.Close)

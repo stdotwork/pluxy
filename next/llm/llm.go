@@ -331,6 +331,11 @@ const (
 	ItemToolCall  = "tool_call"
 )
 
+// OpaqueDevin is the Opaque.Format of a Devin reasoning signature, which has no native format.
+// A Messages client carries it in the thinking block's signature and a streamed Gemini reply in a
+// thought part's thoughtSignature, as today's core does; both give it back on the next turn.
+const OpaqueDevin = "devin"
+
 // Opaque is reasoning state only its provider can read, with the format it came from.
 type Opaque struct {
 	Format string `json:"format"`

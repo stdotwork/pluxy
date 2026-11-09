@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/stdotwork/pluxy/next/protocol"
 )
 
 // ChatPath is the API server's chat method.
@@ -50,6 +52,8 @@ type Server struct {
 
 // New starts a fake that is closed when the test ends.
 func New(t testing.TB) *Server {
+	// The extension honours the fake's address in account settings only under this variable.
+	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	s := &Server{codes: map[string]string{}, tokens: map[string]bool{}}
 	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
 	t.Cleanup(s.Close)

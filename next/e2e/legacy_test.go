@@ -152,7 +152,13 @@ func TestTodaysConfigAndAuthFolder(t *testing.T) {
 			"account_id": "acct-e2e", "email": "user@example.com", "expired": expired},
 		"claude-user@example.com.json": {"type": "claude", "access_token": "fake-claude-access",
 			"refresh_token": "fake-claude-refresh", "email": "user@example.com", "expired": expired, "disabled": true},
-		"antigravity-user@example.com.json": {"type": "antigravity", "access_token": "fake-antigravity-access"},
+		"antigravity-user@example.com.json": {"type": "antigravity", "access_token": "fake-antigravity-access", "refresh_token": "fake-antigravity-refresh",
+			"project_id": "proj-e2e", "expired": expired},
+		"xai-grok@example.com.json": {"type": "xai", "auth_kind": "oauth", "access_token": "fake-xai-access", "refresh_token": "fake-xai-refresh",
+			"email": "grok@example.com", "expired": expired},
+		"meta-muse.json":  {"type": "meta", "auth_kind": "oauth", "api_key": "fake-meta-key", "dca_token": "dca:fake-meta-device"},
+		"devin-user.json": {"type": "devin", "auth_kind": "oauth", "session_token": "fake-devin-token", "user_name": "dev-user"},
+		"gemini-old.json": {"type": "gemini", "access_token": "fake-gemini-access"},
 	} {
 		b, _ := json.Marshal(v)
 		if err := os.WriteFile(filepath.Join(authDir, name), b, 0o600); err != nil {
@@ -201,8 +207,12 @@ openai-compatibility:
 		"imported kimi-1700000000000.json as account kimi-1700000000000 (pluxy/kimi)",
 		"imported codex-ab12cd34-user@example.com-plus.json as account codex-ab12cd34-user-example.com-plus (pluxy/codex)",
 		"imported claude-user@example.com.json as account claude-user-example.com (pluxy/claude)",
-		"skipped antigravity-user@example.com.json: no extension signs in to antigravity accounts yet",
-		"3 imported, 1 skipped",
+		"imported antigravity-user@example.com.json as account antigravity-user-example.com (pluxy/antigravity)",
+		"imported xai-grok@example.com.json as account xai-grok-example.com (pluxy/xai)",
+		"imported meta-muse.json as account meta-muse (pluxy/meta)",
+		"imported devin-user.json as account devin-user (pluxy/devin)",
+		"skipped gemini-old.json: today's core does not load it either",
+		"7 imported, 1 skipped",
 	} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("import output lacks %q", want)
@@ -270,6 +280,10 @@ openai-compatibility:
 		"kimi-1700000000000":                   "login oauth false",
 		"codex-ab12cd34-user-example.com-plus": "login oauth false",
 		"claude-user-example.com":              "login oauth true",
+		"antigravity-user-example.com":         "login oauth false",
+		"xai-grok-example.com":                 "login oauth false",
+		"meta-muse":                            "login oauth false",
+		"devin-user":                           "login api_key false",
 	} {
 		if got[id] != want {
 			t.Errorf("account %s: %q, want %q (all: %v)", id, got[id], want, got)

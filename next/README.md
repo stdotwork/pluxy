@@ -155,7 +155,6 @@ replaying the block sends the reasoning back, so it carries over between turns. 
 | `image_generation_tool` | Default `true`: offer the hosted `image_generation` tool, as today's core does (never to a free plan or a `-spark` model). |
 | `callback_listen` | Default `true`: let a browser sign-in listen on `localhost:1455`. |
 | `websockets` | Default `false`: send a Responses WebSocket client's turns to `{base_url}/responses` over one upstream WebSocket per client socket (Codex's WebSocket transport), as today's core does with `websockets: true`. A socket the upstream drops is not replaced in the middle of a turn: the client gets `upstream_websocket_lost` and sends the whole conversation again. |
-| `auth_base_url` | OpenAI's login server; for tests. |
 
 ## Claude
 
@@ -176,7 +175,7 @@ Anthropic. Core renews a subscription's token an hour before it expires.
 | Setting | Meaning |
 | --- | --- |
 | `base_url` | Where the Messages API is. Default `https://api.anthropic.com`; requests go to `{base_url}/v1/messages`. |
-| `authorize_url`, `token_url`, `client_id` | Claude's OAuth sign-in page, token endpoint and client, for a test server. Defaults are Claude's. |
+| `client_id` | Claude's OAuth client. Default is Claude's. |
 
 A Messages request goes to Anthropic unchanged: its body, so thinking blocks, signatures and
 `cache_control` markers arrive as the client wrote them, and its `anthropic-version`,
@@ -263,7 +262,6 @@ expires. A Kimi Code API key works too, as an account in the config; it has no l
 | --- | --- |
 | `domain` | `kimi.com` (default) or `kimi.ai`, the site the account belongs to. |
 | `base_url` | Where Kimi Code's API is. Default `https://api.{domain}/coding`; a trailing `/v1` is taken as the same place. |
-| `auth_base_url` | Kimi's login host, for a test server. Default `https://auth.{domain}`. |
 
 Kimi Code takes Chat Completions at `{base_url}/v1/chat/completions`, Responses at
 `/v1/responses` and Messages at `/v1/messages`; each client format goes to its own, and a Gemini
@@ -310,7 +308,6 @@ sends them on every request of a login.
 | --- | --- |
 | `base_url` | Where xAI's API lives. Default `https://api.x.ai/v1`; requests go to `{base_url}/responses`. For a Grok login, the default means the Grok CLI's endpoint. |
 | `client_version` | Replaces the Grok CLI version a login's requests name (default 1.0.46). |
-| `auth_issuer` | Moves xAI's sign-in to a test server; its own address is then allowed for the login endpoints. |
 
 Every client format goes to xAI's Responses API. A Responses client's request passes through with
 the changes listed below. Chat Completions, Messages and Gemini clients are translated to
@@ -383,8 +380,6 @@ as a key:
 | Setting | Meaning |
 | --- | --- |
 | `base_url` | Meta's API (requests go to `{base_url}/responses`). Default: where the key endpoint said, for a login; `https://api.meta.ai/v1` otherwise. |
-| `auth_base_url` | Meta's login host, for a test server. Default `https://auth.meta.com`. |
-| `mint_url` | Meta's key endpoint, for a test server. Default `https://api.meta.ai/muse-code/key`. |
 
 Every client format goes to Meta's Responses API: a Responses body passes through, and the other
 formats are translated to Responses. As today's core sends them, every request is streamed (a
@@ -440,7 +435,6 @@ An account written in the config holds the same credential:
 | --- | --- |
 | `base_url` | The Cloud Code host (default `https://daily-cloudcode-pa.googleapis.com`, the one today's core uses); the project calls go there too. |
 | `user_agent` | Replaces the Antigravity app's User-Agent (`antigravity/hub/2.29.0 (aidev_client; ...)`). |
-| `auth_base_url` | Moves Google's sign-in, token and user info endpoints to a test server. |
 | `callback_listen` | `false` keeps the login from listening on port 51121; only a pasted address finishes it. |
 
 A request is built as a Gemini GenerateContent body: a Gemini client's own, or a translation of
@@ -499,7 +493,6 @@ user name. An account written in the config holds the token the same way:
 | --- | --- |
 | `base_url` | Devin's API server (default `https://server.codeium.com`, as today's core uses). |
 | `device_seed` | Makes the device fingerprint every request carries the same each time, as today's core's `device_seed`; without it the fingerprint is random per request. |
-| `app_base_url`, `api_base_url` | Move Devin's sign-in page and login API to a test server. |
 | `callback_listen` | `false` keeps the login from listening for the browser; the user pastes the code. |
 
 Every client format is sent as Devin's chat request, a protobuf message over Connect, to
@@ -637,6 +630,12 @@ send it as a bearer token. With a management key set, the config may set no acco
 | `DELETE /accounts/{id}` | Removes the account and its credential. |
 
 Accounts set in the config are listed but changed only in the config.
+
+A login's codes and a renewal's refresh token go only to the provider's own login hosts, over
+HTTPS. No account setting moves them; `base_url`, where requests go, is a setting. Tests that
+sign in to a fake provider start core with `PLUXY_TEST_LOGIN_HOSTS=1` in its environment, which
+core passes on to its extensions and which makes them take the fake's address from the account's
+settings (`auth_base_url` and the like) instead of ignoring it. Never set it in a real run.
 
 ## Reloading config and swapping extensions
 
@@ -926,7 +925,10 @@ use it from one core only, or sign in again in the other.
 | `claude` | `pluxy/claude` subscription account | `access_token`, `refresh_token`, `expired`. |
 | `kimi`, `kimi-ai` | `pluxy/kimi` account | `access_token`, `refresh_token`, `expired`, `device_id`; `base_url` is an account setting, and so is the site, `domain`, decided as today's core decides it: from `domain`, else `base_url`'s host, else the type (`kimi.ai` for `kimi-ai`). |
 | `vertex` | `pluxy/gemini` Vertex AI account with a service account | `service_account` is the credential; `project_id` and `location` (default `us-central1`, as in today's core) are the account's `vertex` settings. |
-| `antigravity`, `meta`, `devin`, `xai` | Skipped, named in the output | No extension signs in to these yet. |
+| `antigravity` | `pluxy/antigravity` account | `access_token`, `refresh_token`, `expired`; `project_id` stays with the credential and `base_url` is an account setting. The file holds no OAuth client secret (today's core has it built in), so the account serves requests until its token expires; renewing it needs a new login (`POST /accounts/{id}/login`), which asks for the secret. |
+| `xai` | `pluxy/xai` Grok login account | `access_token`, `refresh_token`, `expired`; `token_endpoint` stays with the credential and `base_url` is an account setting. |
+| `meta` | `pluxy/meta` Muse Code login account | `api_key` (else `access_token`) is the minted key and `dca_token` (else a `dca:` `access_token`) the device token that mints a new one; `base_url` stays with the credential. A file with only the device token mints its key on the first request. |
+| `devin` | `pluxy/devin` account with a session token | `session_token` (else `api_key`) is the credential; `base_url` is an account setting and `user_name` the label when the file has no `label` or `email`. |
 | anything else | Skipped, named in the output | Today's core does not load a file with no `type` or with `gemini` either. |
 
 From every file: `disabled: true` imports the account disabled, `priority` and `weight` are the

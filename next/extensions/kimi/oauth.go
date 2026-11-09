@@ -64,6 +64,18 @@ func login(ctx context.Context, call sdk.LoginCall, s *sdk.LoginSession) (*proto
 	return deviceLogin(ctx, set, s)
 }
 
+// waitPoll waits d between token polls, and reports false when ctx ends first. Tests replace it.
+var waitPoll = func(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
 func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant, error) {
 	deviceID := newDeviceID()
 	var dc struct {
@@ -77,39 +89,38 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 	if f := oauthPost(ctx, set.AuthBaseURL+"/api/oauth/device_authorization", deviceID, url.Values{"client_id": {clientID}}, &dc); f != nil {
 		return nil, requestError(ctx, f)
 	}
+	// The code's life and the poll interval are the server's numbers: bounded, so a huge one cannot
+	// overflow a duration and a negative one cannot make a tight polling loop.
+	lifetime := sdk.BoundSeconds(dc.ExpiresIn, sdk.MaxLoginWait)
 	if err := s.Prompt(protocol.Prompt{
 		Kind:                    protocol.PromptDevice,
 		Message:                 "Open Kimi's page and enter the code to sign in to Kimi Code.",
 		UserCode:                dc.UserCode,
 		VerificationURI:         dc.VerificationURI,
 		VerificationURIComplete: dc.VerificationURIComplete,
-		ExpiresIn:               dc.ExpiresIn,
+		ExpiresIn:               int64(lifetime / time.Second),
 	}); err != nil {
 		return nil, err
 	}
 	interval := defaultPollInterval
-	if dc.Interval > 0 {
-		interval = time.Duration(dc.Interval) * time.Second
+	if d := sdk.BoundSeconds(dc.Interval, sdk.MaxPollInterval); d > 0 {
+		interval = d
 	}
-	if dc.ExpiresIn > 0 {
+	if lifetime > 0 {
 		// Polling past the code's lifetime only earns expired_token; stop when it ends.
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithDeadline(ctx, time.Now().Add(time.Duration(dc.ExpiresIn)*time.Second))
+		ctx, cancel = context.WithDeadline(ctx, time.Now().Add(lifetime))
 		defer cancel()
 	}
 	expired := func(parent error) error {
-		if errors.Is(parent, context.DeadlineExceeded) && dc.ExpiresIn > 0 {
+		if errors.Is(parent, context.DeadlineExceeded) && lifetime > 0 {
 			return refused("the code expired before it was approved; start the login again")
 		}
 		return parent
 	}
 	for {
-		timer := time.NewTimer(interval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
+		if !waitPoll(ctx, interval) {
 			return nil, expired(ctx.Err())
-		case <-timer.C:
 		}
 		var tr tokenResponse
 		f := oauthPost(ctx, set.AuthBaseURL+"/api/oauth/token", deviceID, url.Values{
@@ -175,8 +186,8 @@ func (tr *tokenResponse) credential(deviceID, oldRefresh string) *protocol.Crede
 	if c.RefreshToken == "" {
 		c.RefreshToken = oldRefresh
 	}
-	if tr.ExpiresIn > 0 {
-		c.ExpiresAt = time.Now().Unix() + tr.ExpiresIn
+	if exp := sdk.ExpiryUnix(time.Now(), tr.ExpiresIn); exp > 0 {
+		c.ExpiresAt = exp
 		c.RefreshAt = c.ExpiresAt - int64(refreshLead/time.Second)
 	}
 	c.Data, _ = json.Marshal(credentialData{DeviceID: deviceID})
@@ -219,7 +230,7 @@ func oauthPost(ctx context.Context, endpoint, deviceID string, form url.Values, 
 			Error string `json:"error"`
 		}
 		_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
-		return &oauthFailure{status: resp.StatusCode, code: e.Error, retryAfterMS: retryAfter(resp.Header.Get("Retry-After"), time.Now())}
+		return &oauthFailure{status: resp.StatusCode, code: sdk.LoginCode(e.Error), retryAfterMS: retryAfter(resp.Header.Get("Retry-After"), time.Now())}
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(out); err != nil {
 		return &oauthFailure{status: resp.StatusCode, err: fmt.Errorf("the reply is not valid JSON: %w", err)}

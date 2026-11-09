@@ -82,12 +82,31 @@ func TestReadAuthDir(t *testing.T) {
 				"token_uri": "https://oauth2.googleapis.com/token",
 			},
 		},
-		"antigravity-user@example.com.json": map[string]any{"type": "antigravity", "access_token": "fake"},
-		"gemini-old.json":                   map[string]any{"type": "gemini", "access_token": "fake"},
-		"notype.json":                       map[string]any{"access_token": "fake"},
-		"broken.json":                       []byte("{"),
-		"codex-empty.json":                  map[string]any{"type": "codex"},
-		"notes.txt":                         []byte("not a credential"),
+		"antigravity-user@example.com.json": map[string]any{
+			"type": "antigravity", "access_token": "fake-ag-access", "refresh_token": "fake-ag-refresh", "expires_in": 3599,
+			"timestamp": 1767225600000, "expired": exp.Format(time.RFC3339), "email": "user@example.com",
+			"project_id": "proj-1", "base_url": "http://127.0.0.1:2", "antigravity_capability_hints": map[string]any{"model_ids": []any{"m"}},
+		},
+		"xai-user-ab12.json": map[string]any{
+			"type": "xai", "auth_kind": "oauth", "access_token": "fake-xai-access", "refresh_token": "fake-xai-refresh",
+			"expired": exp.Format(time.RFC3339), "email": "grok@example.com", "base_url": "http://127.0.0.1:3/v1",
+			"token_endpoint": "https://auth.x.ai/oauth2/token",
+		},
+		"meta-minted.json": map[string]any{
+			"type": "meta", "auth_kind": "oauth", "access_token": "fake-meta-key", "api_key": "fake-meta-key",
+			"dca_token": "dca:fake-meta-device", "base_url": "https://api.meta.ai/v1", "email": "muse@example.com",
+		},
+		"meta-unminted.json": map[string]any{"type": "meta", "auth_kind": "oauth", "access_token": "dca:fake-meta-only"},
+		"devin-user.json": map[string]any{
+			"type": "devin", "auth_kind": "oauth", "api_key": "fake-devin-token", "session_token": "fake-devin-token",
+			"user_name": "dev-user", "user_id": "u1", "base_url": "http://127.0.0.1:4",
+		},
+		"devin-empty.json": map[string]any{"type": "devin"},
+		"gemini-old.json":  map[string]any{"type": "gemini", "access_token": "fake"},
+		"notype.json":      map[string]any{"access_token": "fake"},
+		"broken.json":      []byte("{"),
+		"codex-empty.json": map[string]any{"type": "codex"},
+		"notes.txt":        []byte("not a credential"),
 	})
 	files, skipped, err := ReadAuthDir(dir, ImportOptions{CodexIdentity: false, ImageGenerationTool: true}, now)
 	if err != nil {
@@ -97,8 +116,8 @@ func TestReadAuthDir(t *testing.T) {
 	for _, f := range files {
 		got[f.Record.ID] = f
 	}
-	if len(got) != 4 {
-		t.Fatalf("read %d accounts, want 4: %v", len(got), got)
+	if len(got) != 9 {
+		t.Fatalf("read %d accounts, want 9: %v", len(got), got)
 	}
 
 	c := got["codex-ab12cd34-user-example.com-plus"]
@@ -139,16 +158,58 @@ func TestReadAuthDir(t *testing.T) {
 	// replies, so plain fields such as the project would be cut out of model output.
 	equalJSON(t, v.Record.Credential.Data, `{"client_email": "sa@my-project.iam.gserviceaccount.com", "private_key": `+mustJSON(key)+`}`)
 
+	ag := got["antigravity-user-example.com"]
+	if ag.Record.Extension != Antigravity || ag.Record.Label != "user@example.com" {
+		t.Errorf("antigravity record: %+v", ag.Record)
+	}
+	agc := ag.Record.Credential
+	if agc.Kind != protocol.CredentialOAuth || agc.AccessToken != "fake-ag-access" || agc.RefreshToken != "fake-ag-refresh" ||
+		agc.ExpiresAt != exp.Unix() || agc.RefreshAt != exp.Add(-30*time.Minute).Unix() {
+		t.Errorf("antigravity credential: %+v", agc)
+	}
+	equalJSON(t, agc.Data, `{"project_id": "proj-1"}`)
+	equalJSON(t, ag.Record.Account.Settings, `{"base_url": "http://127.0.0.1:2"}`)
+
+	x := got["xai-user-ab12"]
+	xc := x.Record.Credential
+	if x.Record.Extension != XAI || x.Record.Label != "grok@example.com" || xc.Kind != protocol.CredentialOAuth ||
+		xc.AccessToken != "fake-xai-access" || xc.RefreshToken != "fake-xai-refresh" ||
+		xc.ExpiresAt != exp.Unix() || xc.RefreshAt != exp.Add(-5*time.Minute).Unix() {
+		t.Errorf("xai: %+v", x.Record)
+	}
+	equalJSON(t, xc.Data, `{"token_endpoint": "https://auth.x.ai/oauth2/token"}`)
+	equalJSON(t, x.Record.Account.Settings, `{"base_url": "http://127.0.0.1:3/v1"}`)
+
+	mm := got["meta-minted"]
+	mc := mm.Record.Credential
+	if mm.Record.Extension != Meta || mm.Record.Label != "muse@example.com" || mc.Kind != protocol.CredentialOAuth ||
+		mc.AccessToken != "fake-meta-key" || mc.RefreshToken != "dca:fake-meta-device" || mc.RefreshAt != 0 {
+		t.Errorf("meta: %+v", mm.Record)
+	}
+	equalJSON(t, mc.Data, `{"base_url": "https://api.meta.ai/v1"}`)
+	// A login with no key minted yet has only the device token, so core mints a key at once.
+	mu := got["meta-unminted"].Record.Credential
+	if mu.AccessToken != "" || mu.RefreshToken != "dca:fake-meta-only" || mu.RefreshAt != now.Unix() {
+		t.Errorf("meta without a key: %+v", mu)
+	}
+
+	d := got["devin-user"]
+	if d.Record.Extension != Devin || d.Record.Label != "dev-user" || d.Record.Credential.Kind != protocol.CredentialAPIKey ||
+		d.Record.Credential.APIKey != "fake-devin-token" {
+		t.Errorf("devin: %+v", d.Record)
+	}
+	equalJSON(t, d.Record.Account.Settings, `{"base_url": "http://127.0.0.1:4"}`)
+
 	reasons := map[string]string{}
 	for _, s := range skipped {
 		reasons[s.File] = s.Reason
 	}
 	for file, want := range map[string]string{
-		"antigravity-user@example.com.json": "no extension signs in to antigravity accounts yet",
-		"gemini-old.json":                   "today's core does not load it either",
-		"notype.json":                       "today's core does not load it either",
-		"broken.json":                       "not a JSON object",
-		"codex-empty.json":                  "it holds no token",
+		"devin-empty.json": "it holds no token",
+		"gemini-old.json":  "today's core does not load it either",
+		"notype.json":      "today's core does not load it either",
+		"broken.json":      "not a JSON object",
+		"codex-empty.json": "it holds no token",
 	} {
 		if reasons[file] != want {
 			t.Errorf("%s skipped for %q, want %q", file, reasons[file], want)

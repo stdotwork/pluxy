@@ -184,6 +184,9 @@ func (e *Extension) start(prog string, deadline time.Time) error {
 	if runtime.GOOS == "windows" {
 		cmd.Env = append(cmd.Env, "SYSTEMROOT="+os.Getenv("SYSTEMROOT"))
 	}
+	if v := os.Getenv(protocol.EnvTestLoginHosts); v != "" {
+		cmd.Env = append(cmd.Env, protocol.EnvTestLoginHosts+"="+v)
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err

@@ -234,7 +234,7 @@ func signInResult(params url.Values, state string) (code string, ok bool, err er
 		return "", false, nil
 	}
 	if e := params.Get("error"); e != "" {
-		return "", true, refused("sign-in was refused: " + e)
+		return "", true, refused("sign-in was refused: " + sdk.LoginText(e))
 	}
 	if code = params.Get("code"); code == "" {
 		return "", true, refused("the sign-in result has no authorization code")
@@ -325,9 +325,9 @@ func (tr *tokenResponse) credential(data credentialData, oldRefresh string) *pro
 	if c.RefreshToken == "" {
 		c.RefreshToken = oldRefresh
 	}
-	if tr.ExpiresIn > 0 {
+	if exp := sdk.ExpiryUnix(time.Now(), tr.ExpiresIn); exp > 0 {
 		now := time.Now()
-		c.ExpiresAt = now.Unix() + tr.ExpiresIn
+		c.ExpiresAt = exp
 		if at := time.Unix(c.ExpiresAt, 0).Add(-refreshLead); at.After(now) {
 			c.RefreshAt = at.Unix()
 		}
@@ -544,12 +544,15 @@ func loginFailure(status int, body []byte) *llm.Error {
 		_ = json.Unmarshal(b.Error, &o)
 		code, b.Description = o.Status, o.Message
 	}
+	// The code and the description are the provider's text, shown to the client before any
+	// credential exists for core to redact: both are bounded and cleaned.
+	code = sdk.LoginCode(code)
 	msg := fmt.Sprintf("Google answered %d", status)
 	if code != "" {
 		msg += " (" + code + ")"
 	}
-	if b.Description != "" {
-		msg += ": " + b.Description
+	if d := sdk.LoginText(b.Description); d != "" {
+		msg += ": " + d
 	}
 	switch {
 	case code == "invalid_grant" || code == "invalid_client" || code == "unauthorized_client":

@@ -6,8 +6,8 @@
 //	{"base_url": "https://api.anthropic.com"}
 //
 // base_url is where the Messages API lives; requests go to {base_url}/v1/messages. The OAuth
-// endpoints and client can be changed with authorize_url, token_url and client_id, for a test
-// server; see oauth.go.
+// client can be changed with client_id; tests move the sign-in page and token endpoint to a fake
+// with authorize_url and token_url (sdk.TestLoginHost), which a normal run ignores; see oauth.go.
 //
 // Credentials: an api_key credential is sent in x-api-key, as Anthropic's API defines; an oauth
 // credential (a subscription login) is sent as a bearer token, with the OAuth beta added to
@@ -92,10 +92,10 @@ func readSettings(raw json.RawMessage) (settings, error) {
 		s.BaseURL = defaultBaseURL
 	}
 	s.BaseURL = strings.TrimRight(s.BaseURL, "/")
-	if s.AuthorizeURL == "" {
+	if s.AuthorizeURL = sdk.TestLoginHost(s.AuthorizeURL); s.AuthorizeURL == "" {
 		s.AuthorizeURL = defaultAuthorizeURL
 	}
-	if s.TokenURL == "" {
+	if s.TokenURL = sdk.TestLoginHost(s.TokenURL); s.TokenURL == "" {
 		s.TokenURL = defaultTokenURL
 	}
 	if s.ClientID == "" {

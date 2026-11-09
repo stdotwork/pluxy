@@ -676,3 +676,36 @@ func TestStreamWriterBoundsLosses(t *testing.T) {
 		t.Errorf("last loss is %+v, want %+v", got, want)
 	}
 }
+
+// A Devin reasoning signature is written in a thought part of its own in a streamed reply, as
+// today's core writes it, and left out of an unstreamed one, which reports it as dropped.
+func TestDevinReasoningSignature(t *testing.T) {
+	events := []llm.Event{
+		{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "id1", Model: "m"}},
+		{Type: llm.EventItemStart, Index: 0, Item: &llm.ItemStart{Kind: llm.ItemReasoning}},
+		{Type: llm.EventReasoningDelta, Index: 0, Delta: "think"},
+		{Type: llm.EventItemEnd, Index: 0, Opaque: &llm.Opaque{Format: llm.OpaqueDevin, Data: "sealed"}},
+		{Type: llm.EventFinish, Finish: &llm.Finish{Reason: llm.FinishStop}},
+	}
+	got := dataLines(t, writeStream(t, events))
+	if len(got) != 3 {
+		t.Fatalf("%d chunks, want 3 (the thought, its signature, the last): %q", len(got), got)
+	}
+	sameJSON(t, "signature chunk", []byte(got[1]), `{"candidates":[{"content":{"role":"model","parts":[`+
+		`{"text":"","thought":true,"thoughtSignature":"sealed"}]},"index":0}],"modelVersion":"m","responseId":"id1"}`)
+
+	a := NewAggregator()
+	for _, ev := range events {
+		a.Add(ev)
+	}
+	body, err := a.Response()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "sealed") {
+		t.Errorf("the unstreamed reply carries the signature: %s", body)
+	}
+	if l := a.Losses(); len(l) != 1 || l[0].Path != "content.thoughtSignature" {
+		t.Errorf("losses = %+v, want the signature reported as dropped", l)
+	}
+}

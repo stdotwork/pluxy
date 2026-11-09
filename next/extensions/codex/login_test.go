@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -87,6 +89,7 @@ func TestThinkingSuffix(t *testing.T) {
 // A login server reply that redirects is not followed: following a 307 would send the refresh
 // token (or an authorization code and its verifier) to wherever the redirect points.
 func TestTokenEndpointRedirectIsNotFollowed(t *testing.T) {
+	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	var reached atomic.Int32
 	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached.Add(1) }))
 	defer elsewhere.Close()
@@ -140,5 +143,32 @@ func TestSignInResultChecksStateFirst(t *testing.T) {
 	h(rec, httptest.NewRequest(http.MethodGet, callbackPath+"?code=c&state="+state, nil))
 	if rec.Code != http.StatusOK || len(results) != 1 {
 		t.Errorf("this login's callback: status %d, %d results passed on", rec.Code, len(results))
+	}
+}
+
+// The goroutine that forwards login input ends once the login's context is cancelled, even with
+// input it cannot hand over: nothing reads the inputs after the login ends.
+func TestForwardInputsStops(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	input := func(ctx context.Context) (map[string]string, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return map[string]string{"redirect_url": "x"}, nil
+	}
+	forwardInputs(ctx, input)
+	// Let the forwarder fill the inputs and block handing over the next one.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		buf := make([]byte, 1<<20)
+		if !strings.Contains(string(buf[:runtime.Stack(buf, true)]), "forwardInputs.func1") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the input forwarder still runs after the login was cancelled")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

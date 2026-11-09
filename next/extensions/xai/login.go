@@ -149,6 +149,9 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 	if json.Unmarshal(body, &dc) != nil || dc.DeviceCode == "" || dc.UserCode == "" || dc.VerificationURI == "" && dc.VerificationURIComplete == "" {
 		return nil, &llm.Error{Code: llm.CodeUpstream, Message: "xAI's login sent no device code", Scope: llm.ScopeEndpoint}
 	}
+	// The code's life and the poll interval are the server's numbers: bounded, so a huge one cannot
+	// overflow a duration and a negative one cannot make a tight polling loop.
+	lifetime := sdk.BoundSeconds(dc.ExpiresIn, sdk.MaxLoginWait)
 	verify := dc.VerificationURI
 	if verify == "" {
 		verify = dc.VerificationURIComplete
@@ -159,17 +162,17 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 		UserCode:                dc.UserCode,
 		VerificationURI:         verify,
 		VerificationURIComplete: dc.VerificationURIComplete,
-		ExpiresIn:               dc.ExpiresIn,
+		ExpiresIn:               int64(lifetime / time.Second),
 	}); err != nil {
 		return nil, err
 	}
 	interval := minPollInterval
-	if d := time.Duration(dc.Interval) * time.Second; d > interval {
+	if d := sdk.BoundSeconds(dc.Interval, sdk.MaxPollInterval); d > interval {
 		interval = d
 	}
 	wait := maxPollDuration
-	if d := time.Duration(dc.ExpiresIn) * time.Second; d > 0 && d < wait {
-		wait = d
+	if lifetime > 0 && lifetime < wait {
+		wait = lifetime
 	}
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
@@ -238,8 +241,8 @@ func grantFrom(body []byte, tokenEndpoint, oldRefresh string) (*protocol.Grant, 
 	}
 	data, _ := json.Marshal(credentialData{TokenEndpoint: tokenEndpoint})
 	c := &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: t.AccessToken, RefreshToken: t.RefreshToken, Data: data}
-	if t.ExpiresIn > 0 {
-		c.ExpiresAt = time.Now().Unix() + t.ExpiresIn
+	if exp := sdk.ExpiryUnix(time.Now(), t.ExpiresIn); exp > 0 {
+		c.ExpiresAt = exp
 		c.RefreshAt = c.ExpiresAt - int64(refreshLead.Seconds())
 	}
 	return &protocol.Grant{Credential: c, Label: idTokenEmail(t.IDToken)}, nil
@@ -338,12 +341,15 @@ func loginFailure(status int, body []byte, h http.Header) *llm.Error {
 		Description string `json:"error_description"`
 	}
 	_ = json.Unmarshal(body, &b)
+	// The code and the description are the provider's text, shown to the client before any
+	// credential exists for core to redact: both are bounded and cleaned.
+	code := sdk.LoginCode(b.Error)
 	msg := fmt.Sprintf("xAI's login answered %d", status)
-	if b.Error != "" {
-		msg += " (" + b.Error + ")"
+	if code != "" {
+		msg += " (" + code + ")"
 	}
-	if b.Description != "" {
-		msg += ": " + b.Description
+	if d := sdk.LoginText(b.Description); d != "" {
+		msg += ": " + d
 	}
 	terminal := false
 	for _, t := range terminalGrantErrors {
@@ -354,13 +360,13 @@ func loginFailure(status int, body []byte, h http.Header) *llm.Error {
 	wait := retryAfter(h.Get("Retry-After"), time.Now())
 	switch {
 	case terminal || status == http.StatusUnauthorized || status == http.StatusForbidden:
-		return &llm.Error{Code: llm.CodeAuth, Message: msg + "; log in again", Status: status, ProviderCode: b.Error, Scope: llm.ScopeCredential}
+		return &llm.Error{Code: llm.CodeAuth, Message: msg + "; log in again", Status: status, ProviderCode: code, Scope: llm.ScopeCredential}
 	case status == http.StatusTooManyRequests:
-		return &llm.Error{Code: llm.CodeRateLimit, Message: msg, Status: status, ProviderCode: b.Error, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: wait}
+		return &llm.Error{Code: llm.CodeRateLimit, Message: msg, Status: status, ProviderCode: code, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: wait}
 	case status >= 500:
 		return &llm.Error{Code: llm.CodeUnavailable, Message: msg, Status: status, Retryable: true, Scope: llm.ScopeEndpoint, RetryAfterMS: wait}
 	}
-	return &llm.Error{Code: llm.CodeUpstream, Message: msg, Status: status, ProviderCode: b.Error, Scope: llm.ScopeEndpoint}
+	return &llm.Error{Code: llm.CodeUpstream, Message: msg, Status: status, ProviderCode: code, Scope: llm.ScopeEndpoint}
 }
 
 // hideSecrets returns err with each secret in its message replaced, for errors whose message

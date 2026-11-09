@@ -148,9 +148,12 @@ func BuildExtension(t *testing.T, manifest, pkg string) string {
 	return copyPath
 }
 
-// Run runs every check as a subtest of t.
+// Run runs every check as a subtest of t. It starts the extension with protocol.EnvTestLoginHosts
+// set to 1 (see sdk.TestLoginHost), so an extension that signs in can send its login and token
+// requests to the fixture's fake provider, which its account settings name.
 func Run(t *testing.T, target Target) {
 	t.Helper()
+	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	m, err := host.LoadManifest(target.Manifest)
 	if err != nil {
 		t.Fatal(err)

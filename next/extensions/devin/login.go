@@ -131,11 +131,7 @@ func browserLogin(ctx context.Context, set settings, s *sdk.LoginSession) (*prot
 			params = p.params
 		}
 		if e := params.Get("error"); e != "" {
-			detail := e
-			if d := params.Get("error_description"); d != "" {
-				detail += ": " + d
-			}
-			return nil, refused("Devin refused the sign-in (" + detail + ")")
+			return nil, signInRefusal(e, params.Get("error_description"))
 		}
 		if st := params.Get("state"); st != "" && st != state {
 			prompt.Message = "That address is not the result of this sign-in; open the link, sign in, and paste the code Devin shows."
@@ -372,6 +368,19 @@ func loginFailure(what string, status int) *llm.Error {
 		return &llm.Error{Code: llm.CodeUnavailable, Message: msg, Status: status, Retryable: true, Scope: llm.ScopeEndpoint}
 	}
 	return &llm.Error{Code: llm.CodeAuth, Message: msg + "; sign in again", Status: status, Scope: llm.ScopeCredential}
+}
+
+// signInRefusal is the error of a sign-in Devin's page answered with an error. The page's text
+// reaches the client before any credential exists for core to redact, so it is bounded and cleaned.
+func signInRefusal(code, description string) *llm.Error {
+	detail := sdk.LoginCode(code)
+	if d := sdk.LoginText(description); d != "" {
+		if detail != "" {
+			detail += ": "
+		}
+		detail += d
+	}
+	return refused("Devin refused the sign-in (" + detail + ")")
 }
 
 func refused(msg string) *llm.Error {

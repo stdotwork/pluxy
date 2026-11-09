@@ -209,8 +209,8 @@ func (b *builder) upstreamData(ev llm.Event) string {
 }
 
 // signature returns the signature for the thinking block an item.end event closes: a Responses
-// upstream's encrypted reasoning or a Gemini upstream's thought signature (the event's opaque
-// data), which a Messages client keeps in the block's signature and replays with it, so the
+// upstream's encrypted reasoning, a Gemini upstream's thought signature or a Devin reasoning
+// signature (the event's opaque data), which a Messages client keeps in the block's signature and replays with it, so the
 // reasoning carries over to the next turn (see openairesponses.IsEncryptedReasoning). It is "" for
 // any other event or opaque data.
 func signature(ev llm.Event) string {
@@ -224,6 +224,9 @@ func signature(ev llm.Event) string {
 	case o.Format == llm.FormatGeminiGenerate && o.Data != "":
 		// A Gemini thought signature, which the Gemini provider puts back on its part when the
 		// client replays the block.
+		return o.Data
+	case o.Format == llm.OpaqueDevin && o.Data != "":
+		// A Devin reasoning signature, which Devin takes back from the replayed block.
 		return o.Data
 	}
 	return ""

@@ -1,0 +1,59 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/stdotwork/pluxy/next/llm"
+)
+
+// The provider's error text reaches the client before an account has a credential, when core
+// cannot redact what a hostile or careless login server echoes: it must be bounded and free of
+// token-like strings, and the OAuth error code kept.
+const (
+	hostileJWT  = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJlLWJ5dGVz"
+	hostileCode = "invalid_request"
+)
+
+func hostileText() string { return "rejected " + hostileJWT + " " + strings.Repeat("filler ", 500) }
+
+func checkLoginError(t *testing.T, what string, err error, wantCode bool) {
+	t.Helper()
+	var e *llm.Error
+	if !errors.As(err, &e) {
+		t.Fatalf("%s: err = %v, want an *llm.Error", what, err)
+	}
+	if strings.Contains(e.Message, hostileJWT) || strings.Contains(e.Message, "eyJhbGci") {
+		t.Errorf("%s: the message carries the token: %.200q", what, e.Message)
+	}
+	if n := len([]rune(e.Message)); n > 400 {
+		t.Errorf("%s: the message is %d characters: %.120q...", what, n, e.Message)
+	}
+	if wantCode && !strings.Contains(e.Message, hostileCode) {
+		t.Errorf("%s: the message lost the error code: %q", what, e.Message)
+	}
+}
+
+func TestLoginErrorTextIsBounded(t *testing.T) {
+	for _, code := range []string{hostileCode, strings.Repeat("a", 5000), hostileJWT} {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"` + code + `","error_description":"` + hostileText() + `"}`))
+		}))
+		f := tokenPost(context.Background(), ts.URL, map[string]string{}, &struct{}{})
+		ts.Close()
+		if f == nil {
+			t.Fatal("a 400 reply was taken as success")
+		}
+		checkLoginError(t, "code "+code[:min(len(code), 10)], tokenError(f), code == hostileCode)
+	}
+}
+
+// The error a pasted address carries is the user's to paste: it is bounded and cleaned too.
+func TestCallbackErrorTextIsBounded(t *testing.T) {
+	checkLoginError(t, "pasted error", callbackRefusal(hostileCode+": "+hostileText()), true)
+}

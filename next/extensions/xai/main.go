@@ -8,7 +8,8 @@
 // base_url is where xAI's API lives; requests go to {base_url}/responses. A Grok login's requests
 // go to the Grok CLI's chat endpoint (https://cli-chat-proxy.grok.com/v1) unless base_url names
 // another address, as today's core sends them. client_version replaces the Grok CLI version a
-// login's requests name; auth_issuer moves xAI's sign-in to a test server.
+// login's requests name. Tests move xAI's sign-in to a fake with auth_issuer (sdk.TestLoginHost);
+// in a normal run it is ignored.
 //
 // Every client format is sent to xAI's Responses API: a Responses client's body passes through
 // with the changes xAI needs (body.go), and the other formats are translated to Responses. An API
@@ -85,7 +86,7 @@ func readSettings(raw json.RawMessage) (settings, error) {
 	if s.ClientVersion == "" {
 		s.ClientVersion = cliVersion
 	}
-	if s.AuthIssuer = strings.TrimRight(s.AuthIssuer, "/"); s.AuthIssuer == "" {
+	if s.AuthIssuer = strings.TrimRight(sdk.TestLoginHost(s.AuthIssuer), "/"); s.AuthIssuer == "" {
 		s.AuthIssuer = defaultIssuer
 	}
 	return s, nil

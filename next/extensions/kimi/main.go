@@ -8,7 +8,8 @@
 // domain is kimi.com (the default) or kimi.ai, Kimi's two sites, each with its own login and API.
 // base_url is where the API lives; requests go to {base_url}/v1/chat/completions, /v1/responses or
 // /v1/messages, whichever speaks the client's format (Gemini clients are translated to Chat
-// Completions). auth_base_url changes the login host, for a test server.
+// Completions). Tests move the login host to a fake with auth_base_url (sdk.TestLoginHost); in a
+// normal run it is ignored.
 //
 // The account's access token, or a Kimi Code API key, is sent as a bearer token with Kimi's device
 // headers (X-Msh-*), which name pluxy as the client and carry the device ID made at login. A request in the upstream's
@@ -92,7 +93,7 @@ func readSettings(raw json.RawMessage) (settings, error) {
 	if s.BaseURL == "" {
 		s.BaseURL = "https://api." + s.Domain + "/coding"
 	}
-	if s.AuthBaseURL == "" {
+	if s.AuthBaseURL = sdk.TestLoginHost(s.AuthBaseURL); s.AuthBaseURL == "" {
 		s.AuthBaseURL = "https://auth." + s.Domain
 	}
 	// A base URL given with its /v1 is taken as the same place.

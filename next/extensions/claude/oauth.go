@@ -21,8 +21,9 @@ import (
 
 // Claude subscription login is OAuth's authorization code grant with PKCE (RFC 6749, RFC 7636),
 // with Claude's endpoints and client. The token endpoint takes and returns JSON. Account
-// settings can name other endpoints and another client (authorize_url, token_url, client_id),
-// which tests use to sign in to a fake server.
+// settings can name another client (client_id). They can name other endpoints (authorize_url,
+// token_url) only under test (sdk.TestLoginHost): a stored account must not choose where the
+// code and refresh token go.
 const (
 	defaultAuthorizeURL = "https://claude.ai/oauth/authorize"
 	defaultTokenURL     = "https://platform.claude.com/v1/oauth/token"
@@ -96,7 +97,7 @@ func subscriptionLogin(ctx context.Context, set settings, s *sdk.LoginSession) (
 	code, gotState, failure := readCallback(in["redirect_url"])
 	switch {
 	case failure != "":
-		return nil, refused("Claude refused the sign-in: " + failure)
+		return nil, callbackRefusal(failure)
 	case code == "":
 		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "the pasted text has no code", Scope: llm.ScopeRequest}
 	case gotState != state:
@@ -213,10 +214,10 @@ type tokenResponse struct {
 // credential builds the credential a token reply grants.
 func (tr *tokenResponse) credential(now time.Time) *protocol.Credential {
 	c := &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: tr.AccessToken, RefreshToken: tr.RefreshToken}
-	if tr.ExpiresIn > 0 {
-		c.ExpiresAt = now.Unix() + tr.ExpiresIn
+	if exp := sdk.ExpiryUnix(now, tr.ExpiresIn); exp > 0 {
+		c.ExpiresAt = exp
 		// Renew renewAhead before expiry, or halfway through a shorter life.
-		ahead := min(int64(renewAhead/time.Second), tr.ExpiresIn/2)
+		ahead := min(int64(renewAhead/time.Second), (exp-now.Unix())/2)
 		c.RefreshAt = c.ExpiresAt - ahead
 	}
 	return c
@@ -258,6 +259,7 @@ func tokenPost(ctx context.Context, endpoint string, fields map[string]string, o
 			// Anthropic's API error shape: {"error": {"type": ..., "message": ...}}.
 			f.code, _ = v["type"].(string)
 		}
+		f.code = sdk.LoginCode(f.code)
 		return f
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(out); err != nil {
@@ -302,6 +304,13 @@ func tokenError(f *tokenFailure) error {
 	default:
 		return &llm.Error{Code: llm.CodeUpstream, Message: fmt.Sprintf("the token endpoint answered %d (%s)", f.status, f.code), Status: f.status, ProviderCode: f.code, Scope: llm.ScopeEndpoint}
 	}
+}
+
+// callbackRefusal is the error of a pasted address that holds an error. The text is the user's to
+// paste and reaches the client before any credential exists for core to redact, so it is bounded
+// and cleaned.
+func callbackRefusal(failure string) error {
+	return refused("Claude refused the sign-in: " + sdk.LoginText(failure))
 }
 
 // refused is the error for a sign-in the user or Claude turned down.

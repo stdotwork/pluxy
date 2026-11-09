@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/stdotwork/pluxy/next/protocol"
 )
 
 // Email is the e-mail address the key endpoint names.
@@ -52,6 +54,8 @@ type code struct {
 
 // New starts a fake that is closed when the test ends.
 func New(t testing.TB) *Server {
+	// The extension honours the fake's address in account settings only under this variable.
+	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	s := &Server{codes: map[string]*code{}, dca: map[string]bool{}, keys: map[string]bool{}}
 	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
 	t.Cleanup(s.Close)

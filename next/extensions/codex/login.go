@@ -108,23 +108,14 @@ func browserLogin(ctx context.Context, set settings, s *sdk.LoginSession) (*prot
 			defer stop()
 		}
 	}
-	inputs := make(chan map[string]string, 1)
-	inputErr := make(chan error, 1)
 	if err := s.Prompt(protocol.Prompt{Kind: protocol.LoginBrowser, URL: authURL, ExpiresIn: 900,
 		Message: "Open the link and sign in to ChatGPT. If the page you end on does not load, paste its address here.",
 		Inputs:  []protocol.LoginInput{{Name: "redirect_url", Label: "Address the browser ended on"}}}); err != nil {
 		return nil, err
 	}
-	go func() {
-		for {
-			in, err := s.Input(ctx)
-			if err != nil {
-				inputErr <- err
-				return
-			}
-			inputs <- in
-		}
-	}()
+	fwdCtx, stopInputs := context.WithCancel(ctx)
+	defer stopInputs()
+	inputs, inputErr := forwardInputs(fwdCtx, s.Input)
 	var code string
 	for code == "" {
 		var params url.Values
@@ -137,7 +128,12 @@ func browserLogin(ctx context.Context, set settings, s *sdk.LoginSession) (*prot
 			}
 			return nil, err
 		case params = <-results:
-		case in := <-inputs:
+		case in, ok := <-inputs:
+			if !ok {
+				// The forwarder stopped; its error, or ctx being done, ends the login.
+				inputs = nil
+				continue
+			}
 			if u, err := url.Parse(strings.TrimSpace(in["redirect_url"])); err == nil {
 				params = u.Query()
 			}
@@ -163,6 +159,30 @@ func browserLogin(ctx context.Context, set settings, s *sdk.LoginSession) (*prot
 	return grantFrom(tr, nil)
 }
 
+// forwardInputs reads the login's inputs on its own goroutine, so the login can wait for an
+// input and the browser's return at once. It stops, closing inputs, when ctx is done or reading
+// fails; a failure is sent on the error channel first.
+func forwardInputs(ctx context.Context, input func(context.Context) (map[string]string, error)) (<-chan map[string]string, <-chan error) {
+	inputs := make(chan map[string]string, 1)
+	inputErr := make(chan error, 1)
+	go func() {
+		defer close(inputs)
+		for {
+			in, err := input(ctx)
+			if err != nil {
+				inputErr <- err
+				return
+			}
+			select {
+			case inputs <- in:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return inputs, inputErr
+}
+
 // signInResult reads a browser sign-in result, the query of the address the browser was sent back
 // to. ok is false when the result is not for this login (its state differs), and it is then
 // ignored, whatever else it says; a refusal or a result with no code ends the login.
@@ -171,7 +191,7 @@ func signInResult(params url.Values, state string) (code string, ok bool, err er
 		return "", false, nil
 	}
 	if e := params.Get("error"); e != "" {
-		return "", true, refused("sign-in was refused: " + e)
+		return "", true, refused("sign-in was refused: " + sdk.LoginText(e))
 	}
 	if code = params.Get("code"); code == "" {
 		return "", true, refused("the sign-in result has no authorization code")
@@ -392,9 +412,9 @@ func grantFrom(tr *tokenResponse, old *protocol.Credential) (*protocol.Grant, er
 	c.Data = raw(d)
 	now := time.Now()
 	if exp := jwtExpiry(c.AccessToken); exp > 0 {
-		c.ExpiresAt = exp
-	} else if tr.ExpiresIn > 0 {
-		c.ExpiresAt = now.Unix() + tr.ExpiresIn
+		c.ExpiresAt = min(exp, now.Add(sdk.MaxTokenLife).Unix())
+	} else {
+		c.ExpiresAt = sdk.ExpiryUnix(now, tr.ExpiresIn)
 	}
 	if c.ExpiresAt > 0 {
 		if at := time.Unix(c.ExpiresAt, 0).Add(-refreshLead); at.After(now) {
@@ -503,6 +523,7 @@ func loginFailure(status int, body []byte) *llm.Error {
 			code = o.Type
 		}
 	}
+	code = sdk.LoginCode(code)
 	for _, r := range grantRefusals {
 		if code == r {
 			return &llm.Error{Code: llm.CodeAuth, Message: "OpenAI refused the sign-in (" + code + "); sign in again", Status: status, ProviderCode: code, Scope: llm.ScopeCredential}

@@ -1049,3 +1049,34 @@ func TestAggregatorBoundsLosses(t *testing.T) {
 			len(more.Losses()), more.acc.lossSize, len(losses), a.acc.lossSize)
 	}
 }
+
+// A Devin reasoning signature is carried in the thinking block's signature, streamed and not, as
+// today's core carries it.
+func TestDevinReasoningSignature(t *testing.T) {
+	events := []llm.Event{
+		{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "id1", Model: "m"}},
+		{Type: llm.EventItemStart, Index: 0, Item: &llm.ItemStart{Kind: llm.ItemReasoning}},
+		{Type: llm.EventReasoningDelta, Index: 0, Delta: "think"},
+		{Type: llm.EventItemEnd, Index: 0, Opaque: &llm.Opaque{Format: llm.OpaqueDevin, Data: "sealed"}},
+		{Type: llm.EventFinish, Finish: &llm.Finish{Reason: llm.FinishStop}},
+	}
+	var buf bytes.Buffer
+	w := NewStreamWriter(&buf)
+	a := NewAggregator()
+	for _, ev := range events {
+		if err := w.Write(ev); err != nil {
+			t.Fatal(err)
+		}
+		a.Add(ev)
+	}
+	if !strings.Contains(buf.String(), `"type":"signature_delta","signature":"sealed"`) && !strings.Contains(buf.String(), `"signature":"sealed","type":"signature_delta"`) {
+		t.Errorf("the stream has no signature_delta for the thinking block:\n%s", buf.String())
+	}
+	body, err := a.Response()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"signature":"sealed"`) {
+		t.Errorf("the unstreamed reply has no signature: %s", body)
+	}
+}
