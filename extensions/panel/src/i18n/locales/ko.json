@@ -1947,6 +1947,8 @@
     "connection_required": "먼저 연결을 설정하세요",
     "refresh_failed": "새로 고침 실패",
     "update_failed": "업데이트 실패",
+    "load_failed": "불러오기 실패",
+    "save_failed": "저장 실패",
     "add_failed": "추가 실패",
     "delete_failed": "삭제 실패",
     "upload_failed": "업로드 실패",

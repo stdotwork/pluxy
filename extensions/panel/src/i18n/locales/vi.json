@@ -1899,6 +1899,8 @@
     "connection_required": "Vui lòng thiết lập kết nối trước",
     "refresh_failed": "Làm mới thất bại",
     "update_failed": "Cập nhật thất bại",
+    "load_failed": "Tải thất bại",
+    "save_failed": "Lưu thất bại",
     "add_failed": "Thêm thất bại",
     "delete_failed": "Xóa thất bại",
     "upload_failed": "Tải lên thất bại",

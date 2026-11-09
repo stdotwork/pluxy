@@ -1947,6 +1947,8 @@
     "connection_required": "Lütfen Önce Bağlantı Kur",
     "refresh_failed": "Yenileme Başarısız",
     "update_failed": "Güncelleme Başarısız",
+    "load_failed": "Yükleme Başarısız",
+    "save_failed": "Kaydetme Başarısız",
     "add_failed": "Ekleme Başarısız",
     "delete_failed": "Silme Başarısız",
     "upload_failed": "Yükleme Başarısız",
