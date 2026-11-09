@@ -281,3 +281,30 @@ func TestGeminiNonStreamingReplyCountsLossesWhileRendering(t *testing.T) {
 		t.Fatalf("status %d, want 502 naming the 64 MiB limit; body starts %.200s", resp.StatusCode, raw)
 	}
 }
+
+// A Gemini client may name a model with a slash in it ("publisher/model"); today's core serves
+// it, and the model reaches the upstream whole.
+func TestGeminiModelWithSlash(t *testing.T) {
+	u := newUpstream(t)
+	u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"chatcmpl-up1","object":"chat.completion","created":1700000000,"model":"upstream",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"Done."},"finish_reason":"stop"}]}`)
+	}
+	base := startCore(t, u)
+	for _, path := range []string{
+		"/v1beta/models/publisher/gpt-test:generateContent",
+		"/v1beta/models/org/publisher/gpt-test:streamGenerateContent",
+	} {
+		resp := postPath(t, context.Background(), base, path, clientKey, `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`)
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || !strings.Contains(string(raw), "Done.") {
+			t.Errorf("%s: status %d: %s", path, resp.StatusCode, raw)
+		}
+	}
+	bodies, _ := u.received()
+	if len(bodies) != 2 || !strings.Contains(string(bodies[0]), `"model":"publisher/gpt-test"`) || !strings.Contains(string(bodies[1]), `"model":"org/publisher/gpt-test"`) {
+		t.Errorf("the upstream got %q, want the whole model names", bodies)
+	}
+}

@@ -98,7 +98,8 @@ var messagesFormat = clientFormat{
 	headers:   slices.Concat(anthropicmessages.Headers, anthropicmessages.ClientHeaders),
 }
 
-// geminiFormat serves Gemini's GenerateContent at /v1beta/models/{model}:{method}. The method
+// geminiFormat serves Gemini's GenerateContent at /v1beta/models/{model}:{method}. The model may
+// hold slashes ("publisher/model"), as today's core's catch-all route accepts it. The method
 // says whether the reply streams; a stream is always server-sent events, with or without
 // alt=sse, as today's core serves it.
 var geminiFormat = clientFormat{
@@ -141,7 +142,7 @@ type Source interface {
 func NewHandler(src Source) http.Handler {
 	mux := http.NewServeMux()
 	formats := map[string]clientFormat{"/v1/chat/completions": chatFormat, "/v1/responses": responsesFormat, "/v1/messages": messagesFormat,
-		"/v1beta/models/{action}": geminiFormat}
+		"/v1beta/models/{action...}": geminiFormat}
 	for path, f := range formats {
 		mux.HandleFunc("POST "+path, func(w http.ResponseWriter, r *http.Request) {
 			g, release := src.Acquire()
