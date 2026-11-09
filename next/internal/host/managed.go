@@ -272,6 +272,25 @@ func (g *Managed) Generate(ctx context.Context, account protocol.Account, req ll
 	return s
 }
 
+// CountTokens starts a count_tokens call, as Generate does a generate call. An extension that
+// does not count tokens answers at once, without its program being started.
+func (g *Managed) CountTokens(ctx context.Context, account protocol.Account, req llm.Request) *Stream {
+	if !CountsTokens(g.info) {
+		return cannotCount(g.manifest.ID)
+	}
+	end := g.beginCall()
+	ext, e := g.ensure(ctx)
+	if e != nil {
+		end()
+		s := &Stream{}
+		s.fail(e)
+		return s
+	}
+	s := ext.CountTokens(ctx, account, req)
+	s.onClose = end
+	return s
+}
+
 // OpenSession opens a session on account, starting the program first if it is idle. The
 // session holds a lease and counts as a running call until it is closed, so the program is not
 // stopped for idleness under it and a drain waits for it; a drain closes it once no turn runs.

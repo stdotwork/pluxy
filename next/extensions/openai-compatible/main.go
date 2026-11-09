@@ -49,7 +49,7 @@ const (
 )
 
 func main() {
-	if err := sdk.Serve(sdk.Extension{ID: id, Version: version, Generate: generate}); err != nil {
+	if err := sdk.Serve(sdk.Extension{ID: id, Version: version, Generate: generate, CountTokens: countTokens}); err != nil {
 		fmt.Fprintln(os.Stderr, "openai-compatible:", err)
 		os.Exit(1)
 	}
@@ -72,7 +72,7 @@ const (
 const anthropicVersion = "2023-06-01"
 
 // wires maps a wire API to its upstream format and endpoint.
-var wires = map[string]struct{ format, endpoint string }{
+var wires = map[string]wireInfo{
 	wireChat:      {llm.FormatOpenAIChat, "/chat/completions"},
 	wireResponses: {llm.FormatOpenAIResponses, "/responses"},
 	wireMessages:  {llm.FormatAnthropicMessages, "/messages"},
@@ -121,73 +121,53 @@ func sameOrigin(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
-func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
+// wireInfo is an upstream format and its endpoint under base_url.
+type wireInfo struct{ format, endpoint string }
+
+// account reads a call's account: its settings, its wire API and its API key.
+func account(call sdk.Call) (settings, wireInfo, string, error) {
 	var s settings
 	if len(call.Account.Settings) > 0 {
 		if err := json.Unmarshal(call.Account.Settings, &s); err != nil {
-			return &llm.Error{Code: llm.CodeInvalidRequest, Message: "account settings are not valid JSON", Scope: llm.ScopeCredential}
+			return s, wireInfo{}, "", &llm.Error{Code: llm.CodeInvalidRequest, Message: "account settings are not valid JSON", Scope: llm.ScopeCredential}
 		}
 	}
 	if s.BaseURL == "" {
-		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "account settings need base_url", Scope: llm.ScopeCredential}
+		return s, wireInfo{}, "", &llm.Error{Code: llm.CodeInvalidRequest, Message: "account settings need base_url", Scope: llm.ScopeCredential}
 	}
 	if s.WireAPI == "" {
 		s.WireAPI = wireChat
 	}
 	wire, ok := wires[s.WireAPI]
 	if !ok {
-		return &llm.Error{Code: llm.CodeInvalidRequest, Message: fmt.Sprintf("account setting wire_api must be %q, %q, %q or %q", wireChat, wireResponses, wireMessages, wireGemini), Scope: llm.ScopeCredential}
+		return s, wireInfo{}, "", &llm.Error{Code: llm.CodeInvalidRequest, Message: fmt.Sprintf("account setting wire_api must be %q, %q, %q or %q", wireChat, wireResponses, wireMessages, wireGemini), Scope: llm.ScopeCredential}
 	}
 	cred := call.Account.Credential
 	if cred == nil || cred.Kind != protocol.CredentialAPIKey || cred.APIKey == "" {
-		return &llm.Error{Code: llm.CodeAuth, Message: "account has no API key", Scope: llm.ScopeCredential}
+		return s, wireInfo{}, "", &llm.Error{Code: llm.CodeAuth, Message: "account has no API key", Scope: llm.ScopeCredential}
 	}
+	return s, wire, cred.APIKey, nil
+}
 
+func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
+	s, wire, key, err := account(call)
+	if err != nil {
+		return err
+	}
 	body, tr, err := buildBody(call.Request, wire.format)
 	if err != nil {
 		return err
 	}
+	if body, err = applyReasoning(body, call.Request, wire.format); err != nil {
+		return err
+	}
 	// The report travels on the reply's first event.
 	send := &reporting{Stream: out, tr: tr}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(s.BaseURL, "/")+endpoint(s.WireAPI, call.Request), bytes.NewReader(body))
+	resp, err := postBody(ctx, call, s, wire, key, endpoint(s.WireAPI, call.Request), body)
 	if err != nil {
-		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
-	}
-	req.Header.Set("Content-Type", "application/json")
-	switch wire.format {
-	case llm.FormatGeminiGenerate:
-		req.Header.Set("X-Goog-Api-Key", cred.APIKey)
-	case llm.FormatAnthropicMessages:
-		req.Header.Set("X-Api-Key", cred.APIKey)
-		req.Header.Set("Anthropic-Version", anthropicVersion)
-		if n := call.Request.Native; n != nil && n.Format == wire.format {
-			for _, h := range anthropicmessages.Headers {
-				if v := n.Headers[h]; v != "" {
-					req.Header.Set(h, v)
-				}
-			}
-		}
-	default:
-		req.Header.Set("Authorization", "Bearer "+cred.APIKey)
-	}
-	if call.Request.Stream {
-		req.Header.Set("Accept", "text/event-stream")
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		var op *net.OpError
-		dial := errors.As(err, &op) && op.Op == "dial"
-		// A failed dial never reached the upstream, so trying again is safe.
-		return &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint, Retryable: dial}
+		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return upstreamError(resp, call.Request.Model)
-	}
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 		return relayStream(ctx, resp.Body, send, wire.format)
 	}
@@ -208,6 +188,114 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		}
 	}
 	return nil
+}
+
+// postBody sends body to path under base_url with the key as wire's upstream takes it, and
+// returns the upstream's successful reply; a failure is returned as the error to report.
+func postBody(ctx context.Context, call sdk.Call, s settings, wire wireInfo, key, path string, body []byte) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(s.BaseURL, "/")+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	switch wire.format {
+	case llm.FormatGeminiGenerate:
+		req.Header.Set("X-Goog-Api-Key", key)
+	case llm.FormatAnthropicMessages:
+		req.Header.Set("X-Api-Key", key)
+		req.Header.Set("Anthropic-Version", anthropicVersion)
+		if n := call.Request.Native; n != nil && n.Format == wire.format {
+			for _, h := range anthropicmessages.Headers {
+				if v := n.Headers[h]; v != "" {
+					req.Header.Set(h, v)
+				}
+			}
+		}
+	default:
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	if call.Request.Stream {
+		req.Header.Set("Accept", "text/event-stream")
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		var op *net.OpError
+		dial := errors.As(err, &op) && op.Op == "dial"
+		// A failed dial never reached the upstream, so trying again is safe.
+		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint, Retryable: dial}
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		defer resp.Body.Close()
+		return nil, upstreamError(resp, call.Request.Model)
+	}
+	return resp, nil
+}
+
+// countTokens counts the request's input tokens with the upstream's own count endpoint: a
+// Messages upstream's {base_url}/messages/count_tokens, a Gemini upstream's
+// {base_url}/models/{model}:countTokens. A Chat or Responses upstream has none, so the account
+// cannot count. A request in the upstream's format is sent as it came; a Gemini request to a
+// Messages upstream is rebuilt with the fields count_tokens takes.
+func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
+	s, wire, key, err := account(call)
+	if err != nil {
+		return err
+	}
+	req := call.Request
+	req.Stream = false
+	call.Request = req
+	var path string
+	switch wire.format {
+	case llm.FormatAnthropicMessages:
+		path = "/messages/count_tokens"
+	case llm.FormatGeminiGenerate:
+		path = "/models/" + url.PathEscape(req.Model) + ":countTokens"
+	default:
+		return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
+			Message: "this account's upstream speaks " + formatNames[wire.format] + ", which has no token count endpoint"}
+	}
+	body, tr, err := buildBody(req, wire.format)
+	if err != nil {
+		return err
+	}
+	if !tr.Passthrough {
+		if body, err = anthropicmessages.CountRequest(body); err != nil {
+			return err
+		}
+	}
+	resp, err := postBody(ctx, call, s, wire, key, path, body)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxFrame))
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream response: " + err.Error(), Scope: llm.ScopeEndpoint}
+	}
+	var n int64
+	if wire.format == llm.FormatAnthropicMessages {
+		if n, err = anthropicmessages.DecodeCount(raw); err != nil {
+			return err
+		}
+	} else {
+		var r struct {
+			TotalTokens *int64 `json:"totalTokens"`
+		}
+		if json.Unmarshal(raw, &r) != nil || r.TotalTokens == nil {
+			return &llm.Error{Code: llm.CodeUpstream, Scope: llm.ScopeEndpoint, Message: "the upstream's countTokens reply has no totalTokens", Raw: llm.RawJSON(raw)}
+		}
+		n = *r.TotalTokens
+	}
+	if err := out.Start(llm.ResponseInfo{Model: req.Model, Format: wire.format}); err != nil {
+		return err
+	}
+	return out.Finish(llm.Finish{Reason: llm.FinishStop}, &llm.Usage{InputTokens: &n, Raw: llm.RawJSON(raw)})
 }
 
 // formatNames name the upstream formats in messages to clients.

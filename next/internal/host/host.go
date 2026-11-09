@@ -344,6 +344,35 @@ func (e *Extension) Stop() {
 // Every event the call returns has the account's credential removed (protocol.Redactor), so
 // nothing the extension or its upstream echoes reaches a client or a log with it.
 func (e *Extension) Generate(ctx context.Context, account protocol.Account, req llm.Request) *Stream {
+	return e.call(ctx, protocol.OpGenerate, account, req)
+}
+
+// CountsTokens reports whether an extension that described itself with info counts tokens: it
+// implements minor version 2 or later and lists the count_tokens operation.
+func CountsTokens(info protocol.Info) bool {
+	return info.ProtocolMinor >= 2 && slices.Contains(info.Operations, protocol.OpCountTokens)
+}
+
+// CountTokens starts a count_tokens call, answered as a generate call is (see Generate). An
+// extension that does not count tokens answers at once with an unsupported error about the
+// account, so routing moves on to another account.
+func (e *Extension) CountTokens(ctx context.Context, account protocol.Account, req llm.Request) *Stream {
+	if !CountsTokens(e.info) {
+		return cannotCount(e.manifest.ID)
+	}
+	return e.call(ctx, protocol.OpCountTokens, account, req)
+}
+
+// cannotCount is the reply of an extension that does not count tokens.
+func cannotCount(id string) *Stream {
+	s := &Stream{}
+	s.fail(&llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
+		Message: fmt.Sprintf("extension %s does not count tokens", id)})
+	return s
+}
+
+// call starts a generate or count_tokens call.
+func (e *Extension) call(ctx context.Context, op string, account protocol.Account, req llm.Request) *Stream {
 	select {
 	case <-e.exited:
 		return failed(llm.CodeExtensionUnavailable, fmt.Sprintf("extension %s is not running", e.manifest.ID))
@@ -360,7 +389,7 @@ func (e *Extension) Generate(ctx context.Context, account protocol.Account, req 
 	}
 	s := &Stream{conn: conn, ctx: ctx, ext: e, redact: protocol.NewRedactor(account.Credential)}
 	s.stop = context.AfterFunc(ctx, func() { conn.Close() })
-	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: protocol.OpGenerate, Account: &account, Request: &req}
+	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: op, Account: &account, Request: &req}
 	if err := protocol.WriteFrame(conn, call); err != nil {
 		if errors.Is(err, protocol.ErrFrameTooLarge) {
 			// The request is valid but too big to pass on in one frame; only a smaller request

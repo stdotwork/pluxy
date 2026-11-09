@@ -164,8 +164,8 @@ func TestSessionTurns(t *testing.T) {
 	}
 	conn.Close()
 	info := described.Info
-	if info.ProtocolMinor != 1 || !slices.Contains(info.Operations, protocol.OpSession) {
-		t.Fatalf("describe: minor %d, operations %v; want minor 1 with session", info.ProtocolMinor, info.Operations)
+	if info.ProtocolMinor < 1 || !slices.Contains(info.Operations, protocol.OpSession) {
+		t.Fatalf("describe: minor %d, operations %v; want minor 1 or later with session", info.ProtocolMinor, info.Operations)
 	}
 
 	conn = dial(t, socket)
@@ -271,4 +271,63 @@ func TestSessionNoticesCoreGoing(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	conn.Close()
 	wait(turnEnded, "the turn")
+}
+
+// An extension with a CountTokens handler lists count_tokens in describe and answers count calls
+// with it; one without answers them unsupported.
+func TestCountTokens(t *testing.T) {
+	count := func(_ context.Context, call Call, out *Stream) error {
+		if err := out.Start(llm.ResponseInfo{Model: call.Request.Model, Format: llm.FormatAnthropicMessages}); err != nil {
+			return err
+		}
+		return out.Finish(llm.Finish{Reason: llm.FinishStop}, &llm.Usage{InputTokens: llm.Int64(42), Raw: json.RawMessage(`{"input_tokens":42}`)})
+	}
+	generate := func(context.Context, Call, *Stream) error { return fmt.Errorf("generate called") }
+	read := func(t *testing.T, conn net.Conn) []llm.Event {
+		t.Helper()
+		var evs []llm.Event
+		for {
+			var r protocol.Reply
+			if err := protocol.ReadFrame(conn, &r); err != nil {
+				t.Fatalf("after %v: %v", evs, err)
+			}
+			evs = append(evs, r.Event)
+			if r.Event.Terminal() {
+				return evs
+			}
+		}
+	}
+	for _, tc := range []struct {
+		name  string
+		count Handler
+	}{{"counts", count}, {"cannot count", nil}} {
+		t.Run(tc.name, func(t *testing.T) {
+			socket, stdin, _ := startServe(t, Extension{ID: "test/sdk", Version: "0.0.0", Generate: generate, CountTokens: tc.count})
+			defer stdin.Close()
+			conn := dial(t, socket)
+			_ = protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeCall, ID: "c-1", Op: protocol.OpDescribe})
+			var described protocol.Reply
+			if err := protocol.ReadFrame(conn, &described); err != nil || described.Info == nil {
+				t.Fatalf("describe: %+v, %v", described, err)
+			}
+			conn.Close()
+			if listed := slices.Contains(described.Info.Operations, protocol.OpCountTokens); listed != (tc.count != nil) || described.Info.ProtocolMinor < 2 {
+				t.Errorf("describe: minor %d, operations %v", described.Info.ProtocolMinor, described.Info.Operations)
+			}
+			conn = dial(t, socket)
+			defer conn.Close()
+			_ = protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeCall, ID: "c-2", Op: protocol.OpCountTokens, Request: &llm.Request{Model: "m"}})
+			evs := read(t, conn)
+			last := evs[len(evs)-1]
+			if tc.count == nil {
+				if last.Type != llm.EventError || last.Error.Code != llm.CodeUnsupported {
+					t.Errorf("events = %+v, want unsupported", evs)
+				}
+				return
+			}
+			if len(evs) != 2 || last.Type != llm.EventFinish || last.Usage == nil || *last.Usage.InputTokens != 42 {
+				t.Errorf("events = %+v, want start and a finish with the count", evs)
+			}
+		})
+	}
 }

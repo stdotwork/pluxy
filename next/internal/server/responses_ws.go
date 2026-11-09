@@ -347,6 +347,7 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 		return s.sendError(asLLMError(err)) == nil
 	}
 	sessReq.DropPolicy = g.Config.DropPolicy
+	takeThinkingSuffix(&sessReq)
 	s.nativeHeaders(&sessReq)
 
 	// An HTTP turn's request carries the whole conversation.
@@ -361,6 +362,7 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 			return s.sendError(asLLMError(err)) == nil
 		}
 		httpReq.DropPolicy = g.Config.DropPolicy
+		takeThinkingSuffix(&httpReq)
 		s.nativeHeaders(&httpReq)
 	}
 

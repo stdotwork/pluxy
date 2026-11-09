@@ -70,22 +70,6 @@ func TestRenewalKeepsTokensTheServerDidNotSend(t *testing.T) {
 	}
 }
 
-func TestThinkingSuffix(t *testing.T) {
-	for _, tc := range []struct{ in, model, effort string }{
-		{"gpt-6.1-sol(high)", "gpt-6.1-sol", "high"},
-		{"gpt-6.1-sol(XHigh)", "gpt-6.1-sol", "xhigh"},
-		{"gpt-6.1-sol(8192)", "gpt-6.1-sol", "medium"},
-		{"gpt-6.1-sol(0)", "gpt-6.1-sol", "none"},
-		{"gpt-6.1-sol(100000)", "gpt-6.1-sol", "xhigh"},
-		{"gpt-6.1-sol(fast)", "gpt-6.1-sol(fast)", ""},
-		{"gpt-6.1-sol", "gpt-6.1-sol", ""},
-	} {
-		if m, e := splitThinkingSuffix(tc.in); m != tc.model || e != tc.effort {
-			t.Errorf("splitThinkingSuffix(%q) = %q, %q; want %q, %q", tc.in, m, e, tc.model, tc.effort)
-		}
-	}
-}
-
 // A login server reply that redirects is not followed: following a 307 would send the refresh
 // token (or an authorization code and its verifier) to wherever the redirect points.
 func TestTokenEndpointRedirectIsNotFollowed(t *testing.T) {

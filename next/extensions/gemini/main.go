@@ -51,6 +51,7 @@ func main() {
 		Generate:     generate,
 		LoginMethods: loginMethods,
 		Login:        login,
+		CountTokens:  countTokens,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gemini:", err)
@@ -128,17 +129,23 @@ type target struct {
 	sa    *serviceAccount
 }
 
-// resolve returns where an account's request for model goes.
+// resolve returns where an account's GenerateContent request for model goes.
 func resolve(ctx context.Context, s settings, cred *protocol.Credential, model string, stream bool) (target, error) {
+	return resolveMethod(ctx, s, cred, model, method(stream))
+}
+
+// resolveMethod returns where an account's request for model's method m (such as
+// ":countTokens", with any query) goes.
+func resolveMethod(ctx context.Context, s settings, cred *protocol.Credential, model, m string) (target, error) {
 	if s.Vertex != nil {
-		return s.Vertex.resolve(ctx, s.BaseURL, cred, model, stream)
+		return s.Vertex.resolve(ctx, s.BaseURL, cred, model, m)
 	}
 	if cred == nil || cred.Kind != protocol.CredentialAPIKey || cred.APIKey == "" {
 		return target{}, &llm.Error{Code: llm.CodeAuth, Message: "the account has no API key", Scope: llm.ScopeCredential}
 	}
 	key := cred.APIKey
 	return target{
-		url:       s.BaseURL + "/v1beta/models/" + url.PathEscape(model) + method(stream),
+		url:       s.BaseURL + "/v1beta/models/" + url.PathEscape(model) + m,
 		authorize: func(h http.Header) { h.Set("X-Goog-Api-Key", key) },
 	}, nil
 }
@@ -167,34 +174,11 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
 			}
 		}()
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.url, bytes.NewReader(body))
+	resp, err := postBody(ctx, t, body, call.Request.Stream, call.Request.Model)
 	if err != nil {
-		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if call.Request.Stream {
-		req.Header.Set("Accept", "text/event-stream")
-	}
-	t.authorize(req.Header)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		var op *net.OpError
-		dial := errors.As(err, &op) && op.Op == "dial"
-		// A failed dial never reached the upstream, so trying again is safe.
-		return &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint, Retryable: dial}
+		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		e := upstreamError(resp, call.Request.Model)
-		if t.sa != nil && resp.StatusCode == http.StatusUnauthorized {
-			tokens.invalidate(t.sa, t.token)
-		}
-		return e
-	}
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 		return relayStream(ctx, resp.Body, send)
 	}
@@ -217,16 +201,59 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
 	return nil
 }
 
+// postBody sends body to target t and returns the upstream's successful reply; a failure is
+// returned as the error to report. stream asks for a stream.
+func postBody(ctx context.Context, t target, body []byte, stream bool, model string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.url, bytes.NewReader(body))
+	if err != nil {
+		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if stream {
+		req.Header.Set("Accept", "text/event-stream")
+	}
+	t.authorize(req.Header)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		var op *net.OpError
+		dial := errors.As(err, &op) && op.Op == "dial"
+		// A failed dial never reached the upstream, so trying again is safe.
+		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint, Retryable: dial}
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		defer resp.Body.Close()
+		e := upstreamError(resp, model)
+		if t.sa != nil && resp.StatusCode == http.StatusUnauthorized {
+			tokens.invalidate(t.sa, t.token)
+		}
+		return nil, e
+	}
+	return resp, nil
+}
+
 // buildBody returns the GenerateContent body for req and how it was built. A GenerateContent
 // request is sent unchanged; any other is rebuilt from the model, with its reasoning effort as
-// thinking settings. Under the reject drop policy a translation that drops anything is refused.
+// thinking settings. A thinking suffix on the model name sets the thinking settings either way,
+// in place of the request's own. Under the reject drop policy a translation that drops anything
+// is refused.
 func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 	tr := &llm.Translation{To: llm.FormatGeminiGenerate}
 	if n := req.Native; n != nil {
 		tr.From = n.Format
 		if n.Format == llm.FormatGeminiGenerate {
 			tr.Passthrough = true
-			return n.Body, tr, nil
+			body := n.Body
+			if s := req.Options.ThinkingSuffix; s != "" {
+				var err error
+				if body, _, err = geminigenerate.ApplyEffort(body, req.Model, s); err != nil {
+					return nil, nil, err
+				}
+			}
+			return body, tr, nil
 		}
 	}
 	var extra []llm.Loss
@@ -243,9 +270,13 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 		return nil, nil, err
 	}
 	losses = append(extra, losses...)
-	if req.Options.ReasoningEffort != "" {
+	effort := req.Options.ReasoningEffort
+	if s := req.Options.ThinkingSuffix; s != "" {
+		effort = s
+	}
+	if effort != "" {
 		var applied bool
-		body, applied, err = geminigenerate.ApplyEffort(body, req.Model, req.Options.ReasoningEffort)
+		body, applied, err = geminigenerate.ApplyEffort(body, req.Model, effort)
 		if err != nil {
 			return nil, nil, err
 		}

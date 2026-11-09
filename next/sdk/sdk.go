@@ -102,6 +102,11 @@ type Extension struct {
 	Refresh      RefreshHandler
 	// Session, when set, holds sessions (protocol minor version 1).
 	Session SessionHandler
+	// CountTokens, when set, counts a request's input tokens (protocol minor version 2). It
+	// answers as Generate does, with out.Start and then out.Finish whose usage holds
+	// InputTokens (the count) and Raw (the upstream's count reply); an account that cannot
+	// count returns code unsupported with scope credential, retryable.
+	CountTokens Handler
 }
 
 // operations lists the operations ext serves.
@@ -115,6 +120,9 @@ func (ext Extension) operations() []string {
 	}
 	if ext.Session != nil {
 		ops = append(ops, protocol.OpSession)
+	}
+	if ext.CountTokens != nil {
+		ops = append(ops, protocol.OpCountTokens)
 	}
 	return ops
 }
@@ -237,7 +245,9 @@ func (s *server) handle(conn net.Conn) {
 			},
 		})
 	case protocol.OpGenerate:
-		s.generate(conn, call)
+		s.generate(conn, call, s.ext.Generate, "this extension does not generate")
+	case protocol.OpCountTokens:
+		s.generate(conn, call, s.ext.CountTokens, "this extension does not count tokens")
 	case protocol.OpLogin:
 		s.login(conn, call)
 	case protocol.OpRefresh:
@@ -251,7 +261,9 @@ func (s *server) handle(conn net.Conn) {
 	}
 }
 
-func (s *server) generate(conn net.Conn, call protocol.Call) {
+// generate answers a generate or count_tokens call with handler h; none is the error message
+// when the extension has no handler for it.
+func (s *server) generate(conn net.Conn, call protocol.Call, h Handler, none string) {
 	ctx, cancel, ok := s.begin(conn)
 	if !ok {
 		return
@@ -274,10 +286,10 @@ func (s *server) generate(conn net.Conn, call protocol.Call) {
 		c.Request = *call.Request
 	}
 	var err error
-	if s.ext.Generate == nil {
-		err = &llm.Error{Code: llm.CodeUnsupported, Message: "this extension does not generate", Scope: llm.ScopeRequest}
+	if h == nil {
+		err = &llm.Error{Code: llm.CodeUnsupported, Message: none, Scope: llm.ScopeRequest}
 	} else {
-		err = runHandler(ctx, s.ext.Generate, c, out)
+		err = runHandler(ctx, h, c, out)
 	}
 	if out.broken || out.seq.Done() {
 		return

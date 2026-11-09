@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/stdotwork/pluxy/next/llm"
 )
 
 // Gemini takes thinking in two forms (Google's thinking guide). Gemini 3 and later take a level:
@@ -104,17 +106,27 @@ func nearestLevel(want string, levels []string) string {
 	return levels[len(levels)-1]
 }
 
-// ApplyEffort sets the thinking settings for effort on a GenerateContent body built for model. It
-// reports false, leaving the body as it was, for an effort it does not know or a model that is not
-// a thinking Gemini model; the effort then stays reported as dropped.
+// ApplyEffort sets the thinking settings for effort on a GenerateContent body built for model.
+// effort may also be a token budget, as a model name's thinking suffix gives it
+// (llm.ThinkingBudget): a model that takes a budget gets that budget within its range, a model
+// with levels the level the budget falls in (llm.ThinkingEffort). It reports false, leaving the
+// body as it was, for an effort it does not know or a model that is not a thinking Gemini model;
+// the effort then stays reported as dropped.
 func ApplyEffort(body []byte, model, effort string) ([]byte, bool, error) {
 	levels, minB, maxB, zero, ok := ThinkingOf(model)
 	if !ok {
 		return body, false, nil
 	}
 	effort = strings.ToLower(strings.TrimSpace(effort))
+	budget, isBudget := llm.ThinkingBudget(effort)
+	if isBudget && (budget == 0 || levels != nil) {
+		effort, isBudget = llm.ThinkingEffort(effort), false
+	}
 	cfg := map[string]any{}
 	switch {
+	case isBudget:
+		cfg["thinkingBudget"] = min(max(budget, minB), maxB)
+		cfg["includeThoughts"] = true
 	case effort == "auto":
 		if levels == nil {
 			cfg["thinkingBudget"] = -1

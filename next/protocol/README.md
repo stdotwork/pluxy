@@ -1,13 +1,15 @@
-# pluxy extension protocol, version 0.1
+# pluxy extension protocol, version 0.2
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
 model service, and streams the reply back; a provider may also sign in to accounts and renew their
 credentials (see [Login and refresh](#login-and-refresh)). Version 0.1 adds
 [sessions](#sessions): a run of requests on one account whose upstream keeps state between them,
-such as a Responses WebSocket. It is deliberately small; later versions add capabilities and more
-operations without changing what is described here. An extension written for version 0 works
-unchanged with a core that speaks 0.1 (see [Versioning](#versioning)).
+such as a Responses WebSocket. Version 0.2 adds [token counting](#count_tokens) and the
+thinking suffix of a model name (`options.thinking_suffix`). It is deliberately small; later
+versions add capabilities and more operations without changing what is described here. An
+extension written for version 0 works unchanged with a core that speaks 0.2 (see
+[Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
 the details. A Go SDK (`github.com/stdotwork/pluxy/next/sdk`) implements the extension side of
@@ -202,9 +204,9 @@ Core opens a connection and writes one call frame:
 | Field | Meaning |
 | --- | --- |
 | `id` | Call ID for logs and traces. Unique per core process. |
-| `op` | The operation. Version 0 has `describe`, `generate`, `login` and `refresh`; version 0.1 adds `session`. |
+| `op` | The operation. Version 0 has `describe`, `generate`, `login` and `refresh`; version 0.1 adds `session`; version 0.2 adds `count_tokens`. |
 | `account` | For `generate`, `refresh` and `session`: the account to use (below). For `login`: the account being signed in to, with its `id` and `settings` but no `credential`. |
-| `request` | For `generate`: the model request (below). |
+| `request` | For `generate` and `count_tokens`: the model request (below). |
 | `login` | For `login`: what to sign in with (see [Login and refresh](#login-and-refresh)). |
 | `session` | For `session`: what kind of session to open (see [Sessions](#sessions)). |
 
@@ -222,7 +224,8 @@ The reply is one frame, then the extension closes the connection:
 `protocol` is the version from the handshake; `protocol_minor` is the revision of that version
 the extension implements (absent means 0; see [Versioning](#versioning)). `operations` lists the
 operations the extension serves: always `generate`, plus `login` and `refresh` when it signs in to
-accounts, and `session` when it holds [sessions](#sessions). An extension that lists `login` also
+accounts, `session` when it holds [sessions](#sessions), and `count_tokens` when it
+[counts tokens](#count_tokens). An extension that lists `login` also
 lists its `login_methods` (see [Login and refresh](#login-and-refresh)).
 
 ### `generate`
@@ -241,6 +244,28 @@ instead of filling memory.
 
 Extensions never retry on their own. Report what happened with a structured error and let core
 decide.
+
+### `count_tokens`
+
+Version 0.2. Counts the input tokens a request would use on the account, as Anthropic's
+`/v1/messages/count_tokens` and Gemini's `countTokens` do, without generating anything. The call
+carries `account` and `request` as `generate` does (`stream` is false; the request's items, tools
+and options are what to count), and the reply is a stream of events as for `generate`, without
+items: `response.start`, then `finish` whose `usage` holds `input_tokens`, the count, and `raw`,
+the upstream's count reply as it came, in `response.format`. Core answers a client in that format
+with `raw` as it is, and any other client with the count in its own shape.
+
+```json
+{"type": "response.start", "response": {"id": "", "model": "claude-sonnet-4-5", "format": "anthropic.messages"}}
+{"type": "finish", "finish": {"reason": "stop"}, "usage": {"input_tokens": 42, "raw": {"input_tokens": 42}}}
+```
+
+Count with the upstream's own count endpoint. An account that cannot count (its upstream has no
+such endpoint, or not for this request's format) answers with code `unsupported`, scope
+`credential` and `retryable` true, so core tries another account. Core sends `count_tokens` only
+to an extension whose describe reports `protocol_minor` 2 or more and lists it in `operations`;
+for any other, core treats the account as one that cannot count. Core routes a count like a
+request: the same accounts, blocks and retries.
 
 ## Accounts
 
@@ -306,7 +331,7 @@ version 0.
 | `stream` | Whether the client asked for a streamed reply. Core always receives events; this only tells the extension how the client is being served, in case the upstream call should match. |
 | `items` | The conversation, in order. |
 | `tools` | Function tools the model may call. `parameters` is a JSON Schema. |
-| `options` | Generation options; any field may be absent: `max_output_tokens`, `temperature`, `top_p`, `stop`, `tool_choice` (`mode`: `auto`, `none`, `required` or `tool` with `name`), `parallel_tool_calls`, `response_format` (`type`: `text`, `json_object` or `json_schema` with `name`, `description`, `schema`, `strict`), `reasoning_effort` (as the client named it). |
+| `options` | Generation options; any field may be absent: `max_output_tokens`, `temperature`, `top_p`, `stop`, `tool_choice` (`mode`: `auto`, `none`, `required` or `tool` with `name`), `parallel_tool_calls`, `response_format` (`type`: `text`, `json_object` or `json_schema` with `name`, `description`, `schema`, `strict`), `reasoning_effort` (as the client named it), `thinking_suffix` (version 0.2; see below). |
 | `native` | The client's original request body and its format, when core received one; `headers` holds the client's request headers that belong to that format, by lower-case name (for `anthropic.messages`: `anthropic-version` and `anthropic-beta`, and the headers the client names itself with: `user-agent`, `x-app`, `anthropic-dangerous-direct-browser-access`, `x-claude-code-session-id`, `x-client-request-id` and the `x-stainless-*` headers of Anthropic's SDKs; for `openai.responses`: the headers the Codex CLI sends, such as `session-id`, `x-codex-window-id`, `x-codex-turn-metadata`, `version` and `originator`). |
 | `origin` | The request's top-level fields that have no place in the model (see Origin below). |
 | `drop_policy` | What to do when building the upstream request would drop part of this one: `report` (default: send it and report the losses) or `reject` (refuse with `unsupported`, naming what could not be carried). |
@@ -349,6 +374,16 @@ That keeps fields core does not model. It also sends `native.headers` with it (f
 request body), `anthropic.messages` (Anthropic Messages request body) and
 `gemini.generate_content` (Gemini GenerateContent request body; its model and whether it streams
 come from the request path, so they are in the request's `model` and `stream`).
+
+**Thinking suffix.** A client may name a thinking setting after the model name, in brackets:
+`gpt-5(high)`, `claude-sonnet-4-5(16000)`. Core takes the suffix off `model` (and off the model
+in `native.body`) and puts it in `options.thinking_suffix`: a level (`minimal`, `low`, `medium`,
+`high`, `xhigh`, `max`), `none`, `auto`, or a token budget (a whole number; `0` is `none`). The
+extension applies it to its upstream request in place of any reasoning or thinking settings the
+request has, also to a native body it sends unchanged: as the upstream's own effort or thinking
+settings for the model, and a budget as a budget where the upstream takes one, otherwise as the
+level it falls in (up to 512 tokens `minimal`, 1024 `low`, 8192 `medium`, 24576 `high`, more
+`xhigh`). An extension that ignores it serves the model without the suffix's setting.
 
 **Translation report.** When the extension rebuilds the body in another format, it reports in the
 reply's `response.start` how it built it: `response.translation` with `from`, `to`, `passthrough`
@@ -690,7 +725,7 @@ removes `previous_response_id`.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.1. An extension reports the minor version it
+raise the minor version: this document is version 0.2. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -699,10 +734,11 @@ a new major version, and core keeps speaking old versions for a while.
 | --- | --- |
 | 0 (0.0) | `describe`, `generate`, `login`, `refresh`. |
 | 0.1 | [Sessions](#sessions): the `session` operation and its frames; `protocol_minor` in describe. |
+| 0.2 | [Token counting](#count_tokens): the `count_tokens` operation. The request's `options.thinking_suffix`. |
 
-## What version 0.1 leaves out
+## What version 0.2 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
-capabilities in `describe`; operations beyond `generate` and sessions (token counting, model
+capabilities in `describe`; operations beyond `generate`, sessions and token counting (model
 listing); several turns at once in one session (OpenAI's `stream_id` lanes); realtime sessions
 (audio, WebRTC); a private data folder per extension.

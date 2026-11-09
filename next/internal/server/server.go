@@ -118,7 +118,7 @@ var geminiFormat = clientFormat{
 		switch method {
 		case "generateContent", "streamGenerateContent":
 		default:
-			// shortcut: countTokens is not served; no client in the corpus relies on it.
+			// countTokens is served apart (geminiAction); any other method is not served.
 			return llm.Request{}, &llm.Error{Code: llm.CodeNotFound, Scope: llm.ScopeRequest,
 				Message: fmt.Sprintf("method %q is not supported on models/%s", method, model)}
 		}
@@ -138,6 +138,8 @@ type Generation struct {
 	Router *route.Router
 	// Attempt runs one attempt as the router does (a WebSocket turn routes with its own).
 	Attempt route.AttemptFunc
+	// Count runs one count_tokens attempt; nil when counting is not served.
+	Count route.AttemptFunc
 	// OpenSession opens a session on an extension; nil when sessions are not served.
 	OpenSession OpenSessionFunc
 }
@@ -151,9 +153,7 @@ type Source interface {
 // src when it starts and keeps it until it ends.
 func NewHandler(src Source) http.Handler {
 	mux := http.NewServeMux()
-	formats := map[string]clientFormat{"/v1/chat/completions": chatFormat, "/v1/completions": completionsFormat, "/v1/responses": responsesFormat, "/v1/messages": messagesFormat,
-		"/v1beta/models/{action...}": geminiFormat}
-	for path, f := range formats {
+	handle := func(path string, f clientFormat, h func(w http.ResponseWriter, r *http.Request, g *Generation)) {
 		mux.HandleFunc("POST "+path, func(w http.ResponseWriter, r *http.Request) {
 			g, release := src.Acquire()
 			defer release()
@@ -161,9 +161,17 @@ func NewHandler(src Source) http.Handler {
 				f.writeError(w, &llm.Error{Code: llm.CodeAuth, Message: "missing or invalid API key", Status: http.StatusUnauthorized, ProviderCode: "invalid_api_key"})
 				return
 			}
-			serve(w, r, g.Config, g.Router, f)
+			h(w, r, g)
 		})
 	}
+	for path, f := range map[string]clientFormat{"/v1/chat/completions": chatFormat, "/v1/completions": completionsFormat,
+		"/v1/responses": responsesFormat, "/v1/messages": messagesFormat} {
+		handle(path, f, func(w http.ResponseWriter, r *http.Request, g *Generation) { serve(w, r, g.Config, g.Router, f) })
+	}
+	handle("/v1/messages/count_tokens", messagesFormat, func(w http.ResponseWriter, r *http.Request, g *Generation) {
+		serveCount(w, r, g, messagesCount)
+	})
+	handle("/v1beta/models/{action...}", geminiFormat, geminiAction)
 	mux.HandleFunc("GET /v1/responses", func(w http.ResponseWriter, r *http.Request) { serveResponsesWebSocket(w, r, src) })
 	return withCORS(src, mux)
 }
@@ -234,16 +242,8 @@ func serve(w http.ResponseWriter, r *http.Request, cfg *Config, router *route.Ro
 		return
 	}
 	req.DropPolicy = cfg.DropPolicy
-	if req.Native != nil {
-		for _, h := range f.headers {
-			if v := r.Header.Values(h); len(v) > 0 {
-				if req.Native.Headers == nil {
-					req.Native.Headers = map[string]string{}
-				}
-				req.Native.Headers[h] = strings.Join(v, ",")
-			}
-		}
-	}
+	takeThinkingSuffix(&req)
+	f.nativeHeaders(r, &req)
 	t := newTrace()
 	r = withTrace(r, t)
 	rr := routeRequest(r, req, body)

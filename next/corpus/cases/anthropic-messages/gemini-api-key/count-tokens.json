@@ -1,0 +1,104 @@
+{
+  "description": "POST /v1/messages/count_tokens to a Gemini upstream.",
+  "source": [
+    "core/sdk/api/handlers/claude/code_handlers.go:104 (ClaudeCountTokens)",
+    "core/internal/runtime/executor/gemini_executor.go:815 (CountTokens)"
+  ],
+  "client": {
+    "path": "/v1/messages/count_tokens",
+    "auth": "none",
+    "headers": {"x-api-key":"corpus-client-key","anthropic-version":"2023-06-01"},
+    "body": {
+      "model": "gemini-corpus",
+      "system": "Be brief.",
+      "messages": [{"role":"user","content":"Say hello"}],
+      "tools": [
+        {
+          "name": "get_weather",
+          "description": "Weather",
+          "input_schema": {"type":"object","properties":{"city":{"type":"string"}}}
+        }
+      ]
+    }
+  },
+  "upstream": [{"body":{"totalTokens":42}}],
+  "recorded_old_core": {
+    "client": {
+      "body": {"input_tokens":42},
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "contents": [{"parts":[{"text":"Say hello"}],"role":"user"}],
+          "model": "gemini-corpus",
+          "systemInstruction": {"parts":[{"text":"Be brief."}]}
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1",
+          "X-Goog-Api-Key": "sk-corpus-upstream"
+        },
+        "method": "POST",
+        "path": "/v1beta/models/gemini-corpus:countTokens"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "upstream[0].body.contents",
+      "kind": "intended",
+      "reason": "Gemini's countTokens takes contents, or a whole GenerateContent request under generateContentRequest, which is the form that counts a system instruction and tools; the new core sends the translated request there. Today's core sends model, contents and systemInstruction at the top level of the countTokens body.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.model",
+      "kind": "intended",
+      "reason": "Gemini's countTokens takes contents, or a whole GenerateContent request under generateContentRequest, which is the form that counts a system instruction and tools; the new core sends the translated request there. Today's core sends model, contents and systemInstruction at the top level of the countTokens body.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.systemInstruction",
+      "kind": "intended",
+      "reason": "Gemini's countTokens takes contents, or a whole GenerateContent request under generateContentRequest, which is the form that counts a system instruction and tools; the new core sends the translated request there. Today's core sends model, contents and systemInstruction at the top level of the countTokens body.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.generateContentRequest",
+      "kind": "intended",
+      "reason": "Gemini's countTokens takes contents, or a whole GenerateContent request under generateContentRequest, which is the form that counts a system instruction and tools; the new core sends the translated request there. Today's core sends model, contents and systemInstruction at the top level of the countTokens body.",
+      "want": {
+        "contents": [{"parts":[{"text":"Say hello"}],"role":"user"}],
+        "model": "models/gemini-corpus",
+        "safetySettings": [
+          {"category":"HARM_CATEGORY_HARASSMENT","threshold":"OFF"},
+          {"category":"HARM_CATEGORY_HATE_SPEECH","threshold":"OFF"},
+          {"category":"HARM_CATEGORY_SEXUALLY_EXPLICIT","threshold":"OFF"},
+          {"category":"HARM_CATEGORY_DANGEROUS_CONTENT","threshold":"OFF"},
+          {"category":"HARM_CATEGORY_CIVIC_INTEGRITY","threshold":"BLOCK_NONE"}
+        ],
+        "systemInstruction": {"parts":[{"text":"Be brief."}]},
+        "tools": [
+          {
+            "functionDeclarations": [
+              {
+                "description": "Weather",
+                "name": "get_weather",
+                "parametersJsonSchema": {"properties":{"city":{"type":"string"}},"type":"object"}
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

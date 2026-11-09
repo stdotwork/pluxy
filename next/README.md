@@ -94,7 +94,27 @@ Responses account serves Responses, Messages and Gemini clients; a Messages acco
 and Gemini clients; a Gemini account serves only Gemini clients for now.
 
 Gemini clients call `POST /v1beta/models/{model}:generateContent` or `:streamGenerateContent`
-(a stream is server-sent events, with or without `alt=sse`); `countTokens` is not served yet.
+(a stream is server-sent events, with or without `alt=sse`), and `:countTokens`.
+
+Token counts (Anthropic's `POST /v1/messages/count_tokens` and Gemini's `:countTokens`) come from
+the upstream's own count endpoint: Anthropic's for a Claude account or an OpenAI-compatible account
+with `"wire_api": "messages"`, Gemini's for a Gemini account (Gemini API or Vertex AI) or one with
+`"wire_api": "gemini"`. A count from an upstream of the client's own kind comes back as the upstream sent it;
+otherwise core answers with the count in the client's shape. An account whose upstream has no count
+endpoint (Codex, xAI, Kimi, Meta, Devin, Antigravity, and Chat or Responses accounts) cannot count:
+core tries the model's next account, and answers with an error when none can. Today's core
+estimates a count itself with a tokenizer for those, and for any Claude account whose base URL is
+not Anthropic's own; this core does not, as that needs a tokenizer and its vocabularies for a
+number that is only approximate.
+
+A model name may end in a thinking setting in brackets, as today's core reads it: a level
+(`gpt-5(high)`; `minimal`, `low`, `medium`, `high`, `xhigh` or `max`), `none`, `auto`, or a token
+budget (`claude-sonnet-4-5(16000)`; `0` is none, `-1` auto). Core takes it off the name before
+routing, so the request goes to the model's own accounts, and the account's extension applies it to
+the upstream request in place of any reasoning or thinking settings the request has: as a
+reasoning effort (a budget becomes the level it falls in: up to 512 tokens minimal, 1024 low, 8192
+medium, 24576 high, more xhigh), or for Claude and Gemini models that take a budget, as that
+budget. Bracketed text that is none of these stays part of the model name; today's core refuses it.
 
 Responses clients may also open a WebSocket on `GET /v1/responses` ([OpenAI's WebSocket
 mode](https://developers.openai.com/api/docs/guides/websocket-mode)): each `response.create`

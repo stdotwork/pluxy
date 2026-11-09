@@ -21,8 +21,9 @@ const Version = 0
 
 // Minor is the minor version this package implements within Version. An extension reports it in
 // describe (Info.ProtocolMinor); core uses what a minor version adds only with an extension that
-// reports it. Minor 1 adds sessions.
-const Minor = 1
+// reports it. Minor 1 adds sessions; minor 2 adds token counting and the request's thinking
+// suffix.
+const Minor = 2
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
@@ -51,6 +52,9 @@ const (
 	// OpSession opens a session (minor version 1): one connection that carries turns, one at a
 	// time, on one account.
 	OpSession = "session"
+	// OpCountTokens counts a request's input tokens (minor version 2), answered with events as
+	// generate is: response.start, then finish whose usage holds the count.
+	OpCountTokens = "count_tokens"
 )
 
 // Frame types that are not events.
