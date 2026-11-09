@@ -8,10 +8,6 @@ import (
 	"strings"
 )
 
-// forwardHeaders are the headers a trusted proxy names the client in, in the order they are
-// read, as today's core reads them.
-var forwardHeaders = []string{"X-Forwarded-For", "X-Real-IP"}
-
 // parseTrustedProxies reads trusted_proxies: IP addresses and CIDR ranges.
 func parseTrustedProxies(list []string) ([]netip.Prefix, error) {
 	var out []netip.Prefix
@@ -43,32 +39,40 @@ func trustedProxy(trusted []netip.Prefix, a netip.Addr) bool {
 }
 
 // clientIP returns where r came from: the connection's peer or, when the peer is one of the
-// trusted proxies, the client it names. In X-Forwarded-For (every line of it, read as one list)
-// that is the last address that is not a trusted proxy, read from the right, or the first when
-// all are; else X-Real-IP. A header with an entry that is not an IP address is not used.
+// trusted proxies, the client it names, as today's core reads them. In X-Forwarded-For (every
+// line of it, read as one list) that is the last address that is not a trusted proxy, read from
+// the right, or the first when all are; else the first line of X-Real-IP. A header with an entry
+// that is not an IP address is not used.
 func clientIP(trusted []netip.Prefix, r *http.Request) netip.Addr {
 	peer := remoteAddr(r)
 	if !peer.IsValid() || !trustedProxy(trusted, peer) {
 		return peer
 	}
-	for _, h := range forwardHeaders {
-		vals := r.Header.Values(h)
-		if len(vals) == 0 {
-			continue
-		}
+	if vals := r.Header.Values("X-Forwarded-For"); len(vals) > 0 {
 		items := strings.Split(strings.Join(vals, ","), ",")
 		for i := len(items) - 1; i >= 0; i-- {
-			a, err := netip.ParseAddr(strings.TrimSpace(items[i]))
-			if err != nil || a.Zone() != "" {
+			a, ok := parseClient(items[i])
+			if !ok {
 				break // not an address: the header is not used
 			}
-			a = a.Unmap()
 			if i == 0 || !trustedProxy(trusted, a) {
 				return a
 			}
 		}
 	}
+	if a, ok := parseClient(r.Header.Get("X-Real-IP")); ok {
+		return a
+	}
 	return peer
+}
+
+// parseClient reads one address from a forwarding header.
+func parseClient(s string) (netip.Addr, bool) {
+	a, err := netip.ParseAddr(strings.TrimSpace(s))
+	if err != nil || a.Zone() != "" {
+		return netip.Addr{}, false
+	}
+	return a.Unmap(), true
 }
 
 // remoteAddr returns the address of the connection's peer, or the zero Addr.

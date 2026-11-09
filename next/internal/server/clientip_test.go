@@ -49,6 +49,8 @@ func TestClientIP(t *testing.T) {
 		{"an entry that is not an address spoils the header", "10.1.2.3:4000", map[string][]string{"X-Forwarded-For": {"198.51.100.1, unknown"}}, "10.1.2.3"},
 		{"X-Real-IP after a spoiled X-Forwarded-For", "10.1.2.3:4000", map[string][]string{"X-Forwarded-For": {"bad"}, "X-Real-IP": {"198.51.100.2"}}, "198.51.100.2"},
 		{"X-Real-IP alone", "10.1.2.3:4000", map[string][]string{"X-Real-IP": {"198.51.100.2"}}, "198.51.100.2"},
+		{"only the first X-Real-IP line counts", "10.1.2.3:4000", map[string][]string{"X-Real-IP": {"10.0.0.2", "198.51.100.7"}}, "10.0.0.2"},
+		{"a list in X-Real-IP is not an address", "10.1.2.3:4000", map[string][]string{"X-Real-IP": {"198.51.100.2, 198.51.100.3"}}, "10.1.2.3"},
 		{"IPv4 in IPv6 peer", "[::ffff:10.1.2.3]:4000", map[string][]string{"X-Forwarded-For": {"::ffff:198.51.100.1"}}, "198.51.100.1"},
 		{"IPv6 client", "10.1.2.3:4000", map[string][]string{"X-Forwarded-For": {"2001:db8::1"}}, "2001:db8::1"},
 	} {

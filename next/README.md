@@ -192,7 +192,7 @@ Core's log lines about a request name where it came from: the address of the con
 when that is one of `trusted_proxies` (IP addresses and CIDR ranges of the proxies in front of
 core), the client the proxy names. In `X-Forwarded-For` (all its lines, as one list) that is the
 last address that is not a trusted proxy, read from the right, so an address a client wrote in
-itself is skipped; without that header, `X-Real-IP`. A header with an entry that is not an IP
+itself is skipped; without that header, the first line of `X-Real-IP`. A header with an entry that is not an IP
 address is not used. The list is empty by default, so no header counts, as in today's core; a
 reload applies a change, where today's core needs a restart.
 
