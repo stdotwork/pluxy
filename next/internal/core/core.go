@@ -97,6 +97,8 @@ type Core struct {
 
 	redactor *configdoc.Redactor // hides the config file's secrets from the management API
 
+	checks *checks // each account's last check
+
 	// accounts serialises setting the accounts a router routes over: a change in the
 	// credential store and a publish never interleave.
 	accounts sync.Mutex
@@ -118,7 +120,7 @@ type Core struct {
 // Start loads the config file and publishes it as revision 1. Unless in safe mode, it starts
 // each extension's program to check it; the program then runs only while it is needed.
 func Start(opts Options) (*Core, error) {
-	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor()}
+	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor(), checks: newChecks()}
 	cfg, err := server.LoadConfig(opts.ConfigPath)
 	if err != nil {
 		return nil, err
@@ -130,6 +132,7 @@ func Start(opts Options) (*Core, error) {
 		return nil, err
 	}
 	if err := c.reload(true, "start"); err != nil {
+		c.checks.stop()
 		if c.creds != nil {
 			c.creds.Close()
 		}
@@ -531,7 +534,8 @@ func (c *Core) discard(next, prev *snapshot) {
 func (c *Core) publish(next, prev *snapshot, hash string) {
 	c.accounts.Lock()
 	defer c.accounts.Unlock()
-	if err := next.Router.SetAccounts(c.routed(next)); err != nil {
+	accounts := c.routed(next)
+	if err := next.Router.SetAccounts(accounts); err != nil {
 		log.Printf("updating accounts: %v", err)
 	}
 	if prev != nil {
@@ -554,6 +558,7 @@ func (c *Core) publish(next, prev *snapshot, hash string) {
 	}
 	c.draining = append(c.draining, old...)
 	c.mu.Unlock()
+	c.checkAccounts(next, accounts)
 	for _, g := range old {
 		g.Drain(func() {
 			c.mu.Lock()
@@ -614,9 +619,11 @@ func (c *Core) accountsChanged() {
 	c.accounts.Lock()
 	defer c.accounts.Unlock()
 	s := c.cur.Load()
-	if err := s.Router.SetAccounts(c.routed(s)); err != nil {
+	accounts := c.routed(s)
+	if err := s.Router.SetAccounts(accounts); err != nil {
 		log.Printf("updating accounts: %v", err)
 	}
+	c.checkAccounts(s, accounts)
 }
 
 // reserved reports whether the active config sets an account with ID id, which a login may
@@ -684,6 +691,7 @@ func (c *Core) Stop() {
 	c.reloading.Lock()
 	defer c.reloading.Unlock()
 	c.stopped = true
+	c.checks.stop()
 	c.mu.Lock()
 	gens := append([]*host.Managed(nil), c.draining...)
 	c.mu.Unlock()

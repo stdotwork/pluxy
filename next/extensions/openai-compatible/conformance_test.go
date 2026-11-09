@@ -67,6 +67,17 @@ func (u *scenarioUpstream) cancelledFor(s conformance.Scenario) <-chan struct{} 
 
 func (u *scenarioUpstream) serve(w http.ResponseWriter, r *http.Request) {
 	scenario, rest, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
+	if rest == "v1/models" && r.Method == http.MethodGet {
+		// The account check.
+		w.Header().Set("Content-Type", "application/json")
+		if r.Header.Get("Authorization") != "Bearer sk-conformance" {
+			w.WriteHeader(http.StatusUnauthorized)
+			io.WriteString(w, `{"error":{"message":"Incorrect API key provided","type":"invalid_request_error","code":"invalid_api_key"}}`)
+			return
+		}
+		io.WriteString(w, `{"object":"list","data":[{"id":"kit-model","object":"model"}]}`)
+		return
+	}
 	if rest != "v1/chat/completions" || r.Method != http.MethodPost {
 		http.NotFound(w, r)
 		return

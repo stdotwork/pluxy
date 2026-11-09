@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.3
+# pluxy extension protocol, version 0.4
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -8,9 +8,10 @@ credentials (see [Login and refresh](#login-and-refresh)). Version 0.1 adds
 such as a Responses WebSocket. Version 0.2 adds [token counting](#count_tokens) and the
 thinking suffix of a model name (`options.thinking_suffix`). Version 0.3 adds
 [model lists](#models): the models an account serves, for the model lists clients ask core for.
+Version 0.4 adds [account checks](#check): whether an account works, asked without generating.
 It is deliberately small; later versions add capabilities and more operations without changing
 what is described here. An extension written for version 0 works unchanged with a core that
-speaks 0.3 (see [Versioning](#versioning)).
+speaks 0.4 (see [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
 the details. A Go SDK (`github.com/stdotwork/pluxy/next/sdk`) implements the extension side of
@@ -205,8 +206,8 @@ Core opens a connection and writes one call frame:
 | Field | Meaning |
 | --- | --- |
 | `id` | Call ID for logs and traces. Unique per core process. |
-| `op` | The operation. Version 0 has `describe`, `generate`, `login` and `refresh`; version 0.1 adds `session`; version 0.2 adds `count_tokens`; version 0.3 adds `models`. |
-| `account` | For `generate`, `count_tokens`, `refresh`, `session` and `models`: the account to use (below). For `login`: the account being signed in to, with its `id` and `settings` but no `credential`. |
+| `op` | The operation. Version 0 has `describe`, `generate`, `login` and `refresh`; version 0.1 adds `session`; version 0.2 adds `count_tokens`; version 0.3 adds `models`; version 0.4 adds `check`. |
+| `account` | For `generate`, `count_tokens`, `refresh`, `session`, `models` and `check`: the account to use (below). For `login`: the account being signed in to, with its `id` and `settings` but no `credential`. |
 | `request` | For `generate` and `count_tokens`: the model request (below). |
 | `login` | For `login`: what to sign in with (see [Login and refresh](#login-and-refresh)). |
 | `session` | For `session`: what kind of session to open (see [Sessions](#sessions)). |
@@ -226,8 +227,8 @@ The reply is one frame, then the extension closes the connection:
 the extension implements (absent means 0; see [Versioning](#versioning)). `operations` lists the
 operations the extension serves: always `generate`, plus `login` and `refresh` when it signs in to
 accounts, `session` when it holds [sessions](#sessions), `count_tokens` when it
-[counts tokens](#count_tokens), and `models` when it lists its accounts' [models](#models). An
-extension that lists `login` also
+[counts tokens](#count_tokens), `models` when it lists its accounts' [models](#models), and
+`check` when it [checks](#check) its accounts. An extension that lists `login` also
 lists its `login_methods` (see [Login and refresh](#login-and-refresh)).
 
 ### `generate`
@@ -308,6 +309,38 @@ renames, leaves out and prefixes the listed models by the account's naming rules
 credential change. List the models the account can use: from the upstream's own list when it has
 one, or from a catalog the extension carries. Leave out models the account's requests cannot
 reach through this extension.
+
+### `check`
+
+Version 0.4. Core asks whether an account works, without generating anything: when it starts,
+when a reload adds an account or changes one (its settings, its credential or its extension), and
+when a login adds an account or one comes back after a new login. Core shows the result in the
+management API's account listing and its log. It never waits for a check before serving
+requests, and gives a check 30 seconds. Core sends `check` only to an extension that reports
+`protocol_minor` 4 or more and lists `check` in `operations`; any other extension's accounts show
+as not checked.
+
+```json
+{"type": "call", "id": "c-22", "op": "check", "account": {"id": "work", "settings": {...}, "credential": {...}}}
+```
+
+The reply is one frame, then the extension closes the connection: a `check.result` when the
+account works, or an `error` event as for `generate` when it does not.
+
+```json
+{"type": "check.result", "check": {"detail": "the upstream lists 42 models"}}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `detail` | What was checked, for people. Optional. Not secret. |
+
+Make at most one call upstream, and only one that costs the account nothing: its model list, or
+the provider's own call that tells whether a token is valid. Never generate, and do not renew the
+credential: core renews it before the account's next request. A refused credential is an `auth`
+error, an upstream that cannot be reached `unavailable`, an upstream failure `upstream`. When the
+account cannot be checked without a generation (the upstream has no such call), reply with code
+`unsupported`: core shows the account as not checked, not as failing.
 
 ## Accounts
 
@@ -767,7 +800,7 @@ removes `previous_response_id`.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.3. An extension reports the minor version it
+raise the minor version: this document is version 0.4. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -778,10 +811,11 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.1 | [Sessions](#sessions): the `session` operation and its frames; `protocol_minor` in describe. |
 | 0.2 | [Token counting](#count_tokens): the `count_tokens` operation. The request's `options.thinking_suffix`. |
 | 0.3 | [Model lists](#models): the `models` operation and its `models.result` frame. |
+| 0.4 | [Account checks](#check): the `check` operation and its `check.result` frame. |
 
-## What version 0.3 leaves out
+## What version 0.4 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
-capabilities in `describe`; operations beyond `generate`, sessions, token counting and model
-lists; several turns at once in one session (OpenAI's `stream_id` lanes); realtime sessions
+capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists
+and account checks; several turns at once in one session (OpenAI's `stream_id` lanes); realtime sessions
 (audio, WebRTC); a private data folder per extension.

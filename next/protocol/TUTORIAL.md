@@ -238,6 +238,35 @@ sdk.Serve(sdk.Extension{
 Read the list from the upstream when it has one (with `call.Account`'s credential), or return a
 catalog the extension carries. Core renames, leaves out and prefixes the models by the account's
 own rules, and keeps the answer until the account's settings or credential change, so the handler
-needs no cache of its own. The SDK reports `protocol_minor` 3 in describe, and lists `models` when
-`Models` is set; without it, core lists only the models accounts' configs name. The fields are in
+needs no cache of its own. The SDK reports its `protocol_minor` (3 or more) in describe, and lists
+`models` when `Models` is set; without it, core lists only the models accounts' configs name. The fields are in
 [`models`](README.md#models).
+
+## 9. Check accounts (optional, protocol 0.4)
+
+When core starts, and when a reload or a login adds or changes an account, it asks the account's
+extension whether the account works, and shows the answer in its account listing and log. Add a
+check handler that makes one free call upstream: the provider's model list, or its own call that
+tells whether a token is valid. Never generate:
+
+```go
+sdk.Serve(sdk.Extension{
+	ID: "example/echo", Version: "0.1.0", Generate: generate,
+	Check: func(ctx context.Context, call sdk.CheckCall) (*protocol.CheckResult, error) {
+		resp, err := getModels(ctx, call.Account) // GET {base_url}/models with the account's key
+		if err != nil {
+			return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach the upstream", Scope: llm.ScopeEndpoint}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusUnauthorized {
+			return nil, &llm.Error{Code: llm.CodeAuth, Message: "the upstream refused the key", Scope: llm.ScopeCredential}
+		}
+		return &protocol.CheckResult{Detail: "the upstream accepted the key"}, nil
+	},
+})
+```
+
+Return code `unsupported` for an account that cannot be checked without a generation: core then
+shows it as not checked. The SDK lists `check` in describe when `Check` is set. The rules are in
+[`check`](README.md#check); the OAuth example (`examples/oauth`) checks a token with its provider.
+

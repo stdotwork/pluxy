@@ -659,6 +659,28 @@ on), then the highest `priority`, then picks by strategy.
 A client can pin a request to one account with the `X-Pluxy-Account: <id>` header. A pinned
 request never goes to another account.
 
+### Account checks
+
+When core starts, and when a reload adds or changes an account (its settings, its credential or
+its extension) or a login adds one, core checks the account: it asks the account's extension
+whether the account works, and the extension makes one call upstream that costs the account
+nothing, such as its model list. Nothing is generated and the credential is not renewed for it.
+Up to 4 checks run at once, each for at most 30 seconds, in the background: core serves requests
+while they run, and the result does not change routing. The management API's `GET /accounts`
+shows each account's last `check`:
+
+| `check.state` | Meaning |
+| --- | --- |
+| `checking` | The check is running. |
+| `ok` | The account works; `detail` says what was checked. |
+| `failed` | It does not; `error` is why (code `auth` for a refused key, `unavailable` for an upstream that cannot be reached). |
+| `not_checked` | The extension cannot check it without a generation, or has no check; `detail` says which. |
+
+Core also logs each result (`account "work": check passed: ...` or `check failed: ...`). The
+OpenAI-compatible extension checks with `GET {base_url}/models`; an upstream without that list
+(404) leaves the account not checked. The other bundled extensions do not check accounts yet. The
+protocol side is the [`check` operation](protocol/README.md#check).
+
 An account that cannot serve a request (its upstream speaks another format and the request
 cannot be translated to it, or the upstream says it does not have the model) passes the request
 on to the next account within the same request.
@@ -735,7 +757,7 @@ send it as a bearer token. With a management key set, the config may set no acco
 
 | Request | Does |
 | --- | --- |
-| `GET /accounts` | Lists every account (`source` `config` or `login`), its credential `kind`, `state` (`active`, or `reauth_required` when the provider refused the grant), `disabled`, `expires_at` and the last renewal error. Never a secret. |
+| `GET /accounts` | Lists every account (`source` `config` or `login`), its credential `kind`, `state` (`active`, or `reauth_required` when the provider refused the grant), `disabled`, `expires_at`, the last renewal error and the last [account check](#account-checks). Never a secret. |
 | `POST /accounts` | Starts a login that adds an account: `{"id": "work", "extension": "pluxy/codex", "method": "device", "input": {...}, ...}` plus any account fields from the config (`settings`, `models`, `priority`, ...). `extension` names the extension that signs in and owns the account; it may be left out while only one extension runs. Replies 202 with the login, usually carrying its first prompt (a URL or a device code). |
 | `GET /logins/{id}` | The login's state (`pending`, `done`, `failed`, `cancelled`), prompt or error. |
 | `POST /logins/{id}/input` | `{"input": {...}}`: what the user entered for the prompt, such as the redirect URL of a browser login. |

@@ -1,14 +1,15 @@
 // Command oauth is an example provider extension that signs in with OAuth. It has three login
 // methods: the device authorization grant (RFC 8628), the authorization code grant with PKCE (RFC
 // 6749 and RFC 7636), and an API key. It renews OAuth credentials with their refresh token, and it
-// calls a model API with the credential's access token or key.
+// calls a model API with the credential's access token or key. It checks an account by asking the
+// provider whether its token works.
 //
 // Account settings:
 //
 //	{"base_url": "https://provider.example"}
 //
 // The provider is any server that speaks the endpoints of the oauthtest package: /oauth/device/code,
-// /oauth/authorize, /oauth/token and /v1/chat.
+// /oauth/authorize, /oauth/token, /v1/chat and /v1/me.
 package main
 
 import (
@@ -67,6 +68,7 @@ func main() {
 		LoginMethods: loginMethods,
 		Login:        login,
 		Refresh:      refresh,
+		Check:        check,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "oauth:", err)
@@ -176,6 +178,36 @@ func chat(ctx context.Context, base, token, model string, stream bool) (*http.Re
 		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach the provider", Retryable: true, Scope: llm.ScopeEndpoint}
 	}
 	return resp, nil
+}
+
+// check asks the provider's /v1/me whether the account's token works: a call that costs the
+// account nothing and generates nothing.
+func check(ctx context.Context, call sdk.CheckCall) (*protocol.CheckResult, error) {
+	base, err := baseURL(call.Account.Settings)
+	if err != nil {
+		return nil, err
+	}
+	token, err := bearerOf(call.Account.Credential)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/me", nil)
+	if err != nil {
+		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "the base_url is not a valid URL", Scope: llm.ScopeCredential}
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach the provider", Scope: llm.ScopeEndpoint}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, chatError(resp)
+	}
+	return &protocol.CheckResult{Detail: "the provider accepted the token"}, nil
 }
 
 // chatError turns a refused /v1/chat request into an error.

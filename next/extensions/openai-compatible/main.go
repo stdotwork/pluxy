@@ -19,6 +19,10 @@
 // account's credential must be of kind api_key; it is sent as a bearer token, for a Messages
 // upstream in x-api-key with the client's anthropic-version (2023-06-01 when the client sent
 // none) and anthropic-beta headers, and for a Gemini upstream in x-goog-api-key.
+//
+// An account check (core's check call) reads the upstream's model list, GET {base_url}/models,
+// with the key sent the same way; it costs the account nothing. An upstream without that list
+// (404) leaves the account not checked.
 package main
 
 import (
@@ -52,7 +56,7 @@ const (
 )
 
 func main() {
-	if err := sdk.Serve(sdk.Extension{ID: id, Version: version, Generate: generate, CountTokens: countTokens}); err != nil {
+	if err := sdk.Serve(sdk.Extension{ID: id, Version: version, Generate: generate, CountTokens: countTokens, Check: check}); err != nil {
 		fmt.Fprintln(os.Stderr, "openai-compatible:", err)
 		os.Exit(1)
 	}
@@ -196,6 +200,64 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	return nil
 }
 
+// check reads the upstream's model list, GET {base_url}/models: free for the account, and refused
+// like a generation when the key is.
+func check(ctx context.Context, call sdk.CheckCall) (*protocol.CheckResult, error) {
+	s, wire, key, err := account(sdk.Call{ID: call.ID, Account: call.Account})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(s.BaseURL, "/")+"/models", nil)
+	if err != nil {
+		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
+	}
+	setKey(req, wire, key, nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: "the upstream has no model list to check the key with", Scope: llm.ScopeCredential}
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, upstreamError(resp, "")
+	}
+	var list struct {
+		Data   []json.RawMessage `json:"data"`   // OpenAI and Anthropic
+		Models []json.RawMessage `json:"models"` // Gemini
+	}
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxFrame))
+	if json.Unmarshal(raw, &list) != nil || (list.Data == nil && list.Models == nil) {
+		return &protocol.CheckResult{Detail: "the upstream accepted the key"}, nil
+	}
+	return &protocol.CheckResult{Detail: fmt.Sprintf("the upstream lists %d models", len(list.Data)+len(list.Models))}, nil
+}
+
+// setKey puts the key on req as wire's upstream takes it; native is the client's request in its
+// own format, whose Messages headers a Messages upstream gets, or nil.
+func setKey(req *http.Request, wire wireInfo, key string, native *llm.Native) {
+	switch wire.format {
+	case llm.FormatGeminiGenerate:
+		req.Header.Set("X-Goog-Api-Key", key)
+	case llm.FormatAnthropicMessages:
+		req.Header.Set("X-Api-Key", key)
+		req.Header.Set("Anthropic-Version", anthropicVersion)
+		if native != nil && native.Format == wire.format {
+			for _, h := range anthropicmessages.Headers {
+				if v := native.Headers[h]; v != "" {
+					req.Header.Set(h, v)
+				}
+			}
+		}
+	default:
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+}
+
 // postBody sends body to path under base_url with the key as wire's upstream takes it, and
 // returns the upstream's successful reply; a failure is returned as the error to report.
 func postBody(ctx context.Context, call sdk.Call, s settings, wire wireInfo, key, path string, body []byte) (*http.Response, error) {
@@ -204,22 +266,7 @@ func postBody(ctx context.Context, call sdk.Call, s settings, wire wireInfo, key
 		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
 	}
 	req.Header.Set("Content-Type", "application/json")
-	switch wire.format {
-	case llm.FormatGeminiGenerate:
-		req.Header.Set("X-Goog-Api-Key", key)
-	case llm.FormatAnthropicMessages:
-		req.Header.Set("X-Api-Key", key)
-		req.Header.Set("Anthropic-Version", anthropicVersion)
-		if n := call.Request.Native; n != nil && n.Format == wire.format {
-			for _, h := range anthropicmessages.Headers {
-				if v := n.Headers[h]; v != "" {
-					req.Header.Set(h, v)
-				}
-			}
-		}
-	default:
-		req.Header.Set("Authorization", "Bearer "+key)
-	}
+	setKey(req, wire, key, call.Request.Native)
 	if call.Request.Stream {
 		req.Header.Set("Accept", "text/event-stream")
 	}

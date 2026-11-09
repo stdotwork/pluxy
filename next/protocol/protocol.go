@@ -22,8 +22,8 @@ const Version = 0
 // Minor is the minor version this package implements within Version. An extension reports it in
 // describe (Info.ProtocolMinor); core uses what a minor version adds only with an extension that
 // reports it. Minor 1 adds sessions; minor 2 adds token counting and the request's thinking
-// suffix; minor 3 adds model listing.
-const Minor = 3
+// suffix; minor 3 adds model listing; minor 4 adds account checks.
+const Minor = 4
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
@@ -57,6 +57,8 @@ const (
 	OpCountTokens = "count_tokens"
 	// OpModels lists the models an account serves (minor version 3).
 	OpModels = "models"
+	// OpCheck asks whether an account works, without generating anything (minor version 4).
+	OpCheck = "check"
 )
 
 // Frame types that are not events.
@@ -81,6 +83,8 @@ const (
 	TypeSessionInterrupt = "session.interrupt"
 	// TypeModelsResult answers a models call.
 	TypeModelsResult = "models.result"
+	// TypeCheckResult answers a check call for an account that works.
+	TypeCheckResult = "check.result"
 )
 
 // Session kinds (SessionInfo.Format).
@@ -274,14 +278,21 @@ type Model struct {
 	OutputModalities  []string `json:"output_modalities,omitempty"`
 }
 
-// Reply is a frame an extension sends: an event, the result of describe or models, or a login
-// or refresh frame.
+// CheckResult is the result of a check call for an account that works.
+type CheckResult struct {
+	// Detail says what was checked, for people. Not secret.
+	Detail string `json:"detail,omitempty"`
+}
+
+// Reply is a frame an extension sends: an event, the result of describe, models or check, or a
+// login or refresh frame.
 type Reply struct {
 	llm.Event
-	Info   *Info      `json:"info,omitempty"`
-	Prompt *Prompt    `json:"prompt,omitempty"`
-	Grant  *Grant     `json:"grant,omitempty"`
-	Models *ModelList `json:"models,omitempty"`
+	Info   *Info        `json:"info,omitempty"`
+	Prompt *Prompt      `json:"prompt,omitempty"`
+	Grant  *Grant       `json:"grant,omitempty"`
+	Models *ModelList   `json:"models,omitempty"`
+	Check  *CheckResult `json:"check,omitempty"`
 }
 
 // ErrFrameTooLarge is returned for a frame longer than MaxFrame.
