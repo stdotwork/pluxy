@@ -156,7 +156,7 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string) 
 		return err
 	}
 	srv := &http.Server{
-		Handler:           mux,
+		Handler:           server.WithClientIP(c.Config, mux),
 		ReadHeaderTimeout: 30 * time.Second,
 		TLSConfig:         tlsConfig,
 	}

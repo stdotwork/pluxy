@@ -182,7 +182,7 @@ var rules = map[string]rule{
 	"management.base-url":                   {dropped, "no terminal UI"},
 	"server.max-request-body-bytes":         {dropped, "requests are capped at 24 MiB"},
 	"server.response-compression":           {later, ""},
-	"server.trusted-proxies":                {later, ""},
+	"server.trusted-proxies":                {supported, ""},
 	"server.tls":                            {supported, ""},
 	"server.commercial-mode":                {dropped, "it turns off features this core does not have"},
 	"server.discovery":                      {later, ""},
@@ -417,7 +417,7 @@ func (x *translator) run() error {
 // malformed parent must not make a setting such as the client keys read as absent.
 var readPaths = []string{
 	"server.host", "server.port", "access.api-keys", "management.secret-key", "management.allow-remote",
-	"server.tls.enable", "server.tls.cert", "server.tls.key",
+	"server.tls.enable", "server.tls.cert", "server.tls.key", "server.trusted-proxies",
 	"routing.strategy", "routing.session-affinity", "routing.session-affinity-ttl",
 	"routing.retry.max-retry-credentials", "routing.retry.max-retry-interval", "routing.retry.request-retry",
 	"routing.force-model-prefix", "oauth.model-alias", "oauth.excluded-models",
@@ -475,6 +475,16 @@ func (x *translator) server() error {
 			return err
 		}
 		x.out["tls"] = map[string]any{"enable": true, "cert": strings.TrimSpace(cert), "key": strings.TrimSpace(key)}
+	}
+
+	if v, ok := get(x.t, "server.trusted-proxies"); ok && v != nil {
+		proxies, err := stringList(v, "server.trusted-proxies")
+		if err != nil {
+			return err
+		}
+		if len(proxies) > 0 {
+			x.out["trusted_proxies"] = proxies
+		}
 	}
 
 	if v, ok := get(x.t, "access.api-keys"); ok && v != nil {

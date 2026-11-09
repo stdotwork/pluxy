@@ -522,3 +522,22 @@ func TestTLS(t *testing.T) {
 		t.Error("a tls.enable that is not true or false was accepted")
 	}
 }
+
+// server.trusted-proxies (older spelling trusted-proxies) becomes trusted_proxies.
+func TestTrustedProxies(t *testing.T) {
+	for _, yaml := range []string{
+		"server:\n  trusted-proxies: [10.0.0.0/8, 127.0.0.1]\n",
+		"trusted-proxies:\n  - 10.0.0.0/8\n  - 127.0.0.1\n",
+	} {
+		r := translate(t, yaml)
+		if got := asJSON(t, r.Config["trusted_proxies"]); !reflect.DeepEqual(got, []any{"10.0.0.0/8", "127.0.0.1"}) {
+			t.Errorf("%s: trusted_proxies = %#v", yaml, got)
+		}
+		if strings.Contains(notices(r), "trusted-proxies") {
+			t.Errorf("%s: notices name trusted-proxies:\n%s", yaml, notices(r))
+		}
+	}
+	if _, err := Translate([]byte("server:\n  trusted-proxies: 10.0.0.1\n")); err == nil {
+		t.Error("trusted-proxies that is not a list was accepted")
+	}
+}
