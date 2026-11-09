@@ -54,6 +54,8 @@ type Config struct {
 	ExtensionPages ExtensionPagesConfig `json:"extension_pages"`
 	// CORS says which web pages may call the client API from a browser. Default: none.
 	CORS CORSConfig `json:"cors"`
+	// TLS serves listen over HTTPS (today's server.tls).
+	TLS TLSFiles `json:"tls"`
 
 	// From a config.yaml with today's core's key names (package legacy):
 	// Notices name the settings it uses that core does not support or know; core logs them
@@ -63,6 +65,16 @@ type Config struct {
 	AuthDir string `json:"-"`
 	// Import says how accounts imported from today's auth folder are set up.
 	Import legacy.ImportOptions `json:"-"`
+}
+
+// TLSFiles is the tls section of the config, with today's core's key names.
+type TLSFiles struct {
+	// Enable serves listen over HTTPS (HTTP/2 or HTTP/1.1) instead of plain HTTP.
+	Enable bool `json:"enable,omitempty"`
+	// Cert is the certificate file (PEM, the leaf first, then its chain) and Key its private
+	// key file (PEM), relative to the config file. Both are required with Enable.
+	Cert string `json:"cert,omitempty"`
+	Key  string `json:"key,omitempty"`
 }
 
 // ExtensionPagesConfig is the extension_pages section of the config.
@@ -309,6 +321,12 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 	}
 	if err := c.CORS.prepare(); err != nil {
 		return nil, err
+	}
+	if c.TLS.Enable {
+		if strings.TrimSpace(c.TLS.Cert) == "" || strings.TrimSpace(c.TLS.Key) == "" {
+			return nil, errors.New("config: tls.enable needs tls.cert and tls.key")
+		}
+		c.TLS.Cert, c.TLS.Key = rel(c.TLS.Cert), rel(c.TLS.Key)
 	}
 	switch c.DropPolicy {
 	case "", llm.DropReport, llm.DropReject:

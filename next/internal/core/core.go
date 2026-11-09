@@ -356,6 +356,9 @@ func (c *Core) fixed(cfg *server.Config, prev *snapshot) error {
 	if prev != nil && cfg.ExtensionPages.Listen != prev.Config.ExtensionPages.Listen {
 		return fmt.Errorf("config: extension_pages.listen cannot change while core runs (%q to %q); restart core to apply it", prev.Config.ExtensionPages.Listen, cfg.ExtensionPages.Listen)
 	}
+	if prev != nil && cfg.TLS != prev.Config.TLS {
+		return errors.New("config: tls cannot change while core runs; restart core to apply it (a renewed certificate in the same files is read without a restart)")
+	}
 	if prev != nil && cfg.CredentialsDir != prev.Config.CredentialsDir {
 		return fmt.Errorf("config: credentials_dir cannot change while core runs (%q to %q); restart core to apply it", prev.Config.CredentialsDir, cfg.CredentialsDir)
 	}

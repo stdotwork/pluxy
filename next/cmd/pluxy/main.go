@@ -149,15 +149,26 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string) 
 	mux.Handle(strings.TrimSuffix(panel.Prefix, "/"), ui)
 	mux.Handle(panel.Prefix, ui)
 	mux.Handle("/", server.NewHandler(c))
+	tlsConfig, err := cfg.TLSConfig()
+	if err != nil {
+		ln.Close()
+		pagesLn.Close()
+		return err
+	}
 	srv := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 30 * time.Second,
+		TLSConfig:         tlsConfig,
 	}
 	pagesSrv := &http.Server{
 		Handler:           pages.Handler(c.PagesFolder, managementOn),
 		ReadHeaderTimeout: 30 * time.Second,
 	}
-	fmt.Fprintf(os.Stderr, "pluxy: listening on http://%s\n", ln.Addr())
+	scheme := "http"
+	if tlsConfig != nil {
+		scheme = "https"
+	}
+	fmt.Fprintf(os.Stderr, "pluxy: listening on %s://%s\n", scheme, ln.Addr())
 	fmt.Fprintf(os.Stderr, "pluxy: extension pages on http://%s\n", pagesLn.Addr())
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -175,7 +186,13 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string) 
 	}()
 
 	errc := make(chan error, 2)
-	go func() { errc <- srv.Serve(ln) }()
+	go func() {
+		if tlsConfig != nil {
+			errc <- srv.ServeTLS(ln, "", "") // the certificate comes from TLSConfig; HTTP/2 is on
+			return
+		}
+		errc <- srv.Serve(ln)
+	}()
 	go func() { errc <- pagesSrv.Serve(pagesLn) }()
 	select {
 	case err := <-errc:

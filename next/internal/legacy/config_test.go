@@ -282,7 +282,7 @@ observability:
 `)
 	n := notices(r)
 	for _, want := range []string{
-		"not supported yet, ignored: observability.logs, routing.session-affinity-rebind-on, server.tls, upstream.claude.tool-search\n",
+		"not supported yet, ignored: observability.logs, routing.session-affinity-rebind-on, upstream.claude.tool-search\n",
 		"dropped, ignored: plugins (replaced by packages), server.commercial-mode (it turns off features this core does not have), upstream.claude.session-date-pin-days (making other clients look like Claude Code is out of scope)\n",
 		"unknown keys, ignored: server.discovery-typo\n",
 		"management.allow-remote is not supported yet",
@@ -497,5 +497,28 @@ openai-compatibility:
 	}
 	if strings.Contains(n, "unknown") || strings.Contains(n, "force-model-prefix") || strings.Contains(n, "excluded-models,") {
 		t.Errorf("notices name a key that is read:\n%s", n)
+	}
+}
+
+// server.tls (older spelling tls) becomes the tls section when it is enabled.
+func TestTLS(t *testing.T) {
+	want := map[string]any{"enable": true, "cert": "certs/c.pem", "key": "/etc/k.pem"}
+	for _, yaml := range []string{
+		"server:\n  tls: {enable: true, cert: certs/c.pem, key: /etc/k.pem}\n",
+		"tls:\n  enable: true\n  cert: certs/c.pem\n  key: /etc/k.pem\n",
+	} {
+		r := translate(t, yaml)
+		if got := r.Config["tls"]; !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: tls = %#v, want %#v", yaml, got, want)
+		}
+		if strings.Contains(notices(r), "tls") {
+			t.Errorf("%s: notices name tls:\n%s", yaml, notices(r))
+		}
+	}
+	if r := translate(t, "server:\n  tls: {enable: false, cert: c.pem, key: k.pem}\n"); r.Config["tls"] != nil {
+		t.Errorf("tls off: tls = %#v, want none", r.Config["tls"])
+	}
+	if _, err := Translate([]byte("server:\n  tls: {enable: yes-please}\n")); err == nil {
+		t.Error("a tls.enable that is not true or false was accepted")
 	}
 }
