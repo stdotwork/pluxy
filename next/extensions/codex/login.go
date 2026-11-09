@@ -108,23 +108,14 @@ func browserLogin(ctx context.Context, set settings, s *sdk.LoginSession) (*prot
 			defer stop()
 		}
 	}
-	inputs := make(chan map[string]string, 1)
-	inputErr := make(chan error, 1)
 	if err := s.Prompt(protocol.Prompt{Kind: protocol.LoginBrowser, URL: authURL, ExpiresIn: 900,
 		Message: "Open the link and sign in to ChatGPT. If the page you end on does not load, paste its address here.",
 		Inputs:  []protocol.LoginInput{{Name: "redirect_url", Label: "Address the browser ended on"}}}); err != nil {
 		return nil, err
 	}
-	go func() {
-		for {
-			in, err := s.Input(ctx)
-			if err != nil {
-				inputErr <- err
-				return
-			}
-			inputs <- in
-		}
-	}()
+	fwdCtx, stopInputs := context.WithCancel(ctx)
+	defer stopInputs()
+	inputs, inputErr := forwardInputs(fwdCtx, s.Input)
 	var code string
 	for code == "" {
 		var params url.Values
@@ -137,7 +128,12 @@ func browserLogin(ctx context.Context, set settings, s *sdk.LoginSession) (*prot
 			}
 			return nil, err
 		case params = <-results:
-		case in := <-inputs:
+		case in, ok := <-inputs:
+			if !ok {
+				// The forwarder stopped; its error, or ctx being done, ends the login.
+				inputs = nil
+				continue
+			}
 			if u, err := url.Parse(strings.TrimSpace(in["redirect_url"])); err == nil {
 				params = u.Query()
 			}
@@ -161,6 +157,30 @@ func browserLogin(ctx context.Context, set settings, s *sdk.LoginSession) (*prot
 		return nil, err
 	}
 	return grantFrom(tr, nil)
+}
+
+// forwardInputs reads the login's inputs on its own goroutine, so the login can wait for an
+// input and the browser's return at once. It stops, closing inputs, when ctx is done or reading
+// fails; a failure is sent on the error channel first.
+func forwardInputs(ctx context.Context, input func(context.Context) (map[string]string, error)) (<-chan map[string]string, <-chan error) {
+	inputs := make(chan map[string]string, 1)
+	inputErr := make(chan error, 1)
+	go func() {
+		defer close(inputs)
+		for {
+			in, err := input(ctx)
+			if err != nil {
+				inputErr <- err
+				return
+			}
+			select {
+			case inputs <- in:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return inputs, inputErr
 }
 
 // signInResult reads a browser sign-in result, the query of the address the browser was sent back
