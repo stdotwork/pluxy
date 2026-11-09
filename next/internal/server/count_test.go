@@ -17,6 +17,12 @@ import (
 // count; generate attempts fail the test.
 func countHandler(t *testing.T, count func(req llm.Request) []llm.Event) (http.Handler, *[]llm.Request) {
 	t.Helper()
+	return countHandlerWith(t, &Config{ClientKeys: []string{"k"}}, count)
+}
+
+// countHandlerWith is countHandler with the given config.
+func countHandlerWith(t *testing.T, cfg *Config, count func(req llm.Request) []llm.Event) (http.Handler, *[]llm.Request) {
+	t.Helper()
 	var seen []llm.Request
 	gen := func(context.Context, string, protocol.Account, llm.Request) route.Stream {
 		t.Error("a count went to generate")
@@ -30,7 +36,7 @@ func countHandler(t *testing.T, count func(req llm.Request) []llm.Event) (http.H
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewHandler(fixedSource{&Generation{Config: &Config{ClientKeys: []string{"k"}}, Router: router, Attempt: gen, Count: cnt}}), &seen
+	return NewHandler(fixedSource{&Generation{Config: cfg, Router: router, Attempt: gen, Count: cnt}}), &seen
 }
 
 func counted(format string, n int64, raw string) func(llm.Request) []llm.Event {
@@ -102,12 +108,83 @@ func TestCountTokensRequest(t *testing.T) {
 	}
 }
 
-// When no account can count, the client gets the error; an extension's count reply without a
-// count is a protocol error.
+// cannotCount is what an extension without a count endpoint answers.
+func cannotCount(llm.Request) []llm.Event {
+	return []llm.Event{{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Message: "extension x does not count tokens"}}}
+}
+
+const countBody = `{"model":"m","system":"Be brief.","messages":[{"role":"user","content":"Say hello"}],"tools":[{"name":"get_weather","description":"Weather","input_schema":{"type":"object","properties":{"city":{"type":"string"}}}}]}`
+
+// When no account can count, core answers with its own estimate in the client's shape, unless
+// token_count_estimate is off: then the client gets the error. The estimate follows the request:
+// 27 is what today's core counts for countBody.
+func TestCountTokensEstimate(t *testing.T) {
+	off := false
+	for _, c := range []struct {
+		name       string
+		cfg        Config
+		path, body string
+		want       string // "" when the client gets the error
+	}{
+		{"messages, on by default", Config{}, "/v1/messages/count_tokens", countBody, `{"input_tokens":27}`},
+		{"messages, on", Config{TokenCountEstimate: new(true)}, "/v1/messages/count_tokens", countBody, `{"input_tokens":27}`},
+		{"gemini, on by default", Config{}, "/v1beta/models/m:countTokens", `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`,
+			`{"totalTokens":3,"promptTokensDetails":[{"modality":"TEXT","tokenCount":3}]}`},
+		{"messages, off", Config{TokenCountEstimate: &off}, "/v1/messages/count_tokens", countBody, ""},
+		{"gemini, off", Config{TokenCountEstimate: &off}, "/v1beta/models/m:countTokens", `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := c.cfg
+			cfg.ClientKeys = []string{"k"}
+			h, _ := countHandlerWith(t, &cfg, cannotCount)
+			w := postCount(h, c.path, c.body)
+			if c.want == "" {
+				if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "does not count tokens") {
+					t.Errorf("answered %d: %s, want the unsupported error", w.Code, w.Body)
+				}
+				return
+			}
+			if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "application/json" || w.Header().Get(TraceHeader) == "" {
+				t.Fatalf("answered %d (%q, trace %q): %s", w.Code, w.Header().Get("Content-Type"), w.Header().Get(TraceHeader), w.Body)
+			}
+			if mustCompact(w.Body.String()) != mustCompact(c.want) {
+				t.Errorf("body = %s, want %s", w.Body, c.want)
+			}
+		})
+	}
+}
+
+// Only an account that cannot count lets core estimate. An upstream that counts and fails keeps
+// its error, and so does a request an extension refuses, whatever the setting.
+func TestCountTokensEstimateKeepsRealErrors(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		err  llm.Error
+		want int
+	}{
+		{"an upstream refusal", llm.Error{Code: llm.CodeInvalidRequest, Status: 400, Scope: llm.ScopeRequest, Message: "messages: Input should be a valid list"}, http.StatusBadRequest},
+		{"a rejected key", llm.Error{Code: llm.CodeAuth, Status: 401, Scope: llm.ScopeCredential, Message: "invalid x-api-key"}, http.StatusUnauthorized},
+		{"a rate limit", llm.Error{Code: llm.CodeRateLimit, Status: 429, Scope: llm.ScopeCredential, Message: "slow down"}, http.StatusTooManyRequests},
+		{"a request an extension refuses", llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeRequest, Message: "cannot carry an item"}, http.StatusBadRequest},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := c.err
+			h, _ := countHandlerWith(t, &Config{ClientKeys: []string{"k"}}, func(llm.Request) []llm.Event {
+				return []llm.Event{{Type: llm.EventError, Error: &e}}
+			})
+			w := postCount(h, "/v1/messages/count_tokens", countBody)
+			if w.Code != c.want || !strings.Contains(w.Body.String(), c.err.Message) || strings.Contains(w.Body.String(), "input_tokens") {
+				t.Errorf("answered %d: %s, want %d and the error %q", w.Code, w.Body, c.want, c.err.Message)
+			}
+		})
+	}
+}
+
+// With the estimate off, the client gets the error; an extension's count reply without a count
+// is a protocol error.
 func TestCountTokensFails(t *testing.T) {
-	h, _ := countHandler(t, func(llm.Request) []llm.Event {
-		return []llm.Event{{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Message: "extension x does not count tokens"}}}
-	})
+	off := false
+	h, _ := countHandlerWith(t, &Config{ClientKeys: []string{"k"}, TokenCountEstimate: &off}, cannotCount)
 	w := postCount(h, "/v1/messages/count_tokens", `{"model":"m","messages":[{"role":"user","content":"hi"}]}`)
 	if w.Code < 400 || !strings.Contains(w.Body.String(), "does not count tokens") || !strings.Contains(w.Body.String(), `"type":"error"`) {
 		t.Errorf("answered %d: %s", w.Code, w.Body)
@@ -118,5 +195,50 @@ func TestCountTokensFails(t *testing.T) {
 	w = postCount(h, "/v1beta/models/m:countTokens", `{"contents":[]}`)
 	if w.Code < 500 || !strings.Contains(w.Body.String(), "no input_tokens") {
 		t.Errorf("answered %d: %s", w.Code, w.Body)
+	}
+}
+
+// In a pool where one account cannot count and another refuses the count, core estimates
+// whichever is tried first, as today's core counts the first kind of account itself; with the
+// estimate off the client gets an error.
+func TestCountTokensEstimateInAMixedPool(t *testing.T) {
+	off := false
+	for _, c := range []struct {
+		first string
+		cfg   Config
+		want  int
+	}{
+		{"cannot", Config{}, http.StatusOK},
+		{"limited", Config{}, http.StatusOK},
+		{"cannot", Config{TokenCountEstimate: &off}, http.StatusTooManyRequests},
+		{"limited", Config{TokenCountEstimate: &off}, http.StatusBadRequest},
+	} {
+		gen := func(context.Context, string, protocol.Account, llm.Request) route.Stream {
+			t.Error("a count went to generate")
+			return &events{evs: []llm.Event{{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeInternal}}}}
+		}
+		var tried []string
+		cnt := func(_ context.Context, _ string, a protocol.Account, req llm.Request) route.Stream {
+			tried = append(tried, a.ID)
+			if a.ID == "cannot" {
+				return &events{evs: cannotCount(req)}
+			}
+			return &events{evs: []llm.Event{{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeRateLimit, Status: 429, Retryable: true, Scope: llm.ScopeCredential, Message: "slow down"}}}}
+		}
+		other := map[string]string{"cannot": "limited", "limited": "cannot"}[c.first]
+		router, err := route.New(route.Config{}, []route.Account{{ID: c.first, Priority: 2}, {ID: other, Priority: 1}}, gen, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg := c.cfg
+		cfg.ClientKeys = []string{"k"}
+		h := NewHandler(fixedSource{&Generation{Config: &cfg, Router: router, Attempt: gen, Count: cnt}})
+		w := postCount(h, "/v1/messages/count_tokens", countBody)
+		if w.Code != c.want || (c.want == http.StatusOK) != strings.Contains(w.Body.String(), `"input_tokens":27`) {
+			t.Errorf("%s first, estimate %v: answered %d: %s, want %d", c.first, cfg.TokenCountEstimateOn(), w.Code, w.Body, c.want)
+		}
+		if len(tried) != 2 || tried[0] != c.first {
+			t.Errorf("%s first: tried %v", c.first, tried)
+		}
 	}
 }

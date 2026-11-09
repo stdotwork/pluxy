@@ -17,6 +17,11 @@
 // Requests in other formats (Chat Completions, Responses, Gemini) are translated to Messages,
 // with the client's reasoning effort turned into Claude's thinking settings (thinking.go).
 //
+// Token counts (core's count_tokens call) go to Anthropic's count_tokens endpoint only when
+// base_url is Anthropic's own origin (https://api.anthropic.com). For any other base_url the
+// account answers that it cannot count, without a request, and core estimates the count itself:
+// a Claude-compatible server may not have the endpoint, or may count differently.
+//
 // An account check (core's check call) of an api_key account reads Anthropic's model list,
 // GET {base_url}/v1/models with x-api-key and anthropic-version, which costs the account nothing.
 // A subscription login (oauth) has no such call here, so it is left not checked, without a
@@ -35,6 +40,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"slices"
 	"strconv"
@@ -298,11 +304,16 @@ func check(ctx context.Context, call sdk.CheckCall) (*protocol.CheckResult, erro
 
 // countTokens counts the request's input tokens with the Messages API's count_tokens. A
 // Messages request is sent as it came, without the fields only generating uses; any other is
-// rebuilt as Messages with only the fields count_tokens takes.
+// rebuilt as Messages with only the fields count_tokens takes. An account whose base_url is not
+// Anthropic's own origin cannot count: it answers so without a request.
 func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
 		return err
+	}
+	if !isAnthropicBase(s.BaseURL) {
+		return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
+			Message: "this account's base_url is not Anthropic's own (" + defaultBaseURL + "), which is the only one this extension sends a token count to"}
 	}
 	body, tr, err := buildBody(call.Request)
 	if err != nil {
@@ -335,6 +346,18 @@ func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return err
 	}
 	return out.Finish(llm.Finish{Reason: llm.FinishStop}, &llm.Usage{InputTokens: &n, Raw: llm.RawJSON(raw)})
+}
+
+// isAnthropicBase reports whether baseURL is Anthropic's own API origin: https, the host
+// api.anthropic.com, the port empty or 443, and no user info. Only that origin has the
+// count_tokens endpoint this extension relies on (today's core draws the same line).
+func isAnthropicBase(baseURL string) bool {
+	u, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil || u.User != nil || !strings.EqualFold(u.Scheme, "https") || !strings.EqualFold(u.Hostname(), "api.anthropic.com") {
+		return false
+	}
+	port := u.Port()
+	return port == "" || port == "443"
 }
 
 // buildBody returns the Messages request body for req and how it was built. A Messages request

@@ -1,5 +1,5 @@
 {
-  "description": "POST /v1/messages/count_tokens to a Claude upstream with fields only generating uses (max_tokens, temperature, stream), as a client counting a create request sends them.",
+  "description": "POST /v1/messages/count_tokens to a Claude upstream with fields only generating uses (max_tokens, temperature, stream), as a client counting a create request sends them. The account's base URL is the fake upstream's, not Anthropic's own, so neither core sends it a request (the scripted reply is never used) and both answer with their own estimate.",
   "source": [
     "core/sdk/api/handlers/claude/code_handlers.go:104 (ClaudeCountTokens)",
     "core/internal/runtime/executor/claude_executor_tokens.go:21 (CountTokens)"
@@ -39,42 +39,5 @@
       "status": 200
     },
     "upstream": []
-  },
-  "exceptions": [
-    {
-      "path": "client.body.input_tokens",
-      "kind": "intended",
-      "reason": "The new core counts tokens with the upstream's own count endpoint (Anthropic's /v1/messages/count_tokens), so the count and any error are the upstream's; today's core answers itself with a local tokenizer estimate when the account's base URL is not Anthropic's own, and makes no upstream request.",
-      "want": 42
-    },
-    {
-      "path": "upstream[0]",
-      "kind": "intended",
-      "reason": "The new core counts tokens with the upstream's own count endpoint (Anthropic's /v1/messages/count_tokens), so the count and any error are the upstream's; today's core answers itself with a local tokenizer estimate when the account's base URL is not Anthropic's own, and makes no upstream request. The body goes without the fields only generating uses (max_tokens, temperature, stream), which count_tokens refuses.",
-      "want": {
-        "body": {
-          "messages": [{"content":"Say hello","role":"user"}],
-          "model": "claude-test",
-          "system": "Be brief.",
-          "tools": [
-            {
-              "description": "Weather",
-              "input_schema": {"properties":{"city":{"type":"string"}},"type":"object"},
-              "name": "get_weather"
-            }
-          ]
-        },
-        "headers": {
-          "Accept": "application/json",
-          "Accept-Encoding": "gzip",
-          "Anthropic-Version": "2023-06-01",
-          "Content-Type": "application/json",
-          "User-Agent": "pluxy-corpus/0",
-          "X-Api-Key": "sk-corpus-upstream"
-        },
-        "method": "POST",
-        "path": "/v1/messages/count_tokens?beta=true"
-      }
-    }
-  ]
+  }
 }
