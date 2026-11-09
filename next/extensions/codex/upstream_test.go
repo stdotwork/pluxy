@@ -57,3 +57,25 @@ func usageLimitRefusal(h http.Header, body string) *http.Response {
 	return &http.Response{StatusCode: http.StatusTooManyRequests, Status: "429 Too Many Requests", Header: h,
 		Body: io.NopCloser(strings.NewReader(body))}
 }
+
+// A usage_limit_reached refusal whose body names no reset waits until the used-up window resets,
+// when Codex's headers say when.
+func TestUsageLimitWaitsForTheWindowReset(t *testing.T) {
+	h := http.Header{}
+	h.Set("X-Codex-Primary-Used-Percent", "100")
+	h.Set("X-Codex-Primary-Window-Minutes", "300")
+	h.Set("X-Codex-Primary-Reset-After-Seconds", "600")
+	h.Set("X-Codex-Secondary-Used-Percent", "100")
+	h.Set("X-Codex-Secondary-Window-Minutes", "10080")
+	h.Set("X-Codex-Secondary-Reset-After-Seconds", "86400")
+	e := statusError(usageLimitRefusal(h, `{"error":{"type":"usage_limit_reached","message":"limit"}}`), "m")
+	if e.RetryAfterMS < 86_399_000 || e.RetryAfterMS > 86_400_000 {
+		t.Errorf("retry after %d ms, want the weekly window's reset (86400 s)", e.RetryAfterMS)
+	}
+	h = http.Header{}
+	h.Set("X-Codex-Primary-Used-Percent", "100")
+	h.Set("X-Codex-Primary-Window-Minutes", "300")
+	if e := statusError(usageLimitRefusal(h, `{"error":{"type":"usage_limit_reached"}}`), "m"); e.RetryAfterMS != 0 {
+		t.Errorf("a window without a reset time gave retry after %d ms, want none", e.RetryAfterMS)
+	}
+}

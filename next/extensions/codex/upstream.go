@@ -337,7 +337,11 @@ func statusError(resp *http.Response, model string) *llm.Error {
 		// The plan's usage allowance is used up until it resets.
 		e.Code, e.Scope, e.Retryable, e.Status = llm.CodeQuota, llm.ScopeCredential, true, http.StatusTooManyRequests
 		e.RetryAfterMS = resetMS(ce, resp.Header.Get("Retry-After"))
-		e.QuotaWindowMinutes, _ = exhaustedWindow(resp.Header, time.Now())
+		var windowReset int64
+		e.QuotaWindowMinutes, windowReset = exhaustedWindow(resp.Header, time.Now())
+		if e.RetryAfterMS == 0 {
+			e.RetryAfterMS = windowReset
+		}
 	case s >= 300 && s < 400:
 		e.Code, e.Scope, e.Status = llm.CodeUpstream, llm.ScopeEndpoint, http.StatusBadGateway
 		e.Message = fmt.Sprintf("upstream redirected (%s) to another host; not followed", resp.Status)
