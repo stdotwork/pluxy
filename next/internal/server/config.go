@@ -3,6 +3,7 @@
 package server
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -71,6 +72,9 @@ type Config struct {
 	// Default: none; a request comes from its connection's peer.
 	TrustedProxies []string `json:"trusted_proxies,omitempty"`
 	trusted        []netip.Prefix
+	// keyDigests are the SHA-256 digests of ClientKeys, made when the config is loaded so that a
+	// request's check does not hash a key (prepareClientKeys).
+	keyDigests [][sha256.Size]byte
 	// Usage says whether core keeps a usage record of the requests it serves, for the
 	// management API, and how much of it.
 	Usage UsageConfig `json:"usage"`
@@ -86,6 +90,29 @@ type Config struct {
 	AuthDir string `json:"-"`
 	// Import says how accounts imported from today's auth folder are set up.
 	Import legacy.ImportOptions `json:"-"`
+}
+
+// prepareClientKeys makes the digests of the client keys, which authorized compares a request's
+// token with. Hashing the keys here, once, keeps the time of a request's check from depending on
+// how long a key is, and from growing with the number and length of the keys.
+func (c *Config) prepareClientKeys() {
+	c.keyDigests = make([][sha256.Size]byte, len(c.ClientKeys))
+	for i, k := range c.ClientKeys {
+		c.keyDigests[i] = sha256.Sum256([]byte(k))
+	}
+}
+
+// clientKeyDigests returns the digests of the client keys: the ones made at load, or, for a
+// Config that was built by hand (tests), made now.
+func (c *Config) clientKeyDigests() [][sha256.Size]byte {
+	if len(c.keyDigests) == len(c.ClientKeys) {
+		return c.keyDigests
+	}
+	out := make([][sha256.Size]byte, len(c.ClientKeys))
+	for i, k := range c.ClientKeys {
+		out[i] = sha256.Sum256([]byte(k))
+	}
+	return out
 }
 
 // TokenCountEstimateOn reports whether a token count no account can give is answered with an
@@ -467,5 +494,6 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 	if err := c.Routing.Validate(); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
+	c.prepareClientKeys()
 	return &c, nil
 }
