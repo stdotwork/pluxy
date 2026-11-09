@@ -48,16 +48,29 @@ func TestExampleClientKeysRefuseEveryRequest(t *testing.T) {
 			h := testHandler(t, &Config{ClientKeys: tc.keys}, hello)
 			for _, req := range []struct {
 				method, path, body string
+				refusalOnly        bool // the test handler serves no such route, so only a refusal is checked
 			}{
-				{"POST", "/v1/chat/completions", chatBody},
-				{"POST", "/v1/messages", `{"model":"m","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`},
-				{"POST", "/v1beta/models/m:generateContent", `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`},
-				{"GET", "/v1/models", ""},
-				{"GET", "/v1beta/models", ""},
+				{"POST", "/v1/chat/completions", chatBody, false},
+				{"POST", "/v1/messages", `{"model":"m","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`, false},
+				{"POST", "/v1beta/models/m:generateContent", `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`, false},
+				{"GET", "/v1/models", "", false},
+				{"GET", "/v1beta/models", "", false},
+				{"POST", "/v1/messages/count_tokens", `{"model":"m","messages":[{"role":"user","content":"hi"}]}`, true},
+				{"POST", "/v1beta/models/m:countTokens", `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`, true},
+				{"GET", "/v1/responses", "", true}, // the WebSocket upgrade, refused before it is accepted
 			} {
+				if req.refusalOnly && tc.want == http.StatusOK {
+					continue
+				}
 				r := httptest.NewRequest(req.method, req.path, strings.NewReader(req.body))
 				if tc.key != "" {
 					r.Header.Set("Authorization", "Bearer "+tc.key)
+				}
+				if req.path == "/v1/responses" {
+					r.Header.Set("Connection", "Upgrade")
+					r.Header.Set("Upgrade", "websocket")
+					r.Header.Set("Sec-WebSocket-Version", "13")
+					r.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
 				}
 				w := httptest.NewRecorder()
 				h.ServeHTTP(w, r)
