@@ -30,7 +30,7 @@ func countHandler(t *testing.T, count func(req llm.Request) []llm.Event) (http.H
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewHandler(fixedSource{&Generation{Config: &Config{}, Router: router, Attempt: gen, Count: cnt}}), &seen
+	return NewHandler(fixedSource{&Generation{Config: &Config{ClientKeys: []string{"k"}}, Router: router, Attempt: gen, Count: cnt}}), &seen
 }
 
 func counted(format string, n int64, raw string) func(llm.Request) []llm.Event {
@@ -44,7 +44,9 @@ func counted(format string, n int64, raw string) func(llm.Request) []llm.Event {
 
 func postCount(h http.Handler, path, body string) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)))
+	r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	r.Header.Set("Authorization", "Bearer k")
+	h.ServeHTTP(w, r)
 	return w
 }
 

@@ -26,7 +26,8 @@ import (
 type Config struct {
 	// Listen is the TCP address to serve on, for example 127.0.0.1:8400.
 	Listen string `json:"listen"`
-	// ClientKeys are the keys clients must send as a bearer token. Empty means no check.
+	// ClientKeys are the keys clients must send as a bearer token. At least one is required:
+	// core serves no client without a key.
 	ClientKeys []string `json:"client_keys"`
 	// Extension is the extension run from a manifest path, with its accounts. Optional once
 	// packages are used.
@@ -263,6 +264,10 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 	}
 	if c.Listen == "" {
 		return nil, errors.New("config: listen is required")
+	}
+	if len(c.ClientKeys) == 0 {
+		// Today's core serves anyone without a key then; this core refuses to.
+		return nil, errors.New("config: client_keys is empty (access.api-keys in a config.yaml): set at least one client key; core serves no client without one")
 	}
 	if err := c.ExtensionPages.prepare(c.Listen); err != nil {
 		return nil, err

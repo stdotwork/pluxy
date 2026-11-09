@@ -115,9 +115,6 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string) 
 	}
 	defer c.Stop()
 	cfg := c.Config()
-	if len(cfg.ClientKeys) == 0 {
-		log.Printf("warning: no client_keys set; anyone who can reach %s can use the configured accounts", cfg.Listen)
-	}
 	if safeMode {
 		log.Print("safe mode: no extension runs")
 	}

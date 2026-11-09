@@ -14,7 +14,7 @@ import (
 // An extension timing too large for a time.Duration is refused, not wrapped into a negative
 // duration.
 func TestConfigRefusesHugeTimings(t *testing.T) {
-	cfg := `{"listen":"127.0.0.1:0","extension":{"manifest":"m.json","accounts":[{"id":"a"}],"restart":{"stable_ms":9223372036855}}}`
+	cfg := `{"listen":"127.0.0.1:0","client_keys":["k"],"extension":{"manifest":"m.json","accounts":[{"id":"a"}],"restart":{"stable_ms":9223372036855}}}`
 	if _, err := ParseConfig([]byte(cfg), "/tmp/config.json"); err == nil || !strings.Contains(err.Error(), "timings") {
 		t.Errorf("ParseConfig = %v, want an error about the timings", err)
 	}
@@ -28,7 +28,7 @@ func TestConfigRegistryLocations(t *testing.T) {
 		"http://example.com/index.json":  false,
 		"ftp://example.com/index.json":   false,
 	} {
-		cfg := `{"listen":"127.0.0.1:0","management_key":"k","packages":{"registries":[{"name":"r","url":"` + url + `"}]}}`
+		cfg := `{"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"k","packages":{"registries":[{"name":"r","url":"` + url + `"}]}}`
 		if _, err := ParseConfig([]byte(cfg), "/tmp/config.json"); (err == nil) != ok {
 			t.Errorf("registry %q: ParseConfig = %v", url, err)
 		}
@@ -38,7 +38,7 @@ func TestConfigRegistryLocations(t *testing.T) {
 // A registry path is relative to the config file even when the config file's own path is
 // relative, as the default "config.json" is.
 func TestConfigRegistryPathRelativeToRelativeConfig(t *testing.T) {
-	cfg := `{"listen":"127.0.0.1:0","management_key":"k","packages":{"registries":[{"name":"r","url":"registry/index.json"}]}}`
+	cfg := `{"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"k","packages":{"registries":[{"name":"r","url":"registry/index.json"}]}}`
 	c, err := ParseConfig([]byte(cfg), "config.json")
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +87,7 @@ claude-api-key:
 
 	// A relative auth-dir is relative to the config file; with it, the config needs no
 	// account and no management key.
-	c, err = ParseConfig([]byte("auth-dir: auths\n"), "/srv/pluxy/config.yml")
+	c, err = ParseConfig([]byte("auth-dir: auths\napi-keys: [k]\n"), "/srv/pluxy/config.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ claude-api-key:
 		t.Errorf("auth dir %q", c.AuthDir)
 	}
 	// Without it, the usual check applies.
-	if _, err := ParseConfig([]byte("port: 9100\n"), "/srv/pluxy/config.yaml"); err == nil {
+	if _, err := ParseConfig([]byte("port: 9100\napi-keys: [k]\n"), "/srv/pluxy/config.yaml"); err == nil {
 		t.Error("a config.yaml with no account, no management key and no auth-dir was accepted")
 	}
 	// A JSON config is not read as YAML.
@@ -130,5 +130,19 @@ func TestLoginDefaults(t *testing.T) {
 	key := x.LoginDefaults(Account{ID: "c"}, protocol.CredentialAPIKey)
 	if len(key.ModelAlias) != 0 || len(key.ExcludedModels) != 0 {
 		t.Errorf("account added with an API key: %+v, want no extension aliases or exclusions", key)
+	}
+}
+
+// Core refuses a config without client keys, in both layouts: today's core serves anyone then.
+func TestConfigNeedsAClientKey(t *testing.T) {
+	for _, c := range []struct{ name, path, cfg string }{
+		{"json without client_keys", "config.json", `{"listen":"127.0.0.1:0","management_key":"k"}`},
+		{"json with an empty list", "config.json", `{"listen":"127.0.0.1:0","client_keys":[],"management_key":"k"}`},
+		{"yaml without api-keys", "config.yaml", "port: 9100\nremote-management:\n  secret-key: k\n"},
+		{"yaml with empty access.api-keys", "config.yaml", "port: 9100\naccess:\n  api-keys: []\nmanagement:\n  secret-key: k\n"},
+	} {
+		if _, err := ParseConfig([]byte(c.cfg), c.path); err == nil || !strings.Contains(err.Error(), "client_keys is empty") {
+			t.Errorf("%s: ParseConfig = %v, want the refusal of no client keys", c.name, err)
+		}
 	}
 }
