@@ -65,6 +65,8 @@ var (
 	ErrInvalid = errors.New("invalid request")
 	// ErrConflict: the request clashes with the current state.
 	ErrConflict = errors.New("conflict")
+	// ErrIdentity: a new login to an existing account signed in to a different upstream account.
+	ErrIdentity = errors.New("the login signed in to a different account")
 )
 
 // Manager is core's credential authority: it hands credentials to routing, renews them (one

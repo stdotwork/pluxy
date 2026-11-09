@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -183,7 +184,7 @@ func (m *Manager) runLogin(l *login) {
 			m.mu.Lock()
 			if err != nil {
 				l.state, l.err = LoginFailed, &llm.Error{Code: llm.CodeInternal, Message: err.Error()}
-				if errors.Is(err, ErrExists) || errors.Is(err, ErrNotFound) || errors.Is(err, ErrStale) {
+				if errors.Is(err, ErrExists) || errors.Is(err, ErrNotFound) || errors.Is(err, ErrStale) || errors.Is(err, ErrIdentity) {
 					l.err.Code = llm.CodeInvalidRequest
 				}
 			} else {
@@ -213,6 +214,10 @@ func (m *Manager) finishLogin(l *login, g *protocol.Grant) error {
 			cur, ok := m.store.Get(l.account)
 			if !ok || cur.Registration != l.registration {
 				return fmt.Errorf("account %q was removed during the login", l.account)
+			}
+			if err := sameIdentity(cur, g); err != nil {
+				log.Printf("credentials: new login to account %q refused: %v", l.account, err)
+				return err
 			}
 			_, err := m.store.Update(l.account, cur.Registration, cur.Version, func(r *Record) {
 				r.Credential = *g.Credential
@@ -248,6 +253,25 @@ func (m *Manager) finishLogin(l *login, g *protocol.Grant) error {
 	}
 	log.Printf("credentials: account %q added", l.account)
 	m.changed()
+	return nil
+}
+
+// sameIdentity checks that grant g, from a new login to the account cur, signs in to the same
+// upstream account: every field of the account's stored identity must be in g's, with the same
+// value (letter case aside). An account stored without an identity (added before its extension
+// reported one) is checked by label instead, when both have one. Neither: nothing to check.
+func sameIdentity(cur Record, g *protocol.Grant) error {
+	if len(cur.Identity) > 0 {
+		for _, k := range slices.Sorted(maps.Keys(cur.Identity)) {
+			if v, ok := g.Identity[k]; !ok || !strings.EqualFold(v, cur.Identity[k]) {
+				return fmt.Errorf("%w (its %s differs from account %q's); to use the other account, add it as a new one", ErrIdentity, k, cur.ID)
+			}
+		}
+		return nil
+	}
+	if cur.Label != "" && g.Label != "" && !strings.EqualFold(cur.Label, g.Label) {
+		return fmt.Errorf("%w (its label differs from account %q's); to use the other account, add it as a new one", ErrIdentity, cur.ID)
+	}
 	return nil
 }
 
