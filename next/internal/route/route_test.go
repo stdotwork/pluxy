@@ -1146,6 +1146,11 @@ func TestErrorSummary(t *testing.T) {
 		{llm.Error{ProviderCode: "quota", Message: "quota exceeded"}, "quota exceeded"},
 		{llm.Error{ProviderCode: "only_code"}, "only_code"},
 		{llm.Error{Message: strings.Repeat("é", 300)}, strings.Repeat("é", 253) + "..."},
+		{llm.Error{ProviderCode: "x", Raw: json.RawMessage(`{"code":"quota_exceeded","message":"Quota exceeded"}`)}, "quota_exceeded: Quota exceeded"},
+		{llm.Error{ProviderCode: "x", Raw: json.RawMessage(`{"error":{},"type":"overloaded","message":"Try later"}`)}, "overloaded: Try later"},
+		{llm.Error{ProviderCode: "RESOURCE_EXHAUSTED", Message: "m", Raw: json.RawMessage(`{"error":{"code":429,"message":"Resource has been exhausted","status":"RESOURCE_EXHAUSTED"}}`)},
+			"429: Resource has been exhausted"},
+		{llm.Error{ProviderCode: "x", Message: "kept", Raw: json.RawMessage(`[1]`)}, "x: kept"},
 	} {
 		if got := errorSummary(&tc.e); got != tc.want {
 			t.Errorf("errorSummary(%+v) = %q, want %q", tc.e, got, tc.want)

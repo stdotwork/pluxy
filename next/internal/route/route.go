@@ -584,22 +584,31 @@ func (c *call) usageLimit(e *llm.Error) *llm.Error {
 }
 
 // errorSummary is "code: message" for an upstream failure, as today's core summarises one:
-// from the upstream's error body when it has one ({"error": {"code" or "type", "message"}}),
-// else from e; the message alone when it already names the code; then sanitized (credentials,
-// tokens and local paths removed) and cut to 256 characters.
+// from the upstream's error body when it has one ({"error": {"code" or "type", "message"}},
+// {"error": "text"}, or "code" or "type" and "message" at the top), else from e; the message
+// alone when it already names the code; then sanitized (credentials, tokens and local paths
+// removed) and cut to 256 characters.
 func errorSummary(e *llm.Error) string {
 	code, msg := e.ProviderCode, e.Message
 	var b struct {
-		Error json.RawMessage `json:"error"`
+		Error               json.RawMessage
+		Code, Type, Message json.RawMessage
 	}
-	if json.Unmarshal(e.Raw, &b) == nil && len(b.Error) > 0 {
-		var o struct{ Code, Type, Message string }
-		var text string
-		switch {
-		case json.Unmarshal(b.Error, &o) == nil && (o.Code != "" || o.Type != "" || o.Message != ""):
-			code, msg = cmp.Or(strings.TrimSpace(o.Code), strings.TrimSpace(o.Type)), strings.TrimSpace(o.Message)
-		case json.Unmarshal(b.Error, &text) == nil && text != "":
-			code, msg = "", strings.TrimSpace(text)
+	if json.Unmarshal(e.Raw, &b) == nil {
+		var c, m string
+		if len(b.Error) > 0 {
+			var o struct{ Code, Type, Message json.RawMessage }
+			if json.Unmarshal(b.Error, &o) == nil {
+				c, m = cmp.Or(jsonText(o.Code), jsonText(o.Type)), jsonText(o.Message)
+			} else {
+				m = jsonText(b.Error)
+			}
+		}
+		if c == "" && m == "" {
+			c, m = cmp.Or(jsonText(b.Code), jsonText(b.Type)), jsonText(b.Message)
+		}
+		if c != "" || m != "" {
+			code, msg = c, m
 		}
 	}
 	s := msg
@@ -610,6 +619,23 @@ func errorSummary(e *llm.Error) string {
 		s = code + ": " + msg
 	}
 	return sanitizeSummary(s)
+}
+
+// jsonText is a JSON string's text, or a number's or boolean's as written (Gemini's error code
+// is the number 429), trimmed; "" for anything else.
+func jsonText(v json.RawMessage) string {
+	var s string
+	if json.Unmarshal(v, &s) == nil {
+		return strings.TrimSpace(s)
+	}
+	var x any
+	if json.Unmarshal(v, &x) == nil {
+		switch x.(type) {
+		case float64, bool:
+			return strings.TrimSpace(string(v))
+		}
+	}
+	return ""
 }
 
 // choose picks one of cands: the session's account if it is among them, otherwise by priority
