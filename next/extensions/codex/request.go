@@ -297,7 +297,7 @@ func (h *shaper) tools() {
 		h.m["tool_choice"] = raw("auto")
 	}
 	lite := h.header("x-openai-internal-codex-responses-lite") != ""
-	if h.s.imageTool() && !lite && !strings.HasSuffix(h.model, "spark") && h.a.planType != "free" && !hasTool(tools, "image_generation") {
+	if h.s.imageTool() && !lite && !strings.HasSuffix(h.model, "spark") && !strings.EqualFold(h.a.planType, "free") && !hasTool(tools, "image_generation") {
 		tools = append(tools, raw(map[string]string{"type": "image_generation", "output_format": "png"}))
 		h.m["tools"] = raw(tools)
 	}

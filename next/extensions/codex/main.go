@@ -32,6 +32,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -133,7 +134,13 @@ func accountOf(c *protocol.Credential) (account, error) {
 				if a.accountID == "" {
 					a.accountID = claims.accountID
 				}
-				a.planType = claims.planType
+				a.planType = strings.TrimSpace(claims.planType)
+			}
+			// An ID token with no plan, or one that does not parse, is the free plan, as today's
+			// core reads it (core/internal/watcher/synthesizer/file.go) and as listModels does.
+			// With no ID token there is no plan to read.
+			if d.IDToken != "" && a.planType == "" {
+				a.planType = "free"
 			}
 			return a, nil
 		}
