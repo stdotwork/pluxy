@@ -585,7 +585,8 @@ func (c *call) usageLimit(e *llm.Error) *llm.Error {
 
 // errorSummary is "code: message" for an upstream failure, as today's core summarises one:
 // from the upstream's error body when it has one ({"error": {"code" or "type", "message"}}),
-// else from e; the message alone when it already names the code; at most 256 characters.
+// else from e; the message alone when it already names the code; then sanitized (credentials,
+// tokens and local paths removed) and cut to 256 characters.
 func errorSummary(e *llm.Error) string {
 	code, msg := e.ProviderCode, e.Message
 	var b struct {
@@ -608,10 +609,7 @@ func errorSummary(e *llm.Error) string {
 	case code != "" && !strings.Contains(strings.ToLower(msg), strings.ToLower(code)):
 		s = code + ": " + msg
 	}
-	if runes := []rune(s); len(runes) > 256 {
-		s = string(runes[:253]) + "..."
-	}
-	return s
+	return sanitizeSummary(s)
 }
 
 // choose picks one of cands: the session's account if it is among them, otherwise by priority

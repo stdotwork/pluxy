@@ -747,8 +747,9 @@ body (Responses WebSocket clients the same object in an `error` message, with th
 Anthropic clients get a `rate_limit_error` whose message ends with `(reset after 2h0m0s)` and that
 carries `resets_at` and `retryable: false`. `provider` (the extension's name without `pluxy/`) is
 there only when every account belongs to one extension; `limit_window_minutes` only when the window
-is known. A stream that has already started ends with the same error, and a Chat Completions
-stream then with `data: [DONE]`.
+is known. `last_upstream_error` and the message's last error have credentials, tokens and local
+paths replaced, as today's core replaces them. A stream that has already started ends with the
+same error, and a Chat Completions stream then with `data: [DONE]`.
 
 ### Account checks
 
