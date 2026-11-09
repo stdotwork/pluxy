@@ -291,7 +291,8 @@ func (h *shaper) reasoning() {
 // tools offers the hosted image_generation tool, as the Codex CLI does, and sets
 // parallel_tool_calls: on when there are tools and the client did not turn it off, absent when
 // there are none. A Responses-lite client (the X-Openai-Internal-Codex-Responses-Lite header)
-// gets neither image generation nor parallel calls.
+// gets neither image generation nor parallel calls. It also rewrites the schema forms of function
+// tools that the endpoint rejects (fixToolSchemas).
 func (h *shaper) tools() {
 	var tools []json.RawMessage
 	_ = json.Unmarshal(h.m["tools"], &tools)
@@ -306,6 +307,11 @@ func (h *shaper) tools() {
 	lite := h.header("x-openai-internal-codex-responses-lite") != ""
 	if h.s.imageTool() && !lite && !strings.HasSuffix(h.model, "spark") && !strings.EqualFold(h.a.planType, "free") && !hasTool(tools, "image_generation") {
 		tools = append(tools, raw(map[string]string{"type": "image_generation", "output_format": "png"}))
+		h.m["tools"] = raw(tools)
+	}
+	// The endpoint rejects some schema forms whoever wrote the tool, so this covers the client's
+	// own Responses tools too.
+	if fixToolSchemas(tools) {
 		h.m["tools"] = raw(tools)
 	}
 	for i, t := range tools {
