@@ -83,6 +83,25 @@ func TestRefreshUsesTheAppsClient(t *testing.T) {
 	}
 }
 
+// A credential made by a login that asked for the secret still renews with the built-in one, and
+// the renewed credential no longer holds the typed one.
+func TestRefreshDropsTheTypedSecret(t *testing.T) {
+	srv := agtest.New(t)
+	access, rt := srv.Grant()
+	c, err := refresh(context.Background(), sdk.RefreshCall{Account: protocol.Account{Settings: srv.Settings(),
+		Credential: &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: access, RefreshToken: rt,
+			Data: json.RawMessage(`{"project_id":"kept","client_secret":"typed-by-the-user"}`)}}})
+	if err != nil {
+		t.Fatalf("renewal: %v", err)
+	}
+	if forms := srv.TokenForms(); len(forms) != 1 || forms[0].Get("client_secret") != clientSecret {
+		t.Errorf("the token endpoint saw %v, want the built-in client secret", forms)
+	}
+	if got := readData(c); got.ProjectID != "kept" || strings.Contains(string(c.Data), "client_secret") {
+		t.Errorf("renewed data %s, want the project kept and no client_secret", c.Data)
+	}
+}
+
 // A login asks for no input to start: the app's client secret is built in.
 func TestLoginAsksForNoInput(t *testing.T) {
 	for _, m := range loginMethods {
