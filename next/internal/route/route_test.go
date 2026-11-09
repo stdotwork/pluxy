@@ -1153,6 +1153,44 @@ func TestErrorSummary(t *testing.T) {
 	}
 }
 
+// An account counts as out of quota as today's core counts it: a named quota block on the
+// credential decides alone; otherwise the block that ends last must be a named quota block, and
+// a block of another kind that ends as late keeps the account out of the count.
+func TestQuotaOutFollowsTodaysPrecedence(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	quota := func(scope string, d time.Duration) *llm.Error {
+		return &llm.Error{Code: llm.CodeQuota, Scope: scope, RetryAfterMS: d.Milliseconds()}
+	}
+	limit := func(scope string, d time.Duration) *llm.Error {
+		return &llm.Error{Code: llm.CodeRateLimit, Scope: scope, RetryAfterMS: d.Milliseconds()}
+	}
+	for _, c := range []struct {
+		name  string
+		fails []*llm.Error
+		until time.Duration // 0: not out of quota
+	}{
+		{"model quota ends last", []*llm.Error{quota(llm.ScopeModel, 3*time.Hour), limit(llm.ScopeModel, time.Hour)}, 3 * time.Hour},
+		{"rate limit ends last", []*llm.Error{quota(llm.ScopeModel, time.Hour), limit(llm.ScopeModel, 3*time.Hour)}, 0},
+		{"rate limit ends as late", []*llm.Error{quota(llm.ScopeModel, 2*time.Hour), limit(llm.ScopeModel, 2*time.Hour)}, 0},
+		{"endpoint limit ends as late", []*llm.Error{quota(llm.ScopeModel, 2*time.Hour), limit(llm.ScopeEndpoint, 2*time.Hour)}, 0},
+		{"endpoint cooldown ends last", []*llm.Error{quota(llm.ScopeModel, 2*time.Hour), limit(llm.ScopeEndpoint, 3*time.Hour)}, 0},
+		{"credential quota over a later model limit", []*llm.Error{quota(llm.ScopeCredential, 2*time.Hour), limit(llm.ScopeModel, 3*time.Hour)}, 2 * time.Hour},
+		{"credential quota over a later model quota", []*llm.Error{quota(llm.ScopeCredential, 2*time.Hour), quota(llm.ScopeModel, 3*time.Hour)}, 2 * time.Hour},
+		{"credential limit as late as credential quota", []*llm.Error{quota(llm.ScopeCredential, 2*time.Hour), limit(llm.ScopeCredential, 2*time.Hour)}, 0},
+		{"no reset named", []*llm.Error{{Code: llm.CodeQuota, Scope: llm.ScopeModel}}, 0},
+	} {
+		st := NewState()
+		a := &Account{ID: "a"}
+		for i, e := range c.fails {
+			st.failure(a, "m", uint64(i+1), e, now, 0)
+		}
+		until, _, _, ok := st.quotaOut(a, "m", now)
+		if want := c.until != 0; ok != want || (ok && !until.Equal(now.Add(c.until))) {
+			t.Errorf("%s: quotaOut = %v, %v; want out %v until now+%v", c.name, until, ok, want, c.until)
+		}
+	}
+}
+
 func TestQuotaResponseModeValidates(t *testing.T) {
 	for mode, ok := range map[string]bool{"": true, QuotaRetryable: true, QuotaUsageLimit: true, "Usage-Limit": false, "stop": false} {
 		c := Config{QuotaResponseMode: mode}

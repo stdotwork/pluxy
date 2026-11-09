@@ -728,7 +728,9 @@ finds every account blocked) gets today's core's usage-limit reply when each acc
 its model is blocked last by a quota refusal whose reset the upstream named (Codex's
 `usage_limit_reached`, an OpenAI-compatible `insufficient_quota` with `Retry-After`, a Claude
 subscription's used-up window, Google's `QUOTA_EXHAUSTED`), and the first reset is more than 5
-minutes away. The reply is a 429 that tells the client to stop until the reset rather than retry:
+minutes away. As in today's core, such a block on the whole account counts on its own and its
+reset is the account's; a block on the model or the endpoint counts only when no block of another
+kind on the account ends as late. The reply is a 429 that tells the client to stop until the reset rather than retry:
 no `Retry-After`, `X-Should-Retry: false`, and, when the upstream said how long the used-up window
 is, Codex's `X-Codex-Primary-*` headers (`X-Codex-Secondary-*` for a window of a day or more) with
 `Used-Percent` 100, `Window-Minutes` and `Reset-At`. OpenAI, Responses and Gemini clients get this
