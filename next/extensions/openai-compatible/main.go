@@ -243,8 +243,9 @@ func postBody(ctx context.Context, call sdk.Call, s settings, wire wireInfo, key
 // countTokens counts the request's input tokens with the upstream's own count endpoint: a
 // Messages upstream's {base_url}/messages/count_tokens, a Gemini upstream's
 // {base_url}/models/{model}:countTokens. A Chat or Responses upstream has none, so the account
-// cannot count. A request in the upstream's format is sent as it came; a Gemini request to a
-// Messages upstream is rebuilt with the fields count_tokens takes.
+// cannot count. A request in the upstream's format is sent as it came (a Messages one without the
+// fields only generating uses); a Gemini request to a Messages upstream is rebuilt with the
+// fields count_tokens takes.
 func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	s, wire, key, err := account(call)
 	if err != nil {
@@ -267,8 +268,15 @@ func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err != nil {
 		return err
 	}
-	if !tr.Passthrough {
-		if body, err = anthropicmessages.CountRequest(body); err != nil {
+	count := anthropicmessages.CountRequest
+	switch {
+	case tr.Passthrough && wire.format == llm.FormatAnthropicMessages:
+		count = anthropicmessages.CountBody
+	case tr.Passthrough:
+		count = nil
+	}
+	if count != nil {
+		if body, err = count(body); err != nil {
 			return err
 		}
 	}

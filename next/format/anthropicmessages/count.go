@@ -36,3 +36,25 @@ func DecodeCount(raw []byte) (int64, error) {
 	}
 	return *r.InputTokens, nil
 }
+
+// generationFields are the fields of a Messages request that only generating uses; count_tokens
+// refuses them.
+var generationFields = []string{"max_tokens", "stream", "temperature", "top_p", "top_k", "stop_sequences", "metadata", "service_tier"}
+
+// CountBody returns a client's own Messages body for count_tokens: as it came, without the
+// fields only generating uses, so a create request counted as it is gets a count; every other
+// field goes on, so fields count_tokens takes that CountRequest does not list still reach it.
+func CountBody(body []byte) ([]byte, error) {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(body, &m); err != nil {
+		return nil, err
+	}
+	n := len(m)
+	for _, k := range generationFields {
+		delete(m, k)
+	}
+	if len(m) == n {
+		return body, nil
+	}
+	return json.Marshal(m)
+}

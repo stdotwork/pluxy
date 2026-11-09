@@ -246,8 +246,8 @@ func post(ctx context.Context, call sdk.Call, s settings, path string, body []by
 }
 
 // countTokens counts the request's input tokens with the Messages API's count_tokens. A
-// Messages request is sent as it came; any other is rebuilt as Messages with only the fields
-// count_tokens takes.
+// Messages request is sent as it came, without the fields only generating uses; any other is
+// rebuilt as Messages with only the fields count_tokens takes.
 func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
@@ -257,10 +257,12 @@ func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err != nil {
 		return err
 	}
-	if !tr.Passthrough {
-		if body, err = anthropicmessages.CountRequest(body); err != nil {
-			return err
-		}
+	count := anthropicmessages.CountRequest
+	if tr.Passthrough {
+		count = anthropicmessages.CountBody
+	}
+	if body, err = count(body); err != nil {
+		return err
 	}
 	resp, err := post(ctx, call, s, "/v1/messages/count_tokens", body, tr.Passthrough, false)
 	if err != nil {
