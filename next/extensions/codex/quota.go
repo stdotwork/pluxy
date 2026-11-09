@@ -36,7 +36,11 @@ func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !a.subscription {
+	switch {
+	case a.siwc:
+		// Its token is for the OpenAI API; the usage windows are the ChatGPT backend's.
+		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: "a Sign in with ChatGPT (SIWC) account has no usage windows to report", Scope: llm.ScopeCredential}
+	case !a.subscription:
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: "an API key has no ChatGPT plan to report", Scope: llm.ScopeCredential}
 	}
 	base := s.BaseURL

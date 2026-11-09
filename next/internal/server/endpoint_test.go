@@ -66,7 +66,8 @@ func bodyReply(contentType string, pieces ...string) []llm.Event {
 }
 
 // A compaction request goes to an account as an endpoint call carrying the client's body, model,
-// thinking suffix and Codex headers; the reply's body pieces reach the client as written, under
+// thinking suffix and Codex headers (the User-Agent among them, by which a Codex extension tells
+// a Codex client); the reply's body pieces reach the client as written, under
 // the extension's content type, on both routes.
 func TestEndpointCompactPassesBodyThrough(t *testing.T) {
 	h, _, seen := endpointHandler(t, func(string, llm.Request) []llm.Event {
@@ -74,7 +75,7 @@ func TestEndpointCompactPassesBodyThrough(t *testing.T) {
 	})
 	for _, path := range []string{"/v1/responses/compact", "/backend-api/codex/responses/compact"} {
 		*seen = nil
-		w := postEndpoint(h, path, `{"model":"gpt-x(high)","input":"hi"}`, map[string]string{"Session-Id": "s1"})
+		w := postEndpoint(h, path, `{"model":"gpt-x(high)","input":"hi"}`, map[string]string{"Session-Id": "s1", "User-Agent": "codex_cli_rs/0.154.0"})
 		if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "application/json" || w.Body.String() != `{"object":"response.compaction","output":[]}` {
 			t.Fatalf("%s: got %d %q %s", path, w.Code, w.Header().Get("Content-Type"), w.Body)
 		}
@@ -82,7 +83,7 @@ func TestEndpointCompactPassesBodyThrough(t *testing.T) {
 		if req.Model != "gpt-x" || req.Options.ThinkingSuffix != "high" || req.Native == nil || req.Native.Format != llm.FormatOpenAIResponsesCompact {
 			t.Fatalf("%s: request = %+v", path, req)
 		}
-		if req.Native.Headers["session-id"] != "s1" || !strings.Contains(string(req.Native.Body), `"model":"gpt-x"`) {
+		if req.Native.Headers["session-id"] != "s1" || req.Native.Headers["user-agent"] != "codex_cli_rs/0.154.0" || !strings.Contains(string(req.Native.Body), `"model":"gpt-x"`) {
 			t.Fatalf("%s: native = %+v %s", path, req.Native.Headers, req.Native.Body)
 		}
 	}

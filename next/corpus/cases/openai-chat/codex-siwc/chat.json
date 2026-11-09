@@ -1,0 +1,159 @@
+{
+  "description": "Sign in with ChatGPT: a streamed Chat Completions request becomes a Responses request that goes to api.openai.com's /v1/responses with the SIWC access token (session_id and X-Client-Request-Id from the derived prompt cache key); the system message becomes a developer message, max_completion_tokens becomes max_output_tokens, temperature is removed, and the Responses stream comes back as Chat chunks.",
+  "source": [
+    "core/internal/runtime/executor/codex_executor_request.go (SIWC rules: applyCodexSIWCRequestBodyRulesDoc, applyCodexHeadersWithSIWC)",
+    "core/internal/runtime/executor/codex_executor_execute.go",
+    "core/internal/runtime/executor/codex_executor_auth.go (codexCredsForRequest: the SIWC access token and https://api.openai.com/v1)",
+    "core/internal/translator/codex/openai/chat-completions/codex_openai_request.go"
+  ],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {
+      "model": "gpt-6.1-sol",
+      "stream": true,
+      "max_completion_tokens": 64,
+      "temperature": 0.2,
+      "messages": [{"role":"system","content":"Be brief."},{"role":"user","content":"Say hello"}]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"event":"response.created","data":{"type":"response.created","sequence_number":0,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"in_progress","model":"gpt-test-upstream","output":[],"usage":null}}},
+        {"event":"response.in_progress","data":{"type":"response.in_progress","sequence_number":1,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"in_progress","model":"gpt-test-upstream","output":[],"usage":null}}},
+        {"event":"response.output_item.added","data":{"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"id":"msg_corpus","type":"message","status":"in_progress","role":"assistant","content":[]}}},
+        {"event":"response.content_part.added","data":{"type":"response.content_part.added","sequence_number":3,"output_index":0,"content_index":0,"item_id":"msg_corpus","part":{"type":"output_text","text":"","annotations":[]}}},
+        {"event":"response.output_text.delta","data":{"type":"response.output_text.delta","sequence_number":4,"output_index":0,"content_index":0,"item_id":"msg_corpus","delta":"Hello"}},
+        {"event":"response.output_text.delta","data":{"type":"response.output_text.delta","sequence_number":5,"output_index":0,"content_index":0,"item_id":"msg_corpus","delta":" there"}},
+        {"event":"response.output_text.done","data":{"type":"response.output_text.done","sequence_number":6,"output_index":0,"content_index":0,"item_id":"msg_corpus","text":"Hello there"}},
+        {"event":"response.content_part.done","data":{"type":"response.content_part.done","sequence_number":7,"output_index":0,"content_index":0,"item_id":"msg_corpus","part":{"type":"output_text","text":"Hello there","annotations":[]}}},
+        {"event":"response.output_item.done","data":{"type":"response.output_item.done","sequence_number":8,"output_index":0,"item":{"id":"msg_corpus","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hello there","annotations":[]}]}}},
+        {"event":"response.completed","data":{"type":"response.completed","sequence_number":9,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"completed","model":"gpt-test-upstream","output":[{"id":"msg_corpus","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hello there","annotations":[]}]}],"usage":{"input_tokens":5,"output_tokens":2,"total_tokens":7,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}}
+      ]
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[*].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."
+    },
+    {
+      "path": "upstream[*].headers.User-Agent",
+      "kind": "intended",
+      "reason": "A Sign in with ChatGPT (SIWC) account names this program in its User-Agent (\"<identifier> (<GOOS>; <GOARCH>)\", from the signin_with_chatgpt_identifier setting); the new core's default identifier is pluxy, today's core's CLIProxyAPI, its own name. With the identifier set on both cores the values match (configuration-update).",
+      "want": "pluxy (linux; amd64)"
+    },
+    {
+      "path": "upstream[*].headers.Session_id",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    },
+    {
+      "path": "upstream[*].headers.X-Client-Request-Id",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    },
+    {
+      "path": "upstream[*].body.prompt_cache_key",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    },
+    {
+      "path": "client.events",
+      "kind": "intended",
+      "reason": "The new core writes Chat chunks from a Codex reply as OpenAI's own Chat streams are written: role and empty content in the first chunk only, finish_reason in its own chunk, usage only in the chunk stream_options.include_usage asks for, no native_finish_reason, and reasoning summary parts joined without a separator. Today's Codex translator repeats the role on every chunk, adds a non-standard native_finish_reason, puts usage on the finish chunk unasked and writes a blank line after each reasoning summary part.",
+      "want": [
+        {
+          "data": {
+            "choices": [{"delta":{"content":"","role":"assistant"},"finish_reason":null,"index":0}],
+            "created": 1700000000,
+            "id": "resp_corpus",
+            "model": "gpt-test-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [{"delta":{"content":"Hello"},"finish_reason":null,"index":0}],
+            "created": 1700000000,
+            "id": "resp_corpus",
+            "model": "gpt-test-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [{"delta":{"content":" there"},"finish_reason":null,"index":0}],
+            "created": 1700000000,
+            "id": "resp_corpus",
+            "model": "gpt-test-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [{"delta":{},"finish_reason":"stop","index":0}],
+            "created": 1700000000,
+            "id": "resp_corpus",
+            "model": "gpt-test-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {"data":"[DONE]"}
+      ]
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"choices":[{"delta":{"content":"Hello","role":"assistant"},"finish_reason":null,"index":0,"native_finish_reason":null}],"created":1700000000,"id":"resp_corpus","model":"gpt-test-upstream","object":"chat.completion.chunk"}},
+        {"data":{"choices":[{"delta":{"content":" there","role":"assistant"},"finish_reason":null,"index":0,"native_finish_reason":null}],"created":1700000000,"id":"resp_corpus","model":"gpt-test-upstream","object":"chat.completion.chunk"}},
+        {"data":{"choices":[{"delta":{},"finish_reason":"stop","index":0,"native_finish_reason":"stop"}],"created":1700000000,"id":"resp_corpus","model":"gpt-test-upstream","object":"chat.completion.chunk","usage":{"completion_tokens":2,"completion_tokens_details":{"reasoning_tokens":0},"prompt_tokens":5,"prompt_tokens_details":{"cached_tokens":0},"total_tokens":7}}},
+        {"data":"[DONE]"}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": ["reasoning.encrypted_content"],
+          "input": [
+            {
+              "content": [{"text":"Be brief.","type":"input_text"}],
+              "role": "developer",
+              "type": "message"
+            },
+            {"content":[{"text":"Say hello","type":"input_text"}],"role":"user","type":"message"}
+          ],
+          "max_output_tokens": 64,
+          "model": "gpt-6.1-sol",
+          "prompt_cache_key": "b061ee6a-c953-57c4-9a4f-b7f73357799d",
+          "reasoning": {"effort":"medium"},
+          "store": false,
+          "stream": true
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0NDQ4MDAsInN1YiI6ImNvcnB1cy1zaXdjfHNrLWNvcnB1cy11cHN0cmVhbSJ9.corpus",
+          "Content-Type": "application/json",
+          "Session_id": "b061ee6a-c953-57c4-9a4f-b7f73357799d",
+          "User-Agent": "CLIProxyAPI (linux; amd64)",
+          "X-Client-Request-Id": "b061ee6a-c953-57c4-9a4f-b7f73357799d"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      }
+    ]
+  }
+}

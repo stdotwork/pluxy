@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"slices"
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -38,7 +39,8 @@ var planModels = func() map[string][]protocol.Model {
 // list of its plan (team, business and go share the team list; any other plan gets the pro list).
 // The plan is read from the ID token's chatgpt_plan_type as core/internal/watcher/synthesizer/file.go
 // does: an ID token that does not parse or has no plan means free, and a credential with no ID
-// token has no plan, so it gets the pro list.
+// token has no plan, so it gets the pro list. A SIWC account gets its plan's list without the
+// image models, since it does not serve the Images API.
 func listModels(_ context.Context, call sdk.ModelsCall) (*protocol.ModelList, error) {
 	plan := "pro"
 	if c := call.Account.Credential; c != nil && c.Kind == protocol.CredentialOAuth {
@@ -58,5 +60,9 @@ func listModels(_ context.Context, call sdk.ModelsCall) (*protocol.ModelList, er
 			}
 		}
 	}
-	return &protocol.ModelList{Models: planModels[plan], OwnedBy: modelsOwner}, nil
+	models := planModels[plan]
+	if isSIWC(call.Account.Credential) {
+		models = slices.DeleteFunc(slices.Clone(models), func(m protocol.Model) bool { return imageModel(m.ID) != "" })
+	}
+	return &protocol.ModelList{Models: models, OwnedBy: modelsOwner}, nil
 }

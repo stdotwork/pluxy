@@ -87,7 +87,8 @@ func TestExampleConfig(t *testing.T) {
 	if r.AuthDir != "~/.cli-proxy-api" {
 		t.Errorf("AuthDir = %q", r.AuthDir)
 	}
-	if r.Import != DefaultImportOptions {
+	// The example spells out today's default identifier, so imported SIWC accounts get it.
+	if want := (ImportOptions{CodexIdentity: true, ImageGenerationTool: true, Images: true, SIWCIdentifier: "CLIProxyAPI"}); r.Import != want {
 		t.Errorf("Import = %+v", r.Import)
 	}
 	// Everything the example sets is supported, off or at today's default.
@@ -630,5 +631,28 @@ func TestDisableImageGeneration(t *testing.T) {
 		if r.Import != want {
 			t.Errorf("%s: Import = %+v, want %+v", v, r.Import, want)
 		}
+	}
+}
+
+// codex.signin-with-chatgpt-identifier (and its v8 spelling) reaches the import options, trimmed,
+// and is no longer reported as unsupported.
+func TestSIWCIdentifier(t *testing.T) {
+	for _, y := range []string{
+		"codex:\n  signin-with-chatgpt-identifier: '  my-agent '",
+		"oauth:\n  providers:\n    codex:\n      signin-with-chatgpt-identifier: my-agent",
+	} {
+		r := translate(t, y)
+		if r.Import.SIWCIdentifier != "my-agent" {
+			t.Errorf("%q: SIWCIdentifier = %q", y, r.Import.SIWCIdentifier)
+		}
+		if strings.Contains(notices(r), "signin-with-chatgpt-identifier") {
+			t.Errorf("%q: notices name it:\n%s", y, notices(r))
+		}
+	}
+	if r := translate(t, "port: 8317"); r.Import.SIWCIdentifier != "" {
+		t.Errorf("default: %q", r.Import.SIWCIdentifier)
+	}
+	if _, err := Translate([]byte("codex:\n  signin-with-chatgpt-identifier: [a]")); err == nil {
+		t.Error("an identifier that is not text loaded")
 	}
 }

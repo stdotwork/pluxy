@@ -275,6 +275,74 @@ var Providers = map[string]Provider{
 			return "codex", accounts
 		},
 	},
+	// A ChatGPT subscription signed in to Codex that also holds a Sign in with ChatGPT (SIWC)
+	// login: in today's core the Codex auth file carries a second token set in a nested "siwc"
+	// object and "use_siwc": true, and a request from a client that is not a Codex client goes
+	// with that token to https://api.openai.com/v1, a host no setting moves, so the old core
+	// runs through the intercepting proxy. In the new core the Codex extension's account holds
+	// the SIWC login's credential (the shape the SIWC login produces) and points base_url at
+	// the fake upstream's /v1. The SIWC access token differs from the outer one, so an
+	// observation shows which of them went upstream.
+	"codex-siwc": {
+		Intercept: true,
+		OldCore:   func(string, []string, []string) map[string]any { return map[string]any{} },
+		OldCoreAuthFiles: func(proxyURL, _ string, models, keys []string) map[string]any {
+			files := map[string]any{}
+			for i, k := range keys {
+				t := corpusTokens(k)
+				s := corpusSIWCTokens(k)
+				f := map[string]any{
+					"type":          "codex",
+					"email":         t.email,
+					"account_id":    t.accountID,
+					"plan_type":     "plus",
+					"access_token":  t.access,
+					"id_token":      t.id,
+					"refresh_token": t.refresh,
+					"expired":       "2100-01-01T00:00:00Z",
+					"last_refresh":  "2026-01-01T00:00:00Z",
+					"proxy_url":     proxyURL,
+					"use_siwc":      true,
+					"siwc": map[string]any{
+						"access_token":  s.access,
+						"id_token":      s.id,
+						"refresh_token": s.refresh,
+						"client_id":     corpusSIWCClientID,
+						"device_id":     corpusSIWCDeviceID,
+						"scope":         corpusSIWCScope,
+						"scopes":        strings.Split(corpusSIWCScope, " "),
+						"expired":       "2100-01-01T00:00:00Z",
+						"expires_at":    "2100-01-01T00:00:00Z",
+						"last_refresh":  "2026-01-01T00:00:00Z",
+					},
+				}
+				files[fmt.Sprintf("codex-corpus-%d.json", i+1)] = f
+			}
+			return files
+		},
+		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
+			var accounts []any
+			for i, k := range keys {
+				id := "corpus"
+				if i > 0 {
+					id = fmt.Sprintf("corpus-%d", i+1)
+				}
+				s := corpusSIWCTokens(k)
+				acct := map[string]any{
+					"id":       id,
+					"settings": map[string]any{"base_url": upstreamURL + "/v1"},
+					"credential": map[string]any{"kind": "oauth", "access_token": s.access, "refresh_token": s.refresh,
+						"expires_at": corpusTokenExpiry, "data": map[string]any{"siwc": true, "client_id": corpusSIWCClientID,
+							"device_id": corpusSIWCDeviceID, "scope": corpusSIWCScope, "id_token": s.id}},
+				}
+				if len(models) > 0 {
+					acct["models"] = models
+				}
+				accounts = append(accounts, acct)
+			}
+			return "codex", accounts
+		},
+	},
 	// An upstream that speaks Anthropic Messages with an API key. The new core uses the
 	// OpenAI-compatible extension with wire_api "messages"; today's core uses a Claude API key
 	// with a custom base URL.
@@ -1307,15 +1375,37 @@ type fakeTokens struct {
 	access, id, refresh, accountID, email string
 }
 
+// corpusJWT makes an unsigned JWT with the claims.
+func corpusJWT(claims map[string]any) string {
+	h := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
+	b, _ := json.Marshal(claims)
+	return h + "." + base64.RawURLEncoding.EncodeToString(b) + ".corpus"
+}
+
 func corpusTokens(key string) fakeTokens {
-	jwt := func(claims map[string]any) string {
-		h := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
-		b, _ := json.Marshal(claims)
-		return h + "." + base64.RawURLEncoding.EncodeToString(b) + ".corpus"
-	}
+	jwt := corpusJWT
 	t := fakeTokens{accountID: "acct-" + key, email: key + "@example.invalid", refresh: "corpus-refresh-" + key}
 	t.access = jwt(map[string]any{"exp": corpusTokenExpiry, "sub": "corpus|" + key})
 	t.id = jwt(map[string]any{"exp": corpusTokenExpiry, "email": t.email,
+		"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": t.accountID, "chatgpt_plan_type": "plus"}})
+	return t
+}
+
+// The corpus's fake Sign in with ChatGPT (SIWC) login, the second token set of a "codex-siwc"
+// account (see corpusSIWCTokens).
+const (
+	corpusSIWCClientID = "corpus-siwc-client"
+	corpusSIWCDeviceID = "7f0a3c52-5b1e-4c8d-9a64-2d1e8b6f3a90"
+	corpusSIWCScope    = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"
+)
+
+// corpusSIWCTokens returns the SIWC login's tokens for one corpus account, made like
+// corpusTokens' but with a different subject, so an upstream request shows which token it carried.
+func corpusSIWCTokens(key string) fakeTokens {
+	t := corpusTokens(key)
+	t.refresh = "corpus-siwc-refresh-" + key
+	t.access = corpusJWT(map[string]any{"exp": corpusTokenExpiry, "sub": "corpus-siwc|" + key})
+	t.id = corpusJWT(map[string]any{"exp": corpusTokenExpiry, "email": t.email,
 		"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": t.accountID, "chatgpt_plan_type": "plus"}})
 	return t
 }

@@ -1,17 +1,20 @@
 // Command codex is the pluxy provider extension for OpenAI's Codex models. It serves accounts
-// of two kinds: an OpenAI API key, and a ChatGPT subscription signed in through OpenAI's login
-// (in a browser, or with a device code), whose tokens it renews. Both speak OpenAI Responses over
-// HTTP with server-sent events; a subscription calls the ChatGPT backend's Codex endpoint.
+// of three kinds: an OpenAI API key; a ChatGPT subscription signed in through OpenAI's login
+// (in a browser, or with a device code); and Sign in with ChatGPT (SIWC), a ChatGPT sign-in whose
+// token calls the OpenAI API. It renews the tokens of both sign-ins. All speak OpenAI Responses
+// over HTTP with server-sent events; a subscription calls the ChatGPT backend's Codex endpoint,
+// and an API key or a SIWC sign-in the OpenAI API.
 //
 // Account settings, all optional:
 //
 //	{"base_url": "https://api.openai.com/v1", "codex_identity": true, "image_generation_tool": true,
-//	 "callback_listen": true, "websockets": false, "alpha_search": false, "images": true}
+//	 "callback_listen": true, "websockets": false, "alpha_search": false, "images": true,
+//	 "signin_with_chatgpt_identifier": "pluxy"}
 //
 // base_url is where requests go ({base_url}/responses); the default is
-// https://api.openai.com/v1 for an API key and https://chatgpt.com/backend-api/codex for a
-// subscription. codex_identity (default true) sends the User-Agent and originator headers of the
-// Codex terminal client in place of the client's own. image_generation_tool (default true) offers
+// https://api.openai.com/v1 for an API key and a SIWC sign-in, and
+// https://chatgpt.com/backend-api/codex for a subscription. codex_identity (default true) sends
+// the User-Agent and originator headers of the Codex terminal client in place of the client's own. image_generation_tool (default true) offers
 // the model the hosted image_generation tool (never to a free plan or a -spark model); both
 // follow what today's core sends.
 // Tests move OpenAI's login to a fake with auth_base_url (sdk.TestLoginHost); in a normal run it is
@@ -23,8 +26,11 @@
 // client socket, so a turn can continue the previous response with previous_response_id.
 // alpha_search (default false, as in today's core) lets an API key account serve Codex's Alpha
 // Search ({base_url}/alpha/search), which not every upstream has; a subscription always serves it.
-// images (default true) serves the Images API ({base_url}/images/generations and /images/edits) on the
-// account; a free ChatGPT plan never does.
+// images (default true) serves the Images API ({base_url}/images/generations and /images/edits)
+// on the account; a free ChatGPT plan and a SIWC sign-in never do. signin_with_chatgpt_identifier
+// (default "pluxy") is how a SIWC sign-in names this program: the agent name its login shows the
+// user, and its requests' User-Agent ("<identifier> (<GOOS>; <GOARCH>)"); the other settings
+// above but base_url, callback_listen and websockets do not apply to it (see siwc.go).
 //
 // Every request is sent in the shape the Codex endpoint takes: streamed, not stored, encrypted
 // reasoning included, sampling settings removed (see shape). Requests in Chat Completions,
@@ -91,6 +97,8 @@ type settings struct {
 	// Images (default true) serves the Images API (/v1/images/generations and /v1/images/edits)
 	// on the account.
 	Images *bool `json:"images"`
+	// SIWCIdentifier names this program to a SIWC sign-in (see siwcIdentifier).
+	SIWCIdentifier string `json:"signin_with_chatgpt_identifier"`
 }
 
 func (s settings) identity() bool  { return s.CodexIdentity == nil || *s.CodexIdentity }
@@ -111,6 +119,10 @@ func readSettings(raw json.RawMessage) (settings, error) {
 			return s, &llm.Error{Code: llm.CodeInvalidRequest, Message: "account settings are not valid: " + err.Error(), Scope: llm.ScopeCredential}
 		}
 	}
+	// The identifier goes into a header and a sign-in URL.
+	if strings.ContainsFunc(s.SIWCIdentifier, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return s, &llm.Error{Code: llm.CodeInvalidRequest, Message: "account settings are not valid: signin_with_chatgpt_identifier holds a control character", Scope: llm.ScopeCredential}
+	}
 	return s, nil
 }
 
@@ -119,7 +131,11 @@ type account struct {
 	token        string // bearer token: the API key, or the subscription's access token
 	subscription bool
 	accountID    string // ChatGPT account ID, for a subscription
-	planType     string // ChatGPT plan, for a subscription, when known
+	planType     string // ChatGPT plan, for a subscription or a SIWC sign-in, when known
+	// siwc marks a Sign in with ChatGPT credential: token calls the OpenAI API under the SIWC
+	// rules (siwc.go). Such an account is not a subscription: it has no ChatGPT account ID to
+	// send, no ChatGPT backend and no usage windows.
+	siwc bool
 }
 
 // credentialData is what a subscription credential keeps in its data. Core treats every string
@@ -128,6 +144,12 @@ type account struct {
 type credentialData struct {
 	IDToken   string `json:"id_token,omitempty"`
 	AccountID string `json:"account_id,omitempty"`
+	// A SIWC credential: SIWC marks it (a boolean, since every string here is redacted from
+	// replies), and ClientID (issued at sign-in), DeviceID and Scope are what renewing it needs.
+	SIWC     bool   `json:"siwc,omitempty"`
+	ClientID string `json:"client_id,omitempty"`
+	DeviceID string `json:"device_id,omitempty"`
+	Scope    string `json:"scope,omitempty"`
 }
 
 func accountOf(c *protocol.Credential) (account, error) {
@@ -136,11 +158,15 @@ func accountOf(c *protocol.Credential) (account, error) {
 		case c.Kind == protocol.CredentialAPIKey && c.APIKey != "":
 			return account{token: c.APIKey}, nil
 		case c.Kind == protocol.CredentialOAuth && c.AccessToken != "":
-			a := account{token: c.AccessToken, subscription: true}
 			var d credentialData
 			if len(c.Data) > 0 {
 				_ = json.Unmarshal(c.Data, &d)
 			}
+			if d.SIWC {
+				claims, _ := parseIDToken(d.IDToken)
+				return account{token: c.AccessToken, siwc: true, planType: claims.planType}, nil
+			}
+			a := account{token: c.AccessToken, subscription: true}
 			a.accountID = d.AccountID
 			if claims, ok := parseIDToken(d.IDToken); ok {
 				if a.accountID == "" {

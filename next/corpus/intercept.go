@@ -20,7 +20,8 @@ import (
 )
 
 // Some of today's core's providers call a fixed upstream host that no setting moves, such as
-// the ChatGPT backend a Codex subscription uses. To run such a provider against the fake
+// the ChatGPT backend a Codex subscription uses, or the OpenAI API a Codex subscription's
+// Sign in with ChatGPT login uses. To run such a provider against the fake
 // upstream, the corpus gives it an HTTP proxy that accepts CONNECT only to the hosts listed in
 // InterceptHosts, ends the TLS connection itself with a certificate from a test authority made
 // for this run, and hands the requests inside to the fake upstream. The core under test trusts
@@ -28,7 +29,7 @@ import (
 // reaches the internet. A plain request for the fake upstream's own address is passed to it.
 
 // InterceptHosts are the hosts (host:port) the intercepting proxy serves.
-var InterceptHosts = []string{"chatgpt.com:443", "aiplatform.googleapis.com:443", "oauth2.googleapis.com:443"}
+var InterceptHosts = []string{"chatgpt.com:443", "api.openai.com:443", "aiplatform.googleapis.com:443", "oauth2.googleapis.com:443"}
 
 // testCA is the run's certificate authority; its certificate is written to CAFile.
 type testCA struct {

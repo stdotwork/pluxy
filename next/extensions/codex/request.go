@@ -92,7 +92,8 @@ var removedFields = []string{
 }
 
 // shaper puts a Responses body in the shape the Codex endpoint takes. The rules follow what
-// today's core does to a request before sending it to Codex (the corpus records it).
+// today's core does to a request before sending it to Codex (the corpus records it); a SIWC
+// account's request then gets the SIWC rules (siwcBody).
 type shaper struct {
 	m         map[string]json.RawMessage
 	req       llm.Request
@@ -158,6 +159,14 @@ func (h *shaper) shape() error {
 	h.tools()
 	h.limits()
 	h.promptCacheKey()
+	if h.a.siwc {
+		siwcBody(m, h.effort != "")
+		if h.ws {
+			// Today's core sends a SIWC turn over the WebSocket without these.
+			delete(m, "stream")
+			delete(m, "background")
+		}
+	}
 	return nil
 }
 
@@ -364,7 +373,8 @@ func (h *shaper) tools() {
 		h.m["tool_choice"] = raw("auto")
 	}
 	lite := h.lite()
-	if h.s.imageTool() && !lite && !strings.HasSuffix(h.model, "spark") && !strings.EqualFold(h.a.planType, "free") && !hasTool(tools, "image_generation") {
+	// A SIWC account gets no image tool, as in today's core.
+	if h.s.imageTool() && !lite && !h.a.siwc && !strings.HasSuffix(h.model, "spark") && !strings.EqualFold(h.a.planType, "free") && !hasTool(tools, "image_generation") {
 		tools = append(tools, raw(map[string]string{"type": "image_generation", "output_format": "png"}))
 		h.m["tools"] = raw(tools)
 	}

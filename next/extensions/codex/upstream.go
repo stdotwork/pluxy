@@ -68,6 +68,9 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err != nil {
 		return err
 	}
+	if a.siwc && codexClient(call.Request) {
+		return siwcCodexClient()
+	}
 	ur, err := buildRequest(call.Request, call.Account.ID, s, a, false)
 	if err != nil {
 		return err
@@ -94,10 +97,26 @@ func setHeaders(h http.Header, req llm.Request, ur *upstreamRequest, s settings,
 	// The Codex endpoint always streams.
 	h.Set("Accept", "text/event-stream")
 	h.Set("Authorization", "Bearer "+a.token)
+	if a.siwc {
+		setSIWCHeaders(h, ur.sessionID, s)
+		return
+	}
 	if ur.sessionID != "" {
 		h.Set("Session-Id", ur.sessionID)
 	}
 	setClientHeaders(h, req, ur, s, a)
+}
+
+// setSIWCHeaders sets a SIWC account's own headers, as today's core sends them: the session as
+// session_id (that spelling) and as X-Client-Request-Id, and the SIWC User-Agent. None of the
+// Codex client's headers, the Codex identity, a ChatGPT account or a routing hint go to the
+// OpenAI API.
+func setSIWCHeaders(h http.Header, sessionID string, s settings) {
+	if sessionID != "" {
+		h["session_id"] = []string{sessionID}
+		h.Set("X-Client-Request-Id", sessionID)
+	}
+	h.Set("User-Agent", siwcUserAgent(s))
 }
 
 // setClientHeaders sets the headers an upstream request carries on HTTP and on the WebSocket

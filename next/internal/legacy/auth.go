@@ -37,13 +37,15 @@ type Skipped struct {
 
 // How long before expiry the extensions renew what they log in: Codex 4 days ahead, Claude an
 // hour ahead, Antigravity half an hour ahead and xAI five minutes ahead
-// (next/extensions/*/login.go, next/extensions/claude/oauth.go). Imported accounts get the same;
+// (next/extensions/*/login.go, next/extensions/claude/oauth.go), and a Codex SIWC sign-in five
+// minutes ahead (next/extensions/codex/siwc.go). Imported accounts get the same;
 // the others use core's default.
 const (
 	codexRefreshLead       = 96 * time.Hour
 	claudeRefreshLead      = time.Hour
 	antigravityRefreshLead = 30 * time.Minute
 	xaiRefreshLead         = 5 * time.Minute
+	siwcRefreshLead        = 5 * time.Minute
 )
 
 // googleTokenURI is the token endpoint a service account key names by default; the Gemini
@@ -94,24 +96,29 @@ func ReadAuthDir(dir string, opts ImportOptions, now time.Time) ([]AuthFile, []S
 		if err != nil {
 			return nil, nil, err
 		}
-		f, reason := readAuthFile(name, b, opts, now)
+		f, siwc, reason := readAuthFile(name, b, opts, now)
 		if reason != "" {
 			skipped = append(skipped, Skipped{File: name, Reason: reason})
-			continue
+		} else {
+			out = append(out, f)
 		}
-		out = append(out, f)
+		// A Codex file's SIWC section imports even when the file's own account is skipped.
+		if siwc != nil {
+			out = append(out, *siwc)
+		}
 	}
 	return out, skipped, nil
 }
 
-// readAuthFile reads one file; a reason says why it is skipped.
-func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (AuthFile, string) {
+// readAuthFile reads one file; a reason says why its own account is skipped. A Codex file whose
+// siwc section holds a token gives a second account, siwc, whatever happens to the first.
+func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f AuthFile, siwc *AuthFile, reason string) {
 	var m map[string]any
 	if err := json.Unmarshal(b, &m); err != nil {
-		return AuthFile{}, "not a JSON object"
+		return AuthFile{}, nil, "not a JSON object"
 	}
 	typ := strings.ToLower(strings.TrimSpace(text(m, "type")))
-	f := AuthFile{File: name}
+	f = AuthFile{File: name}
 	r := cred.Record{ID: AuthAccountID(name), State: cred.StateActive}
 	settings := map[string]any{}
 	c := protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: text(m, "access_token"), RefreshToken: text(m, "refresh_token")}
@@ -163,7 +170,7 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (Aut
 			key["token_uri"] = u
 		}
 		if key["client_email"] == "" || strings.TrimSpace(pk) == "" {
-			return f, "its service_account has no client_email or private_key"
+			return f, nil, "its service_account has no client_email or private_key"
 		}
 		c = protocol.Credential{Kind: "service_account", Data: object(key)}
 		project := text(m, "project_id")
@@ -224,19 +231,22 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (Aut
 			tok = text(m, "api_key")
 		}
 		if tok == "" {
-			return f, "it holds no token"
+			return f, nil, "it holds no token"
 		}
 		c = protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: tok}
 		if u := text(m, "base_url"); u != "" {
 			settings["base_url"] = u
 		}
 	case "", "gemini":
-		return f, "today's core does not load it either"
+		return f, nil, "today's core does not load it either"
 	default:
-		return f, fmt.Sprintf("type %q is not known", typ)
+		return f, nil, fmt.Sprintf("type %q is not known", typ)
 	}
 	if c.Kind == protocol.CredentialOAuth && c.AccessToken == "" && c.RefreshToken == "" {
-		return f, "it holds no token"
+		if typ != "codex" {
+			return f, nil, "it holds no token"
+		}
+		reason = "it holds no token" // the SIWC section may still hold one
 	}
 	r.Credential = c
 	r.Disabled = boolean(m["disabled"])
@@ -282,7 +292,57 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (Aut
 		}
 	}
 	f.Record = r
-	return f, ""
+	if typ == "codex" {
+		siwc = siwcAccount(m, f, opts, now)
+	}
+	return f, siwc, reason
+}
+
+// siwcAccount reads the siwc section of a Codex file as an account of its own (login method
+// siwc), or nil when the section holds no token. base is the file's own account, whose label,
+// routing settings and ignored list it shares. As in today's core it is in use only when the file
+// says use_siwc.
+func siwcAccount(m map[string]any, base AuthFile, opts ImportOptions, now time.Time) *AuthFile {
+	s, _ := m["siwc"].(map[string]any)
+	c := protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: text(s, "access_token"), RefreshToken: text(s, "refresh_token")}
+	if c.AccessToken == "" {
+		c.AccessToken = text(s, "access")
+	}
+	if c.AccessToken == "" && c.RefreshToken == "" {
+		return nil
+	}
+	for _, k := range []string{"expires_at", "expired"} {
+		if t, err := time.Parse(time.RFC3339, text(s, k)); err == nil {
+			c.ExpiresAt = t.Unix()
+			break
+		}
+	}
+	if c.ExpiresAt > 0 {
+		if at := time.Unix(c.ExpiresAt, 0).Add(-siwcRefreshLead); at.After(now) {
+			c.RefreshAt = at.Unix()
+		}
+	}
+	// siwc is a boolean: core redacts every credential string from replies, and the extension
+	// only needs to know the credential is SIWC.
+	c.Data = object(map[string]any{"siwc": true, "client_id": text(s, "client_id"), "device_id": text(s, "device_id"),
+		"scope": text(s, "scope"), "id_token": text(s, "id_token")})
+	settings := map[string]any{}
+	if boolean(m["websockets"]) {
+		settings["websockets"] = true
+	}
+	if opts.SIWCIdentifier != "" {
+		settings["signin_with_chatgpt_identifier"] = opts.SIWCIdentifier
+	}
+	r := base.Record
+	// Room for the suffix inside the 128 characters an account ID may have.
+	r.ID = r.ID[:min(len(r.ID), 128-len("-siwc"))] + "-siwc"
+	r.Credential = c
+	r.Disabled = base.Record.Disabled || !boolean(m["use_siwc"])
+	r.Account.Settings = nil
+	if len(settings) > 0 {
+		r.Account.Settings, _ = json.Marshal(settings)
+	}
+	return &AuthFile{File: base.File, Record: r, Ignored: base.Ignored}
 }
 
 // authExcluded reads a credential file's own excluded models, as today's core does:

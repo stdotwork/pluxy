@@ -368,3 +368,132 @@ func TestAuthFileRequestRetry(t *testing.T) {
 		t.Errorf("request_retry by file = %v, want %v", got, want)
 	}
 }
+
+// siwcFile is a Codex file as today's core writes it after a Sign in with ChatGPT login: the
+// ChatGPT sign-in at the top and the SIWC token set in "siwc".
+func siwcFile(extra map[string]any) map[string]any {
+	m := map[string]any{
+		"type": "codex", "access_token": "fake-outer-access", "refresh_token": "fake-outer-refresh",
+		"email": "user@example.com", "priority": 4, "weight": 2, "prefix": "team", "websockets": true,
+		"disable_cooling": true, "request_retry": 3, "excluded_models": []any{"gpt-x"},
+		"model_aliases": []any{map[string]any{"name": "gpt-6", "alias": "six"}},
+		"headers":       map[string]any{"X-A": "b"},
+		"siwc": map[string]any{
+			"access_token": "fake-siwc-access", "refresh_token": "fake-siwc-refresh", "id_token": "fake-siwc-id",
+			"client_id": "fake-client", "device_id": "fake-device", "scope": "openid fake.scope",
+			"expires_at": "2026-11-20T12:00:00Z", "expired": "2026-11-19T12:00:00Z",
+		},
+	}
+	for k, v := range extra {
+		m[k] = v
+	}
+	return m
+}
+
+func readSIWC(t *testing.T, file map[string]any, opts ImportOptions) map[string]AuthFile {
+	t.Helper()
+	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	files, _, err := ReadAuthDir(writeFiles(t, map[string]any{"codex-user.json": file}), opts, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]AuthFile{}
+	for _, f := range files {
+		got[f.Record.ID] = f
+	}
+	return got
+}
+
+// A file with a siwc section gives a second account, in use when use_siwc is on, with the SIWC
+// token set, the file's routing settings and only the settings SIWC reads.
+func TestSIWCAccount(t *testing.T) {
+	opts := ImportOptions{CodexIdentity: false, ImageGenerationTool: false, Images: false, SIWCIdentifier: "my-agent"}
+	got := readSIWC(t, siwcFile(map[string]any{"use_siwc": true}), opts)
+	if len(got) != 2 {
+		t.Fatalf("read %d accounts, want 2: %v", len(got), got)
+	}
+	outer, s := got["codex-user"], got["codex-user-siwc"]
+	equalJSON(t, outer.Record.Account.Settings, `{"websockets": true, "codex_identity": false, "image_generation_tool": false, "images": false}`)
+	if outer.Record.Credential.AccessToken != "fake-outer-access" || outer.Record.Disabled {
+		t.Errorf("the file's own account changed: %+v", outer.Record)
+	}
+	if s.File != "codex-user.json" || s.Record.Extension != Codex || s.Record.Disabled || s.Record.Label != "user@example.com" ||
+		s.Record.State != cred.StateActive {
+		t.Errorf("siwc record: %+v", s.Record)
+	}
+	exp := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	want := protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: "fake-siwc-access", RefreshToken: "fake-siwc-refresh",
+		ExpiresAt: exp.Unix(), RefreshAt: exp.Add(-5 * time.Minute).Unix()}
+	c := s.Record.Credential
+	data := c.Data
+	c.Data = nil
+	if !reflect.DeepEqual(c, want) {
+		t.Errorf("credential = %+v, want %+v", c, want)
+	}
+	equalJSON(t, data, `{"siwc": true, "client_id": "fake-client", "device_id": "fake-device", "scope": "openid fake.scope", "id_token": "fake-siwc-id"}`)
+	equalJSON(t, s.Record.Account.Settings, `{"websockets": true, "signin_with_chatgpt_identifier": "my-agent"}`)
+	a, b := s.Record.Account, outer.Record.Account
+	if a.Priority != 4 || a.Weight == nil || *a.Weight != 2 || a.Prefix != b.Prefix || a.Prefix == "" || a.DisableCooling == nil || !*a.DisableCooling ||
+		a.RequestRetry == nil || *a.RequestRetry != 3 || !reflect.DeepEqual(a.ExcludedModels, b.ExcludedModels) || len(a.ExcludedModels) != 1 ||
+		!reflect.DeepEqual(a.ModelAlias, b.ModelAlias) || len(a.ModelAlias) != 1 || !reflect.DeepEqual(s.Ignored, []string{"headers"}) {
+		t.Errorf("siwc account settings: %+v, ignored %v", a, s.Ignored)
+	}
+	// Without the identifier option, or the websockets switch, the settings are left out.
+	got = readSIWC(t, siwcFile(map[string]any{"use_siwc": "true", "websockets": false}), DefaultImportOptions)
+	if s := got["codex-user-siwc"]; s.Record.Disabled || s.Record.Account.Settings != nil {
+		t.Errorf("use_siwc as text: %+v", s.Record)
+	}
+}
+
+// The SIWC account is off unless the file says use_siwc, and off when the file is disabled.
+func TestSIWCDisabled(t *testing.T) {
+	for name, extra := range map[string]map[string]any{
+		"absent":   nil,
+		"false":    {"use_siwc": false},
+		"text":     {"use_siwc": "no"},
+		"disabled": {"use_siwc": true, "disabled": true},
+	} {
+		got := readSIWC(t, siwcFile(extra), DefaultImportOptions)
+		if len(got) != 2 || !got["codex-user-siwc"].Record.Disabled {
+			t.Errorf("%s: %+v", name, got)
+		}
+	}
+}
+
+// A siwc section without a token gives no account; one with only an access token (under the
+// older name "access") or only a refresh token does, and a file whose own tokens are empty is
+// skipped while its SIWC account still imports.
+func TestSIWCTokens(t *testing.T) {
+	if got := readSIWC(t, siwcFile(map[string]any{"use_siwc": true, "siwc": map[string]any{"client_id": "fake-client"}}), DefaultImportOptions); len(got) != 1 {
+		t.Errorf("a siwc section without a token gave %v", got)
+	}
+	got := readSIWC(t, siwcFile(map[string]any{"use_siwc": true, "siwc": map[string]any{"access": "fake-old-access", "expired": "2026-11-20T12:00:00Z"}}), DefaultImportOptions)
+	if s, ok := got["codex-user-siwc"]; !ok || s.Record.Credential.AccessToken != "fake-old-access" ||
+		s.Record.Credential.ExpiresAt != time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC).Unix() {
+		t.Errorf("access/expired spelling: %+v", got)
+	}
+	got = readSIWC(t, siwcFile(map[string]any{"use_siwc": true, "siwc": map[string]any{"refresh_token": "fake-r"}}), DefaultImportOptions)
+	if s, ok := got["codex-user-siwc"]; !ok || s.Record.Credential.RefreshToken != "fake-r" || s.Record.Credential.RefreshAt != 0 || s.Record.Credential.Data == nil {
+		t.Errorf("refresh token only: %+v", got)
+	}
+	file := siwcFile(map[string]any{"use_siwc": true})
+	delete(file, "access_token")
+	delete(file, "refresh_token")
+	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	files, skipped, err := ReadAuthDir(writeFiles(t, map[string]any{"codex-user.json": file}), DefaultImportOptions, now)
+	if err != nil || len(files) != 1 || files[0].Record.ID != "codex-user-siwc" || len(skipped) != 1 || skipped[0].Reason != "it holds no token" {
+		t.Errorf("tokenless file: %+v, skipped %v, %v", files, skipped, err)
+	}
+}
+
+// The suffix keeps the account ID valid and within its length even for a file name at the limit.
+func TestSIWCAccountIDLength(t *testing.T) {
+	name := strings.Repeat("a", 128)
+	files, _, err := ReadAuthDir(writeFiles(t, map[string]any{name + ".json": siwcFile(nil)}), DefaultImportOptions, time.Now())
+	if err != nil || len(files) != 2 {
+		t.Fatalf("%v %v", files, err)
+	}
+	if id := files[1].Record.ID; len(id) != 128 || !strings.HasSuffix(id, "-siwc") || files[0].Record.ID == id {
+		t.Errorf("ids %q %q", files[0].Record.ID, id)
+	}
+}
