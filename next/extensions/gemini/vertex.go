@@ -323,10 +323,11 @@ func fetchToken(ctx context.Context, sa *serviceAccount) (string, time.Time, err
 	_ = json.Unmarshal(raw, &tr)
 	switch {
 	case resp.StatusCode == http.StatusOK && tr.AccessToken != "":
-		if tr.ExpiresIn <= 0 {
-			tr.ExpiresIn = 3600
+		life := sdk.BoundSeconds(tr.ExpiresIn, sdk.MaxTokenLife)
+		if life == 0 {
+			life = time.Hour
 		}
-		return tr.AccessToken, time.Now().Add(time.Duration(tr.ExpiresIn) * time.Second), nil
+		return tr.AccessToken, time.Now().Add(life), nil
 	case resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests:
 		return "", time.Time{}, &llm.Error{Code: llm.CodeUnavailable, Status: resp.StatusCode, Message: fmt.Sprintf("service account token endpoint answered %s", resp.Status), Scope: llm.ScopeCredential, Retryable: true}
 	}

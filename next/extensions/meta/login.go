@@ -77,6 +77,18 @@ func login(ctx context.Context, call sdk.LoginCall, s *sdk.LoginSession) (*proto
 	return nil, &llm.Error{Code: llm.CodeUnsupported, Message: fmt.Sprintf("no login method %q", call.Method), Scope: llm.ScopeRequest}
 }
 
+// waitPoll waits d between token polls, and reports false when ctx ends first. Tests replace it.
+var waitPoll = func(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
 func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant, error) {
 	var dc struct {
 		DeviceCode              string `json:"device_code"`
@@ -96,23 +108,26 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 	if json.Unmarshal(body, &dc) != nil || dc.DeviceCode == "" || dc.UserCode == "" {
 		return nil, &llm.Error{Code: llm.CodeUpstream, Message: "Meta's login sent no device code", Scope: llm.ScopeEndpoint}
 	}
+	// The code's life and the poll interval are the server's numbers: bounded, so a huge one cannot
+	// overflow a duration and a negative one cannot make a tight polling loop.
+	lifetime := sdk.BoundSeconds(dc.ExpiresIn, sdk.MaxLoginWait)
 	if err := s.Prompt(protocol.Prompt{
 		Kind:                    protocol.PromptDevice,
 		Message:                 "Open Meta's page and enter the code to sign in to Muse Code.",
 		UserCode:                dc.UserCode,
 		VerificationURI:         dc.VerificationURI,
 		VerificationURIComplete: dc.VerificationURIComplete,
-		ExpiresIn:               dc.ExpiresIn,
+		ExpiresIn:               int64(lifetime / time.Second),
 	}); err != nil {
 		return nil, err
 	}
 	interval := defaultPollInterval
-	if dc.Interval > 0 {
-		interval = time.Duration(dc.Interval) * time.Second
+	if d := sdk.BoundSeconds(dc.Interval, sdk.MaxPollInterval); d > 0 {
+		interval = d
 	}
 	wait := maxPollDuration
-	if dc.ExpiresIn > 0 && time.Duration(dc.ExpiresIn)*time.Second < wait {
-		wait = time.Duration(dc.ExpiresIn) * time.Second
+	if lifetime > 0 && lifetime < wait {
+		wait = lifetime
 	}
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
@@ -123,12 +138,8 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 		return parent
 	}
 	for {
-		timer := time.NewTimer(interval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
+		if !waitPoll(ctx, interval) {
 			return nil, expired(ctx.Err())
-		case <-timer.C:
 		}
 		status, body, h, err := postForm(ctx, set.AuthBaseURL+"/oidc/device/token/", url.Values{
 			"grant_type": {deviceGrant}, "device_code": {dc.DeviceCode}, "client_id": {clientID},

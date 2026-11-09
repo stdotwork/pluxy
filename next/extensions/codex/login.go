@@ -392,9 +392,9 @@ func grantFrom(tr *tokenResponse, old *protocol.Credential) (*protocol.Grant, er
 	c.Data = raw(d)
 	now := time.Now()
 	if exp := jwtExpiry(c.AccessToken); exp > 0 {
-		c.ExpiresAt = exp
-	} else if tr.ExpiresIn > 0 {
-		c.ExpiresAt = now.Unix() + tr.ExpiresIn
+		c.ExpiresAt = min(exp, now.Add(sdk.MaxTokenLife).Unix())
+	} else {
+		c.ExpiresAt = sdk.ExpiryUnix(now, tr.ExpiresIn)
 	}
 	if c.ExpiresAt > 0 {
 		if at := time.Unix(c.ExpiresAt, 0).Add(-refreshLead); at.After(now) {

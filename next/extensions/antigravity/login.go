@@ -325,9 +325,9 @@ func (tr *tokenResponse) credential(data credentialData, oldRefresh string) *pro
 	if c.RefreshToken == "" {
 		c.RefreshToken = oldRefresh
 	}
-	if tr.ExpiresIn > 0 {
+	if exp := sdk.ExpiryUnix(time.Now(), tr.ExpiresIn); exp > 0 {
 		now := time.Now()
-		c.ExpiresAt = now.Unix() + tr.ExpiresIn
+		c.ExpiresAt = exp
 		if at := time.Unix(c.ExpiresAt, 0).Add(-refreshLead); at.After(now) {
 			c.RefreshAt = at.Unix()
 		}

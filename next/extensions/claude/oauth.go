@@ -214,10 +214,10 @@ type tokenResponse struct {
 // credential builds the credential a token reply grants.
 func (tr *tokenResponse) credential(now time.Time) *protocol.Credential {
 	c := &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: tr.AccessToken, RefreshToken: tr.RefreshToken}
-	if tr.ExpiresIn > 0 {
-		c.ExpiresAt = now.Unix() + tr.ExpiresIn
+	if exp := sdk.ExpiryUnix(now, tr.ExpiresIn); exp > 0 {
+		c.ExpiresAt = exp
 		// Renew renewAhead before expiry, or halfway through a shorter life.
-		ahead := min(int64(renewAhead/time.Second), tr.ExpiresIn/2)
+		ahead := min(int64(renewAhead/time.Second), (exp-now.Unix())/2)
 		c.RefreshAt = c.ExpiresAt - ahead
 	}
 	return c

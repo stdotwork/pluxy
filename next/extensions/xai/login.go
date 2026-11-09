@@ -149,6 +149,9 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 	if json.Unmarshal(body, &dc) != nil || dc.DeviceCode == "" || dc.UserCode == "" || dc.VerificationURI == "" && dc.VerificationURIComplete == "" {
 		return nil, &llm.Error{Code: llm.CodeUpstream, Message: "xAI's login sent no device code", Scope: llm.ScopeEndpoint}
 	}
+	// The code's life and the poll interval are the server's numbers: bounded, so a huge one cannot
+	// overflow a duration and a negative one cannot make a tight polling loop.
+	lifetime := sdk.BoundSeconds(dc.ExpiresIn, sdk.MaxLoginWait)
 	verify := dc.VerificationURI
 	if verify == "" {
 		verify = dc.VerificationURIComplete
@@ -159,17 +162,17 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 		UserCode:                dc.UserCode,
 		VerificationURI:         verify,
 		VerificationURIComplete: dc.VerificationURIComplete,
-		ExpiresIn:               dc.ExpiresIn,
+		ExpiresIn:               int64(lifetime / time.Second),
 	}); err != nil {
 		return nil, err
 	}
 	interval := minPollInterval
-	if d := time.Duration(dc.Interval) * time.Second; d > interval {
+	if d := sdk.BoundSeconds(dc.Interval, sdk.MaxPollInterval); d > interval {
 		interval = d
 	}
 	wait := maxPollDuration
-	if d := time.Duration(dc.ExpiresIn) * time.Second; d > 0 && d < wait {
-		wait = d
+	if lifetime > 0 && lifetime < wait {
+		wait = lifetime
 	}
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
@@ -238,8 +241,8 @@ func grantFrom(body []byte, tokenEndpoint, oldRefresh string) (*protocol.Grant, 
 	}
 	data, _ := json.Marshal(credentialData{TokenEndpoint: tokenEndpoint})
 	c := &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: t.AccessToken, RefreshToken: t.RefreshToken, Data: data}
-	if t.ExpiresIn > 0 {
-		c.ExpiresAt = time.Now().Unix() + t.ExpiresIn
+	if exp := sdk.ExpiryUnix(time.Now(), t.ExpiresIn); exp > 0 {
+		c.ExpiresAt = exp
 		c.RefreshAt = c.ExpiresAt - int64(refreshLead.Seconds())
 	}
 	return &protocol.Grant{Credential: c, Label: idTokenEmail(t.IDToken)}, nil
