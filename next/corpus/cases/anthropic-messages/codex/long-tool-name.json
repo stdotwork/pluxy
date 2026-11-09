@@ -1,0 +1,286 @@
+{
+  "description": "A Messages request whose MCP tool names are over Codex's 64-byte limit: the names are cut (mcp__ and the last segment kept, a repeated name gets _1), the same name is sent in the tools, the tool choice and the conversation's tool_use, a tool_use ID over 64 bytes is cut and ends with a hash in the tool_use and its tool_result alike, and the reply's tool_use block has the client's own name.",
+  "source": [
+    "core/internal/translator/codex/claude/codex_claude_request.go (shortenNameIfNeeded, buildShortNameMap, shortenCodexCallIDIfNeeded)",
+    "core/internal/translator/codex/claude/codex_claude_response.go (buildReverseMapFromClaudeOriginalShortToOriginal)"
+  ],
+  "client": {
+    "path": "/v1/messages",
+    "auth": "none",
+    "headers": {"x-api-key":"corpus-client-key","anthropic-version":"2023-06-01"},
+    "body": {
+      "model": "gpt-test",
+      "max_tokens": 1024,
+      "stream": true,
+      "tools": [
+        {
+          "name": "mcp__weather_server_weather_server_weather_server_weather_server_weather_server___get_weather",
+          "description": "Current weather",
+          "input_schema": {
+            "type": "object",
+            "properties": {"city":{"type":"string"}},
+            "required": ["city"]
+          }
+        },
+        {
+          "name": "mcp__climate_server_climate_server_climate_server_climate_server_climate_server___get_weather",
+          "description": "Current weather",
+          "input_schema": {
+            "type": "object",
+            "properties": {"city":{"type":"string"}},
+            "required": ["city"]
+          }
+        },
+        {
+          "name": "read_file",
+          "description": "Current weather",
+          "input_schema": {
+            "type": "object",
+            "properties": {"city":{"type":"string"}},
+            "required": ["city"]
+          }
+        }
+      ],
+      "tool_choice": {
+        "type": "tool",
+        "name": "mcp__climate_server_climate_server_climate_server_climate_server_climate_server___get_weather"
+      },
+      "messages": [
+        {"role":"user","content":"Weather in Paris?"},
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "name": "mcp__weather_server_weather_server_weather_server_weather_server_weather_server___get_weather",
+              "input": {"city":"Paris"}
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "toolu_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "content": "21C"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"event":"response.created","data":{"type":"response.created","sequence_number":0,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"in_progress","model":"gpt-test-upstream","output":[],"usage":null}}},
+        {"event":"response.output_item.added","data":{"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"fc_corpus","type":"function_call","status":"in_progress","call_id":"call_abc","name":"mcp__get_weather_1","arguments":""}}},
+        {"event":"response.function_call_arguments.delta","data":{"type":"response.function_call_arguments.delta","sequence_number":2,"output_index":0,"item_id":"fc_corpus","delta":"{\"city\":"}},
+        {"event":"response.function_call_arguments.delta","data":{"type":"response.function_call_arguments.delta","sequence_number":3,"output_index":0,"item_id":"fc_corpus","delta":"\"Paris\"}"}},
+        {"event":"response.function_call_arguments.done","data":{"type":"response.function_call_arguments.done","sequence_number":4,"output_index":0,"item_id":"fc_corpus","arguments":"{\"city\":\"Paris\"}"}},
+        {"event":"response.output_item.done","data":{"type":"response.output_item.done","sequence_number":5,"output_index":0,"item":{"id":"fc_corpus","type":"function_call","status":"completed","call_id":"call_abc","name":"mcp__get_weather_1","arguments":"{\"city\":\"Paris\"}"}}},
+        {"event":"response.completed","data":{"type":"response.completed","sequence_number":6,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"completed","model":"gpt-test-upstream","output":[{"id":"fc_corpus","type":"function_call","status":"completed","call_id":"call_abc","name":"mcp__get_weather_1","arguments":"{\"city\":\"Paris\"}"}],"usage":{"input_tokens":5,"input_tokens_details":{"cached_tokens":0},"output_tokens":2,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":7}}}}
+      ]
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "client.events[0].data.message.usage.input_tokens",
+      "kind": "gap",
+      "reason": "Today's core puts its own local estimate of the input tokens in message_start; the new core has no tokenizer and sends 0 there, as Anthropic's message_start allows, until message_delta carries the upstream's count.",
+      "want": 0
+    },
+    {
+      "path": "client.events",
+      "kind": "intended",
+      "reason": "The new core streams each tool-argument fragment as its own input_json_delta as it arrives, as Anthropic's streams do; today's core buffers the arguments (a Chat upstream: one delta at the end; a Responses upstream: an empty delta first).",
+      "want": [
+        {
+          "data": {
+            "message": {
+              "content": [],
+              "id": "resp_corpus",
+              "model": "gpt-test-upstream",
+              "role": "assistant",
+              "stop_reason": null,
+              "stop_sequence": null,
+              "type": "message",
+              "usage": {"input_tokens":0,"output_tokens":0}
+            },
+            "type": "message_start"
+          },
+          "event": "message_start"
+        },
+        {
+          "data": {
+            "content_block": {
+              "id": "call_abc",
+              "input": {},
+              "name": "mcp__climate_server_climate_server_climate_server_climate_server_climate_server___get_weather",
+              "type": "tool_use"
+            },
+            "index": 0,
+            "type": "content_block_start"
+          },
+          "event": "content_block_start"
+        },
+        {
+          "data": {
+            "delta": {"partial_json":"{\"city\":","type":"input_json_delta"},
+            "index": 0,
+            "type": "content_block_delta"
+          },
+          "event": "content_block_delta"
+        },
+        {
+          "data": {
+            "delta": {"partial_json":"\"Paris\"}","type":"input_json_delta"},
+            "index": 0,
+            "type": "content_block_delta"
+          },
+          "event": "content_block_delta"
+        },
+        {"data":{"index":0,"type":"content_block_stop"},"event":"content_block_stop"},
+        {
+          "data": {
+            "delta": {"stop_reason":"tool_use","stop_sequence":null},
+            "type": "message_delta",
+            "usage": {
+              "input_tokens": 5,
+              "output_tokens": 2,
+              "output_tokens_details": {"thinking_tokens":0}
+            }
+          },
+          "event": "message_delta"
+        },
+        {"data":{"type":"message_stop"},"event":"message_stop"}
+      ]
+    },
+    {
+      "path": "upstream[*].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."
+    },
+    {
+      "path": "upstream[*].headers.Session-Id",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    },
+    {
+      "path": "upstream[*].body.prompt_cache_key",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    },
+    {
+      "path": "upstream[0].body.reasoning",
+      "kind": "intended",
+      "reason": "The new core sends the reasoning effort the client asked for (reasoning_effort, a Messages thinking budget's effort or a model-name suffix) whatever the model, and gives a translated request that names none the medium effort today's core gives it; today's core checks the effort against its model catalog and drops it for a model it does not list, such as gpt-test. The *-catalog-model cases and the codex-oauth cases show both cores sending it for a model today's core lists.",
+      "want": {"effort":"medium"}
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"message":{"content":[],"id":"resp_corpus","model":"gpt-test-upstream","role":"assistant","stop_reason":null,"stop_sequence":null,"type":"message","usage":{"input_tokens":221,"output_tokens":0}},"type":"message_start"},"event":"message_start"},
+        {"data":{"content_block":{"id":"call_abc","input":{},"name":"mcp__climate_server_climate_server_climate_server_climate_server_climate_server___get_weather","type":"tool_use"},"index":0,"type":"content_block_start"},"event":"content_block_start"},
+        {"data":{"delta":{"partial_json":"","type":"input_json_delta"},"index":0,"type":"content_block_delta"},"event":"content_block_delta"},
+        {"data":{"delta":{"partial_json":"{\"city\":","type":"input_json_delta"},"index":0,"type":"content_block_delta"},"event":"content_block_delta"},
+        {"data":{"delta":{"partial_json":"\"Paris\"}","type":"input_json_delta"},"index":0,"type":"content_block_delta"},"event":"content_block_delta"},
+        {"data":{"index":0,"type":"content_block_stop"},"event":"content_block_stop"},
+        {"data":{"delta":{"stop_reason":"tool_use","stop_sequence":null},"type":"message_delta","usage":{"input_tokens":5,"output_tokens":2,"output_tokens_details":{"thinking_tokens":0}}},"event":"message_delta"},
+        {"data":{"type":"message_stop"},"event":"message_stop"}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": ["reasoning.encrypted_content"],
+          "input": [
+            {
+              "content": [{"text":"Weather in Paris?","type":"input_text"}],
+              "role": "user",
+              "type": "message"
+            },
+            {
+              "arguments": "{\"city\":\"Paris\"}",
+              "call_id": "toolu_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb_de438012d452299d",
+              "name": "mcp__get_weather",
+              "type": "function_call"
+            },
+            {
+              "call_id": "toolu_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb_de438012d452299d",
+              "output": "21C",
+              "type": "function_call_output"
+            }
+          ],
+          "instructions": "",
+          "max_output_tokens": 1024,
+          "model": "gpt-test",
+          "parallel_tool_calls": true,
+          "prompt_cache_key": "0ce92e26-c5e7-59bd-a0ad-e7427665e316",
+          "store": false,
+          "stream": true,
+          "tool_choice": {"name":"mcp__get_weather_1","type":"function"},
+          "tools": [
+            {
+              "description": "Current weather",
+              "name": "mcp__get_weather",
+              "parameters": {
+                "properties": {"city":{"type":"string"}},
+                "required": ["city"],
+                "type": "object"
+              },
+              "strict": false,
+              "type": "function"
+            },
+            {
+              "description": "Current weather",
+              "name": "mcp__get_weather_1",
+              "parameters": {
+                "properties": {"city":{"type":"string"}},
+                "required": ["city"],
+                "type": "object"
+              },
+              "strict": false,
+              "type": "function"
+            },
+            {
+              "description": "Current weather",
+              "name": "read_file",
+              "parameters": {
+                "properties": {"city":{"type":"string"}},
+                "required": ["city"],
+                "type": "object"
+              },
+              "strict": false,
+              "type": "function"
+            },
+            {"output_format":"png","type":"image_generation"}
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "Originator": "codex-tui",
+          "Session-Id": "0ce92e26-c5e7-59bd-a0ad-e7427665e316",
+          "User-Agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      }
+    ]
+  }
+}

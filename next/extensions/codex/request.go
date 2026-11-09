@@ -27,6 +27,9 @@ type upstreamRequest struct {
 	model string
 	// sessionID is the prompt cache key the request carries, also sent as the Session-Id header.
 	sessionID string
+	// names maps the function names the request sent upstream in place of the client's to the
+	// client's, for the reply.
+	names map[string]string
 }
 
 // buildRequest returns the Codex request for req: the client's Responses body, or the request
@@ -78,7 +81,7 @@ func buildRequest(req llm.Request, accountID string, s settings, a account, ws b
 	if err != nil {
 		return nil, err
 	}
-	return &upstreamRequest{body: out, tr: tr, model: model, sessionID: sh.sessionID}, nil
+	return &upstreamRequest{body: out, tr: tr, model: model, sessionID: sh.sessionID, names: sh.names}, nil
 }
 
 // Fields the Codex endpoint does not take, removed from every request.
@@ -101,6 +104,9 @@ type shaper struct {
 	ws        bool   // for the Responses WebSocket
 
 	sessionID string
+	// names maps each function name the request sent upstream in place of the client's to the
+	// client's (see limits).
+	names map[string]string
 }
 
 // wsFields are fields the Responses WebSocket takes that HTTP does not: a turn continues the
@@ -148,6 +154,7 @@ func (h *shaper) shape() error {
 	}
 	h.reasoning()
 	h.tools()
+	h.limits()
 	h.promptCacheKey()
 	return nil
 }
