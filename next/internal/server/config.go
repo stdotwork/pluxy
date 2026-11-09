@@ -75,6 +75,9 @@ type Config struct {
 	// keyDigests are the SHA-256 digests of ClientKeys, made when the config is loaded so that a
 	// request's check does not hash a key (prepareClientKeys).
 	keyDigests [][sha256.Size]byte
+	// managementDigest is the SHA-256 digest of ManagementKey, made when the config is loaded for
+	// the same reason (prepareManagementKey); nil: not made.
+	managementDigest *[sha256.Size]byte
 	// Usage says whether core keeps a usage record of the requests it serves, for the
 	// management API, and how much of it.
 	Usage UsageConfig `json:"usage"`
@@ -100,6 +103,22 @@ func (c *Config) prepareClientKeys() {
 	for i, k := range c.ClientKeys {
 		c.keyDigests[i] = sha256.Sum256([]byte(k))
 	}
+}
+
+// prepareManagementKey makes the digest of the management key, which the management API compares
+// a request's key with, so a request's check does not hash the key.
+func (c *Config) prepareManagementKey() {
+	d := sha256.Sum256([]byte(c.ManagementKey))
+	c.managementDigest = &d
+}
+
+// managementKeyDigest returns the digest of the management key: the one made at load, or, for a
+// Config that was built by hand (tests), made now.
+func (c *Config) managementKeyDigest() [sha256.Size]byte {
+	if c.managementDigest != nil {
+		return *c.managementDigest
+	}
+	return sha256.Sum256([]byte(c.ManagementKey))
 }
 
 // clientKeyDigests returns the digests of the client keys: the ones made at load, or, for a
@@ -517,5 +536,6 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	c.prepareClientKeys()
+	c.prepareManagementKey()
 	return &c, nil
 }
