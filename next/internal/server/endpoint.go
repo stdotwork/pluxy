@@ -24,6 +24,8 @@ type endpoint struct {
 	headers []string
 	// check refuses a request the endpoint does not take, before it is routed.
 	check func(body map[string]json.RawMessage) *llm.Error
+	// modelOptional makes a request that names no model go to any account (route.Request.AnyModel).
+	modelOptional bool
 }
 
 // compactEndpoint is OpenAI's Responses compaction, which the Codex CLI calls to shorten a long
@@ -41,12 +43,22 @@ var compactEndpoint = endpoint{
 	},
 }
 
+// alphaSearchEndpoint is Codex's search endpoint. Its body is Codex's own shape, which core passes
+// on as it came; the model is optional. The headers are those today's core passes on.
+var alphaSearchEndpoint = endpoint{
+	format:        llm.FormatCodexAlphaSearch,
+	headers:       []string{"version", "user-agent", "session_id", "x-client-request-id"},
+	modelOptional: true,
+}
+
 // endpointRoutes are the client routes endpoint calls serve, by path. /backend-api/codex is where
 // the Codex CLI sends a ChatGPT sign-in's requests (its chatgpt_base_url), as today's core serves
 // it.
 var endpointRoutes = map[string]endpoint{
 	"/v1/responses/compact":                compactEndpoint,
 	"/backend-api/codex/responses/compact": compactEndpoint,
+	"/v1/alpha/search":                     alphaSearchEndpoint,
+	"/backend-api/codex/alpha/search":      alphaSearchEndpoint,
 }
 
 // serveEndpoint serves a client request to a provider endpoint: the body, a JSON object, goes to
@@ -89,6 +101,7 @@ func serveEndpoint(w http.ResponseWriter, r *http.Request, g *Generation, ep end
 	m := g.newMeter(r, arrived, req, clientToken(r, false))
 	rr := routeRequest(r, req, body)
 	rr.Attempt = g.Endpoint
+	rr.AnyModel = ep.modelOptional
 	rr.Attempting = func(a route.Attempt) {
 		t.account = a.Account
 		m.attempt(a, t.id)

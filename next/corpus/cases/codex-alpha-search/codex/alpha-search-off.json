@@ -1,0 +1,69 @@
+{
+  "description": "A Codex API key without alpha-search does not serve search: no account is eligible and the client gets an error.",
+  "source": [
+    "core/internal/api/server_routes.go",
+    "core/sdk/cliproxy/auth/credential_policy.go",
+    "core/internal/api/server_codex_search_siwc_test.go"
+  ],
+  "client": {
+    "path": "/v1/alpha/search",
+    "headers": {
+      "Version": "0.154.0",
+      "User-Agent": "codex_cli_rs/0.154.0 (corpus)",
+      "Session_id": "sess-corpus",
+      "X-Client-Request-Id": "req-corpus"
+    },
+    "body": {
+      "model": "gpt-test",
+      "query": "corpus search",
+      "max_results": 3,
+      "id": "conv-corpus",
+      "prompt_cache_key": "pck-corpus",
+      "prompt_cache_retention": "24h"
+    }
+  },
+  "upstream": [],
+  "recorded_old_core": {
+    "client": {
+      "body": {"error":"auth_not_found: no auth available"},
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8"
+      },
+      "status": 503
+    },
+    "upstream": []
+  },
+  "exceptions": [
+    {
+      "path": "client.status",
+      "kind": "gap",
+      "want": 400,
+      "reason": "No account is eligible: an API key without alpha_search answers the call unsupported, and the new core answers that with 400 as for any endpoint no account serves; today's core answers 503. Whether a request no account can serve should answer 503 is not decided."
+    },
+    {
+      "path": "client.body.error",
+      "kind": "intended",
+      "want": {
+        "code": "unsupported",
+        "message": "this API key does not serve Alpha Search (the account's alpha_search setting is off)",
+        "type": "invalid_request_error"
+      },
+      "reason": "Today's core answers {\"error\": \"<text>\"} (auth_not_found: no auth available); the new core answers with an OpenAI-style error object that names why the key does not serve search."
+    },
+    {
+      "path": "client.headers.Content-Type",
+      "kind": "intended",
+      "want": "application/json",
+      "reason": "The new core answers application/json; today's core's gin handler adds a charset to the error it writes itself."
+    },
+    {
+      "path": "client.headers.X-Cpa-Trace-Id",
+      "kind": "intended",
+      "reason": "Today's core sends a trace ID only once it has chosen an account; the new core sends one with every routed reply, including one where no account served the request."
+    }
+  ]
+}

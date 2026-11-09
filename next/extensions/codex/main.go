@@ -6,7 +6,7 @@
 // Account settings, all optional:
 //
 //	{"base_url": "https://api.openai.com/v1", "codex_identity": true, "image_generation_tool": true,
-//	 "callback_listen": true, "websockets": false}
+//	 "callback_listen": true, "websockets": false, "alpha_search": false}
 //
 // base_url is where requests go ({base_url}/responses); the default is
 // https://api.openai.com/v1 for an API key and https://chatgpt.com/backend-api/codex for a
@@ -21,6 +21,8 @@
 // false, as in today's core) holds sessions for WebSocket clients: their turns go over the
 // upstream's Responses WebSocket ({base_url}/responses with ws or wss), one upstream socket per
 // client socket, so a turn can continue the previous response with previous_response_id.
+// alpha_search (default false, as in today's core) lets an API key account serve Codex's Alpha
+// Search ({base_url}/alpha/search), which not every upstream has; a subscription always serves it.
 //
 // Every request is sent in the shape the Codex endpoint takes: streamed, not stored, encrypted
 // reasoning included, sampling settings removed (see shape). Requests in Chat Completions,
@@ -80,6 +82,9 @@ type settings struct {
 	// Websockets (default false) sends a WebSocket client's turns over the upstream's Responses
 	// WebSocket, one socket per client socket; off, core sends each turn over HTTP.
 	Websockets *bool `json:"websockets"`
+	// AlphaSearch (default false) lets an API key account serve Codex's Alpha Search; a
+	// subscription always does.
+	AlphaSearch bool `json:"alpha_search"`
 }
 
 func (s settings) identity() bool  { return s.CodexIdentity == nil || *s.CodexIdentity }

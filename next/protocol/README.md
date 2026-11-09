@@ -411,12 +411,14 @@ account as one that does not serve the endpoint.
 
 The call carries `account` and `request` as `generate` does. The request has no items: `model`
 is the body's `model` (renamed for the account and without its thinking suffix, which is in
-`options.thinking_suffix`, as for `generate`), and `native` holds the client's body and headers,
+`options.thinking_suffix`, as for `generate`; empty for an endpoint that takes no model, when the
+body names none), and `native` holds the client's body and headers,
 with `native.format` naming the endpoint:
 
 | `native.format` | Client route | Body |
 | --- | --- | --- |
 | `openai.responses.compact` | `POST /v1/responses/compact` (and `/backend-api/codex/responses/compact`) | A Responses request; the reply is one JSON object. Core refuses `"stream": true` itself. |
+| `codex.alpha_search` | `POST /v1/alpha/search` (and `/backend-api/codex/alpha/search`) | Codex's search request, in Codex's own shape; the reply is one JSON object. Its `model` is optional: a request without one is sent to any account, with `request.model` empty. |
 
 The reply is a stream of events as for `generate`, without items: `response.start`, whose
 `response.format` is the endpoint's format and whose `response.raw` says how to send the body,

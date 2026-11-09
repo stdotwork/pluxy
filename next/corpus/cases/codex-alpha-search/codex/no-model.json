@@ -1,0 +1,74 @@
+{
+  "description": "A search request that names no model is still served, on a Codex API key with alpha-search on.",
+  "source": [
+    "core/internal/api/server_routes.go",
+    "core/sdk/cliproxy/auth/credential_policy.go",
+    "core/internal/api/server_codex_search_siwc_test.go"
+  ],
+  "client": {
+    "path": "/v1/alpha/search",
+    "headers": {
+      "Version": "0.154.0",
+      "User-Agent": "codex_cli_rs/0.154.0 (corpus)",
+      "Session_id": "sess-corpus",
+      "X-Client-Request-Id": "req-corpus"
+    },
+    "body": {
+      "query": "corpus search",
+      "max_results": 3,
+      "id": "conv-corpus",
+      "prompt_cache_key": "pck-corpus",
+      "prompt_cache_retention": "24h"
+    }
+  },
+  "upstream": [
+    {
+      "headers": {"Content-Type":"application/json","X-Request-Id":"req_search_corpus"},
+      "body": {
+        "id": "search_corpus",
+        "results": [
+          {"title":"Corpus result","url":"https://example.com/corpus","snippet":"A fake hit."}
+        ]
+      }
+    }
+  ],
+  "old_core": {"accounts":[{"alpha-search":true}]},
+  "new_core": {"account":{"settings":{"alpha_search":true}}},
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "id": "search_corpus",
+        "results": [
+          {"snippet":"A fake hit.","title":"Corpus result","url":"https://example.com/corpus"}
+        ]
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {"id":"conv-corpus","max_results":3,"query":"corpus search"},
+        "headers": {
+          "Accept": "application/json",
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "Originator": "codex_cli_rs",
+          "Session_id": "sess-corpus",
+          "User-Agent": "codex_cli_rs/0.154.0 (corpus)",
+          "Version": "0.154.0",
+          "X-Client-Request-Id": "req-corpus"
+        },
+        "method": "POST",
+        "path": "/v1/alpha/search"
+      }
+    ]
+  }
+}

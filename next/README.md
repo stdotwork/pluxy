@@ -276,6 +276,7 @@ replaying the block sends the reasoning back, so it carries over between turns. 
 | `image_generation_tool` | Default `true`: offer the hosted `image_generation` tool, as today's core does (never to a free plan or a `-spark` model). |
 | `callback_listen` | Default `true`: let a browser sign-in listen on `localhost:1455`. |
 | `websockets` | Default `false`: send a Responses WebSocket client's turns to `{base_url}/responses` over one upstream WebSocket per client socket (Codex's WebSocket transport), as today's core does with `websockets: true`. A socket the upstream drops is not replaced in the middle of a turn: the client gets `upstream_websocket_lost` and sends the whole conversation again. |
+| `alpha_search` | Default `false` ("Enable Alpha Search"): let an API key account serve Codex's Alpha Search, as today's core does with `alpha-search: true`; a key without it is not asked, since not every upstream has the endpoint. A ChatGPT sign-in always serves it. |
 
 **Compaction.** The Codex CLI shortens a long conversation with `POST /v1/responses/compact`
 (also `POST /backend-api/codex/responses/compact`, where it sends a ChatGPT sign-in's requests when
@@ -287,6 +288,18 @@ effort applied, and a prompt cache key (with `Session-Id`) derived as for `/resp
 client names none; the upstream's JSON reply comes back to the client as it is. A request with
 `"stream": true` is refused with a 400, as today's core refuses it. An account of another extension
 does not serve it, so a model only those serve gets an error.
+
+**Alpha Search.** Codex's standalone search endpoint is `POST /v1/alpha/search` (also `POST
+/backend-api/codex/alpha/search`, for a ChatGPT sign-in's requests). Core routes it as an [endpoint call](protocol/README.md#endpoint)
+to a Codex account: a ChatGPT sign-in always, an API key only with `alpha_search` on. The request
+may name no model, and then any such account may serve it; one that names a model goes by it, as
+other requests do. The extension sends the body to `{base_url}/alpha/search` as it came, without
+`prompt_cache_key` and `prompt_cache_retention` and, for an API key, the model renamed for the
+account. It sends `originator: codex_cli_rs`, the bearer token, a sign-in's `Chatgpt-Account-Id`
+and the client's `Version`, `User-Agent`, `Session_id` and `X-Client-Request-Id` as they came; the
+upstream's JSON reply comes back to the client whole, with its content type. An upstream error
+reaches the client as an error in OpenAI's shape, and an API key without `alpha_search` is skipped
+for this endpoint only. When no account is eligible the client gets an error saying so.
 
 **Quota.** For a ChatGPT sign-in account, `GET /v0/management/accounts/{id}/quota` reads `GET {backend}/wham/usage`, where `{backend}` is the account's `base_url` without a trailing `/codex` (default `https://chatgpt.com/backend-api`), with the access token, the `Chatgpt-Account-Id` header and the same `User-Agent` and `Originator` the account's requests carry (so `codex_identity` applies). It reports the plan (`plan_type`), the 5-hour and weekly or monthly windows (`five_hour`, `weekly`, `monthly`), code review's windows (`code_review_*`), each extra limit such as one model's (`<name>_five_hour` and so on) and the credit balance (`credits`), with the share used, reset time and window length. An API key answers unsupported. A sign-in's grant carries `identity` `{"email", "account_id"}`: members of one ChatGPT workspace share its account ID, so the e-mail address tells them apart.
 
@@ -1309,7 +1322,7 @@ needs none) is not supported yet: it adds no account and is named in the log.
 
 | Section (v8; older spelling) | Extension | Account settings |
 | --- | --- | --- |
-| `api-keys.codex` (`codex-api-key`) | `pluxy/codex` | `base-url` is `base_url`; `websockets` is `websockets`; `disable-codex-cloaking: true` is `codex_identity: false` |
+| `api-keys.codex` (`codex-api-key`) | `pluxy/codex` | `base-url` is `base_url`; `websockets` is `websockets`; `alpha-search` is `alpha_search`; `disable-codex-cloaking: true` is `codex_identity: false` |
 | `api-keys.claude` (`claude-api-key`) | `pluxy/claude` | `base-url` is `base_url` |
 | `api-keys.gemini` (`gemini-api-key`) | `pluxy/gemini` | `base-url` is `base_url` |
 | `api-keys.vertex` (`vertex-api-key`) | `pluxy/gemini`, Vertex AI with the key as an express mode key | `base-url` is `base_url` |
@@ -1392,7 +1405,7 @@ are accepted silently.
 | Every `disable-cooling` on a group or key | The account's `disable_cooling`. | Supported |
 | Every `request-retry` on a group or key | The account's `request_retry`: a key's own, else its group's (an `openai-compatibility` group's for all its keys, which have none of their own there). A negative one inherits `routing.retry.request-retry`, as in today's core. | Supported |
 | The keys' `models[]` catalog fields (`display-name`, `max-context-length`, `force-mapping`, `is-compat`, `thinking`, `image`, `input-modalities`, `output-modalities`, `use-max-completion-tokens`, `support-configuration-update`, `openapi`) | A model's display name in lists is its upstream name. | Later |
-| Codex keys' `alpha-search`; Vertex keys' `interactions`, `openapi`, `openapi-location`; openai-compatibility's `support-prompt-cache-key`; xAI keys' `websockets` | | Later |
+| Vertex keys' `interactions`, `openapi`, `openapi-location`; openai-compatibility's `support-prompt-cache-key`; xAI keys' `websockets` | | Later |
 | `multimedia.disable-image-generation` (`disable-image-generation`) | `true`, `"chat"` and `"passthrough"` are `image_generation_tool: false` on Codex accounts from the file and on those `-import-auth` adds. | Supported |
 | `multimedia.gpt-image-2-base-model`, `multimedia.video-result-auth-cache-ttl` (each also at the top level) | No image or video routes yet. | Later |
 | `observability.logs.logging-to-file` (`logging-to-file`), `observability.logs.logs-max-total-size-mb` (`logs-max-total-size-mb`) | `logs.to_file` and `logs.max_total_size_mb`: [log files](#log-files). A negative cap is none, as in today's core. | Supported |

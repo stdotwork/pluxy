@@ -289,7 +289,7 @@ var rules = map[string]rule{
 	"api-keys.*[].request-retry":                               {supported, ""},
 	"api-keys.codex[].websockets":                              {supported, ""},
 	"api-keys.codex[].disable-codex-cloaking":                  {supported, ""},
-	"api-keys.codex[].alpha-search":                            {later, ""},
+	"api-keys.codex[].alpha-search":                            {supported, ""},
 	"api-keys.xai[].websockets":                                {later, ""},
 	"api-keys.vertex[].interactions":                           {later, ""},
 	"api-keys.vertex[].openapi":                                {later, ""},
@@ -941,6 +941,13 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 		}
 		if ws {
 			settings["websockets"] = true
+		}
+		search, err := boolean_(field(g, k, "alpha-search"), path+".alpha-search")
+		if err != nil {
+			return nil, err
+		}
+		if search {
+			settings["alpha_search"] = true
 		}
 		off, err := boolean_(field(g, k, "disable-codex-cloaking"), path+".disable-codex-cloaking")
 		if err != nil {

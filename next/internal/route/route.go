@@ -139,6 +139,10 @@ type Request struct {
 	Session string
 	// Pin, when set, restricts the request to the account with this ID.
 	Pin string
+	// AnyModel, for a request of an endpoint that takes no model, makes every account capable
+	// when LLM.Model is empty; the attempt then names no upstream model. A request that names a
+	// model is routed by it as any other.
+	AnyModel bool
 	// Attempt, when set, runs this request's attempts in place of the router's AttemptFunc (a
 	// WebSocket turn that goes to an open session). Routing, state and retries are the same.
 	Attempt AttemptFunc
@@ -369,6 +373,12 @@ func (c *call) release() {
 	}
 }
 
+// anyModel reports whether the request needs no model to choose its accounts (see
+// Request.AnyModel).
+func (c *call) anyModel() bool {
+	return c.req.AnyModel && c.req.LLM.Model == ""
+}
+
 // route runs attempts until one starts a reply, and returns that reply's first event; or it
 // gives up and returns the error event that ends the request, which in the usage-limit quota
 // response mode is the usage-limit reply when every account is out of quota.
@@ -397,10 +407,17 @@ func (c *call) attempts() llm.Event {
 	}
 	// An account without models of its own serves those its extension lists, as today's core
 	// serves an account the models of its provider's catalog.
-	served := r.served(c.ctx, eligible, creds, r.catalogFunc())
+	var served map[string][]string
+	if !c.anyModel() {
+		served = r.served(c.ctx, eligible, creds, r.catalogFunc())
+	}
 	var capable []*Account
 	c.upstream = map[string]string{}
 	for _, a := range eligible {
+		if c.anyModel() {
+			capable = append(capable, a) // no model to serve: the upstream name stays empty
+			continue
+		}
 		// Blocks on a model are kept under its upstream name, which is the account's own.
 		if up, ok := a.resolve(model, r.cfg.ForceModelPrefix, served[a.ID]); ok {
 			capable = append(capable, a)
