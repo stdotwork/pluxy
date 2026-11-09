@@ -548,7 +548,9 @@ export const quotaRowsFor = (provider: QuotaProvider, payload: unknown): QuotaRo
             || quotaText('quota.service.limit.numbered', { index: index + 1 }),
           remainingPercent: clampPercent(
             limit !== null && limit > 0
-              ? (Math.max(0, limit - (usedValue ?? 0)) / limit) * 100
+              ? usedValue === null
+                ? null
+                : (Math.max(0, limit - usedValue) / limit) * 100
               : (usedValue ?? 0) > 0
                 ? 0
                 : null,
@@ -559,7 +561,7 @@ export const quotaRowsFor = (provider: QuotaProvider, payload: unknown): QuotaRo
             )
             ?? relativeResetLabel(detail.reset_in ?? detail.resetIn ?? detail.ttl),
           resetAtMs: quotaResetFor(detail, ['reset_at', 'resetAt', 'reset_time', 'resetTime'], ['reset_in', 'resetIn', 'ttl']),
-          detail: limit === null ? undefined : `${usedValue ?? 0} / ${limit}`,
+          detail: limit === null || usedValue === null ? undefined : `${usedValue} / ${limit}`,
         };
       })
       .filter((row): row is QuotaRow => row !== null);
@@ -621,11 +623,10 @@ export const quotaRowsFor = (provider: QuotaProvider, payload: unknown): QuotaRo
       reset: absoluteResetLabel(billing.billingPeriodEnd),
       resetAtMs: quotaResetInstant(billing.billingPeriodEnd),
     };
-    const amount = (cap: number | null, used: number | null) => {
-      const remaining = cap !== null && used !== null ? Math.max(0, cap - used) : null;
-      return cap === null ? formatUsdFromCents(remaining)
-        : `${formatUsdFromCents(remaining)} / ${formatUsdFromCents(cap)}`;
-    };
+    const amount = (cap: number | null, used: number | null) =>
+      cap === null || used === null
+        ? undefined
+        : `${formatUsdFromCents(Math.max(0, cap - used))} / ${formatUsdFromCents(cap)}`;
     if (billing.onDemandCapCents !== null && billing.onDemandCapCents > 0) {
       rows.push({
         label: quotaText('quota.service.onDemand'),
