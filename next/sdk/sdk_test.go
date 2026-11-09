@@ -384,3 +384,73 @@ func TestModels(t *testing.T) {
 		t.Errorf("models of panic: %+v; want an internal error", r.Event)
 	}
 }
+
+// TestCheck covers the check operation: describe lists it only with a handler, a call returns the
+// handler's result, an error is sent as it is, a nil result is an empty one, and a panic is an
+// internal error.
+func TestCheck(t *testing.T) {
+	gen := func(context.Context, Call, *Stream) error { return nil }
+	ext := Extension{ID: "test/check", Version: "0.0.0", Generate: gen,
+		Check: func(_ context.Context, call CheckCall) (*protocol.CheckResult, error) {
+			switch call.Account.ID {
+			case "none":
+				return nil, nil
+			case "bad":
+				return nil, &llm.Error{Code: llm.CodeAuth, Message: "key refused", Scope: llm.ScopeCredential}
+			case "panic":
+				panic("boom")
+			}
+			return &protocol.CheckResult{Detail: "checked " + call.Account.ID}, nil
+		}}
+	describe := func(socket string) *protocol.Info {
+		t.Helper()
+		conn := dial(t, socket)
+		defer conn.Close()
+		if err := protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeCall, ID: "d", Op: protocol.OpDescribe}); err != nil {
+			t.Fatal(err)
+		}
+		var described protocol.Reply
+		if err := protocol.ReadFrame(conn, &described); err != nil || described.Info == nil {
+			t.Fatalf("describe: %+v, %v", described, err)
+		}
+		return described.Info
+	}
+	call := func(socket, id string) protocol.Reply {
+		t.Helper()
+		conn := dial(t, socket)
+		defer conn.Close()
+		if err := protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeCall, ID: "c", Op: protocol.OpCheck, Account: &protocol.Account{ID: id}}); err != nil {
+			t.Fatal(err)
+		}
+		var r protocol.Reply
+		if err := protocol.ReadFrame(conn, &r); err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+
+	socket, _, _ := startServe(t, ext)
+	if info := describe(socket); !slices.Contains(info.Operations, protocol.OpCheck) || info.ProtocolMinor < 4 {
+		t.Fatalf("describe: %+v; want check with minor 4 or more", info)
+	}
+	if r := call(socket, "a"); r.Type != protocol.TypeCheckResult || r.Check == nil || r.Check.Detail != "checked a" {
+		t.Errorf("check of a: %+v %+v", r.Event, r.Check)
+	}
+	if r := call(socket, "none"); r.Type != protocol.TypeCheckResult || r.Check == nil {
+		t.Errorf("check of none: %+v %+v; want an empty result", r.Event, r.Check)
+	}
+	if r := call(socket, "bad"); r.Type != llm.EventError || r.Error == nil || r.Error.Code != llm.CodeAuth || r.Error.Message != "key refused" {
+		t.Errorf("check of bad: %+v; want the handler's auth error", r.Event)
+	}
+	if r := call(socket, "panic"); r.Type != llm.EventError || r.Error == nil || r.Error.Code != llm.CodeInternal {
+		t.Errorf("check of panic: %+v; want an internal error", r.Event)
+	}
+
+	plain, _, _ := startServe(t, Extension{ID: "test/plain", Version: "0.0.0", Generate: gen})
+	if info := describe(plain); slices.Contains(info.Operations, protocol.OpCheck) {
+		t.Errorf("describe without a handler lists check: %v", info.Operations)
+	}
+	if r := call(plain, "a"); r.Type != llm.EventError || r.Error == nil || r.Error.Code != llm.CodeUnsupported {
+		t.Errorf("check without a handler: %+v; want unsupported", r.Event)
+	}
+}

@@ -9,6 +9,10 @@
 // {base_url}/v1beta/models/{model}:generateContent, or :streamGenerateContent?alt=sse for a
 // stream, with the API key in x-goog-api-key. Vertex accounts are described in vertex.go.
 //
+// An account check (core's check call) of a Gemini API account reads the model list,
+// GET {base_url}/v1beta/models with x-goog-api-key, which costs the account nothing. A Vertex
+// account, and any credential that is not an API key, is left not checked, without a request.
+//
 // A Gemini GenerateContent request is sent unchanged, thought signatures included. Requests in
 // other formats (Chat Completions, Responses, Messages) are translated to GenerateContent, with
 // the client's reasoning effort turned into Gemini's thinking settings (thinking.go).
@@ -53,6 +57,7 @@ func main() {
 		Login:        login,
 		CountTokens:  countTokens,
 		Models:       listModels,
+		Check:        check,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gemini:", err)
@@ -401,6 +406,50 @@ func (g *googleError) retryDelay() int64 {
 		}
 	}
 	return 0
+}
+
+// check asks the Gemini API for its model list with an API key, which costs nothing and generates
+// nothing. A Vertex account, or a credential of another kind, is answered unsupported without a
+// request.
+func check(ctx context.Context, call sdk.CheckCall) (*protocol.CheckResult, error) {
+	s, err := readSettings(call.Account.Settings)
+	if err != nil {
+		return nil, err
+	}
+	cred := call.Account.Credential
+	if s.Vertex != nil || (cred != nil && cred.Kind != protocol.CredentialAPIKey) {
+		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: "only a Gemini API key can be checked without a generation", Scope: llm.ScopeCredential}
+	}
+	if cred == nil || cred.APIKey == "" {
+		return nil, &llm.Error{Code: llm.CodeAuth, Message: "the account has no API key", Scope: llm.ScopeCredential}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.BaseURL+"/v1beta/models", nil)
+	if err != nil {
+		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
+	}
+	req.Header.Set("X-Goog-Api-Key", cred.APIKey)
+	resp, err := client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: "the upstream has no model list to check the key with", Scope: llm.ScopeCredential}
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, upstreamError(resp, "")
+	}
+	var list struct {
+		Models []json.RawMessage `json:"models"`
+	}
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxFrame))
+	if json.Unmarshal(raw, &list) != nil || list.Models == nil {
+		return &protocol.CheckResult{Detail: "the upstream accepted the key"}, nil
+	}
+	return &protocol.CheckResult{Detail: fmt.Sprintf("the upstream lists %d models", len(list.Models))}, nil
 }
 
 // upstreamError turns a non-2xx GenerateContent response into a structured error. model is the

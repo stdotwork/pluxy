@@ -75,6 +75,21 @@ type ModelsCall struct {
 // list for. An *llm.Error is sent as it is, any other error as code internal.
 type ModelsHandler func(ctx context.Context, call ModelsCall) (*protocol.ModelList, error)
 
+// CheckCall is one check call.
+type CheckCall struct {
+	ID string
+	// Account is the account to check, with its credential.
+	Account protocol.Account
+}
+
+// CheckHandler checks whether an account works without generating anything (protocol minor
+// version 4): at most one upstream call, and only one that costs the account nothing, such as its
+// model list or the provider's token check. Return the result for an account that works and an
+// *llm.Error for one that does not: code auth for a refused key, unavailable for an upstream that
+// cannot be reached, upstream for an upstream failure, and unsupported for an account that cannot
+// be checked without a generation. Any other error is sent as code internal.
+type CheckHandler func(ctx context.Context, call CheckCall) (*protocol.CheckResult, error)
+
 // SessionCall is one session call: open a session of a kind on an account.
 type SessionCall struct {
 	ID      string
@@ -122,6 +137,9 @@ type Extension struct {
 	CountTokens Handler
 	// Models, when set, lists an account's models (protocol minor version 3).
 	Models ModelsHandler
+	// Check, when set, checks an account without generating anything (protocol minor version
+	// 4). Core calls it when it starts, and when a reload or a login adds or changes an account.
+	Check CheckHandler
 }
 
 // operations lists the operations ext serves.
@@ -141,6 +159,9 @@ func (ext Extension) operations() []string {
 	}
 	if ext.Models != nil {
 		ops = append(ops, protocol.OpModels)
+	}
+	if ext.Check != nil {
+		ops = append(ops, protocol.OpCheck)
 	}
 	return ops
 }
@@ -274,6 +295,8 @@ func (s *server) handle(conn net.Conn) {
 		s.session(conn, call)
 	case protocol.OpModels:
 		s.models(conn, call)
+	case protocol.OpCheck:
+		s.check(conn, call)
 	default:
 		_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: llm.EventError, Error: &llm.Error{
 			Code: llm.CodeUnsupported, Message: fmt.Sprintf("unknown operation %q", call.Op), Scope: llm.ScopeRequest,
@@ -615,6 +638,47 @@ func (s *server) models(conn net.Conn, call protocol.Call) {
 		reply = protocol.Reply{Event: llm.Event{Type: llm.EventError, Error: asError(ctx, err)}}
 	}
 	_ = protocol.WriteFrame(conn, reply)
+}
+
+// check answers a check call: one check.result or error frame.
+func (s *server) check(conn net.Conn, call protocol.Call) {
+	ctx, cancel, ok := s.begin(conn)
+	if !ok {
+		return
+	}
+	defer cancel()
+	go func() {
+		_, _ = io.Copy(io.Discard, conn)
+		cancel()
+	}()
+	c := CheckCall{ID: call.ID}
+	if call.Account != nil {
+		c.Account = *call.Account
+	}
+	var res *protocol.CheckResult
+	var err error
+	if s.ext.Check == nil {
+		err = &llm.Error{Code: llm.CodeUnsupported, Message: "this extension does not check accounts", Scope: llm.ScopeRequest}
+	} else {
+		res, err = runCheck(ctx, s.ext.Check, c)
+	}
+	if err == nil && res == nil {
+		res = &protocol.CheckResult{}
+	}
+	reply := protocol.Reply{Event: llm.Event{Type: protocol.TypeCheckResult}, Check: res}
+	if err != nil {
+		reply = protocol.Reply{Event: llm.Event{Type: llm.EventError, Error: asError(ctx, err)}}
+	}
+	_ = protocol.WriteFrame(conn, reply)
+}
+
+func runCheck(ctx context.Context, h CheckHandler, c CheckCall) (res *protocol.CheckResult, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = &llm.Error{Code: llm.CodeInternal, Message: fmt.Sprintf("the extension panicked: %v", r)}
+		}
+	}()
+	return h(ctx, c)
 }
 
 func runModels(ctx context.Context, h ModelsHandler, c ModelsCall) (list *protocol.ModelList, err error) {

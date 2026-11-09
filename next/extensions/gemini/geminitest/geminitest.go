@@ -65,6 +65,7 @@ type Server struct {
 	accounts map[string]*rsa.PublicKey // service account email to its public key
 	requests []Request
 	grants   int
+	models   int
 }
 
 // New starts a fake that is closed when the test ends.
@@ -90,6 +91,13 @@ func (s *Server) Requests() []Request {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]Request(nil), s.requests...)
+}
+
+// ModelRequests returns how many model list requests the server has received, valid or not.
+func (s *Server) ModelRequests() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.models
 }
 
 // Grants returns how many access tokens the token endpoint has issued.
@@ -163,6 +171,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if m := modelsPath.FindStringSubmatch(p); m != nil && r.Method == http.MethodGet {
+		s.mu.Lock()
+		s.models++
+		s.mu.Unlock()
 		if !s.validKey(r) {
 			badKey(w)
 			return

@@ -58,6 +58,7 @@ type Server struct {
 	apiKeys  map[string]bool
 	requests []Request
 	renewals int
+	listings int
 }
 
 type codeGrant struct{ challenge, redirect, state string }
@@ -120,6 +121,13 @@ func (s *Server) Requests() []Request {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]Request(nil), s.requests...)
+}
+
+// ModelRequests returns how many model list requests the server has received, valid or not.
+func (s *Server) ModelRequests() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.listings
 }
 
 // Renewals returns how many refresh grants the token endpoint has honoured.
@@ -235,6 +243,7 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
+	s.listings++
 	ok := s.apiKeys[r.Header.Get("X-Api-Key")]
 	s.mu.Unlock()
 	if !ok {

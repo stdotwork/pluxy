@@ -15,6 +15,10 @@
 // with the changes xAI needs (body.go), and the other formats are translated to Responses. An API
 // key's requests name this extension in their User-Agent (pluxy-xai); a login's carry the Grok
 // CLI's identity, which xAI's CLI endpoint expects.
+//
+// An account check (core's check call) of an api_key account reads xAI's model list,
+// GET {base_url}/models with the key as a bearer token, which costs the account nothing. A Grok
+// login (oauth) is left not checked, without a request.
 package main
 
 import (
@@ -59,7 +63,7 @@ const cliVersion = "1.0.46"
 
 func main() {
 	err := sdk.Serve(sdk.Extension{ID: id, Version: version, Generate: generate,
-		LoginMethods: loginMethods, Login: login, Refresh: refresh, Models: models})
+		LoginMethods: loginMethods, Login: login, Refresh: refresh, Models: models, Check: check})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "xai:", err)
 		os.Exit(1)
@@ -135,6 +139,52 @@ func accountTarget(s settings, c *protocol.Credential) (target, error) {
 		return target{base: base, token: c.AccessToken, cli: true}, nil
 	}
 	return target{}, &llm.Error{Code: llm.CodeAuth, Message: "the account has no xAI API key or Grok login", Scope: llm.ScopeCredential}
+}
+
+// check asks xAI for its model list with an API key, which costs nothing and generates nothing. A
+// credential of another kind (a Grok login) is answered unsupported without a request.
+func check(ctx context.Context, call sdk.CheckCall) (*protocol.CheckResult, error) {
+	cred := call.Account.Credential
+	if cred != nil && cred.Kind != protocol.CredentialAPIKey {
+		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: "only an API key can be checked without a generation; a login is not checked", Scope: llm.ScopeCredential}
+	}
+	s, err := readSettings(call.Account.Settings)
+	if err != nil {
+		return nil, err
+	}
+	tg, err := accountTarget(s, cred)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tg.base+"/models", nil)
+	if err != nil {
+		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
+	}
+	req.Header.Set("Authorization", "Bearer "+tg.token)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "pluxy-xai/"+version)
+	resp, err := client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: "the upstream has no model list to check the key with", Scope: llm.ScopeCredential}
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, upstreamError(resp, "")
+	}
+	var list struct {
+		Data []json.RawMessage `json:"data"`
+	}
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxFrame))
+	if json.Unmarshal(raw, &list) != nil || list.Data == nil {
+		return &protocol.CheckResult{Detail: "the upstream accepted the key"}, nil
+	}
+	return &protocol.CheckResult{Detail: fmt.Sprintf("the upstream lists %d models", len(list.Data))}, nil
 }
 
 func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {

@@ -82,6 +82,7 @@ type Server struct {
 	refreshStarted chan struct{}
 	gate           chan struct{} // open while BlockRefresh holds refresh requests
 	chatTokens     []string
+	checkTokens    []string
 	lastDevice     time.Time // the last request of a device login
 	watching       bool
 	abandoned      chan struct{}
@@ -140,6 +141,7 @@ func New(t testing.TB) *Server {
 	mux.HandleFunc("GET /oauth/authorize", s.authorize)
 	mux.HandleFunc("POST /oauth/token", s.token)
 	mux.HandleFunc("POST /v1/chat", s.chat)
+	mux.HandleFunc("GET /v1/me", s.me)
 	srv := httptest.NewServer(mux)
 	s.URL = srv.URL
 	t.Cleanup(func() {
@@ -221,6 +223,14 @@ func (s *Server) ChatTokens() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.chatTokens...)
+}
+
+// CheckTokens returns the bearer token of every /v1/me request (an account check) so far, in
+// order.
+func (s *Server) CheckTokens() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.checkTokens...)
 }
 
 // Grant issues an access token and a refresh token, as a finished login would, for a test that
@@ -485,6 +495,23 @@ type tokenSet struct {
 
 // chat answers the model endpoint. The reply is newline-delimited JSON, flushed line by line,
 // whether or not the request asked to stream.
+// me answers whether the bearer token works, as a provider's token check does: 200 with the
+// account it belongs to, or 401. It costs nothing and generates nothing.
+func (s *Server) me(w http.ResponseWriter, r *http.Request) {
+	bearer, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	s.mu.Lock()
+	s.checkTokens = append(s.checkTokens, bearer)
+	tok, ok := s.tokens[bearer]
+	valid := ok && (tok.family == nil || !tok.family.revoked) && (tok.expires.IsZero() || time.Now().Before(tok.expires)) &&
+		tok.behaviour != behaviourAuthFailed
+	s.mu.Unlock()
+	if !valid {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid_token"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"account": "example"})
+}
+
 func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	var bearer string
 	if b, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {

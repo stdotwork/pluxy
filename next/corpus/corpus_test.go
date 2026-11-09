@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -229,7 +230,11 @@ func runCase(t *testing.T, c *Case, global *Global) Result {
 func observe(t *testing.T, c *Case, label string, start func(dir, upstreamURL, proxyURL, caFile string) (*Core, error)) (Observation, error) {
 	coreSlots <- struct{}{}
 	defer func() { <-coreSlots }()
-	up := NewFakeUpstream(c.Upstream, Providers[c.Provider].Aside)
+	aside := Providers[c.Provider].Aside
+	if label == "new" {
+		aside = withAccountCheck(aside)
+	}
+	up := NewFakeUpstream(c.Upstream, aside)
 	defer up.Close()
 	var proxyURL, caFile string
 	var ic *interceptor
@@ -297,4 +302,20 @@ func caseModels(c *Case) []string {
 		m = "corpus-model"
 	}
 	return []string{m}
+}
+
+// withAccountCheck adds to aside an answer for the new core's account check of an
+// OpenAI-compatible account (GET {base_url}/models, when it starts): 404, no model list, so the
+// account is not checked. Today's core makes no such call, and the check is not part of a case.
+func withAccountCheck(aside func(*http.Request) (Reply, bool)) func(*http.Request) (Reply, bool) {
+	return func(r *http.Request) (Reply, bool) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/models") {
+			return Reply{Status: http.StatusNotFound, Headers: map[string]string{"Content-Type": "application/json"},
+				Body: json.RawMessage(`{"error":{"message":"not found"}}`)}, true
+		}
+		if aside != nil {
+			return aside(r)
+		}
+		return Reply{}, false
+	}
 }

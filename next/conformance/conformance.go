@@ -34,7 +34,8 @@ type Scenario string
 const (
 	// ScenarioText: the upstream replies ReplyText and stops normally (finish reason stop),
 	// reporting InputTokens and OutputTokens. When the request is streamed, the reply must reach
-	// the extension in at least two pieces.
+	// the extension in at least two pieces. A check call on its account must succeed (or report
+	// code unsupported), so the upstream must also answer what the extension checks with.
 	ScenarioText Scenario = "text"
 	// ScenarioHang: the upstream starts a reply with some text and then sends nothing more until
 	// the request is cancelled.
@@ -45,7 +46,8 @@ const (
 	// 20000.
 	ScenarioRateLimited Scenario = "rate_limited"
 	// ScenarioAuthFailed: the upstream refuses the credential. The extension must report code
-	// auth, retryable, scope credential.
+	// auth, retryable, scope credential; a check call on its account must report code auth (or
+	// unsupported).
 	ScenarioAuthFailed Scenario = "auth_failed"
 )
 
@@ -174,6 +176,7 @@ func Run(t *testing.T, target Target) {
 	t.Run("login", k.login)
 	t.Run("refresh", k.refresh)
 	t.Run("models", k.models)
+	t.Run("check", k.check)
 }
 
 type kit struct {
@@ -662,5 +665,41 @@ func (k *kit) models(t *testing.T) {
 			t.Errorf("models[%d] has an empty or repeated id %q", i, m.ID)
 		}
 		seen[m.ID] = true
+	}
+}
+
+// check checks the check operation: an extension that lists it reports that the ScenarioText
+// account works and that the ScenarioAuthFailed account's credential is refused, or code
+// unsupported for both when it cannot check without a generation; one that does not list it
+// refuses the call with code unsupported.
+func (k *kit) check(t *testing.T) {
+	ext := k.start(t)
+	run := func(s Scenario) (*protocol.CheckResult, *llm.Error) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), wait)
+		defer cancel()
+		return ext.Check(ctx, k.target.Prepare(t, s).Account)
+	}
+	res, e := run(ScenarioText)
+	if !host.ChecksAccounts(ext.Info()) {
+		if e == nil || e.Code != llm.CodeUnsupported {
+			t.Errorf("check on an extension that does not list it got %s, want error %s", jsonString(e), llm.CodeUnsupported)
+		}
+		return
+	}
+	unsupported := e != nil && e.Code == llm.CodeUnsupported
+	if e != nil && !unsupported {
+		t.Errorf("check of a working account got %s, want a result or error %s", jsonString(e), llm.CodeUnsupported)
+	} else if e == nil && res == nil {
+		t.Error("check of a working account returned neither a result nor an error")
+	}
+	_, e = run(ScenarioAuthFailed)
+	switch {
+	case unsupported:
+		if e == nil || e.Code != llm.CodeUnsupported {
+			t.Errorf("check of a refused account got %s, want error %s as for the working one", jsonString(e), llm.CodeUnsupported)
+		}
+	case e == nil || e.Code != llm.CodeAuth:
+		t.Errorf("check of a refused account got %s, want error %s", jsonString(e), llm.CodeAuth)
 	}
 }

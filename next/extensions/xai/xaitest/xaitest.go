@@ -1,5 +1,5 @@
 // Package xaitest is a fake xAI for tests of the xAI extension: its Responses API under
-// /v1/responses and the Grok CLI's sign-in (OpenID discovery, device authorization and token
+// /v1/responses, its model list under /v1/models, and the Grok CLI's sign-in (OpenID discovery, device authorization and token
 // endpoints). It accepts only the API keys and tokens it issued and never talks to xAI.
 package xaitest
 
@@ -44,6 +44,7 @@ type Server struct {
 	refresh  map[string]bool
 	devices  map[string]*device // device code to its state
 	requests []Request
+	models   int
 }
 
 type device struct {
@@ -114,6 +115,13 @@ func (s *Server) Revoke(key string) {
 	delete(s.keys, key)
 }
 
+// ModelRequests returns how many model list requests the server has received, valid or not.
+func (s *Server) ModelRequests() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.models
+}
+
 // Requests returns the API requests the server answered, in order.
 func (s *Server) Requests() []Request {
 	s.mu.Lock()
@@ -145,6 +153,20 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	case r.URL.Path == "/oauth2/token" && r.Method == http.MethodPost:
 		s.token(w, r)
+		return
+	}
+	if r.URL.Path == "/v1/models" && r.Method == http.MethodGet {
+		// The account check: the model list, for a key or token the server issued.
+		key, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		s.mu.Lock()
+		s.models++
+		ok := s.keys[key]
+		s.mu.Unlock()
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"code": "Client specified an invalid argument", "error": "Incorrect API key provided."})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": []map[string]any{{"id": "grok-test", "object": "model"}}})
 		return
 	}
 	if r.URL.Path != "/v1/responses" || r.Method != http.MethodPost {

@@ -46,6 +46,7 @@ const maxManagementBody = 1 << 20
 // config the API is not served.
 func (c *Core) Management() http.Handler {
 	m := server.NewManagement(c.Config, c.creds)
+	m.Check = c.checks.result
 	m.Handle("GET /status", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, c.Status())
 	})

@@ -44,6 +44,30 @@ type AccountView struct {
 	RenewalError *llm.Error `json:"renewal_error,omitempty"`
 	CreatedAt    *time.Time `json:"created_at,omitempty"`
 	UpdatedAt    *time.Time `json:"updated_at,omitempty"`
+	// Check is the result of core's last check of the account; absent while core has none.
+	Check *AccountCheck `json:"check,omitempty"`
+}
+
+// Account check states (AccountCheck.State).
+const (
+	CheckRunning    = "checking"
+	CheckOK         = "ok"
+	CheckFailed     = "failed"
+	CheckNotChecked = "not_checked"
+)
+
+// AccountCheck is the result of core's check of an account: the extension's check call, which
+// asks the upstream something that costs the account nothing. Core checks an account when it
+// starts, and when a reload or a login adds or changes one.
+type AccountCheck struct {
+	// State is checking, ok, failed, or not_checked when the extension cannot check the account.
+	State string `json:"state"`
+	// Detail says what was checked (ok) or why the account was not checked (not_checked).
+	Detail string `json:"detail,omitempty"`
+	// Error is why the check failed (failed).
+	Error *llm.Error `json:"error,omitempty"`
+	// At is when the check ended.
+	At *time.Time `json:"at,omitempty"`
 }
 
 // Management is the management API, version 0. Every call needs the management key of the
@@ -53,6 +77,8 @@ type Management struct {
 	mux   *http.ServeMux
 	cfg   func() *Config
 	creds *cred.Manager
+	// Check, when set, returns the result of core's check of account id, or nil.
+	Check func(id string) *AccountCheck
 }
 
 // NewManagement returns the management API with its account and login calls. cfg returns the
@@ -128,6 +154,11 @@ func (m *Management) list(w http.ResponseWriter, r *http.Request) {
 	for _, rec := range m.creds.Records() {
 		if _, shadowed := configured(cfg, rec.ID); !shadowed {
 			views = append(views, m.view(rec))
+		}
+	}
+	if m.Check != nil {
+		for i := range views {
+			views[i].Check = m.Check(views[i].ID)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"accounts": views})
