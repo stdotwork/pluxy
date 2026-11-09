@@ -178,6 +178,7 @@ codex-api-key:
   - api-key: "codex-key"
     base-url: "https://codex.example.com"
     websockets: true
+    alpha-search: true
     weight: 3
     priority: 2
 claude-api-key:
@@ -207,7 +208,7 @@ openai-compatibility:
 		"extensions": {
 			"pluxy/codex": {"accounts": [{
 				"id": "codex-api-key-1", "priority": 2, "weight": 3,
-				"settings": {"base_url": "https://codex.example.com", "websockets": true, "image_generation_tool": false},
+				"settings": {"base_url": "https://codex.example.com", "websockets": true, "alpha_search": true, "image_generation_tool": false},
 				"credential": {"kind": "api_key", "api_key": "codex-key"}
 			}]},
 			"pluxy/claude": {"accounts": [{
@@ -384,6 +385,7 @@ func TestRefusedFiles(t *testing.T) {
 		"remote-management: secret\nclaude-api-key: [{api-key: k}]",
 		"codex-api-key: [{api-key: k, base-url: [https://x]}]",
 		"codex-api-key: [{api-key: k, websockets: yes-please}]",
+		"codex-api-key: [{api-key: k, alpha-search: sometimes}]",
 		"routing: {session-affinity: sometimes}",
 		"disable-image-generation: sometimes",
 		"api-keys: {codex: [{name: c, keys: [{api-key: k, weight: -1}]}]}",

@@ -1302,3 +1302,49 @@ func TestAccountRequestRetryMustNotBeNegative(t *testing.T) {
 		t.Error("a negative request_retry passed the check")
 	}
 }
+
+// A request of an endpoint that takes no model and names none goes to every account, whatever
+// models each lists, and its attempts name no upstream model. One that names a model is routed
+// by it as any other, and without the flag an empty model serves nobody.
+func TestAnyModelServesRequestWithoutModel(t *testing.T) {
+	newRouter := func() *harness {
+		return newHarness(t, Config{Strategy: StrategyFillFirst},
+			Account{ID: "a", Models: []ModelEntry{{Name: "m1"}}}, Account{ID: "b", Models: []ModelEntry{{Name: "m2"}}})
+	}
+	run := func(h *harness, req Request) (accounts, models []string, last llm.Event) {
+		req.Attempt = func(ctx context.Context, ext string, a protocol.Account, r llm.Request) Stream {
+			models = append(models, r.Model)
+			return h.attempt(ctx, ext, a, r)
+		}
+		evs := h.run(req)
+		return h.attempts, models, evs[len(evs)-1]
+	}
+
+	h := newRouter()
+	h.on("a", rateLimited(time.Minute), ok())
+	accounts, models, last := run(h, Request{AnyModel: true})
+	if last.Type != llm.EventFinish {
+		t.Fatalf("a request without a model failed: %+v", last.Error)
+	}
+	// a is tried first although it lists only m1, refuses, and b (m2 only) serves it.
+	if want := []string{"a", "b"}; !slices.Equal(accounts, want) || !slices.Equal(models, []string{"", ""}) {
+		t.Errorf("attempts %v with models %q, want %v with no model", accounts, models, want)
+	}
+
+	// Without the flag, an empty model is served by nobody.
+	_, _, last = run(newRouter(), Request{})
+	if last.Type != llm.EventError || last.Error.Code != llm.CodeNotFound {
+		t.Errorf("without AnyModel: got %+v, want model not found", last)
+	}
+
+	// With a model named, the flag changes nothing: only the account that lists it is asked.
+	h = newRouter()
+	accounts, models, last = run(h, Request{AnyModel: true, LLM: llm.Request{Model: "m2"}})
+	if last.Type != llm.EventFinish || !slices.Equal(accounts, []string{"b"}) || !slices.Equal(models, []string{"m2"}) {
+		t.Errorf("a named model: attempts %v with models %q (%+v), want only b, for m2", accounts, models, last)
+	}
+	_, _, last = run(newRouter(), Request{AnyModel: true, LLM: llm.Request{Model: "m3"}})
+	if last.Type != llm.EventError || last.Error.Code != llm.CodeNotFound {
+		t.Errorf("an unknown model: got %+v, want model not found", last)
+	}
+}

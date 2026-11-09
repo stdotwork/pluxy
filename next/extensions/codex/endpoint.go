@@ -27,6 +27,8 @@ func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	switch format {
 	case llm.FormatOpenAIResponsesCompact:
 		return compact(ctx, call, out)
+	case llm.FormatCodexAlphaSearch:
+		return alphaSearch(ctx, call, out)
 	}
 	return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
 		Message: fmt.Sprintf("the Codex extension does not serve %q", format)}
@@ -96,15 +98,9 @@ func compact(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return endpointStatusError(resp, req.Model)
 	}
-	reply, err := io.ReadAll(io.LimitReader(resp.Body, maxEndpointReply+1))
+	reply, err := readReply(ctx, resp, "compaction")
 	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream response: " + err.Error(), Scope: llm.ScopeEndpoint}
-	}
-	if len(reply) > maxEndpointReply {
-		return &llm.Error{Code: llm.CodeUpstream, Message: fmt.Sprintf("the upstream's compaction reply is larger than %d MiB", maxEndpointReply>>20), Scope: llm.ScopeEndpoint}
+		return err
 	}
 	var r struct {
 		Usage json.RawMessage `json:"usage"`
@@ -130,6 +126,106 @@ func endpointStatusError(resp *http.Response, model string) *llm.Error {
 		e.Scope = llm.ScopeRequest
 	}
 	return e
+}
+
+// alphaSearch serves Codex's search endpoint: the client's body goes to {base_url}/alpha/search
+// as today's core sends it, nearly as it came, and the upstream's reply comes back whole. A
+// subscription always serves it; an API key only when its account sets alpha_search, since not
+// every upstream has the endpoint.
+func alphaSearch(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
+	s, err := readSettings(call.Account.Settings)
+	if err != nil {
+		return err
+	}
+	a, err := accountOf(call.Account.Credential)
+	if err != nil {
+		return err
+	}
+	if !a.subscription && !s.AlphaSearch {
+		return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
+			Message: "this API key does not serve Alpha Search (the account's alpha_search setting is off)"}
+	}
+	req := call.Request
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(req.Native.Body, &m); err != nil || m == nil {
+		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "the request body is not a JSON object", Scope: llm.ScopeRequest}
+	}
+	// The search endpoint takes no prompt cache hints; today's core removes them too.
+	delete(m, "prompt_cache_key")
+	delete(m, "prompt_cache_retention")
+	if _, ok := m["model"]; ok && req.Model != "" {
+		// The account may know the model by another name (an alias or prefix). Routing renames
+		// the body's model for every endpoint call; today's core does so only for an API key.
+		m["model"] = raw(req.Model)
+	}
+	body, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+
+	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL(s, a)+"/alpha/search", bytes.NewReader(body))
+	if err != nil {
+		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
+	}
+	h := hreq.Header
+	h.Set("Content-Type", "application/json")
+	h.Set("Accept", "application/json")
+	h.Set("Authorization", "Bearer "+a.token)
+	h.Set("Originator", alphaSearchOriginator)
+	for _, name := range alphaSearchHeaders {
+		if v := req.Native.Headers[name]; v != "" {
+			h.Set(name, v)
+		}
+	}
+	if a.subscription && a.accountID != "" {
+		h.Set("Chatgpt-Account-Id", a.accountID)
+	}
+	resp, err := client.Do(hreq)
+	if err != nil {
+		return requestFailed(ctx, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return endpointStatusError(resp, req.Model)
+	}
+	reply, err := readReply(ctx, resp, "search")
+	if err != nil {
+		return err
+	}
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/json"
+	}
+	if err := out.StartBody(llm.FormatCodexAlphaSearch, contentType); err != nil {
+		return err
+	}
+	if err := out.Body(string(reply)); err != nil {
+		return err
+	}
+	return out.Finish(llm.Finish{Reason: llm.FinishStop}, nil)
+}
+
+// alphaSearchOriginator is the originator header of a search request: the Codex CLI's own name,
+// which today's core sends here whatever the client's.
+const alphaSearchOriginator = "codex_cli_rs"
+
+// alphaSearchHeaders are the client's request headers a search request carries on (lower-case,
+// as the request's native headers name them), the ones today's core passes.
+var alphaSearchHeaders = []string{"version", "user-agent", "session_id", "x-client-request-id"}
+
+// readReply reads an upstream's whole endpoint reply; what names the reply in an error message.
+func readReply(ctx context.Context, resp *http.Response, what string) ([]byte, error) {
+	reply, err := io.ReadAll(io.LimitReader(resp.Body, maxEndpointReply+1))
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream response: " + err.Error(), Scope: llm.ScopeEndpoint}
+	}
+	if len(reply) > maxEndpointReply {
+		return nil, &llm.Error{Code: llm.CodeUpstream, Message: fmt.Sprintf("the upstream's %s reply is larger than %d MiB", what, maxEndpointReply>>20), Scope: llm.ScopeEndpoint}
+	}
+	return reply, nil
 }
 
 // baseURL returns where the account's requests go, without a trailing slash.

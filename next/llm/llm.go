@@ -129,6 +129,9 @@ const (
 	// FormatOpenAIResponsesCompact is OpenAI's Responses compaction, POST /v1/responses/compact:
 	// a Responses request body, answered with one JSON object.
 	FormatOpenAIResponsesCompact = "openai.responses.compact"
+	// FormatCodexAlphaSearch is Codex's search endpoint, POST /v1/alpha/search: a search request
+	// in Codex's own shape, which may name no model, answered with one JSON object.
+	FormatCodexAlphaSearch = "codex.alpha_search"
 )
 
 // EndpointReply is the Raw of an endpoint call's response.start: how to send the reply's body,

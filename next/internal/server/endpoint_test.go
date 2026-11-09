@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -18,23 +19,29 @@ import (
 // attempt received, with the account they went to.
 func endpointHandler(t *testing.T, reply func(account string, req llm.Request) []llm.Event) (http.Handler, *[]string, *[]llm.Request) {
 	t.Helper()
-	var accounts []string
+	return endpointHandlerOver(t, []route.Account{{ID: "a"}, {ID: "b"}}, reply)
+}
+
+// endpointHandlerOver is endpointHandler over the given accounts.
+func endpointHandlerOver(t *testing.T, accounts []route.Account, reply func(account string, req llm.Request) []llm.Event) (http.Handler, *[]string, *[]llm.Request) {
+	t.Helper()
+	var tried []string
 	var seen []llm.Request
 	gen := func(context.Context, string, protocol.Account, llm.Request) route.Stream {
 		t.Error("an endpoint request went to generate")
 		return &events{evs: []llm.Event{{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeInternal}}}}
 	}
 	ep := func(_ context.Context, _ string, a protocol.Account, req llm.Request) route.Stream {
-		accounts = append(accounts, a.ID)
+		tried = append(tried, a.ID)
 		seen = append(seen, req)
 		return &events{evs: reply(a.ID, req)}
 	}
-	router, err := route.New(route.Config{}, []route.Account{{ID: "a"}, {ID: "b"}}, gen, nil)
+	router, err := route.New(route.Config{}, accounts, gen, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cfg := &Config{ClientKeys: []string{"k"}}
-	return NewHandler(fixedSource{&Generation{Config: cfg, Router: router, Attempt: gen, Endpoint: ep}}), &accounts, &seen
+	return NewHandler(fixedSource{&Generation{Config: cfg, Router: router, Attempt: gen, Endpoint: ep}}), &tried, &seen
 }
 
 func postEndpoint(h http.Handler, path, body string, headers map[string]string) *httptest.ResponseRecorder {
@@ -164,5 +171,43 @@ func TestEndpointStreamAndBreaches(t *testing.T) {
 	w = postEndpoint(h, "/v1/responses/compact", `{"model":"m"}`, nil)
 	if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), "openai.responses reply") {
 		t.Fatalf("a reply in another format: got %d %s", w.Code, w.Body)
+	}
+}
+
+// A search request goes to an account as an endpoint call on both routes, with the client's body
+// and the headers today's core passes on. A request with no model is served by an account that
+// lists models; one that names a model goes only to an account that lists it.
+func TestEndpointAlphaSearch(t *testing.T) {
+	h, accounts, seen := endpointHandlerOver(t, []route.Account{{ID: "a", Models: []route.ModelEntry{{Name: "gpt-x"}}}},
+		func(string, llm.Request) []llm.Event {
+			evs := bodyReply("application/json", `{"results":[]}`)
+			evs[0].Response.Format = llm.FormatCodexAlphaSearch
+			return evs
+		})
+	headers := map[string]string{"Version": "0.154.0", "User-Agent": "codex_cli_rs/0.154.0", "Session_id": "s1", "X-Client-Request-Id": "r1", "Session-Id": "ignored"}
+	for _, path := range []string{"/v1/alpha/search", "/backend-api/codex/alpha/search"} {
+		for _, body := range []string{`{"query":"q"}`, `{"model":"gpt-x","query":"q"}`} {
+			*seen, *accounts = nil, nil
+			w := postEndpoint(h, path, body, headers)
+			if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "application/json" || w.Body.String() != `{"results":[]}` {
+				t.Fatalf("%s %s: got %d %q %s", path, body, w.Code, w.Header().Get("Content-Type"), w.Body)
+			}
+			req := (*seen)[0]
+			if req.Native == nil || req.Native.Format != llm.FormatCodexAlphaSearch || string(req.Native.Body) != body {
+				t.Fatalf("%s %s: native = %+v", path, body, req.Native)
+			}
+			if want := map[string]string{"version": "0.154.0", "user-agent": "codex_cli_rs/0.154.0", "session_id": "s1", "x-client-request-id": "r1"}; !reflect.DeepEqual(req.Native.Headers, want) {
+				t.Fatalf("%s %s: headers = %v, want %v", path, body, req.Native.Headers, want)
+			}
+		}
+	}
+	// The model is still what routes a request that names one.
+	*seen, *accounts = nil, nil
+	if w := postEndpoint(h, "/v1/alpha/search", `{"model":"other"}`, nil); w.Code != http.StatusNotFound || len(*accounts) != 0 {
+		t.Fatalf("unknown model: got %d %s after %v", w.Code, w.Body, *accounts)
+	}
+	// Compaction still needs a model that an account serves.
+	if w := postEndpoint(h, "/v1/responses/compact", `{"input":"hi"}`, nil); w.Code != http.StatusNotFound || len(*accounts) != 0 {
+		t.Fatalf("compact without a model: got %d %s after %v", w.Code, w.Body, *accounts)
 	}
 }
