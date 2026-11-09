@@ -39,12 +39,15 @@ func TestLogFileName(t *testing.T) {
 	if got := logFileName("/v1beta/models/gemini-2.5:generateContent", at, "20261109120005-ab"); got != "v1beta-models-gemini-2.5-generateContent-2026-11-09T120005-20261109120005-ab.log" {
 		t.Fatalf("got %q", got)
 	}
-	if got := logFileName("/"+strings.Repeat("a", 300), at, "x"); len(got) > 140 {
-		t.Fatalf("long path: %d bytes", len(got))
+	long := logFileName("/"+strings.Repeat("a", 300), at, "20261109120005-0123456789abcdef")
+	if len(long) > 160 || !IsErrorLogName("error-"+long) {
+		t.Fatalf("long path: %d bytes, %q", len(long), long)
 	}
 	const ok = "error-v1-chat-completions-2026-11-09T120005-20261109120005-0123456789abcdef.log"
 	for name, want := range map[string]bool{ok: true, ok[len("error-"):]: false, "error-v1-x.log": false, "error-x.txt": false,
-		`error-a\b-2026-11-09T120005-20261109120005-0123456789abcdef.log`: false, "error-../a-2026-11-09T120005-20261109120005-0123456789abcdef.log": false} {
+		`error-a\b-2026-11-09T120005-20261109120005-0123456789abcdef.log`:                              false,
+		"error-" + strings.Repeat("a", 101) + "-2026-11-09T120005-20261109120005-0123456789abcdef.log": false,
+		"error-" + strings.Repeat("a", 100) + "-2026-11-09T120005-20261109120005-0123456789abcdef.log": true, "error-../a-2026-11-09T120005-20261109120005-0123456789abcdef.log": false} {
 		if IsErrorLogName(name) != want {
 			t.Errorf("IsErrorLogName(%q) != %v", name, want)
 		}

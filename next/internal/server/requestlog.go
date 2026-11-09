@@ -256,7 +256,7 @@ func ErrorLogs(dir string) ([]LogFile, error) {
 
 // requestLogName matches the names logFileName gives, with error- in front for an error log:
 // the path's characters, the time and the trace ID.
-var requestLogName = regexp.MustCompile(`^(error-)?[A-Za-z0-9._-]*-[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{6}-([0-9]{14}-[0-9a-f]{16})\.log$`)
+var requestLogName = regexp.MustCompile(`^(error-)?[A-Za-z0-9._-]{0,100}-[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{6}-([0-9]{14}-[0-9a-f]{16})\.log$`)
 
 // IsErrorLogName reports whether name is an error log's, as core names them.
 func IsErrorLogName(name string) bool {
