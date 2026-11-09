@@ -29,8 +29,9 @@ type Case struct {
 	// account each request goes to or a cooldown a failure leaves. Not WebSocket requests.
 	Then []ClientRequest `json:"then,omitempty"`
 	// AccountModels, when set, are the models the provider account lists in both cores. By
-	// default the old core lists the request's model (it serves only listed models) and the
-	// new core lists none (it serves any model).
+	// default the old core lists the request's model (it serves only listed models), and so
+	// does the new core for a provider the old core takes from its api-keys block; for one set
+	// up from auth files the new core lists none (it serves its extension's catalog).
 	AccountModels []string `json:"account_models,omitempty"`
 	// Accounts is how many provider accounts both cores have, all pointed at the fake
 	// upstream, each with its own key (see UpstreamKeys). Default 1.

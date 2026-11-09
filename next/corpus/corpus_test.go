@@ -158,7 +158,7 @@ func runCase(t *testing.T, c *Case, global *Global) Result {
 	volatile = append(volatile, c.Volatile...)
 
 	newObs, err := observe(t, c, "new", func(dir, upstreamURL, _, _ string) (*Core, error) {
-		return StartNewCore(binDir, dir, c.Provider, upstreamURL, c.AccountModels, UpstreamKeys(c.Accounts), c.NewCoreConfig, c.NewCore)
+		return StartNewCore(binDir, dir, c.Provider, upstreamURL, newCoreModels(c), UpstreamKeys(c.Accounts), c.NewCoreConfig, c.NewCore)
 	})
 	if err != nil {
 		res.Err = fmt.Errorf("new core: %w", err)
@@ -283,6 +283,17 @@ func observe(t *testing.T, c *Case, label string, start func(dir, upstreamURL, p
 		t.Logf("%s core output:\n%s", label, core.Logs())
 	}
 	return obs, nil
+}
+
+// newCoreModels returns the models the new core's accounts list for the case: AccountModels, or
+// else, for a provider whose accounts today's core takes from its config's api-keys block, the
+// models the old core's config lists (caseModels), since both cores serve such an account only
+// the models it lists or, without a list, those of its provider's catalog.
+func newCoreModels(c *Case) []string {
+	if len(c.AccountModels) > 0 || Providers[c.Provider].OldCoreAuthFiles != nil {
+		return c.AccountModels
+	}
+	return caseModels(c)
 }
 
 // caseModels returns the models the old core lists for the case: AccountModels, or else the

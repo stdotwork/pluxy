@@ -35,7 +35,7 @@ func serveModels(mux *http.ServeMux, src Source) {
 				f.writeError(w, &llm.Error{Code: llm.CodeAuth, Message: "missing or invalid API key", Status: http.StatusUnauthorized, ProviderCode: "invalid_api_key"})
 				return
 			}
-			write(w, r, g.Router.Models(r.Context(), g.Catalog))
+			write(w, r, g.Router.Models(r.Context()))
 		}
 	}
 	mux.HandleFunc("GET /v1/models", list(false, func(w http.ResponseWriter, r *http.Request, models []protocol.Model) {

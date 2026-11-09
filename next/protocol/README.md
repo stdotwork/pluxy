@@ -305,10 +305,15 @@ event as for `generate`.
 
 Every field but `id` is optional and shown only where a client's list has a place for it. Core
 renames, leaves out and prefixes the listed models by the account's naming rules (its `models`,
-`excluded_models`, `model_alias` and `prefix`), and asks again when the account's settings or
-credential change. List the models the account can use: from the upstream's own list when it has
+`excluded_models`, `model_alias` and `prefix`), and asks again when the account's settings change or
+it signs in again. List the models the account can use: from the upstream's own list when it has
 one, or from a catalog the extension carries. Leave out models the account's requests cannot
 reach through this extension.
+
+Core also routes by the list: an account whose config names no `models` gets only requests for
+the models its list names (after its naming rules), and a request for any other model is
+refused without a `generate` call. An empty list, or an `error` reply, leaves the account
+serving any model, so reply with an empty list when the account's models are not known.
 
 ### `check`
 

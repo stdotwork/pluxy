@@ -160,11 +160,13 @@ func (a *Account) prefixed(names []Name, forcePrefix bool) []Name {
 
 // resolve returns the upstream name of model on the account, and whether the account serves it.
 // An account whose config lists Models serves only those (as renamed); one that lists none
-// serves any model its rules leave it: not excluded, not renamed away by an alias without Fork.
-func (a *Account) resolve(model string, forcePrefix bool) (string, bool) {
+// serves the models of catalog, the upstream names its extension lists for it (as renamed);
+// with no catalog either, any model its rules leave it: not excluded, not renamed away by an
+// alias without Fork.
+func (a *Account) resolve(model string, forcePrefix bool, catalog []string) (string, bool) {
 	for _, name := range a.unprefixed(model, forcePrefix) {
-		if len(a.Models) > 0 {
-			for _, n := range a.baseNames(nil) {
+		if len(a.Models) > 0 || len(catalog) > 0 {
+			for _, n := range a.baseNames(catalog) {
 				if n.Public == name {
 					return n.Upstream, true
 				}

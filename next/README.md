@@ -80,7 +80,9 @@ accounts, extensions and themes, the pages extensions bring and their settings. 
 management key. Extension pages are served from a listener of their own, on another site than
 the panel (`extension_pages` in the config); see [extension pages](ui/extension-pages/README.md).
 
-An account may list `models` it serves; without a list it serves any model. Accounts can rename,
+An account may list `models` it serves; without a list it serves the models its extension lists
+for it, as today's core serves an account the models of its provider's catalog, and any model
+when the extension has no list for it (the OpenAI-compatible extension has none). Accounts can rename,
 exclude and prefix models, and clients list the models on `GET /v1/models`: see
 [Model lists and model names](#model-lists-and-model-names). Core runs the
 extension the config names and every [installed package](#packages) that is enabled, and spreads
@@ -709,8 +711,12 @@ A list holds each model the accounts serve, once under each name a client can as
 sorted by name. An account whose config lists `models` lists those. An account without `models`
 lists the models its extension says the account serves (the protocol's `models` operation, from
 version 0.3), under the account's naming rules below; an extension that cannot say adds nothing
-for it. Core asks an extension once per account and keeps the answer until the config is
-reloaded or the account's credential changes.
+for it. The same list decides which models such an account serves: a request for a model no
+account serves is refused without calling an upstream, as today's core refuses it (404
+`model_not_found`; today's core answers 400). An account whose extension has no list, an empty
+one, or one it could not read serves any model, and core asks again a minute later. Core asks an
+extension once per account and keeps the answer until the accounts change: a reload, or an
+account added, removed or signed in again.
 
 An account names its models with these fields, applied in this order:
 

@@ -1,0 +1,48 @@
+{
+  "description": "A login's account refuses a model its provider's catalog does not have, without calling the upstream.",
+  "source": ["core/sdk/api/handlers/handlers_routing.go:219"],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {"model":"corpus-not-in-catalog","messages":[{"role":"user","content":"Say hello"}]}
+  },
+  "account_models": ["kimi-k3"],
+  "new_core": {"account":{"models":null}},
+  "exceptions": [
+    {
+      "path": "client.status",
+      "kind": "gap",
+      "reason": "The old core answers an unknown model with 400 invalid_request_error (unknown provider, param model); the new core answers 404 model_not_found."
+    },
+    {
+      "path": "client.body.error",
+      "kind": "gap",
+      "reason": "For an unknown model the old core says unknown provider (invalid_request_error, param model); the new core says no account serves the model (model_not_found).",
+      "want": {
+        "code": "model_not_found",
+        "message": "no account serves model \"corpus-not-in-catalog\"",
+        "type": "invalid_request_error"
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {
+          "code": "model_not_found",
+          "message": "unknown provider for model corpus-not-in-catalog",
+          "param": "model",
+          "type": "invalid_request_error"
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json"
+      },
+      "status": 400
+    },
+    "upstream": []
+  }
+}

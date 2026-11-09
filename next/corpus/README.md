@@ -53,6 +53,8 @@ The generated config is the same for every case:
 - for the old core: management and the bundled panel off, response compression off, the
   embedded model catalog (`-local-model`), and the request's model listed for the account (the
   old core serves only listed models; `account_models` in a case overrides this for both cores).
+  A provider set up from the old core's `api-keys` block lists the same model for the new
+  core's account, since both cores serve an account without a list only its provider's catalog.
 
 The client sends no `Accept-Encoding`, so replies are observed as the core sent them.
 

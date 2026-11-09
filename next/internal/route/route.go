@@ -126,9 +126,11 @@ type Router struct {
 	gen      uint64    // this router's generation, from state (see State.Retain)
 	created  time.Time // when the router was made: the created time of models accounts list themselves
 
-	mu       sync.RWMutex // guards accounts and creds
+	mu       sync.RWMutex // guards accounts, creds and catalog
 	accounts []*Account
 	creds    Credentials
+	catalog  CatalogFunc
+	lists    catalogs // the accounts' model lists from catalog
 
 	// For tests: the clock, the wait, the source of jitter, and a hook run after an account
 	// is chosen and before it is reserved.
@@ -195,6 +197,7 @@ func (r *Router) SetAccounts(accounts []Account) error {
 	old := r.accounts
 	r.accounts = list
 	r.picker.setOrder(list)
+	r.lists.clear()
 	r.mu.Unlock()
 	for _, a := range old {
 		if !slices.ContainsFunc(list, func(b *Account) bool { return b.ID == a.ID }) {
@@ -225,6 +228,12 @@ func (r *Router) snapshot() ([]*Account, Credentials) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.accounts, r.creds
+}
+
+func (r *Router) catalogFunc() CatalogFunc {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.catalog
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {
@@ -309,14 +318,21 @@ func (c *call) route() llm.Event {
 	r, model := c.r, c.req.LLM.Model
 	accounts, creds := r.snapshot()
 	c.creds = creds
-	var capable []*Account
-	c.upstream = map[string]string{}
+	var eligible []*Account
 	for _, a := range accounts {
 		if c.req.Pin != "" && a.ID != c.req.Pin || r.picker.strategy == StrategyWeighted && a.weight() == 0 {
 			continue
 		}
+		eligible = append(eligible, a)
+	}
+	// An account without models of its own serves those its extension lists, as today's core
+	// serves an account the models of its provider's catalog.
+	served := r.served(c.ctx, eligible, creds, r.catalogFunc())
+	var capable []*Account
+	c.upstream = map[string]string{}
+	for _, a := range eligible {
 		// Blocks on a model are kept under its upstream name, which is the account's own.
-		if up, ok := a.resolve(model, r.cfg.ForceModelPrefix); ok {
+		if up, ok := a.resolve(model, r.cfg.ForceModelPrefix, served[a.ID]); ok {
 			capable = append(capable, a)
 			c.upstream[a.ID] = up
 		}
