@@ -94,7 +94,7 @@ func compact(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return statusError(resp, req.Model)
+		return endpointStatusError(resp, req.Model)
 	}
 	reply, err := io.ReadAll(io.LimitReader(resp.Body, maxEndpointReply+1))
 	if err != nil {
@@ -119,6 +119,17 @@ func compact(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return err
 	}
 	return out.Finish(llm.Finish{Reason: llm.FinishStop}, responseUsage(r.Usage))
+}
+
+// endpointStatusError is statusError for an endpoint call. A 404 that does not name a missing
+// model means the upstream has no such endpoint; that says nothing about the model's generation on
+// the account, which a model-scoped error would block, so it is scoped to the request.
+func endpointStatusError(resp *http.Response, model string) *llm.Error {
+	e := statusError(resp, model)
+	if e.Code == llm.CodeNotFound && !e.Retryable {
+		e.Scope = llm.ScopeRequest
+	}
+	return e
 }
 
 // baseURL returns where the account's requests go, without a trailing slash.

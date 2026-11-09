@@ -79,3 +79,18 @@ func TestUsageLimitWaitsForTheWindowReset(t *testing.T) {
 		t.Errorf("a window without a reset time gave retry after %d ms, want none", e.RetryAfterMS)
 	}
 }
+
+// An endpoint call's 404 that does not name a missing model is the endpoint missing upstream,
+// scoped to the request so routing blocks no model; one that names the model stays model-scoped.
+func TestEndpointNotFoundBlocksNoModel(t *testing.T) {
+	notFound := func(body string) *http.Response {
+		return &http.Response{StatusCode: http.StatusNotFound, Status: "404 Not Found", Header: http.Header{},
+			Body: io.NopCloser(strings.NewReader(body))}
+	}
+	if e := endpointStatusError(notFound(`{"detail":"Not Found"}`), "gpt-6.1-sol"); e.Scope != "request" || e.Retryable {
+		t.Errorf("missing endpoint: %+v", e)
+	}
+	if e := endpointStatusError(notFound(`{"error":{"code":"model_not_found","message":"no such model"}}`), "gpt-6.1-sol"); e.Scope != "model" || !e.Retryable {
+		t.Errorf("missing model: %+v", e)
+	}
+}
