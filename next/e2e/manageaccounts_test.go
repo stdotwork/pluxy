@@ -282,3 +282,116 @@ func TestManageAccountModelsAndTest(t *testing.T) {
 		t.Fatalf("test of an unknown account: %d, want 404", code)
 	}
 }
+
+// GET /accounts/{id}/quota reads the account's plan and usage through its extension (the
+// protocol's quota call); an account with no plan to report gets 422.
+func TestManageAccountQuota(t *testing.T) {
+	srv := oauthtest.New(t)
+	settings := map[string]string{"base_url": srv.URL}
+	base := runCore(t, map[string]any{
+		"listen":          "127.0.0.1:0",
+		"client_keys":     []string{clientKey},
+		"management_key":  managementKey,
+		"credentials_dir": filepath.Join(t.TempDir(), "credentials"),
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "oauth", "pluxy-extension.json"),
+			"accounts": []any{
+				map[string]any{"id": "fine", "settings": settings, "credential": map[string]any{"kind": "oauth", "access_token": srv.IssueToken("text")}},
+				map[string]any{"id": "full", "settings": settings, "credential": map[string]any{"kind": "oauth", "access_token": srv.IssueToken("rate_limited")}},
+				map[string]any{"id": "key", "settings": settings, "credential": map[string]any{"kind": "api_key", "api_key": "k-e2e"}},
+			},
+		},
+	})
+	type quotaReply struct {
+		Quota struct {
+			Plan   string
+			Limits []struct {
+				ID, Label     string
+				UsedPercent   *float64 `json:"used_percent"`
+				ResetsAt      int64    `json:"resets_at"`
+				WindowSeconds int64    `json:"window_seconds"`
+			}
+			Raw map[string]any
+		}
+		FetchedAt time.Time `json:"fetched_at"`
+		Error     *struct{ Code, Message string }
+	}
+	for id, want := range map[string]float64{"fine": 25, "full": 100} {
+		var q quotaReply
+		if code := manage(t, base, "GET", "/accounts/"+id+"/quota", nil, &q); code != http.StatusOK {
+			t.Fatalf("quota of %s: %d %+v", id, code, q.Error)
+		}
+		l := q.Quota.Limits
+		if q.Quota.Plan != "test" || len(l) != 1 || l[0].ID != "window" || l[0].Label != "5-hour limit" || l[0].UsedPercent == nil ||
+			*l[0].UsedPercent != want || l[0].ResetsAt != oauthtest.QuotaResetsAt || l[0].WindowSeconds != 18000 || q.Quota.Raw["plan"] != "test" || q.FetchedAt.IsZero() {
+			t.Fatalf("quota of %s = %+v", id, q)
+		}
+	}
+	var unsupported quotaReply
+	if code := manage(t, base, "GET", "/accounts/key/quota", nil, &unsupported); code != http.StatusUnprocessableEntity || unsupported.Error == nil || unsupported.Error.Code != "unsupported" {
+		t.Fatalf("quota of an API key account: %d %+v, want 422 unsupported", code, unsupported.Error)
+	}
+	if code := manage(t, base, "GET", "/accounts/nobody/quota", nil, nil); code != http.StatusNotFound {
+		t.Fatalf("quota of an unknown account: %d, want 404", code)
+	}
+}
+
+// reauthDevice signs in to existing account id again by device login and returns how the login
+// ended.
+func reauthDevice(t *testing.T, base string, srv *oauthtest.Server, id string) loginReply {
+	t.Helper()
+	var l loginReply
+	if code := manage(t, base, "POST", "/accounts/"+id+"/login", map[string]any{"method": "device"}, &l); code != http.StatusAccepted || l.Login.Prompt == nil {
+		t.Fatalf("starting the new login: status %d, %+v", code, l.Login)
+	}
+	srv.ApproveDevice(l.Login.Prompt.UserCode)
+	deadline := time.Now().Add(15 * time.Second)
+	for l.Login.State == "pending" {
+		if time.Now().After(deadline) {
+			t.Fatal("the login did not finish")
+		}
+		time.Sleep(100 * time.Millisecond)
+		manage(t, base, "GET", "/logins/"+l.Login.ID, nil, &l)
+	}
+	return l
+}
+
+// A new login to an existing account that signs in as someone else is refused and leaves the
+// account's credential as it was; one that signs in as the same user (letter case aside) replaces
+// it, as today's core does.
+func TestReloginIdentityCheck(t *testing.T) {
+	srv := oauthtest.New(t)
+	base, _ := startOAuthCore(t)
+	deviceLogin(t, base, srv, "work")
+	var list struct {
+		Accounts []struct {
+			ID      string
+			Version uint64
+			Label   string
+		}
+	}
+	manage(t, base, "GET", "/accounts", nil, &list)
+	version := list.Accounts[0].Version
+
+	srv.UserID = "user-2"
+	l := reauthDevice(t, base, srv, "work")
+	if l.Login.State != "failed" || l.Login.Error == nil || l.Login.Error.Code != "invalid_request" || !strings.Contains(l.Login.Error.Message, "different account") {
+		t.Fatalf("login as another user ended %s with %+v, want failed: different account", l.Login.State, l.Login.Error)
+	}
+	manage(t, base, "GET", "/accounts", nil, &list)
+	if len(list.Accounts) != 1 || list.Accounts[0].Version != version {
+		t.Fatalf("the refused login changed the account: %+v (version was %d)", list.Accounts, version)
+	}
+	if code := pinnedChat(t, base, "work"); code != http.StatusOK {
+		t.Fatalf("after the refused login the account answers %d", code)
+	}
+
+	srv.UserID, srv.Email = "user-1", "USER@example.test"
+	if l := reauthDevice(t, base, srv, "work"); l.Login.State != "done" {
+		t.Fatalf("login as the same user ended %s with %+v", l.Login.State, l.Login.Error)
+	}
+	manage(t, base, "GET", "/accounts", nil, &list)
+	if list.Accounts[0].Version == version || list.Accounts[0].Label != "USER@example.test" {
+		t.Fatalf("the accepted login did not replace the credential: %+v", list.Accounts)
+	}
+}
