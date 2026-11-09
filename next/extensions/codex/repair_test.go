@@ -122,6 +122,8 @@ func TestOutputItemIDsAreRestored(t *testing.T) {
 		{"blank", []string{done(0, `{"id":"msg_1","type":"message"}`), completed(`[{"id":"  ","type":"message"}]`)}, []any{"msg_1"}},
 		{"by position", []string{done(0, `{"id":"rs_1","type":"reasoning"}`), done(1, `{"id":"msg_1","type":"message"}`),
 			completed(`[{"id":"rs_kept","type":"reasoning"},{"type":"message"}]`)}, []any{"rs_kept", "msg_1"}},
+		{"in a response.done", []string{done(0, `{"id":"msg_1","type":"message"}`),
+			strings.Replace(completed(`[{"type":"message"}]`), "response.completed", "response.done", 1)}, []any{"msg_1"}},
 		{"an id it has stays", []string{done(0, `{"id":"msg_1","type":"message"}`), completed(`[{"id":"msg_own","type":"message"}]`)}, []any{"msg_own"}},
 		{"a number id stays", []string{done(0, `{"id":"msg_1","type":"message"}`), completed(`[{"id":7,"type":"message"}]`)}, []any{float64(7)}},
 		{"no finished item at the position", []string{done(1, `{"id":"msg_1","type":"message"}`), completed(`[{"type":"message"}]`)}, []any{nil}},
