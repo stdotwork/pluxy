@@ -24,7 +24,7 @@ func TestConformance(t *testing.T) {
 }
 
 func signedIn(access, refresh string) *protocol.Credential {
-	data, _ := json.Marshal(credentialData{ProjectID: agtest.Project, ClientSecret: agtest.ClientSecret})
+	data, _ := json.Marshal(credentialData{ProjectID: agtest.Project})
 	return &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: access, RefreshToken: refresh, Data: data}
 }
 
@@ -72,15 +72,22 @@ func prepareLogin(t *testing.T, s conformance.LoginScenario, method string) conf
 	t.Helper()
 	srv := agtest.New(t)
 	account := protocol.Account{ID: "conformance", Settings: srv.Settings()}
-	input := map[string]string{"client_secret": agtest.ClientSecret}
 	switch s {
 	case conformance.LoginApproved:
-		return conformance.LoginSetup{Account: account, Input: input, Act: browserUser}
+		// The token exchange sends the app's own client ID and secret, and the login asked for none.
+		t.Cleanup(func() {
+			forms := srv.TokenForms()
+			if len(forms) != 1 || forms[0].Get("grant_type") != "authorization_code" ||
+				forms[0].Get("client_id") != clientID || forms[0].Get("client_secret") != clientSecret {
+				t.Errorf("the token endpoint saw %v, want one authorization_code request with the app's client ID and secret", forms)
+			}
+		})
+		return conformance.LoginSetup{Account: account, Act: browserUser}
 	case conformance.LoginDenied:
 		srv.DenyBrowser = true
-		return conformance.LoginSetup{Account: account, Input: input, Act: browserUser}
+		return conformance.LoginSetup{Account: account, Act: browserUser}
 	case conformance.LoginAbandoned:
-		return conformance.LoginSetup{Account: account, Input: input}
+		return conformance.LoginSetup{Account: account}
 	case conformance.RefreshRenewed, conformance.RefreshUnavailable:
 		srv.TokenDown = s == conformance.RefreshUnavailable
 		account.Credential = signedIn(srv.Grant())

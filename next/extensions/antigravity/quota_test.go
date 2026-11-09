@@ -230,7 +230,7 @@ func TestLoginGrantCarriesIdentity(t *testing.T) {
 	srv := agtest.New(t)
 	access, rt := srv.Grant()
 	set, _ := readSettings(srv.Settings())
-	g, err := finishLogin(context.Background(), set, agtest.ClientSecret, &tokenResponse{AccessToken: access, RefreshToken: rt, ExpiresIn: 3600})
+	g, err := finishLogin(context.Background(), set, &tokenResponse{AccessToken: access, RefreshToken: rt, ExpiresIn: 3600})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +241,7 @@ func TestLoginGrantCarriesIdentity(t *testing.T) {
 		t.Errorf("label = %q, want the e-mail address", g.Label)
 	}
 	b, _ := json.Marshal(g.Identity)
-	for _, secret := range []string{access, rt, agtest.ClientSecret} {
+	for _, secret := range []string{access, rt, clientSecret} {
 		if strings.Contains(string(b), secret) {
 			t.Errorf("identity %s holds a secret", b)
 		}

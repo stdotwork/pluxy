@@ -20,9 +20,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// ClientSecret is the client secret the fake accepts.
-const ClientSecret = "agtest-client-secret"
-
 // Email is the e-mail address of the fake's signed-in user.
 const Email = "user@example.com"
 
@@ -65,6 +62,7 @@ type Server struct {
 	mu       sync.Mutex
 	n        int
 	codes    map[string]code // authorization code to what it was issued for
+	forms    []url.Values    // the token endpoint's accepted requests, in order
 	access   map[string]bool
 	refresh  map[string]bool
 	requests []Request
@@ -110,6 +108,14 @@ func (s *Server) Revoke(token string) {
 	defer s.mu.Unlock()
 	delete(s.access, token)
 	delete(s.refresh, token)
+}
+
+// TokenForms returns the forms of the requests the token endpoint accepted (it refuses one
+// without a client ID and a client secret), in order.
+func (s *Server) TokenForms() []url.Values {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]url.Values(nil), s.forms...)
 }
 
 // Requests returns the Cloud Code requests the server answered, in order.
@@ -172,12 +178,13 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = r.ParseForm()
 	f := r.PostForm
-	if f.Get("client_secret") != ClientSecret || f.Get("client_id") == "" {
+	if f.Get("client_secret") == "" || f.Get("client_id") == "" {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid_client", "error_description": "The OAuth client was not found."})
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.forms = append(s.forms, f)
 	switch f.Get("grant_type") {
 	case "authorization_code":
 		c, ok := s.codes[f.Get("code")]

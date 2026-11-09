@@ -29,10 +29,14 @@ import (
 // Then the account's Google Cloud project is found, or made, with Cloud Code's loadCodeAssist and
 // onboardUser calls.
 //
-// Google's token endpoint also takes the client's secret. pluxy does not ship it: the user enters
-// it at login, and it is kept in the credential, which core keeps secret, for renewals.
+// Google's token endpoint also takes the client's secret. The secret is the Antigravity desktop
+// app's own, the installed-app client secret that ships inside every copy of the app and that
+// today's core and many other programs carry (core/internal/auth/antigravity/constants.go). It is
+// not a user's credential and grants nothing without a user's sign-in, so it is built in, and a
+// login asks for nothing and every account, imported ones included, renews with it.
 const (
 	clientID     = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
+	clientSecret = "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"
 	callbackAddr = "127.0.0.1:51121"
 	callbackPath = "/oauth-callback"
 	// redirectURI is the loopback redirect Antigravity's client takes. The browser is sent there
@@ -65,9 +69,7 @@ var scopes = []string{
 }
 
 var loginMethods = []protocol.LoginMethod{
-	{Method: "browser", Kind: protocol.LoginBrowser, Label: "Google account (browser)", Inputs: []protocol.LoginInput{
-		{Name: "client_secret", Label: "Antigravity OAuth client secret", Secret: true},
-	}},
+	{Method: "browser", Kind: protocol.LoginBrowser, Label: "Google account (browser)"},
 }
 
 // endpoints are Google's login endpoints, or a test server's (auth_base_url).
@@ -96,17 +98,13 @@ func login(ctx context.Context, call sdk.LoginCall, s *sdk.LoginSession) (*proto
 	if call.Method != "browser" {
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: fmt.Sprintf("no login method %q", call.Method), Scope: llm.ScopeRequest}
 	}
-	secret := strings.TrimSpace(call.Input["client_secret"])
-	if secret == "" {
-		return nil, refused("enter the Antigravity OAuth client secret")
-	}
-	return browserLogin(ctx, set, secret, s)
+	return browserLogin(ctx, set, s)
 }
 
 // browserLogin runs the authorization code flow, with PKCE (RFC 7636) on top of what today's core
 // sends. The browser comes back to redirectURI, which the extension serves on this machine when
 // the port is free; otherwise the user pastes the address the browser ended on.
-func browserLogin(ctx context.Context, set settings, secret string, s *sdk.LoginSession) (*protocol.Grant, error) {
+func browserLogin(ctx context.Context, set settings, s *sdk.LoginSession) (*protocol.Grant, error) {
 	verifier := randomString(64)
 	sum := sha256.Sum256([]byte(verifier))
 	state := randomString(32)
@@ -177,31 +175,31 @@ func browserLogin(ctx context.Context, set settings, secret string, s *sdk.Login
 	tr, err := tokenRequest(ctx, ep.token, url.Values{
 		"grant_type":    {"authorization_code"},
 		"client_id":     {clientID},
-		"client_secret": {secret},
+		"client_secret": {clientSecret},
 		"code":          {code},
 		"redirect_uri":  {redirectURI},
 		"code_verifier": {verifier},
 	})
 	if err != nil {
-		return nil, hideSecrets(err, secret)
+		return nil, hideSecrets(err, clientSecret)
 	}
-	return finishLogin(ctx, set, secret, tr)
+	return finishLogin(ctx, set, tr)
 }
 
 // finishLogin reads the signed-in account's e-mail address and project with the new tokens.
 // Core does not know the new tokens yet and cannot redact them, so errors are cleaned here.
-func finishLogin(ctx context.Context, set settings, secret string, tr *tokenResponse) (*protocol.Grant, error) {
+func finishLogin(ctx context.Context, set settings, tr *tokenResponse) (*protocol.Grant, error) {
 	email, err := fetchEmail(ctx, set.endpoints().userinfo, tr.AccessToken, set.UserAgent)
 	if err != nil {
-		return nil, hideSecrets(err, tr.AccessToken, tr.RefreshToken, secret)
+		return nil, hideSecrets(err, tr.AccessToken, tr.RefreshToken, clientSecret)
 	}
 	project, err := findProject(ctx, set, tr.AccessToken)
 	if err != nil {
-		return nil, hideSecrets(err, tr.AccessToken, tr.RefreshToken, secret)
+		return nil, hideSecrets(err, tr.AccessToken, tr.RefreshToken, clientSecret)
 	}
 	// The e-mail address tells two Google accounts apart, so core can refuse a new login to an
 	// account that signs in as someone else.
-	return &protocol.Grant{Credential: tr.credential(credentialData{ProjectID: project, ClientSecret: secret}, ""), Label: email,
+	return &protocol.Grant{Credential: tr.credential(credentialData{ProjectID: project}, ""), Label: email,
 		Identity: map[string]string{"email": email}}, nil
 }
 
@@ -294,22 +292,19 @@ func refresh(ctx context.Context, call sdk.RefreshCall) (*protocol.Credential, e
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: "this credential cannot be renewed", Scope: llm.ScopeRequest}
 	}
 	data := readData(c)
-	if data.ClientSecret == "" {
-		return nil, &llm.Error{Code: llm.CodeAuth, Message: "the credential has no Antigravity OAuth client secret (client_secret in its data); log in again", Scope: llm.ScopeCredential}
-	}
 	tr, err := tokenRequest(ctx, set.endpoints().token, url.Values{
 		"client_id":     {clientID},
-		"client_secret": {data.ClientSecret},
+		"client_secret": {clientSecret},
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {c.RefreshToken},
 	})
 	if err != nil {
-		return nil, hideSecrets(err, data.ClientSecret)
+		return nil, hideSecrets(err, clientSecret)
 	}
 	if data.ProjectID == "" {
 		if data.ProjectID, err = findProject(ctx, set, tr.AccessToken); err != nil {
 			// Core does not know the new tokens yet and cannot redact them.
-			return nil, hideSecrets(err, tr.AccessToken, tr.RefreshToken, data.ClientSecret)
+			return nil, hideSecrets(err, tr.AccessToken, tr.RefreshToken, clientSecret)
 		}
 	}
 	return tr.credential(data, c.RefreshToken), nil

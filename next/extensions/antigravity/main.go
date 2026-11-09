@@ -106,9 +106,6 @@ type credentialData struct {
 	// ProjectID is the Google Cloud project Cloud Code bills the account's requests to, found
 	// or made at login.
 	ProjectID string `json:"project_id"`
-	// ClientSecret is the secret of Antigravity's OAuth client, which signing in and renewing
-	// send to Google (login.go).
-	ClientSecret string `json:"client_secret"`
 }
 
 func readData(c *protocol.Credential) credentialData {

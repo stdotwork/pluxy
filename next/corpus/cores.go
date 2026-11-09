@@ -617,7 +617,7 @@ var Providers = map[string]Provider{
 					"id":       id,
 					"settings": map[string]any{"base_url": upstreamURL},
 					"credential": map[string]any{"kind": "oauth", "access_token": k, "refresh_token": k + "-refresh",
-						"expires_at": corpusTokenExpiry, "data": map[string]any{"project_id": corpusAntigravityProject, "client_secret": "corpus-client-secret"}},
+						"expires_at": corpusTokenExpiry, "data": map[string]any{"project_id": corpusAntigravityProject}},
 				}
 				if len(models) > 0 {
 					acct["models"] = models
