@@ -106,7 +106,7 @@ type State struct {
 	// is about the account as it was, so it records nothing.
 	since map[scopeKey]uint64
 	// last holds, per account ID, the latest failure an attempt on the account recorded a
-	// block for, until a later attempt on it succeeds.
+	// block for, until an attempt that started after it was recorded succeeds (block.mark's rule).
 	last map[string]lastFailure
 	rand func() float64
 }
