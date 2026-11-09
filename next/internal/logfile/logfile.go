@@ -6,11 +6,13 @@ package logfile
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -87,7 +89,12 @@ func (l *Files) open() error {
 	if err := os.MkdirAll(l.dir, 0o700); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(filepath.Join(l.dir, Main), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	path := filepath.Join(l.dir, Main)
+	// main.log must be a file of its own: a link there would send the log somewhere else.
+	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a regular file", path)
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}
@@ -120,6 +127,11 @@ func (l *Files) Write(p []byte) (int, error) {
 		}
 		fmt.Fprintf(&b, "[%s] [%s] %s\n", stamp, level, line)
 	}
+	if b.Len() > MaxFileSize {
+		// One write never makes a file larger than the limit.
+		b.Truncate(MaxFileSize - 64)
+		b.WriteString("\n[... the rest of this log message was cut]\n")
+	}
 	if l.size > 0 && l.size+int64(b.Len()) > MaxFileSize {
 		l.rotate()
 	}
@@ -134,8 +146,20 @@ func (l *Files) Write(p []byte) (int, error) {
 func (l *Files) rotate() {
 	l.f.Close()
 	l.f = nil
-	name := "main-" + l.now().UTC().Format(rotatedLayout) + ".log"
-	_ = os.Rename(filepath.Join(l.dir, Main), filepath.Join(l.dir, name))
+	// Two rotations in one millisecond must not give the same name: a rename replaces the file.
+	stamp := l.now().UTC().Format(rotatedLayout)
+	name := "main-" + stamp + ".log"
+	for i := 1; ; i++ {
+		if _, err := os.Lstat(filepath.Join(l.dir, name)); os.IsNotExist(err) {
+			break
+		}
+		name = fmt.Sprintf("main-%s-%d.log", stamp, i)
+	}
+	if err := os.Rename(filepath.Join(l.dir, Main), filepath.Join(l.dir, name)); err != nil {
+		// Keep writing to main.log past the limit rather than lose lines.
+		l.open()
+		return
+	}
 	if err := l.open(); err != nil {
 		return // logged nowhere: the log itself is what failed
 	}
@@ -199,7 +223,20 @@ func (l *Files) logFiles() []string {
 			names = append(names, n)
 		}
 	}
-	slices.Sort(names)
+	// By rotation time, then by the number a second rotation in the same millisecond got.
+	key := func(n string) (string, int) {
+		n = strings.TrimSuffix(strings.TrimPrefix(n, "main-"), ".log")
+		if len(n) <= len(rotatedLayout) {
+			return n, 0
+		}
+		i, _ := strconv.Atoi(strings.TrimPrefix(n[len(rotatedLayout):], "-"))
+		return n[:len(rotatedLayout)], i
+	}
+	slices.SortFunc(names, func(a, b string) int {
+		ka, ia := key(a)
+		kb, ib := key(b)
+		return cmp.Or(strings.Compare(ka, kb), cmp.Compare(ia, ib))
+	})
 	return append(names, Main)
 }
 

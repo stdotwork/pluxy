@@ -158,3 +158,48 @@ func TestReadPagesAndTails(t *testing.T) {
 		t.Fatalf("written after clear: %v", r.Lines)
 	}
 }
+
+// Rotations in the same millisecond keep every file, read back in order; a link at main.log is
+// refused; one write never makes a file larger than the limit.
+func TestRotationEdges(t *testing.T) {
+	l, _ := newFiles(t) // the clock never moves
+	l.Configure(true, 0)
+	for i := range 3 {
+		fmt.Fprintf(l, "pluxy: file %d\n", i)
+		l.mu.Lock()
+		l.rotate()
+		l.mu.Unlock()
+	}
+	fmt.Fprint(l, "pluxy: file 3\n")
+	if got := names(t, l.Dir()); len(got) != 4 {
+		t.Fatalf("files %v", got)
+	}
+	r, _ := l.Read(0, 10)
+	var order []string
+	for _, line := range r.Lines {
+		order = append(order, line[len(line)-6:])
+	}
+	if strings.Join(order, ",") != "file 0,file 1,file 2,file 3" {
+		t.Fatalf("order %v", order)
+	}
+
+	fmt.Fprintln(l, strings.Repeat("y", MaxFileSize+100))
+	info, _ := os.Stat(filepath.Join(l.Dir(), Main))
+	if info.Size() > MaxFileSize {
+		t.Fatalf("main.log is %d bytes after one large write", info.Size())
+	}
+
+	l2, _ := newFiles(t)
+	os.MkdirAll(l2.Dir(), 0o700)
+	target := filepath.Join(t.TempDir(), "elsewhere.log")
+	if err := os.Symlink(target, filepath.Join(l2.Dir(), Main)); err != nil {
+		t.Skip("no symlinks here:", err)
+	}
+	if err := l2.Configure(true, 0); err == nil {
+		t.Fatal("a link at main.log was followed")
+	}
+	fmt.Fprint(l2, "pluxy: secret line\n")
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("the link's target was written: %v", err)
+	}
+}
