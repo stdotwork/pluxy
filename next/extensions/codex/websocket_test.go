@@ -322,10 +322,17 @@ func TestFrameErrorFollowsStatus(t *testing.T) {
 	}
 }
 
-// A turn_rate_limit_exceeded message blocks the model on the account, not the account.
+// A turn_rate_limit_exceeded message blocks the model on the account, not the account, whether
+// its error is in "error" or in "body.error"; the error keeps the upstream's code and message.
 func TestFrameErrorCapacityScope(t *testing.T) {
-	e := wsFrameError(t, `{"type":"error","status":429,"error":{"type":"rate_limit_error","code":"turn_rate_limit_exceeded","message":"Codex is at capacity"}}`)
-	if e.Scope != llm.ScopeModel || e.ProviderCode != "turn_rate_limit_exceeded" {
-		t.Errorf("scope %q, provider code %q; want the model, turn_rate_limit_exceeded", e.Scope, e.ProviderCode)
+	for _, data := range []string{
+		`{"type":"error","status":429,"error":{"type":"rate_limit_error","code":"turn_rate_limit_exceeded","message":"Codex is at capacity"}}`,
+		`{"type":"error","status":429,"body":{"error":{"type":"rate_limit_error","code":"turn_rate_limit_exceeded","message":"Codex is at capacity"}}}`,
+	} {
+		e := wsFrameError(t, data)
+		if e.Scope != llm.ScopeModel || e.ProviderCode != "turn_rate_limit_exceeded" || e.Message != "Codex is at capacity" {
+			t.Errorf("%s: scope %q, provider code %q, message %q; want the model, turn_rate_limit_exceeded, Codex is at capacity",
+				data, e.Scope, e.ProviderCode, e.Message)
+		}
 	}
 }

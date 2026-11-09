@@ -118,6 +118,12 @@ func TestCapacityRefusal(t *testing.T) {
 		{"model wording, no code", `{"error":{"message":"Selected model is at capacity. Please try a different model."}}`, true},
 		{"model wording at the top", `{"message":"The model is at capacity"}`, true},
 		{"model code named in the message", `{"error":{"message":"error: model_is_at_capacity"}}`, true},
+		// The first code found decides, in the order error.code, top level, body.error, response.error,
+		// as in today's core: a later capacity code does not override an earlier other code.
+		{"other code first, capacity code at the top", `{"error":{"code":"rate_limit_exceeded"},"code":"turn_rate_limit_exceeded"}`, false},
+		{"other code first, capacity code in body.error", `{"error":{"code":"rate_limit_exceeded"},"body":{"error":{"code":"turn_rate_limit_exceeded"}}}`, false},
+		{"capacity code first, other code at the top", `{"error":{"code":"turn_rate_limit_exceeded"},"code":"rate_limit_exceeded"}`, true},
+		{"other code at the top hides a later capacity code", `{"code":"rate_limit_exceeded","body":{"error":{"code":"turn_rate_limit_exceeded"}}}`, false},
 		{"code only in the message", `{"error":{"type":"server_error","message":"docs mention turn_rate_limit_exceeded"}}`, false},
 		{"plain rate limit", `{"error":{"type":"rate_limit_error","code":"rate_limit_exceeded","message":"Too many requests"}}`, false},
 		{"another code blocks the rate limit message", `{"error":{"type":"rate_limit_error","code":"rate_limit_exceeded","message":"Codex is at capacity"}}`, false},
