@@ -55,6 +55,11 @@ type block struct {
 	// says nothing about the newer failure.
 	mark   uint64
 	reason *llm.Error
+	// told is true when until is a quota reset the upstream named, and window the length in
+	// minutes of the usage window that ran out, when it said: the evidence the usage-limit
+	// reply needs.
+	told   bool
+	window int64
 }
 
 type scopeState struct {
@@ -480,10 +485,37 @@ func (s *State) failure(a *Account, model string, seq uint64, e *llm.Error, now 
 	// A deadline only ever moves later; a new failure never shortens a live block.
 	if until.After(b.until) {
 		b.until = until
+		b.told = kind == blockQuota && e.RetryAfterMS > 0
+		b.window = e.QuotaWindowMinutes
 	}
 	if seq >= b.mark {
 		b.mark, b.reason = seq, e
 	}
+}
+
+// quotaOut reports whether what keeps account a from serving model at now, its block that ends
+// last, is a quota block whose end the upstream named: then until is that end, window the
+// length of the window that ran out (0 when not known), and reason the failure that set it.
+func (s *State) quotaOut(a *Account, model string, now time.Time) (until time.Time, window int64, reason *llm.Error, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var last block
+	kind := -1
+	for _, k := range keysFor(a, model) {
+		st := s.scopes[k]
+		if st == nil {
+			continue
+		}
+		for i, b := range st.blocks {
+			if b.until.After(now) && b.until.After(last.until) {
+				last, kind = b, i
+			}
+		}
+	}
+	if kind != kindIndex(blockQuota) || !last.told {
+		return time.Time{}, 0, nil, false
+	}
+	return last.until, last.window, last.reason, true
 }
 
 // success records that the attempt with sequence number seq on account a for model succeeded.

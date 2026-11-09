@@ -423,6 +423,13 @@ type Error struct {
 	// Usage is what the upstream reported using before the failure, when it reported any: a
 	// reply that fails partway may still have cost tokens.
 	Usage *Usage `json:"usage,omitempty"`
+	// QuotaWindowMinutes is, for a quota error, the length in minutes of the usage window that
+	// is used up, when the upstream said (protocol 0.6).
+	QuotaWindowMinutes int64 `json:"quota_window_minutes,omitempty"`
+	// UsageLimit, set only by core, marks the final usage-limit reply: every account for the
+	// request is out of quota until a reset the upstream named (routing's usage-limit quota
+	// response mode). It never travels over the protocol.
+	UsageLimit *UsageLimit `json:"-"`
 }
 
 // RawJSON returns upstream bytes for a Raw field, which must hold valid JSON: b itself when it is

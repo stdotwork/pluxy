@@ -712,6 +712,7 @@ strategy.
 | `request_retry` | When set, rounds run as today's `request-retry` runs them: at most this many after the first, each trying every eligible account again. A round starts at once when no account is blocked, or else when the first block ends if that is within `max_wait_ms`; an account refused for rate or quota in the request waits at least 10 seconds; a refused key (401) or a missing model (404) starts none. Unset: rounds are bounded by `max_attempts` and `max_wait_ms`, and each needs a wait. |
 | `disable_cooling` | `true`: failures leave no block, so every account stays eligible. |
 | `transient_error_cooldown_ms` | How long a failing upstream or endpoint (a 5xx or a broken connection) is blocked when it gave no `Retry-After`: 0 (default) backs off from a second to a minute, above 0 that long, below 0 not at all, `Retry-After` or not. |
+| `quota_response_mode` | What a client gets when every account that serves its model is out of quota until a reset the upstream named, the first of them more than 5 minutes away: `retryable` (default) a retryable 429 with `Retry-After`, as for any block; `usage-limit` the final usage-limit reply below. |
 | `session_affinity` | When present, requests of one session go to the same account while it is eligible. The session comes from the `X-Claude-Code-Session-Id`, `Session-Id`, `X-Session-Id` or `X-Session-Affinity` header, or the body's `prompt_cache_key`; bindings are per client key and model. |
 | account `priority` | Higher first; lower accounts serve only while every higher one is blocked. Default 0. |
 | account `weight` | For `weighted`. Default 1; 0 leaves the account out. |
@@ -721,6 +722,31 @@ strategy.
 
 A client can pin a request to one account with the `X-Pluxy-Account: <id>` header. A pinned
 request never goes to another account.
+
+With `quota_response_mode` `usage-limit`, a request that ends with a rate or quota refusal (or
+finds every account blocked) gets today's core's usage-limit reply when each account that serves
+its model is blocked last by a quota refusal whose reset the upstream named (Codex's
+`usage_limit_reached`, an OpenAI-compatible `insufficient_quota` with `Retry-After`, a Claude
+subscription's used-up window, Google's `QUOTA_EXHAUSTED`), and the first reset is more than 5
+minutes away. The reply is a 429 that tells the client to stop until the reset rather than retry:
+no `Retry-After`, `X-Should-Retry: false`, and, when the upstream said how long the used-up window
+is, Codex's `X-Codex-Primary-*` headers (`X-Codex-Secondary-*` for a window of a day or more) with
+`Used-Percent` 100, `Window-Minutes` and `Reset-At`. OpenAI, Responses and Gemini clients get this
+body (Responses WebSocket clients the same object in an `error` message, with the headers in its
+`headers`):
+
+```json
+{"error": {"code": "model_cooldown", "type": "usage_limit_reached", "retryable": false,
+  "message": "All credentials for model gpt-5 are cooling down via provider codex (last error: usage_limit_reached: The usage limit has been reached)",
+  "model": "gpt-5", "provider": "codex", "resets_at": 1767225600, "reset_seconds": 7200, "reset_time": "2h0m0s",
+  "limit_window_minutes": 300, "last_upstream_error": "usage_limit_reached: The usage limit has been reached"}}
+```
+
+Anthropic clients get a `rate_limit_error` whose message ends with `(reset after 2h0m0s)` and that
+carries `resets_at` and `retryable: false`. `provider` (the extension's name without `pluxy/`) is
+there only when every account belongs to one extension; `limit_window_minutes` only when the window
+is known. A stream that has already started ends with the same error, and a Chat Completions
+stream then with `data: [DONE]`.
 
 ### Account checks
 
@@ -1001,14 +1027,15 @@ to `management.secret-key`, or `remote-management.secret-key` when only that is 
 | `routing.retry.request-retry` | `routing.request_retry` | Rounds a request may run after its first, as in today's core. `null` while a JSON config leaves rounds to this core's own rules; a `config.yaml` always has a number (default 0). |
 | `routing.cooldown.disable-cooling` | `routing.disable_cooling` | `true`: failures leave no cooldown. An account's own `disable_cooling` wins. |
 | `routing.cooldown.transient-error-cooldown-seconds` | `routing.transient_error_cooldown_ms` (seconds × 1000) | Seconds a failing upstream cools down: 0 for this core's backoff (1 second doubling to a minute), -1 for none. |
+| `routing.cooldown.quota-response-mode` | `routing.quota_response_mode` | `retryable` (the default) or `usage-limit`: what a client gets when every account is out of quota (see [Accounts and routing](#accounts-and-routing)). |
 | `observability.logs.logging-to-file` | `logs.to_file` | `true` or `false`: whether core also writes its log to [files](#log-files). |
 | `observability.logs.logs-max-total-size-mb` | `logs.max_total_size_mb` | Megabytes the logs folder's `.log` files may take; 0 (the default) is no cap. |
 | `observability.logs.request-log` | `logs.request_log` | `true` or `false`: whether every client request is written to a [request log](#request-logs). |
 | `observability.logs.error-logs-max-files` | `logs.error_logs_max_files` | How many error logs are kept, the newest; 0 keeps all. Default 10. |
 | `observability.usage.usage-statistics-enabled` | `usage.enabled` | `true` or `false`: whether core keeps the [usage record](#usage-statistics). On unless the config turns it off. |
 
-The settings shown are those of the running config. Today's other basic settings (`proxy-url`,
-`ws-auth` and `quota-response-mode`) do not exist in this core yet, and `debug` is dropped (this
+The settings shown are those of the running config. Today's other basic settings (`proxy-url` and
+`ws-auth`) do not exist in this core yet, and `debug` is dropped (this
 core writes no debug-level lines); `max_attempts`, which today's core has no
 name for, is changed in the document.
 
@@ -1291,7 +1318,7 @@ are accepted silently.
 | `routing.retry.max-retry-interval` (`max-retry-interval`) | `routing.max_wait_ms`, in seconds as in today's core: the longest wait before each round. Default 0: a round that needs a wait does not start. | Supported |
 | `routing.cooldown.disable-cooling` (`disable-cooling`) | `routing.disable_cooling`. | Supported |
 | `routing.cooldown.transient-error-cooldown-seconds` (`transient-error-cooldown-seconds`) | `routing.transient_error_cooldown_ms`: above 0 that many seconds, below 0 none. 0 is this core's backoff, from a second doubling to a minute, where today's core waits a fixed minute. | Supported |
-| `routing.cooldown.quota-response-mode` (`quota-cooldown-response-mode`) | | Later |
+| `routing.cooldown.quota-response-mode` (`quota-cooldown-response-mode`) | `routing.quota_response_mode`: `retryable` (default) or `usage-limit`, letter case aside; another value fails the load, as in today's core. | Supported |
 | `routing.cooldown.save-cooldown-status` (`save-cooldown-status`) | Blocks live in memory and carry over reloads. | Dropped: no need found |
 | `quota-exceeded.switch-project`, `quota-exceeded.switch-preview-model` | | Dead |
 | `requests.proxy-url` (`proxy-url`) and every `proxy-url` | | Later |

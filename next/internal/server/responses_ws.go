@@ -223,7 +223,16 @@ func (s *wsSocket) sendError(e *llm.Error) error {
 			delete(obj, "code")
 		}
 	}
-	msg, _ := json.Marshal(map[string]any{"type": "error", "status": status, "error": obj})
+	m := map[string]any{"type": "error", "status": status, "error": obj}
+	if u := e.UsageLimit; u != nil {
+		// The usage-limit reply's headers ride in the message, as today's core sends them.
+		h := map[string]string{}
+		for _, kv := range u.Headers() {
+			h[kv[0]] = kv[1]
+		}
+		m["headers"] = h
+	}
+	msg, _ := json.Marshal(m)
 	return s.send(msg)
 }
 

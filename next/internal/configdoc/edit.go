@@ -166,6 +166,9 @@ type CooldownPatch struct {
 	// TransientErrorCooldownSeconds is how long a failing upstream is blocked: 0 for this
 	// core's backoff, -1 for no block.
 	TransientErrorCooldownSeconds *int64 `json:"transient-error-cooldown-seconds"`
+	// QuotaResponseMode is what a client gets when every account is out of quota: retryable
+	// (a retryable 429) or usage-limit (the final usage-limit reply).
+	QuotaResponseMode *string `json:"quota-response-mode"`
 }
 
 // RetryPatch is a change to the retry settings.
@@ -328,6 +331,15 @@ func (d *Doc) applyRouting(r *RoutingPatch) error {
 				v *= 1000
 			}
 			if err := d.Set(Int(v), d.place("routing.transient_error_cooldown_ms", "routing.cooldown.transient-error-cooldown-seconds", "transient-error-cooldown-seconds")...); err != nil {
+				return err
+			}
+		}
+		if m := c.QuotaResponseMode; m != nil {
+			mode := strings.ToLower(strings.TrimSpace(*m))
+			if mode != "retryable" && mode != "usage-limit" {
+				return fmt.Errorf("%w: routing.cooldown.quota-response-mode must be \"retryable\" or \"usage-limit\"", ErrInvalid)
+			}
+			if err := d.Set(String(mode), d.place("routing.quota_response_mode", "routing.cooldown.quota-response-mode", "quota-cooldown-response-mode")...); err != nil {
 				return err
 			}
 		}

@@ -18,10 +18,14 @@
 package route
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/rand/v2"
+	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -67,7 +71,23 @@ type Config struct {
 	// "<prefix>/<model>", except a model whose name is the prefix itself (today's
 	// force-model-prefix).
 	ForceModelPrefix bool `json:"force_model_prefix,omitempty"`
+	// QuotaResponseMode is what a client gets when every account for its request is out of
+	// quota until a reset the upstream named, more than 5 minutes away (today's
+	// quota-response-mode): QuotaRetryable (the default) a retryable 429 with Retry-After, as
+	// for any cooldown; QuotaUsageLimit the final usage-limit reply, which tells the client to
+	// stop until the reset.
+	QuotaResponseMode string `json:"quota_response_mode,omitempty"`
 }
+
+// Quota response modes (Config.QuotaResponseMode).
+const (
+	QuotaRetryable  = "retryable"
+	QuotaUsageLimit = "usage-limit"
+)
+
+// usageLimitMinReset: a reset this close or closer gets the retryable reply even in the
+// usage-limit mode, as in today's core, since waiting it out is cheaper than stopping.
+const usageLimitMinReset = 5 * time.Minute
 
 // AffinityConfig turns on session affinity.
 type AffinityConfig struct {
@@ -85,6 +105,11 @@ func (c *Config) Validate() error {
 	}
 	if c.SessionAffinity != nil && c.SessionAffinity.TTLMS < 0 {
 		return fmt.Errorf("routing.session_affinity.ttl_ms must not be negative")
+	}
+	switch c.QuotaResponseMode {
+	case "", QuotaRetryable, QuotaUsageLimit:
+	default:
+		return fmt.Errorf("routing.quota_response_mode %q: want %q or %q", c.QuotaResponseMode, QuotaRetryable, QuotaUsageLimit)
 	}
 	return nil
 }
@@ -287,6 +312,7 @@ type call struct {
 	cur      Stream     // the attempt whose reply reached the caller
 	acct     *Account
 	seq      uint64
+	capable  []*Account        // the accounts that serve the request's model
 	upstream map[string]string // each capable account's name for the request's model, by account ID
 	ended    bool              // the attempt's reservation is released
 
@@ -316,6 +342,9 @@ func (c *call) Next() llm.Event {
 			c.r.state.success(c.acct, c.upstream[c.acct.ID], c.seq)
 		} else {
 			c.r.failure(c.acct, c.upstream[c.acct.ID], c.seq, ev.Error)
+			if u := c.usageLimit(ev.Error); u != nil {
+				ev.Error = u
+			}
 		}
 		c.release()
 	}
@@ -337,8 +366,21 @@ func (c *call) release() {
 }
 
 // route runs attempts until one starts a reply, and returns that reply's first event; or it
-// gives up and returns the error event that ends the request.
+// gives up and returns the error event that ends the request, which in the usage-limit quota
+// response mode is the usage-limit reply when every account is out of quota.
 func (c *call) route() llm.Event {
+	ev := c.attempts()
+	if ev.Type == llm.EventError && c.cur == nil {
+		if u := c.usageLimit(ev.Error); u != nil {
+			ev.Error = u
+		}
+	}
+	return ev
+}
+
+// attempts runs attempts until one starts a reply, and returns that reply's first event; or it
+// gives up and returns the error event that ends the request.
+func (c *call) attempts() llm.Event {
 	r, model := c.r, c.req.LLM.Model
 	accounts, creds := r.snapshot()
 	c.creds = creds
@@ -368,6 +410,7 @@ func (c *call) route() llm.Event {
 		}
 		return errorEvent(&llm.Error{Code: llm.CodeNotFound, Message: msg, ProviderCode: "model_not_found"})
 	}
+	c.capable = capable
 
 	tried := map[string]bool{} // this round
 	used := map[string]bool{}  // this request
@@ -494,6 +537,81 @@ func (c *call) route() llm.Event {
 		rounds++
 		clear(tried)
 	}
+}
+
+// usageLimit returns the usage-limit reply for a request that ended with e, in the usage-limit
+// quota response mode, when every account that serves the request's model is out of quota
+// until a reset the upstream named and the first reset is more than 5 minutes away; else nil.
+// As in today's core, only a rate or quota refusal (a 429), or core's own cooldown reply, can
+// become one.
+func (c *call) usageLimit(e *llm.Error) *llm.Error {
+	r := c.r
+	if r.cfg.QuotaResponseMode != QuotaUsageLimit || e == nil || len(c.capable) == 0 ||
+		e.Code != llm.CodeQuota && e.Code != llm.CodeRateLimit && e.Status != http.StatusTooManyRequests {
+		return nil
+	}
+	now := r.now()
+	var reset time.Time
+	var window int64
+	var cause *llm.Error
+	provider := c.capable[0].Extension
+	for _, a := range c.capable {
+		until, w, why, ok := r.state.quotaOut(a, c.upstream[a.ID], now)
+		if !ok {
+			return nil
+		}
+		if reset.IsZero() || until.Before(reset) {
+			reset, window, cause = until, w, why
+		}
+		if a.Extension != provider {
+			provider = ""
+		}
+	}
+	if reset.Sub(now) <= usageLimitMinReset {
+		return nil
+	}
+	if e.ProviderCode == "model_cooldown" && cause != nil {
+		e = cause // core's own cooldown reply: name the failure that set the block
+	}
+	if i := strings.LastIndexByte(provider, '/'); i >= 0 {
+		provider = provider[i+1:]
+	}
+	u := &llm.UsageLimit{Model: c.req.LLM.Model, Provider: provider, ResetsAt: reset, WindowMinutes: window,
+		LastError: errorSummary(e), At: now}
+	return &llm.Error{Code: llm.CodeQuota, Status: http.StatusTooManyRequests, ProviderCode: "usage_limit_reached",
+		Message: u.Message(), Scope: llm.ScopeCredential, RetryAfterMS: (reset.Sub(now) + time.Millisecond - 1).Milliseconds(),
+		UsageLimit: u}
+}
+
+// errorSummary is "code: message" for an upstream failure, as today's core summarises one:
+// from the upstream's error body when it has one ({"error": {"code" or "type", "message"}}),
+// else from e; the message alone when it already names the code; at most 256 characters.
+func errorSummary(e *llm.Error) string {
+	code, msg := e.ProviderCode, e.Message
+	var b struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(e.Raw, &b) == nil && len(b.Error) > 0 {
+		var o struct{ Code, Type, Message string }
+		var text string
+		switch {
+		case json.Unmarshal(b.Error, &o) == nil && (o.Code != "" || o.Type != "" || o.Message != ""):
+			code, msg = cmp.Or(strings.TrimSpace(o.Code), strings.TrimSpace(o.Type)), strings.TrimSpace(o.Message)
+		case json.Unmarshal(b.Error, &text) == nil && text != "":
+			code, msg = "", strings.TrimSpace(text)
+		}
+	}
+	s := msg
+	switch {
+	case code != "" && msg == "":
+		s = code
+	case code != "" && !strings.Contains(strings.ToLower(msg), strings.ToLower(code)):
+		s = code + ": " + msg
+	}
+	if runes := []rune(s); len(runes) > 256 {
+		s = string(runes[:253]) + "..."
+	}
+	return s
 }
 
 // choose picks one of cands: the session's account if it is among them, otherwise by priority
