@@ -151,8 +151,7 @@ func (m *Management) Handle(pattern string, h http.HandlerFunc) {
 
 func (m *Management) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	cfg := m.cfg()
-	key := cfg.ManagementKey
-	if key == "" {
+	if cfg.ManagementKey == "" {
 		http.NotFound(w, r)
 		return
 	}
@@ -164,7 +163,7 @@ func (m *Management) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	client := ClientIP(r)
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	right := ok && token != "" && sameKey(token, key)
+	right := ok && token != "" && sameKey(token, cfg.managementKeyDigest())
 	left, blockedNow := m.lockout.attempt(client, right)
 	if left > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(int((left+time.Second-1)/time.Second)))
@@ -183,11 +182,12 @@ func (m *Management) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	m.mux.ServeHTTP(w, r)
 }
 
-// sameKey compares a sent key with the management key in constant time, length included: it
-// compares their SHA-256 digests.
-func sameKey(sent, key string) bool {
-	a, b := sha256.Sum256([]byte(sent)), sha256.Sum256([]byte(key))
-	return subtle.ConstantTimeCompare(a[:], b[:]) == 1
+// sameKey compares a sent key with the management key's digest (Config.managementKeyDigest) in
+// constant time, length included: it compares their SHA-256 digests, the key's made once, when
+// the config was loaded, so the time of the check does not grow with the key's length.
+func sameKey(sent string, key [sha256.Size]byte) bool {
+	a := sha256.Sum256([]byte(sent))
+	return subtle.ConstantTimeCompare(a[:], key[:]) == 1
 }
 
 func (m *Management) configured(id string) (route.Account, bool) {
