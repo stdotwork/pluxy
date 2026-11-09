@@ -709,6 +709,7 @@ type settingsReply struct {
 			QuotaResponseMode             string  `json:"quota-response-mode"`
 		} `json:"cooldown"`
 	} `json:"routing"`
+	TokenCountEstimate *bool `json:"token_count_estimate"`
 }
 
 func (c *mcore) settings(t *testing.T) settingsReply {
@@ -721,7 +722,7 @@ func (c *mcore) settings(t *testing.T) settingsReply {
 }
 
 func TestManageSettings(t *testing.T) {
-	const patch = `{"routing": {"strategy": "fill-first", "session-affinity": true, "session-affinity-ttl": "2h", "force-model-prefix": true, "retry": {"request-retry": 2, "max-retry-credentials": 2, "max-retry-interval": 5}, "cooldown": {"disable-cooling": true, "transient-error-cooldown-seconds": 20, "quota-response-mode": "Usage-Limit"}}}`
+	const patch = `{"routing": {"strategy": "fill-first", "session-affinity": true, "session-affinity-ttl": "2h", "force-model-prefix": true, "retry": {"request-retry": 2, "max-retry-credentials": 2, "max-retry-interval": 5}, "cooldown": {"disable-cooling": true, "transient-error-cooldown-seconds": 20, "quota-response-mode": "Usage-Limit"}}, "token_count_estimate": false}`
 	for _, f := range formats() {
 		t.Run(f.name, func(t *testing.T) {
 			c := startManaged(t, f.yaml)
@@ -734,7 +735,7 @@ func TestManageSettings(t *testing.T) {
 			}
 			if s.Routing.Strategy != "round-robin" || s.Routing.SessionAffinity || s.Routing.SessionAffinityTTL != "1h" || !wantRounds ||
 				s.Routing.Retry.MaxRetryCredentials != 0 || s.Routing.Retry.MaxRetryInterval != 0 || s.Routing.Cooldown.DisableCooling || s.Routing.Cooldown.TransientErrorCooldownSeconds != 0 ||
-				s.Routing.Cooldown.QuotaResponseMode != "retryable" {
+				s.Routing.Cooldown.QuotaResponseMode != "retryable" || s.TokenCountEstimate == nil || !*s.TokenCountEstimate {
 				t.Errorf("settings = %+v", s)
 			}
 
@@ -747,7 +748,7 @@ func TestManageSettings(t *testing.T) {
 				r := got.Routing
 				if r.Strategy != "fill-first" || !r.SessionAffinity || r.SessionAffinityTTL != "2h" || !r.ForceModelPrefix || r.Retry.MaxRetryCredentials != 2 || r.Retry.MaxRetryInterval != 5 ||
 					r.Retry.RequestRetry == nil || *r.Retry.RequestRetry != 2 || !r.Cooldown.DisableCooling || r.Cooldown.TransientErrorCooldownSeconds != 20 ||
-					r.Cooldown.QuotaResponseMode != "usage-limit" {
+					r.Cooldown.QuotaResponseMode != "usage-limit" || got.TokenCountEstimate == nil || *got.TokenCountEstimate {
 					t.Errorf("%s = %+v", name, got)
 				}
 			}
@@ -799,6 +800,19 @@ func TestManageSettings(t *testing.T) {
 				}
 			}
 
+			// The estimate setting is a top-level key in both files, under its JSON name.
+			wantEstimate := `"token_count_estimate": false`
+			if f.yaml {
+				wantEstimate = "token_count_estimate: false"
+			}
+			if !strings.Contains(c.file(t), wantEstimate) {
+				t.Errorf("file lacks %q:\n%s", wantEstimate, c.file(t))
+			}
+			c.expect(t, http.StatusOK, http.MethodPatch, "/settings", `{"token_count_estimate": true}`)
+			if got := c.settings(t).TokenCountEstimate; got == nil || !*got {
+				t.Errorf("token_count_estimate = %v after turning it on", got)
+			}
+
 			// Weighted round robin is written by the file's own name for it, and read back by ours.
 			c.expect(t, http.StatusOK, http.MethodPatch, "/settings", `{"routing": {"strategy": "weighted-round-robin"}}`)
 			if got := c.settings(t).Routing.Strategy; got != "weighted-round-robin" {
@@ -840,6 +854,7 @@ func TestManageSettingsRefusals(t *testing.T) {
 				"an unknown cooldown field":   `{"routing": {"cooldown": {"nope": 1}}}`,
 				"a transient below -1":        `{"routing": {"cooldown": {"transient-error-cooldown-seconds": -2}}}`,
 				"an unknown quota mode":       `{"routing": {"cooldown": {"quota-response-mode": "stop"}}}`,
+				"a non-boolean estimate":      `{"token_count_estimate": "no"}`,
 				"a bad duration":              `{"routing": {"session-affinity": true, "session-affinity-ttl": "soon"}}`,
 				"a duration of zero":          `{"routing": {"session-affinity": true, "session-affinity-ttl": "0s"}}`,
 				"a valid field next to a bad": `{"routing": {"strategy": "fill-first", "retry": {"max-retry-credentials": -1}}}`,

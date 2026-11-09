@@ -68,7 +68,8 @@ var geminiCount = countFormat{
 }
 
 // serveCount answers a token count: the upstream's own count reply when it is in the client's
-// format, otherwise the count in the client's shape.
+// format, otherwise the count in the client's shape. When no account can count, core's estimate
+// in the client's shape (token_count_estimate).
 func serveCount(w http.ResponseWriter, r *http.Request, g *Generation, f countFormat) {
 	if g.Count == nil {
 		f.writeError(w, &llm.Error{Code: llm.CodeNotFound, Status: http.StatusNotFound, Message: "token counting is not served"})
@@ -108,6 +109,14 @@ func serveCount(w http.ResponseWriter, r *http.Request, g *Generation, f countFo
 		}
 	}
 	if ev.Type == llm.EventError {
+		// No account can count: every one answered that its upstream has no count endpoint. The
+		// request itself is fine, so core estimates, unless that is turned off. An upstream that
+		// counts and refuses, or a request an extension refuses, stays an error.
+		if e := ev.Error; e != nil && e.Code == llm.CodeUnsupported && e.Scope != llm.ScopeRequest && g.Config.TokenCountEstimateOn() {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(f.reply(estimateInputTokens(req)))
+			return
+		}
 		logFailure(r, ev.Error)
 		f.writeError(w, ev.Error)
 		return

@@ -240,6 +240,8 @@ func maskKey(k string) string {
 type settingsView struct {
 	Routing       routingView       `json:"routing"`
 	Observability observabilityView `json:"observability"`
+	// TokenCountEstimate is this core's own setting (no counterpart in today's core).
+	TokenCountEstimate bool `json:"token_count_estimate"`
 }
 
 type observabilityView struct {
@@ -304,7 +306,7 @@ func settings(cfg *server.Config) settingsView {
 		}
 	}
 	v.SessionAffinityTTL = shortDuration(ttl)
-	return settingsView{Routing: v, Observability: observabilityView{
+	return settingsView{TokenCountEstimate: cfg.TokenCountEstimateOn(), Routing: v, Observability: observabilityView{
 		Logs: logsView{LoggingToFile: cfg.Logs.ToFile, LogsMaxTotalSizeMB: cfg.Logs.MaxTotalSizeMB,
 			RequestLog: cfg.Logs.RequestLog, ErrorLogsMaxFiles: cfg.Logs.ErrorLogs()},
 		Usage: usageView{UsageStatisticsEnabled: cfg.Usage.On()}}}

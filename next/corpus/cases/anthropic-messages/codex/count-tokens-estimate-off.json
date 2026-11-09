@@ -1,0 +1,61 @@
+{
+  "description": "POST /v1/messages/count_tokens to a Codex upstream with token_count_estimate off in the new core: it answers that the account cannot count. Today's core has no such setting and always estimates.",
+  "source": [
+    "core/sdk/api/handlers/claude/code_handlers.go:104 (ClaudeCountTokens)",
+    "core/internal/runtime/executor/codex_executor_tokens.go:19 (CountTokens)"
+  ],
+  "client": {
+    "path": "/v1/messages/count_tokens",
+    "auth": "none",
+    "headers": {"x-api-key":"corpus-client-key","anthropic-version":"2023-06-01"},
+    "body": {
+      "model": "gpt-test",
+      "system": "Be brief.",
+      "messages": [{"role":"user","content":"Say hello"}],
+      "tools": [
+        {
+          "name": "get_weather",
+          "description": "Weather",
+          "input_schema": {"type":"object","properties":{"city":{"type":"string"}}}
+        }
+      ]
+    }
+  },
+  "upstream": [],
+  "new_core": {"config":{"token_count_estimate":false}},
+  "exceptions": [
+    {
+      "path": "client.body",
+      "kind": "intended",
+      "reason": "token_count_estimate is off in the new core, which then answers that the account cannot count (Codex has no token count endpoint); today's core has no such setting and answers with its local estimate.",
+      "want": {
+        "error": {
+          "message": "extension pluxy/codex does not count tokens",
+          "type": "invalid_request_error"
+        },
+        "type": "error"
+      }
+    },
+    {
+      "path": "client.status",
+      "kind": "intended",
+      "reason": "token_count_estimate is off in the new core, which then answers that the account cannot count (Codex has no token count endpoint); today's core has no such setting and answers with its local estimate.",
+      "want": 400
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {"input_tokens":25},
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": []
+  }
+}

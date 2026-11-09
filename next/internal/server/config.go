@@ -45,6 +45,11 @@ type Config struct {
 	// drop part of it: "report" (the default) sends it and logs what was dropped, "reject"
 	// refuses it with an error naming what could not be carried.
 	DropPolicy string `json:"drop_policy,omitempty"`
+	// TokenCountEstimate says what a token count gets when no account for the model can count
+	// tokens (its upstream has no count endpoint): true, the default, answers with core's own
+	// estimate (package tokenest); false answers that counting is unsupported. A count an
+	// upstream refuses is an error either way.
+	TokenCountEstimate *bool `json:"token_count_estimate,omitempty"`
 	// ManagementKey turns on the management API (ManagementPrefix); clients send it as a
 	// bearer token. Empty: no management API.
 	ManagementKey string `json:"management_key,omitempty"`
@@ -81,6 +86,12 @@ type Config struct {
 	AuthDir string `json:"-"`
 	// Import says how accounts imported from today's auth folder are set up.
 	Import legacy.ImportOptions `json:"-"`
+}
+
+// TokenCountEstimateOn reports whether a token count no account can give is answered with an
+// estimate (token_count_estimate; absent: on).
+func (c *Config) TokenCountEstimateOn() bool {
+	return c.TokenCountEstimate == nil || *c.TokenCountEstimate
 }
 
 // TLSFiles is the tls section of the config, with today's core's key names.

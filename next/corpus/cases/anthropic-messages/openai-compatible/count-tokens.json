@@ -39,22 +39,10 @@
   },
   "exceptions": [
     {
-      "path": "client.body",
+      "path": "client.body.input_tokens",
       "kind": "intended",
-      "reason": "The new core counts tokens only with an upstream's own count endpoint, and Chat Completions has none, so it answers that the account cannot count; today's core answers with a local tokenizer estimate. A local estimate would need a tokenizer and its vocabularies in the core for a number that is only approximate, so it is left out.",
-      "want": {
-        "error": {
-          "message": "this account's upstream speaks Chat Completions, which has no token count endpoint",
-          "type": "invalid_request_error"
-        },
-        "type": "error"
-      }
-    },
-    {
-      "path": "client.status",
-      "kind": "intended",
-      "reason": "The new core counts tokens only with an upstream's own count endpoint, and Chat Completions has none, so it answers that the account cannot count; today's core answers with a local tokenizer estimate. A local estimate would need a tokenizer and its vocabularies in the core for a number that is only approximate, so it is left out.",
-      "want": 400
+      "reason": "Chat Completions has no token count endpoint, so the new core answers with its own estimate, a standard-library approximation of o200k_base; today's core counts with a tokenizer chosen by the model's name, so the number differs. With token_count_estimate off the new core answers an error saying the account cannot count (see count-tokens-estimate-off).",
+      "want": 27
     }
   ]
 }

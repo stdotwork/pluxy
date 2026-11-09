@@ -114,10 +114,18 @@ with `"wire_api": "messages"`, Gemini's for a Gemini account (Gemini API or Vert
 `"wire_api": "gemini"`. A count from an upstream of the client's own kind comes back as the upstream sent it;
 otherwise core answers with the count in the client's shape. An account whose upstream has no count
 endpoint (Codex, xAI, Kimi, Meta, Devin, Antigravity, and Chat or Responses accounts) cannot count:
-core tries the model's next account, and answers with an error when none can. Today's core
-estimates a count itself with a tokenizer for those, and for any Claude account whose base URL is
-not Anthropic's own; this core does not, as that needs a tokenizer and its vocabularies for a
-number that is only approximate.
+core tries the model's next account, and when none can, it answers with its own estimate in the
+client's shape, as today's core does with a tokenizer for those accounts. The estimate is a
+heuristic written with the standard library, not a tokenizer: it splits the text the way OpenAI's
+`o200k_base` tokenizer does (today's core uses that one for Claude, xAI and Meta accounts) and
+counts each piece by its length. On English prose, code and JSON it comes within a few percent of
+`o200k_base`, but a given request can be off by more. It is the same number whichever account the
+request would have gone to, where today's core's number depends on the account's provider. It
+counts the system text, each message's role and text, reasoning, tool calls and results, the
+tools' names, descriptions and parameters, and the tool choice; images and files add nothing.
+`token_count_estimate` (top level, default `true`) turns the estimate off: core then answers an
+error saying the account cannot count. Either way, an error from an upstream that counts (a 400,
+401 or 429) stays an error; only "cannot count" becomes an estimate.
 
 A model name may end in a thinking setting in brackets, as today's core reads it: a level
 (`gpt-5(high)`; `minimal`, `low`, `medium`, `high`, `xhigh` or `max`), `none`, `auto`, or a token
@@ -211,6 +219,10 @@ account for the model) gets none.
 `drop_policy` (top level) says what happens when translating a request to the upstream's format
 would drop part of it: `"report"` (the default) sends it and logs what was dropped, `"reject"`
 refuses it with a 400 that names what could not be carried.
+
+`token_count_estimate` (top level, default `true`) says what a token count gets when no account
+for the model can count: `true` answers with core's estimate, `false` answers with an error. Today's core has no setting for this: it always
+estimates for those accounts.
 
 A config written for today's core, with its key names, works too: see
 [config.yaml with today's key names](#configyaml-with-todays-key-names).
@@ -1005,7 +1017,7 @@ its keys and its indent. `PUT /config` writes the document as sent.
 | `POST /v0/management/client-keys` | Adds a new random client key (`sk-` and 26 random characters). 201 with the key's `id` and `masked` form and its `value`, which no later call shows. |
 | `DELETE /v0/management/client-keys/{id}` | Removes the client key. 204; 404 when no key has the ID; 409 for the last key, since core refuses a config without client keys. |
 | `POST /v0/management/management-key/rotate` | Replaces the management key with a new random one and returns it as `value`. The old key stops working as the reply is sent. |
-| `GET /v0/management/settings` | The basic and routing settings, by today's core's names (below). |
+| `GET /v0/management/settings` | The basic and routing settings, by today's core's names, and `token_count_estimate`, this core's own, under its own name (below). |
 | `PATCH /v0/management/settings` | Changes the settings the body names (`{"routing": {"strategy": "fill-first"}}`) and replies with them all. 400 for a name or value it does not take. |
 
 In the document, a placeholder stands for the secret it replaced, so a document read with `GET
@@ -1037,6 +1049,7 @@ to `management.secret-key`, or `remote-management.secret-key` when only that is 
 | `observability.logs.request-log` | `logs.request_log` | `true` or `false`: whether every client request is written to a [request log](#request-logs). |
 | `observability.logs.error-logs-max-files` | `logs.error_logs_max_files` | How many error logs are kept, the newest; 0 keeps all. Default 10. |
 | `observability.usage.usage-statistics-enabled` | `usage.enabled` | `true` or `false`: whether core keeps the [usage record](#usage-statistics). On unless the config turns it off. |
+| `token_count_estimate` (top level) | `token_count_estimate` (top level, in a `config.yaml` too) | `true` (the default) or `false`: whether a token count no account can give is answered with core's estimate or with an error. |
 
 The settings shown are those of the running config. Today's other basic settings (`proxy-url` and
 `ws-auth`) do not exist in this core yet, and `debug` is dropped (this
@@ -1256,8 +1269,8 @@ Neither line stops core from starting. Settings that did nothing in today's core
 "dead") are accepted without a word. A key today's core does not know is named as unknown.
 
 Settings only this core has keep their JSON names in a `config.yaml`: `packages`, `extensions`,
-`extension`, `extension_pages`, `drop_policy`, `credentials_dir` and `cors` (today's core has no
-CORS setting: it allows every origin). Provider accounts set in
+`extension`, `extension_pages`, `drop_policy`, `token_count_estimate`, `credentials_dir` and `cors`
+(today's core has no CORS setting: it allows every origin). Provider accounts set in
 the file go to the installed package of their provider (`pluxy/codex`, `pluxy/claude`,
 `pluxy/gemini`, `pluxy/xai`, `pluxy/openai-compatible`), so those packages must be installed:
 the bundled ones are, on the first start.

@@ -20,6 +20,39 @@ func TestConfigRefusesHugeTimings(t *testing.T) {
 	}
 }
 
+// token_count_estimate is on unless the config turns it off, in a JSON config and, under the same
+// name, in a config.yaml. A value that is not a boolean is refused.
+func TestConfigTokenCountEstimate(t *testing.T) {
+	const base = `"listen":"127.0.0.1:0","client_keys":["k"],"extension":{"manifest":"m.json","accounts":[{"id":"a"}]}`
+	for _, c := range []struct {
+		name, file, cfg string
+		want, bad       bool
+	}{
+		{"absent", "config.json", `{` + base + `}`, true, false},
+		{"on", "config.json", `{` + base + `,"token_count_estimate":true}`, true, false},
+		{"off", "config.json", `{` + base + `,"token_count_estimate":false}`, false, false},
+		{"off in a config.yaml", "config.yaml", "api-keys: [k]\nclaude-api-key: [{api-key: x}]\ntoken_count_estimate: false\n", false, false},
+		{"absent in a config.yaml", "config.yaml", "api-keys: [k]\nclaude-api-key: [{api-key: x}]\n", true, false},
+		{"not a boolean", "config.json", `{` + base + `,"token_count_estimate":"no"}`, false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			cfg, err := ParseConfig([]byte(c.cfg), "/tmp/"+c.file)
+			if c.bad {
+				if err == nil {
+					t.Fatal("accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := cfg.TokenCountEstimateOn(); got != c.want {
+				t.Errorf("TokenCountEstimateOn() = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
 // A registry is an https:// URL or a path; any other URL is refused, never read as a path.
 func TestConfigRegistryLocations(t *testing.T) {
 	for url, ok := range map[string]bool{

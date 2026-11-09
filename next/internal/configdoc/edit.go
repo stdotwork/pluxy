@@ -118,6 +118,10 @@ var strategies = map[string]string{
 type SettingsPatch struct {
 	Routing       *RoutingPatch       `json:"routing"`
 	Observability *ObservabilityPatch `json:"observability"`
+	// TokenCountEstimate answers a token count no account can give with core's estimate (true,
+	// the default) or with an error saying counting is unsupported (false). This core's own
+	// setting, so it keeps its name in a config.yaml.
+	TokenCountEstimate *bool `json:"token_count_estimate"`
 }
 
 // ObservabilityPatch is a change to the usage and log settings.
@@ -186,6 +190,11 @@ type RetryPatch struct {
 func (d *Doc) ApplySettings(p SettingsPatch) error {
 	if err := d.applyRouting(p.Routing); err != nil {
 		return err
+	}
+	if p.TokenCountEstimate != nil {
+		if err := d.Set(Bool(*p.TokenCountEstimate), d.place("token_count_estimate", "token_count_estimate", "")...); err != nil {
+			return err
+		}
 	}
 	return d.applyObservability(p.Observability)
 }
