@@ -1,0 +1,74 @@
+{
+  "description": "An ordinary chat request that carries an Origin header: CORS headers on the reply and what reaches the upstream.",
+  "source": ["core/internal/api/server_middleware.go:441 (CORS headers)"],
+  "new_core_config": {"cors":{"allowed_origins":["*"]}},
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {"model":"gpt-test","messages":[{"role":"user","content":"Say hello"}]},
+    "headers": {"Origin":"https://app.example.test"}
+  },
+  "upstream": [
+    {
+      "body": {
+        "id": "chatcmpl-corpus",
+        "object": "chat.completion",
+        "created": 1700000001,
+        "model": "gpt-test-upstream",
+        "choices": [
+          {"index":0,"message":{"role":"assistant","content":"Hi there."},"finish_reason":"stop"}
+        ],
+        "usage": {"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "choices": [
+          {"finish_reason":"stop","index":0,"message":{"content":"Hi there.","role":"assistant"}}
+        ],
+        "created": 1700000001,
+        "id": "chatcmpl-corpus",
+        "model": "gpt-test-upstream",
+        "object": "chat.completion",
+        "usage": {"completion_tokens":2,"prompt_tokens":4,"total_tokens":6}
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {"messages":[{"content":"Say hello","role":"user"}],"model":"gpt-test"},
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "client.headers.Access-Control-Allow-Methods",
+      "kind": "intended",
+      "reason": "With CORS turned on for every origin, the new core lists the methods its client routes take (GET, POST, OPTIONS); today's core also lists PUT, PATCH and DELETE, which no client route of the new core takes.",
+      "want": "GET, POST, OPTIONS"
+    },
+    {
+      "path": "client.headers.Access-Control-Expose-Headers",
+      "kind": "intended",
+      "reason": "The new core exposes the headers its client replies carry (the trace ID and Retry-After); today's core also exposes its version and build headers and others its client replies do not send.",
+      "want": "X-CPA-TRACE-ID, Retry-After"
+    }
+  ]
+}

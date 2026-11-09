@@ -1,0 +1,91 @@
+{
+  "description": "Streamed legacy completion: chat chunks become text_completion chunks.",
+  "source": [
+    "core/sdk/api/handlers/openai/openai_handlers.go:170 (Completions)",
+    "core/sdk/api/handlers/openai/openai_handlers.go:201 (convertCompletionsRequestToChatCompletions)",
+    "core/sdk/api/handlers/openai/openai_handlers.go:347 (convertChatCompletionsStreamChunkToCompletions)"
+  ],
+  "client": {
+    "path": "/v1/completions",
+    "body": {"model":"gpt-test","prompt":"Say hello","stream":true}
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"data":{"id":"chatcmpl-corpus","object":"chat.completion.chunk","created":1700000000,"model":"gpt-test-upstream","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}},
+        {"data":{"id":"chatcmpl-corpus","object":"chat.completion.chunk","created":1700000000,"model":"gpt-test-upstream","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}},
+        {"data":{"id":"chatcmpl-corpus","object":"chat.completion.chunk","created":1700000000,"model":"gpt-test-upstream","choices":[{"index":0,"delta":{"content":", world!"},"finish_reason":null}]}},
+        {"data":{"id":"chatcmpl-corpus","object":"chat.completion.chunk","created":1700000000,"model":"gpt-test-upstream","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}},
+        {"data":{"id":"chatcmpl-corpus","object":"chat.completion.chunk","created":1700000000,"model":"gpt-test-upstream","choices":[],"usage":{"prompt_tokens":9,"completion_tokens":3,"total_tokens":12}}},
+        {"data":"[DONE]"}
+      ]
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"choices":[{"finish_reason":"","index":0,"text":"Hello"}],"created":1700000000,"id":"chatcmpl-corpus","model":"gpt-test-upstream","object":"text_completion"}},
+        {"data":{"choices":[{"finish_reason":"","index":0,"text":", world!"}],"created":1700000000,"id":"chatcmpl-corpus","model":"gpt-test-upstream","object":"text_completion"}},
+        {"data":{"choices":[{"finish_reason":"stop","index":0,"text":""}],"created":1700000000,"id":"chatcmpl-corpus","model":"gpt-test-upstream","object":"text_completion"}},
+        {"data":{"choices":[],"created":1700000000,"id":"chatcmpl-corpus","model":"gpt-test-upstream","object":"text_completion","usage":{"completion_tokens":3,"prompt_tokens":9,"total_tokens":12}}},
+        {"data":"[DONE]"}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "messages": [{"content":"Say hello","role":"user"}],
+          "model": "gpt-test",
+          "stream": true,
+          "stream_options": {"include_usage":true}
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Cache-Control": "no-cache",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "absent": true,
+      "kind": "gap",
+      "path": "client.events[4]",
+      "reason": "Follows from the usage chunk above: one event fewer in the new core's stream."
+    },
+    {
+      "path": "client.events[0].data.choices[0].finish_reason",
+      "kind": "intended",
+      "reason": "The new core leaves finish_reason out of a completion chunk that does not finish the choice, as its Chat stream does; today's core writes an empty string there.",
+      "absent": true
+    },
+    {
+      "path": "client.events[1].data.choices[0].finish_reason",
+      "kind": "intended",
+      "reason": "The new core leaves finish_reason out of a completion chunk that does not finish the choice, as its Chat stream does; today's core writes an empty string there.",
+      "absent": true
+    },
+    {
+      "path": "client.events[3]",
+      "kind": "gap",
+      "reason": "The old core always asks the upstream for usage on streams and passes the usage chunk to the client even when the client did not ask (no stream_options.include_usage); the new core sends the usage chunk only when asked, as OpenAI documents.",
+      "want": {"data":"[DONE]"}
+    }
+  ]
+}
