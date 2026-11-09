@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -261,7 +262,7 @@ func IsErrorLogName(name string) bool {
 // FindRequestLog returns the name of the newest request log in dir, plain or error, of the
 // request with trace ID id; "" when there is none.
 func FindRequestLog(dir, id string) string {
-	if id == "" || strings.ContainsAny(id, `/\`) || strings.Contains(id, "..") {
+	if !traceID.MatchString(id) {
 		return ""
 	}
 	entries, err := os.ReadDir(dir)
@@ -281,6 +282,9 @@ func FindRequestLog(dir, id string) string {
 	}
 	return best
 }
+
+// traceID matches a trace ID as newTrace makes them; no other file in the logs folder ends in one.
+var traceID = regexp.MustCompile(`^[0-9]{14}-[0-9a-f]{16}$`)
 
 // sensitiveName reports whether a header or query parameter name may carry a secret, as today's
 // core judges it, plus cookies and Google's key parameter.

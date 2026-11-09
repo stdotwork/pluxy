@@ -94,8 +94,10 @@ func (c *Core) handleLogs(m *server.Management) {
 // serveLogFile sends the file name in the logs folder as a download.
 func (c *Core) serveLogFile(w http.ResponseWriter, r *http.Request, name string) {
 	path := filepath.Join(c.logs.Dir(), name)
-	// Only a regular file in the folder: a link there could point anywhere.
-	if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() {
+	// Only a regular file in the folder: a link there could point anywhere. The file opened must
+	// be the one checked, so one swapped in between is refused too.
+	linfo, err := os.Lstat(path)
+	if err != nil || !linfo.Mode().IsRegular() {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]string{"code": "not_found", "message": "no log file of that name"}})
 		return
 	}
@@ -106,7 +108,7 @@ func (c *Core) serveLogFile(w http.ResponseWriter, r *http.Request, name string)
 	}
 	defer f.Close()
 	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() {
+	if err != nil || !info.Mode().IsRegular() || !os.SameFile(linfo, info) {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]string{"code": "not_found", "message": "no log file of that name"}})
 		return
 	}

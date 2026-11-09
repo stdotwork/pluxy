@@ -1091,7 +1091,9 @@ and holds today's core's sections: `=== REQUEST INFO ===` (URL, method, time, tr
 account its last attempt went to), `=== HEADERS ===`, `=== REQUEST BODY ===` and `=== RESPONSE
 ===` (status, headers and body). A Responses WebSocket turn is written as one request: the
 client's `response.create` message as its body and, under `=== WEBSOCKET MESSAGES ===`, the
-messages sent back, one per line. A reply over 1 MiB keeps its first 256 KiB and its last 768
+messages sent back, one per line; a turn answered with an error counts as failed. A WebSocket
+message refused before it starts a turn (an unknown type, no model, an `input` that is not a
+list) is answered on the socket and not written. A reply over 1 MiB keeps its first 256 KiB and its last 768
 KiB, with a line saying how many bytes were left out between them. While only error logs are
 written, every request keeps its reply's start and end until it ends, in case it fails, so an
 error log keeps less of a reply: the first 32 KiB and the last 96 KiB.

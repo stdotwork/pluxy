@@ -227,6 +227,15 @@ func (s *wsSocket) sendError(e *llm.Error) error {
 	return s.send(msg)
 }
 
+// refuseTurn sends e as a turn's error, marks the turn failed for its request log (t, when one is
+// kept), and returns false when the socket must close.
+func (s *wsSocket) refuseTurn(t *trace, e *llm.Error) bool {
+	if t != nil && e.Code != llm.CodeCancelled {
+		t.failed = true
+	}
+	return s.sendError(e) == nil
+}
+
 func clientError(status int, msg string) *llm.Error {
 	return &llm.Error{Code: llm.CodeInvalidRequest, Status: status, Scope: llm.ScopeRequest, Message: msg}
 }
@@ -366,7 +375,7 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 	}
 	sessReq, err := openairesponses.ParseRequest(nativeBody)
 	if err != nil {
-		return s.sendError(asLLMError(err)) == nil
+		return s.refuseTurn(turnTrace, asLLMError(err))
 	}
 	sessReq.DropPolicy = g.Config.DropPolicy
 	takeThinkingSuffix(&sessReq)
@@ -378,10 +387,10 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 	if mode != wsModeSession {
 		var e *llm.Error
 		if httpTurn, e = s.transcript.Next(native); e != nil {
-			return s.sendError(e) == nil
+			return s.refuseTurn(turnTrace, e)
 		}
 		if httpReq, err = openairesponses.ParseRequest(httpTurn.Body); err != nil {
-			return s.sendError(asLLMError(err)) == nil
+			return s.refuseTurn(turnTrace, asLLMError(err))
 		}
 		httpReq.DropPolicy = g.Config.DropPolicy
 		takeThinkingSuffix(&httpReq)

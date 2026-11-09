@@ -2,6 +2,8 @@ package server
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -44,5 +46,22 @@ func TestLogFileName(t *testing.T) {
 		if IsErrorLogName(name) != want {
 			t.Errorf("IsErrorLogName(%q) != %v", name, want)
 		}
+	}
+}
+
+// Only a request log's name, ending in a trace ID, is found by one; other log files are not.
+func TestFindRequestLog(t *testing.T) {
+	dir := t.TempDir()
+	const id = "20261109120000-0123456789abcdef"
+	for _, n := range []string{"notes-abc.log", "main-abc.log", "v1-chat-completions-2026-11-09T120000-" + id + ".log"} {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := FindRequestLog(dir, "abc"); got != "" {
+		t.Fatalf("abc found %q", got)
+	}
+	if got := FindRequestLog(dir, id); got != "v1-chat-completions-2026-11-09T120000-"+id+".log" {
+		t.Fatalf("trace ID found %q", got)
 	}
 }
