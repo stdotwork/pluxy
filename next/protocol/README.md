@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.6
+# pluxy extension protocol, version 0.7
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -12,9 +12,11 @@ Version 0.4 adds [account checks](#check): whether an account works, asked witho
 Version 0.5 adds [quota](#quota), what an account's plan allows and how much of it is used, and
 the identity of a login's grant, so core can check that a new login to an account signs in to
 the same upstream account. Version 0.6 adds an error's `quota_window_minutes`: how long the
-usage window that ran out is. It is deliberately small; later versions add capabilities and more operations without changing
+usage window that ran out is. Version 0.7 adds [endpoint calls](#endpoint): client requests to a
+provider's endpoints beyond generation, such as Responses compaction, whose reply the extension
+writes. It is deliberately small; later versions add capabilities and more operations without changing
 what is described here. An extension written for version 0 works unchanged with a core that
-speaks 0.6 (see [Versioning](#versioning)).
+speaks 0.7 (see [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
 the details. A Go SDK (`github.com/stdotwork/pluxy/next/sdk`) implements the extension side of
@@ -209,9 +211,9 @@ Core opens a connection and writes one call frame:
 | Field | Meaning |
 | --- | --- |
 | `id` | Call ID for logs and traces. Unique per core process. |
-| `op` | The operation. Version 0 has `describe`, `generate`, `login` and `refresh`; version 0.1 adds `session`; version 0.2 adds `count_tokens`; version 0.3 adds `models`; version 0.4 adds `check`; version 0.5 adds `quota`. |
-| `account` | For `generate`, `count_tokens`, `refresh`, `session`, `models`, `check` and `quota`: the account to use (below). For `login`: the account being signed in to, with its `id` and `settings` but no `credential`. |
-| `request` | For `generate` and `count_tokens`: the model request (below). |
+| `op` | The operation. Version 0 has `describe`, `generate`, `login` and `refresh`; version 0.1 adds `session`; version 0.2 adds `count_tokens`; version 0.3 adds `models`; version 0.4 adds `check`; version 0.5 adds `quota`; version 0.7 adds `endpoint`. |
+| `account` | For `generate`, `count_tokens`, `endpoint`, `refresh`, `session`, `models`, `check` and `quota`: the account to use (below). For `login`: the account being signed in to, with its `id` and `settings` but no `credential`. |
+| `request` | For `generate`, `count_tokens` and `endpoint`: the model request (below). |
 | `login` | For `login`: what to sign in with (see [Login and refresh](#login-and-refresh)). |
 | `session` | For `session`: what kind of session to open (see [Sessions](#sessions)). |
 
@@ -231,7 +233,8 @@ the extension implements (absent means 0; see [Versioning](#versioning)). `opera
 operations the extension serves: always `generate`, plus `login` and `refresh` when it signs in to
 accounts, `session` when it holds [sessions](#sessions), `count_tokens` when it
 [counts tokens](#count_tokens), `models` when it lists its accounts' [models](#models), and
-`check` when it [checks](#check) its accounts, and `quota` when it reads their [quota](#quota). An
+`check` when it [checks](#check) its accounts, `quota` when it reads their [quota](#quota), and
+`endpoint` when it serves [endpoint calls](#endpoint). An
 extension that lists `login` also
 lists its `login_methods` (see [Login and refresh](#login-and-refresh)).
 
@@ -397,6 +400,45 @@ provider's own usage endpoint for the account's subscription, with the same clie
 that spends from the plan (a generation). An account that has no plan to report (an API key, or
 a provider with no usage endpoint) answers with code `unsupported` and scope `credential`. Core
 removes the account's credential from every string and from `raw`, as from every other reply.
+
+### `endpoint`
+
+Version 0.7. A client request to one of the provider's endpoints beyond generation, which core
+passes to an account's extension whole: core reads nothing of it but the model, and the extension
+writes the reply's body. Core sends it only to an extension whose describe reports
+`protocol_minor` 7 or more and lists `endpoint` in `operations`; for any other, core treats the
+account as one that does not serve the endpoint.
+
+The call carries `account` and `request` as `generate` does. The request has no items: `model`
+is the body's `model` (renamed for the account and without its thinking suffix, which is in
+`options.thinking_suffix`, as for `generate`), and `native` holds the client's body and headers,
+with `native.format` naming the endpoint:
+
+| `native.format` | Client route | Body |
+| --- | --- | --- |
+| `openai.responses.compact` | `POST /v1/responses/compact` (and `/backend-api/codex/responses/compact`) | A Responses request; the reply is one JSON object. Core refuses `"stream": true` itself. |
+
+The reply is a stream of events as for `generate`, without items: `response.start`, whose
+`response.format` is the endpoint's format and whose `response.raw` says how to send the body,
+then any number of `native` events, each a JSON string holding the next piece of the body, in
+order, then `finish`, with `usage` when the upstream reported it.
+
+```json
+{"type": "response.start", "response": {"id": "", "model": "", "format": "openai.responses.compact", "raw": {"content_type": "application/json"}}}
+{"type": "native", "raw": "{\"object\":\"response.compaction\",\"output\":[...]}"}
+{"type": "finish", "finish": {"reason": "stop"}, "usage": {"input_tokens": 120, "output_tokens": 30}}
+```
+
+| `response.raw` field | Meaning |
+| --- | --- |
+| `content_type` | The body's media type, which core sends as the reply's `Content-Type`. Required. With `text/event-stream`, core sends each piece to the client as soon as it arrives. |
+
+The body is text: send it as it should reach the client. An `error` before `response.start` is
+routed as for `generate`: core tries another account when it is retryable, and otherwise answers
+the client with an error in OpenAI's shape. An `error` after `response.start` ends the body where
+it is; a `text/event-stream` body then gets a last `error` event. An account that does not serve
+the endpoint (or does not serve it for this account's credential) answers with code
+`unsupported`, scope `credential` and `retryable` true, so core tries another account.
 
 ## Accounts
 
@@ -890,7 +932,7 @@ removes `previous_response_id`.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.6. An extension reports the minor version it
+raise the minor version: this document is version 0.7. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -904,10 +946,11 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.4 | [Account checks](#check): the `check` operation and its `check.result` frame. |
 | 0.5 | [Quota](#quota): the `quota` operation and its `quota.result` frame. A login grant's `identity`. |
 | 0.6 | An error's `quota_window_minutes`. |
+| 0.7 | [Endpoint calls](#endpoint): the `endpoint` operation. |
 
-## What version 0.6 leaves out
+## What version 0.7 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,
-account checks and quota; several turns at once in one session (OpenAI's `stream_id` lanes); realtime sessions
+account checks, quota and endpoint calls; several turns at once in one session (OpenAI's `stream_id` lanes); realtime sessions
 (audio, WebRTC); a private data folder per extension.

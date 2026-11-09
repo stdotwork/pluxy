@@ -1,0 +1,95 @@
+{
+  "description": "An upstream 400 on compaction reaches the client with the upstream's error.",
+  "source": [
+    "core/internal/runtime/executor/codex_executor_execute.go"
+  ],
+  "client": {
+    "path": "/v1/responses/compact",
+    "body": {
+      "model": "gpt-test",
+      "input": "Say hello"
+    }
+  },
+  "upstream": [
+    {
+      "status": 400,
+      "body": {
+        "error": {
+          "type": "invalid_request_error",
+          "code": "invalid_value",
+          "message": "Bad input",
+          "param": "input"
+        }
+      }
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[*].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."
+    },
+    {
+      "path": "upstream[*].headers.Session-Id",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    },
+    {
+      "path": "upstream[*].body.prompt_cache_key",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    },
+    {
+      "path": "client.body.error",
+      "kind": "intended",
+      "reason": "The new core answers upstream errors with an error body it builds itself (message, type and code), not the upstream's JSON passed through; recorded as a deliberate difference when the core skeleton was built.",
+      "want": {
+        "code": "invalid_value",
+        "message": "Bad input",
+        "type": "invalid_request_error"
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {
+          "code": "invalid_value",
+          "message": "Bad input",
+          "param": "input",
+          "type": "invalid_request_error"
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 400
+    },
+    "upstream": [
+      {
+        "body": {
+          "input": "Say hello",
+          "instructions": "",
+          "model": "gpt-test",
+          "prompt_cache_key": "f674c4c7-551b-57dd-ab73-9724cff0fe39"
+        },
+        "headers": {
+          "Accept": "application/json",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "Originator": "codex-tui",
+          "Session-Id": "f674c4c7-551b-57dd-ab73-9724cff0fe39",
+          "User-Agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
+        },
+        "method": "POST",
+        "path": "/v1/responses/compact"
+      }
+    ]
+  }
+}

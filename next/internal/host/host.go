@@ -363,6 +363,34 @@ func (e *Extension) CountTokens(ctx context.Context, account protocol.Account, r
 	return e.call(ctx, protocol.OpCountTokens, account, req)
 }
 
+// ServesEndpoints reports whether an extension that described itself with info serves endpoint
+// calls: it implements minor version 7 or later and lists the endpoint operation.
+func ServesEndpoints(info protocol.Info) bool {
+	return info.ProtocolMinor >= 7 && slices.Contains(info.Operations, protocol.OpEndpoint)
+}
+
+// Endpoint starts an endpoint call, answered as a generate call is (see Generate). An extension
+// that serves no endpoints answers at once with an unsupported error about the account, so
+// routing moves on to another account.
+func (e *Extension) Endpoint(ctx context.Context, account protocol.Account, req llm.Request) *Stream {
+	if !ServesEndpoints(e.info) {
+		return servesNoEndpoints(e.manifest.ID, req)
+	}
+	return e.call(ctx, protocol.OpEndpoint, account, req)
+}
+
+// servesNoEndpoints is the reply of an extension that does not serve req's endpoint.
+func servesNoEndpoints(id string, req llm.Request) *Stream {
+	name := ""
+	if req.Native != nil {
+		name = req.Native.Format
+	}
+	s := &Stream{}
+	s.fail(&llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
+		Message: fmt.Sprintf("extension %s does not serve %s", id, name)})
+	return s
+}
+
 // cannotCount is the reply of an extension that does not count tokens.
 func cannotCount(id string) *Stream {
 	s := &Stream{}
@@ -371,7 +399,7 @@ func cannotCount(id string) *Stream {
 	return s
 }
 
-// call starts a generate or count_tokens call.
+// call starts a generate, count_tokens or endpoint call.
 func (e *Extension) call(ctx context.Context, op string, account protocol.Account, req llm.Request) *Stream {
 	select {
 	case <-e.exited:

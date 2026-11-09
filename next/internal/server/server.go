@@ -143,6 +143,9 @@ type Generation struct {
 	Attempt route.AttemptFunc
 	// Count runs one count_tokens attempt; nil when counting is not served.
 	Count route.AttemptFunc
+	// Endpoint runs one endpoint attempt (a provider endpoint beyond generation, such as
+	// Responses compaction); nil when endpoints are not served.
+	Endpoint route.AttemptFunc
 	// OpenSession opens a session on an extension; nil when sessions are not served.
 	OpenSession OpenSessionFunc
 	// RequestLog writes request logs; nil: none.
@@ -181,6 +184,9 @@ func NewHandler(src Source) http.Handler {
 		serveCount(w, r, g, messagesCount)
 	})
 	handle("/v1beta/models/{action...}", geminiFormat, geminiAction)
+	for path, ep := range endpointRoutes {
+		handle(path, clientFormat{}, func(w http.ResponseWriter, r *http.Request, g *Generation) { serveEndpoint(w, r, g, ep) })
+	}
 	mux.HandleFunc("GET /v1/responses", func(w http.ResponseWriter, r *http.Request) { serveResponsesWebSocket(w, r, src) })
 	serveModels(mux, src)
 	return withCORS(src, mux)

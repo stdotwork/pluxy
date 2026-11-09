@@ -68,31 +68,18 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err != nil {
 		return err
 	}
-	base := s.BaseURL
-	if base == "" {
-		base = defaultAPIBaseURL
-		if a.subscription {
-			base = defaultSubscriptionBaseURL
-		}
-	}
 	ur, err := buildRequest(call.Request, call.Account.ID, s, a, false)
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(base, "/")+"/responses", bytes.NewReader(ur.body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL(s, a)+"/responses", bytes.NewReader(ur.body))
 	if err != nil {
 		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
 	}
 	setHeaders(req.Header, call.Request, ur, s, a)
 	resp, err := client.Do(req)
 	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		var op *net.OpError
-		dial := errors.As(err, &op) && op.Op == "dial"
-		// A failed dial never reached the upstream, so trying again is safe.
-		return &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint, Retryable: dial}
+		return requestFailed(ctx, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {

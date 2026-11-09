@@ -1,0 +1,134 @@
+{
+  "description": "The Codex CLI's chatgpt_base_url route alias POST /backend-api/codex/responses/compact serves compaction like /v1/responses/compact.",
+  "source": [
+    "core/internal/api/server_routes.go"
+  ],
+  "client": {
+    "path": "/backend-api/codex/responses/compact",
+    "body": {
+      "model": "gpt-test",
+      "input": "Say hello"
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "id": "resp_compact_corpus",
+        "object": "response.compaction",
+        "created_at": 1700000000,
+        "output": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Say hello"
+              }
+            ]
+          },
+          {
+            "type": "compaction",
+            "id": "cmp_corpus",
+            "encrypted_content": "enc-compaction-corpus"
+          }
+        ],
+        "usage": {
+          "input_tokens": 120,
+          "input_tokens_details": {
+            "cached_tokens": 0
+          },
+          "output_tokens": 30,
+          "output_tokens_details": {
+            "reasoning_tokens": 10
+          },
+          "total_tokens": 150
+        }
+      }
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[*].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."
+    },
+    {
+      "path": "upstream[*].headers.Session-Id",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    },
+    {
+      "path": "upstream[*].body.prompt_cache_key",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "created_at": 1700000000,
+        "id": "resp_compact_corpus",
+        "object": "response.compaction",
+        "output": [
+          {
+            "content": [
+              {
+                "text": "Say hello",
+                "type": "input_text"
+              }
+            ],
+            "role": "user",
+            "type": "message"
+          },
+          {
+            "encrypted_content": "enc-compaction-corpus",
+            "id": "cmp_corpus",
+            "type": "compaction"
+          }
+        ],
+        "usage": {
+          "input_tokens": 120,
+          "input_tokens_details": {
+            "cached_tokens": 0
+          },
+          "output_tokens": 30,
+          "output_tokens_details": {
+            "reasoning_tokens": 10
+          },
+          "total_tokens": 150
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "input": "Say hello",
+          "instructions": "",
+          "model": "gpt-test",
+          "prompt_cache_key": "f674c4c7-551b-57dd-ab73-9724cff0fe39"
+        },
+        "headers": {
+          "Accept": "application/json",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "Originator": "codex-tui",
+          "Session-Id": "f674c4c7-551b-57dd-ab73-9724cff0fe39",
+          "User-Agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
+        },
+        "method": "POST",
+        "path": "/v1/responses/compact"
+      }
+    ]
+  }
+}

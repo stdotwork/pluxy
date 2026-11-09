@@ -161,6 +161,12 @@ type Extension struct {
 	// should also report each grant's Identity (minor version 5), so core can check a new login
 	// to an existing account.
 	Quota QuotaHandler
+	// Endpoint, when set, serves endpoint calls (protocol minor version 7): client requests to a
+	// provider endpoint beyond generation, named by call.Request.Native.Format (such as
+	// llm.FormatOpenAIResponsesCompact). It answers with out.StartBody, out.Body for each piece
+	// of the reply's body, and out.Finish; an account or endpoint it does not serve returns code
+	// unsupported with scope credential, retryable, so core tries another account.
+	Endpoint Handler
 }
 
 // operations lists the operations ext serves.
@@ -186,6 +192,9 @@ func (ext Extension) operations() []string {
 	}
 	if ext.Check != nil {
 		ops = append(ops, protocol.OpCheck)
+	}
+	if ext.Endpoint != nil {
+		ops = append(ops, protocol.OpEndpoint)
 	}
 	return ops
 }
@@ -311,6 +320,8 @@ func (s *server) handle(conn net.Conn) {
 		s.generate(conn, call, s.ext.Generate, "this extension does not generate")
 	case protocol.OpCountTokens:
 		s.generate(conn, call, s.ext.CountTokens, "this extension does not count tokens")
+	case protocol.OpEndpoint:
+		s.generate(conn, call, s.ext.Endpoint, "this extension serves no endpoints")
 	case protocol.OpLogin:
 		s.login(conn, call)
 	case protocol.OpRefresh:
@@ -330,7 +341,7 @@ func (s *server) handle(conn net.Conn) {
 	}
 }
 
-// generate answers a generate or count_tokens call with handler h; none is the error message
+// generate answers a generate, count_tokens or endpoint call with handler h; none is the error message
 // when the extension has no handler for it.
 func (s *server) generate(conn net.Conn, call protocol.Call, h Handler, none string) {
 	ctx, cancel, ok := s.begin(conn)
@@ -879,6 +890,26 @@ func (s *Stream) ToolInput(index int, delta string) error {
 // EndItem closes an output item.
 func (s *Stream) EndItem(index int) error {
 	return s.Send(llm.Event{Type: llm.EventItemEnd, Index: index})
+}
+
+// StartBody starts the reply to an endpoint call: response.start with the reply's format (the
+// call's endpoint format) and the body's content type. The body follows with Body.
+func (s *Stream) StartBody(format, contentType string) error {
+	raw, err := json.Marshal(llm.EndpointReply{ContentType: contentType})
+	if err != nil {
+		return err
+	}
+	return s.Start(llm.ResponseInfo{Format: format, Raw: raw})
+}
+
+// Body sends the next piece of an endpoint call's reply body, which is text: bytes that are not
+// UTF-8 arrive as U+FFFD.
+func (s *Stream) Body(chunk string) error {
+	raw, err := json.Marshal(chunk)
+	if err != nil {
+		return err
+	}
+	return s.Send(llm.Event{Type: llm.EventNative, Raw: raw})
 }
 
 // Finish ends the reply successfully.

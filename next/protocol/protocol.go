@@ -23,8 +23,8 @@ const Version = 0
 // describe (Info.ProtocolMinor); core uses what a minor version adds only with an extension that
 // reports it. Minor 1 adds sessions; minor 2 adds token counting and the request's thinking
 // suffix; minor 3 adds model listing; minor 4 adds account checks; minor 5 adds quota and the
-// identity of a login's grant; minor 6 adds an error's quota window.
-const Minor = 6
+// identity of a login's grant; minor 6 adds an error's quota window; minor 7 adds endpoint calls.
+const Minor = 7
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
@@ -62,6 +62,10 @@ const (
 	OpCheck = "check"
 	// OpQuota reads what an account's plan allows and how much of it is used (minor version 5).
 	OpQuota = "quota"
+	// OpEndpoint serves a client request to a provider endpoint beyond generation, such as
+	// Responses compaction (minor version 7), answered with events: response.start, the reply's
+	// body in native events, then finish.
+	OpEndpoint = "endpoint"
 )
 
 // Frame types that are not events.
