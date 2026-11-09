@@ -345,6 +345,12 @@ func statusError(resp *http.Response, model string) *llm.Error {
 		if e.RetryAfterMS == 0 {
 			e.RetryAfterMS = windowReset
 		}
+	case capacityRefusal(raw):
+		// The turn or the model is full, not the account's allowance: refused before it ran, so
+		// another account may take it, and only this model waits on this account. Whatever the
+		// upstream's status, the client sees a 429, as from today's core.
+		e.Code, e.Scope, e.Retryable, e.Status = llm.CodeRateLimit, llm.ScopeModel, true, http.StatusTooManyRequests
+		e.RetryAfterMS = retryAfter(resp.Header.Get("Retry-After"))
 	case s >= 300 && s < 400:
 		e.Code, e.Scope, e.Status = llm.CodeUpstream, llm.ScopeEndpoint, http.StatusBadGateway
 		e.Message = fmt.Sprintf("upstream redirected (%s) to another host; not followed", resp.Status)
@@ -392,12 +398,69 @@ func classify(err error) error {
 		e.RetryAfterMS = resetMS(ce, "")
 	case code == "context_length_exceeded" || ce.Type == "context_length_exceeded":
 		e.Code, e.Scope, e.Status = llm.CodeInvalidRequest, llm.ScopeRequest, http.StatusBadRequest
+	case capacityRefusal(e.Raw):
+		// Not retryable: the stream is open, and today's core does not move such a turn to
+		// another account unless its opt-in bootstrap buffering is on.
+		e.Code, e.Scope, e.Status = llm.CodeRateLimit, llm.ScopeModel, http.StatusTooManyRequests
 	case code == "rate_limit_exceeded" || ce.Type == "rate_limit_error":
 		e.Code, e.Scope, e.Status = llm.CodeRateLimit, llm.ScopeCredential, http.StatusTooManyRequests
 	case ce.Type == "invalid_request_error":
 		e.Code, e.Scope, e.Status = llm.CodeInvalidRequest, llm.ScopeRequest, http.StatusBadRequest
 	}
 	return e
+}
+
+// capacityRefusal reports whether a Codex refusal says the turn or the model is full while the
+// account's allowance is not used up, as today's core reads it. Three forms count:
+//   - the code turn_rate_limit_exceeded (Codex's per-turn admission limit);
+//   - the codes model_at_capacity and model_is_at_capacity;
+//   - with no code at all, a message that says "at capacity" and either comes with the error type
+//     rate_limit_error or names the model ("Selected model is at capacity"), or names one of the
+//     model codes.
+//
+// Another explicit code keeps its own handling, so a plain rate_limit_exceeded is never taken for
+// capacity by its message. The error object may be in "error", at the top of the body, or in
+// "body.error" (a WebSocket message) or "response.error" (a response.failed event), searched in
+// that order; the first code found decides.
+func capacityRefusal(raw []byte) bool {
+	var b struct {
+		codexError
+		Error *codexError `json:"error"`
+		Body  *struct {
+			Error *codexError `json:"error"`
+		} `json:"body"`
+		Response *struct {
+			Error *codexError `json:"error"`
+		} `json:"response"`
+	}
+	_ = json.Unmarshal(raw, &b) // a field of the wrong type is left out; the rest is still read
+	var objs []codexError
+	if b.Error != nil {
+		objs = append(objs, *b.Error)
+	}
+	objs = append(objs, b.codexError)
+	if b.Body != nil && b.Body.Error != nil {
+		objs = append(objs, *b.Body.Error)
+	}
+	if b.Response != nil && b.Response.Error != nil {
+		objs = append(objs, *b.Response.Error)
+	}
+	var rateLimitTyped, atCapacity, namesModel, namesModelCode bool
+	for _, o := range objs {
+		switch strings.ToLower(strings.TrimSpace(o.code())) {
+		case "":
+		case "turn_rate_limit_exceeded", "model_at_capacity", "model_is_at_capacity":
+			return true
+		default:
+			return false
+		}
+		rateLimitTyped = rateLimitTyped || strings.EqualFold(strings.TrimSpace(o.Type), "rate_limit_error")
+		msg := strings.ToLower(o.Message)
+		atCapacity = atCapacity || strings.Contains(msg, "at capacity")
+		namesModel = namesModel || strings.Contains(msg, "model")
+		namesModelCode = namesModelCode || strings.Contains(msg, "model_at_capacity") || strings.Contains(msg, "model_is_at_capacity")
+	}
+	return namesModelCode || atCapacity && (rateLimitTyped || namesModel)
 }
 
 // resetMS returns when a usage limit resets, in milliseconds from now: resets_at, else

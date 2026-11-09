@@ -293,7 +293,8 @@ func wsFrameError(t *testing.T, data string) *llm.Error {
 
 // An error message's own status decides its meaning, as an HTTP reply's status does, whatever
 // its body's error type says; before a reply starts, a refused credential lets routing try
-// another account; a usage limit wrapped in body keeps its reset time.
+// another account; a usage limit wrapped in body keeps its reset time; a capacity refusal is a
+// rate limit on the model.
 func TestFrameErrorFollowsStatus(t *testing.T) {
 	for _, c := range []struct {
 		data       string
@@ -306,11 +307,25 @@ func TestFrameErrorFollowsStatus(t *testing.T) {
 		{`{"type":"error","status":401,"error":{"type":"server_error","message":"no"}}`, llm.CodeAuth, 401, true, 0},
 		{`{"type":"error","status":429,"body":{"error":{"type":"usage_limit_reached","message":"limit","resets_in_seconds":3600}}}`, llm.CodeQuota, 429, true, 3600000},
 		{`{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"bad input"}}`, llm.CodeInvalidRequest, 400, false, 0},
+		// The turn limit and the model limit are rate limits on the model whatever the status; the
+		// socket's connection limit keeps its status like any other message.
+		{`{"type":"error","status":429,"headers":{"Retry-After":"20"},"error":{"type":"rate_limit_error","code":"turn_rate_limit_exceeded","message":"Codex is at capacity"}}`, llm.CodeRateLimit, 429, true, 20000},
+		{`{"type":"error","status":503,"body":{"error":{"code":"model_at_capacity","message":"busy"}}}`, llm.CodeRateLimit, 429, true, 0},
+		{`{"type":"error","status":429,"error":{"type":"invalid_request_error","code":"websocket_connection_limit_reached","message":"Responses websocket connection limit reached (60 minutes)."}}`, llm.CodeRateLimit, 429, true, 0},
+		{`{"type":"error","status":400,"error":{"type":"invalid_request_error","code":"websocket_connection_limit_reached","message":"Responses websocket connection limit reached (60 minutes)."}}`, llm.CodeInvalidRequest, 400, false, 0},
 	} {
 		e := wsFrameError(t, c.data)
 		if e.Code != c.code || e.Status != c.status || e.Retryable != c.retryable || e.RetryAfterMS != c.retryAfter {
 			t.Errorf("%s: code %s, status %d, retryable %v, retry after %d ms; want %s, %d, %v, %d",
 				c.data, e.Code, e.Status, e.Retryable, e.RetryAfterMS, c.code, c.status, c.retryable, c.retryAfter)
 		}
+	}
+}
+
+// A turn_rate_limit_exceeded message blocks the model on the account, not the account.
+func TestFrameErrorCapacityScope(t *testing.T) {
+	e := wsFrameError(t, `{"type":"error","status":429,"error":{"type":"rate_limit_error","code":"turn_rate_limit_exceeded","message":"Codex is at capacity"}}`)
+	if e.Scope != llm.ScopeModel || e.ProviderCode != "turn_rate_limit_exceeded" {
+		t.Errorf("scope %q, provider code %q; want the model, turn_rate_limit_exceeded", e.Scope, e.ProviderCode)
 	}
 }

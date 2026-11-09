@@ -1,0 +1,152 @@
+{
+  "description": "The upstream ends a socket with a websocket_connection_limit_reached error message (status 429): the turn ends, and the client's next turn, sent as a whole new conversation, opens a new upstream socket and is served.",
+  "source": [
+    "core/internal/runtime/executor/codex_websockets_errors.go (isCodexWebsocketConnectionLimitError)",
+    "core/internal/runtime/executor/codex_websockets_executor_test.go (TestParseCodexWebsocketErrorMarksConnectionLimitRetryable)"
+  ],
+  "client": {
+    "method": "GET",
+    "path": "/v1/responses",
+    "websocket": [
+      {
+        "send": {
+          "type": "response.create",
+          "model": "gpt-test",
+          "store": false,
+          "prompt_cache_key": "corpus-ws",
+          "input": [
+            {"type":"message","role":"user","content":[{"type":"input_text","text":"Say hello"}]}
+          ]
+        }
+      },
+      {"read":"turn"},
+      {
+        "send": {
+          "type": "response.create",
+          "model": "gpt-test",
+          "store": false,
+          "prompt_cache_key": "corpus-ws",
+          "input": [
+            {"type":"message","role":"user","content":[{"type":"input_text","text":"Say hello"}]}
+          ]
+        }
+      },
+      {"read":"turn"}
+    ]
+  },
+  "upstream": [
+    {
+      "websocket": [
+        {"receive":true},
+        {
+          "send": {
+            "type": "error",
+            "status": 429,
+            "error": {
+              "type": "invalid_request_error",
+              "code": "websocket_connection_limit_reached",
+              "message": "Responses websocket connection limit reached (60 minutes). Create a new websocket connection to continue."
+            }
+          }
+        }
+      ]
+    },
+    {
+      "websocket": [
+        {"receive":true},
+        {
+          "send": {
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": {
+              "id": "resp_1",
+              "object": "response",
+              "status": "in_progress",
+              "model": "gpt-test",
+              "output": []
+            }
+          }
+        },
+        {
+          "send": {
+            "type": "response.output_item.done",
+            "sequence_number": 1,
+            "output_index": 0,
+            "item": {
+              "id": "msg_1",
+              "type": "message",
+              "status": "completed",
+              "role": "assistant",
+              "content": [{"type":"output_text","text":"Hello","annotations":[]}]
+            }
+          }
+        },
+        {
+          "send": {
+            "type": "response.completed",
+            "sequence_number": 2,
+            "response": {
+              "id": "resp_1",
+              "object": "response",
+              "status": "completed",
+              "model": "gpt-test",
+              "output": [
+                {
+                  "id": "msg_1",
+                  "type": "message",
+                  "status": "completed",
+                  "role": "assistant",
+                  "content": [{"type":"output_text","text":"Hello","annotations":[]}]
+                }
+              ],
+              "usage": {"input_tokens":5,"output_tokens":1,"total_tokens":6}
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "recorded_old_core": {
+    "client": {"close":{"code":1006},"headers":{"Upgrade":"websocket"},"messages":[],"status":101},
+    "upstream": [
+      {
+        "headers": {
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Conversation_id": "corpus-ws",
+          "Openai-Beta": "responses_websockets=2026-02-06",
+          "Originator": "codex-tui",
+          "Sec-Websocket-Extensions": "permessage-deflate; server_no_context_takeover; client_no_context_takeover",
+          "Sec-Websocket-Version": "13",
+          "Session_id": "corpus-ws",
+          "Upgrade": "websocket",
+          "User-Agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
+        },
+        "method": "GET",
+        "path": "/v1/responses",
+        "websocket": {
+          "close": {"code":1006},
+          "messages": [
+            {
+              "include": ["reasoning.encrypted_content"],
+              "input": [
+                {
+                  "content": [{"text":"Say hello","type":"input_text"}],
+                  "role": "user",
+                  "type": "message"
+                }
+              ],
+              "instructions": "",
+              "model": "gpt-test",
+              "parallel_tool_calls": true,
+              "prompt_cache_key": "corpus-ws",
+              "store": false,
+              "stream": true,
+              "tools": [{"output_format":"png","type":"image_generation"}],
+              "type": "response.create"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
