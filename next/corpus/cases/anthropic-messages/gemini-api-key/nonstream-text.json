@@ -37,6 +37,14 @@
       }
     }
   ],
+  "exceptions": [
+    {
+      "path": "client.body.usage.output_tokens_details",
+      "kind": "intended",
+      "reason": "The new core writes the reasoning tokens any upstream reports (here a reasoning token count of the upstream's usage) in usage.output_tokens_details.thinking_tokens; today's core writes it only for a Responses upstream.",
+      "want": {"thinking_tokens":20}
+    }
+  ],
   "recorded_old_core": {
     "client": {
       "body": {

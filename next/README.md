@@ -132,6 +132,10 @@ each turn is a request that carries the whole conversation so far, which core ke
 socket. `response.append`,
 `response.interrupt` and warmups (`"generate": false`) are served as today's core serves them.
 
+A Messages client's usage carries `output_tokens_details.thinking_tokens` (at most `output_tokens`)
+whenever the upstream reports its reasoning tokens; today's core writes it only for a Responses
+upstream.
+
 OpenAI's legacy text completions (`POST /v1/completions`) are served as Chat Completions, as
 today's core serves them: the prompt (a string, or a list of one string) becomes one user message,
 with `max_tokens`, `temperature`, `top_p`, `frequency_penalty`, `presence_penalty`, `stop`,
