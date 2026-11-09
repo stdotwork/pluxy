@@ -354,6 +354,11 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		}
 	case llm.EventItemEnd:
 		b.signature(s.calls[ev.Index], ev)
+		if o := ev.Opaque; o != nil && o.Format == llm.OpaqueDevin && o.Data != "" {
+			// A Devin reasoning signature goes in a thought part of its own, as today's core
+			// writes it.
+			return s.emit(b.response([]any{obj{"text": "", "thought": true, "thoughtSignature": o.Data}}, nil, nil))
+		}
 	case llm.EventFinish:
 		var parts []any
 		for _, idx := range s.order {
@@ -427,6 +432,10 @@ func (a *Aggregator) Add(ev llm.Event) {
 			p.call.args.WriteString(ev.Delta)
 		}
 	case llm.EventItemEnd:
+		if o := ev.Opaque; o != nil && o.Format == llm.OpaqueDevin && o.Data != "" && !a.native {
+			// Today's core leaves a Devin reasoning signature out of an unstreamed reply.
+			a.b.lose("content.thoughtSignature", "a Devin reasoning signature, which an unstreamed GenerateContentResponse does not carry")
+		}
 		if p := a.parts[ev.Index]; p != nil && p.call != nil {
 			// A late signature replaces the call's first one.
 			a.size -= len(p.call.signature)

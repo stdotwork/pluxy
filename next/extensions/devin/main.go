@@ -49,7 +49,7 @@ const (
 	chatPath          = "/exa.api_server_pb.ApiServerService/GetChatMessage"
 
 	// opaqueFormat names Devin's reasoning signatures in a reply's reasoning items.
-	opaqueFormat = "devin"
+	opaqueFormat = llm.OpaqueDevin
 )
 
 func main() {
