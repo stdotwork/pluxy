@@ -90,7 +90,9 @@ func (l *Files) open() error {
 		return err
 	}
 	path := filepath.Join(l.dir, Main)
-	// main.log must be a file of its own: a link there would send the log somewhere else.
+	// main.log must be a file of its own: a link there would send the log somewhere else. The
+	// file opened must be the regular file at the path, so a link swapped in while opening is
+	// refused too.
 	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
 		return fmt.Errorf("%s is not a regular file", path)
 	}
@@ -99,6 +101,12 @@ func (l *Files) open() error {
 		return err
 	}
 	st, err := f.Stat()
+	if err == nil {
+		var at os.FileInfo
+		if at, err = os.Lstat(path); err == nil && (!at.Mode().IsRegular() || !os.SameFile(st, at)) {
+			err = fmt.Errorf("%s is not a regular file", path)
+		}
+	}
 	if err != nil {
 		f.Close()
 		return err
