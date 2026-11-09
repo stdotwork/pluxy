@@ -316,7 +316,13 @@ func serve(w http.ResponseWriter, r *http.Request, g *Generation, f clientFormat
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(out)
+		if m != nil {
+			m.sent = http.StatusOK
+		}
+		if _, err := w.Write(out); err != nil {
+			m.fail(&llm.Error{Code: llm.CodeCancelled}, http.StatusOK) // the client went away
+			return
+		}
 		m.finish(ev)
 		return
 	}

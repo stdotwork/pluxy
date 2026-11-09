@@ -202,3 +202,28 @@ func TestStoreConcurrentUse(t *testing.T) {
 		t.Fatalf("%d events, last %d", len(p.Events), p.Events[len(p.Events)-1].Seq)
 	}
 }
+
+// The age limit counts from when an event was recorded, which is the order the store keeps: a
+// request that arrived long ago but ended just now stays, and one recorded before it goes first.
+func TestStoreAgesByRecordingOrder(t *testing.T) {
+	s, c := newTestStore(100, time.Minute)
+	s.Add(Event{Timestamp: c.now()})
+	c.add(30 * time.Second)
+	s.Add(Event{Timestamp: c.now().Add(-2 * time.Hour)}) // a request that ran two hours
+	c.add(40 * time.Second)                              // recorded 70s and 40s ago
+	if got := fmt.Sprint(seqs(s.Events(Filter{}, 0, 10))); got != "[2]" {
+		t.Fatalf("events %s", got)
+	}
+	c.add(time.Minute)
+	if got := seqs(s.Events(Filter{}, 0, 10)); len(got) != 0 {
+		t.Fatalf("events %v after both aged out", got)
+	}
+}
+
+func TestEventsAfterTheLargestSeq(t *testing.T) {
+	s, c := newTestStore(10, time.Hour)
+	s.Add(Event{Timestamp: c.now()})
+	if p := s.Events(Filter{}, ^uint64(0), 10); p.Lost || len(p.Events) != 0 {
+		t.Fatalf("after the largest seq: %+v", p)
+	}
+}

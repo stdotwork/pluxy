@@ -1006,9 +1006,10 @@ name for, is changed in the document.
 
 ## Usage statistics
 
-Core keeps a usage record: one event for each client request that reached routing (a request
+Core keeps a usage record: one event for each generation request that reached routing (a request
 refused for its client key, or whose body does not parse, is not recorded), including Responses
-WebSocket turns. An event holds the request's trace ID (`id`, the `X-CPA-TRACE-ID` of its reply),
+WebSocket turns. Token counts (`count_tokens`, `:countTokens`) generate nothing and are not
+recorded. An event holds the request's trace ID (`id`, the `X-CPA-TRACE-ID` of its reply),
 when it arrived, the `endpoint`, whether it streamed, the `model` the client asked for (without a
 thinking suffix) and the account's own name for it when that differs (`upstream_model`: an alias
 or prefix resolved), the `provider` (extension) and `account` its last attempt went to, the
@@ -1021,8 +1022,8 @@ that fails after it began keeps its `status` 200 with `failed` true; a client th
 recorded as `cancelled`, with no `status` when nothing had reached it.
 
 The record lives in memory and is gone after a restart. It keeps the last `max_events` requests
-(default 10000, at most 200000) and none older than `max_age_ms` (default 24 hours, at most 30
-days); a reload that lowers either drops the oldest at once. Reading it never removes anything:
+(default 10000, at most 200000) and none recorded (when the request ended) longer ago than
+`max_age_ms` (default 24 hours, at most 30 days); a reload that lowers either drops the oldest at once. Reading it never removes anything:
 today's core hands its usage queue out once and deletes what it hands out.
 
 ```json

@@ -93,6 +93,10 @@ type Event struct {
 	// LatencyMS is how long the request took, from arrival to its last event.
 	LatencyMS int64  `json:"latency_ms"`
 	Tokens    Tokens `json:"tokens"`
+
+	// recorded is when the store added the event. Events are kept in the order they were
+	// recorded, so the age limit is measured from it.
+	recorded time.Time
 }
 
 // Filter selects events. A zero field selects every event.
@@ -114,8 +118,8 @@ func (f Filter) match(e *Event) bool {
 		(f.Failed == nil || *f.Failed == e.Failed)
 }
 
-// Store is the usage record: a ring of at most its maximum number of events, none older than its
-// age limit. It is safe for concurrent use.
+// Store is the usage record: a ring of at most its maximum number of events, none recorded longer
+// ago than its age limit. It is safe for concurrent use.
 type Store struct {
 	mu        sync.Mutex
 	ring      []Event // capacity maxEvents; events in order from head, n of them
@@ -168,12 +172,11 @@ func (s *Store) events() []Event {
 	return out
 }
 
-// expire drops events older than the age limit from the front. Events are kept in the order
-// they ended, which is about the order they arrived, so this stops at the first event inside
-// the limit. s.mu is held.
+// expire drops events recorded longer ago than the age limit. Events are kept in the order they
+// were recorded, so these are at the front. s.mu is held.
 func (s *Store) expire() {
 	cutoff := s.now().Add(-s.maxAge)
-	for s.n > 0 && s.ring[s.head].Timestamp.Before(cutoff) {
+	for s.n > 0 && s.ring[s.head].recorded.Before(cutoff) {
 		s.ring[s.head] = Event{}
 		s.head = (s.head + 1) % len(s.ring)
 		s.n--
@@ -188,6 +191,13 @@ func (s *Store) Add(e Event) uint64 {
 	s.expire()
 	s.seq++
 	e.Seq = s.seq
+	// A clock set back must not put an event behind one recorded before it.
+	e.recorded = s.now()
+	if s.n > 0 {
+		if last := s.ring[(s.head+s.n-1)%len(s.ring)].recorded; e.recorded.Before(last) {
+			e.recorded = last
+		}
+	}
 	switch {
 	case s.n < len(s.ring):
 		s.ring[(s.head+s.n)%len(s.ring)] = e
@@ -228,7 +238,7 @@ func (s *Store) Events(f Filter, after uint64, limit int) Page {
 	s.expire()
 	p := Page{Events: []Event{}, Next: after}
 	if s.n > 0 {
-		p.Lost = s.ring[s.head].Seq > after+1
+		p.Lost = s.ring[s.head].Seq-1 > after
 	} else {
 		p.Lost = s.seq > after
 	}
