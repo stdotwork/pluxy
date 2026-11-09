@@ -293,12 +293,12 @@ does not serve it, so a model only those serve gets an error.
 /backend-api/codex/alpha/search`, for a ChatGPT sign-in's requests). Core routes it as an [endpoint call](protocol/README.md#endpoint)
 to a Codex account: a ChatGPT sign-in always, an API key only with `alpha_search` on. The request
 may name no model, and then any such account may serve it; one that names a model goes by it, as
-other requests do. The extension sends the body to `{base_url}/alpha/search` as it came, without
-`prompt_cache_key` and `prompt_cache_retention` and, for an API key, the model renamed for the
-account. It sends `originator: codex_cli_rs`, the bearer token, a sign-in's `Chatgpt-Account-Id`
+other requests do. The extension sends the body to `{base_url}/alpha/search` as it came, but with
+`prompt_cache_key` and `prompt_cache_retention` removed and the model renamed for the account
+(today's core renames it only for an API key). It sends `originator: codex_cli_rs`, the bearer token, a sign-in's `Chatgpt-Account-Id`
 and the client's `Version`, `User-Agent`, `Session_id` and `X-Client-Request-Id` as they came; the
 upstream's JSON reply comes back to the client whole, with its content type. An upstream error
-reaches the client as an error in OpenAI's shape, and an API key without `alpha_search` is skipped
+reaches the client as an error in OpenAI's shape (a 404 blocks no model on the account), and an API key without `alpha_search` is skipped
 for this endpoint only. When no account is eligible the client gets an error saying so.
 
 **Quota.** For a ChatGPT sign-in account, `GET /v0/management/accounts/{id}/quota` reads `GET {backend}/wham/usage`, where `{backend}` is the account's `base_url` without a trailing `/codex` (default `https://chatgpt.com/backend-api`), with the access token, the `Chatgpt-Account-Id` header and the same `User-Agent` and `Originator` the account's requests carry (so `codex_identity` applies). It reports the plan (`plan_type`), the 5-hour and weekly or monthly windows (`five_hour`, `weekly`, `monthly`), code review's windows (`code_review_*`), each extra limit such as one model's (`<name>_five_hour` and so on) and the credit balance (`credits`), with the share used, reset time and window length. An API key answers unsupported. A sign-in's grant carries `identity` `{"email", "account_id"}`: members of one ChatGPT workspace share its account ID, so the e-mail address tells them apart.

@@ -129,8 +129,9 @@ func TestAlphaSearch(t *testing.T) {
 				t.Errorf("%s = %q, want %q", name, got, want)
 			}
 		}
-		// A subscription gets the model as the client wrote it.
-		want := map[string]any{"model": "alias", "query": "q", "id": "conv-1"}
+		// The model is renamed for the account, as for an API key (routing does it for every
+		// endpoint; today's core leaves a subscription's body model as written).
+		want := map[string]any{"model": "up-model", "query": "q", "id": "conv-1"}
 		if !reflect.DeepEqual(reqs[0].body, want) {
 			t.Errorf("body = %v, want %v", reqs[0].body, want)
 		}
@@ -183,13 +184,18 @@ func TestAlphaSearch(t *testing.T) {
 	})
 
 	t.Run("upstream errors", func(t *testing.T) {
-		for status, code := range map[int]string{http.StatusBadRequest: llm.CodeInvalidRequest, http.StatusUnauthorized: llm.CodeAuth, http.StatusTooManyRequests: llm.CodeRateLimit} {
+		for status, code := range map[int]string{http.StatusBadRequest: llm.CodeInvalidRequest, http.StatusUnauthorized: llm.CodeAuth, http.StatusTooManyRequests: llm.CodeRateLimit, http.StatusNotFound: llm.CodeNotFound} {
 			u := newSearchUpstream(t)
 			u.status = status
 			evs := searchCall(t, ext, searchAccount(t, u, "/backend-api/codex", subscription("tok-sub", ""), nil), "up-model", body, client)
 			e := evs[len(evs)-1].Error
 			if len(evs) != 1 || e == nil || e.Code != code || e.Status != status || e.Message != "refused" {
 				t.Errorf("status %d: events = %+v, want code %s", status, evs, code)
+			}
+			// A 404 means the upstream has no search endpoint: it must not become a block on the
+			// model, which would stop the account generating with it.
+			if status == http.StatusNotFound && (e.Scope != llm.ScopeRequest || e.Retryable) {
+				t.Errorf("404: scope %q retryable %v, want a request-scoped error that blocks nothing", e.Scope, e.Retryable)
 			}
 		}
 	})

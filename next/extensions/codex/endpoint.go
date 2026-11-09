@@ -153,9 +153,9 @@ func alphaSearch(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	// The search endpoint takes no prompt cache hints; today's core removes them too.
 	delete(m, "prompt_cache_key")
 	delete(m, "prompt_cache_retention")
-	if _, ok := m["model"]; ok && !a.subscription && req.Model != "" {
-		// An API key's account may know the model by another name (an alias or prefix); a
-		// subscription gets the body's model as the client wrote it.
+	if _, ok := m["model"]; ok && req.Model != "" {
+		// The account may know the model by another name (an alias or prefix). Routing renames
+		// the body's model for every endpoint call; today's core does so only for an API key.
 		m["model"] = raw(req.Model)
 	}
 	body, err := json.Marshal(m)
@@ -186,7 +186,13 @@ func alphaSearch(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return statusError(resp, req.Model)
+		e := statusError(resp, req.Model)
+		if e.Code == llm.CodeNotFound && !e.Retryable {
+			// The upstream has no such endpoint (it did not name a missing model). That says
+			// nothing about the model's generation on this account, which a model block would stop.
+			e.Scope = llm.ScopeRequest
+		}
+		return e
 	}
 	reply, err := readReply(ctx, resp, "search")
 	if err != nil {
