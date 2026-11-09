@@ -40,6 +40,13 @@ type Case struct {
 	// Volatile lists observation paths whose values change from run to run; they are masked
 	// before any comparison.
 	Volatile []string `json:"volatile,omitempty"`
+	// Unordered lists observation paths of arrays whose order is not compared (today's core
+	// lists models in no fixed order): after masking, each is sorted by its elements' JSON.
+	Unordered []string `json:"unordered,omitempty"`
+	// OldCore and NewCore add settings to each core's generated config for this case, in that
+	// core's own config format.
+	OldCore *CoreOverride `json:"old_core,omitempty"`
+	NewCore *CoreOverride `json:"new_core,omitempty"`
 	// Exceptions lists known differences between the new core and the old one.
 	Exceptions []Exception `json:"exceptions,omitempty"`
 	// Recorded is the old core's observation, written by a record run.
@@ -84,6 +91,35 @@ type ClientStep struct {
 	Close int `json:"close,omitempty"`
 	// Drop drops the connection without a close message.
 	Drop bool `json:"drop,omitempty"`
+}
+
+// CoreOverride adds settings to a core's generated config. Objects merge key by key; any other
+// value replaces what is there, and null removes it.
+type CoreOverride struct {
+	// Config merges into the config at the top level.
+	Config map[string]any `json:"config,omitempty"`
+	// Account merges into each provider account: for the old core each group of its api-keys
+	// block and each auth file, for the new core each account.
+	Account map[string]any `json:"account,omitempty"`
+}
+
+// Merge returns base with over merged into it (see CoreOverride). base is changed in place.
+func Merge(base, over map[string]any) map[string]any {
+	if base == nil {
+		base = map[string]any{}
+	}
+	for k, v := range over {
+		switch v := v.(type) {
+		case nil:
+			delete(base, k)
+		case map[string]any:
+			cur, _ := base[k].(map[string]any)
+			base[k] = Merge(cur, v)
+		default:
+			base[k] = v
+		}
+	}
+	return base
 }
 
 // Reply is one scripted upstream reply.

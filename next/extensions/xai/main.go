@@ -59,7 +59,7 @@ const cliVersion = "1.0.46"
 
 func main() {
 	err := sdk.Serve(sdk.Extension{ID: id, Version: version, Generate: generate,
-		LoginMethods: loginMethods, Login: login, Refresh: refresh})
+		LoginMethods: loginMethods, Login: login, Refresh: refresh, Models: models})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "xai:", err)
 		os.Exit(1)

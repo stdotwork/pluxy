@@ -1,0 +1,49 @@
+{
+  "description": "A Kimi login whose config lists no models lists today's catalog for it.",
+  "source": ["core/sdk/cliproxy/service_models.go","core/internal/registry/models/models.json kimi"],
+  "client": {"method":"GET","path":"/v1/models"},
+  "account_models": ["kimi-k2"],
+  "old_core": {"account":{"models":null}},
+  "new_core": {"account":{"models":null}},
+  "unordered": ["client.body.data"],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "data": [
+          {"created":1752192000,"id":"kimi-k2","object":"model","owned_by":"moonshot"},
+          {"created":1762387200,"id":"kimi-k2-thinking","object":"model","owned_by":"moonshot"},
+          {"created":1769472000,"id":"kimi-k2.5","object":"model","owned_by":"moonshot"},
+          {"created":1776729600,"id":"kimi-k2.6","object":"model","owned_by":"moonshot"},
+          {"created":1780396800,"id":"kimi-k2.7-code","object":"model","owned_by":"moonshot"},
+          {
+            "created": 1780396800,
+            "id": "kimi-k2.7-code-highspeed",
+            "object": "model",
+            "owned_by": "moonshot"
+          },
+          {"created":1784073600,"id":"kimi-k3","object":"model","owned_by":"moonshot"},
+          {"created":1785110400,"id":"kimi-k3-256k","object":"model","owned_by":"moonshot"},
+          {"created":1789115500,"id":"kimi-k2.8","object":"model","owned_by":"moonshot"},
+          {"created":1789115500,"id":"kimi-k2.8-code","object":"model","owned_by":"moonshot"},
+          {"created":1792713600,"id":"kimi-k3.1-pro","object":"model","owned_by":"moonshot"},
+          {
+            "created": 1792713600,
+            "id": "kimi-k3.1-pro-highspeed",
+            "object": "model",
+            "owned_by": "moonshot"
+          }
+        ],
+        "object": "list"
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8"
+      },
+      "status": 200
+    },
+    "upstream": []
+  }
+}

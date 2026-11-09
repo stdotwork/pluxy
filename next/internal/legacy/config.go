@@ -6,6 +6,7 @@
 package legacy
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"net"
@@ -58,6 +59,14 @@ const (
 	Devin            = "pluxy/devin"
 	OpenAICompatible = "pluxy/openai-compatible"
 )
+
+// channels are the oauth.model-alias and oauth.excluded-models channels today's core has, and
+// the package whose accounts added by login they apply to (core/sdk/cliproxy/auth
+// OAuthModelAliasChannel); a channel without one has no extension here.
+var channels = map[string]string{
+	"codex": Codex, "claude": Claude, "vertex": Gemini, "kimi": Kimi, "kimi-ai": Kimi, "kimi.ai": Kimi,
+	"kimi.com": Kimi, "xai": XAI, "meta": Meta, "antigravity": Antigravity, "devin": Devin,
+}
 
 // newKeys are this core's own settings, which keep their JSON names in a config.yaml.
 var newKeys = []string{"packages", "extensions", "extension", "extension_pages", "drop_policy", "credentials_dir", "cors"}
@@ -184,7 +193,7 @@ var rules = map[string]rule{
 	"routing.session-affinity-ttl":                      {supported, ""},
 	"routing.session-affinity-subagents":                {later, ""},
 	"routing.session-affinity-rebind-on":                {later, ""},
-	"routing.force-model-prefix":                        {later, ""},
+	"routing.force-model-prefix":                        {supported, ""},
 	"routing.retry.max-retry-credentials":               {supported, ""},
 	"routing.retry.max-retry-interval":                  {supported, ""},
 	"routing.retry.request-retry":                       {supported, ""}, // reported in translate
@@ -225,8 +234,8 @@ var rules = map[string]rule{
 
 	"oauth.auth-dir":                                       {supported, ""},
 	"oauth.auth-auto-refresh-workers":                      {dropped, "each account is renewed shortly before it expires"},
-	"oauth.model-alias":                                    {later, ""},
-	"oauth.excluded-models":                                {later, ""},
+	"oauth.model-alias":                                    {supported, ""}, // reported in oauthModels
+	"oauth.excluded-models":                                {supported, ""}, // reported in oauthModels
 	"oauth.settings":                                       {dropped, "needs a model catalog, and no page uses it"},
 	"oauth.request-scoped-errors":                          {later, ""},
 	"oauth.providers.aistudio.ws-auth":                     {later, "the AI Studio relay is not built"},
@@ -252,7 +261,7 @@ var rules = map[string]rule{
 	"api-keys.*[].api-key":                                     {supported, ""},
 	"api-keys.*[].weight":                                      {supported, ""},
 	"api-keys.*[].models[].name":                               {supported, ""},
-	"api-keys.*[].models[].alias":                              {supported, ""}, // reported in translate
+	"api-keys.*[].models[].alias":                              {supported, ""},
 	"api-keys.*[].models[].display-name":                       {later, ""},
 	"api-keys.*[].models[].max-context-length":                 {later, ""},
 	"api-keys.*[].models[].force-mapping":                      {later, ""},
@@ -264,8 +273,8 @@ var rules = map[string]rule{
 	"api-keys.*[].models[].use-max-completion-tokens":          {later, ""},
 	"api-keys.*[].models[].support-configuration-update":       {later, ""},
 	"api-keys.*[].models[].openapi":                            {later, ""},
-	"api-keys.*[].prefix":                                      {later, ""},
-	"api-keys.*[].excluded-models":                             {later, ""},
+	"api-keys.*[].prefix":                                      {supported, ""},
+	"api-keys.*[].excluded-models":                             {supported, ""},
 	"api-keys.*[].headers":                                     {later, ""},
 	"api-keys.*[].proxy-url":                                   {later, ""},
 	"api-keys.*[].connection-pool":                             {later, ""},
@@ -281,6 +290,7 @@ var rules = map[string]rule{
 	"api-keys.vertex[].openapi-location":                       {later, ""},
 	"api-keys.openai-compatibility[].disabled":                 {supported, ""},
 	"api-keys.openai-compatibility[].support-prompt-cache-key": {later, ""},
+	"api-keys.openai-compatibility[].excluded-models":          {dead, ""}, // today's core has no such key there
 	"api-keys.claude[].cloak":                                  {dropped, "making other clients look like Claude Code is out of scope"},
 	"api-keys.claude[].fingerprint-profile":                    {dropped, "making other clients look like Claude Code is out of scope"},
 	"api-keys.claude[].native-tool-search":                     {later, ""},
@@ -383,6 +393,9 @@ func (x *translator) run() error {
 	if err := x.providers(providers); err != nil {
 		return err
 	}
+	if err := x.oauthModels(); err != nil {
+		return err
+	}
 	x.classify("", x.t, nil)
 
 	n := &x.res.Notices
@@ -406,6 +419,7 @@ var readPaths = []string{
 	"server.host", "server.port", "access.api-keys", "management.secret-key", "management.allow-remote",
 	"routing.strategy", "routing.session-affinity", "routing.session-affinity-ttl",
 	"routing.retry.max-retry-credentials", "routing.retry.max-retry-interval", "routing.retry.request-retry",
+	"routing.force-model-prefix", "oauth.model-alias", "oauth.excluded-models",
 	"upstream.codex.disable-codex-cloaking", "upstream.codex.websocket-compression",
 	"multimedia.disable-image-generation", "oauth.auth-dir",
 }
@@ -503,6 +517,11 @@ func (x *translator) routing() error {
 			ttl = max(d, time.Second) // as today's core reads it
 		}
 		r["session_affinity"] = map[string]any{"ttl_ms": ttl.Milliseconds()}
+	}
+	if on, err := flag(x.t, "routing.force-model-prefix"); err != nil {
+		return err
+	} else if on {
+		r["force_model_prefix"] = true
 	}
 	if n, err := integer(x.t, "routing.retry.max-retry-credentials"); err != nil {
 		return err
@@ -746,7 +765,8 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 		if !ok {
 			return nil, fmt.Errorf("%s.models must be a list", path)
 		}
-		var models []string
+		var models []any
+		public := map[string]bool{}
 		for _, m := range list {
 			e, ok := m.(tree)
 			if !ok {
@@ -760,15 +780,37 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 			if err != nil {
 				return nil, err
 			}
-			if name = strings.TrimSpace(name); name != "" && !slices.Contains(models, name) {
-				models = append(models, name)
+			// The name clients use is the alias, else the name; the first entry for a name
+			// wins, as in today's core.
+			name, alias = strings.TrimSpace(name), strings.TrimSpace(alias)
+			if name == "" || public[cmp.Or(alias, name)] {
+				continue
 			}
-			if alias = strings.TrimSpace(alias); alias != "" && alias != name {
-				x.laterKeys = append(x.laterKeys, "api-keys."+f.v8+".models.alias")
+			public[cmp.Or(alias, name)] = true
+			if alias == "" || alias == name {
+				models = append(models, name)
+			} else {
+				models = append(models, map[string]any{"name": name, "alias": alias})
 			}
 		}
 		if len(models) > 0 {
 			a["models"] = models
+		}
+	}
+	if p, err := scalar(field(g, k, "prefix"), path+".prefix"); err != nil {
+		return nil, err
+	} else if p = modelPrefix(p); p != "" {
+		a["prefix"] = p
+	}
+	if f.v8 != "openai-compatibility" {
+		if v := field(g, k, "excluded-models"); v != nil {
+			list, err := stringList(v, path+".excluded-models")
+			if err != nil {
+				return nil, err
+			}
+			if pats := patterns(list); len(pats) > 0 {
+				a["excluded_models"] = pats
+			}
 		}
 	}
 	settings := map[string]any{}
@@ -805,6 +847,181 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 		a["settings"] = settings
 	}
 	return a, nil
+}
+
+// modelPrefix reads a prefix as today's core does: without surrounding spaces and slashes, and
+// none at all when a slash is left inside.
+func modelPrefix(p string) string {
+	p = strings.Trim(strings.TrimSpace(p), "/")
+	if strings.Contains(p, "/") {
+		return ""
+	}
+	return p
+}
+
+// patterns reads excluded-models patterns as today's core does: trimmed, lower case, each once.
+func patterns(list []string) []string {
+	var out []string
+	for _, p := range list {
+		if p = strings.ToLower(strings.TrimSpace(p)); p != "" && !slices.Contains(out, p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// oauthModels reads oauth.model-alias and oauth.excluded-models, each a mapping of today's
+// channels to rules, into the model_alias and excluded_models of the package each channel's
+// accounts belong to (channels). They apply to the package's accounts added by a sign-in (not with an API key), as today's
+// apply to accounts from its auth folder.
+func (x *translator) oauthModels() error {
+	exts, _ := x.out["extensions"].(tree)
+	if x.out["extensions"] != nil && exts == nil {
+		return errors.New("extensions must be a mapping")
+	}
+	if exts == nil {
+		exts = tree{}
+	}
+	section := func(pkg string) (tree, error) {
+		e, _ := exts[pkg].(tree)
+		if exts[pkg] != nil && e == nil {
+			return nil, fmt.Errorf("extensions[%q] must be a mapping", pkg)
+		}
+		if e == nil {
+			e = tree{}
+			exts[pkg] = e
+		}
+		return e, nil
+	}
+	read := func(path string) (tree, []string, error) {
+		v, _ := get(x.t, path)
+		del(x.t, path)
+		if v == nil {
+			return nil, nil, nil
+		}
+		m, ok := v.(tree)
+		if !ok {
+			return nil, nil, fmt.Errorf("%s must be a mapping of channels", path)
+		}
+		var names []string
+		for ch := range m {
+			names = append(names, ch)
+		}
+		slices.Sort(names)
+		return m, names, nil
+	}
+
+	aliases, names, err := read("oauth.model-alias")
+	if err != nil {
+		return err
+	}
+	for _, ch := range names {
+		list, ok := aliases[ch].([]any)
+		if aliases[ch] != nil && !ok {
+			return fmt.Errorf("oauth.model-alias.%s must be a list", ch)
+		}
+		var rules []any
+		for _, v := range list {
+			e, ok := v.(tree)
+			if !ok {
+				return fmt.Errorf("oauth.model-alias.%s entries must be mappings", ch)
+			}
+			name, err := scalar(e["name"], "oauth.model-alias."+ch+".name")
+			if err != nil {
+				return err
+			}
+			alias, err := scalar(e["alias"], "oauth.model-alias."+ch+".alias")
+			if err != nil {
+				return err
+			}
+			display, err := scalar(e["display-name"], "oauth.model-alias."+ch+".display-name")
+			if err != nil {
+				return err
+			}
+			fork, err := boolean_(e["fork"], "oauth.model-alias."+ch+".fork")
+			if err != nil {
+				return err
+			}
+			for k, v := range e {
+				switch k {
+				case "name", "alias", "display-name", "fork":
+				case "force-mapping", "openapi":
+					if !isZero(v) {
+						x.laterKeys = append(x.laterKeys, "oauth.model-alias."+k)
+					}
+				default:
+					x.unknownKeys = append(x.unknownKeys, "oauth.model-alias."+k)
+				}
+			}
+			// As today's core reads them: an empty name or alias, or an alias that is the
+			// name, does nothing; an alias counts once per channel, whatever its case.
+			name, alias = strings.TrimSpace(name), strings.TrimSpace(alias)
+			if name == "" || alias == "" || strings.EqualFold(name, alias) ||
+				slices.ContainsFunc(rules, func(r any) bool { return strings.EqualFold(r.(map[string]any)["alias"].(string), alias) }) {
+				continue
+			}
+			r := map[string]any{"name": name, "alias": alias}
+			if fork {
+				r["fork"] = true
+			}
+			if d := strings.TrimSpace(display); d != "" {
+				r["display_name"] = d
+			}
+			rules = append(rules, r)
+		}
+		if len(rules) == 0 {
+			continue
+		}
+		pkg, ok := channels[strings.ToLower(strings.TrimSpace(ch))]
+		if !ok {
+			x.notes = append(x.notes, fmt.Sprintf("config.yaml: oauth.model-alias.%s: no extension serves the %s accounts of today's core; ignored", ch, ch))
+			continue
+		}
+		e, err := section(pkg)
+		if err != nil {
+			return err
+		}
+		have, _ := e["model_alias"].([]any)
+		e["model_alias"] = append(have, rules...)
+	}
+
+	excluded, names, err := read("oauth.excluded-models")
+	if err != nil {
+		return err
+	}
+	for _, ch := range names {
+		if excluded[ch] == nil {
+			continue
+		}
+		list, err := stringList(excluded[ch], "oauth.excluded-models."+ch)
+		if err != nil {
+			return err
+		}
+		pats := patterns(list)
+		if len(pats) == 0 {
+			continue
+		}
+		pkg, ok := channels[strings.ToLower(strings.TrimSpace(ch))]
+		if !ok {
+			x.notes = append(x.notes, fmt.Sprintf("config.yaml: oauth.excluded-models.%s: no extension serves the %s accounts of today's core; ignored", ch, ch))
+			continue
+		}
+		e, err := section(pkg)
+		if err != nil {
+			return err
+		}
+		have, _ := e["excluded_models"].([]any)
+		for _, p := range pats {
+			if !slices.Contains(have, any(p)) {
+				have = append(have, p)
+			}
+		}
+		e["excluded_models"] = have
+	}
+	if len(exts) > 0 {
+		x.out["extensions"] = exts
+	}
+	return nil
 }
 
 var notIDChar = regexp.MustCompile(`[^A-Za-z0-9._-]`)

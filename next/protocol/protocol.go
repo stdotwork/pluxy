@@ -22,8 +22,8 @@ const Version = 0
 // Minor is the minor version this package implements within Version. An extension reports it in
 // describe (Info.ProtocolMinor); core uses what a minor version adds only with an extension that
 // reports it. Minor 1 adds sessions; minor 2 adds token counting and the request's thinking
-// suffix.
-const Minor = 2
+// suffix; minor 3 adds model listing.
+const Minor = 3
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
@@ -55,6 +55,8 @@ const (
 	// OpCountTokens counts a request's input tokens (minor version 2), answered with events as
 	// generate is: response.start, then finish whose usage holds the count.
 	OpCountTokens = "count_tokens"
+	// OpModels lists the models an account serves (minor version 3).
+	OpModels = "models"
 )
 
 // Frame types that are not events.
@@ -77,6 +79,8 @@ const (
 	// TypeSessionInterrupt is a frame core sends on a session while a turn runs: the client's
 	// control message for the running turn, in Raw.
 	TypeSessionInterrupt = "session.interrupt"
+	// TypeModelsResult answers a models call.
+	TypeModelsResult = "models.result"
 )
 
 // Session kinds (SessionInfo.Format).
@@ -230,13 +234,54 @@ type Grant struct {
 	Label string `json:"label,omitempty"`
 }
 
-// Reply is a frame an extension sends: an event, the result of describe, or a login or
-// refresh frame.
+// ModelList is the result of a models call: the models an account serves.
+type ModelList struct {
+	// Models are the account's models, by the names its upstream knows them by. Empty when the
+	// extension has no list for the account (it serves whatever model a client names).
+	Models []Model `json:"models"`
+	// OwnedBy names who provides the account's models, for a model list's owned_by: for models
+	// the account's configuration names itself, and for those in Models that name none.
+	OwnedBy string `json:"owned_by,omitempty"`
+}
+
+// Model is one model an account serves, with what model lists show about it. Only ID is
+// required; every other field is shown where a client's model list has a place for it.
+type Model struct {
+	// ID is the model's name upstream, as requests name it.
+	ID string `json:"id"`
+	// Name is the model's resource name in Gemini's model list (for example
+	// "models/gemini-2.5-pro"); default ID.
+	Name        string `json:"name,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Version     string `json:"version,omitempty"`
+	// Created is when the model was released, in Unix seconds.
+	Created int64  `json:"created,omitempty"`
+	OwnedBy string `json:"owned_by,omitempty"`
+	// ContextLength is the model's context window in tokens, and MaxCompletionTokens its
+	// longest reply.
+	ContextLength       int `json:"context_length,omitempty"`
+	MaxCompletionTokens int `json:"max_completion_tokens,omitempty"`
+	// InputTokenLimit and OutputTokenLimit are Gemini's names for the same limits, where the
+	// provider gives them apart; Gemini lists fall back to ContextLength and
+	// MaxCompletionTokens.
+	InputTokenLimit  int `json:"input_token_limit,omitempty"`
+	OutputTokenLimit int `json:"output_token_limit,omitempty"`
+	// GenerationMethods, InputModalities and OutputModalities are as Gemini's model list
+	// names them (generateContent; TEXT, IMAGE, ...).
+	GenerationMethods []string `json:"generation_methods,omitempty"`
+	InputModalities   []string `json:"input_modalities,omitempty"`
+	OutputModalities  []string `json:"output_modalities,omitempty"`
+}
+
+// Reply is a frame an extension sends: an event, the result of describe or models, or a login
+// or refresh frame.
 type Reply struct {
 	llm.Event
-	Info   *Info   `json:"info,omitempty"`
-	Prompt *Prompt `json:"prompt,omitempty"`
-	Grant  *Grant  `json:"grant,omitempty"`
+	Info   *Info      `json:"info,omitempty"`
+	Prompt *Prompt    `json:"prompt,omitempty"`
+	Grant  *Grant     `json:"grant,omitempty"`
+	Models *ModelList `json:"models,omitempty"`
 }
 
 // ErrFrameTooLarge is returned for a frame longer than MaxFrame.

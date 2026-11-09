@@ -253,13 +253,60 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (Aut
 	if len(settings) > 0 {
 		r.Account.Settings, _ = json.Marshal(settings)
 	}
-	for _, k := range []string{"prefix", "proxy_url", "proxy-url", "headers", "excluded_models", "excluded-models", "model_aliases", "model-aliases"} {
+	if p, ok := m["prefix"].(string); ok {
+		r.Account.Prefix = modelPrefix(p)
+	}
+	r.Account.ExcludedModels = authExcluded(m)
+	r.Account.ModelAlias = authAliases(m)
+	for _, k := range []string{"proxy_url", "proxy-url", "headers"} {
 		if v, ok := m[k]; ok && !isZero(v) {
 			f.Ignored = append(f.Ignored, strings.ReplaceAll(k, "-", "_"))
 		}
 	}
 	f.Record = r
 	return f, ""
+}
+
+// authExcluded reads a credential file's own excluded models, as today's core does:
+// excluded_models (or excluded-models), a list of patterns or one comma-separated string.
+func authExcluded(m map[string]any) []string {
+	v, ok := m["excluded_models"]
+	if !ok {
+		v = m["excluded-models"]
+	}
+	var list []string
+	switch v := v.(type) {
+	case string:
+		list = strings.Split(v, ",")
+	case []any:
+		for _, e := range v {
+			if s, ok := e.(string); ok {
+				list = append(list, s)
+			}
+		}
+	}
+	return patterns(list)
+}
+
+// authAliases reads a credential file's own model aliases, as today's core does: the entries of
+// model_aliases, model-aliases and models that have a name and an alias that differs from it,
+// each alias (whatever its case) once.
+func authAliases(m map[string]any) []route.ModelAlias {
+	var out []route.ModelAlias
+	for _, k := range []string{"model_aliases", "model-aliases", "models"} {
+		list, _ := m[k].([]any)
+		for _, e := range list {
+			o, _ := e.(map[string]any)
+			name, alias := strings.TrimSpace(text(o, "name")), strings.TrimSpace(text(o, "alias"))
+			if name == "" || alias == "" || strings.EqualFold(name, alias) ||
+				slices.ContainsFunc(out, func(r route.ModelAlias) bool { return strings.EqualFold(r.Alias, alias) }) {
+				continue
+			}
+			out = append(out, route.ModelAlias{Name: name, Alias: alias, Fork: boolean(o["fork"]),
+				DisplayName: strings.TrimSpace(text(o, "display-name"))})
+		}
+	}
+	return out
 }
 
 // maxAuthFile bounds a credential file: today's are a few KiB, and a credential must fit in

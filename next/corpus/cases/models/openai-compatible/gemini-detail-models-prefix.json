@@ -1,0 +1,21 @@
+{
+  "description": "GET /v1beta/models/models/{name} finds a config model only if its held name starts with models/ (as today's core matches it): a 404 here.",
+  "source": ["core/sdk/api/handlers/gemini/gemini_handlers.go GeminiGetHandler"],
+  "client": {"method":"GET","path":"/v1beta/models/models/pub-a"},
+  "old_core": {"account":{"models":[{"name":"up-model-a","alias":"pub-a"},{"name":"up-model-b"}]}},
+  "new_core": {"account":{"models":[{"name":"up-model-a","alias":"pub-a"},"up-model-b"]}},
+  "recorded_old_core": {
+    "client": {
+      "body": {"error":{"message":"Not Found","type":"not_found"}},
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8"
+      },
+      "status": 404
+    },
+    "upstream": []
+  }
+}

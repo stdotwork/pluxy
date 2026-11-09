@@ -1,0 +1,81 @@
+{
+  "description": "A ChatGPT plus login lists the plus catalog, with oauth-excluded-models matched against catalog names before oauth-model-alias renames them (without fork the model is listed only as its alias; with fork as both; display-name renames it in Anthropic's list).",
+  "source": [
+    "core/sdk/cliproxy/service_executors.go",
+    "core/sdk/cliproxy/service_models.go applyOAuthModelAliasEntries"
+  ],
+  "client": {"method":"GET","path":"/v1/models"},
+  "account_models": ["gpt-6-sol"],
+  "old_core": {
+    "config": {
+      "oauth-model-alias": {
+        "codex": [
+          {"name":"gpt-6.1-sol","alias":"sol"},
+          {"name":"gpt-6-astra","alias":"astra","fork":true},
+          {"name":"GPT-6-LUNA","alias":"luna"}
+        ]
+      },
+      "oauth-excluded-models": {"codex":["gpt-6.1-sol","astra","codex-*"]}
+    }
+  },
+  "new_core": {
+    "account": {
+      "models": null,
+      "model_alias": [
+        {"name":"gpt-6.1-sol","alias":"sol"},
+        {"name":"gpt-6-astra","alias":"astra","fork":true},
+        {"name":"GPT-6-LUNA","alias":"luna"}
+      ],
+      "excluded_models": ["gpt-6.1-sol","astra","codex-*"]
+    }
+  },
+  "unordered": ["client.body.data"],
+  "exceptions": [
+    {
+      "path": "client.body.data",
+      "kind": "intended",
+      "reason": "Today's core adds its gpt-image-* models to every Codex list; they need image endpoints, which the new core does not serve (no image or video routes yet), so the Codex extension does not list them.",
+      "want": [
+        {"created":1783616400,"id":"astra","object":"model","owned_by":"openai"},
+        {"created":1783616400,"id":"gpt-5.6-luna","object":"model","owned_by":"openai"},
+        {"created":1783616400,"id":"gpt-5.6-sol","object":"model","owned_by":"openai"},
+        {"created":1783616400,"id":"gpt-5.6-terra","object":"model","owned_by":"openai"},
+        {"created":1783616400,"id":"gpt-6-astra","object":"model","owned_by":"openai"},
+        {"created":1790035200,"id":"gpt-6-sol","object":"model","owned_by":"openai"},
+        {"created":1790035200,"id":"luna","object":"model","owned_by":"openai"},
+        {"created":1792972800,"id":"gpt-6.1-terra","object":"model","owned_by":"openai"}
+      ]
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "data": [
+          {"created":1704067200,"id":"gpt-image-1.5","object":"model","owned_by":"openai"},
+          {"created":1704067200,"id":"gpt-image-2","object":"model","owned_by":"openai"},
+          {"created":1704067200,"id":"gpt-image-2.5","object":"model","owned_by":"openai"},
+          {"created":1704067200,"id":"gpt-image-2.5-flare","object":"model","owned_by":"openai"},
+          {"created":1704067200,"id":"gpt-image-2.5-sunburst","object":"model","owned_by":"openai"},
+          {"created":1783616400,"id":"astra","object":"model","owned_by":"openai"},
+          {"created":1783616400,"id":"gpt-5.6-luna","object":"model","owned_by":"openai"},
+          {"created":1783616400,"id":"gpt-5.6-sol","object":"model","owned_by":"openai"},
+          {"created":1783616400,"id":"gpt-5.6-terra","object":"model","owned_by":"openai"},
+          {"created":1783616400,"id":"gpt-6-astra","object":"model","owned_by":"openai"},
+          {"created":1790035200,"id":"gpt-6-sol","object":"model","owned_by":"openai"},
+          {"created":1790035200,"id":"luna","object":"model","owned_by":"openai"},
+          {"created":1792972800,"id":"gpt-6.1-terra","object":"model","owned_by":"openai"}
+        ],
+        "object": "list"
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8"
+      },
+      "status": 200
+    },
+    "upstream": []
+  }
+}

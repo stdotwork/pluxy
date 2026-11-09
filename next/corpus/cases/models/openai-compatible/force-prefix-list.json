@@ -1,0 +1,39 @@
+{
+  "description": "With force-model-prefix, a prefixed account lists its models only as <prefix>/<name>, except a model whose name is the prefix, which is listed bare too.",
+  "source": [
+    "core/sdk/cliproxy/service_models.go applyModelPrefixes",
+    "core/config.example.yaml force-model-prefix"
+  ],
+  "client": {"method":"GET","path":"/v1/models"},
+  "old_core": {
+    "account": {"prefix":"team","models":[{"name":"up-model-a","alias":"pub-a"},{"name":"team"}]},
+    "config": {"routing":{"force-model-prefix":true}}
+  },
+  "new_core": {
+    "account": {"prefix":"team","models":[{"name":"up-model-a","alias":"pub-a"},"team"]},
+    "config": {"routing":{"force_model_prefix":true}}
+  },
+  "unordered": ["client.body.data"],
+  "volatile": ["client.body.data[*].created"],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "data": [
+          {"created":"(volatile)","id":"team","object":"model","owned_by":"corpus"},
+          {"created":"(volatile)","id":"team/pub-a","object":"model","owned_by":"corpus"},
+          {"created":"(volatile)","id":"team/team","object":"model","owned_by":"corpus"}
+        ],
+        "object": "list"
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8"
+      },
+      "status": 200
+    },
+    "upstream": []
+  }
+}

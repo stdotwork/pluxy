@@ -1,33 +1,7 @@
 {
-  "description": "The client lists models.",
+  "description": "The client lists models: the account's model, owned by the account.",
   "client": {"method":"GET","path":"/v1/models"},
   "volatile": ["client.body.data[*].created"],
-  "exceptions": [
-    {
-      "path": "client.status",
-      "kind": "gap",
-      "reason": "The new core does not serve /v1/models yet (recorded when the core skeleton was built).",
-      "want": 404
-    },
-    {
-      "path": "client.body",
-      "kind": "gap",
-      "reason": "The new core does not serve /v1/models yet (recorded when the core skeleton was built).",
-      "want": "404 page not found\n"
-    },
-    {
-      "path": "client.headers.Content-Type",
-      "kind": "gap",
-      "reason": "The new core does not serve /v1/models yet (recorded when the core skeleton was built). The reply is the mux default 404, so its content type differs.",
-      "want": "text/plain; charset=utf-8"
-    },
-    {
-      "path": "client.headers.X-Content-Type-Options",
-      "kind": "gap",
-      "reason": "The new core does not serve /v1/models yet (recorded when the core skeleton was built). The reply is the mux default 404, which adds nosniff.",
-      "want": "nosniff"
-    }
-  ],
   "recorded_old_core": {
     "client": {
       "body": {
@@ -44,5 +18,10 @@
       "status": 200
     },
     "upstream": []
-  }
+  },
+  "account_models": ["corpus-model"],
+  "source": [
+    "core/sdk/api/handlers/openai/openai_handlers.go OpenAIModels",
+    "core/internal/registry/model_registry.go convertModelToMap"
+  ]
 }

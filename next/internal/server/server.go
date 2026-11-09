@@ -142,6 +142,9 @@ type Generation struct {
 	Count route.AttemptFunc
 	// OpenSession opens a session on an extension; nil when sessions are not served.
 	OpenSession OpenSessionFunc
+	// Catalog reads an account's model list from its extension, for the model lists; nil lists
+	// only the models accounts' configs name.
+	Catalog route.CatalogFunc
 }
 
 // Source hands out the current generation. The request holds it until release is called.
@@ -173,6 +176,7 @@ func NewHandler(src Source) http.Handler {
 	})
 	handle("/v1beta/models/{action...}", geminiFormat, geminiAction)
 	mux.HandleFunc("GET /v1/responses", func(w http.ResponseWriter, r *http.Request) { serveResponsesWebSocket(w, r, src) })
+	serveModels(mux, src)
 	return withCORS(src, mux)
 }
 

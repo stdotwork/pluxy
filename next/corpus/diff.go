@@ -230,6 +230,43 @@ func maskAt(v any, segs []segment) {
 	}
 }
 
+// SortAt sorts each array at the paths in patterns by its elements' JSON, so their order is not
+// compared.
+func SortAt(o Observation, patterns []string) {
+	for _, p := range patterns {
+		segs, err := parsePath(p)
+		if err != nil {
+			continue
+		}
+		sortAt(map[string]any(o), segs)
+	}
+}
+
+func sortAt(v any, segs []segment) {
+	if len(segs) == 0 {
+		if list, ok := v.([]any); ok {
+			key := func(x any) string { b, _ := json.Marshal(x); return string(b) }
+			sort.SliceStable(list, func(i, j int) bool { return key(list[i]) < key(list[j]) })
+		}
+		return
+	}
+	s := segs[0]
+	switch c := v.(type) {
+	case map[string]any:
+		for k, child := range c {
+			if s.index == -1 && (s.key == "*" || k == s.key || strings.EqualFold(k, s.key)) {
+				sortAt(child, segs[1:])
+			}
+		}
+	case []any:
+		for i, child := range c {
+			if s.index == -2 || s.index == i {
+				sortAt(child, segs[1:])
+			}
+		}
+	}
+}
+
 // Lookup returns the value at path, or missing.
 func Lookup(o Observation, path string) any {
 	segs, err := parsePath(path)

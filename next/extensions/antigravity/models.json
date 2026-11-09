@@ -1,0 +1,175 @@
+[
+ {
+  "id": "claude-opus-4-6-thinking",
+  "display_name": "Claude Opus 4.6 (Thinking)",
+  "description": "Claude Opus 4.6 (Thinking)",
+  "owned_by": "antigravity",
+  "context_length": 200000,
+  "max_completion_tokens": 64000,
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "claude-sonnet-4-6",
+  "display_name": "Claude Sonnet 4.6 (Thinking)",
+  "description": "Claude Sonnet 4.6 (Thinking)",
+  "owned_by": "antigravity",
+  "context_length": 200000,
+  "max_completion_tokens": 64000,
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "claude-opus-5-5-high",
+  "display_name": "Claude Opus 5.5 (High)",
+  "description": "Claude Opus 5.5 (High)",
+  "owned_by": "antigravity",
+  "context_length": 1000000,
+  "max_completion_tokens": 128000,
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "claude-sonnet-5-5-high",
+  "display_name": "Claude Sonnet 5.5 (High)",
+  "description": "Claude Sonnet 5.5 (High)",
+  "owned_by": "antigravity",
+  "context_length": 1000000,
+  "max_completion_tokens": 128000,
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "gemini-4-argon-high",
+  "display_name": "Gemini 4 Argon",
+  "description": "Gemini 4 Argon (High)",
+  "owned_by": "antigravity",
+  "context_length": 1048576,
+  "max_completion_tokens": 1048576,
+  "input_modalities": [
+   "text",
+   "image",
+   "audio",
+   "video"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "gemini-3.8-flash-high",
+  "display_name": "Gemini 3.8 Flash",
+  "description": "Gemini 3.8 Flash (High)",
+  "owned_by": "antigravity",
+  "context_length": 1048576,
+  "max_completion_tokens": 65536,
+  "input_modalities": [
+   "text",
+   "image",
+   "audio",
+   "video"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "gemini-3-flash",
+  "display_name": "Gemini 3 Flash",
+  "description": "Gemini 3 Flash",
+  "owned_by": "antigravity",
+  "context_length": 1048576,
+  "max_completion_tokens": 65536,
+  "input_modalities": [
+   "text",
+   "image",
+   "audio",
+   "video"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "gemini-3.1-flash-image",
+  "display_name": "Gemini 3.1 Flash Image",
+  "description": "Gemini 3.1 Flash Image",
+  "owned_by": "antigravity",
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text",
+   "image"
+  ]
+ },
+ {
+  "id": "gpt-oss-120b-medium",
+  "display_name": "GPT-OSS 120B (Medium)",
+  "description": "GPT-OSS 120B (Medium)",
+  "owned_by": "antigravity",
+  "context_length": 114000,
+  "max_completion_tokens": 32768,
+  "input_modalities": [
+   "text"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "gemini-3.1-flash-lite",
+  "display_name": "Gemini 3.1 Flash Lite",
+  "description": "Gemini 3.1 Flash Lite",
+  "owned_by": "antigravity",
+  "context_length": 1048576,
+  "max_completion_tokens": 65535,
+  "input_modalities": [
+   "text",
+   "image",
+   "audio",
+   "video"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "gemini-3.5-flash-lite",
+  "display_name": "Gemini 3.5 Flash Lite",
+  "description": "Gemini 3.5 Flash Lite",
+  "owned_by": "antigravity",
+  "context_length": 1048576,
+  "max_completion_tokens": 65535,
+  "input_modalities": [
+   "text",
+   "image",
+   "audio",
+   "video"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ }
+]

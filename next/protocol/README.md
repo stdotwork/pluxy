@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.2
+# pluxy extension protocol, version 0.3
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -6,10 +6,11 @@ model service, and streams the reply back; a provider may also sign in to accoun
 credentials (see [Login and refresh](#login-and-refresh)). Version 0.1 adds
 [sessions](#sessions): a run of requests on one account whose upstream keeps state between them,
 such as a Responses WebSocket. Version 0.2 adds [token counting](#count_tokens) and the
-thinking suffix of a model name (`options.thinking_suffix`). It is deliberately small; later
-versions add capabilities and more operations without changing what is described here. An
-extension written for version 0 works unchanged with a core that speaks 0.2 (see
-[Versioning](#versioning)).
+thinking suffix of a model name (`options.thinking_suffix`). Version 0.3 adds
+[model lists](#models): the models an account serves, for the model lists clients ask core for.
+It is deliberately small; later versions add capabilities and more operations without changing
+what is described here. An extension written for version 0 works unchanged with a core that
+speaks 0.3 (see [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
 the details. A Go SDK (`github.com/stdotwork/pluxy/next/sdk`) implements the extension side of
@@ -204,8 +205,8 @@ Core opens a connection and writes one call frame:
 | Field | Meaning |
 | --- | --- |
 | `id` | Call ID for logs and traces. Unique per core process. |
-| `op` | The operation. Version 0 has `describe`, `generate`, `login` and `refresh`; version 0.1 adds `session`; version 0.2 adds `count_tokens`. |
-| `account` | For `generate`, `refresh` and `session`: the account to use (below). For `login`: the account being signed in to, with its `id` and `settings` but no `credential`. |
+| `op` | The operation. Version 0 has `describe`, `generate`, `login` and `refresh`; version 0.1 adds `session`; version 0.2 adds `count_tokens`; version 0.3 adds `models`. |
+| `account` | For `generate`, `count_tokens`, `refresh`, `session` and `models`: the account to use (below). For `login`: the account being signed in to, with its `id` and `settings` but no `credential`. |
 | `request` | For `generate` and `count_tokens`: the model request (below). |
 | `login` | For `login`: what to sign in with (see [Login and refresh](#login-and-refresh)). |
 | `session` | For `session`: what kind of session to open (see [Sessions](#sessions)). |
@@ -224,8 +225,9 @@ The reply is one frame, then the extension closes the connection:
 `protocol` is the version from the handshake; `protocol_minor` is the revision of that version
 the extension implements (absent means 0; see [Versioning](#versioning)). `operations` lists the
 operations the extension serves: always `generate`, plus `login` and `refresh` when it signs in to
-accounts, `session` when it holds [sessions](#sessions), and `count_tokens` when it
-[counts tokens](#count_tokens). An extension that lists `login` also
+accounts, `session` when it holds [sessions](#sessions), `count_tokens` when it
+[counts tokens](#count_tokens), and `models` when it lists its accounts' [models](#models). An
+extension that lists `login` also
 lists its `login_methods` (see [Login and refresh](#login-and-refresh)).
 
 ### `generate`
@@ -266,6 +268,46 @@ such endpoint, or not for this request's format) answers with code `unsupported`
 to an extension whose describe reports `protocol_minor` 2 or more and lists it in `operations`;
 for any other, core treats the account as one that cannot count. Core routes a count like a
 request: the same accounts, blocks and retries.
+
+### `models`
+
+Version 0.3. Core asks which models an account serves, for the model lists clients ask core for
+(`GET /v1/models` and Gemini's `GET /v1beta/models`). Core sends it only to an extension that
+reports `protocol_minor` 3 or more and lists `models` in `operations`; for any other extension's
+accounts, core lists only the models the account's config names.
+
+```json
+{"type": "call", "id": "c-21", "op": "models", "account": {"id": "work", "settings": {...}, "credential": {...}}}
+```
+
+The reply is one frame, then the extension closes the connection: a `models.result`, or an `error`
+event as for `generate`.
+
+```json
+{"type": "models.result", "models": {"owned_by": "openai", "models": [
+  {"id": "gpt-6.1-sol", "display_name": "GPT-6.1 Sol", "created": 1794268800, "context_length": 400000, "max_completion_tokens": 128000}
+]}}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `models` | The models the account serves, by the names its upstream knows them by. Empty when the extension has no list for the account. At most 10000. |
+| `owned_by` | Who provides the account's models, shown as `owned_by` for models without one of their own, and for the models the account's config names. Default: the account's ID. |
+| model `id` | The model's name upstream, as requests name it. Required, unique in the list; core keeps the first of any repeats. |
+| model `name` | Its resource name in Gemini's list, such as `models/gemini-2.5-pro`. Default `id`. |
+| model `display_name`, `description`, `version` | For people. |
+| model `created` | When the model was released, in Unix seconds. |
+| model `owned_by` | Who provides this model, when it differs from the list's `owned_by`. |
+| model `context_length`, `max_completion_tokens` | Its context window and longest reply, in tokens. |
+| model `input_token_limit`, `output_token_limit` | Gemini's names for the same limits, where the provider gives them apart. Default: the two above. |
+| model `generation_methods`, `input_modalities`, `output_modalities` | Gemini's `supportedGenerationMethods`, `supportedInputModalities` and `supportedOutputModalities`. |
+
+Every field but `id` is optional and shown only where a client's list has a place for it. Core
+renames, leaves out and prefixes the listed models by the account's naming rules (its `models`,
+`excluded_models`, `model_alias` and `prefix`), and asks again when the account's settings or
+credential change. List the models the account can use: from the upstream's own list when it has
+one, or from a catalog the extension carries. Leave out models the account's requests cannot
+reach through this extension.
 
 ## Accounts
 
@@ -725,7 +767,7 @@ removes `previous_response_id`.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.2. An extension reports the minor version it
+raise the minor version: this document is version 0.3. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -735,10 +777,11 @@ a new major version, and core keeps speaking old versions for a while.
 | 0 (0.0) | `describe`, `generate`, `login`, `refresh`. |
 | 0.1 | [Sessions](#sessions): the `session` operation and its frames; `protocol_minor` in describe. |
 | 0.2 | [Token counting](#count_tokens): the `count_tokens` operation. The request's `options.thinking_suffix`. |
+| 0.3 | [Model lists](#models): the `models` operation and its `models.result` frame. |
 
-## What version 0.2 leaves out
+## What version 0.3 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
-capabilities in `describe`; operations beyond `generate`, sessions and token counting (model
-listing); several turns at once in one session (OpenAI's `stream_id` lanes); realtime sessions
+capabilities in `describe`; operations beyond `generate`, sessions, token counting and model
+lists; several turns at once in one session (OpenAI's `stream_id` lanes); realtime sessions
 (audio, WebRTC); a private data folder per extension.

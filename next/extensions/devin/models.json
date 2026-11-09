@@ -1,0 +1,936 @@
+[
+ {
+  "id": "devin/swe-2",
+  "display_name": "SWE-2",
+  "owned_by": "cognition",
+  "context_length": 262000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 262000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/claude-fable-5-1",
+  "display_name": "Claude Fable 5.1",
+  "owned_by": "anthropic",
+  "context_length": 1000000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1000000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/claude-opus-5-5",
+  "display_name": "Claude Opus 5.5",
+  "owned_by": "anthropic",
+  "context_length": 1000000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1000000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/gpt-6-astra",
+  "display_name": "GPT-6 Astra",
+  "owned_by": "openai",
+  "context_length": 1000000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1000000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/gpt-6-sol",
+  "display_name": "GPT-6 Sol",
+  "owned_by": "openai",
+  "context_length": 1000000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1000000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/gpt-6-luna",
+  "display_name": "GPT-6 Luna",
+  "owned_by": "openai",
+  "context_length": 1000000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1000000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/gemini-4-argon",
+  "display_name": "Gemini 4 Argon",
+  "owned_by": "google",
+  "context_length": 1048576,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1048576,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/kimi-k3",
+  "display_name": "Kimi K3",
+  "owned_by": "moonshot",
+  "context_length": 1048576,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1048576,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/glm-5-2",
+  "display_name": "GLM-5.2",
+  "owned_by": "zhipu",
+  "context_length": 200000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 200000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/glm-5-3",
+  "display_name": "GLM-5.3",
+  "owned_by": "zhipu",
+  "context_length": 1048576,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1048576,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/claude-sonnet-5-5",
+  "display_name": "Claude Sonnet 5.5",
+  "owned_by": "anthropic",
+  "context_length": 1000000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1000000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/gemini-3-8-flash",
+  "display_name": "Gemini 3.8 Flash",
+  "owned_by": "google",
+  "context_length": 1048576,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1048576,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/claude-opus-4-7",
+  "display_name": "Claude Opus 4.7",
+  "owned_by": "anthropic",
+  "context_length": 1000000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1000000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/claude-opus-4-8",
+  "display_name": "Claude Opus 4.8",
+  "owned_by": "anthropic",
+  "context_length": 1000000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1000000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/claude-opus-5",
+  "display_name": "Claude Opus 5",
+  "owned_by": "anthropic",
+  "context_length": 1000000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1000000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/claude-5-fable",
+  "display_name": "Claude Fable 5",
+  "owned_by": "anthropic",
+  "context_length": 1000000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1000000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/claude-sonnet-5",
+  "display_name": "Claude Sonnet 5",
+  "owned_by": "anthropic",
+  "context_length": 1000000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1000000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/claude-haiku-5-5",
+  "display_name": "Claude Haiku 5.5",
+  "owned_by": "anthropic",
+  "context_length": 1000000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1000000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/gemini-3-5-flash",
+  "display_name": "Gemini 3.5 Flash",
+  "owned_by": "google",
+  "context_length": 1048576,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1048576,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/gemini-3-6-flash",
+  "display_name": "Gemini 3.6 Flash",
+  "owned_by": "google",
+  "context_length": 1048576,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1048576,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/gemini-3-7-flash",
+  "display_name": "Gemini 3.7 Flash",
+  "owned_by": "google",
+  "context_length": 1048576,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1048576,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/gpt-5-6-sol",
+  "display_name": "GPT-5.6 Sol",
+  "owned_by": "openai",
+  "context_length": 1000000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1000000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/gpt-5-6-terra",
+  "display_name": "GPT-5.6 Terra",
+  "owned_by": "openai",
+  "context_length": 1000000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1000000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/gpt-5-6-luna",
+  "display_name": "GPT-5.6 Luna",
+  "owned_by": "openai",
+  "context_length": 1000000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1000000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/gpt-6-1-sol",
+  "display_name": "GPT-6.1 Sol",
+  "owned_by": "openai",
+  "context_length": 1000000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1000000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/glm-5-2-1m",
+  "display_name": "GLM-5.2 High 1M",
+  "owned_by": "zhipu",
+  "context_length": 1000000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1000000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/grok-4-6",
+  "display_name": "Grok 4.6",
+  "owned_by": "xai",
+  "context_length": 500000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 500000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/grok-4-7",
+  "display_name": "Grok 4.7",
+  "owned_by": "xai",
+  "context_length": 500000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 500000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/muse-wonder-1-0",
+  "display_name": "Muse Wonder",
+  "owned_by": "devin",
+  "context_length": 1048576,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1048576,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/glm-5-3-flash",
+  "display_name": "GLM-5.3 Flash",
+  "owned_by": "zhipu",
+  "context_length": 1000000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1000000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/deepseek-v4-flash",
+  "display_name": "DeepSeek V4 Flash",
+  "owned_by": "deepseek",
+  "context_length": 1048576,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1048576,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/deepseek-v4-1-flash-1017",
+  "display_name": "DeepSeek V4.1 Flash",
+  "owned_by": "deepseek",
+  "context_length": 1048576,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1048576,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/swe-1-7",
+  "display_name": "SWE-1.7",
+  "owned_by": "cognition",
+  "context_length": 262000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 262000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/swe-2-lightning",
+  "display_name": "SWE-2 Lightning",
+  "owned_by": "cognition",
+  "context_length": 262144,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 262144,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/claude-opus-4-6",
+  "display_name": "Claude Opus 4.6",
+  "owned_by": "anthropic",
+  "context_length": 200000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 200000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/claude-opus-4-6-1m",
+  "display_name": "Claude Opus 4.6 1M",
+  "owned_by": "anthropic",
+  "context_length": 1000000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1000000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/gpt-5-4",
+  "display_name": "GPT-5.4",
+  "owned_by": "openai",
+  "context_length": 272000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 272000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/gpt-5-5",
+  "display_name": "GPT-5.5",
+  "owned_by": "openai",
+  "context_length": 272000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 272000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/gpt-5-4-mini",
+  "display_name": "GPT-5.4 Mini",
+  "owned_by": "openai",
+  "context_length": 400000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 400000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/claude-sonnet-4-6",
+  "display_name": "Claude Sonnet 4.6",
+  "owned_by": "anthropic",
+  "context_length": 200000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 200000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/claude-sonnet-4-6-1m",
+  "display_name": "Claude Sonnet 4.6 1M",
+  "owned_by": "anthropic",
+  "context_length": 1000000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1000000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/kimi-k2-6",
+  "display_name": "Kimi K2.6",
+  "owned_by": "moonshot",
+  "context_length": 262144,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 262144,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/kimi-k2-7",
+  "display_name": "Kimi K2.7",
+  "owned_by": "moonshot",
+  "context_length": 262144,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 262144,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/nemotron-3-ultra",
+  "display_name": "Nemotron 3 Ultra",
+  "owned_by": "nvidia",
+  "context_length": 1000000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1000000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/swe-1-6",
+  "display_name": "SWE-1.6",
+  "owned_by": "cognition",
+  "context_length": 200000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 200000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/deepseek-v4-pro",
+  "display_name": "DeepSeek V4 Pro",
+  "owned_by": "deepseek",
+  "context_length": 1048576,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 1048576,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ },
+ {
+  "id": "devin/swe-1-6-slow",
+  "display_name": "SWE-1.6 Slow",
+  "owned_by": "cognition",
+  "context_length": 200000,
+  "max_completion_tokens": 64000,
+  "input_token_limit": 200000,
+  "output_token_limit": 64000,
+  "generation_methods": [
+   "generateContent",
+   "countTokens"
+  ],
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ]
+ }
+]

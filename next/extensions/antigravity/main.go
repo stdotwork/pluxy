@@ -67,6 +67,7 @@ func main() {
 		LoginMethods: loginMethods,
 		Login:        login,
 		Refresh:      refresh,
+		Models:       listModels,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "antigravity:", err)

@@ -57,6 +57,7 @@ func main() {
 		LoginMethods: loginMethods,
 		Login:        login,
 		Refresh:      refresh,
+		Models:       models,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "kimi:", err)

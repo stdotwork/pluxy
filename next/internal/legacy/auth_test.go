@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/stdotwork/pluxy/next/internal/cred"
+	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
@@ -64,7 +65,10 @@ func TestReadAuthDir(t *testing.T) {
 			"type": "codex", "access_token": "fake-codex-access", "refresh_token": "fake-codex-refresh",
 			"id_token": FakeIDToken("acct-1", "user@example.com"), "account_id": "acct-1",
 			"email": "user@example.com", "expired": exp.Format(time.RFC3339), "websockets": true,
-			"disabled": true, "priority": "3", "weight": 2, "prefix": "team", "headers": map[string]any{"X-A": "b"},
+			"disabled": true, "priority": "3", "weight": 2, "prefix": " /team/ ", "headers": map[string]any{"X-A": "b"},
+			"excluded_models": []any{"GPT-Image-*", " gpt-x "},
+			"model_aliases": []any{map[string]any{"name": "gpt-6.1-sol", "alias": "sol", "fork": true, "display-name": "Sol"},
+				map[string]any{"name": "gpt-6", "alias": "SOL"}, map[string]any{"name": "same", "alias": "same"}},
 		},
 		"claude-user@example.com.json": map[string]any{
 			"type": "claude", "access_token": "fake-claude-access", "refresh_token": "fake-claude-refresh",
@@ -132,8 +136,13 @@ func TestReadAuthDir(t *testing.T) {
 		t.Errorf("codex credential: %+v", cc)
 	}
 	equalJSON(t, cc.Data, `{"id_token": "`+FakeIDToken("acct-1", "user@example.com")+`", "account_id": "acct-1"}`)
-	if want := []string{"prefix", "headers"}; !reflect.DeepEqual(c.Ignored, want) {
+	if want := []string{"headers"}; !reflect.DeepEqual(c.Ignored, want) {
 		t.Errorf("codex ignored = %v, want %v", c.Ignored, want)
+	}
+	// The file's own naming settings, read as today's core reads them.
+	if a := c.Record.Account; a.Prefix != "team" || !reflect.DeepEqual(a.ExcludedModels, []string{"gpt-image-*", "gpt-x"}) ||
+		!reflect.DeepEqual(a.ModelAlias, []route.ModelAlias{{Name: "gpt-6.1-sol", Alias: "sol", Fork: true, DisplayName: "Sol"}}) {
+		t.Errorf("codex naming: prefix %q, excluded %v, aliases %+v", a.Prefix, a.ExcludedModels, a.ModelAlias)
 	}
 
 	cl := got["claude-user-example.com"]

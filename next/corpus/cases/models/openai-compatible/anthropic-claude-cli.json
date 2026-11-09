@@ -1,0 +1,42 @@
+{
+  "description": "Claude Code's user agent (claude-cli) also gets Anthropic's model list, without anthropic-version.",
+  "source": ["core/internal/api/server_routes.go isAnthropicModelsRequest"],
+  "client": {
+    "method": "GET",
+    "path": "/v1/models",
+    "headers": {"User-Agent":"claude-cli/2.1.0 (external, cli)"}
+  },
+  "old_core": {"account":{"models":[{"name":"claude-a"}]}},
+  "new_core": {"account":{"models":["claude-a"]}},
+  "volatile": ["client.body.data[*].created_at"],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "data": [
+          {
+            "created_at": "(volatile)",
+            "display_name": "claude-a",
+            "id": "claude-a",
+            "max_input_tokens": 200000,
+            "max_tokens": 64000,
+            "object": "model",
+            "owned_by": "corpus",
+            "type": "model"
+          }
+        ],
+        "first_id": "claude-a",
+        "has_more": false,
+        "last_id": "claude-a"
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8"
+      },
+      "status": 200
+    },
+    "upstream": []
+  }
+}

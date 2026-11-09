@@ -413,6 +413,9 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 		return hostSession{s}, nil
 	}
 	next.Generation = server.Generation{Config: cfg, Attempt: attempt, Count: count, OpenSession: openSession}
+	if !c.opts.SafeMode {
+		next.Catalog = (&catalogs{}).lookup(next.exts)
+	}
 	router, err := route.New(cfg.Routing, c.configured(next), attempt, c.state)
 	if err != nil {
 		c.discard(next, prev)
@@ -540,6 +543,10 @@ func (c *Core) configured(s *snapshot) []route.Account {
 func (c *Core) routed(s *snapshot) []route.Account {
 	accounts := c.configured(s)
 	all := s.Config.Accounts()
+	kinds := map[string]string{}
+	for _, r := range c.creds.Records() {
+		kinds[r.ID] = r.Credential.Kind
+	}
 	for _, a := range c.creds.Accounts() {
 		if s.exts[a.Extension] == nil {
 			continue
@@ -548,7 +555,7 @@ func (c *Core) routed(s *snapshot) []route.Account {
 			log.Printf("account %q is both in the config and added by login; using the config's", a.ID)
 			continue
 		}
-		accounts = append(accounts, a)
+		accounts = append(accounts, c.extensionConfig(s, a.Extension).LoginDefaults(a, kinds[a.ID]))
 	}
 	return accounts
 }
