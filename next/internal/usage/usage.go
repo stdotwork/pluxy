@@ -33,7 +33,7 @@ type Tokens struct {
 	// Cached is the input tokens read from a cache.
 	Cached *int64 `json:"cached_tokens,omitempty"`
 	// CacheWrite is the input tokens written to a cache.
-	CacheWrite *int64 `json:"cache_write_tokens,omitempty"`
+	CacheWrite *int64 `json:"cache_creation_tokens,omitempty"`
 	// Total is input plus output, when either was reported.
 	Total *int64 `json:"total_tokens,omitempty"`
 }
@@ -267,7 +267,7 @@ type TokenTotals struct {
 	Output     int64 `json:"output_tokens"`
 	Reasoning  int64 `json:"reasoning_tokens"`
 	Cached     int64 `json:"cached_tokens"`
-	CacheWrite int64 `json:"cache_write_tokens"`
+	CacheWrite int64 `json:"cache_creation_tokens"`
 	Total      int64 `json:"total_tokens"`
 }
 

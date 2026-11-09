@@ -1015,7 +1015,7 @@ or prefix resolved), the `provider` (extension) and `account` its last attempt w
 client key's `key_id` (the `id` `GET /client-keys` lists it under, never the key), whether it
 `failed` with which `error_code`, the HTTP `status` of the reply, `latency_ms`, and the `tokens`
 the upstream reported: `input_tokens` (cached ones included), `output_tokens` (reasoning
-included), `reasoning_tokens`, `cached_tokens`, `cache_write_tokens` and `total_tokens` (input
+included), `reasoning_tokens`, `cached_tokens`, `cache_creation_tokens` and `total_tokens` (input
 plus output). A token count the upstream did not report is absent, not 0. A streamed reply
 that fails after it began keeps its `status` 200 with `failed` true; a client that goes away is
 recorded as `cancelled`, with no `status` when nothing had reached it.
