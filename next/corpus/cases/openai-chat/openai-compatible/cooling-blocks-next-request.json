@@ -1,0 +1,111 @@
+{
+  "description": "With cooling on, a 429 leaves the account cooling: the next request is answered without calling the upstream.",
+  "source": [
+    "core/sdk/cliproxy/auth/conductor_cooldown.go",
+    "core/config.example.yaml routing.cooldown"
+  ],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {"model":"gpt-test","messages":[{"role":"user","content":"Say hello"}]}
+  },
+  "then": [
+    {
+      "path": "/v1/chat/completions",
+      "body": {"model":"gpt-test","messages":[{"role":"user","content":"Say hello"}]}
+    }
+  ],
+  "upstream": [
+    {
+      "status": 429,
+      "body": {
+        "error": {
+          "message": "Rate limit reached",
+          "type": "rate_limit_error",
+          "code": "rate_limit_exceeded"
+        }
+      }
+    },
+    {
+      "body": {
+        "id": "chatcmpl-corpus-1",
+        "object": "chat.completion",
+        "created": 1700000001,
+        "model": "gpt-test-upstream",
+        "choices": [
+          {"index":0,"message":{"role":"assistant","content":"Hi 1."},"finish_reason":"stop"}
+        ],
+        "usage": {"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}
+      }
+    }
+  ],
+  "old_core": {"config":{"routing":{"cooldown":{"disable-cooling":false}}}},
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {
+          "code": "rate_limit_exceeded",
+          "message": "Rate limit reached",
+          "type": "rate_limit_error"
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 429
+    },
+    "then": [
+      {
+        "body": {
+          "error": {
+            "code": "model_cooldown",
+            "last_upstream_error": "rate_limit_exceeded: Rate limit reached",
+            "message": "All credentials for model gpt-test are cooling down via provider openai-compatible-corpus (last error: rate_limit_exceeded: Rate limit reached)",
+            "model": "gpt-test",
+            "provider": "openai-compatible-corpus",
+            "reset_seconds": 1,
+            "reset_time": "1s"
+          }
+        },
+        "headers": {
+          "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+          "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+          "Content-Type": "application/json",
+          "Retry-After": "1"
+        },
+        "status": 429
+      }
+    ],
+    "upstream": [
+      {
+        "body": {"messages":[{"content":"Say hello","role":"user"}],"model":"gpt-test"},
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "then[0].body.error",
+      "kind": "gap",
+      "reason": "When every account is cooling, today's core names the model, provider, reset time and last upstream error in its own fields; the new core says the same in its message and gives the wait as Retry-After.",
+      "want": {
+        "code": "model_cooldown",
+        "message": "every account for model \"gpt-test\" is cooling down; try again in 1s",
+        "type": "rate_limit_error"
+      }
+    }
+  ]
+}

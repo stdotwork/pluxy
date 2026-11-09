@@ -256,6 +256,12 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (Aut
 	if p, ok := m["prefix"].(string); ok {
 		r.Account.Prefix = modelPrefix(p)
 	}
+	for _, k := range []string{"disable_cooling", "disable-cooling"} {
+		if on, ok := parseBool(m[k]); ok {
+			r.Account.DisableCooling = &on
+			break
+		}
+	}
 	r.Account.ExcludedModels = authExcluded(m)
 	r.Account.ModelAlias = authAliases(m)
 	for _, k := range []string{"proxy_url", "proxy-url", "headers"} {
@@ -406,6 +412,19 @@ func boolean(v any) bool {
 		return b
 	}
 	return false
+}
+
+// parseBool reads true or false written as a boolean or as text, as today's core reads
+// disable_cooling; ok is false for anything else.
+func parseBool(v any) (on, ok bool) {
+	switch v := v.(type) {
+	case bool:
+		return v, true
+	case string:
+		b, err := strconv.ParseBool(strings.TrimSpace(v))
+		return b, err == nil
+	}
+	return false, false
 }
 
 // number reads a whole number written as a number or as text, as today's core reads priority

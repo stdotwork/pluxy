@@ -1,0 +1,93 @@
+{
+  "description": "With request-retry 1 and cooling on, a round after a 429 waits the 10 s floor (within max-retry-interval 12) and then succeeds.",
+  "source": [
+    "core/sdk/cliproxy/auth/conductor_selection.go (request-retry rounds)",
+    "core/config.example.yaml routing.retry",
+    "core/sdk/cliproxy/auth/conductor_refresh.go:39 (minQuotaCooldownFloor)"
+  ],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {"model":"gpt-test","messages":[{"role":"user","content":"Say hello"}]}
+  },
+  "upstream": [
+    {
+      "status": 429,
+      "body": {
+        "error": {
+          "message": "Rate limit reached",
+          "type": "rate_limit_error",
+          "code": "rate_limit_exceeded"
+        }
+      },
+      "headers": {"Retry-After":"1"}
+    },
+    {
+      "body": {
+        "id": "chatcmpl-corpus-1",
+        "object": "chat.completion",
+        "created": 1700000001,
+        "model": "gpt-test-upstream",
+        "choices": [
+          {"index":0,"message":{"role":"assistant","content":"Hi 1."},"finish_reason":"stop"}
+        ],
+        "usage": {"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}
+      }
+    }
+  ],
+  "old_core": {
+    "config": {
+      "routing": {
+        "retry": {"request-retry":1,"max-retry-interval":12},
+        "cooldown": {"disable-cooling":false}
+      }
+    }
+  },
+  "new_core": {"config":{"routing":{"request_retry":1,"max_wait_ms":12000}}},
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "choices": [
+          {"finish_reason":"stop","index":0,"message":{"content":"Hi 1.","role":"assistant"}}
+        ],
+        "created": 1700000001,
+        "id": "chatcmpl-corpus-1",
+        "model": "gpt-test-upstream",
+        "object": "chat.completion",
+        "usage": {"completion_tokens":2,"prompt_tokens":4,"total_tokens":6}
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {"messages":[{"content":"Say hello","role":"user"}],"model":"gpt-test"},
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      },
+      {
+        "body": {"messages":[{"content":"Say hello","role":"user"}],"model":"gpt-test"},
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  }
+}

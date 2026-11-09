@@ -1,0 +1,360 @@
+{
+  "description": "Weighted round robin interleaves accounts in proportion to their weights (4, 2 and 1).",
+  "source": ["core/sdk/cliproxy/auth/scheduler.go","core/sdk/cliproxy/auth/selector.go"],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {"model":"gpt-test","messages":[{"role":"user","content":"Say hello"}]}
+  },
+  "then": [
+    {
+      "path": "/v1/chat/completions",
+      "body": {"model":"gpt-test","messages":[{"role":"user","content":"Say hello"}]}
+    },
+    {
+      "path": "/v1/chat/completions",
+      "body": {"model":"gpt-test","messages":[{"role":"user","content":"Say hello"}]}
+    },
+    {
+      "path": "/v1/chat/completions",
+      "body": {"model":"gpt-test","messages":[{"role":"user","content":"Say hello"}]}
+    },
+    {
+      "path": "/v1/chat/completions",
+      "body": {"model":"gpt-test","messages":[{"role":"user","content":"Say hello"}]}
+    },
+    {
+      "path": "/v1/chat/completions",
+      "body": {"model":"gpt-test","messages":[{"role":"user","content":"Say hello"}]}
+    },
+    {
+      "path": "/v1/chat/completions",
+      "body": {"model":"gpt-test","messages":[{"role":"user","content":"Say hello"}]}
+    }
+  ],
+  "accounts": 3,
+  "label_accounts": true,
+  "upstream": [
+    {
+      "body": {
+        "id": "chatcmpl-corpus-1",
+        "object": "chat.completion",
+        "created": 1700000001,
+        "model": "gpt-test-upstream",
+        "choices": [
+          {"index":0,"message":{"role":"assistant","content":"Hi 1."},"finish_reason":"stop"}
+        ],
+        "usage": {"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}
+      }
+    },
+    {
+      "body": {
+        "id": "chatcmpl-corpus-2",
+        "object": "chat.completion",
+        "created": 1700000001,
+        "model": "gpt-test-upstream",
+        "choices": [
+          {"index":0,"message":{"role":"assistant","content":"Hi 2."},"finish_reason":"stop"}
+        ],
+        "usage": {"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}
+      }
+    },
+    {
+      "body": {
+        "id": "chatcmpl-corpus-3",
+        "object": "chat.completion",
+        "created": 1700000001,
+        "model": "gpt-test-upstream",
+        "choices": [
+          {"index":0,"message":{"role":"assistant","content":"Hi 3."},"finish_reason":"stop"}
+        ],
+        "usage": {"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}
+      }
+    },
+    {
+      "body": {
+        "id": "chatcmpl-corpus-4",
+        "object": "chat.completion",
+        "created": 1700000001,
+        "model": "gpt-test-upstream",
+        "choices": [
+          {"index":0,"message":{"role":"assistant","content":"Hi 4."},"finish_reason":"stop"}
+        ],
+        "usage": {"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}
+      }
+    },
+    {
+      "body": {
+        "id": "chatcmpl-corpus-5",
+        "object": "chat.completion",
+        "created": 1700000001,
+        "model": "gpt-test-upstream",
+        "choices": [
+          {"index":0,"message":{"role":"assistant","content":"Hi 5."},"finish_reason":"stop"}
+        ],
+        "usage": {"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}
+      }
+    },
+    {
+      "body": {
+        "id": "chatcmpl-corpus-6",
+        "object": "chat.completion",
+        "created": 1700000001,
+        "model": "gpt-test-upstream",
+        "choices": [
+          {"index":0,"message":{"role":"assistant","content":"Hi 6."},"finish_reason":"stop"}
+        ],
+        "usage": {"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}
+      }
+    },
+    {
+      "body": {
+        "id": "chatcmpl-corpus-7",
+        "object": "chat.completion",
+        "created": 1700000001,
+        "model": "gpt-test-upstream",
+        "choices": [
+          {"index":0,"message":{"role":"assistant","content":"Hi 7."},"finish_reason":"stop"}
+        ],
+        "usage": {"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}
+      }
+    }
+  ],
+  "old_core": {
+    "config": {"routing":{"strategy":"weighted-round-robin"}},
+    "accounts": [{"weight":4},{"weight":2},{"weight":1}]
+  },
+  "new_core": {
+    "config": {"routing":{"strategy":"weighted"}},
+    "accounts": [{"weight":4},{"weight":2},{"weight":1}]
+  },
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "choices": [
+          {"finish_reason":"stop","index":0,"message":{"content":"Hi 1.","role":"assistant"}}
+        ],
+        "created": 1700000001,
+        "id": "chatcmpl-corpus-1",
+        "model": "gpt-test-upstream",
+        "object": "chat.completion",
+        "usage": {"completion_tokens":2,"prompt_tokens":4,"total_tokens":6}
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "then": [
+      {
+        "body": {
+          "choices": [
+            {"finish_reason":"stop","index":0,"message":{"content":"Hi 2.","role":"assistant"}}
+          ],
+          "created": 1700000001,
+          "id": "chatcmpl-corpus-2",
+          "model": "gpt-test-upstream",
+          "object": "chat.completion",
+          "usage": {"completion_tokens":2,"prompt_tokens":4,"total_tokens":6}
+        },
+        "headers": {
+          "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+          "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+          "Content-Type": "application/json",
+          "X-Cpa-Trace-Id": "(volatile)"
+        },
+        "status": 200
+      },
+      {
+        "body": {
+          "choices": [
+            {"finish_reason":"stop","index":0,"message":{"content":"Hi 3.","role":"assistant"}}
+          ],
+          "created": 1700000001,
+          "id": "chatcmpl-corpus-3",
+          "model": "gpt-test-upstream",
+          "object": "chat.completion",
+          "usage": {"completion_tokens":2,"prompt_tokens":4,"total_tokens":6}
+        },
+        "headers": {
+          "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+          "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+          "Content-Type": "application/json",
+          "X-Cpa-Trace-Id": "(volatile)"
+        },
+        "status": 200
+      },
+      {
+        "body": {
+          "choices": [
+            {"finish_reason":"stop","index":0,"message":{"content":"Hi 4.","role":"assistant"}}
+          ],
+          "created": 1700000001,
+          "id": "chatcmpl-corpus-4",
+          "model": "gpt-test-upstream",
+          "object": "chat.completion",
+          "usage": {"completion_tokens":2,"prompt_tokens":4,"total_tokens":6}
+        },
+        "headers": {
+          "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+          "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+          "Content-Type": "application/json",
+          "X-Cpa-Trace-Id": "(volatile)"
+        },
+        "status": 200
+      },
+      {
+        "body": {
+          "choices": [
+            {"finish_reason":"stop","index":0,"message":{"content":"Hi 5.","role":"assistant"}}
+          ],
+          "created": 1700000001,
+          "id": "chatcmpl-corpus-5",
+          "model": "gpt-test-upstream",
+          "object": "chat.completion",
+          "usage": {"completion_tokens":2,"prompt_tokens":4,"total_tokens":6}
+        },
+        "headers": {
+          "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+          "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+          "Content-Type": "application/json",
+          "X-Cpa-Trace-Id": "(volatile)"
+        },
+        "status": 200
+      },
+      {
+        "body": {
+          "choices": [
+            {"finish_reason":"stop","index":0,"message":{"content":"Hi 6.","role":"assistant"}}
+          ],
+          "created": 1700000001,
+          "id": "chatcmpl-corpus-6",
+          "model": "gpt-test-upstream",
+          "object": "chat.completion",
+          "usage": {"completion_tokens":2,"prompt_tokens":4,"total_tokens":6}
+        },
+        "headers": {
+          "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+          "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+          "Content-Type": "application/json",
+          "X-Cpa-Trace-Id": "(volatile)"
+        },
+        "status": 200
+      },
+      {
+        "body": {
+          "choices": [
+            {"finish_reason":"stop","index":0,"message":{"content":"Hi 7.","role":"assistant"}}
+          ],
+          "created": 1700000001,
+          "id": "chatcmpl-corpus-7",
+          "model": "gpt-test-upstream",
+          "object": "chat.completion",
+          "usage": {"completion_tokens":2,"prompt_tokens":4,"total_tokens":6}
+        },
+        "headers": {
+          "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+          "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+          "Content-Type": "application/json",
+          "X-Cpa-Trace-Id": "(volatile)"
+        },
+        "status": 200
+      }
+    ],
+    "upstream": [
+      {
+        "body": {"messages":[{"content":"Say hello","role":"user"}],"model":"gpt-test"},
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer account-1",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      },
+      {
+        "body": {"messages":[{"content":"Say hello","role":"user"}],"model":"gpt-test"},
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer account-2",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      },
+      {
+        "body": {"messages":[{"content":"Say hello","role":"user"}],"model":"gpt-test"},
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer account-1",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      },
+      {
+        "body": {"messages":[{"content":"Say hello","role":"user"}],"model":"gpt-test"},
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer account-3",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      },
+      {
+        "body": {"messages":[{"content":"Say hello","role":"user"}],"model":"gpt-test"},
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer account-1",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      },
+      {
+        "body": {"messages":[{"content":"Say hello","role":"user"}],"model":"gpt-test"},
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer account-2",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      },
+      {
+        "body": {"messages":[{"content":"Say hello","role":"user"}],"model":"gpt-test"},
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer account-1",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  }
+}

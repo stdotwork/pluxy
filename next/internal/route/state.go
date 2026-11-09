@@ -309,11 +309,20 @@ func (s *State) availability(a *Account, model string, now time.Time) (until tim
 }
 
 // failure records what a failed attempt on account a for model says about the account.
-// Failures about the request or the caller record nothing.
-func (s *State) failure(a *Account, model string, e *llm.Error, now time.Time) {
+// Failures about the request or the caller record nothing. transient replaces the backoff for
+// a failing upstream or endpoint: above 0 it is the block's length, below 0 no block is kept.
+func (s *State) failure(a *Account, model string, e *llm.Error, now time.Time, transient time.Duration) {
 	kind, scope, fixed, base, max := classify(e)
 	if kind == "" {
 		return
+	}
+	if e.Code == llm.CodeUpstream || e.Code == llm.CodeUnavailable {
+		switch {
+		case transient < 0:
+			return
+		case transient > 0:
+			fixed = transient
+		}
 	}
 	var key scopeKey
 	switch scope {

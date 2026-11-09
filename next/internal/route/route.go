@@ -41,10 +41,26 @@ type Config struct {
 	// MaxAccounts bounds how many distinct accounts one request tries. 0 means no limit.
 	MaxAccounts int `json:"max_accounts,omitempty"`
 	// MaxWaitMS is the longest one request waits, in total, for a blocked account to become
-	// eligible again. 0 (the default) means it never waits: when every account is blocked it
-	// fails at once, with the time the first block ends. A request never tries a blocked
-	// scope early to fit this budget.
+	// eligible again; with RequestRetry set, the longest it waits before each extra round. 0
+	// (the default) means it never waits: when every account is blocked it fails at once,
+	// with the time the first block ends. A request never tries a blocked scope early to fit
+	// this budget.
 	MaxWaitMS int64 `json:"max_wait_ms,omitempty"`
+	// RequestRetry, when set, runs a request's rounds as today's core's request-retry does: at
+	// most this many rounds after the first, each trying every eligible account again. A
+	// round starts at once when no account is blocked, or else when the first block ends if
+	// that is within MaxWaitMS; an account refused for rate or quota in this request waits at
+	// least 10 seconds. A refused key (401) or a missing model (404) starts no round. Unset,
+	// rounds are bounded only by MaxAttempts and the wait budget, and each needs a wait.
+	RequestRetry *int `json:"request_retry,omitempty"`
+	// DisableCooling records no blocks after failures: every account stays eligible whatever
+	// the upstream said (today's disable-cooling). An account's DisableCooling overrides it.
+	DisableCooling bool `json:"disable_cooling,omitempty"`
+	// TransientErrorCooldownMS is how long a failing upstream or endpoint (a 5xx, a timeout)
+	// is blocked when it gave no Retry-After: 0 (the default) backs off from 1 second to a
+	// minute, above 0 blocks for that long, below 0 records no block, Retry-After or not
+	// (today's transient-error-cooldown-seconds).
+	TransientErrorCooldownMS int64 `json:"transient_error_cooldown_ms,omitempty"`
 	// SessionAffinity, when set, sends requests of the same session to the same account.
 	SessionAffinity *AffinityConfig `json:"session_affinity,omitempty"`
 	// ForceModelPrefix: an account with a Prefix serves its models only under
@@ -64,7 +80,7 @@ func (c *Config) Validate() error {
 	if _, err := newPicker(c.Strategy, nil, nil, 0); err != nil {
 		return err
 	}
-	if c.MaxAttempts < 0 || c.MaxAccounts < 0 || c.MaxWaitMS < 0 {
+	if c.MaxAttempts < 0 || c.MaxAccounts < 0 || c.MaxWaitMS < 0 || c.RequestRetry != nil && *c.RequestRetry < 0 {
 		return fmt.Errorf("routing limits must not be negative")
 	}
 	if c.SessionAffinity != nil && c.SessionAffinity.TTLMS < 0 {
@@ -291,7 +307,7 @@ func (c *call) Next() llm.Event {
 		if ev.Type == llm.EventFinish {
 			c.r.state.success(c.acct, c.upstream[c.acct.ID], c.seq)
 		} else {
-			c.r.state.failure(c.acct, c.upstream[c.acct.ID], ev.Error, c.r.now())
+			c.r.failure(c.acct, c.upstream[c.acct.ID], ev.Error)
 		}
 		c.release()
 	}
@@ -347,7 +363,9 @@ func (c *call) route() llm.Event {
 
 	tried := map[string]bool{} // this round
 	used := map[string]bool{}  // this request
-	attempts := 0
+	attempts, rounds := 0, 0
+	rounded := r.cfg.RequestRetry != nil // today's request-retry rounds
+	limited := map[string]time.Time{}    // with rounds: when each account refused for rate or quota
 	budget := time.Duration(r.cfg.MaxWaitMS) * time.Millisecond
 	var last *llm.Error
 	for {
@@ -361,6 +379,13 @@ func (c *call) route() llm.Event {
 				continue
 			}
 			until, reason, full := r.state.availability(a, c.upstream[a.ID], now)
+			if at, ok := limited[a.ID]; ok && r.cooling(a) {
+				// As in today's core: an account refused for rate or quota in this request is
+				// tried again no sooner than 10 seconds on.
+				if floor := at.Add(roundRateLimitFloor); floor.After(now) && until.Before(floor) {
+					until = floor
+				}
+			}
 			switch {
 			case full:
 				busy = true
@@ -399,6 +424,9 @@ func (c *call) route() llm.Event {
 				return ev
 			}
 			last = ev.Error
+			if rounded && (last.Code == llm.CodeRateLimit || last.Code == llm.CodeQuota) {
+				limited[a.ID] = r.now()
+			}
 			if c.fresh {
 				// The upstream refused the account's credential and a renewed one is ready:
 				// the account may serve the request after all.
@@ -423,8 +451,18 @@ func (c *call) route() llm.Event {
 			}
 			return errorEvent(&llm.Error{Code: llm.CodeUnavailable, Message: fmt.Sprintf("no account can serve model %q", model)})
 		}
-		wait := next.Sub(now)
-		if wait <= 0 && last != nil {
+		wait := max(next.Sub(now), 0)
+		if rounded {
+			// Today's request-retry: a bounded number of rounds, each waiting at most the
+			// budget; a refused key or a missing model starts none.
+			if rounds >= *r.cfg.RequestRetry || last != nil && (last.Code == llm.CodeAuth || last.Code == llm.CodeNotFound) {
+				if last != nil {
+					return errorEvent(last)
+				}
+				return errorEvent(coolingError(model, wait, nextReason))
+			}
+			budget = time.Duration(r.cfg.MaxWaitMS) * time.Millisecond
+		} else if wait <= 0 && last != nil {
 			// Every eligible account was tried this round and none is blocked: trying them
 			// again at once could loop. A new round starts only after a wait.
 			return errorEvent(last)
@@ -439,10 +477,13 @@ func (c *call) route() llm.Event {
 		// waited for the same account do not all arrive at once. Never shorter than the wait.
 		jitter := min(time.Duration(r.rand()*float64(wait/4)), 2*time.Second, budget-wait)
 		wait += jitter
-		if err := r.sleep(c.ctx, wait); err != nil {
-			return errorEvent(&llm.Error{Code: llm.CodeCancelled, Message: "the request was cancelled"})
+		if wait > 0 {
+			if err := r.sleep(c.ctx, wait); err != nil {
+				return errorEvent(&llm.Error{Code: llm.CodeCancelled, Message: "the request was cancelled"})
+			}
 		}
 		budget -= wait
+		rounds++
 		clear(tried)
 	}
 }
@@ -494,7 +535,7 @@ func (c *call) try(a *Account, seq uint64) (ev llm.Event, started bool) {
 			call.Credential, version, e = c.creds.Credential(c.ctx, a.Extension, a.ID)
 		}
 		if e != nil {
-			r.state.failure(a, c.upstream[a.ID], e, r.now())
+			r.failure(a, c.upstream[a.ID], e)
 			r.state.end(a)
 			return errorEvent(e), false
 		}
@@ -520,7 +561,7 @@ func (c *call) try(a *Account, seq uint64) (ev llm.Event, started bool) {
 				return ev, false
 			}
 		}
-		r.state.failure(a, c.upstream[a.ID], ev.Error, r.now())
+		r.failure(a, c.upstream[a.ID], ev.Error)
 		r.state.end(a)
 		return ev, false
 	}
@@ -534,6 +575,27 @@ func (c *call) try(a *Account, seq uint64) (ev llm.Event, started bool) {
 		c.release()
 	}
 	return ev, true
+}
+
+// roundRateLimitFloor is the least a request with RequestRetry waits before trying again an
+// account that refused it for rate or quota, as in today's core.
+const roundRateLimitFloor = 10 * time.Second
+
+// cooling reports whether failures on account a record blocks.
+func (r *Router) cooling(a *Account) bool {
+	if a.DisableCooling != nil {
+		return !*a.DisableCooling
+	}
+	return !r.cfg.DisableCooling
+}
+
+// failure records a failed attempt on account a for model in the routing state, by the
+// router's cooldown settings.
+func (r *Router) failure(a *Account, model string, e *llm.Error) {
+	if !r.cooling(a) {
+		return
+	}
+	r.state.failure(a, model, e, r.now(), time.Duration(r.cfg.TransientErrorCooldownMS)*time.Millisecond)
 }
 
 // retrySafe reports whether a failed attempt may be tried again elsewhere: the extension says
