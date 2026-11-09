@@ -152,7 +152,10 @@ choices with `text`. Several prompts in one request are refused; `n`, `suffix`, 
 rest are left out.
 
 Clients send the client key as a bearer token or, as Anthropic clients do, in `x-api-key`; Gemini
-clients may also send it in `x-goog-api-key` or the `key` query parameter. `client_keys` must hold
+clients may also send it in `x-goog-api-key` or the `key` query parameter. Today's core takes
+the key in the `key` and `auth_token` query parameters on every route; here only the Gemini routes
+take `key`, since some Gemini clients send it there (n8n's Gemini credential does), and a key in a
+URL ends up in logs and browser history. `client_keys` must hold
 at least one key: core does not start on a config without one, and a reload or a management
 change that would leave none is refused, keeping the running config. Today's core serves anyone
 who reaches it when it has no client keys.
