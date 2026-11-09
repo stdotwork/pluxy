@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -284,6 +285,10 @@ type StreamWriter struct {
 	ended   bool  // an upstream terminal event was passed through
 	seq     int   // last sequence number written
 	pending []int // items whose end waits for the next event, which may say they are incomplete
+	// done holds the items an upstream's response.output_item.done events finished, by
+	// output_index, and those without one in order (see repairOutput).
+	done      map[int]json.RawMessage
+	unindexed []json.RawMessage
 }
 
 // NewStreamWriter returns a writer for one client stream of req.
@@ -322,6 +327,70 @@ func (s *StreamWriter) emit(typ string, fields obj) error {
 	return s.out(typ, data)
 }
 
+// repairOutput keeps the items the upstream's response.output_item.done events finish, and gives
+// a response.completed or response.failed whose response has no output (absent, null or empty)
+// those items as its output, as today's core does: some upstreams send the final response with
+// an empty output. Items are ordered by output_index, then those without one in the order they
+// came. Every other event, and a response with output, is returned unchanged.
+func (s *StreamWriter) repairOutput(typ string, raw json.RawMessage) json.RawMessage {
+	switch typ {
+	case "response.output_item.done":
+		var ev struct {
+			OutputIndex *int            `json:"output_index"`
+			Item        json.RawMessage `json:"item"`
+		}
+		var item struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(raw, &ev) != nil || json.Unmarshal(ev.Item, &item) != nil || item.Type == "" {
+			return raw
+		}
+		if ev.OutputIndex == nil {
+			s.unindexed = append(s.unindexed, ev.Item)
+			return raw
+		}
+		if s.done == nil {
+			s.done = map[int]json.RawMessage{}
+		}
+		s.done[*ev.OutputIndex] = ev.Item
+		return raw
+	case "response.completed", "response.failed":
+	default:
+		return raw
+	}
+	if len(s.done) == 0 && len(s.unindexed) == 0 {
+		return raw
+	}
+	var ev map[string]json.RawMessage
+	var resp map[string]json.RawMessage
+	if json.Unmarshal(raw, &ev) != nil || json.Unmarshal(ev["response"], &resp) != nil || resp == nil {
+		return raw
+	}
+	if out := bytes.TrimSpace(resp["output"]); len(out) > 0 && !bytes.Equal(out, []byte("null")) {
+		var items []json.RawMessage
+		if json.Unmarshal(out, &items) != nil || len(items) > 0 {
+			return raw
+		}
+	}
+	output := make([]json.RawMessage, 0, len(s.done)+len(s.unindexed))
+	for _, i := range slices.Sorted(maps.Keys(s.done)) {
+		output = append(output, s.done[i])
+	}
+	output = append(output, s.unindexed...)
+	var err error
+	if resp["output"], err = json.Marshal(output); err != nil {
+		return raw
+	}
+	if ev["response"], err = json.Marshal(resp); err != nil {
+		return raw
+	}
+	b, err := json.Marshal(ev)
+	if err != nil {
+		return raw
+	}
+	return b
+}
+
 // passthrough writes an upstream event unchanged.
 func (s *StreamWriter) passthrough(typ string, raw json.RawMessage) error {
 	var n struct {
@@ -349,7 +418,7 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 			case "response.completed", "response.incomplete", "response.failed", "error":
 				s.ended = true
 			}
-			return s.passthrough(typ, raw)
+			return s.passthrough(typ, s.repairOutput(typ, raw))
 		}
 		if ev.Type == llm.EventError && !s.ended {
 			return s.emit("error", errorFields(ev.Error))

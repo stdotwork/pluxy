@@ -381,3 +381,81 @@ func TestDecodeResponseJoinsTextPartsInLinearBytes(t *testing.T) {
 		})
 	}
 }
+
+// writeNative runs an upstream Responses stream through the decoder and a stream writer and
+// returns the data of each event the client got.
+func writeNative(t *testing.T, stream []string) []string {
+	t.Helper()
+	req, _ := ParseRequest([]byte(`{"model":"m","input":"hi","stream":true}`))
+	var out strings.Builder
+	w := NewStreamWriter(&out, req)
+	dec := NewStreamDecoder()
+	for _, data := range stream {
+		evs, err := dec.Decode([]byte(data))
+		if e, ok := err.(*llm.Error); ok {
+			evs, err = append(evs, llm.Event{Type: llm.EventError, Error: e}), nil
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ev := range evs {
+			if err := w.Write(ev); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	var datas []string
+	for _, line := range strings.Split(out.String(), "\n") {
+		if d, ok := strings.CutPrefix(line, "data: "); ok {
+			datas = append(datas, d)
+		}
+	}
+	return datas
+}
+
+// A passed-through response.completed whose output is empty, null or absent gets the items the
+// stream's output_item.done events finished, by output_index and then those without one, as
+// today's core rebuilds it; one with output is left alone, and so is response.incomplete.
+func TestNativeStreamRepairsEmptyOutput(t *testing.T) {
+	done := []string{
+		`{"type":"response.output_item.done","sequence_number":1,"output_index":1,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"f","arguments":"{}"}}`,
+		`{"type":"response.output_item.done","sequence_number":2,"item":{"type":"message","id":"m_1","role":"assistant","content":[]}}`,
+		`{"type":"response.output_item.done","sequence_number":3,"output_index":0,"item":{"type":"reasoning","id":"rs_1","summary":[]}}`,
+		`{"type":"response.output_item.done","sequence_number":4,"output_index":2,"item":{"id":"no_type"}}`,
+	}
+	rebuilt := `[{"type":"reasoning","id":"rs_1","summary":[]},{"type":"function_call","id":"fc_1","call_id":"call_1","name":"f","arguments":"{}"},{"type":"message","id":"m_1","role":"assistant","content":[]}]`
+	for _, c := range []struct{ name, last, want string }{
+		{"empty", `{"type":"response.completed","sequence_number":5,"response":{"id":"r","status":"completed","output":[]}}`, rebuilt},
+		{"null", `{"type":"response.completed","sequence_number":5,"response":{"id":"r","status":"completed","output":null}}`, rebuilt},
+		{"absent", `{"type":"response.completed","sequence_number":5,"response":{"id":"r","status":"completed"}}`, rebuilt},
+		{"present", `{"type":"response.completed","sequence_number":5,"response":{"id":"r","status":"completed","output":[{"type":"message","id":"m_2"}]}}`, `[{"type":"message","id":"m_2"}]`},
+		{"incomplete", `{"type":"response.incomplete","sequence_number":5,"response":{"id":"r","status":"incomplete","output":[]}}`, `[]`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			stream := append([]string{`{"type":"response.created","sequence_number":0,"response":{"id":"r","status":"in_progress","output":[]}}`}, done...)
+			got := writeNative(t, append(stream, c.last))
+			var ev struct {
+				Response struct {
+					Output json.RawMessage `json:"output"`
+				} `json:"response"`
+			}
+			if err := json.Unmarshal([]byte(got[len(got)-1]), &ev); err != nil {
+				t.Fatal(err)
+			}
+			if c.name == "absent" || c.want != rebuilt {
+				// The events before the last pass through unchanged either way.
+				for i, d := range append(stream[:0:0], stream...) {
+					if got[i] != d {
+						t.Errorf("event %d = %s, want %s", i, got[i], d)
+					}
+				}
+			}
+			var gotOut, wantOut any
+			_ = json.Unmarshal(ev.Response.Output, &gotOut)
+			_ = json.Unmarshal([]byte(c.want), &wantOut)
+			if !reflect.DeepEqual(gotOut, wantOut) {
+				t.Errorf("output = %s, want %s", ev.Response.Output, c.want)
+			}
+		})
+	}
+}
