@@ -277,6 +277,17 @@ replaying the block sends the reasoning back, so it carries over between turns. 
 | `callback_listen` | Default `true`: let a browser sign-in listen on `localhost:1455`. |
 | `websockets` | Default `false`: send a Responses WebSocket client's turns to `{base_url}/responses` over one upstream WebSocket per client socket (Codex's WebSocket transport), as today's core does with `websockets: true`. A socket the upstream drops is not replaced in the middle of a turn: the client gets `upstream_websocket_lost` and sends the whole conversation again. |
 
+**Compaction.** The Codex CLI shortens a long conversation with `POST /v1/responses/compact`
+(also `POST /backend-api/codex/responses/compact`, where it sends a ChatGPT sign-in's requests when
+its `chatgpt_base_url` points at core). Core routes it by its `model` to an account's extension as
+an [endpoint call](protocol/README.md#endpoint); the Codex extension sends the body to
+`{base_url}/responses/compact` as today's core does, nearly as it came: `stream` removed,
+`instructions` set to `""` when absent, the model renamed for the account, a thinking suffix's
+effort applied, and a prompt cache key (with `Session-Id`) derived as for `/responses` when the
+client names none; the upstream's JSON reply comes back to the client as it is. A request with
+`"stream": true` is refused with a 400, as today's core refuses it. An account of another extension
+does not serve it, so a model only those serve gets an error.
+
 **Quota.** For a ChatGPT sign-in account, `GET /v0/management/accounts/{id}/quota` reads `GET {backend}/wham/usage`, where `{backend}` is the account's `base_url` without a trailing `/codex` (default `https://chatgpt.com/backend-api`), with the access token, the `Chatgpt-Account-Id` header and the same `User-Agent` and `Originator` the account's requests carry (so `codex_identity` applies). It reports the plan (`plan_type`), the 5-hour and weekly or monthly windows (`five_hour`, `weekly`, `monthly`), code review's windows (`code_review_*`), each extra limit such as one model's (`<name>_five_hour` and so on) and the credit balance (`credits`), with the share used, reset time and window length. An API key answers unsupported. A sign-in's grant carries `identity` `{"email", "account_id"}`: members of one ChatGPT workspace share its account ID, so the e-mail address tells them apart.
 
 ## Claude

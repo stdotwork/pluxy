@@ -332,6 +332,70 @@ func TestCountTokens(t *testing.T) {
 	}
 }
 
+// An extension with an Endpoint handler lists endpoint in describe and answers endpoint calls
+// with it: StartBody names the content type and Body sends each piece as a JSON string. One
+// without answers them unsupported.
+func TestEndpoint(t *testing.T) {
+	serve := func(_ context.Context, call Call, out *Stream) error {
+		if err := out.StartBody(call.Request.Native.Format, "application/json"); err != nil {
+			return err
+		}
+		if err := out.Body(`{"a":`); err != nil {
+			return err
+		}
+		if err := out.Body(`1}`); err != nil {
+			return err
+		}
+		return out.Finish(llm.Finish{Reason: llm.FinishStop}, nil)
+	}
+	generate := func(context.Context, Call, *Stream) error { return fmt.Errorf("generate called") }
+	for _, tc := range []struct {
+		name string
+		h    Handler
+	}{{"serves", serve}, {"serves none", nil}} {
+		t.Run(tc.name, func(t *testing.T) {
+			socket, stdin, _ := startServe(t, Extension{ID: "test/sdk", Version: "0.0.0", Generate: generate, Endpoint: tc.h})
+			defer stdin.Close()
+			conn := dial(t, socket)
+			_ = protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeCall, ID: "c-1", Op: protocol.OpDescribe})
+			var described protocol.Reply
+			if err := protocol.ReadFrame(conn, &described); err != nil || described.Info == nil {
+				t.Fatalf("describe: %+v, %v", described, err)
+			}
+			conn.Close()
+			if listed := slices.Contains(described.Info.Operations, protocol.OpEndpoint); listed != (tc.h != nil) || described.Info.ProtocolMinor < 7 {
+				t.Errorf("describe: minor %d, operations %v", described.Info.ProtocolMinor, described.Info.Operations)
+			}
+			conn = dial(t, socket)
+			defer conn.Close()
+			_ = protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeCall, ID: "c-2", Op: protocol.OpEndpoint,
+				Request: &llm.Request{Model: "m", Native: &llm.Native{Format: llm.FormatOpenAIResponsesCompact, Body: json.RawMessage(`{}`)}}})
+			var evs []llm.Event
+			for {
+				var r protocol.Reply
+				if err := protocol.ReadFrame(conn, &r); err != nil {
+					t.Fatalf("after %v: %v", evs, err)
+				}
+				evs = append(evs, r.Event)
+				if r.Event.Terminal() {
+					break
+				}
+			}
+			last := evs[len(evs)-1]
+			if tc.h == nil {
+				if last.Type != llm.EventError || last.Error.Code != llm.CodeUnsupported {
+					t.Errorf("events = %+v, want unsupported", evs)
+				}
+				return
+			}
+			if len(evs) != 4 || last.Type != llm.EventFinish || evs[0].Response == nil || evs[0].Response.Format != llm.FormatOpenAIResponsesCompact ||
+				string(evs[0].Response.Raw) != `{"content_type":"application/json"}` || string(evs[1].Raw) != `"{\"a\":"` || evs[2].Type != llm.EventNative {
+				t.Errorf("events = %+v", evs)
+			}
+		})
+	}
+}
+
 // TestModels covers the models operation: describe lists it, a call returns the handler's list
 // with the account it was given, a nil list is an empty one, and a panic is an internal error.
 func TestModels(t *testing.T) {

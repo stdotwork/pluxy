@@ -489,6 +489,16 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 		}
 		return g.CountTokens(ctx, a, req)
 	}
+	endpoint := func(ctx context.Context, ext string, a protocol.Account, req llm.Request) route.Stream {
+		if c.opts.SafeMode {
+			return failed(safeModeEvent().Error)
+		}
+		g := next.exts[ext]
+		if g == nil {
+			return failed(&llm.Error{Code: llm.CodeExtensionUnavailable, Message: fmt.Sprintf("extension %s does not run", ext)})
+		}
+		return g.Endpoint(ctx, a, req)
+	}
 	openSession := func(ctx context.Context, ext string, a protocol.Account, info protocol.SessionInfo) (server.Session, *llm.Error) {
 		if c.opts.SafeMode {
 			return nil, safeModeEvent().Error
@@ -503,7 +513,7 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 		}
 		return hostSession{s}, nil
 	}
-	next.Generation = server.Generation{Config: cfg, Attempt: attempt, Count: count, OpenSession: openSession, KeyID: c.redactor.ID}
+	next.Generation = server.Generation{Config: cfg, Attempt: attempt, Count: count, Endpoint: endpoint, OpenSession: openSession, KeyID: c.redactor.ID}
 	if cfg.Usage.On() {
 		next.Usage = c.usage
 	}

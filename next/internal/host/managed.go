@@ -291,6 +291,25 @@ func (g *Managed) CountTokens(ctx context.Context, account protocol.Account, req
 	return s
 }
 
+// Endpoint starts an endpoint call, as Generate does a generate call. An extension that serves
+// no endpoints answers at once, without its program being started.
+func (g *Managed) Endpoint(ctx context.Context, account protocol.Account, req llm.Request) *Stream {
+	if !ServesEndpoints(g.info) {
+		return servesNoEndpoints(g.manifest.ID, req)
+	}
+	end := g.beginCall()
+	ext, e := g.ensure(ctx)
+	if e != nil {
+		end()
+		s := &Stream{}
+		s.fail(e)
+		return s
+	}
+	s := ext.Endpoint(ctx, account, req)
+	s.onClose = end
+	return s
+}
+
 // OpenSession opens a session on account, starting the program first if it is idle. The
 // session holds a lease and counts as a running call until it is closed, so the program is not
 // stopped for idleness under it and a drain waits for it; a drain closes it once no turn runs.

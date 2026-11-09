@@ -123,6 +123,21 @@ const (
 	FormatGeminiGenerate = "gemini.generate_content"
 )
 
+// Endpoint formats: the Native.Format of an endpoint call (protocol minor version 7), a client
+// request to a provider endpoint beyond generation. The reply's body is the endpoint's own.
+const (
+	// FormatOpenAIResponsesCompact is OpenAI's Responses compaction, POST /v1/responses/compact:
+	// a Responses request body, answered with one JSON object.
+	FormatOpenAIResponsesCompact = "openai.responses.compact"
+)
+
+// EndpointReply is the Raw of an endpoint call's response.start: how to send the reply's body,
+// which follows in native events, each a JSON string holding the next piece of the body.
+type EndpointReply struct {
+	// ContentType is the body's media type, such as application/json or text/event-stream.
+	ContentType string `json:"content_type"`
+}
+
 // Item types.
 const (
 	ItemTypeMessage    = "message"
