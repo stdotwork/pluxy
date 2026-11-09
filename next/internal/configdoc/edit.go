@@ -132,6 +132,10 @@ type LogsPatch struct {
 	LoggingToFile *bool `json:"logging-to-file"`
 	// LogsMaxTotalSizeMB caps the logs folder's size; 0 is no cap.
 	LogsMaxTotalSizeMB *int64 `json:"logs-max-total-size-mb"`
+	// RequestLog writes every client request to a file.
+	RequestLog *bool `json:"request-log"`
+	// ErrorLogsMaxFiles is how many error logs are kept; 0 is all.
+	ErrorLogsMaxFiles *int64 `json:"error-logs-max-files"`
 }
 
 // UsagePatch is a change to the usage settings.
@@ -199,6 +203,19 @@ func (d *Doc) applyObservability(o *ObservabilityPatch) error {
 				return fmt.Errorf("%w: observability.logs.logs-max-total-size-mb must be between 0 (no cap) and 1048576", ErrInvalid)
 			}
 			if err := d.Set(Int(*n), d.place("logs.max_total_size_mb", "observability.logs.logs-max-total-size-mb", "logs-max-total-size-mb")...); err != nil {
+				return err
+			}
+		}
+		if l.RequestLog != nil {
+			if err := d.Set(Bool(*l.RequestLog), d.place("logs.request_log", "observability.logs.request-log", "request-log")...); err != nil {
+				return err
+			}
+		}
+		if n := l.ErrorLogsMaxFiles; n != nil {
+			if *n < 0 || *n > 1000000 {
+				return fmt.Errorf("%w: observability.logs.error-logs-max-files must be between 0 (keep all) and 1000000", ErrInvalid)
+			}
+			if err := d.Set(Int(*n), d.place("logs.error_logs_max_files", "observability.logs.error-logs-max-files", "error-logs-max-files")...); err != nil {
 				return err
 			}
 		}

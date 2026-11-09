@@ -17,6 +17,8 @@ const TraceHeader = "X-CPA-TRACE-ID"
 type trace struct {
 	id      string
 	account string
+	failed  bool   // a failure was logged: the request counts as failed for its request log
+	body    []byte // the request's body, once read, for its request log
 }
 
 type traceKey struct{}

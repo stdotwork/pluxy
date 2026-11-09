@@ -135,6 +135,20 @@ type LogsConfig struct {
 	// MaxTotalSizeMB caps the logs folder's .log files: the oldest go first, main.log never
 	// (today's logs-max-total-size-mb). 0: no cap.
 	MaxTotalSizeMB int `json:"max_total_size_mb,omitempty"`
+	// RequestLog writes every client request and its reply to a file in the logs folder
+	// (today's request-log). Off, only the requests that fail are written, as error-*.log.
+	RequestLog bool `json:"request_log,omitempty"`
+	// ErrorLogsMaxFiles is how many error logs are kept, the newest (today's
+	// error-logs-max-files). Absent: 10. 0: all.
+	ErrorLogsMaxFiles *int `json:"error_logs_max_files,omitempty"`
+}
+
+// ErrorLogs returns how many error logs are kept; 0 is all.
+func (l LogsConfig) ErrorLogs() int {
+	if l.ErrorLogsMaxFiles == nil {
+		return 10
+	}
+	return *l.ErrorLogsMaxFiles
 }
 
 // PackagesConfig is the packages section of the config.
@@ -389,6 +403,9 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 	}
 	if c.Logs.MaxTotalSizeMB < 0 || c.Logs.MaxTotalSizeMB > 1<<20 {
 		return nil, errors.New("config: logs.max_total_size_mb must be between 0 (no cap) and 1048576")
+	}
+	if n := c.Logs.ErrorLogsMaxFiles; n != nil && (*n < 0 || *n > 1000000) {
+		return nil, errors.New("config: logs.error_logs_max_files must be between 0 (keep all) and 1000000")
 	}
 	switch c.DropPolicy {
 	case "", llm.DropReport, llm.DropReject:

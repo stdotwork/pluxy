@@ -153,6 +153,19 @@ func Start(opts Options) (*Core, error) {
 	return c, nil
 }
 
+// configSecrets returns the redactor of every secret the config holds: the client keys, the
+// management key and the accounts' credentials.
+func configSecrets(cfg *server.Config) *protocol.Redactor {
+	cs := []*protocol.Credential{{Kind: protocol.CredentialAPIKey, APIKey: cfg.ManagementKey}}
+	for _, k := range cfg.ClientKeys {
+		cs = append(cs, &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: k})
+	}
+	for _, a := range cfg.Accounts() {
+		cs = append(cs, a.Credential)
+	}
+	return protocol.NewRedactor(cs...)
+}
+
 // LogsDir returns the logs folder of the config file at configPath: logs beside it.
 func LogsDir(configPath string) string {
 	dir := filepath.Dir(configPath)
@@ -494,6 +507,8 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 	if cfg.Usage.On() {
 		next.Usage = c.usage
 	}
+	next.RequestLog = &server.RequestLog{Dir: c.logs.Dir(), All: cfg.Logs.RequestLog, ErrorMaxFiles: cfg.Logs.ErrorLogs(),
+		Redact: configSecrets(cfg), Trim: c.logs.Trim}
 	router, err := route.New(cfg.Routing, c.configured(next), attempt, c.state)
 	if err != nil {
 		c.discard(next, prev)

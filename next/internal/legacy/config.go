@@ -251,6 +251,8 @@ var rules = map[string]rule{
 	"observability.logs.logging-to-file":                      {supported, ""},
 	"observability.logs.logs-max-total-size-mb":               {supported, ""},
 	"observability.logs.debug":                                {dropped, "this core writes no debug-level log lines"},
+	"observability.logs.request-log":                          {supported, ""},
+	"observability.logs.error-logs-max-files":                 {supported, ""},
 	"observability.usage.usage-statistics-enabled":            {supported, ""},
 	"observability.usage.redis-usage-queue-retention-seconds": {dropped, "reading usage no longer removes it; the record keeps requests by usage.max_events and usage.max_age_ms"},
 	"observability.pprof":                                     {dropped, "a developer tool, off by default"},
@@ -431,6 +433,7 @@ var readPaths = []string{
 	"upstream.codex.disable-codex-cloaking", "upstream.codex.websocket-compression",
 	"multimedia.disable-image-generation", "oauth.auth-dir", "observability.usage.usage-statistics-enabled",
 	"observability.logs.logging-to-file", "observability.logs.logs-max-total-size-mb",
+	"observability.logs.request-log", "observability.logs.error-logs-max-files",
 }
 
 // mappingsOn checks that every value on the way to path, below the root, is a mapping or
@@ -634,6 +637,21 @@ func (x *translator) observability() error {
 		return err
 	} else if n > 0 {
 		logs["max_total_size_mb"] = n
+	}
+	if on, err := flag(x.t, "observability.logs.request-log"); err != nil {
+		return err
+	} else if on {
+		logs["request_log"] = true
+	}
+	// As in today's core, a negative count is the default, 10.
+	if v, ok := get(x.t, "observability.logs.error-logs-max-files"); ok && v != nil {
+		n, err := integer(x.t, "observability.logs.error-logs-max-files")
+		if err != nil {
+			return err
+		}
+		if n >= 0 && n != 10 {
+			logs["error_logs_max_files"] = n
+		}
 	}
 	if len(logs) > 0 {
 		x.out["logs"] = logs

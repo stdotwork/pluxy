@@ -285,7 +285,7 @@ observability:
 `)
 	n := notices(r)
 	for _, want := range []string{
-		"not supported yet, ignored: observability.logs.request-log, routing.session-affinity-rebind-on, upstream.claude.tool-search\n",
+		"not supported yet, ignored: routing.session-affinity-rebind-on, upstream.claude.tool-search\n",
 		"dropped, ignored: plugins (replaced by packages), server.commercial-mode (it turns off features this core does not have), upstream.claude.session-date-pin-days (making other clients look like Claude Code is out of scope)\n",
 		"unknown keys, ignored: server.discovery-typo\n",
 		"websocket-compression: false is not supported",
