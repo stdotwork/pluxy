@@ -73,6 +73,7 @@ func main() {
 		CountTokens:  countTokens,
 		Models:       listModels,
 		Check:        check,
+		Quota:        quota,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "claude:", err)

@@ -356,6 +356,48 @@ var Providers = map[string]Provider{
 			return "claude", accounts
 		},
 	},
+	// A Claude subscription login: the Claude extension with an OAuth credential against a Claude
+	// auth file in today's core. Today's core always sends a subscription's requests to
+	// api.anthropic.com, so only calls that name their URL, such as the management quota cases'
+	// api-call relay and the new core's quota call (base_url), reach the fake upstream.
+	// The tokens are fake and expire in 2100, so neither core renews them.
+	"claude-oauth": {
+		OldCore: func(string, []string, []string) map[string]any { return map[string]any{} },
+		OldCoreAuthFiles: func(_, _ string, models, keys []string) map[string]any {
+			files := map[string]any{}
+			for i, k := range keys {
+				files[fmt.Sprintf("claude-corpus-%d.json", i+1)] = map[string]any{
+					"type":          "claude",
+					"access_token":  k,
+					"refresh_token": k + "-refresh",
+					"email":         fmt.Sprintf("corpus-%d@example.com", i+1),
+					"expired":       "2100-01-01T00:00:00Z",
+					"last_refresh":  "2026-01-01T00:00:00Z",
+				}
+			}
+			return files
+		},
+		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
+			var accounts []any
+			for i, k := range keys {
+				id := "corpus"
+				if i > 0 {
+					id = fmt.Sprintf("corpus-%d", i+1)
+				}
+				acct := map[string]any{
+					"id":       id,
+					"settings": map[string]any{"base_url": upstreamURL},
+					"credential": map[string]any{"kind": "oauth", "access_token": k, "refresh_token": k + "-refresh",
+						"expires_at": corpusTokenExpiry},
+				}
+				if len(models) > 0 {
+					acct["models"] = models
+				}
+				accounts = append(accounts, acct)
+			}
+			return "claude", accounts
+		},
+	},
 	// An upstream that speaks Gemini GenerateContent with an API key. The new core uses the
 	// OpenAI-compatible extension with wire_api "gemini" (the Gemini provider extension comes
 	// later); today's core uses a Gemini API key with a custom base URL. Both send requests to
@@ -626,8 +668,10 @@ var Providers = map[string]Provider{
 					id = fmt.Sprintf("corpus-%d", i+1)
 				}
 				acct := map[string]any{
-					"id":         id,
-					"settings":   map[string]any{"base_url": upstreamURL + "/v1"},
+					"id": id,
+					// mint_url is honoured only in a run with management on (StartNewCore): it
+					// is where the extension's quota call goes.
+					"settings":   map[string]any{"base_url": upstreamURL + "/v1", "mint_url": upstreamURL + "/muse-code/key"},
 					"credential": map[string]any{"kind": "oauth", "access_token": k, "refresh_token": "dca:" + k},
 				}
 				if len(models) > 0 {
@@ -885,8 +929,10 @@ func BuildOldCore(coreDir, out string) error {
 
 // StartNewCore starts the new core from binDir with the case's provider pointed at upstreamURL,
 // one account per key, the settings in extra added to its config, and the case's override (over)
-// merged in.
-func StartNewCore(binDir, workDir, provider, upstreamURL string, models, keys []string, extra map[string]json.RawMessage, over *CoreOverride) (*Core, error) {
+// merged in. With a managementKey the management API is on, and the extensions honour the login
+// and key endpoints their account settings name (a provider's NewCore points them at upstreamURL
+// where a quota call needs it).
+func StartNewCore(binDir, workDir, provider, upstreamURL string, models, keys []string, extra map[string]json.RawMessage, over *CoreOverride, managementKey string) (*Core, error) {
 	p, ok := Providers[provider]
 	if !ok || p.NewCore == nil {
 		return nil, fmt.Errorf("no new-core setup for provider %q", provider)
@@ -910,6 +956,9 @@ func StartNewCore(binDir, workDir, provider, upstreamURL string, models, keys []
 			"accounts": accounts,
 		},
 	}
+	if managementKey != "" {
+		cfg["management_key"] = managementKey
+	}
 	for k, v := range extra {
 		cfg[k] = v
 	}
@@ -924,6 +973,9 @@ func StartNewCore(binDir, workDir, provider, upstreamURL string, models, keys []
 	cmd := exec.Command(filepath.Join(binDir, "pluxy"), "-config", path)
 	cmd.Dir = workDir
 	cmd.Env = isolatedEnv(workDir)
+	if managementKey != "" {
+		cmd.Env = append(cmd.Env, "PLUXY_TEST_LOGIN_HOSTS=1")
+	}
 	return startProcess(cmd, regexp.MustCompile(`pluxy: listening on (http://\S+)`), "")
 }
 
@@ -941,6 +993,8 @@ type OldCoreSetup struct {
 	CAFile   string
 	// Override adds the case's settings to the generated config.
 	Override *CoreOverride
+	// ManagementKey, when set, turns the management API on with this key.
+	ManagementKey string
 }
 
 // roundTrip returns a deep copy of m, so merging it into several places shares nothing.
@@ -991,7 +1045,7 @@ func StartOldCore(s OldCoreSetup) (*Core, error) {
 			"port":                 port,
 			"response-compression": map[string]any{"enabled": false},
 		},
-		"management": map[string]any{"secret-key": "", "disable-control-panel": true, "disable-auto-update-panel": true},
+		"management": map[string]any{"secret-key": s.ManagementKey, "disable-control-panel": true, "disable-auto-update-panel": true},
 		"access":     map[string]any{"api-keys": []string{ClientKey}},
 		"routing": map[string]any{
 			"retry":    map[string]any{"request-retry": 0, "max-retry-interval": 0},

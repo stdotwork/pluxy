@@ -53,6 +53,7 @@ func main() {
 		Refresh:      refresh,
 		Session:      openSession,
 		Models:       listModels,
+		Quota:        quota,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "codex:", err)

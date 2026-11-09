@@ -177,6 +177,7 @@ func Run(t *testing.T, target Target) {
 	t.Run("refresh", k.refresh)
 	t.Run("models", k.models)
 	t.Run("check", k.check)
+	t.Run("quota", k.quota)
 }
 
 type kit struct {
@@ -701,5 +702,39 @@ func (k *kit) check(t *testing.T) {
 		}
 	case e == nil || e.Code != llm.CodeAuth:
 		t.Errorf("check of a refused account got %s, want error %s", jsonString(e), llm.CodeAuth)
+	}
+}
+
+// quota checks the quota operation: an extension that lists it answers for the ScenarioText account
+// with a quota whose limits each have an ID, none twice, and a used share from 0 to 100, or with an
+// error that has a code and a message (an account with no plan to report answers unsupported);
+// one that does not list it refuses the call with code unsupported.
+func (k *kit) quota(t *testing.T) {
+	ext := k.start(t)
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	defer cancel()
+	account := k.target.Prepare(t, ScenarioText).Account
+	q, e := ext.Quota(ctx, account)
+	if !host.ReportsQuota(ext.Info()) {
+		if e == nil || e.Code != llm.CodeUnsupported {
+			t.Errorf("quota on an extension that does not list it got %s, want error %s", jsonString(e), llm.CodeUnsupported)
+		}
+		return
+	}
+	if e != nil {
+		if e.Code == "" || e.Message == "" {
+			t.Errorf("quota failed with an error without a code or message: %s", jsonString(e))
+		}
+		return
+	}
+	seen := map[string]bool{}
+	for i, l := range q.Limits {
+		if l.ID == "" || seen[l.ID] {
+			t.Errorf("limits[%d] has an empty or repeated id %q", i, l.ID)
+		}
+		seen[l.ID] = true
+		if l.UsedPercent != nil && (*l.UsedPercent < 0 || *l.UsedPercent > 100) {
+			t.Errorf("limits[%d] (%s) used_percent %v is not from 0 to 100", i, l.ID, *l.UsedPercent)
+		}
 	}
 }

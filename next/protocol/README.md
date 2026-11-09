@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.4
+# pluxy extension protocol, version 0.5
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -9,9 +9,11 @@ such as a Responses WebSocket. Version 0.2 adds [token counting](#count_tokens) 
 thinking suffix of a model name (`options.thinking_suffix`). Version 0.3 adds
 [model lists](#models): the models an account serves, for the model lists clients ask core for.
 Version 0.4 adds [account checks](#check): whether an account works, asked without generating.
-It is deliberately small; later versions add capabilities and more operations without changing
+Version 0.5 adds [quota](#quota), what an account's plan allows and how much of it is used, and
+the identity of a login's grant, so core can check that a new login to an account signs in to
+the same upstream account. It is deliberately small; later versions add capabilities and more operations without changing
 what is described here. An extension written for version 0 works unchanged with a core that
-speaks 0.4 (see [Versioning](#versioning)).
+speaks 0.5 (see [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
 the details. A Go SDK (`github.com/stdotwork/pluxy/next/sdk`) implements the extension side of
@@ -206,8 +208,8 @@ Core opens a connection and writes one call frame:
 | Field | Meaning |
 | --- | --- |
 | `id` | Call ID for logs and traces. Unique per core process. |
-| `op` | The operation. Version 0 has `describe`, `generate`, `login` and `refresh`; version 0.1 adds `session`; version 0.2 adds `count_tokens`; version 0.3 adds `models`; version 0.4 adds `check`. |
-| `account` | For `generate`, `count_tokens`, `refresh`, `session`, `models` and `check`: the account to use (below). For `login`: the account being signed in to, with its `id` and `settings` but no `credential`. |
+| `op` | The operation. Version 0 has `describe`, `generate`, `login` and `refresh`; version 0.1 adds `session`; version 0.2 adds `count_tokens`; version 0.3 adds `models`; version 0.4 adds `check`; version 0.5 adds `quota`. |
+| `account` | For `generate`, `count_tokens`, `refresh`, `session`, `models`, `check` and `quota`: the account to use (below). For `login`: the account being signed in to, with its `id` and `settings` but no `credential`. |
 | `request` | For `generate` and `count_tokens`: the model request (below). |
 | `login` | For `login`: what to sign in with (see [Login and refresh](#login-and-refresh)). |
 | `session` | For `session`: what kind of session to open (see [Sessions](#sessions)). |
@@ -228,7 +230,8 @@ the extension implements (absent means 0; see [Versioning](#versioning)). `opera
 operations the extension serves: always `generate`, plus `login` and `refresh` when it signs in to
 accounts, `session` when it holds [sessions](#sessions), `count_tokens` when it
 [counts tokens](#count_tokens), `models` when it lists its accounts' [models](#models), and
-`check` when it [checks](#check) its accounts. An extension that lists `login` also
+`check` when it [checks](#check) its accounts, and `quota` when it reads their [quota](#quota). An
+extension that lists `login` also
 lists its `login_methods` (see [Login and refresh](#login-and-refresh)).
 
 ### `generate`
@@ -346,6 +349,49 @@ credential: core renews it before the account's next request. A refused credenti
 error, an upstream that cannot be reached `unavailable`, an upstream failure `upstream`. When the
 account cannot be checked without a generation (the upstream has no such call), reply with code
 `unsupported`: core shows the account as not checked, not as failing.
+
+### `quota`
+
+Version 0.5. Core asks what an account's plan allows and how much of it is used, for the
+management API's quota view (`GET /v0/management/accounts/{id}/quota`). Core sends it only to an
+extension that reports `protocol_minor` 5 or more and lists `quota` in `operations`, and only when
+someone asks: core does not poll.
+
+```json
+{"type": "call", "id": "c-22", "op": "quota", "account": {"id": "work", "settings": {...}, "credential": {...}}}
+```
+
+The reply is one frame, then the extension closes the connection: a `quota.result`, or an `error`
+event as for `generate`.
+
+```json
+{"type": "quota.result", "quota": {"plan": "plus", "limits": [
+  {"id": "five_hour", "label": "5-hour limit", "used_percent": 42, "resets_at": 1794268800, "window_seconds": 18000},
+  {"id": "credits", "label": "Credit balance", "remaining": 120, "unit": "credits"}
+], "raw": {"usage": {...}}}}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `plan` | The account's plan, as the provider names it, for people. |
+| `limits` | The plan's limits: usage windows, allowances and balances. At most 1000. |
+| limit `id` | Names the limit within the extension, the same on every call (`five_hour`, `weekly`). Required, unique in the list. |
+| limit `label` | For people, in English (`5-hour limit`, `Weekly limit`). |
+| limit `used_percent` | The share used, from 0 to 100. |
+| limit `used`, `limit`, `remaining` | Amounts, in `unit`. |
+| limit `unit` | What the amounts count: `requests`, `tokens`, `credits`, `usd`, or the provider's own word. |
+| limit `unlimited` | True when the limit does not run out. |
+| limit `resets_at` | When it resets, in Unix seconds. |
+| limit `window_seconds` | The length of its usage window. |
+| limit `models` | The models it applies to, when not all of the account's. |
+| `raw` | The provider's replies the quota was read from, as one JSON object, for what `limits` has no place for. |
+
+Every field of a limit but `id` is optional; report what the provider gives. Read the quota from the
+provider's own usage endpoint for the account's subscription, with the same client identity
+(user agent and the like) the extension uses for the account's requests, and never with a request
+that spends from the plan (a generation). An account that has no plan to report (an API key, or
+a provider with no usage endpoint) answers with code `unsupported` and scope `credential`. Core
+removes the account's credential from every string and from `raw`, as from every other reply.
 
 ## Accounts
 
@@ -649,8 +695,18 @@ entered for the last prompt; nothing else follows the call frame:
 {"type": "login.input", "input": {"redirect_url": "http://localhost:1455/callback?code=...&state=..."}}
 ```
 
-`login.done` carries the `grant`: the new `credential` and a `label` naming the account for people
-(not secret). A refusal (the user denied access, the code expired, the key was refused) is an
+`login.done` carries the `grant`: the new `credential`, a `label` naming the account for people
+(not secret) and, from version 0.5, its `identity`: the upstream account the credential signs in
+to, as an object of the fields the provider knows it by, such as
+`{"email": "user@example.com", "account_id": "..."}`. Identity is not secret, has at most 16 fields,
+and each name and value is a non-empty string (names up to 64 bytes, values up to 512). Core
+stores it with the account. On a new login to an existing account, every field of the stored
+identity must be in the new grant's identity with the same value, letter case aside; otherwise
+core refuses the login and keeps the old credential, so a login never silently turns an account
+into someone else's. Report the fields that tell two accounts apart: for a provider whose users
+can belong to several workspaces, both the user and the workspace. An account stored without an
+identity is checked by `label` instead, when both have one. A grant with an identity that breaks
+these bounds fails the login with `extension_protocol`. A refusal (the user denied access, the code expired, the key was refused) is an
 `error` with code `auth`. Closing the connection cancels the login: stop polling and release any
 callback listener. A login may wait for a person for a long time; core ends it after 15 minutes.
 
@@ -805,7 +861,7 @@ removes `previous_response_id`.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.4. An extension reports the minor version it
+raise the minor version: this document is version 0.5. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -817,10 +873,11 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.2 | [Token counting](#count_tokens): the `count_tokens` operation. The request's `options.thinking_suffix`. |
 | 0.3 | [Model lists](#models): the `models` operation and its `models.result` frame. |
 | 0.4 | [Account checks](#check): the `check` operation and its `check.result` frame. |
+| 0.5 | [Quota](#quota): the `quota` operation and its `quota.result` frame. A login grant's `identity`. |
 
-## What version 0.4 leaves out
+## What version 0.5 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
-capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists
-and account checks; several turns at once in one session (OpenAI's `stream_id` lanes); realtime sessions
+capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,
+account checks and quota; several turns at once in one session (OpenAI's `stream_id` lanes); realtime sessions
 (audio, WebRTC); a private data folder per extension.

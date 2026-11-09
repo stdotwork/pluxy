@@ -22,8 +22,9 @@ const Version = 0
 // Minor is the minor version this package implements within Version. An extension reports it in
 // describe (Info.ProtocolMinor); core uses what a minor version adds only with an extension that
 // reports it. Minor 1 adds sessions; minor 2 adds token counting and the request's thinking
-// suffix; minor 3 adds model listing; minor 4 adds account checks.
-const Minor = 4
+// suffix; minor 3 adds model listing; minor 4 adds account checks; minor 5 adds quota and the
+// identity of a login's grant.
+const Minor = 5
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
@@ -59,6 +60,8 @@ const (
 	OpModels = "models"
 	// OpCheck asks whether an account works, without generating anything (minor version 4).
 	OpCheck = "check"
+	// OpQuota reads what an account's plan allows and how much of it is used (minor version 5).
+	OpQuota = "quota"
 )
 
 // Frame types that are not events.
@@ -85,6 +88,8 @@ const (
 	TypeModelsResult = "models.result"
 	// TypeCheckResult answers a check call for an account that works.
 	TypeCheckResult = "check.result"
+	// TypeQuotaResult answers a quota call.
+	TypeQuotaResult = "quota.result"
 )
 
 // Session kinds (SessionInfo.Format).
@@ -236,7 +241,19 @@ type Grant struct {
 	// Label names the account for people, for example the e-mail address it belongs to. Not
 	// secret; login only.
 	Label string `json:"label,omitempty"`
+	// Identity names the upstream account the credential signs in to, by the fields the
+	// provider knows it by (for example "email", "account_id", "organization_id"), so core can
+	// check that a new login to an existing account signs in to the same one (minor version 5).
+	// Not secret; login only. At most MaxIdentityFields fields.
+	Identity map[string]string `json:"identity,omitempty"`
 }
+
+// Bounds on a grant's Identity.
+const (
+	MaxIdentityFields = 16
+	MaxIdentityKey    = 64
+	MaxIdentityValue  = 512
+)
 
 // ModelList is the result of a models call: the models an account serves.
 type ModelList struct {
@@ -284,8 +301,48 @@ type CheckResult struct {
 	Detail string `json:"detail,omitempty"`
 }
 
-// Reply is a frame an extension sends: an event, the result of describe, models or check, or a
-// login or refresh frame.
+// Quota is the result of a quota call: what an account's plan allows and how much of it is used,
+// as the provider reports it.
+type Quota struct {
+	// Plan names the account's plan for people, as the provider names it.
+	Plan string `json:"plan,omitempty"`
+	// Limits are the plan's limits: usage windows, allowances and balances.
+	Limits []QuotaLimit `json:"limits"`
+	// Raw holds the provider's replies the quota was read from, as one JSON object, for what
+	// Limits has no place for.
+	Raw json.RawMessage `json:"raw,omitempty"`
+}
+
+// MaxQuotaLimits bounds how many limits one quota call may return.
+const MaxQuotaLimits = 1000
+
+// QuotaLimit is one limit of an account's plan, such as a 5-hour usage window or a credit
+// balance. Every amount is optional: a provider reports a share used, amounts, or both.
+type QuotaLimit struct {
+	// ID names the limit within the extension, stable across calls (for example "five_hour").
+	ID string `json:"id"`
+	// Label names it for people (for example "5-hour limit").
+	Label string `json:"label,omitempty"`
+	// UsedPercent is the share of the limit used, from 0 to 100.
+	UsedPercent *float64 `json:"used_percent,omitempty"`
+	// Used, Limit and Remaining are amounts in Unit.
+	Used      *float64 `json:"used,omitempty"`
+	Limit     *float64 `json:"limit,omitempty"`
+	Remaining *float64 `json:"remaining,omitempty"`
+	// Unit is what the amounts count, for example "requests", "tokens", "credits" or "usd".
+	Unit string `json:"unit,omitempty"`
+	// Unlimited is true when the limit does not run out.
+	Unlimited bool `json:"unlimited,omitempty"`
+	// ResetsAt is when the limit resets, in Unix seconds.
+	ResetsAt int64 `json:"resets_at,omitempty"`
+	// WindowSeconds is the length of the limit's usage window.
+	WindowSeconds int64 `json:"window_seconds,omitempty"`
+	// Models are the models the limit applies to, when not all of the account's.
+	Models []string `json:"models,omitempty"`
+}
+
+// Reply is a frame an extension sends: an event, the result of describe, models, check or quota,
+// or a login or refresh frame.
 type Reply struct {
 	llm.Event
 	Info   *Info        `json:"info,omitempty"`
@@ -293,6 +350,7 @@ type Reply struct {
 	Grant  *Grant       `json:"grant,omitempty"`
 	Models *ModelList   `json:"models,omitempty"`
 	Check  *CheckResult `json:"check,omitempty"`
+	Quota  *Quota       `json:"quota,omitempty"`
 }
 
 // ErrFrameTooLarge is returned for a frame longer than MaxFrame.

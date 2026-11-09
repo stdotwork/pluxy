@@ -63,7 +63,7 @@ const cliVersion = "1.0.46"
 
 func main() {
 	err := sdk.Serve(sdk.Extension{ID: id, Version: version, Generate: generate,
-		LoginMethods: loginMethods, Login: login, Refresh: refresh, Models: models, Check: check})
+		LoginMethods: loginMethods, Login: login, Refresh: refresh, Models: models, Check: check, Quota: quota})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "xai:", err)
 		os.Exit(1)
@@ -187,6 +187,16 @@ func check(ctx context.Context, call sdk.CheckCall) (*protocol.CheckResult, erro
 	return &protocol.CheckResult{Detail: fmt.Sprintf("the upstream lists %d models", len(list.Data))}, nil
 }
 
+// setCLIIdentity sets the Grok CLI's identity headers on a request to the CLI's endpoint, as today's
+// core sends them; the endpoint checks them. Requests and quota reads both carry them.
+func setCLIIdentity(req *http.Request, s settings) {
+	req.Header.Set("User-Agent", "xai-grok-workspace/"+s.ClientVersion)
+	req.Header.Set("X-XAI-Token-Auth", "xai-grok-cli")
+	req.Header.Set("x-grok-client-version", s.ClientVersion)
+	req.Header.Set("x-grok-client-identifier", "grok-shell")
+	req.Header.Set("x-authenticateresponse", "authenticate-response")
+}
+
 func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
@@ -210,12 +220,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+tg.token)
 	if tg.cli {
-		// The Grok CLI's identity, as today's core sends it to the CLI's endpoint, which checks it.
-		req.Header.Set("User-Agent", "xai-grok-workspace/"+s.ClientVersion)
-		req.Header.Set("X-XAI-Token-Auth", "xai-grok-cli")
-		req.Header.Set("x-grok-client-version", s.ClientVersion)
-		req.Header.Set("x-grok-client-identifier", "grok-shell")
-		req.Header.Set("x-authenticateresponse", "authenticate-response")
+		setCLIIdentity(req, s)
 	} else {
 		req.Header.Set("User-Agent", "pluxy-xai/"+version)
 	}

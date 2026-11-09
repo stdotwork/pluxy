@@ -225,7 +225,7 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 
 // grantFrom builds the credential from a token reply. A reply without a refresh token keeps
 // oldRefresh. The account is labelled with the e-mail address in the ID token, as today's core
-// labels it.
+// labels it, and its identity is the token's subject and e-mail address.
 func grantFrom(body []byte, tokenEndpoint, oldRefresh string) (*protocol.Grant, error) {
 	var t struct {
 		AccessToken  string `json:"access_token"`
@@ -245,25 +245,44 @@ func grantFrom(body []byte, tokenEndpoint, oldRefresh string) (*protocol.Grant, 
 		c.ExpiresAt = exp
 		c.RefreshAt = c.ExpiresAt - int64(refreshLead.Seconds())
 	}
-	return &protocol.Grant{Credential: c, Label: idTokenEmail(t.IDToken)}, nil
+	claims := idTokenClaims(t.IDToken)
+	return &protocol.Grant{Credential: c, Label: claims.Email, Identity: claims.identity()}, nil
 }
 
-// idTokenEmail reads the email claim of an ID token. The token came straight from xAI's token
-// endpoint over TLS, and the claim only labels the account, so its signature is not checked.
-func idTokenEmail(tok string) string {
+// idClaims are the claims of an ID token that tell xAI accounts apart.
+type idClaims struct {
+	Subject string `json:"sub"`
+	Email   string `json:"email"`
+}
+
+// identity is who signed in, by the ID token's subject and e-mail address, so that core can refuse
+// a new login to an account that signs in as someone else. Only the claims the token has.
+func (c idClaims) identity() map[string]string {
+	id := map[string]string{}
+	if c.Subject != "" {
+		id["sub"] = c.Subject
+	}
+	if c.Email != "" {
+		id["email"] = c.Email
+	}
+	return id
+}
+
+// idTokenClaims reads the sub and email claims of an ID token. The token came straight from xAI's
+// token endpoint over TLS, and the claims only label and tell apart the account, so its signature
+// is not checked.
+func idTokenClaims(tok string) idClaims {
 	parts := strings.Split(tok, ".")
 	if len(parts) != 3 {
-		return ""
+		return idClaims{}
 	}
 	b, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[1], "="))
 	if err != nil {
-		return ""
+		return idClaims{}
 	}
-	var claims struct {
-		Email string `json:"email"`
-	}
+	var claims idClaims
 	_ = json.Unmarshal(b, &claims)
-	return claims.Email
+	return claims
 }
 
 // refresh renews a login's access token with its refresh token, at the token endpoint the login

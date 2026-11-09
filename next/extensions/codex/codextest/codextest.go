@@ -1,7 +1,8 @@
 // Package codextest is a fake of OpenAI's login server and the Codex Responses endpoint, for
 // testing the Codex provider extension without reaching OpenAI. It speaks the login endpoints the
-// extension uses (the authorization code grant with PKCE, OpenAI's device-code flow and refresh)
-// and answers POST /responses and /backend-api/codex/responses with scripted streams.
+// extension uses (the authorization code grant with PKCE, OpenAI's device-code flow and refresh),
+// answers POST /responses and /backend-api/codex/responses with scripted streams, and answers
+// GET /backend-api/wham/usage, the ChatGPT usage endpoint.
 //
 // Tokens are unsigned JWTs. Refresh tokens rotate: each one works once, and using one again is
 // refused as refresh_token_reused, as OpenAI does.
@@ -44,6 +45,8 @@ type Server struct {
 	DenyBrowser bool
 	// RefreshFailure "unavailable" makes refresh answer 503.
 	RefreshFailure string
+	// Usage, if set, is the body of the usage endpoint's reply; the default is DefaultUsage.
+	Usage string
 	// AccessTTL is how long the n-th issued access token lasts (n from 1). Default: an hour.
 	AccessTTL func(n int) time.Duration
 
@@ -89,10 +92,37 @@ func New(t testing.TB) *Server {
 	mux.HandleFunc("POST /api/accounts/deviceauth/token", s.deviceToken)
 	mux.HandleFunc("POST /responses", s.responses)
 	mux.HandleFunc("POST /backend-api/codex/responses", s.responses)
+	mux.HandleFunc("GET /backend-api/wham/usage", s.usage)
 	s.Server = httptest.NewServer(mux)
 	t.Cleanup(s.Close)
 	return s
 }
+
+// DefaultUsage is what the usage endpoint answers by default, in the shape of ChatGPT's own: a Plus
+// plan with a 5-hour and a weekly window, code review's weekly window, one model's own limits, and
+// a credit balance.
+const DefaultUsage = `{
+  "plan_type": "plus",
+  "rate_limit": {
+    "allowed": true, "limit_reached": false,
+    "primary_window": {"used_percent": 42, "limit_window_seconds": 18000, "reset_after_seconds": 3600, "reset_at": 1794268800},
+    "secondary_window": {"used_percent": 7.5, "limit_window_seconds": 604800, "reset_after_seconds": 400000, "reset_at": 1794668800}
+  },
+  "code_review_rate_limit": {
+    "allowed": true, "limit_reached": false,
+    "primary_window": {"used_percent": 0, "limit_window_seconds": 604800, "reset_after_seconds": 500000, "reset_at": 1794768800},
+    "secondary_window": null
+  },
+  "additional_rate_limits": [{
+    "limit_name": "GPT-5.3-Codex-Spark", "metered_feature": "codex_bengalfox",
+    "rate_limit": {
+      "allowed": true, "limit_reached": false,
+      "primary_window": {"used_percent": 10, "limit_window_seconds": 18000, "reset_after_seconds": 100, "reset_at": 1794260000},
+      "secondary_window": {"used_percent": 3, "limit_window_seconds": 604800, "reset_after_seconds": 200, "reset_at": 1794270000}
+    }
+  }],
+  "credits": {"has_credits": true, "unlimited": false, "balance": "12.50"}
+}`
 
 // IssueToken returns an access token whose model requests act out behaviour: "text" (the conformance
 // kit's reply, in two pieces), "rate_limited" (429 with Retry-After 20) or "auth_failed" (401).
@@ -384,6 +414,33 @@ func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
 	resp["status"], resp["output"] = "completed", []any{item}
 	resp["usage"] = map[string]any{"input_tokens": conformance.InputTokens, "output_tokens": conformance.OutputTokens, "total_tokens": conformance.InputTokens + conformance.OutputTokens}
 	ev("response.completed", map[string]any{"response": resp})
+}
+
+// usage answers the usage endpoint for an access token the fake issued; like the responses endpoint
+// it acts out the token's behaviour (401 for an unknown token, 429 for "rate_limited"). The request
+// is recorded with the model requests.
+func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
+	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	s.mu.Lock()
+	s.requests = append(s.requests, Request{Path: r.URL.Path, Header: r.Header.Clone()})
+	behaviour := s.access[tok]
+	body := s.Usage
+	s.mu.Unlock()
+	switch behaviour {
+	case "text", "hang":
+	case "rate_limited":
+		w.Header().Set("Retry-After", "20")
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": map[string]string{"type": "rate_limit_error", "message": "Rate limit reached"}})
+		return
+	default:
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]string{"message": "token expired"}})
+		return
+	}
+	if body == "" {
+		body = DefaultUsage
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(body))
 }
 
 func jwt(claims map[string]any) string {

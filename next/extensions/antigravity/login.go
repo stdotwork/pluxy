@@ -199,7 +199,10 @@ func finishLogin(ctx context.Context, set settings, secret string, tr *tokenResp
 	if err != nil {
 		return nil, hideSecrets(err, tr.AccessToken, tr.RefreshToken, secret)
 	}
-	return &protocol.Grant{Credential: tr.credential(credentialData{ProjectID: project, ClientSecret: secret}, ""), Label: email}, nil
+	// The e-mail address tells two Google accounts apart, so core can refuse a new login to an
+	// account that signs in as someone else.
+	return &protocol.Grant{Credential: tr.credential(credentialData{ProjectID: project, ClientSecret: secret}, ""), Label: email,
+		Identity: map[string]string{"email": email}}, nil
 }
 
 // forwardInputs reads the login's inputs on its own goroutine, so the login can wait for an

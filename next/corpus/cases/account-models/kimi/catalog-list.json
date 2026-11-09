@@ -1,0 +1,259 @@
+{
+  "description": "A Kimi Code login whose config lists no models: the new core's GET /v0/management/accounts/{id}/models against the old core's GET /v0/management/auth-files/models for the same account.",
+  "source": [
+    "core/internal/api/handlers/management/auth_files.go GetAuthFileModels",
+    "core/sdk/cliproxy/service_models.go",
+    "core/internal/registry/models/ catalog for kimi"
+  ],
+  "client": {"method":"GET","path":"/v0/management/accounts/corpus/models","auth":"management-key"},
+  "old_client": {
+    "method": "GET",
+    "path": "/v0/management/auth-files/models?name=kimi-corpus-1.json",
+    "auth": "management-key"
+  },
+  "account_models": ["kimi-k2"],
+  "old_core": {"account":{"models":null}},
+  "new_core": {"account":{"models":null}},
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "models": [
+          {"display_name":"Kimi K2","id":"kimi-k2","owned_by":"moonshot","type":"kimi"},
+          {
+            "display_name": "Kimi K2 Thinking",
+            "id": "kimi-k2-thinking",
+            "owned_by": "moonshot",
+            "type": "kimi"
+          },
+          {"display_name":"Kimi K2.5","id":"kimi-k2.5","owned_by":"moonshot","type":"kimi"},
+          {"display_name":"Kimi K2.6","id":"kimi-k2.6","owned_by":"moonshot","type":"kimi"},
+          {
+            "display_name": "Kimi K2.7 Code",
+            "id": "kimi-k2.7-code",
+            "owned_by": "moonshot",
+            "type": "kimi"
+          },
+          {
+            "display_name": "Kimi K2.7 Code HighSpeed",
+            "id": "kimi-k2.7-code-highspeed",
+            "owned_by": "moonshot",
+            "type": "kimi"
+          },
+          {"display_name":"Kimi K2.8 Preview","id":"kimi-k2.8","owned_by":"moonshot","type":"kimi"},
+          {
+            "display_name": "Kimi K2.8 Code Preview",
+            "id": "kimi-k2.8-code",
+            "owned_by": "moonshot",
+            "type": "kimi"
+          },
+          {"display_name":"Kimi K3","id":"kimi-k3","owned_by":"moonshot","type":"kimi"},
+          {"display_name":"Kimi K3 256K","id":"kimi-k3-256k","owned_by":"moonshot","type":"kimi"},
+          {"display_name":"Kimi K3.1 Pro","id":"kimi-k3.1-pro","owned_by":"moonshot","type":"kimi"},
+          {
+            "display_name": "Kimi K3.1 Pro Highspeed",
+            "id": "kimi-k3.1-pro-highspeed",
+            "owned_by": "moonshot",
+            "type": "kimi"
+          }
+        ]
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8",
+        "X-Cpa-Build-Date": "unknown",
+        "X-Cpa-Commit": "none",
+        "X-Cpa-Support-Plugin": "1",
+        "X-Cpa-Version": "dev"
+      },
+      "status": 200
+    },
+    "upstream": []
+  },
+  "exceptions": [
+    {
+      "path": "client.headers.Content-Type",
+      "kind": "intended",
+      "want": "application/json",
+      "reason": "Different management API by design: the new management API answers application/json; today's core's gin handlers add a charset."
+    },
+    {
+      "path": "client.body.models[*].type",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The old list's type is not carried."
+    },
+    {
+      "path": "client.body.models[*].context_length",
+      "kind": "intended",
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's context_length is not in the old list."
+    },
+    {
+      "path": "client.body.models[*].created",
+      "kind": "intended",
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's created is not in the old list."
+    },
+    {
+      "path": "client.body.models[*].description",
+      "kind": "intended",
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's description is not in the old list."
+    },
+    {
+      "path": "client.body.models[0].input_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[1].input_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[2].input_modalities",
+      "kind": "intended",
+      "want": ["text","image","video"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[3].input_modalities",
+      "kind": "intended",
+      "want": ["text","image","video"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[4].input_modalities",
+      "kind": "intended",
+      "want": ["text","image","video"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[5].input_modalities",
+      "kind": "intended",
+      "want": ["text","image","video"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[6].input_modalities",
+      "kind": "intended",
+      "want": ["text","image","video"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[7].input_modalities",
+      "kind": "intended",
+      "want": ["text","image","video"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[8].input_modalities",
+      "kind": "intended",
+      "want": ["text","image","video"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[9].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[10].input_modalities",
+      "kind": "intended",
+      "want": ["text","image","video"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[11].input_modalities",
+      "kind": "intended",
+      "want": ["text","image","video"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[*].max_completion_tokens",
+      "kind": "intended",
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's max_completion_tokens is not in the old list."
+    },
+    {
+      "path": "client.body.models[0].names",
+      "kind": "intended",
+      "want": ["kimi-k2"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[1].names",
+      "kind": "intended",
+      "want": ["kimi-k2-thinking"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[2].names",
+      "kind": "intended",
+      "want": ["kimi-k2.5"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[3].names",
+      "kind": "intended",
+      "want": ["kimi-k2.6"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[4].names",
+      "kind": "intended",
+      "want": ["kimi-k2.7-code"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[5].names",
+      "kind": "intended",
+      "want": ["kimi-k2.7-code-highspeed"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[6].names",
+      "kind": "intended",
+      "want": ["kimi-k2.8"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[7].names",
+      "kind": "intended",
+      "want": ["kimi-k2.8-code"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[8].names",
+      "kind": "intended",
+      "want": ["kimi-k3"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[9].names",
+      "kind": "intended",
+      "want": ["kimi-k3-256k"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[10].names",
+      "kind": "intended",
+      "want": ["kimi-k3.1-pro"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[11].names",
+      "kind": "intended",
+      "want": ["kimi-k3.1-pro-highspeed"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[*].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    }
+  ]
+}

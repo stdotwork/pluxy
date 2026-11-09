@@ -1,0 +1,202 @@
+{
+  "description": "A ChatGPT sign-in whose config lists no models: the new core's GET /v0/management/accounts/{id}/models against the old core's GET /v0/management/auth-files/models for the same account.",
+  "source": [
+    "core/internal/api/handlers/management/auth_files.go GetAuthFileModels",
+    "core/sdk/cliproxy/service_models.go",
+    "core/internal/registry/models/ catalog for codex-plus"
+  ],
+  "client": {"method":"GET","path":"/v0/management/accounts/corpus/models","auth":"management-key"},
+  "old_client": {
+    "method": "GET",
+    "path": "/v0/management/auth-files/models?name=codex-corpus-1.json",
+    "auth": "management-key"
+  },
+  "account_models": ["gpt-6.1-sol"],
+  "old_core": {"account":{"models":null}},
+  "new_core": {"account":{"models":null}},
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "models": [
+          {"display_name":"GPT 6.0 Astra","id":"gpt-6-astra","owned_by":"openai","type":"openai"},
+          {"display_name":"GPT 6.0 Sol","id":"gpt-6-sol","owned_by":"openai","type":"openai"},
+          {"display_name":"GPT 6.1 Sol","id":"gpt-6.1-sol","owned_by":"openai","type":"openai"},
+          {"display_name":"GPT 6.1 Terra","id":"gpt-6.1-terra","owned_by":"openai","type":"openai"},
+          {"display_name":"GPT 6.0 Luna","id":"gpt-6-luna","owned_by":"openai","type":"openai"},
+          {"display_name":"GPT 5.6 Sol","id":"gpt-5.6-sol","owned_by":"openai","type":"openai"},
+          {"display_name":"GPT 5.6 Terra","id":"gpt-5.6-terra","owned_by":"openai","type":"openai"},
+          {"display_name":"GPT 5.6 Luna","id":"gpt-5.6-luna","owned_by":"openai","type":"openai"},
+          {
+            "display_name": "Codex Auto Review",
+            "id": "codex-auto-review",
+            "owned_by": "openai",
+            "type": "openai"
+          },
+          {"display_name":"GPT Image 1.5","id":"gpt-image-1.5","owned_by":"openai","type":"openai"},
+          {"display_name":"GPT Image 2","id":"gpt-image-2","owned_by":"openai","type":"openai"},
+          {
+            "display_name": "GPT Image 2.5 Flare",
+            "id": "gpt-image-2.5-flare",
+            "owned_by": "openai",
+            "type": "openai"
+          },
+          {
+            "display_name": "GPT Image 2.5 Sunburst",
+            "id": "gpt-image-2.5-sunburst",
+            "owned_by": "openai",
+            "type": "openai"
+          },
+          {"display_name":"GPT Image 2.5","id":"gpt-image-2.5","owned_by":"openai","type":"openai"}
+        ]
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8",
+        "X-Cpa-Build-Date": "unknown",
+        "X-Cpa-Commit": "none",
+        "X-Cpa-Support-Plugin": "1",
+        "X-Cpa-Version": "dev"
+      },
+      "status": 200
+    },
+    "upstream": []
+  },
+  "exceptions": [
+    {
+      "path": "client.headers.Content-Type",
+      "kind": "intended",
+      "want": "application/json",
+      "reason": "Different management API by design: the new management API answers application/json; today's core's gin handlers add a charset."
+    },
+    {
+      "path": "client.body.models[9]",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Today's core adds its gpt-image-* models to every Codex list; they need image endpoints, which the new core does not serve (no image or video routes yet), so the Codex extension does not list them."
+    },
+    {
+      "path": "client.body.models[10]",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Today's core adds its gpt-image-* models to every Codex list; they need image endpoints, which the new core does not serve (no image or video routes yet), so the Codex extension does not list them."
+    },
+    {
+      "path": "client.body.models[11]",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Today's core adds its gpt-image-* models to every Codex list; they need image endpoints, which the new core does not serve (no image or video routes yet), so the Codex extension does not list them."
+    },
+    {
+      "path": "client.body.models[12]",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Today's core adds its gpt-image-* models to every Codex list; they need image endpoints, which the new core does not serve (no image or video routes yet), so the Codex extension does not list them."
+    },
+    {
+      "path": "client.body.models[13]",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Today's core adds its gpt-image-* models to every Codex list; they need image endpoints, which the new core does not serve (no image or video routes yet), so the Codex extension does not list them."
+    },
+    {
+      "path": "client.body.models[*].type",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The old list's type is not carried."
+    },
+    {
+      "path": "client.body.models[*].context_length",
+      "kind": "intended",
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's context_length is not in the old list."
+    },
+    {
+      "path": "client.body.models[*].created",
+      "kind": "intended",
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's created is not in the old list."
+    },
+    {
+      "path": "client.body.models[*].description",
+      "kind": "intended",
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's description is not in the old list."
+    },
+    {
+      "path": "client.body.models[*].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[*].max_completion_tokens",
+      "kind": "intended",
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's max_completion_tokens is not in the old list."
+    },
+    {
+      "path": "client.body.models[0].names",
+      "kind": "intended",
+      "want": ["gpt-6-astra"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[1].names",
+      "kind": "intended",
+      "want": ["gpt-6-sol"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[2].names",
+      "kind": "intended",
+      "want": ["gpt-6.1-sol"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[3].names",
+      "kind": "intended",
+      "want": ["gpt-6.1-terra"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[4].names",
+      "kind": "intended",
+      "want": ["gpt-6-luna"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[5].names",
+      "kind": "intended",
+      "want": ["gpt-5.6-sol"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[6].names",
+      "kind": "intended",
+      "want": ["gpt-5.6-terra"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[7].names",
+      "kind": "intended",
+      "want": ["gpt-5.6-luna"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[8].names",
+      "kind": "intended",
+      "want": ["codex-auto-review"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[*].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[*].version",
+      "kind": "intended",
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's version is not in the old list."
+    }
+  ]
+}

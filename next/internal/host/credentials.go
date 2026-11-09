@@ -84,6 +84,12 @@ func (l *LoginCall) Next() protocol.Reply {
 		return protocol.Reply{Event: llm.Event{Type: protocol.TypeLoginPrompt}, Prompt: &p}
 	case r.Type == protocol.TypeLoginDone && validGrant(r.Grant):
 		l.ext.held.add(l.account, r.Grant.Credential)
+		if err := validIdentity(r.Grant.Identity); err != "" {
+			l.fail(&llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s sent a grant whose identity %s", l.ext.manifest.ID, err)})
+			return *l.final
+		}
+		// Identity is kept as it is, even a value the credential also holds (an account ID in
+		// its data): core stores it beside the credential and compares it, and never shows it.
 		done := protocol.Reply{Event: llm.Event{Type: protocol.TypeLoginDone}, Grant: r.Grant}
 		l.final = &done
 		l.Close()
@@ -159,6 +165,22 @@ func (e *Extension) Refresh(ctx context.Context, account protocol.Account) (*pro
 		return nil, redact.Event(r.Event).Error
 	}
 	return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a refresh", e.manifest.ID, r.Type)}
+}
+
+// validIdentity says what is wrong with a grant's identity, or "" when nothing is.
+func validIdentity(id map[string]string) string {
+	if len(id) > protocol.MaxIdentityFields {
+		return fmt.Sprintf("has more than %d fields", protocol.MaxIdentityFields)
+	}
+	for k, v := range id {
+		switch {
+		case k == "" || len(k) > protocol.MaxIdentityKey:
+			return fmt.Sprintf("has a field name that is empty or longer than %d bytes", protocol.MaxIdentityKey)
+		case v == "" || len(v) > protocol.MaxIdentityValue:
+			return fmt.Sprintf("field %q is empty or longer than %d bytes", k, protocol.MaxIdentityValue)
+		}
+	}
+	return ""
 }
 
 func validGrant(g *protocol.Grant) bool {

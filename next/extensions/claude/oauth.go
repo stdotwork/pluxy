@@ -117,7 +117,7 @@ func subscriptionLogin(ctx context.Context, set settings, s *sdk.LoginSession) (
 	if tr.AccessToken == "" {
 		return nil, &llm.Error{Code: llm.CodeUpstream, Message: "the token endpoint sent no access token", Scope: llm.ScopeEndpoint}
 	}
-	return &protocol.Grant{Credential: tr.credential(time.Now()), Label: tr.Account.EmailAddress}, nil
+	return &protocol.Grant{Credential: tr.credential(time.Now()), Label: tr.Account.EmailAddress, Identity: tr.identity()}, nil
 }
 
 // readCallback reads what the user pasted: the redirect address (with code and state, or error),
@@ -207,8 +207,24 @@ type tokenResponse struct {
 	RefreshToken string `json:"refresh_token"`
 	ExpiresIn    int64  `json:"expires_in"`
 	Account      struct {
+		UUID         string `json:"uuid"`
 		EmailAddress string `json:"email_address"`
 	} `json:"account"`
+	Organization struct {
+		UUID string `json:"uuid"`
+	} `json:"organization"`
+}
+
+// identity names who signed in, by the account's e-mail address and ID and its organization's ID
+// (those the token reply gives), so core can refuse a new login that signs in as someone else.
+func (tr *tokenResponse) identity() map[string]string {
+	id := map[string]string{}
+	for k, v := range map[string]string{"email": tr.Account.EmailAddress, "account_id": tr.Account.UUID, "organization_id": tr.Organization.UUID} {
+		if v != "" {
+			id[k] = v
+		}
+	}
+	return id
 }
 
 // credential builds the credential a token reply grants.

@@ -19,6 +19,20 @@ import (
 // Email is the e-mail address the key endpoint names.
 const Email = "user@example.com"
 
+// KeyUsage is the subscription usage the key endpoint's default reply reports: a 5-hour window and
+// a weekly one, with reset times in Unix seconds.
+var KeyUsage = map[string]any{
+	"tier":   "Muse Code",
+	"window": map[string]any{"used_percent": 12.5, "resets_at": 1794200000, "window_duration_mins": 300},
+	"weekly": map[string]any{"used_percent": 40, "resets_at": 1794700000},
+}
+
+// KeyRequest is a call to the key endpoint that carried a valid device token.
+type KeyRequest struct {
+	Header http.Header
+	Body   []byte
+}
+
 // Request is a Responses request the server answered with a valid key.
 type Request struct {
 	Header http.Header
@@ -36,6 +50,9 @@ type Server struct {
 	Deny bool
 	// MintDown makes the key endpoint answer 503.
 	MintDown bool
+	// KeyReply, if set, is the body the key endpoint sends in place of the default (which holds
+	// KeyUsage), after the new key is made.
+	KeyReply func(key string) any
 	// Answer, if set, sees every request first; it answers one by returning true.
 	Answer func(w http.ResponseWriter, r *http.Request) bool
 
@@ -45,6 +62,7 @@ type Server struct {
 	dca      map[string]bool
 	keys     map[string]bool
 	requests []Request
+	keyCalls []KeyRequest
 }
 
 type code struct {
@@ -99,6 +117,13 @@ func (s *Server) Approve(userCode string) bool {
 	return false
 }
 
+// KeyRequests returns the key endpoint calls that carried a valid device token, in order.
+func (s *Server) KeyRequests() []KeyRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]KeyRequest(nil), s.keyCalls...)
+}
+
 // Requests returns the Responses requests the server answered, in order.
 func (s *Server) Requests() []Request {
 	s.mu.Lock()
@@ -151,10 +176,18 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]string{"message": "Invalid device token", "type": "invalid_request_error"}})
 			return
 		}
+		call := KeyRequest{Header: r.Header.Clone()}
+		call.Body, _ = io.ReadAll(r.Body)
+		s.keyCalls = append(s.keyCalls, call)
 		s.n++
 		key := fmt.Sprintf("metatest-key-%d", s.n)
 		s.keys[key] = true
-		writeJSON(w, http.StatusOK, map[string]any{"api_key": key, "base_url": s.URL + "/v1", "user_email": Email, "subs_tier_name": "Muse Code", "is_subs_active": true})
+		if s.KeyReply != nil {
+			writeJSON(w, http.StatusOK, s.KeyReply(key))
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"api_key": key, "base_url": s.URL + "/v1", "user_email": Email, "user_full_name": "Test User",
+			"subs_tier_name": "Muse Code", "is_subs_active": true, "subs_usage": KeyUsage})
 	case r.URL.Path == "/v1/responses" && r.Method == http.MethodPost:
 		tok, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		s.mu.Lock()

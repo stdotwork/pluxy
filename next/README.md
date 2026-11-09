@@ -217,6 +217,8 @@ replaying the block sends the reasoning back, so it carries over between turns. 
 | `callback_listen` | Default `true`: let a browser sign-in listen on `localhost:1455`. |
 | `websockets` | Default `false`: send a Responses WebSocket client's turns to `{base_url}/responses` over one upstream WebSocket per client socket (Codex's WebSocket transport), as today's core does with `websockets: true`. A socket the upstream drops is not replaced in the middle of a turn: the client gets `upstream_websocket_lost` and sends the whole conversation again. |
 
+**Quota.** For a ChatGPT sign-in account, `GET /v0/management/accounts/{id}/quota` reads `GET {backend}/wham/usage`, where `{backend}` is the account's `base_url` without a trailing `/codex` (default `https://chatgpt.com/backend-api`), with the access token, the `Chatgpt-Account-Id` header and the same `User-Agent` and `Originator` the account's requests carry (so `codex_identity` applies). It reports the plan (`plan_type`), the 5-hour and weekly or monthly windows (`five_hour`, `weekly`, `monthly`), code review's windows (`code_review_*`), each extra limit such as one model's (`<name>_five_hour` and so on) and the credit balance (`credits`), with the share used, reset time and window length. An API key answers unsupported. A sign-in's grant carries `identity` `{"email", "account_id"}`: members of one ChatGPT workspace share its account ID, so the e-mail address tells them apart.
+
 ## Claude
 
 The Claude extension (`extensions/claude`) talks to Anthropic's Messages API with an API key or a
@@ -251,6 +253,8 @@ not Claude Code is not made to look like Claude Code.
 
 A 429 from a subscription whose usage window is used up blocks the account until the window
 resets; a 529 (overloaded) moves the request to another account.
+
+**Quota.** For a subscription account, quota reads `GET {base_url}/api/oauth/usage` and `GET {base_url}/api/oauth/profile` (default base `https://api.anthropic.com`) with the access token, the OAuth beta in `anthropic-beta` and `anthropic-version`. Like the account's requests, it presents no client identity of its own. It reports the 5-hour window (`five_hour`), the weekly windows (`seven_day`, `seven_day_oauth_apps`, `seven_day_opus`, `seven_day_sonnet`, `seven_day_cowork`, the Fable window), any window counted in dollars, and extra usage (`extra_usage`), with the share used and reset time; the plan (Free, Pro, Max, Max 5x, Max 20x or Team) comes from the profile, and usage is still reported when the profile cannot be read. An API key answers unsupported. A subscription login's grant carries `identity` `{"email", "account_id", "organization_id"}` from the token reply, the fields today's core compares on a re-login.
 
 ## Gemini
 
@@ -305,6 +309,8 @@ Today's core can also relay Gemini requests through a browser tab signed in to A
 connects to core over a WebSocket. This extension does not: the extension protocol gives a
 program no listener that outlives its calls, and core stops idle programs.
 
+**Quota and identity.** Gemini has no usage endpoint, so quota answers unsupported. A `service_account` login's grant carries `identity` `{"client_email"}`, the key's service account; an API key login has none.
+
 ## Kimi
 
 The Kimi extension (`extensions/kimi`) serves Kimi Code, Moonshot AI's coding subscription. Point
@@ -337,6 +343,8 @@ each Chat tool call, and a Responses batch of function call outputs moved next t
 request names pluxy in Kimi's device headers, with the device ID made at login (none for a key); the device's host
 name, which Kimi's CLI also sends, is left out. A 429 that says the quota is used up is reported
 as a used-up quota, not a rate limit.
+
+**Quota.** For a device login, quota reads `GET {base_url}/v1/usages` and the plan from `GET {base_url}/v1/me` (`user_level_name`) on the account's Kimi Code host, with the access token and the same device headers (`X-Msh-*`, `User-Agent`) the account's requests carry. It reports each entry of `limits` (labelled by its name, else by its window length, else "Limit #n"), the usage summary ("Weekly limit") and the monthly ratios ("Monthly limit", "Monthly coding limit"). An API key answers unsupported. Kimi's device login returns no user ID, so its grant has no identity and a re-login is not checked, as in today's core.
 
 ## xAI
 
@@ -419,6 +427,8 @@ Not built, and why:
   `client_version` when xAI asks for a newer CLI), the file name and legacy-file adoption today's
   core uses for its auth files, and opening the browser at sign-in.
 
+**Quota.** A Grok login's quota is what the Grok CLI shows: `GET {cli}/billing?format=credits` and `GET {cli}/billing` on the CLI's chat endpoint (the host the account's requests go to), and `GET {cli}/user?include=subscription` and `GET {cli}/settings` for the plan's name, with the login's token and the Grok CLI identity headers the requests carry. It reports the weekly credit window (`weekly`), the monthly credits (`monthly_credits`), the pay-as-you-go cap and use (`pay_as_you_go`) and the prepaid balance (`prepaid`), in `usd`. Nothing that spends from the account is sent (today's panel sent a one-token chat for paid accounts; that is not rebuilt). An API key answers unsupported. A Grok login's grant carries `identity` `{"sub", "email"}` from its ID token.
+
 ## Meta
 
 The Meta extension (`extensions/meta`) serves Meta's Muse models on `api.meta.ai`. Point
@@ -460,6 +470,8 @@ Not built, from today's core: the Codex translator's defaults it adds to every r
 instructions, a list input, a medium effort, `tool_choice`, `parallel_tool_calls`, `strict`
 false), apply_patch rewriting for Codex Desktop, dropping encrypted reasoning Meta did not issue,
 Responses compaction through Meta, and token counting.
+
+**Quota.** Meta reports a Muse Code login's usage only from its key endpoint, so quota sends `POST https://api.meta.ai/muse-code/key` with an empty object, the device token, `x-api-version: 1.0.0` and Muse Code's client identity headers. The device token renews the account, so this goes only where a renewal goes, never to `base_url`. The call makes a new API key, which is dropped and never returned or stored; the account's own key is left alone, and if Meta retires it, core renews the credential on the next refused request (whether Meta does is not known). It reports `window` ("Usage limit", with its length) and `weekly` ("Weekly limit") from `subs_usage`, and the plan from `subs_tier_name`. An API key answers unsupported. A device login's grant carries `identity` `{"email"}`.
 
 ## Antigravity
 
@@ -526,6 +538,8 @@ reasoning (thought signatures travel in band, as for Gemini), the per-account mo
 pool settings (`antigravity.connection-pool.*`), the app version lookup at every start, token
 counting (core has no count-tokens route), and the placeholder property today's core adds to a
 Claude function's objects that require nothing.
+
+**Quota.** Quota reads `POST {base_url}/v1internal:retrieveUserQuotaSummary` with the credential's project, and the plan from `POST {base_url}/v1internal:loadCodeAssist`, with the access token and the account's Antigravity user agent. Each bucket of each model group becomes a limit, such as "Gemini models 5-hour limit", with the share used, the reset time, the window length where known and the group's models. A login's grant carries `identity` `{"email"}`.
 
 ## Devin
 
@@ -612,6 +626,8 @@ Gaps outside the extension: a Messages or Gemini client gets Devin's reasoning w
 signature, because those renderers pass on only Responses and Gemini signatures, so such a client
 cannot replay it. A Gemini client's `thoughtSignature` on a function call is reported as dropped;
 today's core sends it to Devin as a sealed signature.
+
+**Quota.** Quota calls Devin's `GetUserStatus` on the API host (`{base_url}/exa.seat_management_pb.SeatManagementService/GetUserStatus`, Connect with a protobuf body), as today's core does, with the session token and the client identity chat requests carry. It reports "Daily limit" and "Weekly limit" (share used, reset time) and the plan name. A login's grant carries `identity` `{"user_id"}` from `/v3/self`; a re-login whose `/v3/self` call fails has no identity and is refused for an account that stored one.
 
 ## Accounts and routing
 
@@ -781,12 +797,13 @@ send it as a bearer token. With a management key set, the config may set no acco
 | `GET /logins/{id}` | The login's state (`pending`, `done`, `failed`, `cancelled`), prompt or error. |
 | `POST /logins/{id}/input` | `{"input": {...}}`: what the user entered for the prompt, such as the redirect URL of a browser login. |
 | `DELETE /logins/{id}` | Cancels the login. |
-| `POST /accounts/{id}/login` | Signs in to an existing account again (`{"method": ..., "input": ...}`), replacing its credential. |
+| `POST /accounts/{id}/login` | Signs in to an existing account again (`{"method": ..., "input": ...}`), replacing its credential. The login must sign in to the same upstream account: when the provider reports who signed in (the grant's [`identity`](protocol/README.md#login), such as an e-mail address and an account ID), every field core stored for the account must match, letter case aside; an account stored without one is checked by its `label`. Otherwise the login ends `failed` with code `invalid_request` and the account keeps its credential, as today's core refuses with "Authenticated account does not match target credential". To use the other account, add it as a new one. |
 | `POST /accounts/{id}/refresh` | Renews the account's credential now. |
 | `PATCH /accounts/{id}` | `disabled` (`true` or `false`; disabled accounts get no requests) and any of the routing fields `priority`, `weight`, `disable_cooling`, `max_concurrency`, `prefix`, `models`, `excluded_models` and `model_alias`, checked as the config's are; `null` sets one back to its default. A bad field changes nothing (400). Replies with the account. |
 | `POST /accounts/{id}/cooldown/reset` | Clears the account's cooldowns, on its credential, its models and its endpoint (which accounts naming the same endpoint share), with their backoff steps and its last error, so it serves again at once. Works for config accounts too. Replies with `cleared`, the number of live blocks it cleared, and the account. |
 | `GET /accounts/{id}/models` | The models the account serves: its config's `models` when it lists them, else the ones its extension lists for it (the protocol's [`models`](protocol/README.md#models)). Each has its upstream `id`, what the extension says about it, `names` (the names clients use for it after the account's exclusions, aliases and prefix, and its extension's defaults for logins) and `excluded` when `excluded_models` leaves it out. |
 | `POST /accounts/{id}/test` | Sends the account one small request (`Hi`, at most 16 tokens of reply), straight to its extension: its cooldowns are ignored and its routing state is left as it is. `{"model": ...}` names the model by its upstream name; without it, the first the account serves. Replies 200 with `result`: `ok`, `model`, `served_model`, `latency_ms`, the start of the `reply`, `finish_reason` and `usage`, or `error`. The request spends what a request that size costs. |
+| `GET /accounts/{id}/quota` | The account's plan and usage, read from its provider when asked (the protocol's [`quota`](protocol/README.md#quota)): `quota` with `plan`, `limits` (each with `id`, `label`, and what the provider gives of `used_percent`, `used`, `limit`, `remaining`, `unit`, `unlimited`, `resets_at`, `window_seconds`, `models`) and `raw`, the provider's replies; and `fetched_at`. 422 with code `unsupported` for an account with no plan to report, such as an API key, or whose extension reads no quota; 502 with the provider's error code when the provider refused or failed. Each provider's section says what it reports. |
 | `GET /login-methods` | For each running extension that signs in, its `extension` ID and `methods`: each `method`, `kind` (`browser`, `device`, `api_key`), `label` and the `inputs` it asks for (`name`, `label`, `secret`, `optional`), as its describe reports them; what a panel needs to offer "add account". |
 | `DELETE /accounts/{id}` | Removes the account and its credential. |
 

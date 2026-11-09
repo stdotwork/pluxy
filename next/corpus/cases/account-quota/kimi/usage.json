@@ -1,0 +1,229 @@
+{
+  "description": "A Kimi Code login's quota: the new core's GET /v0/management/accounts/{id}/quota against the usage and profile requests today's panel sends through the old core's api-call relay.",
+  "source": [
+    "extensions/panel/src/features/quota/providers/kimi/data.ts fetchKimiQuota",
+    "extensions/panel/src/services/api/kimiQuota.ts fetchKimiPlanName",
+    "extensions/panel/src/utils/quota/constants.ts KIMI_USAGE_URL, KIMI_REQUEST_HEADERS",
+    "core/internal/api/handlers/management/api_tools.go APICall"
+  ],
+  "client": {"method":"GET","path":"/v0/management/accounts/corpus/quota","auth":"management-key"},
+  "old_client": {
+    "path": "/v0/management/api-call",
+    "auth": "management-key",
+    "body": {
+      "auth_index": "{{auth_index}}",
+      "method": "GET",
+      "url": "{{upstream}}/coding/v1/usages",
+      "header": {"Authorization":"Bearer $TOKEN$"}
+    }
+  },
+  "account_models": ["kimi-k2"],
+  "upstream": [
+    {
+      "body": {
+        "usage": {
+          "name": "Weekly limit",
+          "limit": "100",
+          "used": "30",
+          "remaining": "70",
+          "resetTime": "2030-01-08T00:00:00Z"
+        },
+        "limits": [
+          {
+            "window": {"duration":300,"timeUnit":"TIME_UNIT_MINUTE"},
+            "detail": {"limit":"50","used":"10","remaining":"40","resetTime":"2030-01-01T05:00:00Z"}
+          }
+        ],
+        "usages": {"limit_month_total":{"used_ratio":0.25,"reset_time":"2030-02-01T00:00:00Z"}}
+      }
+    },
+    {"body":{"user_id":"user-corpus","user_level_name":"Moderato"}}
+  ],
+  "volatile": ["client.body.fetched_at","client.body.header.Date","client_more[*].body.header.Date"],
+  "old_client_more": [
+    {
+      "path": "/v0/management/api-call",
+      "auth": "management-key",
+      "body": {
+        "auth_index": "{{auth_index}}",
+        "method": "GET",
+        "url": "{{upstream}}/coding/v1/me",
+        "header": {"Authorization":"Bearer $TOKEN$","Accept":"application/json"}
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "body": "{\"usage\":{\"name\":\"Weekly limit\",\"limit\":\"100\",\"used\":\"30\",\"remaining\":\"70\",\"resetTime\":\"2030-01-08T00:00:00Z\"},\"limits\":[{\"window\":{\"duration\":300,\"timeUnit\":\"TIME_UNIT_MINUTE\"},\"detail\":{\"limit\":\"50\",\"used\":\"10\",\"remaining\":\"40\",\"resetTime\":\"2030-01-01T05:00:00Z\"}}],\"usages\":{\"limit_month_total\":{\"used_ratio\":0.25,\"reset_time\":\"2030-02-01T00:00:00Z\"}}}",
+        "header": {"Content-Length":["355"],"Content-Type":["application/json"],"Date":"(volatile)"},
+        "status_code": 200
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8",
+        "X-Cpa-Build-Date": "unknown",
+        "X-Cpa-Commit": "none",
+        "X-Cpa-Support-Plugin": "1",
+        "X-Cpa-Version": "dev"
+      },
+      "status": 200
+    },
+    "client_more": [
+      {
+        "body": {
+          "body": "{\"user_id\":\"user-corpus\",\"user_level_name\":\"Moderato\"}",
+          "header": {
+            "Content-Length": ["54"],
+            "Content-Type": ["application/json"],
+            "Date": "(volatile)"
+          },
+          "status_code": 200
+        },
+        "headers": {
+          "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+          "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+          "Content-Type": "application/json; charset=utf-8",
+          "X-Cpa-Build-Date": "unknown",
+          "X-Cpa-Commit": "none",
+          "X-Cpa-Support-Plugin": "1",
+          "X-Cpa-Version": "dev"
+        },
+        "status": 200
+      }
+    ],
+    "upstream": [
+      {
+        "body": null,
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "User-Agent": "Go-http-client/1.1"
+        },
+        "method": "GET",
+        "path": "/coding/v1/usages"
+      },
+      {
+        "body": null,
+        "headers": {
+          "Accept": "application/json",
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "User-Agent": "Go-http-client/1.1"
+        },
+        "method": "GET",
+        "path": "/coding/v1/me"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "client.body",
+      "kind": "intended",
+      "want": {
+        "fetched_at": "(volatile)",
+        "quota": {
+          "limits": [
+            {
+              "id": "limit_1",
+              "label": "5-hour limit",
+              "limit": 50,
+              "remaining": 40,
+              "resets_at": 1893474000,
+              "used": 10,
+              "used_percent": 20,
+              "window_seconds": 18000
+            },
+            {
+              "id": "usage",
+              "label": "Weekly limit",
+              "limit": 100,
+              "remaining": 70,
+              "resets_at": 1894060800,
+              "used": 30,
+              "used_percent": 30
+            },
+            {"id":"month_total","label":"Monthly limit","resets_at":1896134400,"used_percent":25}
+          ],
+          "plan": "Moderato",
+          "raw": {
+            "profile": {"user_id":"user-corpus","user_level_name":"Moderato"},
+            "usage": {
+              "limits": [
+                {
+                  "detail": {
+                    "limit": "50",
+                    "remaining": "40",
+                    "resetTime": "2030-01-01T05:00:00Z",
+                    "used": "10"
+                  },
+                  "window": {"duration":300,"timeUnit":"TIME_UNIT_MINUTE"}
+                }
+              ],
+              "usage": {
+                "limit": "100",
+                "name": "Weekly limit",
+                "remaining": "70",
+                "resetTime": "2030-01-08T00:00:00Z",
+                "used": "30"
+              },
+              "usages": {
+                "limit_month_total": {"reset_time":"2030-02-01T00:00:00Z","used_ratio":0.25}
+              }
+            }
+          }
+        }
+      },
+      "reason": "Different management API by design: the old core's api-call relay answers with the upstream's reply wrapped as {status_code, header, body} for the panel to read, and the panel works out the plan and limits itself; the new core's quota call reads the account's quota itself and answers {quota, fetched_at}. The want pins the new quota for this upstream reply."
+    },
+    {
+      "path": "client.headers.Content-Type",
+      "kind": "intended",
+      "want": "application/json",
+      "reason": "Different management API by design: the new management API answers application/json; today's core's gin handlers add a charset."
+    },
+    {
+      "path": "client_more",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Different management API by design: the panel makes one relay call for each upstream request and gets one reply for each; the new quota call makes those requests itself and answers once."
+    },
+    {
+      "path": "upstream[*].headers.User-Agent",
+      "kind": "intended",
+      "reason": "Quota fetchers use each provider's own client identity for its own subscription (a decision on record): the new core sends the Kimi extension's own User-Agent; the panel's Kimi requests set none, so the relay sends Go's default."
+    },
+    {
+      "path": "upstream[0].headers.Accept",
+      "kind": "intended",
+      "reason": "The new core's usage request asks for JSON explicitly; the panel's usage request sets no Accept (its profile request does).",
+      "want": "application/json"
+    },
+    {
+      "path": "upstream[*].headers.X-Msh-Device-Id",
+      "kind": "intended",
+      "reason": "The new core sends the device headers the account's own requests carry (the login's device ID); the panel's quota requests send none.",
+      "want": "corpus-device-0001"
+    },
+    {
+      "path": "upstream[*].headers.X-Msh-Device-Model",
+      "kind": "intended",
+      "reason": "The new core sends the device headers the account's own requests carry (this host's OS and architecture); the panel's quota requests send none."
+    },
+    {
+      "path": "upstream[*].headers.X-Msh-Platform",
+      "kind": "intended",
+      "reason": "The new core sends the device headers the account's own requests carry; the panel's quota requests send none."
+    },
+    {
+      "path": "upstream[*].headers.X-Msh-Version",
+      "kind": "intended",
+      "reason": "The new core sends the device headers the account's own requests carry (the extension's version); the panel's quota requests send none."
+    }
+  ]
+}

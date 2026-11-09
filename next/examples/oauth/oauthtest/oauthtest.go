@@ -1,10 +1,12 @@
 // Package oauthtest is a fake OAuth 2.0 provider and model API for the tests of the example oauth
 // extension. It serves the device authorization grant (RFC 8628), the authorization code grant with
 // PKCE (RFC 6749 and RFC 7636), refresh token rotation with reuse detection (RFC 9700 section
-// 4.14.2), and a /v1/chat endpoint that accepts the access tokens it issued.
+// 4.14.2), a /v1/chat endpoint that accepts the access tokens it issued, and a /v1/quota endpoint
+// that reports the plan's usage.
 package oauthtest
 
 import (
+	"cmp"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -68,6 +70,9 @@ type Server struct {
 	// AccessTTL returns how long the n-th access token issued by the token endpoint lasts, n counting
 	// from 1. Tokens from IssueToken and IssueHang are not counted. Nil means an hour.
 	AccessTTL func(n int) time.Duration
+	// Email and UserID are who the token endpoint says signed in; defaults user@example.test and
+	// user-1. Change them between logins to sign in as someone else.
+	Email, UserID string
 
 	quit chan struct{}
 
@@ -142,6 +147,7 @@ func New(t testing.TB) *Server {
 	mux.HandleFunc("POST /oauth/token", s.token)
 	mux.HandleFunc("POST /v1/chat", s.chat)
 	mux.HandleFunc("GET /v1/me", s.me)
+	mux.HandleFunc("GET /v1/quota", s.quota)
 	srv := httptest.NewServer(mux)
 	s.URL = srv.URL
 	t.Cleanup(func() {
@@ -480,8 +486,31 @@ func (s *Server) issueLocked(fam *family, now time.Time) tokenSet {
 		RefreshToken: refresh,
 		TokenType:    "Bearer",
 		ExpiresIn:    int64(ttl / time.Second),
-		Email:        "user@example.test",
+		Email:        cmp.Or(s.Email, "user@example.test"),
+		UserID:       cmp.Or(s.UserID, "user-1"),
 	}
+}
+
+// QuotaResetsAt is when the plan's window that /v1/quota reports resets, in Unix seconds.
+const QuotaResetsAt = 1_900_000_000
+
+// quota answers the quota endpoint for a token it issued: a plan with one window, 25% used, and
+// a rate limited token's window full.
+func (s *Server) quota(w http.ResponseWriter, r *http.Request) {
+	bearer, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	s.mu.Lock()
+	tok, ok := s.tokens[bearer]
+	valid := ok && (tok.family == nil || !tok.family.revoked) && (tok.expires.IsZero() || time.Now().Before(tok.expires))
+	s.mu.Unlock()
+	if !valid {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid_token"})
+		return
+	}
+	used := 25
+	if tok.behaviour == behaviourRateLimited {
+		used = 100
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"plan": "test", "window": map[string]any{"used_percent": used, "resets_at": QuotaResetsAt, "seconds": 18000}})
 }
 
 // tokenSet is a successful token reply (RFC 6749 section 5.1).
@@ -491,6 +520,7 @@ type tokenSet struct {
 	TokenType    string `json:"token_type"`
 	ExpiresIn    int64  `json:"expires_in"`
 	Email        string `json:"email"`
+	UserID       string `json:"user_id"`
 }
 
 // chat answers the model endpoint. The reply is newline-delimited JSON, flushed line by line,

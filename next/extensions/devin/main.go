@@ -60,6 +60,7 @@ func main() {
 		LoginMethods: loginMethods,
 		Login:        login,
 		Models:       listModels,
+		Quota:        quota,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "devin:", err)

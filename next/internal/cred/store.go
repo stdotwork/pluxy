@@ -52,6 +52,10 @@ type Record struct {
 	Reason string `json:"reason,omitempty"`
 	// Label names the account for people (for example an e-mail address); not secret.
 	Label string `json:"label,omitempty"`
+	// Identity names the upstream account the credential signs in to, as the provider's login
+	// reported it (protocol.Grant.Identity); not secret. A new login to the account must sign
+	// in to the same one.
+	Identity map[string]string `json:"identity,omitempty"`
 	// Account holds the account's routing fields and settings. Its credential is always nil;
 	// the credential is Credential.
 	Account    route.Account       `json:"account"`

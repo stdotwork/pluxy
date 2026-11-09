@@ -1,6 +1,7 @@
 // Package xaitest is a fake xAI for tests of the xAI extension: its Responses API under
-// /v1/responses, its model list under /v1/models, and the Grok CLI's sign-in (OpenID discovery, device authorization and token
-// endpoints). It accepts only the API keys and tokens it issued and never talks to xAI.
+// /v1/responses, its model list under /v1/models, the Grok CLI's billing and profile reads
+// (/v1/billing, /v1/user, /v1/settings) and its sign-in (OpenID discovery, device authorization and
+// token endpoints). It accepts only the API keys and tokens it issued and never talks to xAI.
 package xaitest
 
 import (
@@ -19,7 +20,9 @@ import (
 
 // Request is an API request the server answered with a valid key.
 type Request struct {
+	Method string
 	Path   string
+	Query  string
 	Header http.Header
 	Body   []byte
 }
@@ -35,6 +38,9 @@ type Server struct {
 	DenyDevice bool
 	// TokenDown makes the token endpoint answer 503.
 	TokenDown bool
+	// Billing, if set, answers the billing and profile reads of a Grok login (GET /v1/billing,
+	// /v1/user and /v1/settings) whose token is valid, in place of the default bodies below.
+	Billing func(w http.ResponseWriter, r *http.Request)
 	// Answer, if set, sees every request first; it answers one by returning true.
 	Answer func(w http.ResponseWriter, r *http.Request) bool
 
@@ -169,7 +175,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": []map[string]any{{"id": "grok-test", "object": "model"}}})
 		return
 	}
-	if r.URL.Path != "/v1/responses" || r.Method != http.MethodPost {
+	billing := r.Method == http.MethodGet && (r.URL.Path == "/v1/billing" || r.URL.Path == "/v1/user" || r.URL.Path == "/v1/settings")
+	if !billing && (r.URL.Path != "/v1/responses" || r.Method != http.MethodPost) {
 		http.NotFound(w, r)
 		return
 	}
@@ -181,11 +188,28 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"code": "Client specified an invalid argument", "error": "Incorrect API key provided."})
 		return
 	}
-	req := Request{Path: r.URL.Path, Header: r.Header.Clone()}
+	req := Request{Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery, Header: r.Header.Clone()}
 	req.Body, _ = io.ReadAll(r.Body)
 	s.mu.Lock()
 	s.requests = append(s.requests, req)
 	s.mu.Unlock()
+	if billing {
+		if s.Billing != nil {
+			s.Billing(w, r)
+			return
+		}
+		switch {
+		case r.URL.Path == "/v1/billing" && r.URL.Query().Get("format") == "credits":
+			writeRaw(w, CreditsBody)
+		case r.URL.Path == "/v1/billing":
+			writeRaw(w, BillingBody)
+		case r.URL.Path == "/v1/user":
+			writeRaw(w, UserBody)
+		default:
+			writeRaw(w, SettingsBody)
+		}
+		return
+	}
 	if s.Generate != nil {
 		s.Generate(w, r, req)
 		return
@@ -247,6 +271,21 @@ func idToken() string {
 	return enc(map[string]string{"alg": "none"}) + "." + enc(map[string]string{"sub": "user-1", "email": Email}) + ".x"
 }
 
+// The default bodies of the billing and profile reads, shaped as the Grok CLI's endpoint answers
+// them: amounts in cents under "val", periods as RFC 3339 times.
+const (
+	// CreditsBody answers GET /v1/billing?format=credits: the weekly window.
+	CreditsBody = `{"config":{"currentPeriod":{"type":"BILLING_PERIOD_TYPE_WEEKLY","start":"2026-11-02T00:00:00Z","end":"2026-11-09T00:00:00Z"},` +
+		`"creditUsagePercent":42.5,"productUsage":[{"product":"grok-build","usagePercent":30}]}}`
+	// BillingBody answers GET /v1/billing: the monthly credits, the cap and the prepaid balance.
+	BillingBody = `{"config":{"monthlyLimit":{"val":"15000"},"used":{"val":"16000"},"onDemandCap":{"val":"5000"},` +
+		`"prepaidBalance":{"val":"2500"},"billingPeriodStart":"2026-11-01T00:00:00Z","billingPeriodEnd":"2026-12-01T00:00:00Z"}}`
+	// UserBody answers GET /v1/user?include=subscription.
+	UserBody = `{"subscriptionTier":"SUBSCRIPTION_TIER_SUPER_GROK_PRO"}`
+	// SettingsBody answers GET /v1/settings.
+	SettingsBody = `{"subscription_tier_display":"SuperGrok"}`
+)
+
 // Usage is the usage the default replies report.
 var Usage = map[string]int{"input_tokens": 11, "output_tokens": 7, "total_tokens": 18}
 
@@ -283,6 +322,11 @@ func messageItem(text string) map[string]any {
 func event(w io.Writer, name string, data any) {
 	b, _ := json.Marshal(data)
 	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, b)
+}
+
+func writeRaw(w http.ResponseWriter, body string) {
+	w.Header().Set("Content-Type", "application/json")
+	io.WriteString(w, body)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

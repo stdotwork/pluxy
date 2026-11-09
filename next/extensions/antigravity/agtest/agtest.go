@@ -51,6 +51,14 @@ type Server struct {
 	// onboarding takes OnboardPolls polls before it is done.
 	NoProject    bool
 	OnboardPolls int
+	// QuotaSummary, if set, is the body of retrieveUserQuotaSummary; the default is DefaultQuota.
+	// QuotaStatus, if not 0, makes it answer that status and an error body instead.
+	QuotaSummary string
+	QuotaStatus  int
+	// PaidTier, if set, is the ID of the paid tier loadCodeAssist names besides the free current
+	// tier. ProfileStatus, if not 0, makes loadCodeAssist answer that status.
+	PaidTier      string
+	ProfileStatus int
 	// Answer, if set, sees every request first; it answers one by returning true.
 	Answer func(w http.ResponseWriter, r *http.Request) bool
 
@@ -213,11 +221,30 @@ func (s *Server) cloudCode(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	switch r.URL.Path {
 	case "/v1internal:loadCodeAssist":
+		if s.ProfileStatus != 0 {
+			writeJSON(w, s.ProfileStatus, googleError(s.ProfileStatus, "the fake was told to fail", "INTERNAL"))
+			return
+		}
 		if s.NoProject {
 			writeJSON(w, http.StatusOK, map[string]any{"allowedTiers": []any{map[string]any{"id": "standard-tier", "isDefault": true}}})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"cloudaicompanionProject": Project, "currentTier": map[string]string{"id": "free-tier"}})
+		reply := map[string]any{"cloudaicompanionProject": Project, "currentTier": map[string]string{"id": "free-tier"}}
+		if s.PaidTier != "" {
+			reply["paidTier"] = map[string]string{"id": s.PaidTier}
+		}
+		writeJSON(w, http.StatusOK, reply)
+	case "/v1internal:retrieveUserQuotaSummary":
+		if s.QuotaStatus != 0 {
+			writeJSON(w, s.QuotaStatus, googleError(s.QuotaStatus, "the fake was told to fail", "INTERNAL"))
+			return
+		}
+		body := s.QuotaSummary
+		if body == "" {
+			body = DefaultQuota
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, body)
 	case "/v1internal:onboardUser":
 		s.mu.Lock()
 		s.onboards++
@@ -246,6 +273,15 @@ func (s *Server) cloudCode(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	}
 }
+
+// DefaultQuota is the default body of retrieveUserQuotaSummary: groups of models that share
+// quota, each with usage windows.
+const DefaultQuota = `{"groups":[
+{"displayName":"Gemini models","description":"Models within this group: Gemini 3 Pro, Gemini 3 Flash","buckets":[
+ {"bucketId":"gemini-weekly","displayName":"Weekly Limit","window":"weekly","remainingFraction":0.75,"resetTime":"2026-11-14T00:00:00Z"},
+ {"bucketId":"gemini-5h","displayName":"Five Hour Limit Remaining","window":"5h","remainingFraction":"40%","resetTime":"2026-11-09T15:00:00.123456789Z"}]},
+{"displayName":"Claude and GPT models","description":"Models within this group: Claude Sonnet 4.6, GPT-OSS 120B","buckets":[
+ {"bucketId":"claude-weekly","window":"weekly","remainingFraction":1,"resetTime":"2026-11-14T00:00:00Z"}]}]}`
 
 func googleError(code int, msg, status string) map[string]any {
 	return map[string]any{"error": map[string]any{"code": code, "message": msg, "status": status}}

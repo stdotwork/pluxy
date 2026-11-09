@@ -69,6 +69,7 @@ func main() {
 		Login:        login,
 		Refresh:      refresh,
 		Check:        check,
+		Quota:        quota,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "oauth:", err)
@@ -420,6 +421,7 @@ type tokenResponse struct {
 	RefreshToken string `json:"refresh_token"`
 	ExpiresIn    int64  `json:"expires_in"`
 	Email        string `json:"email"`
+	UserID       string `json:"user_id"`
 }
 
 // grantFrom builds the login's grant from a token reply.
@@ -431,8 +433,72 @@ func grantFrom(tr *tokenResponse) *protocol.Grant {
 			RefreshToken: tr.RefreshToken,
 			ExpiresAt:    expiresAt(tr.ExpiresIn),
 		},
-		Label: tr.Email,
+		Label:    tr.Email,
+		Identity: identityOf(tr),
 	}
+}
+
+// identityOf returns who signed in, by the provider's user ID and e-mail address, so that core
+// can refuse a new login to an account that signs in as someone else.
+func identityOf(tr *tokenResponse) map[string]string {
+	id := map[string]string{}
+	if tr.UserID != "" {
+		id["user_id"] = tr.UserID
+	}
+	if tr.Email != "" {
+		id["email"] = tr.Email
+	}
+	return id
+}
+
+// quota reads the plan's usage from the provider's /v1/quota (protocol minor version 5).
+func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
+	base, err := baseURL(call.Account.Settings)
+	if err != nil {
+		return nil, err
+	}
+	token, err := bearerOf(call.Account.Credential)
+	if err != nil {
+		return nil, err
+	}
+	if call.Account.Credential.Kind != protocol.CredentialOAuth {
+		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: "only signed-in accounts have a plan to report", Scope: llm.ScopeCredential}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/quota", nil)
+	if err != nil {
+		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "the base_url is not a valid URL", Scope: llm.ScopeCredential}
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach the provider", Retryable: true, Scope: llm.ScopeEndpoint}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, chatError(resp)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "the provider's reply broke off", Retryable: true, Scope: llm.ScopeEndpoint}
+	}
+	var q struct {
+		Plan   string `json:"plan"`
+		Window struct {
+			UsedPercent float64 `json:"used_percent"`
+			ResetsAt    int64   `json:"resets_at"`
+			Seconds     int64   `json:"seconds"`
+		} `json:"window"`
+	}
+	if err := json.Unmarshal(body, &q); err != nil {
+		return nil, &llm.Error{Code: llm.CodeUpstream, Message: "the provider's quota reply is not JSON", Status: resp.StatusCode}
+	}
+	used := q.Window.UsedPercent
+	return &protocol.Quota{Plan: q.Plan, Raw: body, Limits: []protocol.QuotaLimit{{
+		ID: "window", Label: "5-hour limit", UsedPercent: &used, ResetsAt: q.Window.ResetsAt, WindowSeconds: q.Window.Seconds,
+	}}}, nil
 }
 
 // expiresAt returns when a token that lasts expiresIn seconds stops working; 0 when unknown.
