@@ -97,6 +97,7 @@ type wsConn struct {
 // read reads every message of the socket: between turns too, so the socket's end is seen while
 // it is idle. A message no turn waits for is dropped, as today's core drops it.
 func (w *wsConn) read(ctx context.Context) {
+	defer w.c.CloseNow() // after ended is closed: the peer sees the close only once the loss is known here
 	defer close(w.ended)
 	for {
 		_, data, err := w.c.Read(ctx)

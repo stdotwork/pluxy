@@ -437,11 +437,14 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 	s.mu.Lock()
 	s.turn = turn
 	s.mu.Unlock()
-	defer func() {
+	// The turn is over for an interrupt once its last message is on its way to the client: a
+	// client that has read that message and interrupts next must be told no turn is running.
+	endTurn := func() {
 		s.mu.Lock()
 		s.turn = nil
 		s.mu.Unlock()
-	}()
+	}
+	defer endTurn()
 
 	stream := g.Router.Generate(ctx, rr)
 	defer stream.Close()
@@ -501,6 +504,9 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 			if json.Unmarshal(data, &d) == nil {
 				completed = d.Response.Output
 			}
+			endTurn()
+		case "response.failed":
+			endTurn()
 		}
 		return s.send(data)
 	}, req)

@@ -31,6 +31,9 @@
         "read": "turn"
       },
       {
+        "await_drop": 0
+      },
+      {
         "send": {
           "type": "response.interrupt",
           "response_id": "resp_x"

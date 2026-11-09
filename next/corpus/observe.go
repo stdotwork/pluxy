@@ -60,7 +60,7 @@ func Run(ctx context.Context, c *Case, base string, up *FakeUpstream) (Observati
 	var reply map[string]any
 	if len(c.Client.WebSocket) > 0 {
 		var err error
-		if reply, err = runClientWebSocket(ctx, c, base); err != nil {
+		if reply, err = runClientWebSocket(ctx, c, base, up); err != nil {
 			return nil, err
 		}
 		up.waitWebSockets(closeWait)

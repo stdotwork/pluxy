@@ -2,9 +2,11 @@ package corpus
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -35,9 +37,17 @@ type RecordedRequest struct {
 // requests it takes (see Provider.Aside) without recording them or using up a reply.
 func NewFakeUpstream(script []Reply, aside func(*http.Request) (Reply, bool)) *FakeUpstream {
 	u := &FakeUpstream{script: script, aside: aside}
-	u.Server = httptest.NewServer(http.HandlerFunc(u.serve))
+	u.Server = httptest.NewUnstartedServer(http.HandlerFunc(u.serve))
+	// A WebSocket step that drops the connection needs the TCP connection under the handshake.
+	u.Server.Config.ConnContext = func(ctx context.Context, c net.Conn) context.Context {
+		return context.WithValue(ctx, connKey{}, c)
+	}
+	u.Server.Start()
 	return u
 }
+
+// connKey is the request context key of the TCP connection a request came in on.
+type connKey struct{}
 
 func (u *FakeUpstream) serve(w http.ResponseWriter, r *http.Request) {
 	if u.aside != nil {
@@ -53,7 +63,7 @@ func (u *FakeUpstream) serve(w http.ResponseWriter, r *http.Request) {
 	rec := RecordedRequest{Method: r.Method, Path: r.URL.RequestURI(), Header: r.Header.Clone(), Body: body}
 	ws := n < len(u.script) && len(u.script[n].WebSocket) > 0 && isWebSocketHandshake(r)
 	if ws {
-		rec.ws = &wsRecord{done: make(chan struct{})}
+		rec.ws = &wsRecord{done: make(chan struct{}), dropped: make(chan struct{})}
 	}
 	u.requests = append(u.requests, rec)
 	u.mu.Unlock()
