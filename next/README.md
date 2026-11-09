@@ -323,6 +323,15 @@ for this endpoint only. When no account is eligible the client gets an error say
 
 **Capacity refusals.** A refusal that says the turn or the model is full, not that the account's allowance is used up, is a rate limit on that model for that account: the code `turn_rate_limit_exceeded`, `model_at_capacity` or `model_is_at_capacity`, or, with no code, an "at capacity" message from a `rate_limit_error` or about the model. Whatever status the upstream gave, the client sees a 429, core tries another account, and the account keeps serving its other models. The upstream's `Retry-After` is kept; `Retry-After: 0` (retry at once) cannot be passed on, so the model waits about a second. The same refusal inside an open stream blocks the model the same way, but the request is not tried again, as in today's core. A WebSocket `websocket_connection_limit_reached` message is an error message like any other: it keeps its status (a 429 is then a retryable rate limit on the account, a 400 an invalid request), and the next turn opens a new upstream socket.
 
+**Stream repairs.** As today's core does, on HTTP and on the upstream WebSocket alike: an output
+item of a terminal `response.completed` or `response.incomplete` that has no `id` (or a null or
+blank one) gets the `id` of the item `response.output_item.done` finished at the same position; and
+a `response.incomplete` that produced nothing (no output delta with text, no finished item, no
+output) and reports `output_tokens` of exactly `0` is an upstream that gave up silently, so it fails
+with an `upstream` error (502, scope `request`, not retryable) instead of finishing the reply. The
+error is not retried on another account, because the upstream may have run the request, and it puts
+no cooldown on the account.
+
 **Quota.** For a ChatGPT sign-in account, `GET /v0/management/accounts/{id}/quota` reads `GET {backend}/wham/usage`, where `{backend}` is the account's `base_url` without a trailing `/codex` (default `https://chatgpt.com/backend-api`), with the access token, the `Chatgpt-Account-Id` header and the same `User-Agent` and `Originator` the account's requests carry (so `codex_identity` applies). It reports the plan (`plan_type`), the 5-hour and weekly or monthly windows (`five_hour`, `weekly`, `monthly`), code review's windows (`code_review_*`), each extra limit such as one model's (`<name>_five_hour` and so on) and the credit balance (`credits`), with the share used, reset time and window length. An API key answers unsupported. A sign-in's grant carries `identity` `{"email", "account_id"}`: members of one ChatGPT workspace share its account ID, so the e-mail address tells them apart.
 
 ## Claude

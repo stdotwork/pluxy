@@ -181,9 +181,11 @@ type eventSender interface{ Send(llm.Event) error }
 // send blocks the next upstream read. The Codex endpoint always streams, so a client that asked
 // for a non-streamed reply gets the same events and core puts the reply together.
 //
-// Two repairs, as today's core makes them: a terminal Response whose output is empty gets the
-// items the stream finished (response.output_item.done) as its output, and response.done, which
-// some Codex streams end with, counts as response.completed.
+// Four repairs, as today's core makes them: a terminal Response whose output is empty gets the
+// items the stream finished (response.output_item.done) as its output; an output item without an
+// id gets the id of the finished item at its position; response.done, which some Codex streams
+// end with, counts as response.completed; and a response.incomplete that produced nothing is an
+// error (see repairs.apply).
 func relay(ctx context.Context, resp *http.Response, out eventSender) error {
 	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 		// The Codex endpoint answers with a stream; a JSON body is a whole Response.
@@ -207,7 +209,7 @@ func relay(ctx context.Context, resp *http.Response, out eventSender) error {
 	}
 	r := sse.NewReader(resp.Body)
 	dec := openairesponses.NewStreamDecoder()
-	done := map[int]json.RawMessage{} // output_index -> finished item
+	rep := newRepairs()
 	for {
 		e, err := r.Next()
 		eof := err == io.EOF
@@ -224,7 +226,11 @@ func relay(ctx context.Context, resp *http.Response, out eventSender) error {
 			}
 			return &llm.Error{Code: llm.CodeUpstream, Message: "upstream stream broke: " + err.Error(), Scope: llm.ScopeEndpoint}
 		default:
-			events, err = dec.Decode(repair([]byte(e.Data), done))
+			var data []byte
+			if data, err = rep.apply([]byte(e.Data)); err != nil {
+				return err
+			}
+			events, err = dec.Decode(data)
 			if err != nil {
 				return classify(err)
 			}
@@ -243,45 +249,118 @@ func relay(ctx context.Context, resp *http.Response, out eventSender) error {
 	}
 }
 
-// repair records finished output items and rewrites a terminal event as relay describes.
-func repair(data []byte, done map[int]json.RawMessage) []byte {
+// emptyIncomplete is the error for a reply that ended with response.incomplete without having
+// produced anything. The upstream may have run the request, so it is not retried; the scope is the
+// request, as it says nothing about the account, so routing puts no cooldown on the account and
+// does not move the request to another one (today's core's request-scoped error).
+func emptyIncomplete() *llm.Error {
+	return &llm.Error{Code: llm.CodeUpstream, Status: http.StatusBadGateway, Scope: llm.ScopeRequest,
+		Message: "stream error: upstream terminated with incomplete empty response (0 tokens)"}
+}
+
+// repairs holds what the repairs of one reply need from the events before its terminal event.
+type repairs struct {
+	done     map[int]json.RawMessage // output_index -> finished item
+	produced bool                    // a delta with text, or a finished item, came
+}
+
+func newRepairs() *repairs { return &repairs{done: map[int]json.RawMessage{}} }
+
+// apply records finished output items and rewrites a terminal event as relay describes. It
+// fails for a response.incomplete that produced nothing: no output delta with text, no finished
+// item, no output in the event, and a usage whose output_tokens is exactly the number 0. That is
+// an upstream that gave up silently, which today's core reports as an error rather than as a
+// reply; a 0 that is missing, null, a string or written 0.0 does not show it.
+func (p *repairs) apply(data []byte) ([]byte, error) {
 	var ev map[string]json.RawMessage
 	if json.Unmarshal(data, &ev) != nil {
-		return data
+		return data, nil
 	}
 	var typ string
 	_ = json.Unmarshal(ev["type"], &typ)
 	switch typ {
+	case "response.output_text.delta", "response.reasoning_text.delta", "response.reasoning_summary_text.delta", "response.function_call_arguments.delta":
+		var delta string
+		if json.Unmarshal(ev["delta"], &delta) == nil && strings.TrimSpace(delta) != "" {
+			p.produced = true
+		}
+		return data, nil
 	case "response.output_item.done":
+		var item map[string]json.RawMessage
+		if json.Unmarshal(ev["item"], &item) == nil && item != nil {
+			p.produced = true
+		}
 		var idx int
 		if json.Unmarshal(ev["output_index"], &idx) == nil {
-			done[idx] = ev["item"]
+			p.done[idx] = ev["item"]
 		}
-		return data
+		return data, nil
 	case "response.done":
 		ev["type"] = raw("response.completed")
 	case "response.completed", "response.incomplete":
 	default:
-		return data
+		return data, nil
 	}
-	var r map[string]json.RawMessage
-	if json.Unmarshal(ev["response"], &r) == nil && r != nil && len(done) > 0 {
-		var output []json.RawMessage
-		_ = json.Unmarshal(r["output"], &output)
+	var r map[string]json.RawMessage // nil when the event has no response object
+	_ = json.Unmarshal(ev["response"], &r)
+	var output []json.RawMessage
+	_ = json.Unmarshal(r["output"], &output)
+	if typ == "response.incomplete" && !p.produced && len(output) == 0 && r != nil {
+		var usage map[string]json.RawMessage
+		if json.Unmarshal(r["usage"], &usage) == nil && string(bytes.TrimSpace(usage["output_tokens"])) == "0" {
+			return nil, emptyIncomplete()
+		}
+	}
+	if r != nil && len(p.done) > 0 {
 		if len(output) == 0 {
-			idx := make([]int, 0, len(done))
-			for i := range done {
+			idx := make([]int, 0, len(p.done))
+			for i := range p.done {
 				idx = append(idx, i)
 			}
 			sort.Ints(idx)
 			for _, i := range idx {
-				output = append(output, done[i])
+				output = append(output, p.done[i])
 			}
+			r["output"] = raw(output)
+			ev["response"] = raw(r)
+		} else if p.restoreIDs(output) {
 			r["output"] = raw(output)
 			ev["response"] = raw(r)
 		}
 	}
-	return raw(ev)
+	return raw(ev), nil
+}
+
+// restoreIDs gives each output item that has no id (missing, null or blank) the id of the
+// finished item at the same position, when that has one, as today's core does. It reports whether
+// it changed any.
+func (p *repairs) restoreIDs(output []json.RawMessage) bool {
+	changed := false
+	for i, it := range output {
+		var item map[string]json.RawMessage
+		if json.Unmarshal(it, &item) != nil || item == nil || hasID(item["id"]) {
+			continue
+		}
+		var finished struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(p.done[i], &finished) != nil || strings.TrimSpace(finished.ID) == "" {
+			continue
+		}
+		item["id"] = raw(finished.ID)
+		output[i] = raw(item)
+		changed = true
+	}
+	return changed
+}
+
+// hasID reports whether an item's id is there: any value but null and a blank string.
+func hasID(v json.RawMessage) bool {
+	var s string
+	if json.Unmarshal(v, &s) == nil {
+		return strings.TrimSpace(s) != ""
+	}
+	return len(v) > 0
 }
 
 // codexError is the error object of a Codex refusal, in an HTTP error body or a stream's error

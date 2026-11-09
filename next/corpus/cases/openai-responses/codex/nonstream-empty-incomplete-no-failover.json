@@ -1,0 +1,95 @@
+{
+  "description": "Two accounts: the first answers a non-streamed request with an empty response.incomplete. The error ends the request: neither core tries the second account, because the upstream may have run the request. Which account goes first is masked: the old core's first pick between two equal accounts changes from run to run.",
+  "source": [
+    "core/internal/runtime/executor/codex_executor_terminal.go (codexEmptyIncompleteStreamError.IsRequestScoped)",
+    "core/sdk/cliproxy/auth/conductor_cooldown.go (isRequestScopedError)"
+  ],
+  "accounts": 2,
+  "client": {"path":"/v1/responses","body":{"model":"gpt-test","input":"Say hello"}},
+  "upstream": [
+    {
+      "sse": [
+        {"event":"response.created","data":{"type":"response.created","sequence_number":0,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"in_progress","model":"gpt-test-upstream","output":[],"usage":null}}},
+        {"event":"response.incomplete","data":{"type":"response.incomplete","sequence_number":1,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"incomplete","model":"gpt-test-upstream","output":[],"usage":{"input_tokens":5,"output_tokens":0,"total_tokens":5,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}},"incomplete_details":{"reason":"max_output_tokens"}}}}
+      ]
+    },
+    {
+      "sse": [
+        {"event":"response.created","data":{"type":"response.created","sequence_number":0,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"in_progress","model":"gpt-test-upstream","output":[],"usage":null}}},
+        {"event":"response.completed","data":{"type":"response.completed","sequence_number":1,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"completed","model":"gpt-test-upstream","output":[{"id":"msg_corpus","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hello","annotations":[]}]}],"usage":{"input_tokens":5,"output_tokens":1,"total_tokens":6}}}}
+      ]
+    }
+  ],
+  "volatile": ["upstream[*].headers.Authorization"],
+  "exceptions": [
+    {
+      "path": "client.body.error.code",
+      "kind": "gap",
+      "reason": "Both cores answer 502 with the same message and type; the error's code differs (today's core writes internal_server_error, the name of its 502 status, the new core's names the failure: upstream).",
+      "want": "upstream"
+    },
+    {
+      "path": "upstream[*].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."
+    },
+    {
+      "path": "upstream[*].headers.Session-Id",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    },
+    {
+      "path": "upstream[*].body.prompt_cache_key",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {
+          "code": "internal_server_error",
+          "message": "stream error: upstream terminated with incomplete empty response (0 tokens)",
+          "type": "server_error"
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 502
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": ["reasoning.encrypted_content"],
+          "input": [
+            {"content":[{"text":"Say hello","type":"input_text"}],"role":"user","type":"message"}
+          ],
+          "instructions": "",
+          "model": "gpt-test",
+          "parallel_tool_calls": true,
+          "prompt_cache_key": "f674c4c7-551b-57dd-ab73-9724cff0fe39",
+          "store": false,
+          "stream": true,
+          "tools": [{"output_format":"png","type":"image_generation"}]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "(volatile)",
+          "Content-Type": "application/json",
+          "Originator": "codex-tui",
+          "Session-Id": "f674c4c7-551b-57dd-ab73-9724cff0fe39",
+          "User-Agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      }
+    ]
+  }
+}
