@@ -49,10 +49,13 @@ func (t *trace) setHeader(w http.ResponseWriter) {
 	}
 }
 
-// logPrefix returns what a log line about r starts with: its method and path, and its trace
-// ID and account when it has them.
+// logPrefix returns what a log line about r starts with: its method and path, where it came
+// from (ClientIP), and its trace ID and account when it has them.
 func logPrefix(r *http.Request) string {
 	p := r.Method + " " + logField(r.URL.Path)
+	if a := ClientIP(r); a.IsValid() {
+		p += " from " + a.String()
+	}
 	if t := traceOf(r); t != nil {
 		p += " [trace " + t.id
 		if t.account != "" {

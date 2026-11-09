@@ -188,6 +188,18 @@ names behind HTTPS of your own.
 {"tls": {"enable": true, "cert": "certs/fullchain.pem", "key": "certs/privkey.pem"}}
 ```
 
+Core's log lines about a request name where it came from: the address of the connection, or,
+when that is one of `trusted_proxies` (IP addresses and CIDR ranges of the proxies in front of
+core), the client the proxy names. In `X-Forwarded-For` (all its lines, as one list) that is the
+last address that is not a trusted proxy, read from the right, so an address a client wrote in
+itself is skipped; without that header, the first line of `X-Real-IP`. A header with an entry that is not an IP
+address is not used. The list is empty by default, so no header counts, as in today's core; a
+reload applies a change, where today's core needs a restart.
+
+```json
+{"trusted_proxies": ["127.0.0.1", "10.0.0.0/8"]}
+```
+
 A reply to a request that went to an account carries `X-CPA-TRACE-ID`, as today's core sends it:
 the time and a random part, such as `20261109061500-3f9a0c2e5b7d4e18`. Core's log lines about the
 request (a failure, what translation lost) carry the same ID and the account, so a reply can be
@@ -1117,7 +1129,7 @@ are accepted silently.
 | `server.max-request-body-bytes` | Request bodies are capped at 24 MiB. | Dropped: core needs a fixed cap for its request frame |
 | `server.response-compression.*` | | Later |
 | `server.tls.enable`, `.cert`, `.key` (`tls`) | `tls`, the same three keys. Relative paths are relative to the config file, where today's core reads them relative to the folder it was started in. | Supported |
-| `server.trusted-proxies` (`trusted-proxies`) | | Later |
+| `server.trusted-proxies` (`trusted-proxies`) | `trusted_proxies`; a change applies on reload. | Supported |
 | `server.commercial-mode` (`commercial-mode`) | | Dropped: it turns off features this core does not have |
 | `server.discovery.*` (`discovery`) | | Later |
 | `server.discovery.advertise-management` | | Dead |

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"maps"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -56,6 +57,11 @@ type Config struct {
 	CORS CORSConfig `json:"cors"`
 	// TLS serves listen over HTTPS (today's server.tls).
 	TLS TLSFiles `json:"tls"`
+	// TrustedProxies are the IP addresses and CIDR ranges of the proxies in front of core whose
+	// X-Forwarded-For or X-Real-IP header names the client (today's server.trusted-proxies).
+	// Default: none; a request comes from its connection's peer.
+	TrustedProxies []string `json:"trusted_proxies,omitempty"`
+	trusted        []netip.Prefix
 
 	// From a config.yaml with today's core's key names (package legacy):
 	// Notices name the settings it uses that core does not support or know; core logs them
@@ -322,6 +328,11 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 	if err := c.CORS.prepare(); err != nil {
 		return nil, err
 	}
+	trusted, err := parseTrustedProxies(c.TrustedProxies)
+	if err != nil {
+		return nil, err
+	}
+	c.trusted = trusted
 	if c.TLS.Enable {
 		c.TLS.Cert, c.TLS.Key = strings.TrimSpace(c.TLS.Cert), strings.TrimSpace(c.TLS.Key) // as today's core reads them
 		if c.TLS.Cert == "" || c.TLS.Key == "" {

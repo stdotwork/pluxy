@@ -86,7 +86,7 @@ func TestLogTranslationCutsThePath(t *testing.T) {
 	if !utf8.ValidString(line) {
 		t.Errorf("log line is not valid UTF-8")
 	}
-	if !strings.Contains(line, "POST /v1/€") || !strings.Contains(line, "…: translation: request dropped p (d)") {
+	if !strings.Contains(line, "POST /v1/€") || !strings.Contains(line, "… from 192.0.2.1: translation: request dropped p (d)") {
 		t.Errorf("log line does not hold the cut path and the loss: %q", line)
 	}
 }
