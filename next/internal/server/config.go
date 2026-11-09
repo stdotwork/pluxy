@@ -19,6 +19,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/legacy"
 	"github.com/stdotwork/pluxy/next/internal/packages"
 	"github.com/stdotwork/pluxy/next/internal/route"
+	"github.com/stdotwork/pluxy/next/internal/usage"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
@@ -65,6 +66,9 @@ type Config struct {
 	// Default: none; a request comes from its connection's peer.
 	TrustedProxies []string `json:"trusted_proxies,omitempty"`
 	trusted        []netip.Prefix
+	// Usage says whether core keeps a usage record of the requests it serves, for the
+	// management API, and how much of it.
+	Usage UsageConfig `json:"usage"`
 
 	// From a config.yaml with today's core's key names (package legacy):
 	// Notices name the settings it uses that core does not support or know; core logs them
@@ -94,6 +98,30 @@ type ExtensionPagesConfig struct {
 	// URL is the pages site's origin as browsers reach it. Default: derived for a panel on a
 	// loopback name (the other loopback name, on the pages listener's port).
 	URL string `json:"url,omitempty"`
+}
+
+// UsageConfig is the usage section of the config: the usage record (package usage).
+type UsageConfig struct {
+	// Enabled turns the usage record on (today's usage-statistics-enabled). Absent: on.
+	Enabled *bool `json:"enabled,omitempty"`
+	// MaxEvents is the most requests the record keeps; the oldest go first. Default 10000, at
+	// most 200000.
+	MaxEvents int `json:"max_events,omitempty"`
+	// MaxAgeMS is how long the record keeps a request. Default 24 hours, at most 30 days.
+	MaxAgeMS int64 `json:"max_age_ms,omitempty"`
+}
+
+// On reports whether the usage record is on.
+func (u UsageConfig) On() bool { return u.Enabled == nil || *u.Enabled }
+
+func (u UsageConfig) validate() error {
+	if u.MaxEvents < 0 || u.MaxEvents > usage.MaxMaxEvents {
+		return fmt.Errorf("config: usage.max_events must be between 0 (the default, %d) and %d", usage.DefaultMaxEvents, usage.MaxMaxEvents)
+	}
+	if u.MaxAgeMS < 0 || u.MaxAgeMS > usage.MaxMaxAge.Milliseconds() {
+		return fmt.Errorf("config: usage.max_age_ms must be between 0 (the default, 24 hours) and %d (30 days)", usage.MaxMaxAge.Milliseconds())
+	}
+	return nil
 }
 
 // PackagesConfig is the packages section of the config.
@@ -342,6 +370,9 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 			return nil, errors.New("config: tls.enable needs tls.cert and tls.key")
 		}
 		c.TLS.Cert, c.TLS.Key = rel(c.TLS.Cert), rel(c.TLS.Key)
+	}
+	if err := c.Usage.validate(); err != nil {
+		return nil, err
 	}
 	switch c.DropPolicy {
 	case "", llm.DropReport, llm.DropReject:

@@ -335,6 +335,7 @@ func isJSONArray(v json.RawMessage) bool {
 // runTurn routes one turn and writes its reply. mode is the mode the turn must take, or "" to
 // let the chosen account decide. It returns false when the socket must close.
 func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model, mode string) bool {
+	arrived := time.Now()
 	// The client's message with the model filled in: as it is, it is a session turn's request.
 	native := make(map[string]json.RawMessage, len(msg))
 	for k, v := range msg {
@@ -446,7 +447,11 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 	}
 	defer endTurn()
 
-	stream := g.Router.Generate(ctx, rr)
+	turnReq := sessReq
+	turnReq.Stream = true
+	m := g.newMeter(arrived, s.r.URL.Path, turnReq, clientToken(s.r, false))
+	rr.Attempting = func(a route.Attempt) { m.attempt(a, "") }
+	stream := meterStream(g.Router.Generate(ctx, rr), m)
 	defer stream.Close()
 	ev := stream.Next()
 	// The session the turn ran on is the socket's from now on, whatever the outcome; the
@@ -523,8 +528,11 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 					s.pinned = ranOn
 					s.epoch.Add(1)
 				}
+				status, _ := openaichat.ErrorResponse(ev.Error)
+				m.fail(ev.Error, status)
 				return s.turnFailed(ev.Error)
 			}
+			m.fail(ev.Error, http.StatusOK)
 			// An HTTP turn the client interrupted: it ends for the client, and the conversation
 			// keeps what it said so far.
 			if s.send(openairesponses.InterruptedMessage(id, output)) != nil {
@@ -536,7 +544,16 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 		if err := sw.Write(ev); err != nil {
 			return false
 		}
+		if m != nil {
+			m.sent = http.StatusOK // the turn's reply has begun
+		}
 		if ev.Terminal() {
+			if chosen == wsModeHTTP && httpTurn.Warmup {
+				// A warmup reaches no upstream: nothing to record.
+				m.drop()
+			} else if ev.Type == llm.EventFinish {
+				m.finish(ev)
+			}
 			break
 		}
 		ev = stream.Next()

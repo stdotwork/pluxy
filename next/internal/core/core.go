@@ -43,6 +43,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/packages"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/internal/server"
+	"github.com/stdotwork/pluxy/next/internal/usage"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
@@ -99,6 +100,8 @@ type Core struct {
 
 	checks *checks // each account's last check
 
+	usage *usage.Store // the usage record, kept across reloads
+
 	// accounts serialises setting the accounts a router routes over: a change in the
 	// credential store and a publish never interleave.
 	accounts sync.Mutex
@@ -120,7 +123,7 @@ type Core struct {
 // Start loads the config file and publishes it as revision 1. Unless in safe mode, it starts
 // each extension's program to check it; the program then runs only while it is needed.
 func Start(opts Options) (*Core, error) {
-	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor(), checks: newChecks()}
+	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor(), checks: newChecks(), usage: usage.NewStore()}
 	cfg, err := server.LoadConfig(opts.ConfigPath)
 	if err != nil {
 		return nil, c.scrubbed(err)
@@ -470,7 +473,10 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 		}
 		return hostSession{s}, nil
 	}
-	next.Generation = server.Generation{Config: cfg, Attempt: attempt, Count: count, OpenSession: openSession}
+	next.Generation = server.Generation{Config: cfg, Attempt: attempt, Count: count, OpenSession: openSession, KeyID: c.redactor.ID}
+	if cfg.Usage.On() {
+		next.Usage = c.usage
+	}
 	router, err := route.New(cfg.Routing, c.configured(next), attempt, c.state)
 	if err != nil {
 		c.discard(next, prev)
@@ -550,6 +556,8 @@ func (c *Core) publish(next, prev *snapshot, hash string) {
 	for id, g := range next.exts {
 		g.SetPolicy(policy(c.extensionConfig(next, id)))
 	}
+	u := next.Config.Usage
+	c.usage.SetLimits(u.MaxEvents, time.Duration(u.MaxAgeMS)*time.Millisecond)
 	c.mu.Lock()
 	c.cur.Store(next)
 	c.active = Revision{Revision: next.revision, Hash: hash, At: time.Now()}
