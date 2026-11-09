@@ -307,4 +307,10 @@ func TestOldAccountsLeaveNoModelList(t *testing.T) {
 		t.Fatalf("old account's list = %+v, want m1", l)
 	}
 	h.runOK("m2")
+	h.r.lists.mu.Lock()
+	n := len(h.r.lists.entries)
+	h.r.lists.mu.Unlock()
+	if n != 1 {
+		t.Errorf("%d model lists kept, want 1: the old account's is not kept", n)
+	}
 }

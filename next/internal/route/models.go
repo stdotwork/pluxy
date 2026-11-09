@@ -68,6 +68,8 @@ func (r *Router) listOf(ctx context.Context, a *Account, creds Credentials, cata
 		return nil
 	}
 	c := &r.lists
+	// Held while the entry is added, so SetAccounts cannot replace the accounts in between.
+	r.mu.RLock()
 	c.mu.Lock()
 	e := c.entries[a]
 	if e != nil && isClosed(e.done) && e.list == nil && now.Sub(e.at) >= catalogRetry {
@@ -75,10 +77,14 @@ func (r *Router) listOf(ctx context.Context, a *Account, creds Credentials, cata
 	}
 	if e == nil {
 		e = &catalogEntry{done: make(chan struct{})}
-		if c.entries == nil {
-			c.entries = map[*Account]*catalogEntry{}
+		// A request still routing over accounts set before reads their list without keeping
+		// it: the kept lists are the current accounts'.
+		if slices.Contains(r.accounts, a) {
+			if c.entries == nil {
+				c.entries = map[*Account]*catalogEntry{}
+			}
+			c.entries[a] = e
 		}
-		c.entries[a] = e
 		// One read serves every request waiting for it, so a request that ends does not end it;
 		// it has a time limit of its own instead.
 		go func(a Account) {
@@ -92,6 +98,7 @@ func (r *Router) listOf(ctx context.Context, a *Account, creds Credentials, cata
 		}(*a)
 	}
 	c.mu.Unlock()
+	r.mu.RUnlock()
 	select {
 	case <-e.done:
 		return e.list
