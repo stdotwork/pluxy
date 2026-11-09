@@ -125,7 +125,10 @@ settings for every case.
 
 `client`: `method` (default `POST`), `path`, `headers`, `auth` (`client-key` by default,
 `none`, or a literal token), and `body` (JSON) or `body_text` (literal text, for bodies that
-are not JSON). The runner adds `Content-Type: application/json` and `User-Agent: pluxy-corpus/0`
+are not JSON). `then` lists more requests of the same form, sent one after another once the
+reply before has ended, for behaviour that shows across requests (which account each one goes
+to, a cooldown a failure leaves); their replies are the observation's `then`, and the global
+exceptions and volatile paths for `client` apply to each of them. The runner adds `Content-Type: application/json` and `User-Agent: pluxy-corpus/0`
 unless the case sets them.
 
 `upstream`: one reply per upstream request, in order. Each has `status` (default 200),
@@ -162,10 +165,17 @@ ends the request, like an upstream still generating.
 today's core has by default and the new core only when configured (CORS, for example). Today's
 core runs with its usual config.
 
-`accounts`: how many provider accounts both cores have (default 1). The old core's first pick
-between equal accounts changes from run to run, so multi-account cases mark
-`upstream[*].headers.Authorization` volatile; which account the new core picks is pinned by
-the e2e tests.
+`accounts`: how many provider accounts both cores have (default 1). The old core orders equal
+accounts by an ID hashed from the upstream URL, which changes from run to run, so multi-account
+cases mark `upstream[*].headers.Authorization` volatile, or set `label_accounts`: each account's
+key in the upstream requests' headers becomes `account-1`, `account-2` and so on, numbered in
+the order the accounts were first used, which compares the pattern of turns.
+
+`old_core` and `new_core` add settings to each core's generated config: `config` merges at the
+top level, `account` into every account, and `accounts` its n-th entry into the n-th account
+(for the old core the n-th key of its `api-keys` block), for settings such as a weight. A
+`null` removes a value, such as `{"account": {"models": null}}` for an account without a models
+list.
 
 `volatile`: paths whose values change between runs (timestamps, trace IDs). They are replaced by
 `"(volatile)"` before any comparison.

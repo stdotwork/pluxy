@@ -893,9 +893,12 @@ func StartNewCore(binDir, workDir, provider, upstreamURL string, models, keys []
 	}
 	ext, accounts := p.NewCore(upstreamURL, models, keys)
 	if over != nil {
-		for _, a := range accounts {
+		for i, a := range accounts {
 			if m, ok := a.(map[string]any); ok {
 				Merge(m, roundTrip(over.Account))
+				if i < len(over.Accounts) {
+					Merge(m, roundTrip(over.Accounts[i]))
+				}
 			}
 		}
 	}
@@ -1005,6 +1008,21 @@ func StartOldCore(s OldCoreSetup) (*Core, error) {
 			for _, g := range list {
 				if m, ok := g.(map[string]any); ok {
 					Merge(m, roundTrip(s.Override.Account))
+				}
+			}
+			// The n-th key: the n-th entry, or the n-th of a lone group's keys.
+			if len(list) == 1 {
+				if g, ok := list[0].(map[string]any); ok {
+					if keys, ok := g["keys"].([]any); ok {
+						list = keys
+					}
+				}
+			}
+			for i, over := range s.Override.Accounts {
+				if i < len(list) {
+					if m, ok := list[i].(map[string]any); ok {
+						Merge(m, roundTrip(over))
+					}
 				}
 			}
 		}

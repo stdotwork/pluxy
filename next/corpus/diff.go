@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
+	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -188,6 +191,32 @@ func diffValue(path []segment, want, got any, out *[]Difference) {
 
 func clonePath(p []segment) []segment { return append([]segment(nil), p...) }
 
+// upstreamKeyPattern matches the upstream keys UpstreamKeys hands out.
+var upstreamKeyPattern = regexp.MustCompile(UpstreamKey + `(-[0-9]+)?`)
+
+// LabelAccounts replaces each upstream key in the headers of the upstream requests in o with
+// "account-<n>", n counting the accounts in the order their keys first appear.
+func LabelAccounts(o Observation) {
+	labels := map[string]string{}
+	ups, _ := o["upstream"].([]any)
+	for _, u := range ups {
+		r, _ := u.(map[string]any)
+		h, _ := r["headers"].(map[string]any)
+		for _, k := range slices.Sorted(maps.Keys(h)) {
+			v, ok := h[k].(string)
+			if !ok {
+				continue
+			}
+			h[k] = upstreamKeyPattern.ReplaceAllStringFunc(v, func(key string) string {
+				if labels[key] == "" {
+					labels[key] = fmt.Sprintf("account-%d", len(labels)+1)
+				}
+				return labels[key]
+			})
+		}
+	}
+}
+
 // Mask replaces the values at the given paths with "(volatile)" in place.
 func Mask(o Observation, patterns []string) {
 	for _, p := range patterns {
@@ -356,6 +385,15 @@ func (e *Exception) accepts(pattern []segment, d Difference) bool {
 	return len(pattern) == len(d.segs) && !isContainer(d.Want) && !isContainer(d.Got)
 }
 
+// ForEachReply returns path, and for a path under client, the same path under each later
+// request's reply (then[*]): a global setting about the client's reply applies to all of them.
+func ForEachReply(path string) []string {
+	if rest, ok := strings.CutPrefix(path, "client."); ok {
+		return []string{path, "then[*]." + rest}
+	}
+	return []string{path}
+}
+
 // Judge compares got (new core) with want (reference) under the case's and the global
 // exceptions. Global exceptions are never stale for a single case.
 func Judge(want, got Observation, caseEx, globalEx []Exception) Verdict {
@@ -373,8 +411,10 @@ func Judge(want, got Observation, caseEx, globalEx []Exception) Verdict {
 		all = append(all, &compiled{&caseEx[i], segs, false, map[string][]segment{}})
 	}
 	for i := range globalEx {
-		segs, _ := parsePath(globalEx[i].Path)
-		all = append(all, &compiled{&globalEx[i], segs, true, map[string][]segment{}})
+		for _, p := range ForEachReply(globalEx[i].Path) {
+			segs, _ := parsePath(p)
+			all = append(all, &compiled{&globalEx[i], segs, true, map[string][]segment{}})
+		}
 	}
 	for _, d := range Diff(map[string]any(want), map[string]any(got)) {
 		hit := false

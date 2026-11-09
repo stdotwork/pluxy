@@ -24,6 +24,10 @@ type Case struct {
 	Source []string `json:"source,omitempty"`
 	// Client is the request the client sends.
 	Client ClientRequest `json:"client"`
+	// Then lists further requests the client sends after Client, one at a time, each once the
+	// reply to the one before has ended: for behaviour that shows across requests, such as which
+	// account each request goes to or a cooldown a failure leaves. Not WebSocket requests.
+	Then []ClientRequest `json:"then,omitempty"`
 	// AccountModels, when set, are the models the provider account lists in both cores. By
 	// default the old core lists the request's model (it serves only listed models) and the
 	// new core lists none (it serves any model).
@@ -31,6 +35,11 @@ type Case struct {
 	// Accounts is how many provider accounts both cores have, all pointed at the fake
 	// upstream, each with its own key (see UpstreamKeys). Default 1.
 	Accounts int `json:"accounts,omitempty"`
+	// LabelAccounts replaces each account's upstream key in the requests the upstream received
+	// with "account-1", "account-2" and so on, numbered in the order the accounts were first
+	// used, so a case can compare which account each request went to although today's core
+	// orders equal accounts differently on each run.
+	LabelAccounts bool `json:"label_accounts,omitempty"`
 	// NewCoreConfig holds settings added to the new core's config (top-level keys of its JSON
 	// config), for a behaviour that today's core has by default and the new core only when
 	// configured (such as CORS). Today's core is run as usual.
@@ -107,6 +116,11 @@ type CoreOverride struct {
 	// Account merges into each provider account: for the old core each group of its api-keys
 	// block and each auth file, for the new core each account.
 	Account map[string]any `json:"account,omitempty"`
+	// Accounts merges its n-th entry into the n-th account, after Account: for the new core
+	// its n-th account, for the old core the n-th key of its api-keys block (the n-th entry of
+	// a section with one entry per key, or the n-th of a group's keys). For settings that differ
+	// between accounts, such as a weight.
+	Accounts []map[string]any `json:"accounts,omitempty"`
 }
 
 // Merge returns base with over merged into it (see CoreOverride). base is changed in place.
@@ -282,6 +296,16 @@ func (c *Case) validate() error {
 	}
 	if len(c.Client.WebSocket) > 0 && (len(c.Client.Body) > 0 || c.Client.BodyText != nil) {
 		return fmt.Errorf("client: a websocket script has no body")
+	}
+	for i, t := range c.Then {
+		switch {
+		case t.Path == "":
+			return fmt.Errorf("then[%d].path is required", i)
+		case len(t.WebSocket) > 0:
+			return fmt.Errorf("then[%d]: only the first request may be a websocket", i)
+		case len(t.Body) > 0 && t.BodyText != nil:
+			return fmt.Errorf("then[%d]: set body or body_text, not both", i)
+		}
 	}
 	for i, s := range c.Client.WebSocket {
 		if n := count(len(s.Send) > 0, s.SendText != nil, s.Read != "", s.AwaitDrop != nil, s.Close != 0, s.Drop); n != 1 {
