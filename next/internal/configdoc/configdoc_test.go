@@ -954,7 +954,7 @@ func TestScrub(t *testing.T) {
 	long, short := "zzzz-long-secret", "zzzz"
 	msg := "bad " + long + " and " + short + " and tiny abc"
 	got := r.Scrub(msg, []string{short, long, "abc"})
-	want := "bad " + r.Placeholder(long) + " and " + r.Placeholder(short) + " and tiny abc"
+	want := "bad " + r.Placeholder(long) + " and " + r.Placeholder(short) + " and tiny " + r.Placeholder("abc")
 	if got != want {
 		t.Errorf("Scrub = %q, want %q", got, want)
 	}
@@ -967,9 +967,9 @@ func TestScrub(t *testing.T) {
 	if got := r.Scrub("x", nil); got != "x" {
 		t.Errorf("Scrub(nil) = %q", got)
 	}
-	// A secret of exactly four characters is replaced.
-	if got := r.Scrub("is zzzz", []string{"zzzz"}); got != "is "+r.Placeholder("zzzz") {
-		t.Errorf("Scrub of a 4-character secret = %q", got)
+	// However short, a secret is replaced; an empty one is not a secret.
+	if got := r.Scrub("is z", []string{"z", ""}); got != "is "+r.Placeholder("z") {
+		t.Errorf("Scrub of a 1-character secret = %q", got)
 	}
 }
 

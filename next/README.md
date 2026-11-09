@@ -828,7 +828,8 @@ checks the new contents and prepares them, and only when they are ready to serve
 the file and switch to them. The file is replaced in one step (a new file renamed over it, with
 the same permissions, through a symbolic link if the path is one), so nothing ever reads half of
 it. When a change is refused, the file and the running config stay as they were, and status
-keeps showing the file as it is. Today's core writes its file in place and saves a change that
+keeps showing the file as it is. When another program writes the file while a change is being
+prepared, the change is dropped with a 409, so that write is not lost. Today's core writes its file in place and saves a change that
 its reload may then refuse.
 
 A change made with the structured calls (client keys, management key, settings) writes the file

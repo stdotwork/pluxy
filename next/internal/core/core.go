@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -225,10 +226,12 @@ func (c *Core) transact(force bool, why string, change func(packages.State), str
 	}
 
 	b, err := os.ReadFile(c.opts.ConfigPath)
+	var orig []byte // the file's contents an edit started from
 	if edit != nil {
 		if err != nil {
 			return fmt.Errorf("reading the config file: %w", err)
 		}
+		orig = b
 		if b, err = edit(b); err != nil {
 			return err
 		}
@@ -279,8 +282,14 @@ func (c *Core) transact(force bool, why string, change func(packages.State), str
 		}
 	}
 	if err == nil && edit != nil {
-		if err = writeFileAtomic(c.opts.ConfigPath, b); err != nil {
+		// Another program may have written the file while the change was prepared; its
+		// version must not be lost.
+		if now, rerr := os.ReadFile(c.opts.ConfigPath); rerr != nil || !bytes.Equal(now, orig) {
+			err = &editError{http.StatusConflict, "conflict", "the config file changed while the change was prepared; try again"}
+		} else if err = writeFileAtomic(c.opts.ConfigPath, b); err != nil {
 			err = fmt.Errorf("%w: %w", errWriteConfig, err)
+		}
+		if err != nil {
 			c.discard(next, prev)
 		}
 	}
@@ -289,7 +298,7 @@ func (c *Core) transact(force bool, why string, change func(packages.State), str
 		c.mu.Lock()
 		c.desired = seen
 		c.mu.Unlock()
-		log.Printf("config change (%s) refused; the config file and the active revision stay: %v", why, err)
+		log.Printf("config change (%s) refused; the config file and the active revision stay: %s", why, c.scrub(err.Error(), orig, b))
 		return err
 	}
 	if err != nil {

@@ -473,13 +473,13 @@ func (d *Doc) line(n *yaml.Node) int {
 	return 1 + bytes.Count(d.src[:d.spans[n].start], []byte("\n"))
 }
 
-// Scrub returns msg with each of the secrets in it replaced by its placeholder. Secrets
-// shorter than four characters are left: replacing them would garble the message.
+// Scrub returns msg with each of the secrets in it replaced by its placeholder, longest
+// first. A very short secret may garble the message; showing it would be worse.
 func (r *Redactor) Scrub(msg string, secrets []string) string {
 	secrets = slices.Clone(secrets)
 	slices.SortFunc(secrets, func(a, b string) int { return len(b) - len(a) })
 	for _, s := range secrets {
-		if len(s) >= 4 {
+		if s != "" {
 			msg = strings.ReplaceAll(msg, s, r.Placeholder(s))
 		}
 	}

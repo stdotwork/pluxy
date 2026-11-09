@@ -1,8 +1,13 @@
 package core
 
 import (
+	"bytes"
+	"errors"
+	"log"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -122,5 +127,62 @@ func TestWriteFileAtomicRemovesTempFileOnFailure(t *testing.T) {
 	}
 	if names := dirNames(t, dir); len(names) != 1 || names[0] != "config.json" {
 		t.Errorf("folder holds %v, want only config.json", names)
+	}
+}
+
+// safeCore starts core in safe mode (no extensions) on a JSON config holding cfg.
+func safeCore(t *testing.T, cfg string) (*Core, string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Start(Options{ConfigPath: path, SafeMode: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Stop)
+	return c, path
+}
+
+const safeConfig = `{"listen": "127.0.0.1:0", "client_keys": ["fake-client-key-1"], "management_key": "fake-management-key"}` + "\n"
+
+func TestWriteConfigKeepsAnotherProgramsWrite(t *testing.T) {
+	c, path := safeCore(t, safeConfig)
+	other := strings.Replace(safeConfig, "fake-client-key-1", "written-by-an-editor", 1)
+	before := c.Status()
+	err := c.WriteConfig("test", func(cur []byte) ([]byte, error) {
+		// Another program writes the file after core read it, while the change is prepared.
+		if err := os.WriteFile(path, []byte(other), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return append(cur, ' '), nil
+	})
+	var ee *editError
+	if !errors.As(err, &ee) || ee.status != http.StatusConflict {
+		t.Fatalf("WriteConfig = %v, want a conflict", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != other {
+		t.Errorf("the other program's write was lost: %s", got)
+	}
+	if after := c.Status(); after.Active != before.Active || after.Desired != before.Desired {
+		t.Errorf("revisions changed: %+v, were %+v", after, before)
+	}
+}
+
+func TestRefusedChangeLogsNoSecret(t *testing.T) {
+	c, _ := safeCore(t, safeConfig)
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	// A strategy core refuses, whose value is the client key: the refusal names the value.
+	err := c.WriteConfig("test", func(cur []byte) ([]byte, error) {
+		return []byte(strings.Replace(string(cur), `"management_key"`, `"routing": {"strategy": "fake-client-key-1"}, "management_key"`, 1)), nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "fake-client-key-1") {
+		t.Fatalf("WriteConfig = %v, want a refusal that names the strategy", err)
+	}
+	if !strings.Contains(buf.String(), "refused") || strings.Contains(buf.String(), "fake-client-key-1") {
+		t.Errorf("log: %s", buf.String())
 	}
 }
