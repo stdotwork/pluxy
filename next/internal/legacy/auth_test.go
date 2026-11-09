@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -495,5 +496,26 @@ func TestSIWCAccountIDLength(t *testing.T) {
 	}
 	if id := files[1].Record.ID; len(id) != 128 || !strings.HasSuffix(id, "-siwc") || files[0].Record.ID == id {
 		t.Errorf("ids %q %q", files[0].Record.ID, id)
+	}
+}
+
+// A SIWC account does not take the ID another file imports as: foo.json's SIWC account beside a
+// foo-siwc.json gets foo-siwc-2, and reading the folder again gives the same IDs.
+func TestSIWCAccountIDCollision(t *testing.T) {
+	dir := writeFiles(t, map[string]any{"foo.json": siwcFile(nil), "foo-siwc.json": siwcFile(nil)})
+	for range 2 {
+		files, _, err := ReadAuthDir(dir, DefaultImportOptions, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, f := range files {
+			ids = append(ids, f.File+":"+f.Record.ID)
+		}
+		slices.Sort(ids)
+		want := []string{"foo-siwc.json:foo-siwc", "foo-siwc.json:foo-siwc-siwc", "foo.json:foo", "foo.json:foo-siwc-2"}
+		if !slices.Equal(ids, want) {
+			t.Errorf("ids %v, want %v", ids, want)
+		}
 	}
 }

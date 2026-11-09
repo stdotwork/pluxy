@@ -82,7 +82,7 @@ func ReadAuthDir(dir string, opts ImportOptions, now time.Time) ([]AuthFile, []S
 	if err != nil {
 		return nil, nil, err
 	}
-	var out []AuthFile
+	var out, siwcs []AuthFile
 	var skipped []Skipped
 	for _, name := range files {
 		b, err := readLimited(filepath.Join(dir, name))
@@ -104,8 +104,19 @@ func ReadAuthDir(dir string, opts ImportOptions, now time.Time) ([]AuthFile, []S
 		}
 		// A Codex file's SIWC section imports even when the file's own account is skipped.
 		if siwc != nil {
-			out = append(out, *siwc)
+			siwcs = append(siwcs, *siwc)
 		}
+	}
+	// A SIWC account never takes the ID another file imports as (foo.json's SIWC account and a
+	// foo-siwc.json): it gets -2, -3 and so on. The IDs depend only on the folder's file names,
+	// so importing again finds the same ones and skips them.
+	used := map[string]bool{}
+	for _, name := range files {
+		used[strings.ToLower(AuthAccountID(name))] = true
+	}
+	for _, f := range siwcs {
+		f.Record.ID = accountID(f.Record.ID, used)
+		out = append(out, f)
 	}
 	return out, skipped, nil
 }

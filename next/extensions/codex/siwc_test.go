@@ -142,8 +142,8 @@ func TestSIWCSignInAndRenewal(t *testing.T) {
 }
 
 // A grant without the direct-use scope cannot call the API, a sign-in result without the issued
-// client cannot be exchanged, a sign-in reply without an ID token is incomplete, and a credential
-// without its issued client cannot be renewed: each needs a new sign-in or fails the login.
+// client cannot be exchanged, a sign-in reply without an ID token or a renewal without a refresh
+// token is incomplete, and a credential without its issued client cannot be renewed.
 func TestSIWCGrantChecks(t *testing.T) {
 	srv := codextest.New(t)
 	srv.SIWCGrantScope = "openid profile email offline_access"
@@ -166,6 +166,19 @@ func TestSIWCGrantChecks(t *testing.T) {
 	set, _ = readSettings(raw)
 	_, err = siwcExchange(context.Background(), set, url.Values{"code": {"c"}, "client_id": {"x"}}, "v", "d")
 	wantError(t, err, llm.CodeUpstream, false)
+
+	// A renewal reply without a refresh token is refused, as today's core refuses it, so core
+	// keeps the stored credential and its refresh token.
+	noRefresh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"access_token":"a2","scope":"`+codextest.SIWCScope+`","expires_in":3600}`)
+	}))
+	defer noRefresh.Close()
+	raw, _ = json.Marshal(map[string]any{"auth_base_url": noRefresh.URL})
+	renewed, err := refresh(context.Background(), sdk.RefreshCall{Account: protocol.Account{Settings: raw, Credential: siwcCred("a", "r")}})
+	wantError(t, err, llm.CodeUpstream, false)
+	if renewed != nil {
+		t.Errorf("renewed without a refresh token: %+v", renewed)
+	}
 
 	c := siwcCred("a", "r")
 	c.Data = json.RawMessage(`{"siwc":true}`)
