@@ -1,0 +1,94 @@
+{
+  "description": "count_tokens when the Claude upstream answers 400.",
+  "source": [
+    "core/sdk/api/handlers/claude/code_handlers.go:104 (ClaudeCountTokens)",
+    "core/internal/runtime/executor/claude_executor_tokens.go:21 (CountTokens)"
+  ],
+  "client": {
+    "path": "/v1/messages/count_tokens",
+    "auth": "none",
+    "headers": {"x-api-key":"corpus-client-key","anthropic-version":"2023-06-01"},
+    "body": {
+      "model": "claude-test",
+      "system": "Be brief.",
+      "messages": [{"role":"user","content":"Say hello"}],
+      "tools": [
+        {
+          "name": "get_weather",
+          "description": "Weather",
+          "input_schema": {"type":"object","properties":{"city":{"type":"string"}}}
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "status": 400,
+      "body": {
+        "type": "error",
+        "error": {"type":"invalid_request_error","message":"messages: Input should be a valid list"}
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {"input_tokens":27},
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": []
+  },
+  "exceptions": [
+    {
+      "path": "client.body",
+      "kind": "intended",
+      "reason": "The new core counts tokens with the upstream's own count endpoint (Anthropic's /v1/messages/count_tokens), so the count and any error are the upstream's; today's core answers itself with a local tokenizer estimate when the account's base URL is not Anthropic's own, and makes no upstream request. Here the upstream refuses the count, and its error reaches the client as an error from any request does.",
+      "want": {
+        "error": {"message":"messages: Input should be a valid list","type":"invalid_request_error"},
+        "type": "error"
+      }
+    },
+    {
+      "path": "client.status",
+      "kind": "intended",
+      "reason": "The new core counts tokens with the upstream's own count endpoint (Anthropic's /v1/messages/count_tokens), so the count and any error are the upstream's; today's core answers itself with a local tokenizer estimate when the account's base URL is not Anthropic's own, and makes no upstream request. Here the upstream refuses the count, and its error reaches the client as an error from any request does.",
+      "want": 400
+    },
+    {
+      "path": "upstream[0]",
+      "kind": "intended",
+      "reason": "The new core counts tokens with the upstream's own count endpoint (Anthropic's /v1/messages/count_tokens), so the count and any error are the upstream's; today's core answers itself with a local tokenizer estimate when the account's base URL is not Anthropic's own, and makes no upstream request. Here the upstream refuses the count, and its error reaches the client as an error from any request does.",
+      "want": {
+        "body": {
+          "messages": [{"content":"Say hello","role":"user"}],
+          "model": "claude-test",
+          "system": "Be brief.",
+          "tools": [
+            {
+              "description": "Weather",
+              "input_schema": {"properties":{"city":{"type":"string"}},"type":"object"},
+              "name": "get_weather"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "application/json",
+          "Accept-Encoding": "gzip",
+          "Anthropic-Version": "2023-06-01",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0",
+          "X-Api-Key": "sk-corpus-upstream"
+        },
+        "method": "POST",
+        "path": "/v1/messages/count_tokens?beta=true"
+      }
+    }
+  ]
+}

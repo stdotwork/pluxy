@@ -584,8 +584,9 @@ func encodeString(s string) []byte {
 }
 
 // Event returns ev with the credential removed from the text and upstream data it carries:
-// error messages and codes, every raw field and reasoning's opaque data. Generated content (deltas, tool names) is the
-// reply itself and is left alone.
+// error messages and codes, every raw field, reasoning's opaque data, and the identifiers the
+// upstream names the reply with (its id and model, tool call IDs, the raw finish reason).
+// Generated content (deltas, tool names) is the reply itself and is left alone.
 func (r *Redactor) Event(ev llm.Event) llm.Event {
 	if r == nil || r.r == nil {
 		return ev
@@ -593,8 +594,20 @@ func (r *Redactor) Event(ev llm.Event) llm.Event {
 	ev.Raw = r.raw(ev.Raw)
 	if ev.Response != nil {
 		resp := *ev.Response
+		resp.ID = r.String(resp.ID)
+		resp.Model = r.String(resp.Model)
 		resp.Raw = r.raw(resp.Raw)
 		ev.Response = &resp
+	}
+	if ev.Item != nil {
+		it := *ev.Item
+		it.CallID = r.String(it.CallID)
+		ev.Item = &it
+	}
+	if ev.Finish != nil {
+		f := *ev.Finish
+		f.RawReason = r.String(f.RawReason)
+		ev.Finish = &f
 	}
 	ev.Usage = r.usage(ev.Usage)
 	if ev.Opaque != nil {

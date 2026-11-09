@@ -1,15 +1,17 @@
-package main
+package anthropicmessages
 
 import (
 	"encoding/json"
 	"regexp"
 	"strconv"
+
+	"github.com/stdotwork/pluxy/next/llm"
 )
 
 // Claude takes thinking in two forms. Newer models think adaptively: thinking {"type":
 // "adaptive"} with output_config.effort low, medium, high or max. Older models take a token budget:
 // thinking {"type": "enabled", "budget_tokens": n}, at least 1024 and below max_tokens. Clients in
-// other formats name an effort (OpenAI's reasoning_effort, from none to xhigh), which applyEffort
+// other formats name an effort (OpenAI's reasoning_effort, from none to xhigh), which ApplyEffort
 // turns into whichever form the model takes.
 
 // minBudget is the smallest thinking budget Messages accepts.
@@ -67,11 +69,13 @@ func claudeVersion(model string) (major, minor int, ok bool) {
 // adaptive reports whether a Claude model of this version thinks adaptively: Claude 4.6 and later.
 func adaptive(major, minor int) bool { return major > 4 || (major == 4 && minor >= 6) }
 
-// applyEffort sets the thinking settings for effort on a Messages body built for model. It reports
-// false, leaving the body as it was, for an effort it does not know or a body whose max_tokens
-// leaves no room for the smallest budget, or a model that is not a Claude model; the effort then
-// stays reported as dropped.
-func applyEffort(body []byte, model, effort string) ([]byte, bool, error) {
+// ApplyEffort sets the thinking settings for effort on a Messages body built for model. effort
+// may also be a token budget, as a model name's thinking suffix gives it (llm.ThinkingBudget):
+// a model that takes a budget gets that budget, an adaptive model the effort it falls in
+// (llm.ThinkingEffort). It reports false, leaving the body as it was, for an effort it does not
+// know or a body whose max_tokens leaves no room for the smallest budget, or a model that is not
+// a Claude model; the effort then stays reported as dropped.
+func ApplyEffort(body []byte, model, effort string) ([]byte, bool, error) {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(body, &m); err != nil {
 		return nil, false, err
@@ -84,7 +88,15 @@ func applyEffort(body []byte, model, effort string) ([]byte, bool, error) {
 		b, _ := json.Marshal(v)
 		m[key] = b
 	}
+	budget, isBudget := llm.ThinkingBudget(effort)
+	if isBudget && (budget == 0 || adaptive(major, minor)) {
+		effort, isBudget = llm.ThinkingEffort(effort), false
+	}
 	switch {
+	case isBudget:
+		if !setBudget(m, max(budget, minBudget), set) {
+			return body, false, nil
+		}
 	case effort == "none":
 		set("thinking", map[string]any{"type": "disabled"})
 	case effort == "auto" && adaptive(major, minor):

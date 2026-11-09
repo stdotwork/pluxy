@@ -1,5 +1,5 @@
 {
-  "description": "countTokens: today's core passes it to the upstream's countTokens and returns its totalTokens; the new core does not serve it yet.",
+  "description": "countTokens: both cores pass it to the upstream's countTokens and answer with its count.",
   "source": [
     "core/sdk/api/handlers/gemini/gemini_handlers.go:128-177 (countTokens dispatch)",
     "core/internal/runtime/executor/gemini_executor.go:169-183 (countTokens uses the countTokens method on the model path)",
@@ -12,36 +12,15 @@
   "upstream": [{"body":{"totalTokens":3}}],
   "exceptions": [
     {
-      "path": "client.body.error",
-      "kind": "gap",
-      "reason": "countTokens is not served yet: the corpus inventory shows no client relying on it. Today's core passes it to the upstream; the new core answers 404.",
-      "want": {
-        "code": 404,
-        "message": "method \"countTokens\" is not supported on models/gemini-corpus",
-        "status": "NOT_FOUND"
-      }
-    },
-    {
-      "path": "client.body.promptTokensDetails",
-      "kind": "gap",
-      "reason": "countTokens is not served yet: the corpus inventory shows no client relying on it. Today's core passes it to the upstream; the new core answers 404.",
+      "path": "upstream[0].body.model",
+      "kind": "intended",
+      "reason": "The new core sends a Gemini client's countTokens body to the upstream as the client wrote it; today's core adds the model's name to the body (the model is already in the path).",
       "absent": true
     },
     {
-      "path": "client.body.totalTokens",
-      "kind": "gap",
-      "reason": "countTokens is not served yet: the corpus inventory shows no client relying on it. Today's core passes it to the upstream; the new core answers 404."
-    },
-    {
-      "path": "client.status",
-      "kind": "gap",
-      "reason": "countTokens is not served yet: the corpus inventory shows no client relying on it. Today's core passes it to the upstream; the new core answers 404.",
-      "want": 404
-    },
-    {
-      "path": "upstream[0]",
-      "kind": "gap",
-      "reason": "countTokens is not served yet: the corpus inventory shows no client relying on it. Today's core passes it to the upstream; the new core answers 404.",
+      "path": "client.body.promptTokensDetails",
+      "kind": "intended",
+      "reason": "The new core gives a Gemini client the upstream's countTokens reply as it came; today's core rebuilds it from totalTokens alone, with a promptTokensDetails entry of modality TEXT it makes up.",
       "absent": true
     }
   ],

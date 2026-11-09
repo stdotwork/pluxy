@@ -488,7 +488,10 @@
             "usage": {
               "cache_read_input_tokens": 8,
               "input_tokens": 32,
-              "output_tokens": 32
+              "output_tokens": 32,
+              "output_tokens_details": {
+                "thinking_tokens": 20
+              }
             }
           },
           "event": "message_delta"

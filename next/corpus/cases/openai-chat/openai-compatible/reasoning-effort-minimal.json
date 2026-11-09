@@ -1,0 +1,92 @@
+{
+  "description": "reasoning_effort minimal on a model without a thinking config.",
+  "source": [
+    "core/internal/thinking/validate.go:38 (ValidateConfig; level error at :141)",
+    "core/test/thinking_conversion_test.go"
+  ],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {
+      "model": "gpt-test",
+      "messages": [{"role":"user","content":"Say hello"}],
+      "reasoning_effort": "minimal"
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "id": "chatcmpl-corpus",
+        "object": "chat.completion",
+        "created": 1700000001,
+        "model": "gpt-test-upstream",
+        "choices": [
+          {"index":0,"message":{"role":"assistant","content":"Hi there."},"finish_reason":"stop"}
+        ],
+        "usage": {"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {
+          "message": "level \"minimal\" not supported, valid levels: low, medium, high",
+          "type": "invalid_request_error"
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 400
+    },
+    "upstream": []
+  },
+  "exceptions": [
+    {
+      "path": "client.body",
+      "kind": "intended",
+      "reason": "The new core moves an effort the account does not accept to the nearest level it does, minimal to low here, as it moves xhigh and max to high; today's core moves xhigh and max but refuses minimal with 400.",
+      "want": {
+        "choices": [
+          {"finish_reason":"stop","index":0,"message":{"content":"Hi there.","role":"assistant"}}
+        ],
+        "created": 1700000001,
+        "id": "chatcmpl-corpus",
+        "model": "gpt-test-upstream",
+        "object": "chat.completion",
+        "usage": {"completion_tokens":2,"prompt_tokens":4,"total_tokens":6}
+      }
+    },
+    {
+      "path": "client.status",
+      "kind": "intended",
+      "reason": "The new core moves an effort the account does not accept to the nearest level it does, minimal to low here, as it moves xhigh and max to high; today's core moves xhigh and max but refuses minimal with 400.",
+      "want": 200
+    },
+    {
+      "path": "upstream[0]",
+      "kind": "intended",
+      "reason": "The new core moves an effort the account does not accept to the nearest level it does, minimal to low here, as it moves xhigh and max to high; today's core moves xhigh and max but refuses minimal with 400.",
+      "want": {
+        "body": {
+          "messages": [{"content":"Say hello","role":"user"}],
+          "model": "gpt-test",
+          "reasoning_effort": "low"
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    }
+  ]
+}

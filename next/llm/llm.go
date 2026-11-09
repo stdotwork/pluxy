@@ -231,6 +231,11 @@ type Options struct {
 	// ReasoningEffort is the reasoning effort the client asked for, as it named it (for
 	// example low, medium or high).
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	// ThinkingSuffix is the thinking setting the client wrote after the model name, as in
+	// gpt-5(high): a level, none or auto, or a token budget (see SplitThinkingSuffix). Core has
+	// taken it off Model and off the model in Native.Body. It wins over ReasoningEffort and over
+	// any reasoning or thinking settings in Native.Body, also in a body sent unchanged.
+	ThinkingSuffix string `json:"thinking_suffix,omitempty"`
 }
 
 // Tool choice modes.

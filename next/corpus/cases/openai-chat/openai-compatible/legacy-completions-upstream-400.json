@@ -1,0 +1,67 @@
+{
+  "description": "The upstream rejects a legacy completion with 400.",
+  "source": [
+    "core/sdk/api/handlers/openai/openai_handlers.go:170 (Completions)",
+    "core/sdk/api/handlers/openai/openai_handlers.go:201 (convertCompletionsRequestToChatCompletions)"
+  ],
+  "client": {"path":"/v1/completions","body":{"model":"gpt-test","prompt":"Say hello"}},
+  "upstream": [
+    {
+      "status": 400,
+      "body": {
+        "error": {
+          "message": "This model's maximum context length is 8192 tokens.",
+          "type": "invalid_request_error",
+          "param": "messages",
+          "code": "context_length_exceeded"
+        }
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {
+          "code": "context_length_exceeded",
+          "message": "This model's maximum context length is 8192 tokens.",
+          "param": "messages",
+          "type": "invalid_request_error"
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 400
+    },
+    "upstream": [
+      {
+        "body": {"messages":[{"content":"Say hello","role":"user"}],"model":"gpt-test"},
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "client.body.error",
+      "kind": "intended",
+      "reason": "The new core answers upstream errors with an error body it builds itself (message, type and code), not the upstream's JSON passed through; recorded as a deliberate difference when the core skeleton was built.",
+      "want": {
+        "code": "context_length_exceeded",
+        "message": "This model's maximum context length is 8192 tokens.",
+        "type": "invalid_request_error"
+      }
+    }
+  ]
+}

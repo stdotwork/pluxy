@@ -1,0 +1,61 @@
+{
+  "description": "Gemini :countTokens to a Claude upstream.",
+  "source": [
+    "core/sdk/api/handlers/gemini/gemini_handlers.go:325 (handleCountTokens)",
+    "core/internal/runtime/executor/claude_executor_tokens.go:21 (CountTokens)"
+  ],
+  "client": {
+    "path": "/v1beta/models/claude-test:countTokens",
+    "body": {"contents":[{"role":"user","parts":[{"text":"hi"}]}]}
+  },
+  "upstream": [{"body":{"input_tokens":42}}],
+  "recorded_old_core": {
+    "client": {
+      "body": {"promptTokensDetails":[{"modality":"TEXT","tokenCount":3}],"totalTokens":3},
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": []
+  },
+  "exceptions": [
+    {
+      "path": "client.body",
+      "kind": "intended",
+      "reason": "The new core counts tokens with the upstream's own count endpoint (Anthropic's /v1/messages/count_tokens), so the count and any error are the upstream's; today's core answers itself with a local tokenizer estimate when the account's base URL is not Anthropic's own, and makes no upstream request.",
+      "want": {"promptTokensDetails":[{"modality":"TEXT","tokenCount":42}],"totalTokens":42}
+    },
+    {
+      "path": "upstream[0]",
+      "kind": "intended",
+      "reason": "The new core counts tokens with the upstream's own count endpoint (Anthropic's /v1/messages/count_tokens), so the count and any error are the upstream's; today's core answers itself with a local tokenizer estimate when the account's base URL is not Anthropic's own, and makes no upstream request.",
+      "want": {
+        "body": {
+          "messages": [
+            {
+              "content": [{"cache_control":{"type":"ephemeral"},"text":"hi","type":"text"}],
+              "role": "user"
+            }
+          ],
+          "model": "claude-test"
+        },
+        "headers": {
+          "Accept": "application/json",
+          "Accept-Encoding": "gzip",
+          "Anthropic-Version": "2023-06-01",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1",
+          "X-Api-Key": "sk-corpus-upstream"
+        },
+        "method": "POST",
+        "path": "/v1/messages/count_tokens?beta=true"
+      }
+    }
+  ]
+}

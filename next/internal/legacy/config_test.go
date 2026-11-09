@@ -326,6 +326,7 @@ func TestNewKeysPassThrough(t *testing.T) {
 credentials_dir: creds
 drop_policy: reject
 packages: {dir: pk}
+cors: {allowed_origins: ["http://localhost:5173"]}
 extensions:
   pluxy/codex: {idle_stop_ms: 0, accounts: [{id: own, credential: {kind: api_key, api_key: k}}]}
 codex-api-key: [{api-key: from-yaml}]
@@ -333,6 +334,7 @@ codex-api-key: [{api-key: from-yaml}]
 	equalJSON(t, r.Config, `{
 		"listen": ":8317", "routing": {"max_wait_ms": 30000},
 		"credentials_dir": "creds", "drop_policy": "reject", "packages": {"dir": "pk"},
+		"cors": {"allowed_origins": ["http://localhost:5173"]},
 		"extensions": {"pluxy/codex": {"idle_stop_ms": 0, "accounts": [
 			{"id": "own", "credential": {"kind": "api_key", "api_key": "k"}},
 			{"id": "codex-api-key-1", "credential": {"kind": "api_key", "api_key": "from-yaml"}}

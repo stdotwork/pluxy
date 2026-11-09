@@ -1,0 +1,55 @@
+{
+  "description": "Gemini :countTokens when the upstream answers 400 with a Google error body.",
+  "source": [
+    "core/sdk/api/handlers/gemini/gemini_handlers.go:325 (handleCountTokens)",
+    "core/internal/runtime/executor/gemini_executor.go:815 (CountTokens)"
+  ],
+  "client": {
+    "path": "/v1beta/models/gemini-corpus:countTokens",
+    "body": {"contents":[{"role":"user","parts":[{"text":"hi"}]}]}
+  },
+  "upstream": [
+    {
+      "status": 400,
+      "body": {
+        "error": {"code":400,"message":"Invalid JSON payload received.","status":"INVALID_ARGUMENT"}
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {"code":400,"message":"Invalid JSON payload received.","status":"INVALID_ARGUMENT"}
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 400
+    },
+    "upstream": [
+      {
+        "body": {"contents":[{"parts":[{"text":"hi"}],"role":"user"}],"model":"gemini-corpus"},
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1",
+          "X-Goog-Api-Key": "sk-corpus-upstream"
+        },
+        "method": "POST",
+        "path": "/v1beta/models/gemini-corpus:countTokens"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "upstream[0].body.model",
+      "kind": "intended",
+      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: among other changes it adds model and default safetySettings that turn every filter off."
+    }
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "description": "POST /v1/messages/count_tokens to an OpenAI-compatible chat upstream.",
+  "source": [
+    "core/sdk/api/handlers/claude/code_handlers.go:104 (ClaudeCountTokens)",
+    "core/internal/runtime/executor/openai_compat_executor.go:802 (CountTokens)"
+  ],
+  "client": {
+    "path": "/v1/messages/count_tokens",
+    "auth": "none",
+    "headers": {"x-api-key":"corpus-client-key","anthropic-version":"2023-06-01"},
+    "body": {
+      "model": "gpt-test",
+      "system": "Be brief.",
+      "messages": [{"role":"user","content":"Say hello"}],
+      "tools": [
+        {
+          "name": "get_weather",
+          "description": "Weather",
+          "input_schema": {"type":"object","properties":{"city":{"type":"string"}}}
+        }
+      ]
+    }
+  },
+  "upstream": [{"body":{"input_tokens":42}}],
+  "recorded_old_core": {
+    "client": {
+      "body": {"input_tokens":31},
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": []
+  },
+  "exceptions": [
+    {
+      "path": "client.body",
+      "kind": "intended",
+      "reason": "The new core counts tokens only with an upstream's own count endpoint, and Chat Completions has none, so it answers that the account cannot count; today's core answers with a local tokenizer estimate. A local estimate would need a tokenizer and its vocabularies in the core for a number that is only approximate, so it is left out.",
+      "want": {
+        "error": {
+          "message": "this account's upstream speaks Chat Completions, which has no token count endpoint",
+          "type": "invalid_request_error"
+        },
+        "type": "error"
+      }
+    },
+    {
+      "path": "client.status",
+      "kind": "intended",
+      "reason": "The new core counts tokens only with an upstream's own count endpoint, and Chat Completions has none, so it answers that the account cannot count; today's core answers with a local tokenizer estimate. A local estimate would need a tokenizer and its vocabularies in the core for a number that is only approximate, so it is left out.",
+      "want": 400
+    }
+  ]
+}

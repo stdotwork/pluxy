@@ -60,7 +60,7 @@ const (
 )
 
 // newKeys are this core's own settings, which keep their JSON names in a config.yaml.
-var newKeys = []string{"packages", "extensions", "extension", "extension_pages", "drop_policy", "credentials_dir"}
+var newKeys = []string{"packages", "extensions", "extension", "extension_pages", "drop_policy", "credentials_dir", "cors"}
 
 // moves are today's older spellings and the v8 paths that replace them, from
 // core/internal/config/config_v8.go. More specific paths come before the paths that contain

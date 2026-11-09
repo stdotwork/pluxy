@@ -65,6 +65,7 @@ func main() {
 		LoginMethods: loginMethods,
 		Login:        login,
 		Refresh:      refresh,
+		CountTokens:  countTokens,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "claude:", err)
@@ -170,48 +171,11 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return err
 	}
 	send := &reporting{Stream: out, tr: tr}
-
-	// ?beta=true is how Anthropic's SDKs, Claude Code among them, call the API with betas.
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.BaseURL+"/v1/messages?beta=true", bytes.NewReader(body))
+	resp, err := post(ctx, call, s, "/v1/messages", body, tr.Passthrough, call.Request.Stream)
 	if err != nil {
-		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if call.Request.Stream {
-		req.Header.Set("Accept", "text/event-stream")
-		// An uncompressed stream reaches the client event by event.
-		req.Header.Set("Accept-Encoding", "identity")
-	} else {
-		req.Header.Set("Accept", "application/json")
-	}
-	req.Header.Set("Anthropic-Version", anthropicVersion)
-	if tr.Passthrough {
-		// The client's own Messages headers go with its body. Passthrough means the client
-		// spoke Messages, so these are its headers, not ones made up for it.
-		for _, h := range slices.Concat(anthropicmessages.Headers, anthropicmessages.ClientHeaders) {
-			if v := call.Request.Native.Headers[h]; v != "" {
-				req.Header.Set(h, v)
-			}
-		}
-	}
-	if err := authorize(req.Header, call.Account.Credential); err != nil {
 		return err
 	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		var op *net.OpError
-		dial := errors.As(err, &op) && op.Op == "dial"
-		// A failed dial never reached the upstream, so trying again is safe.
-		return &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint, Retryable: dial}
-	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return upstreamError(resp, call.Request.Model)
-	}
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 		return relayStream(ctx, resp.Body, send)
 	}
@@ -234,16 +198,113 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	return nil
 }
 
+// post sends body to the Messages API at path (under base_url) and returns the upstream's
+// successful reply; a failure is returned as the error to report. passthrough sends the client's
+// own Messages headers with its body; stream asks for a stream.
+func post(ctx context.Context, call sdk.Call, s settings, path string, body []byte, passthrough, stream bool) (*http.Response, error) {
+	// ?beta=true is how Anthropic's SDKs, Claude Code among them, call the API with betas.
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.BaseURL+path+"?beta=true", bytes.NewReader(body))
+	if err != nil {
+		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if stream {
+		req.Header.Set("Accept", "text/event-stream")
+		// An uncompressed stream reaches the client event by event.
+		req.Header.Set("Accept-Encoding", "identity")
+	} else {
+		req.Header.Set("Accept", "application/json")
+	}
+	req.Header.Set("Anthropic-Version", anthropicVersion)
+	if passthrough {
+		// The client's own Messages headers go with its body. Passthrough means the client
+		// spoke Messages, so these are its headers, not ones made up for it.
+		for _, h := range slices.Concat(anthropicmessages.Headers, anthropicmessages.ClientHeaders) {
+			if v := call.Request.Native.Headers[h]; v != "" {
+				req.Header.Set(h, v)
+			}
+		}
+	}
+	if err := authorize(req.Header, call.Account.Credential); err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		var op *net.OpError
+		dial := errors.As(err, &op) && op.Op == "dial"
+		// A failed dial never reached the upstream, so trying again is safe.
+		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint, Retryable: dial}
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		defer resp.Body.Close()
+		return nil, upstreamError(resp, call.Request.Model)
+	}
+	return resp, nil
+}
+
+// countTokens counts the request's input tokens with the Messages API's count_tokens. A
+// Messages request is sent as it came, without the fields only generating uses; any other is
+// rebuilt as Messages with only the fields count_tokens takes.
+func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
+	s, err := readSettings(call.Account.Settings)
+	if err != nil {
+		return err
+	}
+	body, tr, err := buildBody(call.Request)
+	if err != nil {
+		return err
+	}
+	count := anthropicmessages.CountRequest
+	if tr.Passthrough {
+		count = anthropicmessages.CountBody
+	}
+	if body, err = count(body); err != nil {
+		return err
+	}
+	resp, err := post(ctx, call, s, "/v1/messages/count_tokens", body, tr.Passthrough, false)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxFrame))
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream response: " + err.Error(), Scope: llm.ScopeEndpoint}
+	}
+	n, err := anthropicmessages.DecodeCount(raw)
+	if err != nil {
+		return err
+	}
+	if err := out.Start(llm.ResponseInfo{Model: call.Request.Model, Format: llm.FormatAnthropicMessages}); err != nil {
+		return err
+	}
+	return out.Finish(llm.Finish{Reason: llm.FinishStop}, &llm.Usage{InputTokens: &n, Raw: llm.RawJSON(raw)})
+}
+
 // buildBody returns the Messages request body for req and how it was built. A Messages request
 // is sent unchanged; any other is rebuilt from the model, with its reasoning effort as thinking
-// settings. Under the reject drop policy a translation that drops anything is refused.
+// settings. A thinking suffix on the model name sets the thinking settings either way, in place
+// of the request's own. Under the reject drop policy a translation that drops anything is
+// refused.
 func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 	tr := &llm.Translation{To: llm.FormatAnthropicMessages}
 	if n := req.Native; n != nil {
 		tr.From = n.Format
 		if n.Format == llm.FormatAnthropicMessages {
 			tr.Passthrough = true
-			return n.Body, tr, nil
+			body := n.Body
+			if s := req.Options.ThinkingSuffix; s != "" {
+				var err error
+				if body, _, err = anthropicmessages.ApplyEffort(body, req.Model, s); err != nil {
+					return nil, nil, err
+				}
+			}
+			return body, tr, nil
 		}
 	}
 	body, losses, err := anthropicmessages.EncodeRequest(req)
@@ -253,9 +314,13 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 	if body, err = addCacheBreakpoints(body); err != nil {
 		return nil, nil, err
 	}
-	if req.Options.ReasoningEffort != "" {
+	effort := req.Options.ReasoningEffort
+	if s := req.Options.ThinkingSuffix; s != "" {
+		effort = s
+	}
+	if effort != "" {
 		var applied bool
-		body, applied, err = applyEffort(body, req.Model, req.Options.ReasoningEffort)
+		body, applied, err = anthropicmessages.ApplyEffort(body, req.Model, effort)
 		if err != nil {
 			return nil, nil, err
 		}

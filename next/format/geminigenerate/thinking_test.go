@@ -11,6 +11,13 @@ func TestApplyEffort(t *testing.T) {
 		want          string // thinkingConfig as JSON, "" when not applied
 	}{
 		{"gemini-2.5-pro", "high", `{"includeThoughts":true,"thinkingBudget":24576}`},
+		// Token budgets, as a thinking suffix names them: kept within the model's range, or the
+		// level they fall in on a model with levels.
+		{"gemini-2.5-pro", "16000", `{"includeThoughts":true,"thinkingBudget":16000}`},
+		{"gemini-2.5-pro", "50", `{"includeThoughts":true,"thinkingBudget":128}`},
+		{"gemini-2.5-flash", "99999", `{"includeThoughts":true,"thinkingBudget":24576}`},
+		{"gemini-2.5-flash", "0", `{"thinkingBudget":0}`},
+		{"gemini-3-pro-preview", "1000", `{"includeThoughts":true,"thinkingLevel":"low"}`},
 		{"gemini-2.5-pro", "none", `{"thinkingBudget":128}`},
 		{"gemini-2.5-flash", "none", `{"thinkingBudget":0}`},
 		{"gemini-2.5-flash", "xhigh", `{"includeThoughts":true,"thinkingBudget":24576}`},

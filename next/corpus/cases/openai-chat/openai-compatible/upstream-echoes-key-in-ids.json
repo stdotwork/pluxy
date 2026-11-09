@@ -1,0 +1,128 @@
+{
+  "description": "A non-streamed reply whose id, model, system_fingerprint and tool call id contain the upstream key.",
+  "source": [
+    "core/sdk/api/handlers/openai/openai_handlers.go:119 (ChatCompletions; the reply is passed through)"
+  ],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {
+      "model": "gpt-test",
+      "messages": [{"role":"user","content":"Say hello"}],
+      "tools": [
+        {"type":"function","function":{"name":"get_weather","parameters":{"type":"object"}}}
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "id": "chatcmpl-sk-corpus-upstream",
+        "object": "chat.completion",
+        "created": 1700000001,
+        "model": "gpt-sk-corpus-upstream",
+        "system_fingerprint": "fp_sk-corpus-upstream",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": null,
+              "tool_calls": [
+                {
+                  "id": "call_sk-corpus-upstream",
+                  "type": "function",
+                  "function": {"name":"get_weather","arguments":"{\"city\":\"Paris\"}"}
+                }
+              ]
+            },
+            "finish_reason": "tool_calls"
+          }
+        ],
+        "usage": {"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "choices": [
+          {
+            "finish_reason": "tool_calls",
+            "index": 0,
+            "message": {
+              "content": null,
+              "role": "assistant",
+              "tool_calls": [
+                {
+                  "function": {"arguments":"{\"city\":\"Paris\"}","name":"get_weather"},
+                  "id": "call_sk-corpus-upstream",
+                  "type": "function"
+                }
+              ]
+            }
+          }
+        ],
+        "created": 1700000001,
+        "id": "chatcmpl-sk-corpus-upstream",
+        "model": "gpt-sk-corpus-upstream",
+        "object": "chat.completion",
+        "system_fingerprint": "fp_sk-corpus-upstream",
+        "usage": {"completion_tokens":2,"prompt_tokens":4,"total_tokens":6}
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "messages": [{"content":"Say hello","role":"user"}],
+          "model": "gpt-test",
+          "tools": [
+            {"function":{"name":"get_weather","parameters":{"type":"object"}},"type":"function"}
+          ]
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "client.body.id",
+      "kind": "intended",
+      "reason": "The new core removes the account's key wherever it appears in a reply, ids and model names included, as it does in error messages; today's core passes a key the upstream echoes on to the client.",
+      "want": "chatcmpl-[redacted]"
+    },
+    {
+      "path": "client.body.model",
+      "kind": "intended",
+      "reason": "The new core removes the account's key wherever it appears in a reply, ids and model names included, as it does in error messages; today's core passes a key the upstream echoes on to the client.",
+      "want": "gpt-[redacted]"
+    },
+    {
+      "path": "client.body.system_fingerprint",
+      "kind": "intended",
+      "reason": "The new core removes the account's key wherever it appears in a reply, ids and model names included, as it does in error messages; today's core passes a key the upstream echoes on to the client.",
+      "want": "fp_[redacted]"
+    },
+    {
+      "path": "client.body.choices[0].message.tool_calls[0].id",
+      "kind": "intended",
+      "reason": "The new core removes the account's key wherever it appears in a reply, ids and model names included, as it does in error messages; today's core passes a key the upstream echoes on to the client.",
+      "want": "call_[redacted]"
+    }
+  ]
+}

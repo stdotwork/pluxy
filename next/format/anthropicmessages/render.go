@@ -81,7 +81,9 @@ func stopReason(f *llm.Finish, upFormat string, hasToolCalls bool) string {
 }
 
 // encodeUsage writes model usage as Messages usage. Messages input_tokens leaves out tokens read
-// from or written to a cache, which are counted in their own fields.
+// from or written to a cache, which are counted in their own fields. Reasoning tokens the
+// upstream reported go in output_tokens_details.thinking_tokens (at most output_tokens), a field
+// Anthropic's usage does not have, as today's core adds it so clients can see them.
 func encodeUsage(u *llm.Usage) obj {
 	v := func(p *int64) int64 {
 		if p == nil {
@@ -102,6 +104,9 @@ func encodeUsage(u *llm.Usage) obj {
 	if written > 0 {
 		out["cache_creation_input_tokens"] = written
 	}
+	if r := u.ReasoningTokens; r != nil && *r >= 0 {
+		out["output_tokens_details"] = obj{"thinking_tokens": min(*r, v(u.OutputTokens))}
+	}
 	return out
 }
 
@@ -119,7 +124,8 @@ func usageLosses(u *llm.Usage, upFormat string) []string {
 		case "prompt_tokens_details", "input_tokens_details", "completion_tokens_details", "output_tokens_details":
 			if d := rawjson.Object(v); d != nil {
 				for dk, dv := range d {
-					carried := dk == "cached_tokens" && (k == "prompt_tokens_details" || k == "input_tokens_details")
+					carried := dk == "cached_tokens" && (k == "prompt_tokens_details" || k == "input_tokens_details") ||
+						dk == "reasoning_tokens" && u.ReasoningTokens != nil && (k == "completion_tokens_details" || k == "output_tokens_details")
 					if carried || string(dv) == "0" || string(dv) == "null" {
 						continue
 					}

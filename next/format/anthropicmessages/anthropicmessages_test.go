@@ -646,6 +646,44 @@ func TestAggregatorReportsReplyLosses(t *testing.T) {
 	}
 }
 
+// Reasoning tokens the upstream reported go in output_tokens_details.thinking_tokens, at most
+// output_tokens, as today's core writes them (core/internal/translator/codex/claude/
+// codex_claude_response.go), and are not reported as lost; none reported, none written.
+func TestUsageThinkingTokens(t *testing.T) {
+	for _, c := range []struct {
+		reasoning *int64
+		want      string
+	}{
+		{llm.Int64(4), `{"input_tokens":5,"output_tokens":9,"output_tokens_details":{"thinking_tokens":4}}`},
+		{llm.Int64(0), `{"input_tokens":5,"output_tokens":9,"output_tokens_details":{"thinking_tokens":0}}`},
+		{llm.Int64(20), `{"input_tokens":5,"output_tokens":9,"output_tokens_details":{"thinking_tokens":9}}`},
+		{nil, `{"input_tokens":5,"output_tokens":9}`},
+	} {
+		a := NewAggregator()
+		for _, ev := range []llm.Event{
+			{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "r", Model: "up", Format: llm.FormatOpenAIResponses}},
+			{Type: llm.EventFinish, Finish: &llm.Finish{Reason: llm.FinishStop}, Usage: &llm.Usage{InputTokens: llm.Int64(5), OutputTokens: llm.Int64(9), ReasoningTokens: c.reasoning,
+				Raw: json.RawMessage(`{"input_tokens":5,"output_tokens":9,"output_tokens_details":{"reasoning_tokens":4}}`)}},
+		} {
+			a.Add(ev)
+		}
+		body, err := a.Response()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m struct {
+			Usage json.RawMessage `json:"usage"`
+		}
+		_ = json.Unmarshal(body, &m)
+		if !jsonEqual(m.Usage, json.RawMessage(c.want)) {
+			t.Errorf("usage %s, want %s", m.Usage, c.want)
+		}
+		if c.reasoning != nil && len(a.Losses()) != 0 {
+			t.Errorf("losses %v", a.Losses())
+		}
+	}
+}
+
 // Assistant text on both sides of a tool call stays in the one Chat message holding the call.
 func TestChatKeepsTextAroundToolCall(t *testing.T) {
 	req, err := ParseRequest([]byte(`{"model":"m","messages":[

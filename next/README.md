@@ -93,8 +93,34 @@ or `:streamGenerateContent?alt=sse`, with the key in `x-goog-api-key`); the defa
 Responses account serves Responses, Messages and Gemini clients; a Messages account serves Messages
 and Gemini clients; a Gemini account serves only Gemini clients for now.
 
+A Chat or Responses account sends a reasoning effort the upstream may not take as the nearest one
+it does, as today's core does: `"reasoning_levels"` in its `settings` lists the efforts the
+upstream accepts (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`), by default `low`,
+`medium` and `high`, so `xhigh` and `max` go as `high`, `minimal` and `none` as `low`, and `auto`
+as `medium`. Today's core refuses `minimal` with a 400 instead.
+
 Gemini clients call `POST /v1beta/models/{model}:generateContent` or `:streamGenerateContent`
-(a stream is server-sent events, with or without `alt=sse`); `countTokens` is not served yet.
+(a stream is server-sent events, with or without `alt=sse`), and `:countTokens`.
+
+Token counts (Anthropic's `POST /v1/messages/count_tokens` and Gemini's `:countTokens`) come from
+the upstream's own count endpoint: Anthropic's for a Claude account or an OpenAI-compatible account
+with `"wire_api": "messages"`, Gemini's for a Gemini account (Gemini API or Vertex AI) or one with
+`"wire_api": "gemini"`. A count from an upstream of the client's own kind comes back as the upstream sent it;
+otherwise core answers with the count in the client's shape. An account whose upstream has no count
+endpoint (Codex, xAI, Kimi, Meta, Devin, Antigravity, and Chat or Responses accounts) cannot count:
+core tries the model's next account, and answers with an error when none can. Today's core
+estimates a count itself with a tokenizer for those, and for any Claude account whose base URL is
+not Anthropic's own; this core does not, as that needs a tokenizer and its vocabularies for a
+number that is only approximate.
+
+A model name may end in a thinking setting in brackets, as today's core reads it: a level
+(`gpt-5(high)`; `minimal`, `low`, `medium`, `high`, `xhigh` or `max`), `none`, `auto`, or a token
+budget (`claude-sonnet-4-5(16000)`; `0` is none, `-1` auto). Core takes it off the name before
+routing, so the request goes to the model's own accounts, and the account's extension applies it to
+the upstream request in place of any reasoning or thinking settings the request has: as a
+reasoning effort (a budget becomes the level it falls in: up to 512 tokens minimal, 1024 low, 8192
+medium, 24576 high, more xhigh), or for Claude and Gemini models that take a budget, as that
+budget. Bracketed text that is none of these stays part of the model name; today's core refuses it.
 
 Responses clients may also open a WebSocket on `GET /v1/responses` ([OpenAI's WebSocket
 mode](https://developers.openai.com/api/docs/guides/websocket-mode)): each `response.create`
@@ -106,8 +132,39 @@ each turn is a request that carries the whole conversation so far, which core ke
 socket. `response.append`,
 `response.interrupt` and warmups (`"generate": false`) are served as today's core serves them.
 
+When an upstream ends a Responses stream with a `response.completed`, `response.incomplete` or
+`response.failed` whose `output` is empty, core fills it with the items the stream's
+`response.output_item.done` events finished, as today's core does.
+
+A Messages client's usage carries `output_tokens_details.thinking_tokens` (at most `output_tokens`)
+whenever the upstream reports its reasoning tokens; today's core writes it only for a Responses
+upstream.
+
+OpenAI's legacy text completions (`POST /v1/completions`) are served as Chat Completions, as
+today's core serves them: the prompt (a string, or a list of one string) becomes one user message,
+with `max_tokens`, `temperature`, `top_p`, `frequency_penalty`, `presence_penalty`, `stop`,
+`stream`, `logprobs`, `top_logprobs` and `echo`, and the reply comes back as `text_completion`
+choices with `text`. Several prompts in one request are refused; `n`, `suffix`, `best_of` and the
+rest are left out.
+
 Clients send the client key as a bearer token or, as Anthropic clients do, in `x-api-key`; Gemini
 clients may also send it in `x-goog-api-key` or the `key` query parameter.
+
+Web pages may call the client API from a browser only from the origins listed in
+`cors.allowed_origins` (each `scheme://host[:port]`, or `"*"` for every origin): core then adds
+the CORS headers to their replies and answers their preflight `OPTIONS` requests with 204 before
+checking the client key. The list is empty by default, so no page can. Today's core allows every
+origin on every route; here CORS covers the client API only, never the panel or the management API.
+
+```json
+{"cors": {"allowed_origins": ["http://localhost:5173"]}}
+```
+
+A reply to a request that went to an account carries `X-CPA-TRACE-ID`, as today's core sends it:
+the time and a random part, such as `20261109061500-3f9a0c2e5b7d4e18`. Core's log lines about the
+request (a failure, what translation lost) carry the same ID and the account, so a reply can be
+matched with them. A request refused before that (no client key, a body that does not parse, no
+account for the model) gets none.
 
 `drop_policy` (top level) says what happens when translating a request to the upstream's format
 would drop part of it: `"report"` (the default) sends it and logs what was dropped, `"reject"`
@@ -801,7 +858,8 @@ Neither line stops core from starting. Settings that did nothing in today's core
 "dead") are accepted without a word. A key today's core does not know is named as unknown.
 
 Settings only this core has keep their JSON names in a `config.yaml`: `packages`, `extensions`,
-`extension`, `extension_pages`, `drop_policy` and `credentials_dir`. Provider accounts set in
+`extension`, `extension_pages`, `drop_policy`, `credentials_dir` and `cors` (today's core has no
+CORS setting: it allows every origin). Provider accounts set in
 the file go to the installed package of their provider (`pluxy/codex`, `pluxy/claude`,
 `pluxy/gemini`, `pluxy/xai`, `pluxy/openai-compatible`), so those packages must be installed:
 the bundled ones are, on the first start.

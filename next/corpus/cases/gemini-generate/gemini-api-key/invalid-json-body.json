@@ -34,6 +34,12 @@
       "kind": "intended",
       "reason": "The new core rejects a body that is not JSON with 400 before anything reaches the upstream; today's core sends it to the upstream as it is.",
       "absent": true
+    },
+    {
+      "path": "client.headers.X-Cpa-Trace-Id",
+      "kind": "intended",
+      "reason": "The new core rejects a body that is not JSON before choosing an account, so the reply has no trace ID; today's core sends the body to an account's upstream and its reply carries one.",
+      "absent": true
     }
   ],
   "recorded_old_core": {

@@ -884,8 +884,8 @@ func BuildOldCore(coreDir, out string) error {
 }
 
 // StartNewCore starts the new core from binDir with the case's provider pointed at upstreamURL,
-// one account per key.
-func StartNewCore(binDir, workDir, provider, upstreamURL string, models, keys []string) (*Core, error) {
+// one account per key, and the settings in extra added to its config.
+func StartNewCore(binDir, workDir, provider, upstreamURL string, models, keys []string, extra map[string]json.RawMessage) (*Core, error) {
 	p, ok := Providers[provider]
 	if !ok || p.NewCore == nil {
 		return nil, fmt.Errorf("no new-core setup for provider %q", provider)
@@ -898,6 +898,9 @@ func StartNewCore(binDir, workDir, provider, upstreamURL string, models, keys []
 			"manifest": filepath.Join(binDir, ext+".pluxy-extension.json"),
 			"accounts": accounts,
 		},
+	}
+	for k, v := range extra {
+		cfg[k] = v
 	}
 	path := filepath.Join(workDir, "config.json")
 	b, _ := json.Marshal(cfg)

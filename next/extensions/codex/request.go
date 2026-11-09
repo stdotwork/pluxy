@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/format/openairesponses"
@@ -34,7 +33,11 @@ type upstreamRequest struct {
 // translated to Responses, in the shape the Codex endpoint takes (shape). ws shapes it for the
 // Responses WebSocket, which keeps previous_response_id and generate.
 func buildRequest(req llm.Request, accountID string, s settings, a account, ws bool) (*upstreamRequest, error) {
-	model, effort := splitThinkingSuffix(req.Model)
+	// Core has taken a thinking suffix off the model name (llm.SplitThinkingSuffix).
+	model, effort := req.Model, ""
+	if s := req.Options.ThinkingSuffix; s != "" {
+		effort = llm.ThinkingEffort(s)
+	}
 	tr := &llm.Translation{To: llm.FormatOpenAIResponses}
 	var body []byte
 	if n := req.Native; n != nil {
@@ -76,52 +79,6 @@ func buildRequest(req llm.Request, accountID string, s settings, a account, ws b
 		return nil, err
 	}
 	return &upstreamRequest{body: out, tr: tr, model: model, sessionID: sh.sessionID}, nil
-}
-
-// thinkingLevels are the reasoning levels a model name suffix may name, as in gpt-5(high).
-var thinkingLevels = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "auto"}
-
-// splitThinkingSuffix splits a model name with a thinking suffix, gpt-5(high), into the model and
-// the reasoning effort. A suffix that is a token budget, gpt-5(8192), becomes the effort the
-// budget falls in. A name without a suffix it knows is returned unchanged.
-func splitThinkingSuffix(name string) (model, effort string) {
-	i := strings.LastIndex(name, "(")
-	if i <= 0 || !strings.HasSuffix(name, ")") {
-		return name, ""
-	}
-	suffix := strings.ToLower(strings.TrimSpace(name[i+1 : len(name)-1]))
-	if slices.Contains(thinkingLevels, suffix) {
-		return name[:i], suffix
-	}
-	if n, err := strconv.Atoi(suffix); err == nil {
-		if e := budgetEffort(n); e != "" {
-			return name[:i], e
-		}
-	}
-	return name, ""
-}
-
-// budgetEffort returns the reasoning effort a thinking token budget falls in, with the same
-// bounds today's core uses: -1 is auto, 0 none, up to 512 minimal, 1024 low, 8192 medium, 24576
-// high, above that xhigh.
-func budgetEffort(n int) string {
-	switch {
-	case n < -1:
-		return ""
-	case n == -1:
-		return "auto"
-	case n == 0:
-		return "none"
-	case n <= 512:
-		return "minimal"
-	case n <= 1024:
-		return "low"
-	case n <= 8192:
-		return "medium"
-	case n <= 24576:
-		return "high"
-	}
-	return "xhigh"
 }
 
 // Fields the Codex endpoint does not take, removed from every request.

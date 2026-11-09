@@ -1,0 +1,152 @@
+{
+  "description": "The same, streamed.",
+  "source": [
+    "core/sdk/api/handlers/openai/openai_handlers.go:119 (ChatCompletions; the reply is passed through)"
+  ],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {
+      "model": "gpt-test",
+      "messages": [{"role":"user","content":"Say hello"}],
+      "tools": [
+        {"type":"function","function":{"name":"get_weather","parameters":{"type":"object"}}}
+      ],
+      "stream": true
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"data":{"id":"chatcmpl-sk-corpus-upstream","object":"chat.completion.chunk","created":1700000000,"model":"gpt-sk-corpus-upstream","system_fingerprint":"fp_sk-corpus-upstream","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}},
+        {"data":{"id":"chatcmpl-sk-corpus-upstream","object":"chat.completion.chunk","created":1700000000,"model":"gpt-sk-corpus-upstream","system_fingerprint":"fp_sk-corpus-upstream","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_sk-corpus-upstream","type":"function","function":{"name":"get_weather","arguments":""}}]},"finish_reason":null}]}},
+        {"data":{"id":"chatcmpl-sk-corpus-upstream","object":"chat.completion.chunk","created":1700000000,"model":"gpt-sk-corpus-upstream","system_fingerprint":"fp_sk-corpus-upstream","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"city\":\"Paris\"}"}}]},"finish_reason":null}]}},
+        {"data":{"id":"chatcmpl-sk-corpus-upstream","object":"chat.completion.chunk","created":1700000000,"model":"gpt-sk-corpus-upstream","system_fingerprint":"fp_sk-corpus-upstream","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}},
+        {"data":"[DONE]"}
+      ]
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"choices":[{"delta":{"content":"","role":"assistant"},"finish_reason":null,"index":0}],"created":1700000000,"id":"chatcmpl-sk-corpus-upstream","model":"gpt-sk-corpus-upstream","object":"chat.completion.chunk","system_fingerprint":"fp_sk-corpus-upstream"}},
+        {"data":{"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"","name":"get_weather"},"id":"call_sk-corpus-upstream","index":0,"type":"function"}]},"finish_reason":null,"index":0}],"created":1700000000,"id":"chatcmpl-sk-corpus-upstream","model":"gpt-sk-corpus-upstream","object":"chat.completion.chunk","system_fingerprint":"fp_sk-corpus-upstream"}},
+        {"data":{"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"{\"city\":\"Paris\"}"},"index":0}]},"finish_reason":null,"index":0}],"created":1700000000,"id":"chatcmpl-sk-corpus-upstream","model":"gpt-sk-corpus-upstream","object":"chat.completion.chunk","system_fingerprint":"fp_sk-corpus-upstream"}},
+        {"data":{"choices":[{"delta":{},"finish_reason":"tool_calls","index":0}],"created":1700000000,"id":"chatcmpl-sk-corpus-upstream","model":"gpt-sk-corpus-upstream","object":"chat.completion.chunk","system_fingerprint":"fp_sk-corpus-upstream"}},
+        {"data":"[DONE]"}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "messages": [{"content":"Say hello","role":"user"}],
+          "model": "gpt-test",
+          "stream": true,
+          "stream_options": {"include_usage":true},
+          "tools": [
+            {"function":{"name":"get_weather","parameters":{"type":"object"}},"type":"function"}
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Cache-Control": "no-cache",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "client.events[0].data.id",
+      "kind": "intended",
+      "reason": "The new core removes the account's key wherever it appears in a reply, ids and model names included, as it does in error messages; today's core passes a key the upstream echoes on to the client.",
+      "want": "chatcmpl-[redacted]"
+    },
+    {
+      "path": "client.events[0].data.model",
+      "kind": "intended",
+      "reason": "The new core removes the account's key wherever it appears in a reply, ids and model names included, as it does in error messages; today's core passes a key the upstream echoes on to the client.",
+      "want": "gpt-[redacted]"
+    },
+    {
+      "path": "client.events[0].data.system_fingerprint",
+      "kind": "intended",
+      "reason": "The new core removes the account's key wherever it appears in a reply, ids and model names included, as it does in error messages; today's core passes a key the upstream echoes on to the client.",
+      "want": "fp_[redacted]"
+    },
+    {
+      "path": "client.events[1].data.id",
+      "kind": "intended",
+      "reason": "The new core removes the account's key wherever it appears in a reply, ids and model names included, as it does in error messages; today's core passes a key the upstream echoes on to the client.",
+      "want": "chatcmpl-[redacted]"
+    },
+    {
+      "path": "client.events[1].data.model",
+      "kind": "intended",
+      "reason": "The new core removes the account's key wherever it appears in a reply, ids and model names included, as it does in error messages; today's core passes a key the upstream echoes on to the client.",
+      "want": "gpt-[redacted]"
+    },
+    {
+      "path": "client.events[1].data.system_fingerprint",
+      "kind": "intended",
+      "reason": "The new core removes the account's key wherever it appears in a reply, ids and model names included, as it does in error messages; today's core passes a key the upstream echoes on to the client.",
+      "want": "fp_[redacted]"
+    },
+    {
+      "path": "client.events[2].data.id",
+      "kind": "intended",
+      "reason": "The new core removes the account's key wherever it appears in a reply, ids and model names included, as it does in error messages; today's core passes a key the upstream echoes on to the client.",
+      "want": "chatcmpl-[redacted]"
+    },
+    {
+      "path": "client.events[2].data.model",
+      "kind": "intended",
+      "reason": "The new core removes the account's key wherever it appears in a reply, ids and model names included, as it does in error messages; today's core passes a key the upstream echoes on to the client.",
+      "want": "gpt-[redacted]"
+    },
+    {
+      "path": "client.events[2].data.system_fingerprint",
+      "kind": "intended",
+      "reason": "The new core removes the account's key wherever it appears in a reply, ids and model names included, as it does in error messages; today's core passes a key the upstream echoes on to the client.",
+      "want": "fp_[redacted]"
+    },
+    {
+      "path": "client.events[3].data.id",
+      "kind": "intended",
+      "reason": "The new core removes the account's key wherever it appears in a reply, ids and model names included, as it does in error messages; today's core passes a key the upstream echoes on to the client.",
+      "want": "chatcmpl-[redacted]"
+    },
+    {
+      "path": "client.events[3].data.model",
+      "kind": "intended",
+      "reason": "The new core removes the account's key wherever it appears in a reply, ids and model names included, as it does in error messages; today's core passes a key the upstream echoes on to the client.",
+      "want": "gpt-[redacted]"
+    },
+    {
+      "path": "client.events[3].data.system_fingerprint",
+      "kind": "intended",
+      "reason": "The new core removes the account's key wherever it appears in a reply, ids and model names included, as it does in error messages; today's core passes a key the upstream echoes on to the client.",
+      "want": "fp_[redacted]"
+    },
+    {
+      "path": "client.events[1].data.choices[0].delta.tool_calls[0].id",
+      "kind": "intended",
+      "reason": "The new core removes the account's key wherever it appears in a reply, ids and model names included, as it does in error messages; today's core passes a key the upstream echoes on to the client.",
+      "want": "call_[redacted]"
+    }
+  ]
+}

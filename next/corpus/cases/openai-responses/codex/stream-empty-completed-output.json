@@ -1,0 +1,101 @@
+{
+  "description": "Empty completed output rebuilt from output_item.done events, Codex upstream.",
+  "source": [
+    "core/internal/runtime/executor/codex_executor_terminal.go:49 (collectCodexOutputItemDone)",
+    "core/internal/runtime/executor/codex_executor_terminal.go (hydrateCodexCompletedOutputItemIDs)"
+  ],
+  "client": {"path":"/v1/responses","body":{"model":"gpt-test","input":"Say hello","stream":true}},
+  "upstream": [
+    {
+      "sse": [
+        {"event":"response.created","data":{"type":"response.created","sequence_number":0,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"in_progress","model":"gpt-test-upstream","output":[],"usage":null}}},
+        {"event":"response.in_progress","data":{"type":"response.in_progress","sequence_number":1,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"in_progress","model":"gpt-test-upstream","output":[],"usage":null}}},
+        {"event":"response.output_item.added","data":{"type":"response.output_item.added","sequence_number":2,"item":{"id":"rs_corpus","type":"reasoning","summary":[]},"output_index":0}},
+        {"event":"response.output_item.done","data":{"type":"response.output_item.done","sequence_number":3,"item":{"id":"rs_corpus","type":"reasoning","summary":[{"type":"summary_text","text":"Thinking."}]},"output_index":0}},
+        {"event":"response.output_item.added","data":{"type":"response.output_item.added","sequence_number":4,"item":{"id":"fc_corpus","type":"function_call","status":"in_progress","call_id":"call_corpus","name":"get_weather","arguments":"{\"city\":\"Paris\"}"},"output_index":1}},
+        {"event":"response.output_item.done","data":{"type":"response.output_item.done","sequence_number":5,"item":{"id":"fc_corpus","type":"function_call","status":"completed","call_id":"call_corpus","name":"get_weather","arguments":"{\"city\":\"Paris\"}"},"output_index":1}},
+        {"event":"response.completed","data":{"type":"response.completed","sequence_number":6,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"completed","model":"gpt-test-upstream","output":[],"usage":{"input_tokens":5,"output_tokens":4,"total_tokens":9}}}}
+      ]
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"response":{"created_at":1700000000,"id":"resp_corpus","model":"gpt-test-upstream","object":"response","output":[],"status":"in_progress","usage":null},"sequence_number":0,"type":"response.created"},"event":"response.created"},
+        {"data":{"response":{"created_at":1700000000,"id":"resp_corpus","model":"gpt-test-upstream","object":"response","output":[],"status":"in_progress","usage":null},"sequence_number":1,"type":"response.in_progress"},"event":"response.in_progress"},
+        {"data":{"item":{"id":"rs_corpus","summary":[],"type":"reasoning"},"output_index":0,"sequence_number":2,"type":"response.output_item.added"},"event":"response.output_item.added"},
+        {"data":{"item":{"id":"rs_corpus","summary":[{"text":"Thinking.","type":"summary_text"}],"type":"reasoning"},"output_index":0,"sequence_number":3,"type":"response.output_item.done"},"event":"response.output_item.done"},
+        {"data":{"item":{"arguments":"{\"city\":\"Paris\"}","call_id":"call_corpus","id":"fc_corpus","name":"get_weather","status":"in_progress","type":"function_call"},"output_index":1,"sequence_number":4,"type":"response.output_item.added"},"event":"response.output_item.added"},
+        {"data":{"item":{"arguments":"{\"city\":\"Paris\"}","call_id":"call_corpus","id":"fc_corpus","name":"get_weather","status":"completed","type":"function_call"},"output_index":1,"sequence_number":5,"type":"response.output_item.done"},"event":"response.output_item.done"},
+        {"data":{"response":{"created_at":1700000000,"id":"resp_corpus","model":"gpt-test-upstream","object":"response","output":[{"id":"rs_corpus","summary":[{"text":"Thinking.","type":"summary_text"}],"type":"reasoning"},{"arguments":"{\"city\":\"Paris\"}","call_id":"call_corpus","id":"fc_corpus","name":"get_weather","status":"completed","type":"function_call"}],"status":"completed","usage":{"input_tokens":5,"input_tokens_details":{"cached_tokens":0},"output_tokens":4,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":9}},"sequence_number":6,"type":"response.completed"},"event":"response.completed"}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": ["reasoning.encrypted_content"],
+          "input": [
+            {"content":[{"text":"Say hello","type":"input_text"}],"role":"user","type":"message"}
+          ],
+          "instructions": "",
+          "model": "gpt-test",
+          "parallel_tool_calls": true,
+          "prompt_cache_key": "f674c4c7-551b-57dd-ab73-9724cff0fe39",
+          "store": false,
+          "stream": true,
+          "tools": [{"output_format":"png","type":"image_generation"}]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "Originator": "codex-tui",
+          "Session-Id": "f674c4c7-551b-57dd-ab73-9724cff0fe39",
+          "User-Agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "kind": "intended",
+      "path": "upstream[*].body.prompt_cache_key",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    },
+    {
+      "kind": "intended",
+      "path": "upstream[*].headers.Accept-Encoding",
+      "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."
+    },
+    {
+      "kind": "intended",
+      "path": "upstream[*].headers.Session-Id",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    },
+    {
+      "path": "client.events[6].data.response.usage.input_tokens_details",
+      "kind": "gap",
+      "reason": "Today's core fills in zero cached and reasoning token counts when the upstream reports usage without them (EnsureResponsesUsageDetails); the new core reports the upstream's usage as it comes. Whether to keep it is open.",
+      "absent": true
+    },
+    {
+      "path": "client.events[6].data.response.usage.output_tokens_details",
+      "kind": "gap",
+      "reason": "Today's core fills in zero cached and reasoning token counts when the upstream reports usage without them (EnsureResponsesUsageDetails); the new core reports the upstream's usage as it comes. Whether to keep it is open.",
+      "absent": true
+    }
+  ]
+}

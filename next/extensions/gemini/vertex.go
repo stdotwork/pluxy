@@ -91,7 +91,7 @@ func vertexHost(location string) string {
 
 var versionSegment = regexp.MustCompile(`/v\d+(?:beta\d*|alpha\d*)?$`)
 
-func (v *vertexSettings) resolve(ctx context.Context, base string, cred *protocol.Credential, model string, stream bool) (target, error) {
+func (v *vertexSettings) resolve(ctx context.Context, base string, cred *protocol.Credential, model, method string) (target, error) {
 	m := url.PathEscape(model)
 	switch {
 	case cred != nil && cred.Kind == protocol.CredentialAPIKey && cred.APIKey != "":
@@ -108,7 +108,7 @@ func (v *vertexSettings) resolve(ctx context.Context, base string, cred *protoco
 			u = base + "/v1/publishers/google/models/" + m
 		}
 		key := cred.APIKey
-		return target{url: u + method(stream), authorize: func(h http.Header) { h.Set("X-Goog-Api-Key", key) }}, nil
+		return target{url: u + method, authorize: func(h http.Header) { h.Set("X-Goog-Api-Key", key) }}, nil
 	case cred != nil && cred.Kind == CredentialServiceAccount:
 		sa, err := readServiceAccount(cred.Data)
 		if err != nil {
@@ -132,7 +132,7 @@ func (v *vertexSettings) resolve(ctx context.Context, base string, cred *protoco
 		if err != nil {
 			return target{}, err
 		}
-		u := fmt.Sprintf("%s/v1/projects/%s/locations/%s/publishers/google/models/%s%s", base, url.PathEscape(project), location, m, method(stream))
+		u := fmt.Sprintf("%s/v1/projects/%s/locations/%s/publishers/google/models/%s%s", base, url.PathEscape(project), location, m, method)
 		return target{url: u, authorize: func(h http.Header) { h.Set("Authorization", "Bearer "+token) }, token: token, sa: sa}, nil
 	}
 	return target{}, &llm.Error{Code: llm.CodeAuth, Message: "the Vertex account has neither an API key nor a service account key", Scope: llm.ScopeCredential}

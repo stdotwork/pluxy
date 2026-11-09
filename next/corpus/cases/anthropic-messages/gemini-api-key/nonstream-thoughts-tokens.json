@@ -1,0 +1,87 @@
+{
+  "description": "Gemini usageMetadata with thoughtsTokenCount 9 and no cached tokens: how the Messages usage shows it.",
+  "source": ["core/internal/translator/gemini/claude/gemini_claude_response.go"],
+  "client": {
+    "path": "/v1/messages",
+    "body": {
+      "model": "gemini-corpus",
+      "max_tokens": 512,
+      "messages": [{"role":"user","content":"Say hello"}]
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "candidates": [
+          {
+            "content": {"role":"model","parts":[{"text":"Hello world"}]},
+            "finishReason": "STOP",
+            "index": 0
+          }
+        ],
+        "usageMetadata": {
+          "promptTokenCount": 30,
+          "candidatesTokenCount": 12,
+          "thoughtsTokenCount": 9,
+          "totalTokenCount": 51
+        },
+        "modelVersion": "gemini-corpus-upstream",
+        "responseId": "resp-corpus"
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "content": [{"text":"Hello world","type":"text"}],
+        "id": "resp-corpus",
+        "model": "gemini-corpus-upstream",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "type": "message",
+        "usage": {"input_tokens":30,"output_tokens":21}
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "contents": [{"parts":[{"text":"Say hello"}],"role":"user"}],
+          "model": "gemini-corpus",
+          "safetySettings": [
+            {"category":"HARM_CATEGORY_HARASSMENT","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_HATE_SPEECH","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_SEXUALLY_EXPLICIT","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_DANGEROUS_CONTENT","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_CIVIC_INTEGRITY","threshold":"BLOCK_NONE"}
+          ]
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1",
+          "X-Goog-Api-Key": "sk-corpus-upstream"
+        },
+        "method": "POST",
+        "path": "/v1beta/models/gemini-corpus:generateContent"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "client.body.usage.output_tokens_details",
+      "kind": "intended",
+      "reason": "The new core writes the reasoning tokens any upstream reports (here a reasoning token count of the upstream's usage) in usage.output_tokens_details.thinking_tokens; today's core writes it only for a Responses upstream.",
+      "want": {"thinking_tokens":9}
+    }
+  ]
+}

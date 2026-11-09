@@ -69,7 +69,7 @@ func TestVertexURLs(t *testing.T) {
 		{"https://example.test/v1beta1", "https://example.test/v1beta1/publishers/google/models/gemini-x:streamGenerateContent?alt=sse"},
 		{"https://example.test/v1/publishers/google/models", "https://example.test/v1/publishers/google/models/gemini-x:streamGenerateContent?alt=sse"},
 	} {
-		tg, err := (&vertexSettings{}).resolve(context.Background(), c.base, key, "gemini-x", true)
+		tg, err := (&vertexSettings{}).resolve(context.Background(), c.base, key, "gemini-x", method(true))
 		if err != nil || tg.url != c.want {
 			t.Errorf("API key, base %q: %q (%v), want %q", c.base, tg.url, err, c.want)
 		}
