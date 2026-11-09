@@ -143,6 +143,13 @@ func (c *Core) scrub(msg string, docs ...[]byte) string {
 	return c.redactor.Scrub(msg, secrets)
 }
 
+// ScrubConfigError returns err with the secrets of the config file at path taken out of its
+// message, for a command that reads the config without starting core (-import-auth).
+func ScrubConfigError(path string, err error) error {
+	c := &Core{opts: Options{ConfigPath: path}, redactor: configdoc.NewRedactor()}
+	return c.scrubbed(err)
+}
+
 // scrubbed returns err with the secrets scrub finds taken out of its message; errors.Is and
 // errors.As still see err.
 func (c *Core) scrubbed(err error, docs ...[]byte) error {

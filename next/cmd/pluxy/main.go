@@ -52,7 +52,7 @@ func main() {
 func importAuthDir(configPath, dir string) error {
 	cfg, err := server.LoadConfig(configPath)
 	if err != nil {
-		return err
+		return core.ScrubConfigError(configPath, err)
 	}
 	if err := legacy.CheckImportFolders(dir, cfg.CredentialsDir); err != nil {
 		return err

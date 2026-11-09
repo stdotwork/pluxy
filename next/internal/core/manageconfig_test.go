@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stdotwork/pluxy/next/internal/server"
 )
 
 func dirNames(t *testing.T, dir string) []string {
@@ -235,5 +237,19 @@ func TestFailedStartShowsNoSecret(t *testing.T) {
 	_, err := Start(Options{ConfigPath: path, SafeMode: true})
 	if err == nil || strings.Contains(err.Error(), "fake-provider-secret") || !strings.Contains(err.Error(), "pluxy-redacted-") {
 		t.Fatalf("Start = %v, want a refusal without the secret", err)
+	}
+}
+
+func TestScrubConfigError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(leakyConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := server.LoadConfig(path)
+	if err == nil || !strings.Contains(err.Error(), "fake-provider-secret") {
+		t.Fatalf("LoadConfig = %v, want a refusal that quotes the value", err)
+	}
+	if got := ScrubConfigError(path, err); strings.Contains(got.Error(), "fake-provider-secret") || !errors.Is(got, err) {
+		t.Errorf("ScrubConfigError = %v", got)
 	}
 }
