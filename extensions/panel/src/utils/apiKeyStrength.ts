@@ -101,11 +101,18 @@ function effectiveLength(key: string): number {
 
 /**
  * 最小周期长度：`deadbeefdeadbeef` → 8，`abcabca` → 3，无周期则返回原长。
- * 用 (s + s).indexOf(s, 1) 求解，尾部不完整的周期同样能识别。
+ * 周期 = 长度 - 最长公共前后缀（KMP 失败函数），尾部不完整的周期同样能识别。
+ * 周期至少要重复两次（周期 * 2 <= 长度）才算周期串。
  */
 function smallestPeriod(key: string): number {
-  const period = `${key}${key}`.indexOf(key, 1);
-  return period > 0 && period < key.length ? period : key.length;
+  const border: number[] = new Array<number>(key.length).fill(0);
+  for (let index = 1, matched = 0; index < key.length; index += 1) {
+    while (matched > 0 && key[index] !== key[matched]) matched = border[matched - 1];
+    if (key[index] === key[matched]) matched += 1;
+    border[index] = matched;
+  }
+  const period = key.length - (border[key.length - 1] ?? 0);
+  return period * 2 <= key.length ? period : key.length;
 }
 
 function charsetSize(key: string): number {

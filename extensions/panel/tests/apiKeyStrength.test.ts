@@ -59,6 +59,22 @@ describe('API key strength', () => {
     const periodic = evaluateApiKeyStrength('myproxy2024myproxy2024myproxy');
     const aperiodic = evaluateApiKeyStrength('myproxy2024ZtRv4Ns8Lc3Bd7hQwK');
     expect(periodic.bits).toBeLessThan(aperiodic.bits);
+    expect(periodic.tier).not.toBe('strong');
+    // 一个完整周期加半个周期（20 位重复 + 8 位尾部），仍只值一个周期
+    const partial = evaluateApiKeyStrength('xK9mQ2vLp7xK9mQ2vLp7xK9mQ2vL');
+    const random = evaluateApiKeyStrength('xK9mQ2vLp7zT4nRb8Wc3Hy6Fd1Js');
+    expect(partial.tier).not.toBe('strong');
+    expect(partial.bits).toBeLessThan(random.bits);
+  });
+
+  test('a period with a partial tail is periodic, a block repeated less than twice is not', () => {
+    // 'abcabca' 周期为 3（7 - 最长公共前后缀 4）：有效长度 2.35 + 4 * 0.25 = 3.35，
+    // 3.35 * log2(26) = 15.7，取整 15 位
+    expect(evaluateApiKeyStrength('abcabca').bits).toBe(15);
+    // 周期 10 的串只重复了 3 个字符（周期的 2 倍超过串长），不算周期串，与无重复的同长度串得分相同
+    expect(evaluateApiKeyStrength('xK9mQ2vLp7xK9').bits).toBe(
+      evaluateApiKeyStrength('xK9mQ2vLp7aB3').bits
+    );
   });
 
   test('guessable tokens drag the score down', () => {
