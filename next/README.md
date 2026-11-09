@@ -915,12 +915,14 @@ Beside the account calls [above](#accounts-added-by-login), management serves th
 needs `Authorization: Bearer <management_key>`.
 
 The management API answers only this machine: a call from a loopback address (`127.0.0.1`,
-`::1`). Any other client gets a 403 with the code `remote_disabled`, before its key is looked at,
+`::1`). Any other client gets a 403 with the code `remote_disabled`, before its key is looked at
+(so its keys do not count for the lockout below),
 unless `management_allow_remote` is `true`, as today's `management.allow-remote`. The client is
-the address [`trusted_proxies`](#run-it) gives. A call through a proxy core does not trust that
-names another client (`X-Forwarded-For`, `X-Real-IP` or `Forwarded`) does not count as this
-machine, so a tunnel or proxy on this machine that forwards calls from elsewhere does not open
-the management API; today's core counts those calls as local. The client API and the panel's
+the address [`trusted_proxies`](#run-it) gives. A call that names another client in
+`X-Forwarded-For`, `X-Real-IP` or `Forwarded` does not count as this machine unless core took the
+client from that header (a trusted proxy's `X-Forwarded-For` or `X-Real-IP`; core does not read
+`Forwarded`), so a tunnel or proxy on this machine that forwards calls from elsewhere does not
+open the management API; today's core counts those calls as local. The client API and the panel's
 page are not gated; the panel's calls are.
 
 ```json

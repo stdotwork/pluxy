@@ -38,6 +38,7 @@ func TestManagementRemoteGate(t *testing.T) {
 		{"X-Real-IP from a local proxy core does not trust", "127.0.0.1:1", map[string]string{"X-Real-IP": "198.51.100.1"}, http.StatusForbidden},
 		{"Forwarded from a local proxy core does not trust", "127.0.0.1:1", map[string]string{"Forwarded": "for=198.51.100.1"}, http.StatusForbidden},
 		{"a remote client claiming to be local", "192.0.2.10:1", map[string]string{"X-Forwarded-For": "127.0.0.1"}, http.StatusForbidden},
+		{"an empty forwarding header names no one", "127.0.0.1:1", map[string]string{"X-Forwarded-For": " "}, http.StatusNoContent},
 	} {
 		if w := call(c.peer, c.headers); w.Code != c.want {
 			t.Errorf("%s: answered %d %s, want %d", c.name, w.Code, w.Body, c.want)
@@ -54,6 +55,15 @@ func TestManagementRemoteGate(t *testing.T) {
 	}
 	if w := call("127.0.0.1:1", map[string]string{"X-Forwarded-For": "::1"}); w.Code != http.StatusNoContent {
 		t.Errorf("local client behind a trusted proxy: %d", w.Code)
+	}
+	// A trusted proxy that names the client only in a way core does not read is not this machine.
+	for _, h := range []map[string]string{{"Forwarded": "for=198.51.100.1"}, {"X-Forwarded-For": "unknown"}, {"X-Real-IP": "unknown"}} {
+		if w := call("127.0.0.1:1", h); w.Code != http.StatusForbidden {
+			t.Errorf("trusted proxy with %v: %d, want 403", h, w.Code)
+		}
+	}
+	if w := call("127.0.0.1:1", nil); w.Code != http.StatusNoContent {
+		t.Errorf("the trusted proxy's own call: %d", w.Code)
 	}
 
 	// management_allow_remote serves other machines, still with the key.
