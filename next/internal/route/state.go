@@ -105,7 +105,17 @@ type State struct {
 	// generation of the router Retain carried the state to: an outcome seen by an older router
 	// is about the account as it was, so it records nothing.
 	since map[scopeKey]uint64
-	rand  func() float64
+	// last holds, per account ID, the latest failure an attempt on the account recorded a
+	// block for, until a later attempt on it succeeds.
+	last map[string]lastFailure
+	rand func() float64
+}
+
+// lastFailure is the latest failure recorded about an account.
+type lastFailure struct {
+	at   time.Time
+	mark uint64 // as block.mark
+	err  *llm.Error
 }
 
 // lastEnd returns when the latest block of st ends.
@@ -171,7 +181,7 @@ func (s *State) reserve(a *Account, model string, now time.Time) (uint64, bool) 
 // NewState returns empty state.
 func NewState() *State {
 	return &State{scopes: map[scopeKey]*scopeState{}, active: map[string]int{}, affinity: newAffinity(), rotation: newRotation(),
-		since: map[scopeKey]uint64{}, rand: rand.Float64}
+		since: map[scopeKey]uint64{}, last: map[string]lastFailure{}, rand: rand.Float64}
 }
 
 // nextGen returns the generation for a new router.
@@ -230,6 +240,11 @@ func (s *State) Retain(prevRouter, nextRouter *Router, same func(old, cur *Accou
 			s.drop(k)
 		}
 	}
+	for id := range s.last {
+		if !kept[id] {
+			delete(s.last, id)
+		}
+	}
 	s.mu.Unlock()
 
 	s.affinity.retain(kept, changed, gen)
@@ -271,6 +286,7 @@ func (s *State) forget(id string) {
 			s.drop(k)
 		}
 	}
+	delete(s.last, id)
 }
 
 func (s *State) activeCount(id string) int {
@@ -340,6 +356,7 @@ func (s *State) failure(a *Account, model string, e *llm.Error, now time.Time, t
 	if s.stale(key, a.gen) {
 		return
 	}
+	s.last[a.ID] = lastFailure{at: now, mark: s.seq, err: e}
 	s.maybeSweep(now)
 	st := s.scopes[key]
 	if st == nil {
@@ -399,6 +416,9 @@ func (s *State) failure(a *Account, model string, e *llm.Error, now time.Time, t
 func (s *State) success(a *Account, model string, seq uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if l, ok := s.last[a.ID]; ok && l.mark < seq && !s.stale(scopeKey{kind: scopeCredential, id: a.ID}, a.gen) {
+		delete(s.last, a.ID)
+	}
 	for _, k := range keysFor(a, model) {
 		st := s.scopes[k]
 		if st == nil || s.stale(k, a.gen) {
