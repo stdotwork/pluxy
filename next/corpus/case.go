@@ -87,6 +87,12 @@ type ClientStep struct {
 	// stands for any message that ends a turn: response.completed, response.done,
 	// response.incomplete, response.failed or error.
 	Read string `json:"read,omitempty"`
+	// AwaitDrop waits until the fake upstream's WebSocket that is upstream[n] (counting from 0) has
+	// dropped its connection and the core has closed its side of it, so the core knows the
+	// upstream is gone. The upstream drops right after its last message, but the client does not
+	// wait for that: without this step, whether the core has noticed by the client's next
+	// message depends on timing.
+	AwaitDrop *int `json:"await_drop,omitempty"`
 	// Close closes the socket with this close code.
 	Close int `json:"close,omitempty"`
 	// Drop drops the connection without a close message.
@@ -278,8 +284,8 @@ func (c *Case) validate() error {
 		return fmt.Errorf("client: a websocket script has no body")
 	}
 	for i, s := range c.Client.WebSocket {
-		if n := count(len(s.Send) > 0, s.SendText != nil, s.Read != "", s.Close != 0, s.Drop); n != 1 {
-			return fmt.Errorf("client.websocket[%d]: set exactly one of send, send_text, read, close or drop", i)
+		if n := count(len(s.Send) > 0, s.SendText != nil, s.Read != "", s.AwaitDrop != nil, s.Close != 0, s.Drop); n != 1 {
+			return fmt.Errorf("client.websocket[%d]: set exactly one of send, send_text, read, await_drop, close or drop", i)
 		}
 	}
 	for i, r := range c.Upstream {

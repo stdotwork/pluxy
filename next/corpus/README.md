@@ -140,15 +140,20 @@ A client may instead hold a WebSocket: `client.websocket` is a script, and the r
 `GET` with an upgrade (no body). Each step is one of `send` (a JSON value, sent as one text
 message), `send_text` (literal text), `read` (read messages until one whose `type` is the given
 one, or `"turn"` for any message that ends a turn: `response.completed`, `response.done`,
-`response.incomplete`, `response.failed` or `error`), `close` (a close code) or `drop` (end the
+`response.incomplete`, `response.failed` or `error`), `await_drop` (wait until the fake upstream's
+WebSocket `upstream[n]`, `n` counting from 0, has dropped its connection and the core has closed its
+side; a core that never does is recorded as `timeout`), `close` (a close code) or `drop` (end the
 connection without a close message). After the last step the client closes normally. A read
 that waits more than 10 seconds stops the script and is recorded as `timeout`.
 
 An upstream reply may be `websocket`: the fake upstream accepts the handshake and plays a script.
 Each step is one of `receive` (wait for the next message from the core), `send` (a JSON value as
-one text message), `close` (`code` and `reason`) or `drop`. Every message the core sends is
-recorded, whenever it arrives; after the last step the fake upstream reads on until the core
-closes the socket. A `hold` reply (HTTP) keeps the response open after its body until the core
+one text message), `close` (`code` and `reason`) or `drop` (end the connection without a close
+message, then wait for the core to close its side; a core that does not within 10 seconds is
+recorded as `timeout`). A client that continues after a drop uses `await_drop`: the upstream drops
+right after its last message, and the client would otherwise race the drop. Every message the core
+sends is recorded, whenever it arrives; after the last step the fake upstream reads on until the
+core closes the socket. A `hold` reply (HTTP) keeps the response open after its body until the core
 ends the request, like an upstream still generating.
 
 `account_models`: models the account lists in both cores (see above).

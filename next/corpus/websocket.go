@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -33,7 +34,7 @@ var turnEnds = map[string]bool{"response.completed": true, "response.done": true
 // runClientWebSocket runs the case's WebSocket script against a core at base and returns the
 // client's side of the observation: the handshake reply's status and headers, every message
 // read, and the close the core sent, if it closed the socket.
-func runClientWebSocket(ctx context.Context, c *Case, base string) (map[string]any, error) {
+func runClientWebSocket(ctx context.Context, c *Case, base string, up *FakeUpstream) (map[string]any, error) {
 	h := http.Header{}
 	h.Set("User-Agent", ClientUserAgent)
 	switch c.Client.Auth {
@@ -112,6 +113,11 @@ steps:
 					break
 				}
 			}
+		case s.AwaitDrop != nil:
+			if msg := up.awaitDrop(ctx, *s.AwaitDrop); msg != "" {
+				out["timeout"] = fmt.Sprintf("client.websocket[%d]: %s", i, msg)
+				break steps
+			}
 		case s.Close != 0:
 			_ = conn.Close(websocket.StatusCode(s.Close), "")
 			closed = true
@@ -168,6 +174,7 @@ type wsRecord struct {
 	close    map[string]any // set when the core closed the socket or the connection ended
 	timeout  string
 	done     chan struct{}
+	dropped  chan struct{} // closed once the script has dropped the connection and the core has closed its side
 }
 
 func (r *wsRecord) observation() map[string]any {
@@ -190,6 +197,7 @@ func (r *wsRecord) observation() map[string]any {
 
 // serveWebSocket accepts a handshake and plays the upstream's side of the script.
 func (u *FakeUpstream) serveWebSocket(w http.ResponseWriter, r *http.Request, steps []UpstreamStep, rec *wsRecord) {
+	tcp, _ := r.Context().Value(connKey{}).(net.Conn)
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{CompressionMode: websocket.CompressionDisabled})
 	if err != nil {
 		close(rec.done)
@@ -257,12 +265,50 @@ steps:
 			scriptMu.Lock()
 			closedByScript = true
 			scriptMu.Unlock()
+			// End our side of the connection without a close message, then wait for the core to
+			// end its own, which it does once it has seen ours end: the drop is then known to it.
+			if t, ok := tcp.(interface{ CloseWrite() error }); ok && t.CloseWrite() == nil {
+				select {
+				case <-readerDone:
+				case <-time.After(stepTimeout):
+					rec.mu.Lock()
+					rec.timeout = fmt.Sprintf("upstream websocket step %d: the core did not close the dropped connection", i)
+					rec.mu.Unlock()
+				}
+			}
 			_ = conn.CloseNow()
+			close(rec.dropped)
 			break steps
 		}
 	}
 	<-readerDone
 	close(rec.done)
+}
+
+// awaitDrop waits until the n-th request to the fake upstream (counting from 0), a WebSocket
+// whose script drops the connection, has dropped it and the core has closed its side. It returns
+// what went wrong, or "" once that has happened.
+func (u *FakeUpstream) awaitDrop(ctx context.Context, n int) string {
+	reqs := u.Requests()
+	if n < 0 || n >= len(reqs) || reqs[n].ws == nil {
+		return fmt.Sprintf("upstream[%d] is not a WebSocket the fake upstream accepted", n)
+	}
+	rec := reqs[n].ws
+	select {
+	case <-rec.dropped:
+		return ""
+	case <-rec.done:
+		select {
+		case <-rec.dropped:
+			return ""
+		default:
+		}
+		return fmt.Sprintf("upstream[%d] ended without dropping its connection", n)
+	case <-time.After(stepTimeout):
+		return fmt.Sprintf("upstream[%d] did not drop its connection", n)
+	case <-ctx.Done():
+		return ctx.Err().Error()
+	}
 }
 
 // waitWebSockets waits until every WebSocket the fake upstream accepted has closed, or until
