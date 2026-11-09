@@ -313,7 +313,14 @@ func fetchToken(ctx context.Context, sa *serviceAccount) (string, time.Time, err
 		return "", time.Time{}, &llm.Error{Code: llm.CodeUnavailable, Message: "service account token endpoint unreachable: " + err.Error(), Scope: llm.ScopeCredential, Retryable: true}
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", time.Time{}, ctx.Err()
+		}
+		// A reply that broke off says nothing about the key: it is not a refusal of it.
+		return "", time.Time{}, &llm.Error{Code: llm.CodeUnavailable, Message: "service account token endpoint reply broke off: " + err.Error(), Scope: llm.ScopeCredential, Retryable: true}
+	}
 	var tr struct {
 		AccessToken string `json:"access_token"`
 		ExpiresIn   int64  `json:"expires_in"`
@@ -330,6 +337,8 @@ func fetchToken(ctx context.Context, sa *serviceAccount) (string, time.Time, err
 		return tr.AccessToken, time.Now().Add(life), nil
 	case resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests:
 		return "", time.Time{}, &llm.Error{Code: llm.CodeUnavailable, Status: resp.StatusCode, Message: fmt.Sprintf("service account token endpoint answered %s", resp.Status), Scope: llm.ScopeCredential, Retryable: true}
+	case resp.StatusCode == http.StatusOK:
+		return "", time.Time{}, &llm.Error{Code: llm.CodeUpstream, Message: "service account token endpoint sent no access token", Scope: llm.ScopeCredential, Retryable: true}
 	}
 	// The code and the description are the endpoint's text, shown to the client at login, before
 	// any credential exists for core to redact: both are bounded and cleaned.

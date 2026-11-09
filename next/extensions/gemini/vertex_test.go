@@ -201,6 +201,67 @@ func TestTokenFetchTimesOut(t *testing.T) {
 	}
 }
 
+// serviceAccountAt returns a service account whose token endpoint is the server's /token.
+func serviceAccountAt(t *testing.T, tokenURL string) *serviceAccount {
+	t.Helper()
+	var raw map[string]any
+	_ = json.Unmarshal(geminitest.New(t).ServiceAccount("p", true), &raw)
+	raw["token_uri"] = tokenURL
+	b, _ := json.Marshal(raw)
+	sa, err := readServiceAccount(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sa
+}
+
+// The token endpoint's reply decides the error: a reply that breaks off or cannot be read says
+// nothing about the key, so it is an unavailable error, not a refusal of the key; a complete 200
+// without a token is an upstream error; a refusal the endpoint wrote stays an auth error. No
+// request has reached the model in any of them, so another account may serve the request.
+func TestTokenFetchErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		handler   http.HandlerFunc
+		code      string
+		retryable bool
+	}{
+		{"200 whose body breaks off", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Length", "200")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"access_token":"ya29.partial`)) // 200 bytes promised, the connection ends
+		}, llm.CodeUnavailable, true},
+		{"400 whose body breaks off", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Length", "200")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"invalid_`))
+		}, llm.CodeUnavailable, true},
+		{"200 with a body that is not JSON", func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte("<html>captive portal</html>"))
+		}, llm.CodeUpstream, true},
+		{"200 with no access token", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"expires_in":3599}`))
+		}, llm.CodeUpstream, true},
+		{"400 invalid_grant", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"invalid_grant","error_description":"Invalid JWT Signature."}`))
+		}, llm.CodeAuth, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := httptest.NewServer(tc.handler)
+			defer ts.Close()
+			_, _, err := fetchToken(context.Background(), serviceAccountAt(t, ts.URL+"/token"))
+			var e *llm.Error
+			if !errors.As(err, &e) || e.Code != tc.code || e.Retryable != tc.retryable {
+				t.Errorf("err = %v, want code %s with retryable %v", err, tc.code, tc.retryable)
+			}
+		})
+	}
+}
+
 // A Gemini client's countTokens body that wraps a whole request reaches Vertex AI as that
 // request's contents, since Vertex AI takes no generateContentRequest.
 func TestVertexCountUnwraps(t *testing.T) {
