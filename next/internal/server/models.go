@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
@@ -27,12 +26,12 @@ func serveModels(mux *http.ServeMux, src Source) {
 		return func(w http.ResponseWriter, r *http.Request) {
 			g, release := src.Acquire()
 			defer release()
-			if !authorized(g.Config, r, google) {
+			if e := refused(g.Config, r, google); e != nil {
 				f := chatFormat
 				if google {
 					f = geminiFormat
 				}
-				f.writeError(w, &llm.Error{Code: llm.CodeAuth, Message: "missing or invalid API key", Status: http.StatusUnauthorized, ProviderCode: "invalid_api_key"})
+				f.writeError(w, e)
 				return
 			}
 			write(w, r, g.Router.Models(r.Context()))

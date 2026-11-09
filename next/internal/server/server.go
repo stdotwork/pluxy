@@ -165,8 +165,8 @@ func NewHandler(src Source) http.Handler {
 		mux.HandleFunc("POST "+path, func(w http.ResponseWriter, r *http.Request) {
 			g, release := src.Acquire()
 			defer release()
-			if !authorized(g.Config, r, f.googleKeys) {
-				f.writeError(w, &llm.Error{Code: llm.CodeAuth, Message: "missing or invalid API key", Status: http.StatusUnauthorized, ProviderCode: "invalid_api_key"})
+			if e := refused(g.Config, r, f.googleKeys); e != nil {
+				f.writeError(w, e)
 				return
 			}
 			logged(w, r, g, func(w http.ResponseWriter, r *http.Request) { h(w, r, g) })
@@ -184,6 +184,27 @@ func NewHandler(src Source) http.Handler {
 	serveModels(mux, src)
 	return withCORS(src, mux)
 }
+
+// refused returns the error that answers a request that may not use the client API, or nil when
+// it may: a request that carries no configured client key is refused as unauthorized; one that
+// does is refused as forbidden while a client key is one of the example config's public ones.
+// Today's core does the same (its example API-key safe mode), and the config's notices say so
+// at every load. Only a request with a configured key learns of the state.
+func refused(cfg *Config, r *http.Request, googleKeys bool) *llm.Error {
+	if !authorized(cfg, r, googleKeys) {
+		return &llm.Error{Code: llm.CodeAuth, Message: "missing or invalid API key", Status: http.StatusUnauthorized, ProviderCode: "invalid_api_key"}
+	}
+	if ex := cfg.ExampleClientKeys(); len(ex) > 0 {
+		return &llm.Error{Code: llm.CodePermission, Status: http.StatusForbidden, ProviderCode: ExampleKeyCode,
+			Message: "the client API is disabled because client_keys holds the example config's key " + strings.Join(ex, ", ") +
+				"; replace it with your own key, then retry"}
+	}
+	return nil
+}
+
+// ExampleKeyCode is the provider code of the error that refuses requests while a client key is
+// one of the example config's.
+const ExampleKeyCode = "unsafe_example_api_key"
 
 // authorized reports whether the request carries a client key: as a bearer token, or in
 // x-api-key as Anthropic clients send it; with googleKeys also in x-goog-api-key or the key

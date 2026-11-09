@@ -59,8 +59,8 @@ func serveResponsesWebSocket(w http.ResponseWriter, r *http.Request, src Source)
 	g, release := src.Acquire()
 	cfg := g.Config
 	release()
-	if !authorized(cfg, r, false) {
-		responsesFormat.writeError(w, &llm.Error{Code: llm.CodeAuth, Message: "missing or invalid API key", Status: http.StatusUnauthorized, ProviderCode: "invalid_api_key"})
+	if e := refused(cfg, r, false); e != nil {
+		responsesFormat.writeError(w, e)
 		return
 	}
 	if ts := r.Header.Get("X-Codex-Turn-State"); ts != "" {
@@ -252,12 +252,12 @@ func clientError(status int, msg string) *llm.Error {
 // interrupt answers a response.interrupt: on a session it goes to the extension when it targets
 // the running response; on an HTTP turn core cancels the turn and ends it for the client.
 func (s *wsSocket) interrupt(data []byte) {
-	if g, release := s.src.Acquire(); !authorized(g.Config, s.r, false) {
-		release()
-		_ = s.sendError(&llm.Error{Code: llm.CodeAuth, Status: http.StatusUnauthorized, Message: "missing or invalid API key", ProviderCode: "invalid_api_key"})
+	g, release := s.src.Acquire()
+	e := refused(g.Config, s.r, false)
+	release()
+	if e != nil {
+		_ = s.sendError(e)
 		return
-	} else {
-		release()
 	}
 	var m struct {
 		ResponseID any `json:"response_id"`
@@ -300,8 +300,8 @@ func (s *wsSocket) interrupt(data []byte) {
 func (s *wsSocket) handle(data []byte) bool {
 	g, release := s.src.Acquire()
 	defer release()
-	if !authorized(g.Config, s.r, false) {
-		return s.sendError(&llm.Error{Code: llm.CodeAuth, Status: http.StatusUnauthorized, Message: "missing or invalid API key", ProviderCode: "invalid_api_key"}) == nil
+	if e := refused(g.Config, s.r, false); e != nil {
+		return s.sendError(e) == nil
 	}
 	var msg map[string]json.RawMessage
 	if json.Unmarshal(data, &msg) != nil || msg == nil {
