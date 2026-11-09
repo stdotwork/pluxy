@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -154,23 +155,31 @@ func (m *Management) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	client := ClientIP(r)
-	if left := m.lockout.blocked(client); left > 0 {
+	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	right := ok && token != "" && sameKey(token, key)
+	left, blockedNow := m.lockout.attempt(client, right)
+	if left > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(int((left+time.Second-1)/time.Second)))
 		writeManagementError(w, http.StatusForbidden, "blocked",
 			fmt.Sprintf("too many failed management keys from this address; try again in %s", left.Round(time.Second)))
 		return
 	}
-	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if !ok || token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(key)) != 1 {
-		if m.lockout.fail(client) {
+	if !right {
+		if blockedNow {
 			log.Printf("management: %d failed management keys in a row from %s; refusing it for %s", lockoutFailures, client, lockoutFor)
 		}
 		writeManagementError(w, http.StatusUnauthorized, "unauthorized", "missing or invalid management key")
 		return
 	}
-	m.lockout.succeed(client)
 	w.Header().Set("Cache-Control", "no-store")
 	m.mux.ServeHTTP(w, r)
+}
+
+// sameKey compares a sent key with the management key in constant time, length included: it
+// compares their SHA-256 digests.
+func sameKey(sent, key string) bool {
+	a, b := sha256.Sum256([]byte(sent)), sha256.Sum256([]byte(key))
+	return subtle.ConstantTimeCompare(a[:], b[:]) == 1
 }
 
 func (m *Management) configured(id string) (route.Account, bool) {

@@ -15,8 +15,7 @@ const (
 	lockoutIdle     = 2 * time.Hour
 	// lockoutSweep is how often, at most, forgotten clients are removed.
 	lockoutSweep = 10 * time.Minute
-	// lockoutClients bounds how many clients are tracked; past it the one whose last failure
-	// is oldest is dropped.
+	// lockoutClients bounds how many clients are tracked; past it one is dropped (dropOne).
 	lockoutClients = 10000
 )
 
@@ -25,6 +24,7 @@ const (
 type lockout struct {
 	mu      sync.Mutex
 	clients map[netip.Prefix]*attempts
+	max     int // lockoutClients; smaller in tests
 	swept   time.Time
 	now     func() time.Time
 }
@@ -36,7 +36,7 @@ type attempts struct {
 }
 
 func newLockout() *lockout {
-	return &lockout{clients: map[netip.Prefix]*attempts{}, now: time.Now}
+	return &lockout{clients: map[netip.Prefix]*attempts{}, max: lockoutClients, now: time.Now}
 }
 
 // lockoutKey is what a client is counted by: its address, or for IPv6 its /64.
@@ -51,29 +51,29 @@ func lockoutKey(a netip.Addr) netip.Prefix {
 	return netip.PrefixFrom(a, a.BitLen())
 }
 
-// blocked returns how long the client stays blocked, or 0.
-func (l *lockout) blocked(a netip.Addr) time.Duration {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if at := l.clients[lockoutKey(a)]; at != nil {
-		if left := at.until.Sub(l.now()); left > 0 {
-			return left
-		}
-	}
-	return 0
-}
-
-// fail counts a failed key from the client and reports whether that blocked it.
-func (l *lockout) fail(a netip.Addr) bool {
+// attempt records one call from the client, whose key was right or not, in one step: it returns
+// how long the client stays blocked (0 when it is not, and then the call may go on when the key
+// was right), and whether this call's failure blocked it. A blocked client's calls change
+// nothing; a right key clears the count; a wrong one adds to it.
+func (l *lockout) attempt(a netip.Addr, right bool) (left time.Duration, blockedNow bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
-	l.sweep(now)
 	key := lockoutKey(a)
 	at := l.clients[key]
+	if at != nil {
+		if left := at.until.Sub(now); left > 0 {
+			return left, false
+		}
+	}
+	if right {
+		delete(l.clients, key)
+		return 0, false
+	}
+	l.sweep(now)
 	if at == nil || now.Sub(at.last) > lockoutIdle {
-		if at == nil && len(l.clients) >= lockoutClients {
-			l.dropOldest()
+		if at == nil && len(l.clients) >= l.max {
+			l.dropOne(now)
 		}
 		at = &attempts{}
 		l.clients[key] = at
@@ -81,17 +81,10 @@ func (l *lockout) fail(a netip.Addr) bool {
 	at.failures++
 	at.last = now
 	if at.failures < lockoutFailures {
-		return false
+		return 0, false
 	}
 	at.failures, at.until = 0, now.Add(lockoutFor)
-	return true
-}
-
-// succeed clears the client's count after a right key.
-func (l *lockout) succeed(a netip.Addr) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	delete(l.clients, lockoutKey(a))
+	return 0, true
 }
 
 // sweep removes clients whose count is forgotten and who are not blocked.
@@ -107,13 +100,28 @@ func (l *lockout) sweep(now time.Time) {
 	}
 }
 
-func (l *lockout) dropOldest() {
-	var oldest netip.Prefix
-	var at *attempts
+// dropOne makes room for a new client: it drops the client that is not blocked whose last
+// failure is oldest or, when every client is blocked, the one whose block ends first. So a
+// client cannot end its own block by failing from many other addresses until it is dropped:
+// that needs every tracked client blocked, which takes more failed keys from more addresses than
+// those addresses could try fresh.
+func (l *lockout) dropOne(now time.Time) {
+	var victim netip.Prefix
+	var vat *attempts
+	better := func(a *attempts) bool {
+		aBlocked, vBlocked := now.Before(a.until), now.Before(vat.until)
+		if aBlocked != vBlocked {
+			return !aBlocked
+		}
+		if aBlocked {
+			return a.until.Before(vat.until)
+		}
+		return a.last.Before(vat.last)
+	}
 	for k, a := range l.clients {
-		if at == nil || a.last.Before(at.last) {
-			oldest, at = k, a
+		if vat == nil || better(a) {
+			victim, vat = k, a
 		}
 	}
-	delete(l.clients, oldest)
+	delete(l.clients, victim)
 }

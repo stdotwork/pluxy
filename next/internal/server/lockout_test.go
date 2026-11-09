@@ -12,24 +12,45 @@ type fakeClock struct{ t time.Time }
 
 func (c *fakeClock) now() time.Time { return c.t }
 
+// fail records a wrong key from a and reports whether that blocked it.
+func (l *lockout) fail(a netip.Addr) bool {
+	_, blockedNow := l.attempt(a, false)
+	return blockedNow
+}
+
+// blockedFor returns how long a stays blocked, without recording a call.
+func (l *lockout) blockedFor(a netip.Addr) time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if at := l.clients[lockoutKey(a)]; at != nil && at.until.After(l.now()) {
+		return at.until.Sub(l.now())
+	}
+	return 0
+}
+
 func TestLockout(t *testing.T) {
 	clock := &fakeClock{time.Unix(1_800_000_000, 0)}
 	l := newLockout()
 	l.now = clock.now
 	a := netip.MustParseAddr("198.51.100.7")
 	for i := 1; i < lockoutFailures; i++ {
-		if l.fail(a) || l.blocked(a) != 0 {
+		if l.fail(a) || l.blockedFor(a) != 0 {
 			t.Fatalf("blocked after %d failures", i)
 		}
 	}
-	if !l.fail(a) || l.blocked(a) != lockoutFor {
-		t.Fatalf("not blocked for %s after %d failures: %s", lockoutFor, lockoutFailures, l.blocked(a))
+	if !l.fail(a) || l.blockedFor(a) != lockoutFor {
+		t.Fatalf("not blocked for %s after %d failures: %s", lockoutFor, lockoutFailures, l.blockedFor(a))
 	}
-	if other := netip.MustParseAddr("198.51.100.8"); l.blocked(other) != 0 {
+	// While blocked, a right key is refused and changes nothing.
+	clock.t = clock.t.Add(time.Minute)
+	if left, _ := l.attempt(a, true); left != lockoutFor-time.Minute || l.blockedFor(a) != left {
+		t.Errorf("right key while blocked: left %s, still blocked %s", left, l.blockedFor(a))
+	}
+	if other := netip.MustParseAddr("198.51.100.8"); l.blockedFor(other) != 0 {
 		t.Error("another address is blocked")
 	}
 	clock.t = clock.t.Add(lockoutFor)
-	if l.blocked(a) != 0 {
+	if left, _ := l.attempt(a, true); left != 0 {
 		t.Error("still blocked after the block ended")
 	}
 	// After the block the count starts again.
@@ -42,7 +63,9 @@ func TestLockout(t *testing.T) {
 	for range lockoutFailures - 1 {
 		l.fail(b)
 	}
-	l.succeed(b)
+	if left, _ := l.attempt(b, true); left != 0 {
+		t.Fatal("right key refused")
+	}
 	if l.fail(b) {
 		t.Error("count not cleared by a right key")
 	}
@@ -63,21 +86,38 @@ func TestLockoutCountsIPv6By64(t *testing.T) {
 	for i := range lockoutFailures {
 		l.fail(netip.AddrFrom16([16]byte{0x20, 0x01, 0x0d, 0xb8, 15: byte(i + 1)}))
 	}
-	if l.blocked(netip.MustParseAddr("2001:db8::ffff")) == 0 {
+	if l.blockedFor(netip.MustParseAddr("2001:db8::ffff")) == 0 {
 		t.Error("an address in the same /64 is not blocked")
 	}
-	if l.blocked(netip.MustParseAddr("2001:db8:0:1::1")) != 0 {
+	if l.blockedFor(netip.MustParseAddr("2001:db8:0:1::1")) != 0 {
 		t.Error("an address in another /64 is blocked")
 	}
 }
 
 func TestLockoutBounded(t *testing.T) {
 	l := newLockout()
-	for i := range lockoutClients + 10 {
+	l.max = 100
+	for i := range 3 * l.max {
 		l.fail(netip.AddrFrom4([4]byte{10, byte(i >> 16), byte(i >> 8), byte(i)}))
 	}
-	if n := len(l.clients); n > lockoutClients {
-		t.Errorf("%d clients tracked, want at most %d", n, lockoutClients)
+	if n := len(l.clients); n != l.max {
+		t.Errorf("%d clients tracked, want %d", n, l.max)
+	}
+}
+
+// Failing from many other addresses does not push a blocked client out of the table.
+func TestLockoutKeepsBlockedClientsWhenFull(t *testing.T) {
+	l := newLockout()
+	l.max = 100
+	a := netip.MustParseAddr("198.51.100.7")
+	for range lockoutFailures {
+		l.fail(a)
+	}
+	for i := range 3 * l.max {
+		l.fail(netip.AddrFrom4([4]byte{10, byte(i >> 16), byte(i >> 8), byte(i)}))
+	}
+	if l.blockedFor(a) == 0 {
+		t.Error("the blocked client was dropped to make room")
 	}
 }
 
