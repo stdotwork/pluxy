@@ -1022,3 +1022,24 @@ func TestTransientErrorCooldown(t *testing.T) {
 		t.Errorf("rate limit with transient cooldown off: %+v, want its block", evs[0])
 	}
 }
+
+// A failure whose block is not kept (the model table is full of live blocks) is not the
+// account's last error either: the last error is the latest failure that set a block.
+func TestDroppedBlockSetsNoLastError(t *testing.T) {
+	defer func(n int) { maxModelKeys = n }(maxModelKeys)
+	maxModelKeys = 1
+	st := NewState()
+	a := &Account{ID: "a"}
+	now := time.Unix(1_800_000_000, 0)
+	modelLimit := func(msg string) *llm.Error {
+		return &llm.Error{Code: llm.CodeRateLimit, Scope: llm.ScopeModel, RetryAfterMS: time.Hour.Milliseconds(), Message: msg}
+	}
+	st.failure(a, "m1", 0, modelLimit("m1 limited"), now, 0)
+	st.failure(a, "m2", 0, modelLimit("m2 limited"), now, 0) // the table is full: no block kept
+	if until, _, _ := st.availability(a, "m2", now); !until.IsZero() {
+		t.Fatalf("m2 blocked until %v with the table full", until)
+	}
+	if rt := st.Runtime(*a, now); rt.LastError == nil || rt.LastError.Message != "m1 limited" {
+		t.Errorf("last error = %+v, want m1's: m2's failure set no block", rt.LastError)
+	}
+}

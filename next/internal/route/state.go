@@ -424,11 +424,6 @@ func (s *State) failure(a *Account, model string, seq uint64, e *llm.Error, now 
 	if st != nil && st.won > seq {
 		return // a newer attempt has succeeded on this scope since this one started
 	}
-	if cred := s.scopes[scopeKey{kind: scopeCredential, id: a.ID}]; cred == nil || cred.won <= seq {
-		if l, ok := s.last[a.ID]; !ok || l.mark <= seq {
-			s.last[a.ID] = lastFailure{at: now, mark: seq, err: e}
-		}
-	}
 	s.maybeSweep(now)
 	st = s.scopes[key]
 	if st == nil {
@@ -445,6 +440,13 @@ func (s *State) failure(a *Account, model string, seq uint64, e *llm.Error, now 
 		s.scopes[key] = st
 		if key.kind == scopeModel {
 			s.models++
+		}
+	}
+	// The block is kept, so the failure is the account's last error, unless an attempt on the
+	// account that started after this one has since succeeded.
+	if cred := s.scopes[scopeKey{kind: scopeCredential, id: a.ID}]; cred == nil || cred.won <= seq {
+		if l, ok := s.last[a.ID]; !ok || l.mark <= seq {
+			s.last[a.ID] = lastFailure{at: now, mark: seq, err: e}
 		}
 	}
 	b := &st.blocks[kindIndex(kind)]
