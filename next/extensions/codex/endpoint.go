@@ -321,7 +321,7 @@ func images(ctx context.Context, call sdk.Call, out *sdk.Stream, path string) er
 		return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
 			Message: "the account's \"images\" setting turns the Images API off"}
 	}
-	if a.subscription && a.planType == "free" {
+	if a.subscription && strings.EqualFold(strings.TrimSpace(a.planType), "free") {
 		return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
 			Message: "a free ChatGPT plan cannot use the Images API"}
 	}
@@ -372,7 +372,7 @@ func images(ctx context.Context, call sdk.Call, out *sdk.Stream, path string) er
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return statusError(resp, model)
+		return endpointStatusError(resp, model)
 	}
 	ct := resp.Header.Get("Content-Type")
 	if ct == "" {

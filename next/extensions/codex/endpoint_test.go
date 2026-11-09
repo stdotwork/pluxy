@@ -241,6 +241,9 @@ func TestImagesRefusals(t *testing.T) {
 	key := &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-test"}
 	free, _ := json.Marshal(credentialData{IDToken: idTokenWithPlan("free")})
 	freePlan := &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: "at", Data: free}
+	// Today's core compares the plan without case or surrounding spaces.
+	freeWritten, _ := json.Marshal(credentialData{IDToken: idTokenWithPlan(" Free ")})
+	freeWrittenPlan := &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: "at", Data: freeWritten}
 	for _, tc := range []struct {
 		name     string
 		model    string
@@ -250,6 +253,7 @@ func TestImagesRefusals(t *testing.T) {
 		scope    string
 	}{
 		{"free plan", "gpt-image-2", map[string]any{}, freePlan, llm.CodeUnsupported, llm.ScopeCredential},
+		{"free plan in capitals", "gpt-image-2", map[string]any{}, freeWrittenPlan, llm.CodeUnsupported, llm.ScopeCredential},
 		{"images off", "gpt-image-2", map[string]any{"images": false}, key, llm.CodeUnsupported, llm.ScopeCredential},
 		{"not an image model", "gpt-6.1-sol", map[string]any{}, key, llm.CodeInvalidRequest, llm.ScopeRequest},
 	} {
