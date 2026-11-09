@@ -41,11 +41,15 @@ const maxManagementBody = 1 << 20
 //	POST   /v0/management/management-key/rotate  replace the management key with a new one
 //	GET    /v0/management/settings  the basic and routing settings, by today's core's names
 //	PATCH  /v0/management/settings  change them
+//	GET    /v0/management/login-methods  each extension's login methods (handleAccounts)
+//	POST   /v0/management/accounts/{id}/cooldown/reset  clear an account's cooldowns
+//	GET    /v0/management/accounts/{id}/models  the models an account serves
+//	POST   /v0/management/accounts/{id}/test  send an account one small request
 //
 // Every call needs the active config's management_key as a bearer token. Without a key in the
 // config the API is not served.
 func (c *Core) Management() http.Handler {
-	m := server.NewManagement(c.Config, c.creds)
+	m := server.NewManagement(c.Config, c.creds, c.state)
 	m.Check = c.checks.result
 	m.Handle("GET /status", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, c.Status())
@@ -85,6 +89,7 @@ func (c *Core) Management() http.Handler {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	c.handleUI(m)
+	c.handleAccounts(m)
 	c.handleConfig(m)
 	return m
 }

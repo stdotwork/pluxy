@@ -92,6 +92,12 @@ type Name struct {
 	DisplayName string
 }
 
+// Names returns every name the account serves models under, given the upstream names catalog
+// its extension lists for it, as names does.
+func (a *Account) Names(catalog []string, forcePrefix bool) []Name {
+	return a.names(catalog, forcePrefix)
+}
+
 // names returns every name the account serves models under, given the models it serves without
 // renaming: its config's Models, else catalog (the upstream names its extension lists for it).
 // The rules apply in today's core's order: exclusions on those names, then aliases, then the

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -44,6 +45,25 @@ type AccountView struct {
 	RenewalError *llm.Error `json:"renewal_error,omitempty"`
 	CreatedAt    *time.Time `json:"created_at,omitempty"`
 	UpdatedAt    *time.Time `json:"updated_at,omitempty"`
+	// The account's routing fields, as its config entry or its login set them (route.Account).
+	Priority       int                `json:"priority,omitempty"`
+	Weight         *int               `json:"weight,omitempty"`
+	DisableCooling *bool              `json:"disable_cooling,omitempty"`
+	MaxConcurrency int                `json:"max_concurrency,omitempty"`
+	Prefix         string             `json:"prefix,omitempty"`
+	Models         []route.ModelEntry `json:"models,omitempty"`
+	ExcludedModels []string           `json:"excluded_models,omitempty"`
+	ModelAlias     []route.ModelAlias `json:"model_alias,omitempty"`
+	Endpoint       string             `json:"endpoint,omitempty"`
+
+	// What routing knows about the account now (route.Runtime). An account that receives no
+	// requests (disabled, or waiting for a new login) has none of it.
+	CooldownUntil  *time.Time       `json:"cooldown_until,omitempty"`
+	Cooldowns      []route.Cooldown `json:"cooldowns,omitempty"`
+	LastError      *llm.Error       `json:"last_error,omitempty"`
+	LastErrorAt    *time.Time       `json:"last_error_at,omitempty"`
+	ActiveRequests int              `json:"active_requests,omitempty"`
+
 	// Check is the result of core's last check of the account; absent while core has none.
 	Check *AccountCheck `json:"check,omitempty"`
 }
@@ -70,6 +90,24 @@ type AccountCheck struct {
 	At *time.Time `json:"at,omitempty"`
 }
 
+// fields sets v's routing fields from a and its runtime state from state.
+func (v *AccountView) fields(a route.Account, state *route.State) {
+	v.Priority, v.Weight, v.MaxConcurrency, v.Prefix = a.Priority, a.Weight, a.MaxConcurrency, a.Prefix
+	v.DisableCooling = a.DisableCooling
+	v.Models, v.ExcludedModels, v.ModelAlias, v.Endpoint = a.Models, a.ExcludedModels, a.ModelAlias, a.Endpoint
+	if state == nil {
+		return
+	}
+	rt := state.Runtime(a, time.Now())
+	if !rt.CooldownUntil.IsZero() {
+		v.CooldownUntil = &rt.CooldownUntil
+	}
+	v.Cooldowns, v.LastError, v.ActiveRequests = rt.Cooldowns, rt.LastError, rt.Active
+	if rt.LastError != nil {
+		v.LastErrorAt = &rt.LastErrorAt
+	}
+}
+
 // Management is the management API, version 0. Every call needs the management key of the
 // config active when it arrives, as a bearer token; while that config sets none, the API is not
 // served.
@@ -79,12 +117,13 @@ type Management struct {
 	creds *cred.Manager
 	// Check, when set, returns the result of core's check of account id, or nil.
 	Check func(id string) *AccountCheck
+	state *route.State
 }
 
 // NewManagement returns the management API with its account and login calls. cfg returns the
-// active config.
-func NewManagement(cfg func() *Config, creds *cred.Manager) *Management {
-	m := &Management{mux: http.NewServeMux(), cfg: cfg, creds: creds}
+// active config; state is the routing state accounts' cooldowns are read from (nil: none).
+func NewManagement(cfg func() *Config, creds *cred.Manager, state *route.State) *Management {
+	m := &Management{mux: http.NewServeMux(), cfg: cfg, creds: creds, state: state}
 	m.Handle("GET /accounts", m.list)
 	m.Handle("POST /accounts", m.add)
 	m.Handle("PATCH /accounts/{id}", m.patch)
@@ -138,27 +177,55 @@ func (m *Management) view(r cred.Record) AccountView {
 		Refreshable: m.creds.Refreshable(r), RenewalError: m.creds.LastRenewalError(r)}
 	created, updated := r.CreatedAt, r.UpdatedAt
 	v.CreatedAt, v.UpdatedAt = &created, &updated
+	a := r.Account
+	a.ID = r.ID
+	v.fields(a, m.state)
+	v.Check = m.check(r.ID)
 	return v
+}
+
+// check returns the result of core's check of account id, or nil.
+func (m *Management) check(id string) *AccountCheck {
+	if m.Check == nil {
+		return nil
+	}
+	return m.Check(id)
+}
+
+// configView returns config account a as the management API lists it.
+func (m *Management) configView(a route.Account) AccountView {
+	v := AccountView{ID: a.ID, Source: "config", Extension: a.Extension, State: cred.StateActive}
+	if a.Credential != nil {
+		v.Kind = a.Credential.Kind
+	}
+	v.fields(a, m.state)
+	v.Check = m.check(a.ID)
+	return v
+}
+
+// View returns account id as the management API lists it: the config's account of that ID,
+// else the one added by login.
+func (m *Management) View(id string) (AccountView, bool) {
+	if a, ok := m.configured(id); ok {
+		return m.configView(a), true
+	}
+	for _, rec := range m.creds.Records() {
+		if rec.ID == id {
+			return m.view(rec), true
+		}
+	}
+	return AccountView{}, false
 }
 
 func (m *Management) list(w http.ResponseWriter, r *http.Request) {
 	cfg := m.cfg()
 	views := []AccountView{}
 	for _, a := range cfg.Accounts() {
-		v := AccountView{ID: a.ID, Source: "config", Extension: a.Extension, State: cred.StateActive}
-		if a.Credential != nil {
-			v.Kind = a.Credential.Kind
-		}
-		views = append(views, v)
+		views = append(views, m.configView(a))
 	}
 	for _, rec := range m.creds.Records() {
 		if _, shadowed := configured(cfg, rec.ID); !shadowed {
 			views = append(views, m.view(rec))
-		}
-	}
-	if m.Check != nil {
-		for i := range views {
-			views[i].Check = m.Check(views[i].ID)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"accounts": views})
@@ -259,19 +326,92 @@ func (m *Management) stored(w http.ResponseWriter, id string) bool {
 	return true
 }
 
+// patchFields are the fields PATCH /accounts/{id} changes besides disabled: an account's routing
+// fields (route.Account), by their JSON names. null sets a field back to its default.
+var patchFields = map[string]func(a *route.Account, raw json.RawMessage) error{
+	"priority": func(a *route.Account, raw json.RawMessage) error {
+		a.Priority = 0
+		return unmarshalSet(raw, &a.Priority)
+	},
+	"weight": func(a *route.Account, raw json.RawMessage) error { a.Weight = nil; return unmarshalSet(raw, &a.Weight) },
+	"disable_cooling": func(a *route.Account, raw json.RawMessage) error {
+		a.DisableCooling = nil
+		return unmarshalSet(raw, &a.DisableCooling)
+	},
+	"max_concurrency": func(a *route.Account, raw json.RawMessage) error {
+		a.MaxConcurrency = 0
+		return unmarshalSet(raw, &a.MaxConcurrency)
+	},
+	"prefix": func(a *route.Account, raw json.RawMessage) error { a.Prefix = ""; return unmarshalSet(raw, &a.Prefix) },
+	"models": func(a *route.Account, raw json.RawMessage) error { a.Models = nil; return unmarshalSet(raw, &a.Models) },
+	"excluded_models": func(a *route.Account, raw json.RawMessage) error {
+		a.ExcludedModels = nil
+		return unmarshalSet(raw, &a.ExcludedModels)
+	},
+	"model_alias": func(a *route.Account, raw json.RawMessage) error {
+		a.ModelAlias = nil
+		return unmarshalSet(raw, &a.ModelAlias)
+	},
+}
+
+// unmarshalSet decodes raw into v, leaving v as it is for null.
+func unmarshalSet(raw json.RawMessage, v any) error {
+	if string(raw) == "null" {
+		return nil
+	}
+	return json.Unmarshal(raw, v)
+}
+
 func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	var req struct {
-		Disabled *bool `json:"disabled"`
-	}
+	var req map[string]json.RawMessage
 	if !readJSON(w, r, &req) || !m.stored(w, id) {
 		return
 	}
-	if req.Disabled == nil {
-		writeManagementError(w, http.StatusBadRequest, "invalid_request", "nothing to change: send disabled")
+	var disabled *bool
+	var changes []func(*route.Account) error
+	for name, raw := range req {
+		if name == "disabled" {
+			if err := json.Unmarshal(raw, &disabled); err != nil || disabled == nil {
+				writeManagementError(w, http.StatusBadRequest, "invalid_request", "disabled must be true or false")
+				return
+			}
+			continue
+		}
+		set, ok := patchFields[name]
+		if !ok {
+			writeManagementError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("%q cannot be changed here: send disabled or any of %s",
+				name, strings.Join(slices.Sorted(maps.Keys(patchFields)), ", ")))
+			return
+		}
+		changes = append(changes, func(a *route.Account) error {
+			if err := set(a, raw); err != nil {
+				return fmt.Errorf("%s: %v", name, err)
+			}
+			return nil
+		})
+	}
+	if disabled == nil && len(changes) == 0 {
+		writeManagementError(w, http.StatusBadRequest, "invalid_request", "nothing to change: send disabled or a routing field")
 		return
 	}
-	rec, err := m.creds.SetDisabled(id, *req.Disabled)
+	// Decode every field before changing anything, so a bad one changes nothing.
+	var probe route.Account
+	for _, c := range changes {
+		if err := c(&probe); err != nil {
+			writeManagementError(w, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+	}
+	var change func(*route.Account)
+	if len(changes) > 0 {
+		change = func(a *route.Account) {
+			for _, c := range changes {
+				_ = c(a) // each decoded above
+			}
+		}
+	}
+	rec, err := m.creds.SetAccount(id, change, disabled)
 	if err != nil {
 		writeCredError(w, err)
 		return

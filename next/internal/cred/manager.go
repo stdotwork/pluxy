@@ -536,12 +536,32 @@ func describeState(r Record) string {
 
 // SetDisabled disables or enables account id. Enabling does not clear a refused grant.
 func (m *Manager) SetDisabled(id string, disabled bool) (Record, error) {
+	return m.SetAccount(id, nil, &disabled)
+}
+
+// SetAccount changes the routing fields of account id (its route.Account) with change, which
+// may be nil, then checks them, and sets its disabled flag when disabled is not nil, in one
+// update. The account's ID, settings and credential stay as they are.
+func (m *Manager) SetAccount(id string, change func(*route.Account), disabled *bool) (Record, error) {
 	for {
 		cur, ok := m.store.Get(id)
 		if !ok {
 			return Record{}, ErrNotFound
 		}
-		next, err := m.store.Update(id, cur.Registration, cur.Version, func(r *Record) { r.Disabled = disabled })
+		a := cur.Account
+		if change != nil {
+			change(&a)
+			a.ID, a.Settings, a.Credential = cur.Account.ID, cur.Account.Settings, nil
+			if err := a.Check(); err != nil {
+				return Record{}, fmt.Errorf("%w: %v", ErrInvalid, err)
+			}
+		}
+		next, err := m.store.Update(id, cur.Registration, cur.Version, func(r *Record) {
+			r.Account = a
+			if disabled != nil {
+				r.Disabled = *disabled
+			}
+		})
 		if errors.Is(err, ErrStale) {
 			continue // a renewal landed meanwhile; apply the change to the new version
 		}

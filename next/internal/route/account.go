@@ -2,6 +2,7 @@ package route
 
 import (
 	"encoding/json"
+	"errors"
 
 	"github.com/stdotwork/pluxy/next/protocol"
 )
@@ -48,6 +49,14 @@ type Account struct {
 
 	// gen is the generation of the router that holds this copy (see State.Retain).
 	gen uint64
+}
+
+// Check checks the account's routing and naming fields, as a config's accounts are checked.
+func (a *Account) Check() error {
+	if a.MaxConcurrency < 0 {
+		return errors.New("max_concurrency must not be negative")
+	}
+	return a.checkNames()
 }
 
 func (a *Account) weight() int {
