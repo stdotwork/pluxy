@@ -152,12 +152,14 @@ func apiKeyLogin(ctx context.Context, set settings, key string) (*protocol.Grant
 	}
 	req.Header.Set("X-Api-Key", key)
 	req.Header.Set("Anthropic-Version", anthropicVersion)
+	req, sent := sdk.TrackSend(req)
 	resp, err := client.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach Anthropic: " + err.Error(), Retryable: true, Scope: llm.ScopeEndpoint}
+		// A login error is retryable only when the request never reached Anthropic.
+		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach Anthropic: " + err.Error(), Retryable: !sent(), Scope: llm.ScopeEndpoint}
 	}
 	defer resp.Body.Close()
 	switch {
@@ -167,8 +169,14 @@ func apiKeyLogin(ctx context.Context, set settings, key string) (*protocol.Grant
 		return nil, refused("Anthropic refused the key")
 	default:
 		// Core redacts the key as the user entered it; this one is trimmed, so remove it here.
+		e := upstreamError(resp, "")
+		if e.Status >= 500 {
+			// A model request that Anthropic refused with a 503 or 529 is safe to try again; a login
+			// call that got a 5xx is not, because it reached Anthropic and may have run.
+			e.Retryable = false
+		}
 		r := protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: key})
-		return nil, r.Event(llm.Event{Type: llm.EventError, Error: upstreamError(resp, "")}).Error
+		return nil, r.Event(llm.Event{Type: llm.EventError, Error: e}).Error
 	}
 }
 
@@ -246,6 +254,9 @@ type tokenFailure struct {
 	code         string
 	retryAfterMS int64
 	err          error
+	// sent is whether any of the request was written to the connection. Only a request that was
+	// not sent is safe to try again.
+	sent bool
 }
 
 // tokenPost posts fields as JSON to the token endpoint and decodes a 200 reply into out.
@@ -257,9 +268,10 @@ func tokenPost(ctx context.Context, endpoint string, fields map[string]string, o
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	req, sent := sdk.TrackSend(req)
 	resp, err := client.Do(req)
 	if err != nil {
-		return &tokenFailure{err: err}
+		return &tokenFailure{err: err, sent: sent()}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -267,7 +279,7 @@ func tokenPost(ctx context.Context, endpoint string, fields map[string]string, o
 			Error any `json:"error"`
 		}
 		_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
-		f := &tokenFailure{status: resp.StatusCode, retryAfterMS: retryAfter(resp.Header.Get("Retry-After"), time.Now())}
+		f := &tokenFailure{status: resp.StatusCode, retryAfterMS: retryAfter(resp.Header.Get("Retry-After"), time.Now()), sent: true}
 		switch v := e.Error.(type) {
 		case string:
 			f.code = v
@@ -279,7 +291,7 @@ func tokenPost(ctx context.Context, endpoint string, fields map[string]string, o
 		return f
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(out); err != nil {
-		return &tokenFailure{status: resp.StatusCode, err: fmt.Errorf("the reply is not valid JSON: %w", err)}
+		return &tokenFailure{status: resp.StatusCode, err: fmt.Errorf("the reply is not valid JSON: %w", err), sent: true}
 	}
 	return nil
 }
@@ -304,19 +316,20 @@ var terminalCodes = map[string]bool{
 	"token_revoked":             true,
 }
 
-// tokenError turns a failed token request into an error.
+// tokenError turns a failed token request into an error. Only a request that never reached the
+// token endpoint is retryable, apart from a 429, where the endpoint refused to run the request.
 func tokenError(f *tokenFailure) error {
 	switch {
 	case f.status == 0:
-		return &llm.Error{Code: llm.CodeUnavailable, Message: fmt.Sprintf("could not reach the token endpoint: %v", f.err), Retryable: true, Scope: llm.ScopeEndpoint}
+		return &llm.Error{Code: llm.CodeUnavailable, Message: fmt.Sprintf("could not reach the token endpoint: %v", f.err), Retryable: !f.sent, Scope: llm.ScopeEndpoint}
 	case f.err != nil:
-		return &llm.Error{Code: llm.CodeUpstream, Message: f.err.Error(), Status: f.status, Retryable: true, Scope: llm.ScopeEndpoint}
+		return &llm.Error{Code: llm.CodeUpstream, Message: f.err.Error(), Status: f.status, Scope: llm.ScopeEndpoint}
 	case terminalCodes[f.code] || f.status == http.StatusUnauthorized:
 		return &llm.Error{Code: llm.CodeAuth, Message: "Claude refused the grant; log in again", Status: f.status, ProviderCode: f.code, Scope: llm.ScopeCredential}
 	case f.status == http.StatusTooManyRequests:
 		return &llm.Error{Code: llm.CodeRateLimit, Message: "the token endpoint is rate limiting", Status: f.status, ProviderCode: f.code, Retryable: true, Scope: llm.ScopeEndpoint, RetryAfterMS: f.retryAfterMS}
 	case f.status >= 500:
-		return &llm.Error{Code: llm.CodeUnavailable, Message: fmt.Sprintf("the token endpoint answered %d", f.status), Status: f.status, Retryable: true, Scope: llm.ScopeEndpoint, RetryAfterMS: f.retryAfterMS}
+		return &llm.Error{Code: llm.CodeUnavailable, Message: fmt.Sprintf("the token endpoint answered %d", f.status), Status: f.status, Scope: llm.ScopeEndpoint, RetryAfterMS: f.retryAfterMS}
 	default:
 		return &llm.Error{Code: llm.CodeUpstream, Message: fmt.Sprintf("the token endpoint answered %d (%s)", f.status, f.code), Status: f.status, ProviderCode: f.code, Scope: llm.ScopeEndpoint}
 	}

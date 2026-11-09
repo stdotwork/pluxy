@@ -610,7 +610,7 @@ Usage, in `finish.usage`; a field that is absent was not reported, which is diff
 | `message` | Human-readable; safe to show to the client. Never include credentials. Core also removes the call's credential, and its JSON, URL and base64 forms, from `message`, `provider_code`, every `raw` field, every `opaque` `data`, the response's `id` and `model`, every item's `call_id` and the finish's `raw_reason` of every event before passing them on, in case an upstream echoes it. |
 | `status` | The upstream HTTP status, when there was one. |
 | `provider_code` | The upstream's own error code, when there was one. |
-| `retryable` | True only when the upstream certainly did not run the request (it was refused), so trying again, on this account later or on another account, is safe. |
+| `retryable` | True only when the upstream certainly did not run the request (it was refused), so trying again, on this account later or on another account, is safe. For `login` and `refresh` calls, see [Errors in login and refresh calls](#errors-in-login-and-refresh-calls). |
 | `scope` | What the failure is about: `request` (this request is bad), `credential` (this account), `model` (this model on this account), `endpoint` (the upstream endpoint). |
 | `retry_after_ms` | When the upstream said to try again, in milliseconds from now. |
 | `raw` | The upstream's error body, unchanged. |
@@ -731,7 +731,9 @@ stored one with it; keep the old refresh token when the provider did not send a 
 | Failure | Report |
 | --- | --- |
 | The provider refused the grant itself (OAuth `invalid_grant`): only a new login helps. | Code `auth`, scope `credential`, not retryable. Core marks the account as needing a new login. |
-| The token endpoint failed in a way that may pass (down, 5xx, rate limited). | A retryable error such as `unavailable` or `rate_limit`, with `retry_after_ms` when known. Core keeps the credential and tries again later. |
+| The request never reached the token endpoint (connection refused, host name not found, TLS handshake failed). | Code `unavailable`, scope `endpoint`, retryable. Core keeps the credential and tries again later. |
+| The token endpoint answered 5xx, or the request was sent and then failed (the connection was reset or timed out, or the reply could not be read). | Code `unavailable` (or `upstream`), scope `endpoint`, not retryable, with `retry_after_ms` when known. Core keeps the credential and tries again later. |
+| The token endpoint rate limited the call (429). | Code `rate_limit`, retryable, with `retry_after_ms` when known. Core keeps the credential and tries again later. |
 
 Core sends at most one refresh per credential at a time, and every request that needs the same
 credential renewed waits for that one call. It applies the result only if the stored credential
@@ -743,6 +745,27 @@ at its `refresh_at` (on the first request after it), and when the upstream refus
 `auth` error (once per request). After a renewal that failed in a way that may pass, core waits 5
 minutes (or the `retry_after_ms` given) before renewing automatically again; after one that gave a
 credential already due for renewal, 30 seconds. An extension never refreshes on its own.
+
+### Errors in login and refresh calls
+
+For a `login` or `refresh` call, `retryable` is true only when the request never reached the
+provider. Send `retryable: true` only when you are sure of that: the connection was refused, the
+host name was not found, the TLS handshake failed, or anything else went wrong before the first
+byte of the request was written. A request that was written may have run. A provider that rotates
+refresh tokens may already have retired the old token, and a code exchange may already have used
+the code. So these are not retryable: a 5xx answer, a connection that was reset or timed out after
+the request was sent, and a reply that could not be read or understood. Keep the code and scope you
+would use otherwise (for example `unavailable` with scope `endpoint`) and set `retryable` false. A
+429 stays retryable, with `retry_after_ms` when the provider said how long: the provider refused to
+run the request.
+
+A login that polls for the user (the device grant) follows the same rule. After a poll fails, poll
+again only when the request was not sent. Stop the login with the error when the poll got a 5xx or
+failed after it was sent. `authorization_pending` and `slow_down` are answers, not failures, and
+work as RFC 8628 says.
+
+In Go, `sdk.TrackSend` wraps a request and tells you, after it failed, whether any of it was
+written.
 
 ## Sessions
 

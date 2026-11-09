@@ -192,8 +192,13 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 			if ctx.Err() != nil {
 				return nil, ended()
 			}
-			// A poll that got no answer is tried again at the next interval.
-			continue
+			// A poll that never left this machine is tried again at the next interval. One that was
+			// sent may have run, so the login stops.
+			var le *llm.Error
+			if errors.As(err, &le) && le.Retryable {
+				continue
+			}
+			return nil, err
 		}
 		var e struct {
 			Error string `json:"error"`
@@ -204,8 +209,9 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 			if status == http.StatusOK {
 				return grantFrom(body, ep.token, "")
 			}
-			if status == http.StatusTooManyRequests || status >= 500 {
-				// An outage with no OAuth error leaves the device code good: poll again.
+			if status == http.StatusTooManyRequests {
+				// A 429 refused the poll without running it and leaves the device code good: poll
+				// again. A 5xx may have run the poll, so it ends the login below.
 				continue
 			}
 			return nil, hideSecrets(loginFailure(status, body, h), dc.DeviceCode)
@@ -332,18 +338,21 @@ func postForm(ctx context.Context, endpoint string, form url.Values) (int, []byt
 	return do(ctx, req)
 }
 
+// do sends a login request. A request that failed is retryable only when it never reached xAI:
+// one that did may have run.
 func do(ctx context.Context, req *http.Request) (int, []byte, http.Header, error) {
+	req, sent := sdk.TrackSend(req)
 	resp, err := authClient.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return 0, nil, nil, ctx.Err()
 		}
-		return 0, nil, nil, &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach xAI's login: " + err.Error(), Retryable: true, Scope: llm.ScopeEndpoint}
+		return 0, nil, nil, &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach xAI's login: " + err.Error(), Retryable: !sent(), Scope: llm.ScopeEndpoint}
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return 0, nil, nil, &llm.Error{Code: llm.CodeUnavailable, Message: "reading xAI's login reply: " + err.Error(), Retryable: true, Scope: llm.ScopeEndpoint}
+		return 0, nil, nil, &llm.Error{Code: llm.CodeUnavailable, Message: "reading xAI's login reply: " + err.Error(), Scope: llm.ScopeEndpoint}
 	}
 	return resp.StatusCode, body, resp.Header, nil
 }
@@ -353,7 +362,8 @@ func do(ctx context.Context, req *http.Request) (int, []byte, http.Header, error
 var terminalGrantErrors = []string{"invalid_grant", "invalid_client", "unauthorized_client", "refresh_token_reused",
 	"refresh_token_expired", "refresh_token_invalidated", "token_revoked"}
 
-// loginFailure turns a refusal from xAI's login into an error.
+// loginFailure turns a refusal from xAI's login into an error. A 429 is retryable, with the wait
+// it names; a 5xx is not, because the request reached xAI and may have run.
 func loginFailure(status int, body []byte, h http.Header) *llm.Error {
 	var b struct {
 		Error       string `json:"error"`
@@ -383,7 +393,7 @@ func loginFailure(status int, body []byte, h http.Header) *llm.Error {
 	case status == http.StatusTooManyRequests:
 		return &llm.Error{Code: llm.CodeRateLimit, Message: msg, Status: status, ProviderCode: code, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: wait}
 	case status >= 500:
-		return &llm.Error{Code: llm.CodeUnavailable, Message: msg, Status: status, Retryable: true, Scope: llm.ScopeEndpoint, RetryAfterMS: wait}
+		return &llm.Error{Code: llm.CodeUnavailable, Message: msg, Status: status, Scope: llm.ScopeEndpoint, RetryAfterMS: wait}
 	}
 	return &llm.Error{Code: llm.CodeUpstream, Message: msg, Status: status, ProviderCode: code, Scope: llm.ScopeEndpoint}
 }

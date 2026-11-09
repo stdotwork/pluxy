@@ -401,7 +401,9 @@ public client (it has no secret), at the endpoints xAI's OpenID discovery docume
 xAI's page to enter it on. The credential keeps the access and refresh tokens and the token
 endpoint, and the account is labelled with the ID token's e-mail address. Core renews the token 5
 minutes before it expires; a renewal keeps the refresh token when xAI sends no new one, and an
-`invalid_grant` or revoked token asks for a new login.
+`invalid_grant` or revoked token asks for a new login. A token poll that fails before it was sent,
+or gets a 429, is tried again while the code is good; a 5xx, or a failure after the poll was sent,
+ends the login.
 
 A Grok login's requests go to the Grok CLI's chat endpoint, `https://cli-chat-proxy.grok.com/v1`,
 unless `base_url` names another address than xAI's API, as today's core routes them, and carry the
@@ -476,10 +478,11 @@ code and Meta's page to enter it on. The sign-in is the OAuth device authorizati
 at `auth.meta.com` with Muse Code's own public client, as today's core signs in, since Meta
 registers no other clients. The device token it yields (`dca:...`) is traded at Meta's key
 endpoint (`https://api.meta.ai/muse-code/key`) for an API key; the credential keeps the key as its
-access token and the device token as its refresh token. A token poll that gets an answer with no
-OAuth error (an outage) is tried again while the code is good. The key does not expire on a timer: when
-Meta refuses it, core renews the credential once, which makes a new key from the device token. A
-Meta API key works too, by login with method `api_key` or in the config; a `dca:` token is refused
+access token and the device token as its refresh token. A token poll that fails before it was
+sent, or gets an answer with no OAuth error that is not a 5xx, is tried again while the code is
+good; a 5xx, or a failure after the poll was sent, ends the login. The key does not expire on a
+timer: when Meta refuses it, core renews the credential once, which makes a new key from the
+device token. A Meta API key works too, by login with method `api_key` or in the config; a `dca:` token is refused
 as a key:
 
 ```json

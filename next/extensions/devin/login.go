@@ -347,31 +347,35 @@ func profile(ctx context.Context, set settings, tok string) (label, userID strin
 	return p.UserID, p.UserID, nil
 }
 
+// do sends a login request. A request that failed is retryable only when it never reached Devin:
+// one that did may have run.
 func do(ctx context.Context, req *http.Request) (int, []byte, error) {
+	req, sent := sdk.TrackSend(req)
 	resp, err := authClient.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return 0, nil, ctx.Err()
 		}
-		return 0, nil, &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach Devin's login API: " + err.Error(), Retryable: true, Scope: llm.ScopeEndpoint}
+		return 0, nil, &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach Devin's login API: " + err.Error(), Retryable: !sent(), Scope: llm.ScopeEndpoint}
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return 0, nil, &llm.Error{Code: llm.CodeUnavailable, Message: "reading Devin's login API reply: " + err.Error(), Retryable: true, Scope: llm.ScopeEndpoint}
+		return 0, nil, &llm.Error{Code: llm.CodeUnavailable, Message: "reading Devin's login API reply: " + err.Error(), Scope: llm.ScopeEndpoint}
 	}
 	return resp.StatusCode, raw, nil
 }
 
 // loginFailure is the error of a refused login call. Devin's reply body is left out: it is not
-// shown to the user, as it may echo the code.
+// shown to the user, as it may echo the code. A 429 is retryable; a 5xx is not, because the request
+// reached Devin and may have run.
 func loginFailure(what string, status int) *llm.Error {
 	msg := fmt.Sprintf("Devin's login API answered %d %s %s", status, http.StatusText(status), what)
 	switch {
 	case status == http.StatusTooManyRequests:
 		return &llm.Error{Code: llm.CodeRateLimit, Message: msg, Status: status, Retryable: true, Scope: llm.ScopeCredential}
 	case status >= 500:
-		return &llm.Error{Code: llm.CodeUnavailable, Message: msg, Status: status, Retryable: true, Scope: llm.ScopeEndpoint}
+		return &llm.Error{Code: llm.CodeUnavailable, Message: msg, Status: status, Scope: llm.ScopeEndpoint}
 	}
 	return &llm.Error{Code: llm.CodeAuth, Message: msg + "; sign in again", Status: status, Scope: llm.ScopeCredential}
 }

@@ -59,12 +59,14 @@ func apiKeyLogin(ctx context.Context, set settings, key string) (*protocol.Grant
 		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
 	}
 	req.Header.Set("X-Goog-Api-Key", key)
+	req, sent := sdk.TrackSend(req)
 	resp, err := tokenClient.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach the Gemini API: " + err.Error(), Retryable: true, Scope: llm.ScopeEndpoint}
+		// A login error is retryable only when the request never reached Google.
+		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach the Gemini API: " + err.Error(), Retryable: !sent(), Scope: llm.ScopeEndpoint}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusOK {
@@ -73,6 +75,11 @@ func apiKeyLogin(ctx context.Context, set settings, key string) (*protocol.Grant
 	e := upstreamError(resp, "")
 	if e.Code == llm.CodeAuth || e.Code == llm.CodePermission {
 		return nil, refused("Google refused the key")
+	}
+	if e.Status >= 500 {
+		// A model request Google answered with a 5xx is not retried either, but a login call must
+		// not depend on that: it reached Google and may have run.
+		e.Retryable = false
 	}
 	// Core redacts the key as the user entered it; this one is trimmed, so remove it here.
 	r := protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: key})
@@ -103,10 +110,25 @@ func serviceAccountLogin(ctx context.Context, set settings, key string) (*protoc
 		}
 		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: msg, Scope: llm.ScopeRequest}
 	}
+	// The token fetch is shared with model requests, whose errors say the model request did not run.
+	// A login call is retryable only when the fetch never reached the token endpoint.
+	ctx, sent := sdk.TrackSendContext(ctx)
 	if _, err := tokens.get(ctx, sa); err != nil {
 		var e *llm.Error
-		if errors.As(err, &e) && e.Code == llm.CodeAuth {
-			return nil, refused(e.Message)
+		if errors.As(err, &e) {
+			switch {
+			case e.Code == llm.CodeAuth:
+				return nil, refused(e.Message)
+			case e.Code == llm.CodeUnavailable && e.Status == 0:
+				// The fetch got no reply.
+				c := *e
+				c.Retryable = !sent()
+				return nil, &c
+			case e.Code == llm.CodeUnavailable && e.Status >= 500:
+				c := *e
+				c.Retryable = false
+				return nil, &c
+			}
 		}
 		return nil, err
 	}

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -190,9 +191,29 @@ type promptFunc func(protocol.Prompt)
 
 func (f promptFunc) Prompt(p protocol.Prompt) error { f(p); return nil }
 
-// A poll that gets an answer with no OAuth error, such as a plain 503, is tried again: the device
-// code is still good.
-func TestPollSurvivesOutage(t *testing.T) {
+// A poll that gets a 5xx stops the login: the poll may have run, so it is not tried again.
+func TestPollStopsOnServerFailure(t *testing.T) {
+	srv := metatest.New(t)
+	var polls atomic.Int32
+	srv.Answer = func(w http.ResponseWriter, r *http.Request) bool {
+		if r.URL.Path != "/oidc/device/token/" {
+			return false
+		}
+		polls.Add(1)
+		http.Error(w, "upstream connect error", http.StatusServiceUnavailable)
+		return true
+	}
+	set, _ := readSettings(srv.Settings())
+	_, err := deviceLogin(context.Background(), set, promptFunc(func(p protocol.Prompt) { srv.Approve(p.UserCode) }))
+	wantError(t, err, llm.CodeUnavailable, false)
+	if polls.Load() != 1 {
+		t.Errorf("%d polls reached Meta, want 1", polls.Load())
+	}
+}
+
+// An answer with no OAuth error that is not a 5xx leaves the device code good: the poll is tried
+// again.
+func TestPollSurvivesOddAnswer(t *testing.T) {
 	srv := metatest.New(t)
 	failed := false
 	srv.Answer = func(w http.ResponseWriter, r *http.Request) bool {
@@ -200,13 +221,13 @@ func TestPollSurvivesOutage(t *testing.T) {
 			return false
 		}
 		failed = true
-		http.Error(w, "upstream connect error", http.StatusServiceUnavailable)
+		http.Error(w, "not here", http.StatusNotFound)
 		return true
 	}
 	set, _ := readSettings(srv.Settings())
 	g, err := deviceLogin(context.Background(), set, promptFunc(func(p protocol.Prompt) { srv.Approve(p.UserCode) }))
 	if err != nil || g.Credential.AccessToken == "" || !failed {
-		t.Fatalf("login after an outage: grant %+v, err %v (outage seen %v)", g, err, failed)
+		t.Fatalf("login after an odd answer: grant %+v, err %v (seen %v)", g, err, failed)
 	}
 }
 
