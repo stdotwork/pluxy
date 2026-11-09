@@ -111,6 +111,11 @@ func serveEndpoint(w http.ResponseWriter, r *http.Request, g *Generation, ep end
 		fail(&llm.Error{Code: llm.CodeExtensionProtocol, Message: "the extension's endpoint reply does not start with its content type"})
 		return
 	}
+	if ev.Response.Format != ep.format {
+		// A reply for another endpoint must not reach this one's client.
+		fail(&llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("the extension answered a %s request with a %s reply", ep.format, ev.Response.Format)})
+		return
+	}
 	sse := strings.HasPrefix(reply.ContentType, "text/event-stream")
 	w.Header().Set("Content-Type", reply.ContentType)
 	if sse {

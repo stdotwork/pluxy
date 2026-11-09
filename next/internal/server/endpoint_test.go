@@ -155,4 +155,14 @@ func TestEndpointStreamAndBreaches(t *testing.T) {
 	if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), "content type") {
 		t.Fatalf("got %d %s", w.Code, w.Body)
 	}
+
+	h, _, _ = endpointHandler(t, func(string, llm.Request) []llm.Event {
+		evs := bodyReply("application/json", `{}`)
+		evs[0].Response.Format = llm.FormatOpenAIResponses
+		return evs
+	})
+	w = postEndpoint(h, "/v1/responses/compact", `{"model":"m"}`, nil)
+	if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), "openai.responses reply") {
+		t.Fatalf("a reply in another format: got %d %s", w.Code, w.Body)
+	}
 }
