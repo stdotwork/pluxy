@@ -1,0 +1,100 @@
+{
+  "description": "ChatGPT subscription whose ID token has no chatgpt_plan_type claim: the account is the free plan, so the request offers no hosted image_generation tool, as today's core does.",
+  "source": [
+    "core/internal/watcher/synthesizer/file.go (a codex auth file with an ID token and no plan_type reads the plan from the token; a token that does not give one is free)",
+    "core/internal/auth/codex/jwt_parser.go (GetPlanType: a missing, null or blank chatgpt_plan_type is the free plan)",
+    "core/internal/runtime/executor/codex_executor_request.go (isCodexFreePlanAuth and ensureImageGenerationToolDoc: no image_generation tool for a free plan)"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "body": {"model":"gpt-6.1-terra","input":"Say hello","stream":true}
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"event":"response.created","data":{"type":"response.created","sequence_number":0,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"in_progress","model":"gpt-test-upstream","output":[],"usage":null}}},
+        {"event":"response.output_text.delta","data":{"type":"response.output_text.delta","sequence_number":1,"output_index":0,"content_index":0,"item_id":"msg_corpus","delta":"Hello"}},
+        {"event":"response.completed","data":{"type":"response.completed","sequence_number":2,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"completed","model":"gpt-test-upstream","output":[{"id":"msg_corpus","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hello","annotations":[]}]}],"usage":{"input_tokens":5,"output_tokens":1,"total_tokens":6,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}}
+      ]
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[*].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."
+    },
+    {
+      "path": "upstream[*].headers.Session-Id",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    },
+    {
+      "path": "upstream[*].body.prompt_cache_key",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    }
+  ],
+  "old_core": {
+    "account": {
+      "plan_type": null,
+      "id_token": "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJlbWFpbCI6InNrLWNvcnB1cy11cHN0cmVhbUBleGFtcGxlLmludmFsaWQiLCJleHAiOjQxMDI0NDQ4MDAsImh0dHBzOi8vYXBpLm9wZW5haS5jb20vYXV0aCI6eyJjaGF0Z3B0X2FjY291bnRfaWQiOiJhY2N0LXNrLWNvcnB1cy11cHN0cmVhbSJ9fQ.corpus"
+    }
+  },
+  "new_core": {
+    "account": {
+      "credential": {
+        "data": {
+          "id_token": "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJlbWFpbCI6InNrLWNvcnB1cy11cHN0cmVhbUBleGFtcGxlLmludmFsaWQiLCJleHAiOjQxMDI0NDQ4MDAsImh0dHBzOi8vYXBpLm9wZW5haS5jb20vYXV0aCI6eyJjaGF0Z3B0X2FjY291bnRfaWQiOiJhY2N0LXNrLWNvcnB1cy11cHN0cmVhbSJ9fQ.corpus"
+        }
+      }
+    }
+  },
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"response":{"created_at":1700000000,"id":"resp_corpus","model":"gpt-test-upstream","object":"response","output":[],"status":"in_progress","usage":null},"sequence_number":0,"type":"response.created"},"event":"response.created"},
+        {"data":{"content_index":0,"delta":"Hello","item_id":"msg_corpus","output_index":0,"sequence_number":1,"type":"response.output_text.delta"},"event":"response.output_text.delta"},
+        {"data":{"response":{"created_at":1700000000,"id":"resp_corpus","model":"gpt-test-upstream","object":"response","output":[{"content":[{"annotations":[],"text":"Hello","type":"output_text"}],"id":"msg_corpus","role":"assistant","status":"completed","type":"message"}],"status":"completed","usage":{"input_tokens":5,"input_tokens_details":{"cached_tokens":0},"output_tokens":1,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":6}},"sequence_number":2,"type":"response.completed"},"event":"response.completed"}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": ["reasoning.encrypted_content"],
+          "input": [
+            {"content":[{"text":"Say hello","type":"input_text"}],"role":"user","type":"message"}
+          ],
+          "instructions": "",
+          "model": "gpt-6.1-terra",
+          "prompt_cache_key": "f674c4c7-551b-57dd-ab73-9724cff0fe39",
+          "store": false,
+          "stream": true
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0NDQ4MDAsInN1YiI6ImNvcnB1c3xzay1jb3JwdXMtdXBzdHJlYW0ifQ.corpus",
+          "Chatgpt-Account-Id": "acct-sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "Originator": "codex-tui",
+          "Session-Id": "f674c4c7-551b-57dd-ab73-9724cff0fe39",
+          "User-Agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)",
+          "X-Codex-Routing-Hint": "model=gpt-6.1-terra"
+        },
+        "method": "POST",
+        "path": "/backend-api/codex/responses"
+      }
+    ]
+  }
+}
