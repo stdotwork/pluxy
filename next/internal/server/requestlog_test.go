@@ -2,9 +2,11 @@ package server
 
 import (
 	"bytes"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -68,5 +70,53 @@ func TestFindRequestLog(t *testing.T) {
 	}
 	if got := FindRequestLog(dir, id); got != "v1-chat-completions-2026-11-09T120000-"+id+".log" {
 		t.Fatalf("trace ID found %q", got)
+	}
+}
+
+// A reader of the logs folder finds a request log whole: never the file with part of its content.
+func TestRequestLogAppearsWhole(t *testing.T) {
+	dir := t.TempDir()
+	l := &RequestLog{Dir: dir, All: true}
+	e := &requestEntry{at: time.Now(), method: "POST", url: &url.URL{Path: "/v1/responses"}, trace: newTrace(),
+		body: bytes.Repeat([]byte("b"), 32<<20), replyTitle: "RESPONSE"} // big, so the write takes a while
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	var seen []int64 // the size of the log file at each look that found it
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if matches, _ := filepath.Glob(filepath.Join(dir, "*.log")); len(matches) == 1 {
+				if info, err := os.Stat(matches[0]); err == nil {
+					seen = append(seen, info.Size())
+				}
+			}
+		}
+	}()
+	l.write(e)
+	close(stop)
+	wg.Wait()
+
+	matches, _ := filepath.Glob(filepath.Join(dir, "*.log"))
+	if len(matches) != 1 {
+		t.Fatalf("request log files: %v", matches)
+	}
+	info, err := os.Stat(matches[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, size := range seen {
+		if size != info.Size() {
+			t.Fatalf("a reader found the log at %d bytes, of %d once written", size, info.Size())
+		}
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Errorf("the folder holds %d entries after the write, want only the log", len(entries))
 	}
 }
