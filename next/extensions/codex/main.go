@@ -6,7 +6,7 @@
 // Account settings, all optional:
 //
 //	{"base_url": "https://api.openai.com/v1", "codex_identity": true, "image_generation_tool": true,
-//	 "callback_listen": true, "websockets": false, "alpha_search": false}
+//	 "callback_listen": true, "websockets": false, "alpha_search": false, "images": true}
 //
 // base_url is where requests go ({base_url}/responses); the default is
 // https://api.openai.com/v1 for an API key and https://chatgpt.com/backend-api/codex for a
@@ -23,6 +23,8 @@
 // client socket, so a turn can continue the previous response with previous_response_id.
 // alpha_search (default false, as in today's core) lets an API key account serve Codex's Alpha
 // Search ({base_url}/alpha/search), which not every upstream has; a subscription always serves it.
+// images (default true) serves the Images API ({base_url}/images/generations and /images/edits) on the
+// account; a free ChatGPT plan never does.
 //
 // Every request is sent in the shape the Codex endpoint takes: streamed, not stored, encrypted
 // reasoning included, sampling settings removed (see shape). Requests in Chat Completions,
@@ -86,10 +88,14 @@ type settings struct {
 	// AlphaSearch (default false) lets an API key account serve Codex's Alpha Search; a
 	// subscription always does.
 	AlphaSearch bool `json:"alpha_search"`
+	// Images (default true) serves the Images API (/v1/images/generations and /v1/images/edits)
+	// on the account.
+	Images *bool `json:"images"`
 }
 
 func (s settings) identity() bool  { return s.CodexIdentity == nil || *s.CodexIdentity }
 func (s settings) imageTool() bool { return s.ImageGenerationTool == nil || *s.ImageGenerationTool }
+func (s settings) imagesAPI() bool { return s.Images == nil || *s.Images }
 
 func (s settings) authBase() string {
 	if v := sdk.TestLoginHost(s.AuthBaseURL); v != "" {

@@ -112,7 +112,7 @@ func TestReadAuthDir(t *testing.T) {
 		"codex-empty.json": map[string]any{"type": "codex"},
 		"notes.txt":        []byte("not a credential"),
 	})
-	files, skipped, err := ReadAuthDir(dir, ImportOptions{CodexIdentity: false, ImageGenerationTool: true}, now)
+	files, skipped, err := ReadAuthDir(dir, ImportOptions{CodexIdentity: false, ImageGenerationTool: true, Images: true}, now)
 	if err != nil {
 		t.Fatal(err)
 	}

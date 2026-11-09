@@ -17,6 +17,7 @@ import (
 	"slices"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -910,6 +911,48 @@ func (s *Stream) Body(chunk string) error {
 		return err
 	}
 	return s.Send(llm.Event{Type: llm.EventNative, Raw: raw})
+}
+
+// BodyWriter returns a writer that sends what is written to it as body pieces (Body), each as
+// soon as it is written, keeping a UTF-8 character that a write cuts in two for the next piece.
+// Call its Close after the last write, before Finish, to send what it holds.
+func (s *Stream) BodyWriter() *BodyWriter { return &BodyWriter{s: s} }
+
+// BodyWriter sends an endpoint reply's body as it is written (see Stream.BodyWriter).
+type BodyWriter struct {
+	s    *Stream
+	tail []byte // the start of a UTF-8 character the last write cut
+}
+
+func (w *BodyWriter) Write(p []byte) (int, error) {
+	b := append(w.tail, p...)
+	// Hold back the start of a character the write cut, at most 3 bytes.
+	cut := len(b)
+	for i := len(b) - 1; i >= 0 && i >= len(b)-3; i-- {
+		if utf8.RuneStart(b[i]) {
+			if !utf8.FullRune(b[i:]) {
+				cut = i
+			}
+			break
+		}
+	}
+	w.tail = append([]byte(nil), b[cut:]...)
+	if cut > 0 {
+		if err := w.s.Body(string(b[:cut])); err != nil {
+			return 0, err
+		}
+	}
+	return len(p), nil
+}
+
+// Close sends what the writer still holds.
+func (w *BodyWriter) Close() error {
+	if len(w.tail) == 0 {
+		return nil
+	}
+	t := w.tail
+	w.tail = nil
+	return w.s.Body(string(t))
 }
 
 // Finish ends the reply successfully.

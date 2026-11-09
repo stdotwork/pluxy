@@ -1,0 +1,92 @@
+{
+  "description": "A JSON image edit goes to {base}/images/edits with its images and mask as the client sent them.",
+  "source": [
+    "core/internal/api/server_routes.go",
+    "core/sdk/api/handlers/openai/openai_images_handlers.go",
+    "core/internal/runtime/executor/codex_openai_images.go"
+  ],
+  "client": {
+    "path": "/v1/images/edits",
+    "body": {
+      "model": "gpt-image-2",
+      "prompt": "add a hat",
+      "images": [{"image_url":"data:image/png;base64,iVBORw0KGgo="},{"file_id":"file-abc"}],
+      "mask": {"file_id":"file-mask"},
+      "input_fidelity": "high",
+      "stream": false
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "created": 1700000000,
+        "data": [{"b64_json":"aGVsbG8=","revised_prompt":"a small cat"}],
+        "background": "opaque",
+        "output_format": "png",
+        "quality": "low",
+        "size": "1024x1024",
+        "usage": {
+          "input_tokens": 10,
+          "input_tokens_details": {"image_tokens":0,"text_tokens":10},
+          "output_tokens": 100,
+          "total_tokens": 110
+        }
+      }
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[*].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "background": "opaque",
+        "created": 1700000000,
+        "data": [{"b64_json":"aGVsbG8=","revised_prompt":"a small cat"}],
+        "output_format": "png",
+        "quality": "low",
+        "size": "1024x1024",
+        "usage": {
+          "input_tokens": 10,
+          "input_tokens_details": {"image_tokens":0,"text_tokens":10},
+          "output_tokens": 100,
+          "total_tokens": 110
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "images": [{"image_url":"data:image/png;base64,iVBORw0KGgo="},{"file_id":"file-abc"}],
+          "input_fidelity": "high",
+          "mask": {"file_id":"file-mask"},
+          "model": "gpt-image-2",
+          "prompt": "add a hat"
+        },
+        "headers": {
+          "Accept": "application/json",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "Originator": "codex-tui",
+          "User-Agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
+        },
+        "method": "POST",
+        "path": "/v1/images/edits"
+      }
+    ]
+  }
+}

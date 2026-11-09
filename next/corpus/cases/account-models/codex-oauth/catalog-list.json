@@ -72,36 +72,6 @@
       "reason": "Different management API by design: the new management API answers application/json; today's core's gin handlers add a charset."
     },
     {
-      "path": "client.body.models[9]",
-      "kind": "intended",
-      "absent": true,
-      "reason": "Today's core adds its gpt-image-* models to every Codex list; they need image endpoints, which the new core does not serve (no image or video routes yet), so the Codex extension does not list them."
-    },
-    {
-      "path": "client.body.models[10]",
-      "kind": "intended",
-      "absent": true,
-      "reason": "Today's core adds its gpt-image-* models to every Codex list; they need image endpoints, which the new core does not serve (no image or video routes yet), so the Codex extension does not list them."
-    },
-    {
-      "path": "client.body.models[11]",
-      "kind": "intended",
-      "absent": true,
-      "reason": "Today's core adds its gpt-image-* models to every Codex list; they need image endpoints, which the new core does not serve (no image or video routes yet), so the Codex extension does not list them."
-    },
-    {
-      "path": "client.body.models[12]",
-      "kind": "intended",
-      "absent": true,
-      "reason": "Today's core adds its gpt-image-* models to every Codex list; they need image endpoints, which the new core does not serve (no image or video routes yet), so the Codex extension does not list them."
-    },
-    {
-      "path": "client.body.models[13]",
-      "kind": "intended",
-      "absent": true,
-      "reason": "Today's core adds its gpt-image-* models to every Codex list; they need image endpoints, which the new core does not serve (no image or video routes yet), so the Codex extension does not list them."
-    },
-    {
       "path": "client.body.models[*].type",
       "kind": "intended",
       "absent": true,
@@ -185,6 +155,36 @@
       "path": "client.body.models[8].names",
       "kind": "intended",
       "want": ["codex-auto-review"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[9].names",
+      "kind": "intended",
+      "want": ["gpt-image-1.5"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[10].names",
+      "kind": "intended",
+      "want": ["gpt-image-2"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[11].names",
+      "kind": "intended",
+      "want": ["gpt-image-2.5-flare"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[12].names",
+      "kind": "intended",
+      "want": ["gpt-image-2.5-sunburst"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[13].names",
+      "kind": "intended",
+      "want": ["gpt-image-2.5"],
       "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
     },
     {

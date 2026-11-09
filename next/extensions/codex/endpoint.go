@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/llm"
+	"github.com/stdotwork/pluxy/next/protocol"
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
@@ -29,6 +30,10 @@ func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return compact(ctx, call, out)
 	case llm.FormatCodexAlphaSearch:
 		return alphaSearch(ctx, call, out)
+	case llm.FormatOpenAIImagesGenerations:
+		return images(ctx, call, out, "/images/generations")
+	case llm.FormatOpenAIImagesEdits:
+		return images(ctx, call, out, "/images/edits")
 	}
 	return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
 		Message: fmt.Sprintf("the Codex extension does not serve %q", format)}
@@ -274,4 +279,144 @@ func responseUsage(raw json.RawMessage) *llm.Usage {
 	}
 	return &llm.Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CachedInputTokens: u.InputTokensDetails.CachedTokens,
 		ReasoningTokens: u.OutputTokensDetails.ReasoningTokens, Raw: raw}
+}
+
+// imageModels are the image models the Codex upstream serves on its Images API, listed for every
+// account as today's core lists them (its Codex built-ins), with the names and dates it gives.
+var imageModels = []protocol.Model{
+	{ID: "gpt-image-1.5", DisplayName: "GPT Image 1.5", Version: "gpt-image-1.5", Created: 1704067200},
+	{ID: "gpt-image-2", DisplayName: "GPT Image 2", Version: "gpt-image-2", Created: 1704067200},
+	{ID: "gpt-image-2.5-flare", DisplayName: "GPT Image 2.5 Flare", Version: "gpt-image-2.5-flare", Created: 1704067200},
+	{ID: "gpt-image-2.5-sunburst", DisplayName: "GPT Image 2.5 Sunburst", Version: "gpt-image-2.5-sunburst", Created: 1704067200},
+	{ID: "gpt-image-2.5", DisplayName: "GPT Image 2.5", Version: "gpt-image-2.5", Created: 1704067200},
+}
+
+// imageModel returns the image model a request names, as the upstream knows it (any letter
+// case), or "" for a model that is not one.
+func imageModel(name string) string {
+	for _, m := range imageModels {
+		if strings.EqualFold(name, m.ID) {
+			return m.ID
+		}
+	}
+	return ""
+}
+
+// images serves the Images API (generations and edits) through the account's Codex upstream:
+// the client's JSON body goes to {base_url}{path}, the model named as the upstream knows it and
+// stream left out unless it is true, and the upstream's reply (JSON, or server-sent events for a
+// stream) comes back as it is, as today's core sends both. A multipart edit arrives in its JSON
+// form (core reads it), as today's core also sends it. A free ChatGPT plan, and an account whose
+// "images" setting is false, do not serve it.
+func images(ctx context.Context, call sdk.Call, out *sdk.Stream, path string) error {
+	s, err := readSettings(call.Account.Settings)
+	if err != nil {
+		return err
+	}
+	a, err := accountOf(call.Account.Credential)
+	if err != nil {
+		return err
+	}
+	if !s.imagesAPI() {
+		return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
+			Message: "the account's \"images\" setting turns the Images API off"}
+	}
+	if a.subscription && a.planType == "free" {
+		return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
+			Message: "a free ChatGPT plan cannot use the Images API"}
+	}
+	req := call.Request
+	model := imageModel(req.Model)
+	if model == "" {
+		names := make([]string, len(imageModels))
+		for i, m := range imageModels {
+			names[i] = m.ID
+		}
+		return &llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusBadRequest, Scope: llm.ScopeRequest,
+			Message: fmt.Sprintf("Model %s is not supported on /v1/images/generations or /v1/images/edits. Use %s.", req.Model, strings.Join(names, ", "))}
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(req.Native.Body, &m); err != nil || m == nil {
+		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "the request body is not a JSON object", Scope: llm.ScopeRequest}
+	}
+	m["model"] = raw(model)
+	stream := string(m["stream"]) == "true"
+	if !stream {
+		delete(m, "stream")
+	}
+	body, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL(s, a)+path, bytes.NewReader(body))
+	if err != nil {
+		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
+	}
+	h := hreq.Header
+	h.Set("Content-Type", "application/json")
+	h.Set("Accept", "application/json")
+	if stream {
+		h.Set("Accept", "text/event-stream")
+	}
+	h.Set("Authorization", "Bearer "+a.token)
+	sent := req.Native.Headers
+	for _, name := range passedHeaders {
+		if v := sent[name]; v != "" {
+			h.Set(name, v)
+		}
+	}
+	setIdentity(h, sent, s, a)
+	resp, err := client.Do(hreq)
+	if err != nil {
+		return requestFailed(ctx, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return statusError(resp, model)
+	}
+	ct := resp.Header.Get("Content-Type")
+	if ct == "" {
+		ct = "application/json"
+		if stream {
+			ct = "text/event-stream"
+		}
+	}
+	if err := out.StartBody(call.Request.Native.Format, ct); err != nil {
+		return err
+	}
+	// A stream goes on piece by piece as it arrives; a JSON reply is kept too, for its usage.
+	var kept bytes.Buffer
+	var dst io.Writer = out.BodyWriter()
+	bw := dst.(*sdk.BodyWriter)
+	if !strings.HasPrefix(ct, "text/event-stream") {
+		dst = io.MultiWriter(bw, &limitedBuffer{b: &kept, max: maxEndpointReply})
+	}
+	if _, err := io.Copy(dst, resp.Body); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream response: " + err.Error(), Scope: llm.ScopeEndpoint}
+	}
+	if err := bw.Close(); err != nil {
+		return err
+	}
+	var r struct {
+		Usage json.RawMessage `json:"usage"`
+	}
+	_ = json.Unmarshal(kept.Bytes(), &r)
+	return out.Finish(llm.Finish{Reason: llm.FinishStop}, responseUsage(r.Usage))
+}
+
+// limitedBuffer keeps at most max bytes of what is written to it and drops the rest, never
+// failing a write.
+type limitedBuffer struct {
+	b   *bytes.Buffer
+	max int
+}
+
+func (l *limitedBuffer) Write(p []byte) (int, error) {
+	if room := l.max - l.b.Len(); room > 0 {
+		l.b.Write(p[:min(len(p), room)])
+	}
+	return len(p), nil
 }

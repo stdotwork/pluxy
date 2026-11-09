@@ -226,7 +226,7 @@ openai-compatibility:
 	if r.AuthDir != "./auths" {
 		t.Errorf("AuthDir = %q", r.AuthDir)
 	}
-	if r.Import != (ImportOptions{CodexIdentity: false, ImageGenerationTool: false}) {
+	if r.Import != (ImportOptions{CodexIdentity: false, ImageGenerationTool: false, Images: true}) {
 		t.Errorf("Import = %+v", r.Import)
 	}
 	// disable-codex-cloaking means nothing on a Claude key: it is not a Claude key field.
@@ -614,5 +614,21 @@ api-keys:
 	}
 	if _, err := Translate([]byte("codex-api-key: [{api-key: k, request-retry: soon}]")); err == nil {
 		t.Error("a request-retry that is not a number loaded")
+	}
+}
+
+// disable-image-generation true turns off both the hosted image tool and the Images API on Codex
+// accounts; chat and passthrough keep the Images API, as today's core keeps its image routes.
+func TestDisableImageGeneration(t *testing.T) {
+	for v, want := range map[string]ImportOptions{
+		"true":        {CodexIdentity: true, ImageGenerationTool: false, Images: false},
+		"chat":        {CodexIdentity: true, ImageGenerationTool: false, Images: true},
+		"passthrough": {CodexIdentity: true, ImageGenerationTool: false, Images: true},
+		"false":       DefaultImportOptions,
+	} {
+		r := translate(t, "disable-image-generation: "+v)
+		if r.Import != want {
+			t.Errorf("%s: Import = %+v, want %+v", v, r.Import, want)
+		}
 	}
 }

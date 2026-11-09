@@ -1,0 +1,40 @@
+{
+  "description": "A generation without a prompt is refused with a 400 before it reaches an account.",
+  "source": [
+    "core/internal/api/server_routes.go",
+    "core/sdk/api/handlers/openai/openai_images_handlers.go",
+    "core/internal/runtime/executor/codex_openai_images.go"
+  ],
+  "client": {"path":"/v1/images/generations","body":{"model":"gpt-image-2","size":"1024x1024"}},
+  "upstream": [],
+  "exceptions": [
+    {
+      "path": "client.body.error.code",
+      "kind": "intended",
+      "reason": "The new core's OpenAI-style error bodies always carry a code; a request it refuses itself gets the error's own code (invalid_request), where today's core's handler leaves code out.",
+      "want": "invalid_request"
+    },
+    {
+      "path": "client.headers.Content-Type",
+      "kind": "intended",
+      "reason": "The new core answers application/json; today's core's gin handler adds a charset to the error it writes itself.",
+      "want": "application/json"
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {"message":"Invalid request: prompt is required","type":"invalid_request_error"}
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8"
+      },
+      "status": 400
+    },
+    "upstream": []
+  }
+}
