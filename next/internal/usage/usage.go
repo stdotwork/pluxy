@@ -83,6 +83,9 @@ type Event struct {
 	// KeyID identifies the client key the request came with, as the management API lists client
 	// keys; empty with no client keys set.
 	KeyID string `json:"key_id,omitempty"`
+	// ClientIP is the address the request came from: the connection's peer, or the client a
+	// trusted proxy names (trusted_proxies).
+	ClientIP string `json:"client_ip,omitempty"`
 	// Failed is true when the request did not end with a complete reply.
 	Failed bool `json:"failed"`
 	// Status is the HTTP status of the reply; absent when none was sent (the client went away

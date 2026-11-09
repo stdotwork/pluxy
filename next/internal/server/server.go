@@ -253,7 +253,7 @@ func serve(w http.ResponseWriter, r *http.Request, g *Generation, f clientFormat
 	f.nativeHeaders(r, &req)
 	t := newTrace()
 	r = withTrace(r, t)
-	m := g.newMeter(arrived, r.URL.Path, req, clientToken(r, f.googleKeys))
+	m := g.newMeter(r, arrived, req, clientToken(r, f.googleKeys))
 	rr := routeRequest(r, req, body)
 	rr.Attempting = func(a route.Attempt) {
 		t.account = a.Account

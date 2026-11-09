@@ -449,7 +449,7 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 
 	turnReq := sessReq
 	turnReq.Stream = true
-	m := g.newMeter(arrived, s.r.URL.Path, turnReq, clientToken(s.r, false))
+	m := g.newMeter(s.r, arrived, turnReq, clientToken(s.r, false))
 	rr.Attempting = func(a route.Attempt) { m.attempt(a, "") }
 	stream := meterStream(g.Router.Generate(ctx, rr), m)
 	defer stream.Close()

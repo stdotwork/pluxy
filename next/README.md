@@ -1013,8 +1013,9 @@ recorded. An event holds the request's trace ID (`id`, the `X-CPA-TRACE-ID` of i
 when it arrived, the `endpoint`, whether it streamed, the `model` the client asked for (without a
 thinking suffix) and the account's own name for it when that differs (`upstream_model`: an alias
 or prefix resolved), the `provider` (extension) and `account` its last attempt went to, the
-client key's `key_id` (the `id` `GET /client-keys` lists it under, never the key), whether it
-`failed` with which `error_code`, the HTTP `status` of the reply, `latency_ms`, and the `tokens`
+client key's `key_id` (the `id` `GET /client-keys` lists it under, never the key), the
+`client_ip` it came from (the connection's peer, or the client a trusted proxy names; see
+`trusted_proxies`), whether it `failed` with which `error_code`, the HTTP `status` of the reply, `latency_ms`, and the `tokens`
 the upstream reported: `input_tokens` (cached ones included), `output_tokens` (reasoning
 included), `reasoning_tokens`, `cached_tokens`, `cache_creation_tokens` and `total_tokens` (input
 plus output). A token count the upstream did not report is absent, not 0. A streamed reply

@@ -19,14 +19,17 @@ type meter struct {
 	done  bool
 }
 
-// newMeter returns the meter of a request that arrived at start, or nil when the generation
+// newMeter returns the meter of a request r that arrived at start, or nil when the generation
 // keeps no usage record. key is the client key the request came with.
-func (g *Generation) newMeter(start time.Time, endpoint string, req llm.Request, key string) *meter {
+func (g *Generation) newMeter(r *http.Request, start time.Time, req llm.Request, key string) *meter {
 	if g.Usage == nil {
 		return nil
 	}
 	m := &meter{store: g.Usage, start: start}
-	m.ev = usage.Event{Timestamp: start.UTC(), Endpoint: endpoint, Stream: req.Stream, Model: req.Model}
+	m.ev = usage.Event{Timestamp: start.UTC(), Endpoint: r.URL.Path, Stream: req.Stream, Model: req.Model}
+	if a := ClientIP(r); a.IsValid() {
+		m.ev.ClientIP = a.String()
+	}
 	if len(g.Config.ClientKeys) > 0 && key != "" && g.KeyID != nil {
 		m.ev.KeyID = g.KeyID(key)
 	}

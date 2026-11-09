@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +36,7 @@ type usageEvent struct {
 	Provider      string      `json:"provider"`
 	Account       string      `json:"account"`
 	KeyID         string      `json:"key_id"`
+	ClientIP      string      `json:"client_ip"`
 	Failed        bool        `json:"failed"`
 	Status        int         `json:"status"`
 	ErrorCode     string      `json:"error_code"`
@@ -141,7 +143,8 @@ func TestUsageRecordsRequests(t *testing.T) {
 	if code != http.StatusOK || trace == "" {
 		t.Fatalf("plain request: status %d, trace %q", code, trace)
 	}
-	if code, _, _ = chatReply(t, c.base, secondClientKey, true); code != http.StatusOK {
+	// No trusted proxies: a forwarding header is not believed.
+	if code, _, _ = chatReply(t, c.base, secondClientKey, true, "X-Forwarded-For", "198.51.100.7"); code != http.StatusOK {
 		t.Fatalf("streamed request: status %d", code)
 	}
 	// Pinned to an account that does not exist: routing refuses it before any account.
@@ -172,12 +175,12 @@ func TestUsageRecordsRequests(t *testing.T) {
 	plain, streamed, refused := p.Events[0], p.Events[1], p.Events[2]
 	if plain.ID != trace || plain.Endpoint != "/v1/chat/completions" || plain.Stream || plain.Model != "gpt-4o" ||
 		plain.UpstreamModel != "" || plain.Provider != "pluxy/openai-compatible" || plain.Account != "upstream-1" ||
-		plain.KeyID != id1 || plain.Failed || plain.Status != 200 || plain.ErrorCode != "" ||
+		plain.KeyID != id1 || plain.ClientIP != "127.0.0.1" || plain.Failed || plain.Status != 200 || plain.ErrorCode != "" ||
 		!i64Is(plain.Tokens.Input, 9) || !i64Is(plain.Tokens.Output, 3) || !i64Is(plain.Tokens.Total, 12) ||
 		plain.Timestamp.Before(start) || plain.Timestamp.After(time.Now()) || plain.LatencyMS < 0 {
 		t.Errorf("plain request's event: %+v", plain)
 	}
-	if !streamed.Stream || streamed.KeyID != id2 || streamed.Failed || streamed.Status != 200 || !i64Is(streamed.Tokens.Total, 12) ||
+	if !streamed.Stream || streamed.KeyID != id2 || streamed.ClientIP != "127.0.0.1" || streamed.Failed || streamed.Status != 200 || !i64Is(streamed.Tokens.Total, 12) ||
 		streamed.Seq <= plain.Seq {
 		t.Errorf("streamed request's event: %+v", streamed)
 	}
@@ -309,9 +312,10 @@ func TestUsageUpstreamModelAndCancel(t *testing.T) {
 	u := newUpstream(t)
 	u.respond = u.streamReply
 	base := runCore(t, map[string]any{
-		"listen":         "127.0.0.1:0",
-		"client_keys":    []string{clientKey},
-		"management_key": managementKey,
+		"listen":          "127.0.0.1:0",
+		"client_keys":     []string{clientKey},
+		"management_key":  managementKey,
+		"trusted_proxies": []string{"127.0.0.1"},
 		"extension": map[string]any{
 			"manifest": filepath.Join(binDir, "pluxy-extension.json"),
 			"accounts": []any{map[string]any{
@@ -352,8 +356,18 @@ func TestUsageUpstreamModelAndCancel(t *testing.T) {
 	}
 	e := p.Events[0]
 	if e.Model != "fast" || e.UpstreamModel != "gpt-test-upstream" || e.Account != "aliased" || !e.Failed ||
-		e.ErrorCode != "cancelled" || e.Status != 200 || !e.Stream || e.KeyID == "" {
+		e.ErrorCode != "cancelled" || e.Status != 200 || !e.Stream || e.KeyID == "" || e.ClientIP != "127.0.0.1" {
 		t.Fatalf("cancelled stream's event: %+v", e)
+	}
+
+	// From a trusted proxy, the client is the rightmost address in X-Forwarded-For that is not
+	// a trusted proxy.
+	if code, _, _ := chatReply(t, base, clientKey, false, "X-Pluxy-Account", "nobody",
+		"X-Forwarded-For", "203.0.113.50, 198.51.100.7, 127.0.0.1"); code != http.StatusNotFound {
+		t.Fatalf("pinned to no account: status %d", code)
+	}
+	if p, raw := c.usageEvents(t, "?after="+strconv.FormatUint(e.Seq, 10)); len(p.Events) != 1 || p.Events[0].ClientIP != "198.51.100.7" {
+		t.Fatalf("forwarded request's event: %s", raw)
 	}
 }
 
