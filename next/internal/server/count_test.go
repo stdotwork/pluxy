@@ -197,3 +197,48 @@ func TestCountTokensFails(t *testing.T) {
 		t.Errorf("answered %d: %s", w.Code, w.Body)
 	}
 }
+
+// In a pool where one account cannot count and another refuses the count, core estimates
+// whichever is tried first, as today's core counts the first kind of account itself; with the
+// estimate off the client gets an error.
+func TestCountTokensEstimateInAMixedPool(t *testing.T) {
+	off := false
+	for _, c := range []struct {
+		first string
+		cfg   Config
+		want  int
+	}{
+		{"cannot", Config{}, http.StatusOK},
+		{"limited", Config{}, http.StatusOK},
+		{"cannot", Config{TokenCountEstimate: &off}, http.StatusTooManyRequests},
+		{"limited", Config{TokenCountEstimate: &off}, http.StatusBadRequest},
+	} {
+		gen := func(context.Context, string, protocol.Account, llm.Request) route.Stream {
+			t.Error("a count went to generate")
+			return &events{evs: []llm.Event{{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeInternal}}}}
+		}
+		var tried []string
+		cnt := func(_ context.Context, _ string, a protocol.Account, req llm.Request) route.Stream {
+			tried = append(tried, a.ID)
+			if a.ID == "cannot" {
+				return &events{evs: cannotCount(req)}
+			}
+			return &events{evs: []llm.Event{{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeRateLimit, Status: 429, Retryable: true, Scope: llm.ScopeCredential, Message: "slow down"}}}}
+		}
+		other := map[string]string{"cannot": "limited", "limited": "cannot"}[c.first]
+		router, err := route.New(route.Config{}, []route.Account{{ID: c.first, Priority: 2}, {ID: other, Priority: 1}}, gen, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg := c.cfg
+		cfg.ClientKeys = []string{"k"}
+		h := NewHandler(fixedSource{&Generation{Config: &cfg, Router: router, Attempt: gen, Count: cnt}})
+		w := postCount(h, "/v1/messages/count_tokens", countBody)
+		if w.Code != c.want || (c.want == http.StatusOK) != strings.Contains(w.Body.String(), `"input_tokens":27`) {
+			t.Errorf("%s first, estimate %v: answered %d: %s, want %d", c.first, cfg.TokenCountEstimateOn(), w.Code, w.Body, c.want)
+		}
+		if len(tried) != 2 || tried[0] != c.first {
+			t.Errorf("%s first: tried %v", c.first, tried)
+		}
+	}
+}

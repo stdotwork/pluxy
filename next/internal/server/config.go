@@ -45,10 +45,10 @@ type Config struct {
 	// drop part of it: "report" (the default) sends it and logs what was dropped, "reject"
 	// refuses it with an error naming what could not be carried.
 	DropPolicy string `json:"drop_policy,omitempty"`
-	// TokenCountEstimate says what a token count gets when no account for the model can count
-	// tokens (its upstream has no count endpoint): true, the default, answers with core's own
-	// estimate (package tokenest); false answers that counting is unsupported. A count an
-	// upstream refuses is an error either way.
+	// TokenCountEstimate says what a token count gets when it reaches an account that cannot
+	// count tokens (its upstream has no count endpoint) and no account answers it: true, the
+	// default, answers with core's own estimate (package tokenest); false answers with the
+	// error. A count that only accounts that can count refuse is an error either way.
 	TokenCountEstimate *bool `json:"token_count_estimate,omitempty"`
 	// ManagementKey turns on the management API (ManagementPrefix); clients send it as a
 	// bearer token. Empty: no management API.

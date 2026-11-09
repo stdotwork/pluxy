@@ -115,8 +115,10 @@ the upstream's own count endpoint: Anthropic's for a Claude account on Anthropic
 otherwise core answers with the count in the client's shape. An account whose upstream has no count
 endpoint (Codex, xAI, Kimi, Meta, Devin, Antigravity, and Chat or Responses accounts), and a Claude
 account whose `base_url` is not Anthropic's own (today's core draws the same line), cannot count:
-core tries the model's next account, and when none can, it answers with its own estimate in the
-client's shape, as today's core does with a tokenizer for those accounts. The estimate is a
+core tries the model's next account, and when the count gets no answer and one of the accounts
+tried could not count, it answers with its own estimate in the client's shape, as today's core
+does with a tokenizer for those accounts (it counts such an account itself, so a pool that mixes
+both kinds gets an estimate when the account that counts refuses). The estimate is a
 heuristic written with the standard library, not a tokenizer: it splits the text the way OpenAI's
 `o200k_base` tokenizer does (today's core uses that one for Claude, xAI and Meta accounts) and
 counts each piece by its length. On English prose, code and JSON it comes within a few percent of
@@ -125,8 +127,8 @@ request would have gone to, where today's core's number depends on the account's
 counts the system text, each message's role and text, reasoning, tool calls and results, the
 tools' names, descriptions and parameters, and the tool choice; images and files add nothing.
 `token_count_estimate` (top level, default `true`) turns the estimate off: core then answers an
-error saying the account cannot count. Either way, an error from an upstream that counts (a 400,
-401 or 429) stays an error; only "cannot count" becomes an estimate.
+error saying the account cannot count. When every account tried can count, an error from an
+upstream that counts (a 400, 401 or 429) stays an error.
 
 A model name may end in a thinking setting in brackets, as today's core reads it: a level
 (`gpt-5(high)`; `minimal`, `low`, `medium`, `high`, `xhigh` or `max`), `none`, `auto`, or a token
@@ -221,9 +223,9 @@ account for the model) gets none.
 would drop part of it: `"report"` (the default) sends it and logs what was dropped, `"reject"`
 refuses it with a 400 that names what could not be carried.
 
-`token_count_estimate` (top level, default `true`) says what a token count gets when no account
-for the model can count: `true` answers with core's estimate, `false` answers with an error. Today's core has no setting for this: it always
-estimates for those accounts.
+`token_count_estimate` (top level, default `true`) says what a token count gets when an account
+for the model cannot count: `true` answers with core's estimate, `false` answers with an error.
+Today's core has no setting for this: it always estimates for those accounts.
 
 A config written for today's core, with its key names, works too: see
 [config.yaml with today's key names](#configyaml-with-todays-key-names).

@@ -272,10 +272,11 @@ such endpoint, or not for this request's format) answers with code `unsupported`
 `credential` and `retryable` true, so core tries another account. Core sends `count_tokens` only
 to an extension whose describe reports `protocol_minor` 2 or more and lists it in `operations`;
 for any other, core treats the account as one that cannot count. Core routes a count like a
-request: the same accounts, blocks and retries. An extension does not estimate: when no account
-can count, core answers the client with its own estimate (unless the config turns
-`token_count_estimate` off, then with the `unsupported` error). Any other error, such as an
-upstream's 400 or 429, reaches the client as it is.
+request: the same accounts, blocks and retries. An extension does not estimate: when the count
+gets no answer and an account tried answered `unsupported`, core answers the client with its own
+estimate (unless the config turns `token_count_estimate` off, then with the last error). When no
+account tried answered `unsupported`, any other error, such as an upstream's 400 or 429, reaches
+the client as it is.
 
 ### `models`
 
