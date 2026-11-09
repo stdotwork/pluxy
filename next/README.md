@@ -132,6 +132,10 @@ each turn is a request that carries the whole conversation so far, which core ke
 socket. `response.append`,
 `response.interrupt` and warmups (`"generate": false`) are served as today's core serves them.
 
+When an upstream ends a Responses stream with a `response.completed`, `response.incomplete` or
+`response.failed` whose `output` is empty, core fills it with the items the stream's
+`response.output_item.done` events finished, as today's core does.
+
 A Messages client's usage carries `output_tokens_details.thinking_tokens` (at most `output_tokens`)
 whenever the upstream reports its reasoning tokens; today's core writes it only for a Responses
 upstream.

@@ -429,7 +429,7 @@ func TestNativeStreamRepairsEmptyOutput(t *testing.T) {
 		{"null", `{"type":"response.completed","sequence_number":5,"response":{"id":"r","status":"completed","output":null}}`, rebuilt},
 		{"absent", `{"type":"response.completed","sequence_number":5,"response":{"id":"r","status":"completed"}}`, rebuilt},
 		{"present", `{"type":"response.completed","sequence_number":5,"response":{"id":"r","status":"completed","output":[{"type":"message","id":"m_2"}]}}`, `[{"type":"message","id":"m_2"}]`},
-		{"incomplete", `{"type":"response.incomplete","sequence_number":5,"response":{"id":"r","status":"incomplete","output":[]}}`, `[]`},
+		{"incomplete", `{"type":"response.incomplete","sequence_number":5,"response":{"id":"r","status":"incomplete","output":[]}}`, rebuilt},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			stream := append([]string{`{"type":"response.created","sequence_number":0,"response":{"id":"r","status":"in_progress","output":[]}}`}, done...)

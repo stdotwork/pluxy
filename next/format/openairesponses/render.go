@@ -328,10 +328,11 @@ func (s *StreamWriter) emit(typ string, fields obj) error {
 }
 
 // repairOutput keeps the items the upstream's response.output_item.done events finish, and gives
-// a response.completed or response.failed whose response has no output (absent, null or empty)
-// those items as its output, as today's core does: some upstreams send the final response with
-// an empty output. Items are ordered by output_index, then those without one in the order they
-// came. Every other event, and a response with output, is returned unchanged.
+// a response.completed, response.incomplete or response.failed whose response has no output
+// (absent, null or empty) those items as its output, as today's core does: some upstreams send
+// the final response with an empty output. Items are ordered by output_index, then those without
+// one in the order they came. Every other event, and a response with output, is returned
+// unchanged.
 func (s *StreamWriter) repairOutput(typ string, raw json.RawMessage) json.RawMessage {
 	switch typ {
 	case "response.output_item.done":
@@ -354,7 +355,7 @@ func (s *StreamWriter) repairOutput(typ string, raw json.RawMessage) json.RawMes
 		}
 		s.done[*ev.OutputIndex] = ev.Item
 		return raw
-	case "response.completed", "response.failed":
+	case "response.completed", "response.incomplete", "response.failed":
 	default:
 		return raw
 	}
