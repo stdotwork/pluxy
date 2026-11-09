@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -131,6 +132,7 @@ type requestEntry struct {
 	at       time.Time
 	method   string
 	url      *url.URL
+	client   netip.Addr // where the request came from (ClientIP)
 	headers  http.Header
 	body     []byte
 	trace    *trace
@@ -344,6 +346,9 @@ func (l *RequestLog) format(e *requestEntry) []byte {
 	var b bytes.Buffer
 	b.WriteString("=== REQUEST INFO ===\n")
 	fmt.Fprintf(&b, "URL: %s\nMethod: %s\nTimestamp: %s\n", u.RequestURI(), e.method, e.at.Format(time.RFC3339Nano))
+	if e.client.IsValid() {
+		fmt.Fprintf(&b, "Client IP: %s\n", e.client)
+	}
 	if e.trace != nil {
 		fmt.Fprintf(&b, "Trace ID: %s\n", e.trace.id)
 		if e.trace.account != "" {
@@ -384,7 +389,7 @@ func logged(w http.ResponseWriter, r *http.Request, g *Generation, h func(w http
 	r = withTrace(r, t)
 	rec := &recorder{ResponseWriter: w, body: g.RequestLog.newCapture()}
 	h(rec, r)
-	g.RequestLog.write(&requestEntry{at: at, method: r.Method, url: r.URL, headers: r.Header, body: t.body, trace: t,
+	g.RequestLog.write(&requestEntry{at: at, method: r.Method, url: r.URL, client: ClientIP(r), headers: r.Header, body: t.body, trace: t,
 		status: rec.status, rHeaders: rec.header, reply: rec.body.bytes(), replyTitle: "RESPONSE"})
 }
 

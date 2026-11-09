@@ -97,6 +97,7 @@ func TestRequestLogs(t *testing.T) {
 	text := c.download(t, "/request-error-logs/"+l.Files[0].Name)
 	wantNoSecrets(t, "the error log", text, secrets...)
 	for _, want := range []string{"=== REQUEST INFO ===", "URL: /v1/chat/completions?key=%5Bredacted%5D", "Method: POST",
+		"Client IP: 127.0.0.1",
 		"=== HEADERS ===", "Authorization: Bearer [redacted]", "X-Goog-Api-Key: [redacted]", "Cookie: [redacted]",
 		"=== REQUEST BODY ===", `"my keys are [redacted] and [redacted]"`, "=== RESPONSE ===", "Status: 404", `does not exist or does not serve model`} {
 		if !strings.Contains(text, want) {
@@ -186,9 +187,10 @@ func TestErrorLogForStreamFailingMidway(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
 	b, _ := json.Marshal(map[string]any{
-		"listen":         "127.0.0.1:0",
-		"client_keys":    []string{clientKey},
-		"management_key": managementKey,
+		"listen":          "127.0.0.1:0",
+		"client_keys":     []string{clientKey},
+		"management_key":  managementKey,
+		"trusted_proxies": []string{"127.0.0.1"},
 		"extension": map[string]any{
 			"manifest": filepath.Join(binDir, "pluxy-extension.json"),
 			"accounts": []any{map[string]any{"id": "a", "settings": map[string]any{"base_url": u.URL + "/v1"},
@@ -201,7 +203,17 @@ func TestErrorLogForStreamFailingMidway(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	resp := post(t, ctx, base, clientKey, `{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/chat/completions",
+		strings.NewReader(`{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+clientKey)
+	req.Header.Set("X-Forwarded-For", "198.51.100.7") // from a trusted proxy: the client
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
 	io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -212,7 +224,8 @@ func TestErrorLogForStreamFailingMidway(t *testing.T) {
 		t.Fatalf("error logs: %+v", l)
 	}
 	text := c.download(t, "/request-error-logs/"+l.Files[0].Name)
-	if !strings.Contains(text, "Status: 200") || !strings.Contains(text, "partial") || !strings.Contains(text, "error") {
+	if !strings.Contains(text, "Status: 200") || !strings.Contains(text, "partial") || !strings.Contains(text, "error") ||
+		!strings.Contains(text, "Client IP: 198.51.100.7\n") {
 		t.Fatalf("error log:\n%s", text)
 	}
 	wantNoSecrets(t, "the error log", text, clientKey, upstreamKey, managementKey)
@@ -255,7 +268,7 @@ func TestRequestLogWebSocketTurn(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	for _, want := range []string{"Method: GET", "Account: acct-ws", "Authorization: Bearer [redacted]", "hello there",
+	for _, want := range []string{"Method: GET", "Client IP: 127.0.0.1", "Account: acct-ws", "Authorization: Bearer [redacted]", "hello there",
 		"=== WEBSOCKET MESSAGES ===", "response.completed"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("turn log lacks %q:\n%s", want, text)

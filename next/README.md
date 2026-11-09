@@ -1087,8 +1087,9 @@ With `logs.request_log` on (today's `request-log`), core writes each client requ
 the client key check, and its reply, to a file in its logs folder (the folder `logs` beside the
 config file), as today's core does. The file is named after the request's path, its time and its
 trace ID, such as `v1-chat-completions-2026-11-09T120000-20261109120000-3f9a0c2e5b7d4e18.log`,
-and holds today's core's sections: `=== REQUEST INFO ===` (URL, method, time, trace ID and the
-account its last attempt went to), `=== HEADERS ===`, `=== REQUEST BODY ===` and `=== RESPONSE
+and holds today's core's sections: `=== REQUEST INFO ===` (URL, method, time, the client's
+address (the connection's peer, or the client a trusted proxy names), trace ID and the account
+its last attempt went to), `=== HEADERS ===`, `=== REQUEST BODY ===` and `=== RESPONSE
 ===` (status, headers and body). A Responses WebSocket turn is written as one request: the
 client's `response.create` message as its body and, under `=== WEBSOCKET MESSAGES ===`, the
 messages sent back, one per line; a turn answered with an error counts as failed. A WebSocket
