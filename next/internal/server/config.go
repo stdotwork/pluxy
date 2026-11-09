@@ -47,6 +47,9 @@ type Config struct {
 	// ManagementKey turns on the management API (ManagementPrefix); clients send it as a
 	// bearer token. Empty: no management API.
 	ManagementKey string `json:"management_key,omitempty"`
+	// ManagementAllowRemote serves the management API to clients on other machines too (today's
+	// management.allow-remote). Default: only to this machine (FromThisMachine).
+	ManagementAllowRemote bool `json:"management_allow_remote,omitempty"`
 	// CredentialsDir is the folder that keeps accounts added by login, relative to the config
 	// file. Default: "credentials" beside the config file.
 	CredentialsDir string `json:"credentials_dir,omitempty"`

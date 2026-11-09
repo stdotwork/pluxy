@@ -8,6 +8,10 @@ import (
 	"strings"
 )
 
+// anyForwardHeaders are the headers a proxy may name the client in: the two clientIP reads and
+// RFC 7239's Forwarded, which core does not read.
+var anyForwardHeaders = []string{"X-Forwarded-For", "X-Real-IP", "Forwarded"}
+
 // parseTrustedProxies reads trusted_proxies: IP addresses and CIDR ranges.
 func parseTrustedProxies(list []string) ([]netip.Prefix, error) {
 	var out []netip.Prefix
@@ -84,22 +88,54 @@ func remoteAddr(r *http.Request) netip.Addr {
 	return ap.Addr().Unmap()
 }
 
-type clientIPKey struct{}
+// client is where a request came from, as WithClientIP found it.
+type client struct {
+	addr netip.Addr
+	// forwarded: the request names another client in a forwarding header that was not used,
+	// because the peer is not a trusted proxy. A proxy on this machine that core does not trust
+	// forwards it from somewhere else.
+	forwarded bool
+}
+
+type clientKey struct{}
 
 // WithClientIP finds each request's client address with the trusted proxies of the config cfg
 // returns when the request arrives, for ClientIP in the handlers after it.
 func WithClientIP(cfg func() *Config, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		a := clientIP(cfg().trusted, r)
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), clientIPKey{}, a)))
+		c := clientOf(cfg().trusted, r)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), clientKey{}, c)))
 	})
+}
+
+func clientOf(trusted []netip.Prefix, r *http.Request) client {
+	c := client{addr: clientIP(trusted, r)}
+	if peer := remoteAddr(r); !peer.IsValid() || !trustedProxy(trusted, peer) {
+		for _, h := range anyForwardHeaders {
+			if len(r.Header.Values(h)) > 0 {
+				c.forwarded = true
+			}
+		}
+	}
+	return c
+}
+
+func clientFor(r *http.Request) client {
+	if c, ok := r.Context().Value(clientKey{}).(client); ok {
+		return c
+	}
+	return clientOf(nil, r)
 }
 
 // ClientIP returns where r came from, as WithClientIP found it; without WithClientIP, the
 // connection's peer.
-func ClientIP(r *http.Request) netip.Addr {
-	if a, ok := r.Context().Value(clientIPKey{}).(netip.Addr); ok {
-		return a
-	}
-	return remoteAddr(r)
+func ClientIP(r *http.Request) netip.Addr { return clientFor(r).addr }
+
+// FromThisMachine reports whether r came from a loopback address and was not forwarded from
+// elsewhere: a request that names another client in X-Forwarded-For, X-Real-IP or Forwarded
+// through a peer that is not a trusted proxy does not count, so a proxy on this machine that
+// core does not trust cannot make remote clients look local.
+func FromThisMachine(r *http.Request) bool {
+	c := clientFor(r)
+	return c.addr.IsLoopback() && !c.forwarded
 }
