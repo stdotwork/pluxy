@@ -142,7 +142,7 @@ func serve(withTLS bool) error {
 	if err != nil {
 		return err
 	}
-	cfgPath, err := writeConfig(dir, clientKey, mgmtKey)
+	cfgPath, err := writeConfig(dir, clientKey, mgmtKey, withTLS)
 	if err != nil {
 		return err
 	}
@@ -440,7 +440,9 @@ func randomKey() (string, error) {
 
 // writeConfig writes core's config file with the local extension's account and the two accounts
 // of test/alpha, and returns its path.
-func writeConfig(dir, clientKey, mgmtKey string) (string, error) {
+// writeConfig writes core's config. remote: core stands for a remote core behind an https
+// proxy, whose forwarded calls the management API answers only with management_allow_remote.
+func writeConfig(dir, clientKey, mgmtKey string, remote bool) (string, error) {
 	cfg := map[string]any{
 		"listen":          "127.0.0.1:0",
 		"client_keys":     []string{clientKey},
@@ -464,6 +466,9 @@ func writeConfig(dir, clientKey, mgmtKey string) (string, error) {
 				"credential": map[string]any{"kind": "api_key", "api_key": "fake-alpha-key-2"},
 			},
 		}}},
+	}
+	if remote {
+		cfg["management_allow_remote"] = true
 	}
 	b, err := json.Marshal(cfg)
 	if err != nil {
