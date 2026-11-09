@@ -82,3 +82,53 @@ func TestTrustedProxies(t *testing.T) {
 		t.Errorf("reload with a bad trusted proxy: %d, error %q; want 422 naming trusted_proxies[0]", code, s.Desired.Error)
 	}
 }
+
+// managementFrom calls GET /v0/management/status with key, as the client a trusted proxy names
+// in X-Forwarded-For.
+func managementFrom(t *testing.T, base, forwardedFor, key string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, base+"/v0/management/status", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	if forwardedFor != "" {
+		req.Header.Set("X-Forwarded-For", forwardedFor)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	return resp
+}
+
+// Five wrong management keys from one client block it for 30 minutes, the right key included,
+// while other clients are served; behind a trusted proxy the client is the forwarded address.
+func TestManagementLockout(t *testing.T) {
+	cfg := accessConfig(newUpstream(t))
+	cfg["trusted_proxies"] = []string{"127.0.0.1"}
+	base, _, logs := runCoreArgs(t, cfg, noWatch...)
+
+	const attacker, owner = "198.51.100.66", "198.51.100.1"
+	for i := range 5 {
+		if resp := managementFrom(t, base, attacker, "wrong-key"); resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("wrong key %d answered %d, want 401", i+1, resp.StatusCode)
+		}
+	}
+	logs.waitFor(t, "management: 5 failed management keys in a row from "+attacker)
+	resp := managementFrom(t, base, attacker, managementKey)
+	if resp.StatusCode != http.StatusForbidden || resp.Header.Get("Retry-After") == "" {
+		t.Errorf("blocked client with the right key answered %d (Retry-After %q), want 403 with Retry-After", resp.StatusCode, resp.Header.Get("Retry-After"))
+	}
+	if resp := managementFrom(t, base, owner, managementKey); resp.StatusCode != http.StatusOK {
+		t.Errorf("another client answered %d, want 200", resp.StatusCode)
+	}
+	// The proxy itself (no forwarded address) is another client too.
+	if resp := managementFrom(t, base, "", managementKey); resp.StatusCode != http.StatusOK {
+		t.Errorf("the proxy's own address answered %d, want 200", resp.StatusCode)
+	}
+}

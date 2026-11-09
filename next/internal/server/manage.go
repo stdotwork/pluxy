@@ -2,14 +2,17 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"maps"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -118,12 +121,14 @@ type Management struct {
 	// Check, when set, returns the result of core's check of account id, or nil.
 	Check func(id string) *AccountCheck
 	state *route.State
+	// lockout blocks a client that keeps sending a wrong key.
+	lockout *lockout
 }
 
 // NewManagement returns the management API with its account and login calls. cfg returns the
 // active config; state is the routing state accounts' cooldowns are read from (nil: none).
 func NewManagement(cfg func() *Config, creds *cred.Manager, state *route.State) *Management {
-	m := &Management{mux: http.NewServeMux(), cfg: cfg, creds: creds, state: state}
+	m := &Management{mux: http.NewServeMux(), cfg: cfg, creds: creds, state: state, lockout: newLockout()}
 	m.Handle("GET /accounts", m.list)
 	m.Handle("POST /accounts", m.add)
 	m.Handle("PATCH /accounts/{id}", m.patch)
@@ -149,13 +154,32 @@ func (m *Management) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	client := ClientIP(r)
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if !ok || token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(key)) != 1 {
+	right := ok && token != "" && sameKey(token, key)
+	left, blockedNow := m.lockout.attempt(client, right)
+	if left > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(int((left+time.Second-1)/time.Second)))
+		writeManagementError(w, http.StatusForbidden, "blocked",
+			fmt.Sprintf("too many failed management keys from this address; try again in %s", left.Round(time.Second)))
+		return
+	}
+	if !right {
+		if blockedNow {
+			log.Printf("management: %d failed management keys in a row from %s; refusing it for %s", lockoutFailures, client, lockoutFor)
+		}
 		writeManagementError(w, http.StatusUnauthorized, "unauthorized", "missing or invalid management key")
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	m.mux.ServeHTTP(w, r)
+}
+
+// sameKey compares a sent key with the management key in constant time, length included: it
+// compares their SHA-256 digests.
+func sameKey(sent, key string) bool {
+	a, b := sha256.Sum256([]byte(sent)), sha256.Sum256([]byte(key))
+	return subtle.ConstantTimeCompare(a[:], b[:]) == 1
 }
 
 func (m *Management) configured(id string) (route.Account, bool) {

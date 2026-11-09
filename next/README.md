@@ -914,6 +914,14 @@ config can still be checked and reloaded through management.
 Beside the account calls [above](#accounts-added-by-login), management serves these. Every call
 needs `Authorization: Bearer <management_key>`.
 
+A client that sends a missing or wrong management key 5 times in a row is refused for 30 minutes,
+with a 403 and `Retry-After`, even when it then sends the right key; core logs a line naming it.
+A right key clears its count, and a count is forgotten after 2 hours without a failure. These are
+today's core's numbers. The client is the address [`trusted_proxies`](#run-it) gives, and an
+IPv6 client is counted by its /64, so it cannot start again by moving to another address in the
+block it was given; today's core counts each address. Behind a proxy that is not in
+`trusted_proxies`, every client has the proxy's address, so one client's wrong keys block them all.
+
 | Call | What it does |
 | --- | --- |
 | `GET /v0/management/status` | `desired` (the newest config version core has seen, with `error` when it was refused) and `active` (the one serving), each with `revision` and `hash`; `extensions`, one entry per running generation with `state` (`starting`, `active`, `idle`, `crashed`, `quarantined`, `draining`, `stopped`), `current`, `pid`, `restarts`, `last_error` and `active_requests`; `safe_mode`. |
