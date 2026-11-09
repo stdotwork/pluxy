@@ -125,9 +125,13 @@ func (c *Core) configView() (configView, error) {
 	return v, nil
 }
 
-// scrub returns msg with the secrets of the given config contents replaced by placeholders.
+// scrub returns msg with the secrets of the config file, of the active config and of the
+// given config contents replaced by placeholders.
 func (c *Core) scrub(msg string, docs ...[]byte) string {
 	var secrets []string
+	if b, err := os.ReadFile(c.opts.ConfigPath); err == nil {
+		docs = append(docs, b)
+	}
 	for _, b := range docs {
 		if d, err := configdoc.Parse(b, c.isYAML()); err == nil {
 			secrets = append(secrets, d.Secrets()...)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -184,5 +185,18 @@ func TestRefusedChangeLogsNoSecret(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "refused") || strings.Contains(buf.String(), "fake-client-key-1") {
 		t.Errorf("log: %s", buf.String())
+	}
+}
+
+func TestRefusedSettingsReplyShowsNoFileSecret(t *testing.T) {
+	// Safe mode does not read the manifest, so the account's credential stays only in the file.
+	c, _ := safeCore(t, `{"listen": "127.0.0.1:0", "client_keys": ["fake-client-key-1"], "management_key": "fake-management-key",
+		"extension": {"manifest": "missing.json", "accounts": [{"id": "a", "credential": {"kind": "api_key", "api_key": "fake-provider-secret"}}]}}`+"\n")
+	req := httptest.NewRequest(http.MethodPatch, ManagementPrefix+"settings", strings.NewReader(`{"routing": {"strategy": "fake-provider-secret"}}`))
+	req.Header.Set("Authorization", "Bearer fake-management-key")
+	rec := httptest.NewRecorder()
+	c.Management().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "pluxy-redacted-") || strings.Contains(rec.Body.String(), "fake-provider-secret") {
+		t.Errorf("reply %d: %s", rec.Code, rec.Body.String())
 	}
 }
