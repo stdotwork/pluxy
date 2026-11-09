@@ -36,11 +36,14 @@ type Skipped struct {
 }
 
 // How long before expiry the extensions renew what they log in: Codex 4 days ahead, Claude an
-// hour ahead (next/extensions/codex/login.go, next/extensions/claude/oauth.go). Imported
-// accounts get the same; the others use core's default.
+// hour ahead, Antigravity half an hour ahead and xAI five minutes ahead
+// (next/extensions/*/login.go, next/extensions/claude/oauth.go). Imported accounts get the same;
+// the others use core's default.
 const (
-	codexRefreshLead  = 96 * time.Hour
-	claudeRefreshLead = time.Hour
+	codexRefreshLead       = 96 * time.Hour
+	claudeRefreshLead      = time.Hour
+	antigravityRefreshLead = 30 * time.Minute
+	xaiRefreshLead         = 5 * time.Minute
 )
 
 // googleTokenURI is the token endpoint a service account key names by default; the Gemini
@@ -173,8 +176,58 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (Aut
 			v["project"] = project
 		}
 		settings["vertex"] = v
-	case "antigravity", "meta", "devin", "xai":
-		return f, fmt.Sprintf("no extension signs in to %s accounts yet", typ)
+	case "antigravity":
+		// The file holds no OAuth client secret (today's core has it built in), so the account
+		// serves requests until its token expires; renewing it needs a new login, which asks for
+		// the secret.
+		r.Extension = Antigravity
+		renewAhead(antigravityRefreshLead)
+		c.Data = object(map[string]any{"project_id": text(m, "project_id")})
+		if u := text(m, "base_url"); u != "" {
+			settings["base_url"] = u
+		}
+	case "xai":
+		r.Extension = XAI
+		renewAhead(xaiRefreshLead)
+		c.Data = object(map[string]any{"token_endpoint": text(m, "token_endpoint")})
+		if u := text(m, "base_url"); u != "" {
+			settings["base_url"] = u
+		}
+	case "meta":
+		// The minted API key is the access token and the device (dca:) token the refresh token,
+		// which mints a new key. Today's core keeps the device token in dca_token, or as the
+		// access token when no key was minted yet.
+		r.Extension = Meta
+		key, dca := text(m, "api_key"), text(m, "dca_token")
+		if t := text(m, "access_token"); strings.HasPrefix(t, "dca:") {
+			if dca == "" {
+				dca = t
+			}
+		} else if key == "" {
+			key = t
+		}
+		if strings.HasPrefix(key, "dca:") {
+			key = ""
+		}
+		c = protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: key, RefreshToken: dca,
+			Data: object(map[string]any{"base_url": text(m, "base_url")})}
+		if key == "" && dca != "" {
+			c.RefreshAt = now.Unix() // no key yet: core mints one on the first request
+		}
+	case "devin":
+		// A Devin session token is a permanent API key in the Devin extension.
+		r.Extension = Devin
+		tok := text(m, "session_token")
+		if tok == "" {
+			tok = text(m, "api_key")
+		}
+		if tok == "" {
+			return f, "it holds no token"
+		}
+		c = protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: tok}
+		if u := text(m, "base_url"); u != "" {
+			settings["base_url"] = u
+		}
 	case "", "gemini":
 		return f, "today's core does not load it either"
 	default:
@@ -188,6 +241,9 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (Aut
 	r.Label = text(m, "label")
 	if r.Label == "" {
 		r.Label = text(m, "email")
+	}
+	if r.Label == "" && typ == "devin" {
+		r.Label = text(m, "user_name")
 	}
 	r.Account = route.Account{Priority: number(m["priority"])}
 	if _, ok := m["weight"]; ok {

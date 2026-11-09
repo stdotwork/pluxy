@@ -53,6 +53,9 @@ const (
 	Gemini           = "pluxy/gemini"
 	Kimi             = "pluxy/kimi"
 	XAI              = "pluxy/xai"
+	Antigravity      = "pluxy/antigravity"
+	Meta             = "pluxy/meta"
+	Devin            = "pluxy/devin"
 	OpenAICompatible = "pluxy/openai-compatible"
 )
 
