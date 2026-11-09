@@ -183,8 +183,8 @@ func (m *Management) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	m.mux.ServeHTTP(w, r)
 }
 
-// sameKey compares a sent key with the management key in constant time, length included: it
-// compares their SHA-256 digests.
+// sameKey compares a sent key with a configured one (the management key or a client key) in
+// constant time, length included: it compares their SHA-256 digests.
 func sameKey(sent, key string) bool {
 	a, b := sha256.Sum256([]byte(sent)), sha256.Sum256([]byte(key))
 	return subtle.ConstantTimeCompare(a[:], b[:]) == 1

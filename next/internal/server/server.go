@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/subtle"
 	"errors"
 	"fmt"
 	"io"
@@ -193,11 +192,13 @@ func authorized(cfg *Config, r *http.Request, googleKeys bool) bool {
 	if token == "" {
 		return false
 	}
-	match := 0
+	// Every key is checked, none ends the loop early, and each check compares digests, so the
+	// time it takes does not show which key matched or how long a key is.
+	match := false
 	for _, k := range cfg.ClientKeys {
-		match |= subtle.ConstantTimeCompare([]byte(token), []byte(k))
+		match = sameKey(token, k) || match
 	}
-	return match == 1
+	return match
 }
 
 // clientToken returns the key the client sent: a bearer token, or else x-api-key; with
