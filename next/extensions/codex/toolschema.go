@@ -3,7 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
+	"math/big"
 	"strconv"
 	"strings"
 )
@@ -257,7 +257,7 @@ func valueKey(v any) (string, bool) {
 		if neg {
 			sign = "-"
 		}
-		return fmt.Sprintf("n:%s%se%d", sign, digits, exp), true
+		return "n:" + sign + digits + "e" + exp.String(), true
 	}
 	return "", false
 }
@@ -266,13 +266,17 @@ func valueKey(v any) (string, bool) {
 // with a fraction, such as 1.5, is not whole and is kept; so is 1e3, which is 1000.
 func outsideInt64(n json.Number) bool {
 	neg, digits, exp := splitNumber(n)
-	if digits == "" || exp < 0 {
+	if digits == "" || exp.Sign() < 0 {
 		return false
 	}
-	if exp > 19 || int64(len(digits))+exp > 19 {
+	if exp.Cmp(big.NewInt(19)) > 0 {
 		return true
 	}
-	s := digits + strings.Repeat("0", int(exp))
+	e := int(exp.Int64())
+	if len(digits)+e > 19 {
+		return true
+	}
+	s := digits + strings.Repeat("0", e)
 	if neg {
 		s = "-" + s
 	}
@@ -282,32 +286,23 @@ func outsideInt64(n json.Number) bool {
 
 // splitNumber writes n (JSON number syntax, as the decoder has checked) as sign, digits and a
 // power of ten: the value is ±digits × 10^exp, where digits has no leading or trailing zeros
-// and is empty for zero. An exponent too large for an int64 is capped at ±1<<40, as far past
-// any use as the real one.
-func splitNumber(n json.Number) (neg bool, digits string, exp int64) {
+// and is empty for zero. The exponent is a big.Int because JSON allows one of any length.
+func splitNumber(n json.Number) (neg bool, digits string, exp *big.Int) {
 	s := string(n)
 	if strings.HasPrefix(s, "-") {
 		neg, s = true, s[1:]
 	}
+	exp = new(big.Int)
 	if i := strings.IndexAny(s, "eE"); i >= 0 {
-		e, err := strconv.ParseInt(strings.TrimPrefix(s[i+1:], "+"), 10, 64)
-		switch {
-		case err == nil:
-			exp = e
-		case strings.HasPrefix(s[i+1:], "-"):
-			exp = -1 << 40
-		default:
-			exp = 1 << 40
-		}
+		exp.SetString(strings.TrimPrefix(s[i+1:], "+"), 10)
 		s = s[:i]
 	}
 	intPart, frac, _ := strings.Cut(s, ".")
 	digits = strings.TrimLeft(intPart+frac, "0")
 	if digits == "" {
-		return false, "", 0
+		return false, "", new(big.Int)
 	}
-	exp -= int64(len(frac))
 	trimmed := strings.TrimRight(digits, "0")
-	exp += int64(len(digits) - len(trimmed))
+	exp.Add(exp, big.NewInt(int64(len(digits)-len(trimmed)-len(frac))))
 	return neg, trimmed, exp
 }
