@@ -820,6 +820,59 @@ needs `Authorization: Bearer <management_key>`.
 | `GET /v0/management/ui` | The pages of the extensions that run and where they are served; see [extension pages](ui/extension-pages/README.md#how-core-serves-pages). |
 | `GET`, `PATCH /v0/management/extensions/{publisher}/{name}/config` | An extension's settings, checked against the schema its manifest declares; see [extension pages](ui/extension-pages/README.md#how-core-serves-pages). |
 
+### Changing the config through management
+
+These calls read and change the config file core runs on, whether it is the JSON config or a
+`config.yaml` with today's key names. A change goes through the same steps as a reload: core
+checks the new contents and prepares them, and only when they are ready to serve does it write
+the file and switch to them. The file is replaced in one step (a new file renamed over it, with
+the same permissions, through a symbolic link if the path is one), so nothing ever reads half of
+it. When a change is refused, the file and the running config stay as they were, and status
+keeps showing the file as it is. Today's core writes its file in place and saves a change that
+its reload may then refuse.
+
+A change made with the structured calls (client keys, management key, settings) writes the file
+out again. A `config.yaml` keeps its comments and the order of its keys, with two-space indents
+and no blank lines, as today's core writes it when it saves; a JSON config keeps the order of
+its keys and its indent. `PUT /config` writes the document as sent.
+
+| Call | What it does |
+| --- | --- |
+| `GET /v0/management/config` | The config file: `format` (`json` or `yaml`), `hash` (as in status) and `content`, the file as written with each secret replaced by a placeholder such as `pluxy-redacted-4f1c...`. Secrets are found by key name, in both layouts of a `config.yaml` and in the JSON config: client keys, the management key, every `api-key` and `api_key`, everything in an account's `credential` except its `kind`, passwords, tokens and secrets, header values about authentication (`Authorization`, `X-Api-Key`, cookies), and any URL with a user name, password or query. Comments are shown as written. 422 when the file does not parse. Today's core returns its config, the management key's hash and provider keys included, as they are. |
+| `POST /v0/management/config/validate` | `{"content": "..."}`: checks a document as a reload would, without starting extensions or writing anything. 200 with `valid: true` and the `notices` a `config.yaml` load logs, or `valid: false` and `error`. |
+| `PUT /v0/management/config` | `{"content": "...", "base_hash": "..."}`: replaces the file with the document and applies it. 200 with the file as `GET /config` shows it; 409 when `base_hash` is set and the file has changed since; 422 with `error` when core refuses the document. |
+| `GET /v0/management/client-keys` | The client keys: each one's `id` and `masked` form (first and last two characters, as today's panel shows them; a key shorter than 8 characters is hidden whole). |
+| `POST /v0/management/client-keys` | Adds a new random client key (`sk-` and 26 random characters). 201 with the key's `id` and `masked` form and its `value`, which no later call shows. |
+| `DELETE /v0/management/client-keys/{id}` | Removes the client key. 204; 404 when no key has the ID; 409 for the last key, since without client keys anyone who reaches core could use it. |
+| `POST /v0/management/management-key/rotate` | Replaces the management key with a new random one and returns it as `value`. The old key stops working as the reply is sent. |
+| `GET /v0/management/settings` | The basic and routing settings, by today's core's names (below). |
+| `PATCH /v0/management/settings` | Changes the settings the body names (`{"routing": {"strategy": "fill-first"}}`) and replies with them all. 400 for a name or value it does not take. |
+
+In the document, a placeholder stands for the secret it replaced, so a document read with `GET
+/config`, edited and sent back keeps its secrets: core puts each one back from the file as it is
+now. To change a secret, write the new value in its place. A placeholder is accepted only where a
+secret goes, and only while the file still holds that secret and core has not restarted (the
+placeholders are keyed hashes with a key core picks at start); otherwise the call answers 409
+(read the config again) or refuses the document. Messages in replies never show a secret either.
+
+A `config.yaml` keeps each setting under the name it already has there: the v8 name, or the
+older spelling when only that is in the file. New client keys go to `access.api-keys`, or to the
+older layout's `api-keys` list when the file has that and no `access.api-keys`; the management key
+to `management.secret-key`, or `remote-management.secret-key` when only that is there.
+
+| Setting | JSON config | Values |
+| --- | --- | --- |
+| `routing.strategy` | `routing.strategy` (`weighted` for `weighted-round-robin`) | `round-robin`, `fill-first`, `weighted-round-robin`, `least-active`; today's other spellings (`wrr`, `ff`, ...) are taken too. |
+| `routing.session-affinity` | `routing.session_affinity` there or not | `true` or `false`. |
+| `routing.session-affinity-ttl` | `routing.session_affinity.ttl_ms` | A duration such as `1h` (default) or `30m`. In a JSON config it needs session affinity on. |
+| `routing.retry.max-retry-credentials` | `routing.max_accounts` | Accounts one request may try; 0 is no limit. |
+| `routing.retry.max-retry-interval` | `routing.max_wait_ms` (seconds × 1000) | Seconds one request may wait for a blocked account. In a `config.yaml`, `request-retry: 0` turns waiting off whatever this says, as in today's core. |
+
+The settings shown are those of the running config. Today's other basic settings (`debug`,
+logging to file, the request log, usage statistics, `proxy-url`, `ws-auth`, the cooldown
+settings and `request-retry` rounds) do not exist in this core yet; `max_attempts`, which today's
+core has no name for, is changed in the document.
+
 ## Packages
 
 Extensions are installed as packages: a release archive from a registry, checked against the
