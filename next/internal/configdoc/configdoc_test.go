@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -1027,6 +1028,42 @@ func TestScrub(t *testing.T) {
 	// However short, a secret is replaced; an empty one is not a secret.
 	if got := r.Scrub("is z", []string{"z", ""}); got != "is "+r.Placeholder("z") {
 		t.Errorf("Scrub of a 1-character secret = %q", got)
+	}
+}
+
+// A placeholder is never altered, whatever the other secrets are: a short secret may match the
+// placeholder's prefix ("red", "e") or its hex digits ("abc"), and only the message's own text
+// may hold a secret. The key is fixed so the hex case is not left to chance.
+func TestScrubLeavesPlaceholdersAlone(t *testing.T) {
+	r := &Redactor{key: []byte("fixed key for the scrub test....")}
+	// A long secret whose placeholder holds "abc" in its hex digits.
+	var long string
+	for i := 0; ; i++ {
+		long = "long-secret-" + strconv.Itoa(i)
+		if strings.Contains(r.ID(long), "abc") {
+			break
+		}
+	}
+	// The words between the secrets hold none of the short ones.
+	for _, shorts := range [][]string{{"abc"}, {"red"}, {"e"}, {"pluxy-redacted-"}, {"abc", "red", "e", "9"}} {
+		secrets := append([]string{long}, shorts...)
+		msg := "oh " + long + " is"
+		want := "oh " + r.Placeholder(long) + " is"
+		for _, s := range shorts {
+			msg += " so " + s + " us"
+			want += " so " + r.Placeholder(s) + " us"
+		}
+		for range 2 { // in either order
+			if got := r.Scrub(msg, secrets); got != want {
+				t.Errorf("secrets %q:\nScrub = %q\nwant    %q", secrets, got, want)
+			}
+			slices.Reverse(secrets)
+		}
+	}
+	// A short secret that occurs many times, beside placeholders that hold it.
+	got := r.Scrub("ee "+long+" ee", []string{long, "e"})
+	if want := r.Placeholder("e") + r.Placeholder("e") + " " + r.Placeholder(long) + " " + r.Placeholder("e") + r.Placeholder("e"); got != want {
+		t.Errorf("Scrub = %q, want %q", got, want)
 	}
 }
 

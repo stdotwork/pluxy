@@ -2,6 +2,7 @@ package configdoc
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -474,14 +475,42 @@ func (d *Doc) line(n *yaml.Node) int {
 }
 
 // Scrub returns msg with each of the secrets in it replaced by its placeholder, longest
-// first. A very short secret may garble the message; showing it would be worse.
+// first. A very short secret may garble the message; showing it would be worse. Secrets are
+// looked for in msg as it was given, never in a placeholder put in it, so a short secret
+// (such as "red" or "abc") cannot alter the placeholder of another.
 func (r *Redactor) Scrub(msg string, secrets []string) string {
-	secrets = slices.Clone(secrets)
-	slices.SortFunc(secrets, func(a, b string) int { return len(b) - len(a) })
+	secrets = slices.DeleteFunc(slices.Clone(secrets), func(s string) bool { return s == "" })
+	slices.SortFunc(secrets, func(a, b string) int { return cmp.Or(len(b)-len(a), strings.Compare(a, b)) })
+	secrets = slices.Compact(secrets)
+	type found struct {
+		start, end int
+		secret     string
+	}
+	var hits []found
 	for _, s := range secrets {
-		if s != "" {
-			msg = strings.ReplaceAll(msg, s, r.Placeholder(s))
+		for from := 0; from < len(msg); {
+			i := strings.Index(msg[from:], s)
+			if i < 0 {
+				break
+			}
+			start, end := from+i, from+i+len(s)
+			// A longer secret that already holds this text keeps it.
+			if slices.ContainsFunc(hits, func(h found) bool { return start < h.end && h.start < end }) {
+				from = start + 1
+				continue
+			}
+			hits = append(hits, found{start, end, s})
+			from = end
 		}
 	}
-	return msg
+	slices.SortFunc(hits, func(a, b found) int { return a.start - b.start })
+	var out strings.Builder
+	last := 0
+	for _, h := range hits {
+		out.WriteString(msg[last:h.start])
+		out.WriteString(r.Placeholder(h.secret))
+		last = h.end
+	}
+	out.WriteString(msg[last:])
+	return out.String()
 }
