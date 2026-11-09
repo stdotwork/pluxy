@@ -32,6 +32,15 @@ const maxManagementBody = 1 << 20
 //	GET    /v0/management/ui        the extensions' pages and where they are served
 //	GET    /v0/management/extensions/{publisher}/{name}/config  an extension's settings
 //	PATCH  /v0/management/extensions/{publisher}/{name}/config  change them
+//	GET    /v0/management/config    the config file, with its secrets replaced by placeholders
+//	POST   /v0/management/config/validate  check a config document without applying it
+//	PUT    /v0/management/config    replace the config file and apply it (WriteConfig)
+//	GET    /v0/management/client-keys  the client keys, masked
+//	POST   /v0/management/client-keys  add a new random client key; the reply shows it once
+//	DELETE /v0/management/client-keys/{id}  remove a client key
+//	POST   /v0/management/management-key/rotate  replace the management key with a new one
+//	GET    /v0/management/settings  the basic and routing settings, by today's core's names
+//	PATCH  /v0/management/settings  change them
 //
 // Every call needs the active config's management_key as a bearer token. Without a key in the
 // config the API is not served.
@@ -75,6 +84,7 @@ func (c *Core) Management() http.Handler {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	c.handleUI(m)
+	c.handleConfig(m)
 	return m
 }
 

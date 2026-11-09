@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -34,6 +35,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/internal/configdoc"
 	"github.com/stdotwork/pluxy/next/internal/cred"
 	"github.com/stdotwork/pluxy/next/internal/extconfig"
 	"github.com/stdotwork/pluxy/next/internal/host"
@@ -93,6 +95,8 @@ type Core struct {
 	settings  *extconfig.Store // extensions' settings, in the packages folder
 	pagesPort atomic.Int64     // the pages listener's port, once main has it
 
+	redactor *configdoc.Redactor // hides the config file's secrets from the management API
+
 	// accounts serialises setting the accounts a router routes over: a change in the
 	// credential store and a publish never interleave.
 	accounts sync.Mutex
@@ -114,7 +118,7 @@ type Core struct {
 // Start loads the config file and publishes it as revision 1. Unless in safe mode, it starts
 // each extension's program to check it; the program then runs only while it is needed.
 func Start(opts Options) (*Core, error) {
-	c := &Core{opts: opts, state: route.NewState()}
+	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor()}
 	cfg, err := server.LoadConfig(opts.ConfigPath)
 	if err != nil {
 		return nil, err
@@ -204,19 +208,35 @@ func (c *Core) Reload(why string) error { return c.reload(true, why) }
 func (c *Core) reload(force bool, why string) error {
 	c.reloading.Lock()
 	defer c.reloading.Unlock()
-	return c.transact(force, why, nil, nil)
+	return c.transact(force, why, nil, nil, nil)
 }
 
 // transact runs one reload transaction with c.reloading held. change, when set, is applied to
 // a copy of the package record before preparing; the record is saved only when everything is
 // prepared, just before publishing. Packages in strict that fail to start fail the
 // transaction; other enabled packages that fail are skipped and shown as failed.
-func (c *Core) transact(force bool, why string, change func(packages.State), strict map[string]bool) error {
+//
+// edit, when set, makes the transaction a change to the config file (see WriteConfig): it gets
+// the file's contents and returns the new contents, which are prepared and, only when
+// everything is prepared, written to the file just before publishing. An edit that fails or
+// is refused leaves the file and the desired revision as they were.
+func (c *Core) transact(force bool, why string, change func(packages.State), strict map[string]bool, edit func([]byte) ([]byte, error)) error {
 	if c.stopped {
 		return errors.New("core is stopping")
 	}
 
 	b, err := os.ReadFile(c.opts.ConfigPath)
+	var orig []byte // the file's contents an edit started from
+	if edit != nil {
+		if err != nil {
+			return fmt.Errorf("reading the config file: %w", err)
+		}
+		orig = b
+		if b, err = edit(b); err != nil {
+			return err
+		}
+		force = true
+	}
 	if err == nil && len(bytes.TrimSpace(b)) == 0 {
 		if !force {
 			return nil
@@ -239,6 +259,7 @@ func (c *Core) transact(force bool, why string, change func(packages.State), str
 		return nil
 	}
 	rev := c.desired.Revision + 1
+	seen := c.desired
 	c.desired = Revision{Revision: rev, Hash: hash, At: time.Now()}
 	c.mu.Unlock()
 
@@ -259,6 +280,26 @@ func (c *Core) transact(force bool, why string, change func(packages.State), str
 			err = fmt.Errorf("saving the package record: %w", err)
 			c.discard(next, prev)
 		}
+	}
+	if err == nil && edit != nil {
+		// Another program may have written the file while the change was prepared; its
+		// version must not be lost.
+		if now, rerr := os.ReadFile(c.opts.ConfigPath); rerr != nil || !bytes.Equal(now, orig) {
+			err = &editError{http.StatusConflict, "conflict", "the config file changed while the change was prepared; try again"}
+		} else if err = writeFileAtomic(c.opts.ConfigPath, b); err != nil {
+			err = fmt.Errorf("%w: %w", errWriteConfig, err)
+		}
+		if err != nil {
+			c.discard(next, prev)
+		}
+	}
+	if err != nil && edit != nil {
+		// The edited version was never on disk: core still wants the file as it is.
+		c.mu.Lock()
+		c.desired = seen
+		c.mu.Unlock()
+		log.Printf("config change (%s) refused; the config file and the active revision stay: %s", why, c.scrub(err.Error(), orig, b))
+		return err
 	}
 	if err != nil {
 		c.mu.Lock()
@@ -301,6 +342,23 @@ func (c *Core) reportPendingImport(cfg *server.Config) {
 	}
 }
 
+// fixed refuses a config that changes a setting that cannot change while core runs.
+func (c *Core) fixed(cfg *server.Config, prev *snapshot) error {
+	if prev != nil && cfg.Listen != prev.Config.Listen {
+		return fmt.Errorf("config: listen cannot change while core runs (%q to %q); restart core to apply it", prev.Config.Listen, cfg.Listen)
+	}
+	if prev != nil && cfg.ExtensionPages.Listen != prev.Config.ExtensionPages.Listen {
+		return fmt.Errorf("config: extension_pages.listen cannot change while core runs (%q to %q); restart core to apply it", prev.Config.ExtensionPages.Listen, cfg.ExtensionPages.Listen)
+	}
+	if prev != nil && cfg.CredentialsDir != prev.Config.CredentialsDir {
+		return fmt.Errorf("config: credentials_dir cannot change while core runs (%q to %q); restart core to apply it", prev.Config.CredentialsDir, cfg.CredentialsDir)
+	}
+	if cfg.Packages.Dir != c.pkgDir {
+		return fmt.Errorf("config: packages.dir cannot change while core runs (%q to %q); restart core to apply it", c.pkgDir, cfg.Packages.Dir)
+	}
+	return nil
+}
+
 // extensionSpec is one extension a snapshot runs.
 type extensionSpec struct {
 	manifest string
@@ -317,17 +375,8 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 	if err != nil {
 		return nil, err
 	}
-	if prev != nil && cfg.Listen != prev.Config.Listen {
-		return nil, fmt.Errorf("config: listen cannot change while core runs (%q to %q); restart core to apply it", prev.Config.Listen, cfg.Listen)
-	}
-	if prev != nil && cfg.ExtensionPages.Listen != prev.Config.ExtensionPages.Listen {
-		return nil, fmt.Errorf("config: extension_pages.listen cannot change while core runs (%q to %q); restart core to apply it", prev.Config.ExtensionPages.Listen, cfg.ExtensionPages.Listen)
-	}
-	if prev != nil && cfg.CredentialsDir != prev.Config.CredentialsDir {
-		return nil, fmt.Errorf("config: credentials_dir cannot change while core runs (%q to %q); restart core to apply it", prev.Config.CredentialsDir, cfg.CredentialsDir)
-	}
-	if cfg.Packages.Dir != c.pkgDir {
-		return nil, fmt.Errorf("config: packages.dir cannot change while core runs (%q to %q); restart core to apply it", c.pkgDir, cfg.Packages.Dir)
+	if err := c.fixed(cfg, prev); err != nil {
+		return nil, err
 	}
 
 	next := &snapshot{revision: rev, exts: map[string]*host.Managed{}, pkgs: pkgs, failed: map[string]string{}}

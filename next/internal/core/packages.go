@@ -165,12 +165,12 @@ func (c *Core) Install(ctx context.Context, req InstallRequest) (PackageView, er
 	p.Enabled = req.Enable || (had && old.Enabled)
 	strict := map[string]bool{req.ID: p.Enabled}
 	c.reloading.Lock()
-	err = c.transact(true, "installing "+req.ID+" "+p.Version, func(st packages.State) { st[req.ID] = p }, strict)
+	err = c.transact(true, "installing "+req.ID+" "+p.Version, func(st packages.State) { st[req.ID] = p }, strict, nil)
 	recorded, disabled := err == nil, false
 	if err != nil && !had && p.Enabled {
 		// It did not start: keep it installed, disabled.
 		p.Enabled = false
-		recorded = c.transact(true, "installing "+req.ID+" "+p.Version+" disabled", func(st packages.State) { st[req.ID] = p }, nil) == nil
+		recorded = c.transact(true, "installing "+req.ID+" "+p.Version+" disabled", func(st packages.State) { st[req.ID] = p }, nil, nil) == nil
 		disabled = recorded
 	}
 	c.reloading.Unlock()
@@ -207,7 +207,7 @@ func (c *Core) setEnabled(id string, enabled bool) (PackageView, error) {
 		p.Enabled = enabled
 		verb := map[bool]string{true: "enabling ", false: "disabling "}[enabled]
 		c.reloading.Lock()
-		err := c.transact(true, verb+id, func(st packages.State) { st[id] = p }, map[string]bool{id: enabled})
+		err := c.transact(true, verb+id, func(st packages.State) { st[id] = p }, map[string]bool{id: enabled}, nil)
 		c.reloading.Unlock()
 		if err != nil {
 			return PackageView{}, fmt.Errorf("%w: %v", ErrNotStarted, err)
@@ -227,7 +227,7 @@ func (c *Core) RemovePackage(id string) error {
 		return fmt.Errorf("%w: package %s is not installed", packages.ErrNotFound, id)
 	}
 	c.reloading.Lock()
-	err := c.transact(true, "removing "+id, func(st packages.State) { delete(st, id) }, nil)
+	err := c.transact(true, "removing "+id, func(st packages.State) { delete(st, id) }, nil, nil)
 	c.reloading.Unlock()
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrNotStarted, err)
