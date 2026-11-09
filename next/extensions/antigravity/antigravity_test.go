@@ -42,36 +42,53 @@ func TestFindProjectOnboards(t *testing.T) {
 	}
 }
 
-// A renewal keeps the refresh token Google does not send again, and the project and client
-// secret the credential holds.
+// A renewal keeps the refresh token Google does not send again, and the project the credential
+// holds.
 func TestRefreshKeepsLogin(t *testing.T) {
 	srv := agtest.New(t)
 	access, rt := srv.Grant()
-	data, _ := json.Marshal(credentialData{ProjectID: "kept-project", ClientSecret: agtest.ClientSecret})
+	data, _ := json.Marshal(credentialData{ProjectID: "kept-project"})
 	c, err := refresh(context.Background(), sdk.RefreshCall{Account: protocol.Account{Settings: srv.Settings(),
 		Credential: &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: access, RefreshToken: rt, Data: data}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := readData(c)
-	if c.AccessToken == access || c.RefreshToken != rt || got.ProjectID != "kept-project" || got.ClientSecret != agtest.ClientSecret {
-		t.Errorf("renewed credential %+v with data %+v; want a new access token, the old refresh token, project and secret kept", c, got)
+	if c.AccessToken == access || c.RefreshToken != rt || got.ProjectID != "kept-project" {
+		t.Errorf("renewed credential %+v with data %+v; want a new access token, the old refresh token and the project kept", c, got)
 	}
 	if c.RefreshAt == 0 || c.ExpiresAt-c.RefreshAt != int64(refreshLead.Seconds()) {
 		t.Errorf("refresh_at %d, expires_at %d; want renewal %v before expiry", c.RefreshAt, c.ExpiresAt, refreshLead)
 	}
 }
 
-// A credential without the client secret cannot be renewed: the user has to log in again.
-func TestRefreshNeedsClientSecret(t *testing.T) {
+// An account whose credential holds no client secret, as one imported from today's auth folder
+// does not (only the project), renews with the Antigravity app's built-in OAuth client.
+func TestRefreshUsesTheAppsClient(t *testing.T) {
 	srv := agtest.New(t)
 	access, rt := srv.Grant()
-	data, _ := json.Marshal(credentialData{ProjectID: agtest.Project})
-	_, err := refresh(context.Background(), sdk.RefreshCall{Account: protocol.Account{Settings: srv.Settings(),
+	data, _ := json.Marshal(map[string]string{"project_id": agtest.Project})
+	c, err := refresh(context.Background(), sdk.RefreshCall{Account: protocol.Account{Settings: srv.Settings(),
 		Credential: &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: access, RefreshToken: rt, Data: data}}})
-	var e *llm.Error
-	if !errors.As(err, &e) || e.Code != llm.CodeAuth || !strings.Contains(e.Message, "client secret") {
-		t.Fatalf("err = %v, want an auth error naming the missing client secret", err)
+	if err != nil {
+		t.Fatalf("renewal: %v", err)
+	}
+	if c.AccessToken == access || c.RefreshToken != rt {
+		t.Errorf("renewed credential %+v, want a new access token and the old refresh token", c)
+	}
+	forms := srv.TokenForms()
+	if len(forms) != 1 || forms[0].Get("grant_type") != "refresh_token" ||
+		forms[0].Get("client_id") != clientID || forms[0].Get("client_secret") != clientSecret {
+		t.Errorf("the token endpoint saw %v, want one refresh_token request with the app's client ID and secret", forms)
+	}
+}
+
+// A login asks for no input to start: the app's client secret is built in.
+func TestLoginAsksForNoInput(t *testing.T) {
+	for _, m := range loginMethods {
+		if len(m.Inputs) != 0 {
+			t.Errorf("login method %q asks for %v", m.Method, m.Inputs)
+		}
 	}
 }
 
@@ -137,7 +154,7 @@ func TestErrorsHideNewTokens(t *testing.T) {
 			tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 			seen = tok
 			_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"code": 400, "status": "INVALID_ARGUMENT",
-				"message": "bad request for token " + tok + " with secret " + agtest.ClientSecret}})
+				"message": "bad request for token " + tok + " with secret " + clientSecret}})
 			return true
 		}
 	}
@@ -160,19 +177,19 @@ func TestErrorsHideNewTokens(t *testing.T) {
 		srv.Answer = echo(path)
 		access, rt := srv.Grant()
 		set, _ := readSettings(srv.Settings())
-		_, err := finishLogin(context.Background(), set, agtest.ClientSecret, &tokenResponse{AccessToken: access, RefreshToken: rt, ExpiresIn: 3600})
-		check("login "+path, err, access, rt, agtest.ClientSecret)
+		_, err := finishLogin(context.Background(), set, &tokenResponse{AccessToken: access, RefreshToken: rt, ExpiresIn: 3600})
+		check("login "+path, err, access, rt, clientSecret)
 	}
 	srv := agtest.New(t)
 	srv.Answer = echo("/v1internal:loadCodeAssist")
 	access, rt := srv.Grant()
-	data, _ := json.Marshal(credentialData{ClientSecret: agtest.ClientSecret})
+	data, _ := json.Marshal(credentialData{})
 	_, err := refresh(context.Background(), sdk.RefreshCall{Account: protocol.Account{Settings: srv.Settings(),
 		Credential: &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: access, RefreshToken: rt, Data: data}}})
 	if seen == "" || seen == access {
 		t.Fatalf("renewal sent token %q to loadCodeAssist, want a new one", seen)
 	}
-	check("renewal", err, seen, agtest.ClientSecret)
+	check("renewal", err, seen, clientSecret)
 }
 
 // An error event after the reply began is not retry-safe: the model already ran. One that comes

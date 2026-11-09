@@ -177,9 +177,8 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (Aut
 		}
 		settings["vertex"] = v
 	case "antigravity":
-		// The file holds no OAuth client secret (today's core has it built in), so the account
-		// serves requests until its token expires; renewing it needs a new login, which asks for
-		// the secret.
+		// The file holds no OAuth client secret (today's core has it built in, and so does the
+		// extension), so the account renews on its own.
 		r.Extension = Antigravity
 		renewAhead(antigravityRefreshLead)
 		c.Data = object(map[string]any{"project_id": text(m, "project_id")})
