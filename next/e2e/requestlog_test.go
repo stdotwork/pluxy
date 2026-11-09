@@ -154,6 +154,23 @@ func TestRequestLogs(t *testing.T) {
 	if code, b := c.call(t, http.MethodPatch, "/settings", `{"observability": {"logs": {"error-logs-max-files": -1}}}`); code != http.StatusBadRequest {
 		t.Fatalf("negative count: %d %s", code, b)
 	}
+
+	// A link planted in the folder is neither listed nor served, under an error log's name or
+	// a trace ID's.
+	secret := filepath.Join(t.TempDir(), "secret.txt")
+	os.WriteFile(secret, []byte("not a log"), 0o600)
+	if err := os.Symlink(secret, filepath.Join(dir, "error-planted.log")); err != nil {
+		t.Skip("no symlinks here:", err)
+	}
+	os.Symlink(secret, filepath.Join(dir, "v1-x-planted-trace.log"))
+	for _, path := range []string{"/request-error-logs/error-planted.log", "/request-log-by-id/planted-trace"} {
+		if code, b := c.call(t, http.MethodGet, path, nil); code != http.StatusNotFound || strings.Contains(string(b), "not a log") {
+			t.Fatalf("%s: %d %s", path, code, b)
+		}
+	}
+	if l := c.errorLogs(t); len(l.Files) != 2 {
+		t.Fatalf("listed with a planted link: %+v", l)
+	}
 }
 
 // A streamed reply that fails after it began is a failure: its error log holds the reply up to

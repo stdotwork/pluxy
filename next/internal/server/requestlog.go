@@ -160,7 +160,17 @@ func (l *RequestLog) write(e *requestEntry) {
 	if !l.All {
 		name = "error-" + name
 	}
-	if err := os.WriteFile(filepath.Join(l.Dir, name), l.format(e), 0o600); err != nil {
+	// Always a new file: an existing name, or a link planted under it, is never written through.
+	f, err := os.OpenFile(filepath.Join(l.Dir, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		log.Printf("request log: %v", err)
+		return
+	}
+	_, err = f.Write(l.format(e))
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
 		log.Printf("request log: %v", err)
 		return
 	}
