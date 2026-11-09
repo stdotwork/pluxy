@@ -244,15 +244,16 @@ var rules = map[string]rule{
 	"oauth.providers.antigravity":                          {later, ""},
 	"oauth.providers.devin":                                {later, ""},
 
-	"multimedia.disable-image-generation":    {supported, ""},
-	"multimedia.gpt-image-2-base-model":      {later, ""},
-	"multimedia.video-result-auth-cache-ttl": {later, ""},
-	"observability.logs":                     {later, ""},
-	"observability.usage":                    {later, ""},
-	"observability.pprof":                    {dropped, "a developer tool, off by default"},
-	"models":                                 {later, ""},
-	"plugins":                                {dropped, "replaced by packages"},
-	"credentials":                            {dropped, "only the Home control plane used them"},
+	"multimedia.disable-image-generation":                     {supported, ""},
+	"multimedia.gpt-image-2-base-model":                       {later, ""},
+	"multimedia.video-result-auth-cache-ttl":                  {later, ""},
+	"observability.logs":                                      {later, ""},
+	"observability.usage.usage-statistics-enabled":            {supported, ""},
+	"observability.usage.redis-usage-queue-retention-seconds": {dropped, "reading usage no longer removes it; the record keeps requests by usage.max_events and usage.max_age_ms"},
+	"observability.pprof":                                     {dropped, "a developer tool, off by default"},
+	"models":                                                  {later, ""},
+	"plugins":                                                 {dropped, "replaced by packages"},
+	"credentials":                                             {dropped, "only the Home control plane used them"},
 
 	// Provider sections: group fields, and a key's fields (which override the group's).
 	"api-keys.*[].name":                                        {supported, ""},
@@ -390,6 +391,9 @@ func (x *translator) run() error {
 	if err := x.options(); err != nil {
 		return err
 	}
+	if err := x.observability(); err != nil {
+		return err
+	}
 	if err := x.providers(providers); err != nil {
 		return err
 	}
@@ -422,7 +426,7 @@ var readPaths = []string{
 	"routing.retry.max-retry-credentials", "routing.retry.max-retry-interval", "routing.retry.request-retry",
 	"routing.force-model-prefix", "oauth.model-alias", "oauth.excluded-models",
 	"upstream.codex.disable-codex-cloaking", "upstream.codex.websocket-compression",
-	"multimedia.disable-image-generation", "oauth.auth-dir",
+	"multimedia.disable-image-generation", "oauth.auth-dir", "observability.usage.usage-statistics-enabled",
 }
 
 // mappingsOn checks that every value on the way to path, below the root, is a mapping or
@@ -610,6 +614,18 @@ func (x *translator) options() error {
 		return err
 	}
 	x.res.AuthDir = strings.TrimSpace(dir)
+	return nil
+}
+
+// observability reads the usage settings.
+func (x *translator) observability() error {
+	if v, ok := get(x.t, "observability.usage.usage-statistics-enabled"); ok && v != nil {
+		on, err := boolean_(v, "observability.usage.usage-statistics-enabled")
+		if err != nil {
+			return err
+		}
+		x.out["usage"] = tree{"enabled": on}
+	}
 	return nil
 }
 

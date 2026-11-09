@@ -81,7 +81,8 @@ func TestExampleConfig(t *testing.T) {
 	equalJSON(t, r.Config, `{
 		"listen": ":8317",
 		"client_keys": ["your-api-key-1", "your-api-key-2", "your-api-key-3"],
-		"routing": {"request_retry": 3, "max_wait_ms": 30000}
+		"routing": {"request_retry": 3, "max_wait_ms": 30000},
+		"usage": {"enabled": false}
 	}`)
 	if r.AuthDir != "~/.cli-proxy-api" {
 		t.Errorf("AuthDir = %q", r.AuthDir)

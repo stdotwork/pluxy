@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/stdotwork/pluxy/next/format/anthropicmessages"
@@ -18,6 +19,7 @@ import (
 	"github.com/stdotwork/pluxy/next/format/openaichat"
 	"github.com/stdotwork/pluxy/next/format/openairesponses"
 	"github.com/stdotwork/pluxy/next/internal/route"
+	"github.com/stdotwork/pluxy/next/internal/usage"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
@@ -142,6 +144,10 @@ type Generation struct {
 	Count route.AttemptFunc
 	// OpenSession opens a session on an extension; nil when sessions are not served.
 	OpenSession OpenSessionFunc
+	// Usage is the usage record requests are added to; nil while usage statistics are off.
+	Usage *usage.Store
+	// KeyID returns the ID the management API lists a client key under.
+	KeyID func(key string) string
 }
 
 // Source hands out the current generation. The request holds it until release is called.
@@ -166,7 +172,7 @@ func NewHandler(src Source) http.Handler {
 	}
 	for path, f := range map[string]clientFormat{"/v1/chat/completions": chatFormat, "/v1/completions": completionsFormat,
 		"/v1/responses": responsesFormat, "/v1/messages": messagesFormat} {
-		handle(path, f, func(w http.ResponseWriter, r *http.Request, g *Generation) { serve(w, r, g.Config, g.Router, f) })
+		handle(path, f, func(w http.ResponseWriter, r *http.Request, g *Generation) { serve(w, r, g, f) })
 	}
 	handle("/v1/messages/count_tokens", messagesFormat, func(w http.ResponseWriter, r *http.Request, g *Generation) {
 		serveCount(w, r, g, messagesCount)
@@ -208,7 +214,8 @@ func clientToken(r *http.Request, googleKeys bool) string {
 	return token
 }
 
-func (f clientFormat) writeError(w http.ResponseWriter, e *llm.Error) {
+// writeError writes e as the format's error reply and returns its status.
+func (f clientFormat) writeError(w http.ResponseWriter, e *llm.Error) int {
 	errorBody := f.errorBody
 	if errorBody == nil {
 		errorBody = openaichat.ErrorResponse
@@ -222,9 +229,11 @@ func (f clientFormat) writeError(w http.ResponseWriter, e *llm.Error) {
 	}
 	w.WriteHeader(status)
 	_, _ = w.Write(body)
+	return status
 }
 
-func serve(w http.ResponseWriter, r *http.Request, cfg *Config, router *route.Router, f clientFormat) {
+func serve(w http.ResponseWriter, r *http.Request, g *Generation, f clientFormat) {
+	arrived := time.Now()
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxRequestBody))
 	if err != nil {
 		var tooLarge *http.MaxBytesError
@@ -239,23 +248,30 @@ func serve(w http.ResponseWriter, r *http.Request, cfg *Config, router *route.Ro
 		f.writeError(w, asLLMError(err))
 		return
 	}
-	req.DropPolicy = cfg.DropPolicy
+	req.DropPolicy = g.Config.DropPolicy
 	takeThinkingSuffix(&req)
 	f.nativeHeaders(r, &req)
 	t := newTrace()
 	r = withTrace(r, t)
+	m := g.newMeter(r, arrived, req, clientToken(r, f.googleKeys))
 	rr := routeRequest(r, req, body)
-	rr.Attempting = func(account string) { t.account = account }
-	stream := router.Generate(r.Context(), rr)
+	rr.Attempting = func(a route.Attempt) {
+		t.account = a.Account
+		m.attempt(a, t.id)
+	}
+	stream := meterStream(g.Router.Generate(r.Context(), rr), m)
 	defer stream.Close()
+	fail := func(e *llm.Error) {
+		logFailure(r, e)
+		m.fail(e, f.writeError(w, e))
+	}
 
 	// Nothing is sent to the client until the first event, so an error before it becomes a
 	// proper HTTP error response. By then the request has gone to its account, if any.
 	ev := stream.Next()
 	t.setHeader(w)
 	if ev.Type == llm.EventError {
-		logFailure(r, ev.Error)
-		f.writeError(w, ev.Error)
+		fail(ev.Error)
 		return
 	}
 	var request *llm.Translation
@@ -266,9 +282,7 @@ func serve(w http.ResponseWriter, r *http.Request, cfg *Config, router *route.Ro
 		agg := f.aggregate(req)
 		defer func() { logTranslation(r, request, agg) }()
 		tooLarge := func() {
-			e := &llm.Error{Code: llm.CodeUpstream, Message: fmt.Sprintf("the upstream reply is larger than %d MiB, the limit for a non-streamed response; send the request with \"stream\": true", MaxResponseBody>>20)}
-			logFailure(r, e)
-			f.writeError(w, e)
+			fail(&llm.Error{Code: llm.CodeUpstream, Message: fmt.Sprintf("the upstream reply is larger than %d MiB, the limit for a non-streamed response; send the request with \"stream\": true", MaxResponseBody>>20)})
 		}
 		for {
 			agg.Add(ev)
@@ -285,13 +299,13 @@ func serve(w http.ResponseWriter, r *http.Request, cfg *Config, router *route.Ro
 			ev = stream.Next()
 		}
 		if ev.Type == llm.EventError {
-			logFailure(r, ev.Error)
-			f.writeError(w, ev.Error)
+			fail(ev.Error)
 			return
 		}
 		out, err := agg.Response()
 		if err != nil {
-			f.writeError(w, &llm.Error{Code: llm.CodeInternal, Message: err.Error()})
+			e := &llm.Error{Code: llm.CodeInternal, Message: err.Error()}
+			m.fail(e, f.writeError(w, e))
 			return
 		}
 		// Rendering can add to what the reply holds, such as losses that name each tool call.
@@ -302,7 +316,14 @@ func serve(w http.ResponseWriter, r *http.Request, cfg *Config, router *route.Ro
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(out)
+		if m != nil {
+			m.sent = http.StatusOK
+		}
+		if _, err := w.Write(out); err != nil {
+			m.fail(&llm.Error{Code: llm.CodeCancelled}, http.StatusOK) // the client went away
+			return
+		}
+		m.finish(ev)
 		return
 	}
 
@@ -311,6 +332,9 @@ func serve(w http.ResponseWriter, r *http.Request, cfg *Config, router *route.Ro
 	h.Set("Cache-Control", "no-cache")
 	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
+	if m != nil {
+		m.sent = http.StatusOK
+	}
 	rc := http.NewResponseController(w)
 	sw := f.stream(w, req)
 	defer func() { logTranslation(r, request, sw) }()
@@ -326,6 +350,9 @@ func serve(w http.ResponseWriter, r *http.Request, cfg *Config, router *route.Ro
 		if ev.Terminal() {
 			if ev.Type == llm.EventError {
 				logFailure(r, ev.Error)
+				m.fail(ev.Error, http.StatusOK)
+			} else {
+				m.finish(ev)
 			}
 			return
 		}

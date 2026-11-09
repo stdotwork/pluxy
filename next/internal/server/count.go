@@ -9,6 +9,7 @@ import (
 
 	"github.com/stdotwork/pluxy/next/format/anthropicmessages"
 	"github.com/stdotwork/pluxy/next/format/geminigenerate"
+	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
@@ -95,7 +96,7 @@ func serveCount(w http.ResponseWriter, r *http.Request, g *Generation, f countFo
 	r = withTrace(r, t)
 	rr := routeRequest(r, req, body)
 	rr.Attempt = g.Count
-	rr.Attempting = func(account string) { t.account = account }
+	rr.Attempting = func(a route.Attempt) { t.account = a.Account }
 	stream := g.Router.Generate(r.Context(), rr)
 	defer stream.Close()
 	ev := stream.Next()
@@ -152,5 +153,5 @@ func geminiAction(w http.ResponseWriter, r *http.Request, g *Generation) {
 		serveCount(w, r, g, geminiCount)
 		return
 	}
-	serve(w, r, g.Config, g.Router, geminiFormat)
+	serve(w, r, g, geminiFormat)
 }

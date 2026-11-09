@@ -36,6 +36,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `internal/packages` | Registries, release archives and the record of installed packages. |
 | `internal/panel` | Serves the web panel at `/panel/`, embedded in core's binary. |
 | `internal/pages` | Serves extension pages on a site of their own ([extension pages](ui/extension-pages/README.md)). |
+| `internal/usage` | The [usage record](#usage-statistics): one event per request, kept in memory within limits. |
 | `internal/extconfig` | Extensions' settings: the schema from the manifest, checking values, and the store core keeps them in. |
 | `ui/` | The UI kit the panel and the desktop app share, the panel's browser build, and the [theme contract](ui/themes/README.md) ([README](ui/README.md)). |
 | `app/` | The desktop app: the kit's second build in a Tauri window, with a tray icon and three ways to reach core ([README](app/README.md)). |
@@ -996,11 +997,51 @@ to `management.secret-key`, or `remote-management.secret-key` when only that is 
 | `routing.retry.request-retry` | `routing.request_retry` | Rounds a request may run after its first, as in today's core. `null` while a JSON config leaves rounds to this core's own rules; a `config.yaml` always has a number (default 0). |
 | `routing.cooldown.disable-cooling` | `routing.disable_cooling` | `true`: failures leave no cooldown. An account's own `disable_cooling` wins. |
 | `routing.cooldown.transient-error-cooldown-seconds` | `routing.transient_error_cooldown_ms` (seconds × 1000) | Seconds a failing upstream cools down: 0 for this core's backoff (1 second doubling to a minute), -1 for none. |
+| `observability.usage.usage-statistics-enabled` | `usage.enabled` | `true` or `false`: whether core keeps the [usage record](#usage-statistics). On unless the config turns it off. |
 
 The settings shown are those of the running config. Today's other basic settings (`debug`,
-logging to file, the request log, usage statistics, `proxy-url`, `ws-auth` and
+logging to file, the request log, `proxy-url`, `ws-auth` and
 `quota-response-mode`) do not exist in this core yet; `max_attempts`, which today's core has no
 name for, is changed in the document.
+
+## Usage statistics
+
+Core keeps a usage record: one event for each generation request that reached routing (a request
+refused for its client key, or whose body does not parse, is not recorded), including Responses
+WebSocket turns. Token counts (`count_tokens`, `:countTokens`) generate nothing and are not
+recorded. An event holds the request's trace ID (`id`, the `X-CPA-TRACE-ID` of its reply),
+when it arrived, the `endpoint`, whether it streamed, the `model` the client asked for (without a
+thinking suffix) and the account's own name for it when that differs (`upstream_model`: an alias
+or prefix resolved), the `provider` (extension) and `account` its last attempt went to, the
+client key's `key_id` (the `id` `GET /client-keys` lists it under, never the key), the
+`client_ip` it came from (the connection's peer, or the client a trusted proxy names; see
+`trusted_proxies`), whether it `failed` with which `error_code`, the HTTP `status` of the reply, `latency_ms`, and the `tokens`
+the upstream reported: `input_tokens` (cached ones included), `output_tokens` (reasoning
+included), `reasoning_tokens`, `cached_tokens`, `cache_creation_tokens` and `total_tokens` (input
+plus output). A token count the upstream did not report is absent, not 0. A streamed reply
+that fails after it began keeps its `status` 200 with `failed` true; a client that goes away is
+recorded as `cancelled`, with no `status` when nothing had reached it.
+
+The record lives in memory and is gone after a restart. It keeps the last `max_events` requests
+(default 10000, at most 200000) and none recorded (when the request ended) longer ago than
+`max_age_ms` (default 24 hours, at most 30 days); a reload that lowers either drops the oldest at once. Reading it never removes anything:
+today's core hands its usage queue out once and deletes what it hands out.
+
+```json
+{"usage": {"enabled": true, "max_events": 10000, "max_age_ms": 86400000}}
+```
+
+`usage.enabled` (today's `usage-statistics-enabled`) is on unless the config turns it off. Off,
+requests are not recorded and what was recorded stays readable.
+
+| Call | What it does |
+| --- | --- |
+| `GET /v0/management/usage` | What the recorded requests add up to: `total_requests`, `success_count`, `failure_count`, `success_rate` (0 to 1), `average_latency_ms` and `tokens` (the sums of each token count); the same per model (`models`), extension (`providers`), account (`accounts`, each with its `provider`) and client key (`keys`, by `key_id`), most requests first; and `series`, the requests, failures and tokens in each of the last `buckets` steps of `bucket` (default 60 steps of `1m`; `bucket` from `1s` to `24h`, `buckets` up to 1440), oldest first, ending with the step that holds now. `oldest` is the arrival time of the oldest event kept, `evicted` how many events the limits have pushed out since core started, and `enabled` whether recording is on. |
+| `GET /v0/management/usage/events` | The recorded events, oldest first: up to `limit` (default 100, at most 1000) with a `seq` above `after`. The reply's `next` is the `seq` to pass as `after` for the next page, `more` says whether more match, and `lost` says whether events after `after` were pushed out before this read, so a program that polls with `after` knows it missed some. |
+
+Both calls take the filters `since` (an RFC 3339 time, or a duration back from now such as
+`24h`), `until` (an RFC 3339 time), `model`, `provider`, `account`, `key_id` and `failed`
+(`true` or `false`). A filter that does not parse is a 400.
 
 ## Packages
 
@@ -1199,7 +1240,9 @@ are accepted silently.
 | Codex keys' `alpha-search`; Vertex keys' `interactions`, `openapi`, `openapi-location`; openai-compatibility's `support-prompt-cache-key`; xAI keys' `websockets` | | Later |
 | `multimedia.disable-image-generation` (`disable-image-generation`) | `true`, `"chat"` and `"passthrough"` are `image_generation_tool: false` on Codex accounts from the file and on those `-import-auth` adds. | Supported |
 | `multimedia.gpt-image-2-base-model`, `multimedia.video-result-auth-cache-ttl` (each also at the top level) | No image or video routes yet. | Later |
-| `observability.logs.*` (`debug`, `logging-to-file`, `logs-max-total-size-mb`, `error-logs-max-files`, `request-log`), `observability.usage.*` (`usage-statistics-enabled`, `redis-usage-queue-retention-seconds`) | | Later |
+| `observability.logs.*` (`debug`, `logging-to-file`, `logs-max-total-size-mb`, `error-logs-max-files`, `request-log`) | | Later |
+| `observability.usage.usage-statistics-enabled` (`usage-statistics-enabled`) | `usage.enabled`: the [usage record](#usage-statistics). Today's example config sets it to `false`, which turns the record off here too. | Supported |
+| `observability.usage.redis-usage-queue-retention-seconds` (`redis-usage-queue-retention-seconds`) | The record keeps requests by `usage.max_events` and `usage.max_age_ms`. | Dropped: it was how long a queued usage record waited for a reader that removed it; reading the record here removes nothing, and its default of 60 seconds would leave little to read |
 | `observability.pprof.*` (`pprof`) | | Dropped: a developer tool, off by default |
 | `models.catalog`, `models.codex-catalog`, `models.devin-catalog` | | Later |
 | `plugins.*` | Extensions are separate programs (packages), not libraries loaded into core. | Dropped: replaced by packages |
