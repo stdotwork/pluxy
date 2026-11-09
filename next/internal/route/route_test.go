@@ -1239,6 +1239,20 @@ func TestAccountRequestRetry(t *testing.T) {
 	}
 }
 
+// The wait before a round counts only the accounts that take part in it: a's block, shorter
+// than b's, does not end the wait, as a has no rounds past the first.
+func TestAccountRequestRetryWaitsForTheNextRoundsAccounts(t *testing.T) {
+	h := newHarness(t, Config{Strategy: StrategyFillFirst, RequestRetry: rounds(1), MaxWaitMS: time.Hour.Milliseconds()},
+		Account{ID: "a", RequestRetry: rounds(0)}, Account{ID: "b"})
+	h.on("a", rateLimited(10*time.Second))
+	h.on("b", rateLimited(time.Minute), ok())
+	h.runOK("m")
+	h.wantAttempts("a", "b", "b")
+	if len(h.slept) != 1 || h.slept[0] != time.Minute {
+		t.Errorf("slept %v, want one wait of 1m0s for b", h.slept)
+	}
+}
+
 func TestAccountRequestRetryMustNotBeNegative(t *testing.T) {
 	a := Account{ID: "a", RequestRetry: rounds(-1)}
 	if err := a.Check(); err == nil {
