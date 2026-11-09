@@ -323,7 +323,8 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 		return nil, err
 	}
 	if c.TLS.Enable {
-		if strings.TrimSpace(c.TLS.Cert) == "" || strings.TrimSpace(c.TLS.Key) == "" {
+		c.TLS.Cert, c.TLS.Key = strings.TrimSpace(c.TLS.Cert), strings.TrimSpace(c.TLS.Key) // as today's core reads them
+		if c.TLS.Cert == "" || c.TLS.Key == "" {
 			return nil, errors.New("config: tls.enable needs tls.cert and tls.key")
 		}
 		c.TLS.Cert, c.TLS.Key = rel(c.TLS.Cert), rel(c.TLS.Key)

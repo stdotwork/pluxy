@@ -128,12 +128,12 @@ func TestConfigTLS(t *testing.T) {
 	if _, err := ParseConfig([]byte(`{"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"m","tls":{"enable":true,"cert":"c.pem"}}`), "/srv/pluxy/config.json"); err == nil || !strings.Contains(err.Error(), "tls.key") {
 		t.Errorf("tls without a key: ParseConfig = %v", err)
 	}
-	c, err := ParseConfig([]byte(`{"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"m","tls":{"enable":true,"cert":"certs/c.pem","key":"/etc/k.pem"}}`), "/srv/pluxy/config.json")
+	c, err := ParseConfig([]byte(`{"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"m","tls":{"enable":true,"cert":" certs/c.pem","key":"/etc/k.pem "}}`), "/srv/pluxy/config.json")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c.TLS.Cert != "/srv/pluxy/certs/c.pem" || c.TLS.Key != "/etc/k.pem" {
-		t.Errorf("tls = %+v, want the cert relative to the config file", c.TLS)
+		t.Errorf("tls = %+v, want the paths trimmed and the cert relative to the config file", c.TLS)
 	}
 	c, err = ParseConfig([]byte(`{"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"m","tls":{"cert":"c.pem"}}`), "/srv/pluxy/config.json")
 	if err != nil {

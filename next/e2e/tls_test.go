@@ -145,7 +145,9 @@ func TestTLSListener(t *testing.T) {
 
 	// Plain HTTP on the TLS port gets no reply from the API.
 	plain := "http://" + strings.TrimPrefix(base, "https://")
-	if resp, err := http.Get(plain + "/v1/models"); err == nil {
+	if resp, err := http.Get(plain + "/v1/models"); err != nil {
+		t.Errorf("plain HTTP: %v, want Go's 400 for HTTP on an HTTPS port", err)
+	} else {
 		b, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(b), "HTTPS") {
