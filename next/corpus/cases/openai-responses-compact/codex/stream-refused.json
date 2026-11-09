@@ -1,15 +1,9 @@
 {
   "description": "A compaction request with stream true is refused with a 400 before it reaches an account.",
-  "source": [
-    "core/sdk/api/handlers/openai/openai_responses_handlers.go"
-  ],
+  "source": ["core/sdk/api/handlers/openai/openai_responses_handlers.go"],
   "client": {
     "path": "/v1/responses/compact",
-    "body": {
-      "model": "gpt-test",
-      "input": "Say hello",
-      "stream": true
-    }
+    "body": {"model":"gpt-test","input":"Say hello","stream":true}
   },
   "upstream": [],
   "exceptions": [

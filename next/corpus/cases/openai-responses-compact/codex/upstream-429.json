@@ -1,21 +1,11 @@
 {
   "description": "An upstream 429 on compaction reaches the client as a rate-limit error.",
-  "source": [
-    "core/internal/runtime/executor/codex_executor_execute.go"
-  ],
-  "client": {
-    "path": "/v1/responses/compact",
-    "body": {
-      "model": "gpt-test",
-      "input": "Say hello"
-    }
-  },
+  "source": ["core/internal/runtime/executor/codex_executor_execute.go"],
+  "client": {"path":"/v1/responses/compact","body":{"model":"gpt-test","input":"Say hello"}},
   "upstream": [
     {
       "status": 429,
-      "headers": {
-        "Retry-After": "7"
-      },
+      "headers": {"Retry-After":"7"},
       "body": {
         "error": {
           "type": "rate_limit_error",

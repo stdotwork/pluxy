@@ -9,10 +9,7 @@
     "body": {
       "model": "gpt-6.1-sol(low)",
       "input": "Say hello",
-      "reasoning": {
-        "effort": "high",
-        "summary": "auto"
-      }
+      "reasoning": {"effort":"high","summary":"auto"}
     }
   },
   "upstream": [
@@ -22,31 +19,14 @@
         "object": "response.compaction",
         "created_at": 1700000000,
         "output": [
-          {
-            "type": "message",
-            "role": "user",
-            "content": [
-              {
-                "type": "input_text",
-                "text": "Say hello"
-              }
-            ]
-          },
-          {
-            "type": "compaction",
-            "id": "cmp_corpus",
-            "encrypted_content": "enc-compaction-corpus"
-          }
+          {"type":"message","role":"user","content":[{"type":"input_text","text":"Say hello"}]},
+          {"type":"compaction","id":"cmp_corpus","encrypted_content":"enc-compaction-corpus"}
         ],
         "usage": {
           "input_tokens": 120,
-          "input_tokens_details": {
-            "cached_tokens": 0
-          },
+          "input_tokens_details": {"cached_tokens":0},
           "output_tokens": 30,
-          "output_tokens_details": {
-            "reasoning_tokens": 10
-          },
+          "output_tokens_details": {"reasoning_tokens":10},
           "total_tokens": 150
         }
       }
@@ -76,31 +56,14 @@
         "id": "resp_compact_corpus",
         "object": "response.compaction",
         "output": [
-          {
-            "content": [
-              {
-                "text": "Say hello",
-                "type": "input_text"
-              }
-            ],
-            "role": "user",
-            "type": "message"
-          },
-          {
-            "encrypted_content": "enc-compaction-corpus",
-            "id": "cmp_corpus",
-            "type": "compaction"
-          }
+          {"content":[{"text":"Say hello","type":"input_text"}],"role":"user","type":"message"},
+          {"encrypted_content":"enc-compaction-corpus","id":"cmp_corpus","type":"compaction"}
         ],
         "usage": {
           "input_tokens": 120,
-          "input_tokens_details": {
-            "cached_tokens": 0
-          },
+          "input_tokens_details": {"cached_tokens":0},
           "output_tokens": 30,
-          "output_tokens_details": {
-            "reasoning_tokens": 10
-          },
+          "output_tokens_details": {"reasoning_tokens":10},
           "total_tokens": 150
         }
       },
@@ -121,10 +84,7 @@
           "instructions": "",
           "model": "gpt-6.1-sol",
           "prompt_cache_key": "f674c4c7-551b-57dd-ab73-9724cff0fe39",
-          "reasoning": {
-            "effort": "low",
-            "summary": "auto"
-          }
+          "reasoning": {"effort":"low","summary":"auto"}
         },
         "headers": {
           "Accept": "application/json",

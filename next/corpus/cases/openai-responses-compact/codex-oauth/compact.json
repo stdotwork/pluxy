@@ -8,38 +8,14 @@
   ],
   "client": {
     "path": "/v1/responses/compact",
-    "headers": {
-      "Session-Id": "sess-corpus"
-    },
+    "headers": {"Session-Id":"sess-corpus"},
     "body": {
       "model": "gpt-6.1-sol",
       "input": [
-        {
-          "type": "message",
-          "role": "system",
-          "content": "Be brief."
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": "Say hello"
-            }
-          ]
-        },
-        {
-          "type": "function_call",
-          "call_id": "call_1",
-          "name": "get_weather",
-          "arguments": ""
-        },
-        {
-          "type": "function_call_output",
-          "call_id": "call_1",
-          "output": "4C"
-        }
+        {"type":"message","role":"system","content":"Be brief."},
+        {"type":"message","role":"user","content":[{"type":"input_text","text":"Say hello"}]},
+        {"type":"function_call","call_id":"call_1","name":"get_weather","arguments":""},
+        {"type":"function_call_output","call_id":"call_1","output":"4C"}
       ],
       "instructions": null,
       "tools": [
@@ -47,18 +23,11 @@
           "type": "function",
           "name": "get_weather",
           "description": "Weather",
-          "parameters": {
-            "type": "object",
-            "properties": {}
-          }
+          "parameters": {"type":"object","properties":{}}
         }
       ],
-      "reasoning": {
-        "effort": "high"
-      },
-      "include": [
-        "file_search_call.results"
-      ],
+      "reasoning": {"effort":"high"},
+      "include": ["file_search_call.results"],
       "store": true,
       "temperature": 0.5,
       "top_p": 0.9,
@@ -73,39 +42,20 @@
   },
   "upstream": [
     {
-      "headers": {
-        "Content-Type": "application/json"
-      },
+      "headers": {"Content-Type":"application/json"},
       "body": {
         "id": "resp_compact_corpus",
         "object": "response.compaction",
         "created_at": 1700000000,
         "output": [
-          {
-            "type": "message",
-            "role": "user",
-            "content": [
-              {
-                "type": "input_text",
-                "text": "Say hello"
-              }
-            ]
-          },
-          {
-            "type": "compaction",
-            "id": "cmp_corpus",
-            "encrypted_content": "enc-compaction-corpus"
-          }
+          {"type":"message","role":"user","content":[{"type":"input_text","text":"Say hello"}]},
+          {"type":"compaction","id":"cmp_corpus","encrypted_content":"enc-compaction-corpus"}
         ],
         "usage": {
           "input_tokens": 120,
-          "input_tokens_details": {
-            "cached_tokens": 0
-          },
+          "input_tokens_details": {"cached_tokens":0},
           "output_tokens": 30,
-          "output_tokens_details": {
-            "reasoning_tokens": 10
-          },
+          "output_tokens_details": {"reasoning_tokens":10},
           "total_tokens": 150
         }
       }
@@ -125,31 +75,14 @@
         "id": "resp_compact_corpus",
         "object": "response.compaction",
         "output": [
-          {
-            "content": [
-              {
-                "text": "Say hello",
-                "type": "input_text"
-              }
-            ],
-            "role": "user",
-            "type": "message"
-          },
-          {
-            "encrypted_content": "enc-compaction-corpus",
-            "id": "cmp_corpus",
-            "type": "compaction"
-          }
+          {"content":[{"text":"Say hello","type":"input_text"}],"role":"user","type":"message"},
+          {"encrypted_content":"enc-compaction-corpus","id":"cmp_corpus","type":"compaction"}
         ],
         "usage": {
           "input_tokens": 120,
-          "input_tokens_details": {
-            "cached_tokens": 0
-          },
+          "input_tokens_details": {"cached_tokens":0},
           "output_tokens": 30,
-          "output_tokens_details": {
-            "reasoning_tokens": 10
-          },
+          "output_tokens_details": {"reasoning_tokens":10},
           "total_tokens": 150
         }
       },
@@ -166,36 +99,12 @@
     "upstream": [
       {
         "body": {
-          "include": [
-            "file_search_call.results"
-          ],
+          "include": ["file_search_call.results"],
           "input": [
-            {
-              "content": "Be brief.",
-              "role": "system",
-              "type": "message"
-            },
-            {
-              "content": [
-                {
-                  "text": "Say hello",
-                  "type": "input_text"
-                }
-              ],
-              "role": "user",
-              "type": "message"
-            },
-            {
-              "arguments": "",
-              "call_id": "call_1",
-              "name": "get_weather",
-              "type": "function_call"
-            },
-            {
-              "call_id": "call_1",
-              "output": "4C",
-              "type": "function_call_output"
-            }
+            {"content":"Be brief.","role":"system","type":"message"},
+            {"content":[{"text":"Say hello","type":"input_text"}],"role":"user","type":"message"},
+            {"arguments":"","call_id":"call_1","name":"get_weather","type":"function_call"},
+            {"call_id":"call_1","output":"4C","type":"function_call_output"}
           ],
           "instructions": "",
           "max_tokens": 50,
@@ -203,9 +112,7 @@
           "previous_response_id": "resp_old",
           "prompt_cache_key": "pck-corpus",
           "prompt_cache_retention": "24h",
-          "reasoning": {
-            "effort": "high"
-          },
+          "reasoning": {"effort":"high"},
           "service_tier": "fast",
           "store": true,
           "temperature": 0.5,
@@ -213,10 +120,7 @@
             {
               "description": "Weather",
               "name": "get_weather",
-              "parameters": {
-                "properties": {},
-                "type": "object"
-              },
+              "parameters": {"properties":{},"type":"object"},
               "type": "function"
             }
           ],

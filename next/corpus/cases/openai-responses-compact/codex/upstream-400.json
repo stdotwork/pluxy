@@ -1,15 +1,7 @@
 {
   "description": "An upstream 400 on compaction reaches the client with the upstream's error.",
-  "source": [
-    "core/internal/runtime/executor/codex_executor_execute.go"
-  ],
-  "client": {
-    "path": "/v1/responses/compact",
-    "body": {
-      "model": "gpt-test",
-      "input": "Say hello"
-    }
-  },
+  "source": ["core/internal/runtime/executor/codex_executor_execute.go"],
+  "client": {"path":"/v1/responses/compact","body":{"model":"gpt-test","input":"Say hello"}},
   "upstream": [
     {
       "status": 400,
@@ -43,11 +35,7 @@
       "path": "client.body.error",
       "kind": "intended",
       "reason": "The new core answers upstream errors with an error body it builds itself (message, type and code), not the upstream's JSON passed through; recorded as a deliberate difference when the core skeleton was built.",
-      "want": {
-        "code": "invalid_value",
-        "message": "Bad input",
-        "type": "invalid_request_error"
-      }
+      "want": {"code":"invalid_value","message":"Bad input","type":"invalid_request_error"}
     }
   ],
   "recorded_old_core": {
