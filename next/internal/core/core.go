@@ -40,6 +40,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/extconfig"
 	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/internal/legacy"
+	"github.com/stdotwork/pluxy/next/internal/logfile"
 	"github.com/stdotwork/pluxy/next/internal/packages"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/internal/server"
@@ -56,6 +57,9 @@ type Options struct {
 	SafeMode bool
 	// Host tunes how extension programs are started.
 	Host host.Options
+	// Logs is core's logs folder, which core's log output also goes to while the config says
+	// so. Nil: core uses the folder logs beside the config file, without writing to it.
+	Logs *logfile.Files
 	// Bundled is the index of the registry of packages this install ships with (absolute), or
 	// empty for none. On the first start with a packages folder that has no record yet, every
 	// package it lists is installed and enabled.
@@ -100,7 +104,8 @@ type Core struct {
 
 	checks *checks // each account's last check
 
-	usage *usage.Store // the usage record, kept across reloads
+	usage *usage.Store   // the usage record, kept across reloads
+	logs  *logfile.Files // the logs folder
 
 	// accounts serialises setting the accounts a router routes over: a change in the
 	// credential store and a publish never interleave.
@@ -128,6 +133,9 @@ func Start(opts Options) (*Core, error) {
 	if err != nil {
 		return nil, c.scrubbed(err)
 	}
+	if c.logs = opts.Logs; c.logs == nil {
+		c.logs = logfile.New(LogsDir(opts.ConfigPath))
+	}
 	c.pkgDir = cfg.Packages.Dir
 	// No publisher's folder can be called .settings: IDs start with a letter or digit.
 	c.settings = extconfig.NewStore(filepath.Join(c.pkgDir, ".settings"))
@@ -143,6 +151,15 @@ func Start(opts Options) (*Core, error) {
 	}
 	c.creds.OnChange(c.accountsChanged)
 	return c, nil
+}
+
+// LogsDir returns the logs folder of the config file at configPath: logs beside it.
+func LogsDir(configPath string) string {
+	dir := filepath.Dir(configPath)
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	return filepath.Join(dir, "logs")
 }
 
 // Config returns the active config.
@@ -558,6 +575,9 @@ func (c *Core) publish(next, prev *snapshot, hash string) {
 	}
 	u := next.Config.Usage
 	c.usage.SetLimits(u.MaxEvents, time.Duration(u.MaxAgeMS)*time.Millisecond)
+	if err := c.logs.Configure(next.Config.Logs.ToFile, next.Config.Logs.MaxTotalSizeMB); err != nil {
+		log.Printf("logs: %v", err)
+	}
 	c.mu.Lock()
 	c.cur.Store(next)
 	c.active = Revision{Revision: next.revision, Hash: hash, At: time.Now()}

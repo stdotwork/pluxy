@@ -69,6 +69,9 @@ type Config struct {
 	// Usage says whether core keeps a usage record of the requests it serves, for the
 	// management API, and how much of it.
 	Usage UsageConfig `json:"usage"`
+	// Logs says whether core also writes its log to files in its logs folder, the folder logs
+	// beside the config file.
+	Logs LogsConfig `json:"logs"`
 
 	// From a config.yaml with today's core's key names (package legacy):
 	// Notices name the settings it uses that core does not support or know; core logs them
@@ -122,6 +125,16 @@ func (u UsageConfig) validate() error {
 		return fmt.Errorf("config: usage.max_age_ms must be between 0 (the default, 24 hours) and %d (30 days)", usage.MaxMaxAge.Milliseconds())
 	}
 	return nil
+}
+
+// LogsConfig is the logs section of the config.
+type LogsConfig struct {
+	// ToFile also writes core's log to logs/main.log, rotated at 10 MB (today's
+	// logging-to-file).
+	ToFile bool `json:"to_file,omitempty"`
+	// MaxTotalSizeMB caps the logs folder's .log files: the oldest go first, main.log never
+	// (today's logs-max-total-size-mb). 0: no cap.
+	MaxTotalSizeMB int `json:"max_total_size_mb,omitempty"`
 }
 
 // PackagesConfig is the packages section of the config.
@@ -373,6 +386,9 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 	}
 	if err := c.Usage.validate(); err != nil {
 		return nil, err
+	}
+	if c.Logs.MaxTotalSizeMB < 0 || c.Logs.MaxTotalSizeMB > 1<<20 {
+		return nil, errors.New("config: logs.max_total_size_mb must be between 0 (no cap) and 1048576")
 	}
 	switch c.DropPolicy {
 	case "", llm.DropReport, llm.DropReject:

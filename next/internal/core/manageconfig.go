@@ -242,7 +242,13 @@ type settingsView struct {
 }
 
 type observabilityView struct {
+	Logs  logsView  `json:"logs"`
 	Usage usageView `json:"usage"`
+}
+
+type logsView struct {
+	LoggingToFile      bool `json:"logging-to-file"`
+	LogsMaxTotalSizeMB int  `json:"logs-max-total-size-mb"`
 }
 
 type usageView struct {
@@ -292,7 +298,9 @@ func settings(cfg *server.Config) settingsView {
 		}
 	}
 	v.SessionAffinityTTL = shortDuration(ttl)
-	return settingsView{Routing: v, Observability: observabilityView{Usage: usageView{UsageStatisticsEnabled: cfg.Usage.On()}}}
+	return settingsView{Routing: v, Observability: observabilityView{
+		Logs:  logsView{LoggingToFile: cfg.Logs.ToFile, LogsMaxTotalSizeMB: cfg.Logs.MaxTotalSizeMB},
+		Usage: usageView{UsageStatisticsEnabled: cfg.Usage.On()}}}
 }
 
 // shortDuration writes d as today's config does, such as 1h or 1h30m rather than 1h0m0s.
