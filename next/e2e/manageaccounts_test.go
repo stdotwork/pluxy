@@ -23,6 +23,7 @@ type accountView struct {
 	Disabled          bool
 	Priority          int
 	Weight            *int
+	DisableCooling    *bool `json:"disable_cooling"`
 	Prefix            string
 	ExcludedModels    []string   `json:"excluded_models"`
 	MaxConcurrency    int        `json:"max_concurrency"`
@@ -149,12 +150,13 @@ func TestManageAccountFields(t *testing.T) {
 	var reply struct{ Account accountView }
 	if code := manage(t, base, "PATCH", "/accounts/work", map[string]any{
 		"priority": 3, "weight": 2, "prefix": "w", "excluded_models": []string{"x-*"}, "max_concurrency": 4, "disabled": true,
+		"disable_cooling": true,
 	}, &reply); code != http.StatusOK {
 		t.Fatalf("PATCH: %d", code)
 	}
 	a := reply.Account
 	if a.Priority != 3 || a.Weight == nil || *a.Weight != 2 || a.Prefix != "w" || !slices.Equal(a.ExcludedModels, []string{"x-*"}) ||
-		a.MaxConcurrency != 4 || !a.Disabled {
+		a.MaxConcurrency != 4 || !a.Disabled || a.DisableCooling == nil || !*a.DisableCooling {
 		t.Fatalf("after PATCH: %+v", a)
 	}
 	if a := getAccount(t, base, "work"); a.Priority != 3 || a.Prefix != "w" || !a.Disabled {
@@ -178,10 +180,10 @@ func TestManageAccountFields(t *testing.T) {
 	}
 
 	var cleared struct{ Account accountView }
-	if code := manage(t, base, "PATCH", "/accounts/work", map[string]any{"weight": nil, "prefix": nil, "disabled": false}, &cleared); code != http.StatusOK {
+	if code := manage(t, base, "PATCH", "/accounts/work", map[string]any{"weight": nil, "prefix": nil, "disable_cooling": nil, "disabled": false}, &cleared); code != http.StatusOK {
 		t.Fatalf("PATCH with nulls: %d", code)
 	}
-	if a := cleared.Account; a.Weight != nil || a.Prefix != "" || a.Disabled || a.Priority != 3 {
+	if a := cleared.Account; a.Weight != nil || a.Prefix != "" || a.DisableCooling != nil || a.Disabled || a.Priority != 3 {
 		t.Fatalf("after nulls: %+v", a)
 	}
 }

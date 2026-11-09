@@ -48,6 +48,7 @@ type AccountView struct {
 	// The account's routing fields, as its config entry or its login set them (route.Account).
 	Priority       int                `json:"priority,omitempty"`
 	Weight         *int               `json:"weight,omitempty"`
+	DisableCooling *bool              `json:"disable_cooling,omitempty"`
 	MaxConcurrency int                `json:"max_concurrency,omitempty"`
 	Prefix         string             `json:"prefix,omitempty"`
 	Models         []route.ModelEntry `json:"models,omitempty"`
@@ -92,6 +93,7 @@ type AccountCheck struct {
 // fields sets v's routing fields from a and its runtime state from state.
 func (v *AccountView) fields(a route.Account, state *route.State) {
 	v.Priority, v.Weight, v.MaxConcurrency, v.Prefix = a.Priority, a.Weight, a.MaxConcurrency, a.Prefix
+	v.DisableCooling = a.DisableCooling
 	v.Models, v.ExcludedModels, v.ModelAlias, v.Endpoint = a.Models, a.ExcludedModels, a.ModelAlias, a.Endpoint
 	if state == nil {
 		return
@@ -332,6 +334,10 @@ var patchFields = map[string]func(a *route.Account, raw json.RawMessage) error{
 		return unmarshalSet(raw, &a.Priority)
 	},
 	"weight": func(a *route.Account, raw json.RawMessage) error { a.Weight = nil; return unmarshalSet(raw, &a.Weight) },
+	"disable_cooling": func(a *route.Account, raw json.RawMessage) error {
+		a.DisableCooling = nil
+		return unmarshalSet(raw, &a.DisableCooling)
+	},
 	"max_concurrency": func(a *route.Account, raw json.RawMessage) error {
 		a.MaxConcurrency = 0
 		return unmarshalSet(raw, &a.MaxConcurrency)
