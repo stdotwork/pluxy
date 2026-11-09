@@ -211,7 +211,7 @@ func TestPriority(t *testing.T) {
 }
 
 func TestCapabilityAndPin(t *testing.T) {
-	h := newHarness(t, Config{}, Account{ID: "a", Models: []string{"m1"}}, Account{ID: "b", Models: []string{"m2"}}, Account{ID: "c"})
+	h := newHarness(t, Config{}, Account{ID: "a", Models: []ModelEntry{{Name: "m1"}}}, Account{ID: "b", Models: []ModelEntry{{Name: "m2"}}}, Account{ID: "c"})
 	h.runOK("m2") // b or c; round robin starts at the first: b
 	req := h.req("m1")
 	req.Pin = "c"

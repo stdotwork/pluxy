@@ -1,0 +1,358 @@
+{
+  "models": [
+    {
+      "id": "gemini-2.5-pro",
+      "name": "models/gemini-2.5-pro",
+      "display_name": "Gemini 2.5 Pro",
+      "description": "Stable release (June 17th, 2025) of Gemini 2.5 Pro",
+      "version": "2.5",
+      "created": 1750118400,
+      "owned_by": "google",
+      "input_token_limit": 1048576,
+      "output_token_limit": 65536,
+      "generation_methods": [
+        "generateContent",
+        "countTokens",
+        "createCachedContent",
+        "batchGenerateContent"
+      ],
+      "input_modalities": [
+        "text",
+        "image",
+        "audio",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-2.5-flash",
+      "name": "models/gemini-2.5-flash",
+      "display_name": "Gemini 2.5 Flash",
+      "description": "Stable version of Gemini 2.5 Flash, our mid-size multimodal model that supports up to 1 million tokens, released in June of 2025.",
+      "version": "001",
+      "created": 1750118400,
+      "owned_by": "google",
+      "input_token_limit": 1048576,
+      "output_token_limit": 65536,
+      "generation_methods": [
+        "generateContent",
+        "countTokens",
+        "createCachedContent",
+        "batchGenerateContent"
+      ],
+      "input_modalities": [
+        "text",
+        "image",
+        "audio",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-2.5-flash-lite",
+      "name": "models/gemini-2.5-flash-lite",
+      "display_name": "Gemini 2.5 Flash Lite",
+      "description": "Our smallest and most cost effective model, built for at scale usage.",
+      "version": "2.5",
+      "created": 1753142400,
+      "owned_by": "google",
+      "input_token_limit": 1048576,
+      "output_token_limit": 65536,
+      "generation_methods": [
+        "generateContent",
+        "countTokens",
+        "createCachedContent",
+        "batchGenerateContent"
+      ],
+      "input_modalities": [
+        "text",
+        "image",
+        "audio",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-3-pro-preview",
+      "name": "models/gemini-3-pro-preview",
+      "display_name": "Gemini 3 Pro Preview",
+      "description": "Gemini 3 Pro Preview",
+      "version": "3.0",
+      "created": 1737158400,
+      "owned_by": "google",
+      "input_token_limit": 1048576,
+      "output_token_limit": 65536,
+      "generation_methods": [
+        "generateContent",
+        "countTokens",
+        "createCachedContent",
+        "batchGenerateContent"
+      ],
+      "input_modalities": [
+        "text",
+        "image",
+        "audio",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-3.1-pro-preview",
+      "name": "models/gemini-3.1-pro-preview",
+      "display_name": "Gemini 3.1 Pro Preview",
+      "description": "Gemini 3.1 Pro Preview",
+      "version": "3.1",
+      "created": 1771459200,
+      "owned_by": "google",
+      "input_token_limit": 1048576,
+      "output_token_limit": 65536,
+      "generation_methods": [
+        "generateContent",
+        "countTokens",
+        "createCachedContent",
+        "batchGenerateContent"
+      ],
+      "input_modalities": [
+        "text",
+        "image",
+        "audio",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-3.1-flash-image-preview",
+      "name": "models/gemini-3.1-flash-image-preview",
+      "display_name": "Gemini 3.1 Flash Image Preview",
+      "description": "Gemini 3.1 Flash Image Preview",
+      "version": "3.1",
+      "created": 1771459200,
+      "owned_by": "google",
+      "input_token_limit": 1048576,
+      "output_token_limit": 65536,
+      "generation_methods": [
+        "generateContent",
+        "countTokens",
+        "createCachedContent",
+        "batchGenerateContent"
+      ],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text",
+        "image"
+      ]
+    },
+    {
+      "id": "gemini-3-flash-preview",
+      "name": "models/gemini-3-flash-preview",
+      "display_name": "Gemini 3 Flash Preview",
+      "description": "Our most intelligent model built for speed, combining frontier intelligence with superior search and grounding.",
+      "version": "3.0",
+      "created": 1765929600,
+      "owned_by": "google",
+      "input_token_limit": 1048576,
+      "output_token_limit": 65536,
+      "generation_methods": [
+        "generateContent",
+        "countTokens",
+        "createCachedContent",
+        "batchGenerateContent"
+      ],
+      "input_modalities": [
+        "text",
+        "image",
+        "audio",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-3.1-flash-lite-preview",
+      "name": "models/gemini-3.1-flash-lite-preview",
+      "display_name": "Gemini 3.1 Flash Lite Preview",
+      "description": "Our smallest and most cost effective model, built for at scale usage.",
+      "version": "3.1",
+      "created": 1776288000,
+      "owned_by": "google",
+      "input_token_limit": 1048576,
+      "output_token_limit": 65536,
+      "generation_methods": [
+        "generateContent",
+        "countTokens",
+        "createCachedContent",
+        "batchGenerateContent"
+      ],
+      "input_modalities": [
+        "text",
+        "image",
+        "audio",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-3-pro-image-preview",
+      "name": "models/gemini-3-pro-image-preview",
+      "display_name": "Gemini 3 Pro Image Preview",
+      "description": "Gemini 3 Pro Image Preview",
+      "version": "3.0",
+      "created": 1737158400,
+      "owned_by": "google",
+      "input_token_limit": 1048576,
+      "output_token_limit": 65536,
+      "generation_methods": [
+        "generateContent",
+        "countTokens",
+        "createCachedContent",
+        "batchGenerateContent"
+      ],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text",
+        "image"
+      ]
+    },
+    {
+      "id": "gemini-3.5-flash",
+      "name": "models/gemini-3.5-flash",
+      "display_name": "Gemini 3.5 Flash",
+      "description": "Our most intelligent model built for speed, combining frontier intelligence with superior search and grounding.",
+      "version": "3.5",
+      "created": 1779235200,
+      "owned_by": "google",
+      "input_token_limit": 1048576,
+      "output_token_limit": 65536,
+      "generation_methods": [
+        "generateContent",
+        "countTokens",
+        "createCachedContent",
+        "batchGenerateContent"
+      ],
+      "input_modalities": [
+        "text",
+        "image",
+        "audio",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-3.5-flash-lite",
+      "name": "models/gemini-3.5-flash-lite",
+      "display_name": "Gemini 3.5 Flash Lite",
+      "description": "Gemini 3.5 Flash Lite",
+      "version": "3.5",
+      "created": 1782864000,
+      "owned_by": "google",
+      "input_token_limit": 1048576,
+      "output_token_limit": 65536,
+      "generation_methods": [
+        "generateContent",
+        "countTokens",
+        "createCachedContent",
+        "batchGenerateContent"
+      ],
+      "input_modalities": [
+        "text",
+        "image",
+        "audio",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-3.6-flash",
+      "name": "models/gemini-3.6-flash",
+      "display_name": "Gemini 3.6 Flash",
+      "description": "Gemini 3.6 Flash",
+      "version": "3.6",
+      "created": 1782864000,
+      "owned_by": "google",
+      "input_token_limit": 1048576,
+      "output_token_limit": 65536,
+      "generation_methods": [
+        "generateContent",
+        "countTokens",
+        "createCachedContent",
+        "batchGenerateContent"
+      ],
+      "input_modalities": [
+        "text",
+        "image",
+        "audio",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-3.8-flash",
+      "name": "models/gemini-3.8-flash",
+      "display_name": "Gemini 3.8 Flash",
+      "description": "Gemini 3.8 Flash",
+      "version": "3.8",
+      "owned_by": "google",
+      "context_length": 1048576,
+      "max_completion_tokens": 65536,
+      "input_modalities": [
+        "text",
+        "image",
+        "audio",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "generation_methods": [
+        "generateContent"
+      ]
+    },
+    {
+      "id": "gemini-4-argon",
+      "name": "models/gemini-4-argon",
+      "display_name": "Gemini 4 Argon",
+      "description": "Gemini 4 Argon",
+      "owned_by": "google",
+      "context_length": 1048576,
+      "max_completion_tokens": 1048576,
+      "input_modalities": [
+        "text",
+        "image",
+        "audio",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "generation_methods": [
+        "generateContent"
+      ]
+    }
+  ],
+  "owned_by": "google"
+}

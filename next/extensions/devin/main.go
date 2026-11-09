@@ -59,6 +59,7 @@ func main() {
 		Generate:     generate,
 		LoginMethods: loginMethods,
 		Login:        login,
+		Models:       listModels,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "devin:", err)

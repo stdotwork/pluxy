@@ -164,8 +164,8 @@ func TestSessionTurns(t *testing.T) {
 	}
 	conn.Close()
 	info := described.Info
-	if info.ProtocolMinor < 1 || !slices.Contains(info.Operations, protocol.OpSession) {
-		t.Fatalf("describe: minor %d, operations %v; want minor 1 or later with session", info.ProtocolMinor, info.Operations)
+	if info.ProtocolMinor != protocol.Minor || !slices.Contains(info.Operations, protocol.OpSession) {
+		t.Fatalf("describe: minor %d, operations %v; want minor %d with session", info.ProtocolMinor, info.Operations, protocol.Minor)
 	}
 
 	conn = dial(t, socket)
@@ -329,5 +329,58 @@ func TestCountTokens(t *testing.T) {
 				t.Errorf("events = %+v, want start and a finish with the count", evs)
 			}
 		})
+	}
+}
+
+// TestModels covers the models operation: describe lists it, a call returns the handler's list
+// with the account it was given, a nil list is an empty one, and a panic is an internal error.
+func TestModels(t *testing.T) {
+	ext := Extension{ID: "test/models", Version: "0.0.0", Generate: func(context.Context, Call, *Stream) error { return nil },
+		Models: func(_ context.Context, call ModelsCall) (*protocol.ModelList, error) {
+			switch call.Account.ID {
+			case "none":
+				return nil, nil
+			case "panic":
+				panic("boom")
+			}
+			return &protocol.ModelList{OwnedBy: "test", Models: []protocol.Model{{ID: call.Account.ID + "-model", ContextLength: 8}}}, nil
+		}}
+	socket, _, _ := startServe(t, ext)
+
+	conn := dial(t, socket)
+	if err := protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeCall, ID: "d", Op: protocol.OpDescribe}); err != nil {
+		t.Fatal(err)
+	}
+	var described protocol.Reply
+	if err := protocol.ReadFrame(conn, &described); err != nil || described.Info == nil {
+		t.Fatalf("describe: %+v, %v", described, err)
+	}
+	conn.Close()
+	if !slices.Contains(described.Info.Operations, protocol.OpModels) || described.Info.ProtocolMinor < 3 {
+		t.Fatalf("describe: %+v; want models with minor 3 or more", described.Info)
+	}
+
+	call := func(id string) protocol.Reply {
+		t.Helper()
+		conn := dial(t, socket)
+		defer conn.Close()
+		if err := protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeCall, ID: "m", Op: protocol.OpModels, Account: &protocol.Account{ID: id}}); err != nil {
+			t.Fatal(err)
+		}
+		var r protocol.Reply
+		if err := protocol.ReadFrame(conn, &r); err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	if r := call("a"); r.Type != protocol.TypeModelsResult || r.Models == nil || r.Models.OwnedBy != "test" ||
+		len(r.Models.Models) != 1 || r.Models.Models[0].ID != "a-model" || r.Models.Models[0].ContextLength != 8 {
+		t.Errorf("models of a: %+v %+v", r.Event, r.Models)
+	}
+	if r := call("none"); r.Type != protocol.TypeModelsResult || r.Models == nil || r.Models.Models == nil || len(r.Models.Models) != 0 {
+		t.Errorf("models of none: %+v %+v; want an empty list", r.Event, r.Models)
+	}
+	if r := call("panic"); r.Type != llm.EventError || r.Error == nil || r.Error.Code != llm.CodeInternal {
+		t.Errorf("models of panic: %+v; want an internal error", r.Event)
 	}
 }

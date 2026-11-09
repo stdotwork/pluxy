@@ -1,8 +1,8 @@
 // Package conformance is the extension conformance kit, version 0. It starts a provider
 // extension exactly as core does and checks it against the extension protocol
 // (../protocol/README.md): the handshake, streamed and unstreamed replies, cancellation, a crash,
-// shutdown and structured errors; and, for an extension that signs in to accounts, login and
-// credential refresh.
+// shutdown and structured errors; for an extension that signs in to accounts, login and
+// credential refresh; and, for one that lists models, its model list.
 //
 // The kit cannot know how to make an extension's upstream behave, so the extension's test gives
 // it a fixture: for each Scenario, the account that makes the extension act it out. See
@@ -173,6 +173,7 @@ func Run(t *testing.T, target Target) {
 	t.Run("shutdown", k.shutdown)
 	t.Run("login", k.login)
 	t.Run("refresh", k.refresh)
+	t.Run("models", k.models)
 }
 
 type kit struct {
@@ -635,4 +636,31 @@ func (k *kit) refresh(t *testing.T) {
 			t.Errorf("transient refresh failure got %s, want a retryable error that is not code %s", jsonString(e), llm.CodeAuth)
 		}
 	})
+}
+
+// models checks the models operation: an extension that lists it answers with a list whose models
+// each have an ID, none twice (with the ScenarioText account); one that does not refuses the call
+// with code unsupported.
+func (k *kit) models(t *testing.T) {
+	ext := k.start(t)
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	defer cancel()
+	account := k.target.Prepare(t, ScenarioText).Account
+	list, e := ext.Models(ctx, account)
+	if !host.ListsModels(ext.Info()) {
+		if e == nil || e.Code != llm.CodeUnsupported {
+			t.Errorf("models on an extension that does not list it got %s, want error %s", jsonString(e), llm.CodeUnsupported)
+		}
+		return
+	}
+	if e != nil {
+		t.Fatalf("models failed: %s", jsonString(e))
+	}
+	seen := map[string]bool{}
+	for i, m := range list.Models {
+		if m.ID == "" || seen[m.ID] {
+			t.Errorf("models[%d] has an empty or repeated id %q", i, m.ID)
+		}
+		seen[m.ID] = true
+	}
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/packages"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/llm"
+	"github.com/stdotwork/pluxy/next/protocol"
 )
 
 // Config is core's configuration file, version 0.
@@ -101,6 +102,37 @@ type ExtensionConfig struct {
 	DrainTimeoutMS *int64 `json:"drain_timeout_ms,omitempty"`
 	// Restart says how a crashed program is restarted.
 	Restart RestartConfig `json:"restart"`
+	// ModelAlias renames models for every account of the extension added by a sign-in (not an
+	// API key), after the account's own model_alias (today's oauth-model-alias); see
+	// route.ModelAlias.
+	ModelAlias []route.ModelAlias `json:"model_alias,omitempty"`
+	// ExcludedModels are model name patterns no account of the extension added by a sign-in (not
+	// an API key) serves, unless the account has its own excluded_models (today's
+	// oauth-excluded-models).
+	ExcludedModels []string `json:"excluded_models,omitempty"`
+}
+
+// LoginDefaults returns account a, added by login to the extension x configures with a
+// credential of kind, with x's model_alias after its own (an alias the account already has is
+// not added twice) and, when it has no excluded_models of its own, x's. An account added with an
+// API key gets neither, as today's oauth-model-alias and oauth-excluded-models skip API keys.
+func (x ExtensionConfig) LoginDefaults(a Account, kind string) Account {
+	if kind == protocol.CredentialAPIKey {
+		return a
+	}
+	if len(a.ExcludedModels) == 0 {
+		a.ExcludedModels = x.ExcludedModels
+	}
+	if len(x.ModelAlias) > 0 {
+		aliases := slices.Clone(a.ModelAlias)
+		for _, r := range x.ModelAlias {
+			if !slices.ContainsFunc(aliases, func(o route.ModelAlias) bool { return strings.EqualFold(o.Alias, r.Alias) }) {
+				aliases = append(aliases, r)
+			}
+		}
+		a.ModelAlias = aliases
+	}
+	return a
 }
 
 // RestartConfig says how a crashed extension program is restarted. Zero fields take defaults.
@@ -146,6 +178,11 @@ func (x ExtensionConfig) validate(name string, seen map[string]bool) error {
 	}
 	if x.Restart.QuarantineAfter < 0 {
 		return fmt.Errorf("config: %s.restart.quarantine_after must not be negative", name)
+	}
+	for i, r := range x.ModelAlias {
+		if strings.TrimSpace(r.Name) == "" || strings.TrimSpace(r.Alias) == "" {
+			return fmt.Errorf("config: %s.model_alias[%d] needs a name and an alias", name, i)
+		}
 	}
 	return nil
 }

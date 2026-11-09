@@ -1,0 +1,554 @@
+{
+ "free": [
+  {
+   "id": "gpt-6-luna",
+   "display_name": "GPT 6.0 Luna",
+   "description": "GPT-6 Luna Codex model.",
+   "version": "gpt-6.0",
+   "created": 1790035200,
+   "owned_by": "openai",
+   "context_length": 272000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "gpt-6.1-terra",
+   "display_name": "GPT 6.1 Terra",
+   "description": "A fast, efficient model for visual reasoning, precise computer use, and clear, natural writing.",
+   "version": "gpt-6.0",
+   "created": 1792972800,
+   "owned_by": "openai",
+   "context_length": 500000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "gpt-5.6-terra",
+   "display_name": "GPT 5.6 Terra",
+   "description": "Balanced agentic coding model for everyday work.",
+   "version": "gpt-5.6",
+   "created": 1783616400,
+   "owned_by": "openai",
+   "context_length": 372000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "gpt-5.6-luna",
+   "display_name": "GPT 5.6 Luna",
+   "description": "Fast and affordable agentic coding model.",
+   "version": "gpt-5.6",
+   "created": 1783616400,
+   "owned_by": "openai",
+   "context_length": 372000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "codex-auto-review",
+   "display_name": "Codex Auto Review",
+   "description": "Automatic approval review model for Codex.",
+   "version": "Codex Auto Review",
+   "created": 1776902400,
+   "owned_by": "openai",
+   "context_length": 272000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  }
+ ],
+ "team": [
+  {
+   "id": "gpt-6-astra",
+   "display_name": "GPT 6.0 Astra",
+   "description": "GPT-6 Astra is our most intelligent model yet, with state-of-the-art performance in computer use, browsing, software engineering, science, and professional work.",
+   "version": "gpt-6.0",
+   "created": 1783616400,
+   "owned_by": "openai",
+   "context_length": 272000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "gpt-6-sol",
+   "display_name": "GPT 6.0 Sol",
+   "description": "GPT-6 Sol Codex model.",
+   "version": "gpt-6.0",
+   "created": 1790035200,
+   "owned_by": "openai",
+   "context_length": 272000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "gpt-6.1-sol",
+   "display_name": "GPT 6.1 Sol",
+   "description": "Latest workhorse model for coding and everyday work.",
+   "version": "gpt-6.0",
+   "created": 1790640000,
+   "owned_by": "openai",
+   "context_length": 272000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "gpt-6.1-terra",
+   "display_name": "GPT 6.1 Terra",
+   "description": "A fast, efficient model for visual reasoning, precise computer use, and clear, natural writing.",
+   "version": "gpt-6.0",
+   "created": 1792972800,
+   "owned_by": "openai",
+   "context_length": 500000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "gpt-6-luna",
+   "display_name": "GPT 6.0 Luna",
+   "description": "GPT-6 Luna Codex model.",
+   "version": "gpt-6.0",
+   "created": 1790035200,
+   "owned_by": "openai",
+   "context_length": 272000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "gpt-5.6-sol",
+   "display_name": "GPT 5.6 Sol",
+   "description": "Our most capable model yet. GPT-5.6 Sol can tackle complex code changes, dig into research, produce polished documents, and take on your most ambitious work. Sol is highly capable at lower reasoning efforts\u2014try starting lower, then turn it up for harder jobs.",
+   "version": "gpt-5.6",
+   "created": 1783616400,
+   "owned_by": "openai",
+   "context_length": 372000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "gpt-5.6-terra",
+   "display_name": "GPT 5.6 Terra",
+   "description": "Balanced agentic coding model for everyday work.",
+   "version": "gpt-5.6",
+   "created": 1783616400,
+   "owned_by": "openai",
+   "context_length": 372000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "gpt-5.6-luna",
+   "display_name": "GPT 5.6 Luna",
+   "description": "Fast and affordable agentic coding model.",
+   "version": "gpt-5.6",
+   "created": 1783616400,
+   "owned_by": "openai",
+   "context_length": 372000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "codex-auto-review",
+   "display_name": "Codex Auto Review",
+   "description": "Automatic approval review model for Codex.",
+   "version": "Codex Auto Review",
+   "created": 1776902400,
+   "owned_by": "openai",
+   "context_length": 272000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  }
+ ],
+ "plus": [
+  {
+   "id": "gpt-6-astra",
+   "display_name": "GPT 6.0 Astra",
+   "description": "GPT-6 Astra is our most intelligent model yet, with state-of-the-art performance in computer use, browsing, software engineering, science, and professional work.",
+   "version": "gpt-6.0",
+   "created": 1783616400,
+   "owned_by": "openai",
+   "context_length": 272000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "gpt-6-sol",
+   "display_name": "GPT 6.0 Sol",
+   "description": "GPT-6 Sol Codex model.",
+   "version": "gpt-6.0",
+   "created": 1790035200,
+   "owned_by": "openai",
+   "context_length": 272000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "gpt-6.1-sol",
+   "display_name": "GPT 6.1 Sol",
+   "description": "Latest workhorse model for coding and everyday work.",
+   "version": "gpt-6.0",
+   "created": 1790640000,
+   "owned_by": "openai",
+   "context_length": 272000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "gpt-6.1-terra",
+   "display_name": "GPT 6.1 Terra",
+   "description": "A fast, efficient model for visual reasoning, precise computer use, and clear, natural writing.",
+   "version": "gpt-6.0",
+   "created": 1792972800,
+   "owned_by": "openai",
+   "context_length": 500000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "gpt-6-luna",
+   "display_name": "GPT 6.0 Luna",
+   "description": "GPT-6 Luna Codex model.",
+   "version": "gpt-6.0",
+   "created": 1790035200,
+   "owned_by": "openai",
+   "context_length": 272000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "gpt-5.6-sol",
+   "display_name": "GPT 5.6 Sol",
+   "description": "Our most capable model yet. GPT-5.6 Sol can tackle complex code changes, dig into research, produce polished documents, and take on your most ambitious work. Sol is highly capable at lower reasoning efforts\u2014try starting lower, then turn it up for harder jobs.",
+   "version": "gpt-5.6",
+   "created": 1783616400,
+   "owned_by": "openai",
+   "context_length": 372000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "gpt-5.6-terra",
+   "display_name": "GPT 5.6 Terra",
+   "description": "Balanced agentic coding model for everyday work.",
+   "version": "gpt-5.6",
+   "created": 1783616400,
+   "owned_by": "openai",
+   "context_length": 372000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "gpt-5.6-luna",
+   "display_name": "GPT 5.6 Luna",
+   "description": "Fast and affordable agentic coding model.",
+   "version": "gpt-5.6",
+   "created": 1783616400,
+   "owned_by": "openai",
+   "context_length": 372000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "codex-auto-review",
+   "display_name": "Codex Auto Review",
+   "description": "Automatic approval review model for Codex.",
+   "version": "Codex Auto Review",
+   "created": 1776902400,
+   "owned_by": "openai",
+   "context_length": 272000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  }
+ ],
+ "pro": [
+  {
+   "id": "gpt-6-astra",
+   "display_name": "GPT 6.0 Astra",
+   "description": "GPT-6 Astra is our most intelligent model yet, with state-of-the-art performance in computer use, browsing, software engineering, science, and professional work.",
+   "version": "gpt-6.0",
+   "created": 1783616400,
+   "owned_by": "openai",
+   "context_length": 272000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "gpt-6-sol",
+   "display_name": "GPT 6.0 Sol",
+   "description": "GPT-6 Sol Codex model.",
+   "version": "gpt-6.0",
+   "created": 1790035200,
+   "owned_by": "openai",
+   "context_length": 272000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "gpt-6.1-sol",
+   "display_name": "GPT 6.1 Sol",
+   "description": "Latest workhorse model for coding and everyday work.",
+   "version": "gpt-6.0",
+   "created": 1790640000,
+   "owned_by": "openai",
+   "context_length": 272000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "gpt-6.1-terra",
+   "display_name": "GPT 6.1 Terra",
+   "description": "A fast, efficient model for visual reasoning, precise computer use, and clear, natural writing.",
+   "version": "gpt-6.0",
+   "created": 1792972800,
+   "owned_by": "openai",
+   "context_length": 500000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "gpt-6-luna",
+   "display_name": "GPT 6.0 Luna",
+   "description": "GPT-6 Luna Codex model.",
+   "version": "gpt-6.0",
+   "created": 1790035200,
+   "owned_by": "openai",
+   "context_length": 272000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "gpt-5.6-sol",
+   "display_name": "GPT 5.6 Sol",
+   "description": "Our most capable model yet. GPT-5.6 Sol can tackle complex code changes, dig into research, produce polished documents, and take on your most ambitious work. Sol is highly capable at lower reasoning efforts\u2014try starting lower, then turn it up for harder jobs.",
+   "version": "gpt-5.6",
+   "created": 1783616400,
+   "owned_by": "openai",
+   "context_length": 921000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "gpt-5.6-terra",
+   "display_name": "GPT 5.6 Terra",
+   "description": "Balanced agentic coding model for everyday work.",
+   "version": "gpt-5.6",
+   "created": 1783616400,
+   "owned_by": "openai",
+   "context_length": 921000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "gpt-5.6-luna",
+   "display_name": "GPT 5.6 Luna",
+   "description": "Fast and affordable agentic coding model.",
+   "version": "gpt-5.6",
+   "created": 1783616400,
+   "owned_by": "openai",
+   "context_length": 921000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  },
+  {
+   "id": "codex-auto-review",
+   "display_name": "Codex Auto Review",
+   "description": "Automatic approval review model for Codex.",
+   "version": "Codex Auto Review",
+   "created": 1776902400,
+   "owned_by": "openai",
+   "context_length": 272000,
+   "max_completion_tokens": 128000,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ]
+  }
+ ]
+}

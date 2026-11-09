@@ -66,6 +66,7 @@ func main() {
 		Login:        login,
 		Refresh:      refresh,
 		CountTokens:  countTokens,
+		Models:       listModels,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "claude:", err)

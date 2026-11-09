@@ -52,6 +52,7 @@ func main() {
 		Login:        login,
 		Refresh:      refresh,
 		Session:      openSession,
+		Models:       listModels,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "codex:", err)

@@ -884,13 +884,21 @@ func BuildOldCore(coreDir, out string) error {
 }
 
 // StartNewCore starts the new core from binDir with the case's provider pointed at upstreamURL,
-// one account per key, and the settings in extra added to its config.
-func StartNewCore(binDir, workDir, provider, upstreamURL string, models, keys []string, extra map[string]json.RawMessage) (*Core, error) {
+// one account per key, the settings in extra added to its config, and the case's override (over)
+// merged in.
+func StartNewCore(binDir, workDir, provider, upstreamURL string, models, keys []string, extra map[string]json.RawMessage, over *CoreOverride) (*Core, error) {
 	p, ok := Providers[provider]
 	if !ok || p.NewCore == nil {
 		return nil, fmt.Errorf("no new-core setup for provider %q", provider)
 	}
 	ext, accounts := p.NewCore(upstreamURL, models, keys)
+	if over != nil {
+		for _, a := range accounts {
+			if m, ok := a.(map[string]any); ok {
+				Merge(m, roundTrip(over.Account))
+			}
+		}
+	}
 	cfg := map[string]any{
 		"listen":      "127.0.0.1:0",
 		"client_keys": []string{ClientKey},
@@ -901,6 +909,9 @@ func StartNewCore(binDir, workDir, provider, upstreamURL string, models, keys []
 	}
 	for k, v := range extra {
 		cfg[k] = v
+	}
+	if over != nil {
+		Merge(cfg, roundTrip(over.Config))
 	}
 	path := filepath.Join(workDir, "config.json")
 	b, _ := json.Marshal(cfg)
@@ -925,6 +936,19 @@ type OldCoreSetup struct {
 	// a provider with Intercept set.
 	ProxyURL string
 	CAFile   string
+	// Override adds the case's settings to the generated config.
+	Override *CoreOverride
+}
+
+// roundTrip returns a deep copy of m, so merging it into several places shares nothing.
+func roundTrip(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	b, _ := json.Marshal(m)
+	var out map[string]any
+	_ = json.Unmarshal(b, &out)
+	return out
 }
 
 // StartOldCore starts today's core on a free local port with a generated config: the client
@@ -948,6 +972,9 @@ func StartOldCore(s OldCoreSetup) (*Core, error) {
 	}
 	if p.OldCoreAuthFiles != nil {
 		for name, f := range p.OldCoreAuthFiles(s.ProxyURL, s.UpstreamURL, s.Models, s.Keys) {
+			if m, ok := f.(map[string]any); ok && s.Override != nil {
+				f = Merge(m, roundTrip(s.Override.Account))
+			}
 			b, _ := json.Marshal(f)
 			if err := os.WriteFile(filepath.Join(authDir, name), b, 0o600); err != nil {
 				return nil, err
@@ -971,6 +998,17 @@ func StartOldCore(s OldCoreSetup) (*Core, error) {
 		"api-keys":      p.OldCore(s.UpstreamURL, s.Models, s.Keys),
 		"observability": map[string]any{"usage": map[string]any{"usage-statistics-enabled": false}},
 		"plugins":       map[string]any{"enabled": false},
+	}
+	if s.Override != nil {
+		for _, groups := range cfg["api-keys"].(map[string]any) {
+			list, _ := groups.([]any)
+			for _, g := range list {
+				if m, ok := g.(map[string]any); ok {
+					Merge(m, roundTrip(s.Override.Account))
+				}
+			}
+		}
+		Merge(cfg, roundTrip(s.Override.Config))
 	}
 	// YAML is a superset of JSON, so the old core reads this as its YAML config.
 	path := filepath.Join(s.WorkDir, "config.yaml")

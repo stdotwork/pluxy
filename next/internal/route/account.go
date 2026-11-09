@@ -2,7 +2,6 @@ package route
 
 import (
 	"encoding/json"
-	"slices"
 
 	"github.com/stdotwork/pluxy/next/protocol"
 )
@@ -12,8 +11,16 @@ import (
 // without the account losing its cooldowns or its place in rotation.
 type Account struct {
 	ID string `json:"id"`
-	// Models this account serves. Empty means any model.
-	Models []string `json:"models,omitempty"`
+	// Models this account serves, each by its upstream name and optionally the name clients
+	// use (ModelEntry). Empty means any model.
+	Models []ModelEntry `json:"models,omitempty"`
+	// ExcludedModels are patterns of model names the account does not serve (see excluded).
+	ExcludedModels []string `json:"excluded_models,omitempty"`
+	// ModelAlias renames models the account serves (see ModelAlias).
+	ModelAlias []ModelAlias `json:"model_alias,omitempty"`
+	// Prefix, when set, is a namespace for the account's models: clients name them
+	// "<prefix>/<model>" (and also without it, unless routing forces prefixes).
+	Prefix string `json:"prefix,omitempty"`
 	// Priority: only the highest-priority accounts that are eligible are used; lower ones
 	// take over while every higher one is blocked. Default 0.
 	Priority int `json:"priority,omitempty"`
@@ -39,10 +46,6 @@ type Account struct {
 
 	// gen is the generation of the router that holds this copy (see State.Retain).
 	gen uint64
-}
-
-func (a *Account) serves(model string) bool {
-	return len(a.Models) == 0 || slices.Contains(a.Models, model)
 }
 
 func (a *Account) weight() int {

@@ -1,0 +1,64 @@
+{
+  "description": "Anthropic's model list shows a model that is not a Claude model under its own name.",
+  "source": ["core/internal/client/claude/models/models.go EnsureClaudeModelIDPrefix"],
+  "client": {"method":"GET","path":"/v1/models","headers":{"Anthropic-Version":"2023-06-01"}},
+  "old_core": {"account":{"models":[{"name":"up-x","alias":"pub-x"}]}},
+  "new_core": {"account":{"models":[{"name":"up-x","alias":"pub-x"}]}},
+  "volatile": ["client.body.data[*].created_at"],
+  "exceptions": [
+    {
+      "path": "client.body.data[0].id",
+      "kind": "intended",
+      "reason": "Today's core lists a model whose name does not start with claude- under a made-up Claude name (claude-fable-5-dd- and the name reversed) unless disable-cloaking-model-list is set, and turns it back on requests; the new core never makes one model look like another, so it lists the name clients use (making other clients look like Claude Code is out of scope).",
+      "want": "pub-x"
+    },
+    {
+      "path": "client.body.first_id",
+      "kind": "intended",
+      "reason": "Today's core lists a model whose name does not start with claude- under a made-up Claude name (claude-fable-5-dd- and the name reversed) unless disable-cloaking-model-list is set, and turns it back on requests; the new core never makes one model look like another, so it lists the name clients use (making other clients look like Claude Code is out of scope).",
+      "want": "pub-x"
+    },
+    {
+      "path": "client.body.last_id",
+      "kind": "intended",
+      "reason": "Today's core lists a model whose name does not start with claude- under a made-up Claude name (claude-fable-5-dd- and the name reversed) unless disable-cloaking-model-list is set, and turns it back on requests; the new core never makes one model look like another, so it lists the name clients use (making other clients look like Claude Code is out of scope).",
+      "want": "pub-x"
+    },
+    {
+      "path": "client.body.data[0].display_name",
+      "kind": "intended",
+      "reason": "A model a key's config lists under an alias shows its upstream name as its display name for every provider in the new core, as today's core shows it for Codex, Claude and Gemini keys; today's core shows the alias instead for an openai-compatibility key.",
+      "want": "up-x"
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "data": [
+          {
+            "created_at": "(volatile)",
+            "display_name": "pub-x",
+            "id": "claude-fable-5-dd-x-bup",
+            "max_input_tokens": 200000,
+            "max_tokens": 64000,
+            "object": "model",
+            "owned_by": "corpus",
+            "type": "model"
+          }
+        ],
+        "first_id": "claude-fable-5-dd-x-bup",
+        "has_more": false,
+        "last_id": "claude-fable-5-dd-x-bup"
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8"
+      },
+      "status": 200
+    },
+    "upstream": []
+  }
+}

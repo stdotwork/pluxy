@@ -120,22 +120,25 @@ func TestExampleProviderSections(t *testing.T) {
 	}
 	vertex := exts[Gemini].(map[string]any)["accounts"].([]any)[3]
 	equalJSON(t, vertex, `{
-		"id": "vertex-1", "weight": 5,
-		"models": ["gemini-2.5-flash", "gemini-2.5-pro"],
+		"id": "vertex-1", "weight": 5, "prefix": "test",
+		"models": [{"name": "gemini-2.5-flash", "alias": "vertex-flash"}, {"name": "gemini-2.5-pro", "alias": "vertex-pro"}],
+		"excluded_models": ["imagen-3.0-generate-002", "imagen-*"],
 		"settings": {"base_url": "https://example.com/api", "vertex": {}},
 		"credential": {"kind": "api_key", "api_key": "vk-123..."}
 	}`)
-	// A key's null fields inherit the group's; its own weight and proxy are its own.
+	// A key's null fields inherit the group's; its own weight and proxy are its own, and its
+	// empty excluded-models clears the group's.
+	first := exts[Gemini].(map[string]any)["accounts"].([]any)[0].(map[string]any)
+	equalJSON(t, first["excluded_models"], `["gemini-2.5-pro", "gemini-2.5-*", "*-preview", "*flash*"]`)
 	second := exts[Gemini].(map[string]any)["accounts"].([]any)[1]
 	equalJSON(t, second, `{
-		"id": "gemini-1-2", "priority": 0, "weight": 2,
-		"models": ["gemini-2.5-flash"],
+		"id": "gemini-1-2", "priority": 0, "weight": 2, "prefix": "test",
+		"models": [{"name": "gemini-2.5-flash", "alias": "gemini-flash"}],
 		"settings": {"base_url": "https://generativelanguage.googleapis.com"},
 		"credential": {"kind": "api_key", "api_key": "replace-with-second-gemini-key"}
 	}`)
 	n := notices(r)
 	for _, want := range []string{
-		"api-keys.codex.prefix", "api-keys.claude.models.alias", "api-keys.gemini.excluded-models",
 		"api-keys.xai.websockets", "api-keys.meta", "api-keys.interactions",
 		"api-keys.claude.cloak (making other clients look like Claude Code is out of scope)",
 	} {
@@ -145,6 +148,11 @@ func TestExampleProviderSections(t *testing.T) {
 	}
 	if strings.Contains(n, "unknown") || strings.Contains(n, "experimental-cch-signing") {
 		t.Errorf("notices name an unknown or dead key:\n%s", n)
+	}
+	for _, read := range []string{"prefix", "models.alias", "excluded-models"} {
+		if strings.Contains(n, "."+read) {
+			t.Errorf("notices name %s, which is read:\n%s", read, n)
+		}
 	}
 }
 
@@ -421,5 +429,73 @@ openai-compatibility:
 		if !strings.Contains(n, want) {
 			t.Errorf("notices lack %q:\n%s", want, n)
 		}
+	}
+}
+
+// TestModelNaming covers today's model naming settings: per-key model aliases, prefixes and
+// exclusions, force-model-prefix, and the per-channel oauth-model-alias and
+// oauth-excluded-models, which go to the package of each channel's accounts.
+func TestModelNaming(t *testing.T) {
+	r := translate(t, `
+force-model-prefix: true
+oauth-model-alias:
+  codex:
+    - {name: gpt-6.1-sol, alias: sol}
+    - {name: gpt-6-astra, alias: Astra, fork: true, display-name: Astra Display}
+    - {name: gpt-6-astra, alias: astra}
+    - {name: same, alias: SAME}
+    - {name: gpt-6-luna, alias: luna, force-mapping: true}
+  kimi-ai:
+    - {name: kimi-k2, alias: k2}
+  gemini-cli:
+    - {name: gemini-2.5-pro, alias: pro}
+oauth-excluded-models:
+  codex: [" GPT-IMAGE-* ", "gpt-image-*"]
+  qwen: [qwen-max]
+codex-api-key:
+  - api-key: k1
+    prefix: " /team/ "
+    excluded-models: ["*-Mini"]
+    models:
+      - {name: up-a, alias: pub-a}
+      - {name: up-b}
+      - {name: up-c, alias: pub-a}
+openai-compatibility:
+  - name: compat
+    base-url: https://compat.example.com/v1
+    prefix: a/b
+    excluded-models: [x]
+    api-key-entries: [{api-key: k2}]
+    models: [{name: m, alias: m}]
+`)
+	equalJSON(t, r.Config["routing"], `{"force_model_prefix": true, "max_wait_ms": 30000}`)
+	exts := asJSON(t, r.Config["extensions"]).(map[string]any)
+	equalJSON(t, exts[Codex].(map[string]any)["accounts"], `[{
+		"id": "codex-api-key-1", "prefix": "team", "excluded_models": ["*-mini"],
+		"models": [{"name": "up-a", "alias": "pub-a"}, "up-b"],
+		"credential": {"kind": "api_key", "api_key": "k1"}
+	}]`)
+	equalJSON(t, exts[Codex].(map[string]any)["model_alias"], `[
+		{"name": "gpt-6.1-sol", "alias": "sol"},
+		{"name": "gpt-6-astra", "alias": "Astra", "fork": true, "display_name": "Astra Display"},
+		{"name": "gpt-6-luna", "alias": "luna"}
+	]`)
+	equalJSON(t, exts[Codex].(map[string]any)["excluded_models"], `["gpt-image-*"]`)
+	equalJSON(t, exts[Kimi], `{"model_alias": [{"name": "kimi-k2", "alias": "k2"}]}`)
+	// openai-compatibility has no excluded-models in today's core, and a prefix with a slash
+	// inside is none.
+	equalJSON(t, exts[OpenAICompatible].(map[string]any)["accounts"], `[{
+		"id": "compat", "models": ["m"],
+		"settings": {"base_url": "https://compat.example.com/v1"},
+		"credential": {"kind": "api_key", "api_key": "k2"}
+	}]`)
+	n := notices(r)
+	for _, want := range []string{"oauth.model-alias.force-mapping", "oauth.model-alias.gemini-cli: no extension", "oauth.excluded-models.qwen: no extension"} {
+		if !strings.Contains(n, want) {
+			t.Errorf("notices lack %q:\n%s", want, n)
+		}
+	}
+	if strings.Contains(n, "unknown") || strings.Contains(n, "force-model-prefix") || strings.Contains(n, "excluded-models,") {
+		t.Errorf("notices name a key that is read:\n%s", n)
 	}
 }

@@ -1,6 +1,6 @@
 // Package agtest is a fake Google for tests of the Antigravity extension: Google's OAuth sign-in
 // (/o/oauth2/v2/auth), token endpoint (/token) and user info (/oauth2/v2/userinfo), and Cloud
-// Code's loadCodeAssist, onboardUser and generateContent methods (/v1internal:*). It issues
+// Code's loadCodeAssist, onboardUser, fetchAvailableModels and generateContent methods (/v1internal:*). It issues
 // made-up tokens and never talks to Google.
 package agtest
 
@@ -229,6 +229,9 @@ func (s *Server) cloudCode(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"name": "operations/onboard", "done": true,
 			"response": map[string]any{"cloudaicompanionProject": map[string]string{"id": Project}}})
+	case "/v1internal:fetchAvailableModels":
+		// The reply the corpus's Cloud Code gives (next/corpus/cores.go).
+		writeJSON(w, http.StatusOK, map[string]any{"models": map[string]any{"gemini-3.8-flash-high": map[string]any{}, "claude-sonnet-5-5-high": map[string]any{}}})
 	case "/v1internal:generateContent", "/v1internal:streamGenerateContent":
 		if s.Generate != nil {
 			s.Generate(w, r, req)

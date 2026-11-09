@@ -80,7 +80,9 @@ accounts, extensions and themes, the pages extensions bring and their settings. 
 management key. Extension pages are served from a listener of their own, on another site than
 the panel (`extension_pages` in the config); see [extension pages](ui/extension-pages/README.md).
 
-An account may list `models` it serves; without a list it serves any model. Core runs the
+An account may list `models` it serves; without a list it serves any model. Accounts can rename,
+exclude and prefix models, and clients list the models on `GET /v1/models`: see
+[Model lists and model names](#model-lists-and-model-names). Core runs the
 extension the config names and every [installed package](#packages) that is enabled, and spreads
 requests over all their accounts: see [Accounts and routing](#accounts-and-routing).
 
@@ -661,6 +663,63 @@ An account that cannot serve a request (its upstream speaks another format and t
 cannot be translated to it, or the upstream says it does not have the model) passes the request
 on to the next account within the same request.
 
+## Model lists and model names
+
+Clients list the models they can ask for in their own API's shape, with the client key as for
+any request:
+
+| Request | Reply |
+| --- | --- |
+| `GET /v1/models` | OpenAI's list: `{"object": "list", "data": [{"id", "object", "created", "owned_by"}]}`. A request with an `anthropic-version` header or Claude Code's user agent (`claude-cli/...`) gets Anthropic's list instead: each model's `display_name`, `created_at`, `max_input_tokens` and `max_tokens` (200000 and 64000 when not known), sorted by display name, with `has_more`, `first_id` and `last_id`. |
+| `GET /v1/models/{id}` | One model from that list, or a 404 with code `model_not_found`. |
+| `GET /v1beta/models` | Gemini's list, `{"models": [...]}`: each model's `name` (`models/{id}`), `displayName`, `description`, token limits and `supportedGenerationMethods` (`["generateContent"]` when not known). |
+| `GET /v1beta/models/{name}` | One model, named with or without `models/`, or a 404. |
+
+A list holds each model the accounts serve, once under each name a client can ask for it by,
+sorted by name. An account whose config lists `models` lists those. An account without `models`
+lists the models its extension says the account serves (the protocol's `models` operation, from
+version 0.3), under the account's naming rules below; an extension that cannot say adds nothing
+for it. Core asks an extension once per account and keeps the answer until the config is
+reloaded or the account's credential changes.
+
+An account names its models with these fields, applied in this order:
+
+```json
+{
+  "routing": {"force_model_prefix": false},
+  "extension": {
+    "accounts": [
+      {
+        "id": "team",
+        "models": ["gpt-6.1-sol", {"name": "gpt-6-astra-2026-10", "alias": "gpt-6-astra"}],
+        "excluded_models": ["*-mini"],
+        "model_alias": [{"name": "gpt-6-luna", "alias": "luna", "fork": true, "display_name": "Luna"}],
+        "prefix": "team",
+        "...": "..."
+      }
+    ]
+  }
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| account `models` | The only models the account serves. Each is the upstream's name, or `{"name": ..., "alias": ...}` to serve the model `name` under the name `alias` only. |
+| account `excluded_models` | Models the account does not serve: names, or patterns with `*` for any text (`gpt-5-*`, `*-mini`, `*preview*`), whatever their case. They match the name clients use for an entry of `models` (its `alias`, when it has one, as in today's core), and for any other model its name before `model_alias` renames it. |
+| account `model_alias` | Renames: a request for `alias` (exactly as written) goes to the model `name` (any case). Without `fork` the model is served only as `alias`; with `"fork": true` under both names. `display_name` replaces the model's display name in lists. |
+| account `prefix` | The account also serves each model as `{prefix}/{model}`, so a client can ask for a model on that account alone. No `/` in it. |
+| `routing.force_model_prefix` | `true`: an account with a prefix serves its models only with the prefix, except a model whose name is the prefix itself. |
+
+A request for a renamed or prefixed model reaches the upstream under the upstream's name, and
+blocks on a model are kept under that name, so asking for the same model by another name does not
+get around a block.
+
+An extension's settings (`extension`, or its entry in `extensions`) may also hold `model_alias`
+and `excluded_models` for the accounts added to it by a sign-in (not those added with an API
+key, as today's `oauth-model-alias` and `oauth-excluded-models` skip API keys). Its `model_alias` rules come after
+an account's own, leaving out a rule for an alias the account already has; its
+`excluded_models` apply to an account that has none of its own.
+
 ## Accounts added by login
 
 Besides the accounts in the config, a provider extension that signs in to accounts (OAuth in a
@@ -880,8 +939,12 @@ needs none) is not supported yet: it adds no account and is named in the log.
 | `api-keys.openai-compatibility` (`openai-compatibility`) | `pluxy/openai-compatible`, one account per entry in `keys` (`api-key-entries`) | `base-url` is `base_url`; a group with `disabled: true` adds no accounts |
 
 In every section, `priority` is the account's `priority` and a key's `weight` is its `weight`.
-A group's `models` list becomes the account's `models` (each entry's `name`, the model the
-upstream knows): the account serves only those models. An account's ID is the group's `name`
+A group's `models` list becomes the account's `models`: each entry's `name` is the model the
+upstream knows, and its `alias` the name clients use (the first entry for a name wins, as in
+today's core); the account serves only those models. A group's or key's `prefix` is the account's
+`prefix`, and its `excluded-models` its `excluded_models` (today's core has no
+`excluded-models` for `openai-compatibility`, so it is accepted there and does nothing). See
+[Model lists and model names](#model-lists-and-model-names). An account's ID is the group's `name`
 for a group with one key, and `<name>-<n>` (`n` from 1) for each key of a group with more;
 entries without a name are `<section>-<n>`, counted across the section, such as
 `codex-api-key-1`. Characters an account ID cannot hold (anything but letters, digits, `.`, `_`
@@ -913,7 +976,7 @@ are accepted silently.
 | `routing.strategy` | `routing.strategy`: `round-robin`, `fill-first` (also `fillfirst`, `ff`), `weighted-round-robin` (also `weightedroundrobin`, `wrr`; this core's `weighted`); this core's `weighted` and `least-active` work too. A name today's core does not know is `round-robin`, as there, and the log says so. | Supported |
 | `routing.session-affinity`, `routing.session-affinity-ttl` | `routing.session_affinity` with `ttl_ms` from the duration (default `1h`). | Supported |
 | `routing.session-affinity-subagents`, `routing.session-affinity-rebind-on` | | Later |
-| `routing.force-model-prefix` (`force-model-prefix`) and every `prefix` | Pin a request to an account with the `X-Pluxy-Account` header. | Later |
+| `routing.force-model-prefix` (`force-model-prefix`) | `routing.force_model_prefix`. | Supported |
 | `routing.retry.max-retry-credentials` (`max-retry-credentials`) | `routing.max_accounts`. | Supported |
 | `routing.retry.max-retry-interval` (`max-retry-interval`) | `routing.max_wait_ms`, in seconds as in today's core, default 30. Here it bounds the whole wait of one request; today's core bounds each wait between rounds. | Supported |
 | `routing.retry.request-retry` (`request-retry`) | `0` turns off waiting for another round (`max_wait_ms` 0). Above 0, rounds are bounded by `max-retry-interval`, not counted; the log says so. | Supported for 0; the round count later |
@@ -936,7 +999,7 @@ are accepted silently.
 | `experimental-cch-signing` (Claude keys) | | Dead |
 | `oauth.auth-dir` (`auth-dir`) | The folder `-import-auth` reads (see below). Core never reads or writes it while it runs; at each load it logs how many credential files there are not imported yet. | Supported |
 | `oauth.auth-auto-refresh-workers` (`auth-auto-refresh-workers`) | Each account is renewed shortly before it expires. | Dropped: no need for a pool size |
-| `oauth.model-alias` (`oauth-model-alias`), `oauth.excluded-models` (`oauth-excluded-models`), and every `models[].alias`, `excluded-models` | | Later |
+| `oauth.model-alias` (`oauth-model-alias`), `oauth.excluded-models` (`oauth-excluded-models`) | Each channel's rules become the `model_alias` and `excluded_models` of the package that serves its accounts, for the accounts added to it by a sign-in (not with an API key): `codex` is `pluxy/codex`, `claude` is `pluxy/claude`, `vertex` is `pluxy/gemini`, `kimi` (and `kimi-ai`, `kimi.ai`, `kimi.com`) is `pluxy/kimi`, `xai` is `pluxy/xai`, `meta` is `pluxy/meta`, `antigravity` is `pluxy/antigravity`, `devin` is `pluxy/devin`. Rules for another channel are named in the log and ignored. An alias's `force-mapping` and `openapi` are later. | Supported |
 | `oauth.settings` (`oauth-settings`) | | Dropped: needs a model catalog, and no page uses it |
 | `oauth.request-scoped-errors` (`oauth-request-scoped-errors`) and every `request-scoped-errors` | | Later |
 | `oauth.providers.aistudio.ws-auth` (`ws-auth`) | | Later: the AI Studio relay is not built |
@@ -946,7 +1009,7 @@ are accepted silently.
 | `api-keys.meta` (`meta-api-key`), `api-keys.interactions` (`interactions-api-key`) | | Later |
 | Every `headers` and `connection-pool` | | Later |
 | Every `disable-cooling` and `request-retry` on a group or key | | Dropped: no need found for per-key tuning |
-| The keys' `models[]` catalog fields (`display-name`, `max-context-length`, `force-mapping`, `is-compat`, `thinking`, `image`, `input-modalities`, `output-modalities`, `use-max-completion-tokens`, `support-configuration-update`, `openapi`) | | Later |
+| The keys' `models[]` catalog fields (`display-name`, `max-context-length`, `force-mapping`, `is-compat`, `thinking`, `image`, `input-modalities`, `output-modalities`, `use-max-completion-tokens`, `support-configuration-update`, `openapi`) | A model's display name in lists is its upstream name. | Later |
 | Codex keys' `alpha-search`; Vertex keys' `interactions`, `openapi`, `openapi-location`; openai-compatibility's `support-prompt-cache-key`; xAI keys' `websockets` | | Later |
 | `multimedia.disable-image-generation` (`disable-image-generation`) | `true`, `"chat"` and `"passthrough"` are `image_generation_tool: false` on Codex accounts from the file and on those `-import-auth` adds. | Supported |
 | `multimedia.gpt-image-2-base-model`, `multimedia.video-result-auth-cache-ttl` (each also at the top level) | No image or video routes yet. | Later |
@@ -990,5 +1053,8 @@ use it from one core only, or sign in again in the other.
 | anything else | Skipped, named in the output | Today's core does not load a file with no `type` or with `gemini` either. |
 
 From every file: `disabled: true` imports the account disabled, `priority` and `weight` are the
-account's, and `label` (else `email`) is its label. A file's `prefix`, `proxy_url`, `headers`,
-`excluded_models` and `model_aliases` are not supported yet and are named in the output.
+account's, and `label` (else `email`) is its label. A file's `prefix` is the account's `prefix`,
+its `excluded_models` (a list, or one comma-separated string) its `excluded_models`, and the
+entries of its `model_aliases` (or `models`) with a `name` and an `alias` its `model_alias`, as
+today's core reads them. A file's `proxy_url` and `headers` are not supported yet and are named
+in the output.

@@ -214,6 +214,30 @@ sdk.Serve(sdk.Extension{
 handler answers a call, on the session's upstream connection; `ctx` ends if core cancels the turn.
 `Interrupt(raw)` is called from another goroutine while a turn runs, with the client's control
 message to pass upstream. `Close()` is called once when the session ends: close the upstream
-connection there. The SDK reports `protocol_minor` 1 in describe, since it implements 0.1, and
-lists `session` when `Session` is set. The rules, including what to send when the upstream connection is lost, are in
+connection there. The SDK lists `session` in describe when `Session` is set. The rules,
+including what to send when the upstream connection is lost, are in
 [Sessions](README.md#sessions); the Codex extension (`extensions/codex`) is a complete example.
+
+## 8. List models (optional, protocol 0.3)
+
+Core answers clients' model lists (`GET /v1/models`) with the models each account serves. An
+account whose config names its `models` lists those; for any other account core asks its
+extension. Add a models handler that returns the account's models by their upstream names:
+
+```go
+sdk.Serve(sdk.Extension{
+	ID: "example/echo", Version: "0.1.0", Generate: generate,
+	Models: func(ctx context.Context, call sdk.ModelsCall) (*protocol.ModelList, error) {
+		return &protocol.ModelList{OwnedBy: "example", Models: []protocol.Model{
+			{ID: "echo-1", DisplayName: "Echo 1", ContextLength: 8192},
+		}}, nil
+	},
+})
+```
+
+Read the list from the upstream when it has one (with `call.Account`'s credential), or return a
+catalog the extension carries. Core renames, leaves out and prefixes the models by the account's
+own rules, and keeps the answer until the account's settings or credential change, so the handler
+needs no cache of its own. The SDK reports `protocol_minor` 3 in describe, and lists `models` when
+`Models` is set; without it, core lists only the models accounts' configs name. The fields are in
+[`models`](README.md#models).

@@ -1,0 +1,36 @@
+{
+  "description": "A prefixed Gemini key's catalog model by its prefixed name: its resource name gets the prefix too.",
+  "source": ["core/sdk/cliproxy/service_models.go applyModelPrefixes, rewriteModelInfoName"],
+  "client": {"method":"GET","path":"/v1beta/models/team/gemini-2.5-pro"},
+  "old_core": {"account":{"models":null,"prefix":"team"}},
+  "new_core": {"account":{"models":null,"prefix":"team"}},
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "description": "Stable release (June 17th, 2025) of Gemini 2.5 Pro",
+        "displayName": "Gemini 2.5 Pro",
+        "inputTokenLimit": 1048576,
+        "name": "models/team/gemini-2.5-pro",
+        "outputTokenLimit": 65536,
+        "supportedGenerationMethods": [
+          "generateContent",
+          "countTokens",
+          "createCachedContent",
+          "batchGenerateContent"
+        ],
+        "supportedInputModalities": ["text","image","audio","video"],
+        "supportedOutputModalities": ["text"],
+        "version": "2.5"
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8"
+      },
+      "status": 200
+    },
+    "upstream": []
+  }
+}

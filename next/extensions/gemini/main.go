@@ -52,6 +52,7 @@ func main() {
 		LoginMethods: loginMethods,
 		Login:        login,
 		CountTokens:  countTokens,
+		Models:       listModels,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gemini:", err)

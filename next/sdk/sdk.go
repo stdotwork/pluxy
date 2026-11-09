@@ -1,7 +1,8 @@
 // Package sdk implements the extension side of the pluxy extension protocol for Go extensions:
 // the handshake, framing, cancellation and shutdown. An extension supplies a Generate handler,
 // Login and Refresh handlers if it signs in to accounts, a Session handler if it holds
-// sessions, and calls Serve from main. See ../protocol/TUTORIAL.md.
+// sessions, a Models handler if it lists its accounts' models, and calls Serve from main. See
+// ../protocol/TUTORIAL.md.
 package sdk
 
 import (
@@ -62,6 +63,18 @@ type RefreshCall struct {
 // failure that may pass (the token endpoint is down or rate limited) is retryable.
 type RefreshHandler func(ctx context.Context, call RefreshCall) (*protocol.Credential, error)
 
+// ModelsCall is one models call.
+type ModelsCall struct {
+	ID string
+	// Account is the account whose models to list, with its credential.
+	Account protocol.Account
+}
+
+// ModelsHandler lists the models an account serves, by their upstream names, and who provides
+// them (protocol minor version 3). Return an empty list for an account the extension has no
+// list for. An *llm.Error is sent as it is, any other error as code internal.
+type ModelsHandler func(ctx context.Context, call ModelsCall) (*protocol.ModelList, error)
+
 // SessionCall is one session call: open a session of a kind on an account.
 type SessionCall struct {
 	ID      string
@@ -107,6 +120,8 @@ type Extension struct {
 	// InputTokens (the count) and Raw (the upstream's count reply); an account that cannot
 	// count returns code unsupported with scope credential, retryable.
 	CountTokens Handler
+	// Models, when set, lists an account's models (protocol minor version 3).
+	Models ModelsHandler
 }
 
 // operations lists the operations ext serves.
@@ -123,6 +138,9 @@ func (ext Extension) operations() []string {
 	}
 	if ext.CountTokens != nil {
 		ops = append(ops, protocol.OpCountTokens)
+	}
+	if ext.Models != nil {
+		ops = append(ops, protocol.OpModels)
 	}
 	return ops
 }
@@ -254,6 +272,8 @@ func (s *server) handle(conn net.Conn) {
 		s.refresh(conn, call)
 	case protocol.OpSession:
 		s.session(conn, call)
+	case protocol.OpModels:
+		s.models(conn, call)
 	default:
 		_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: llm.EventError, Error: &llm.Error{
 			Code: llm.CodeUnsupported, Message: fmt.Sprintf("unknown operation %q", call.Op), Scope: llm.ScopeRequest,
@@ -561,6 +581,49 @@ func (s *server) refresh(conn net.Conn, call protocol.Call) {
 		reply = protocol.Reply{Event: llm.Event{Type: llm.EventError, Error: asError(ctx, err)}}
 	}
 	_ = protocol.WriteFrame(conn, reply)
+}
+
+func (s *server) models(conn net.Conn, call protocol.Call) {
+	ctx, cancel, ok := s.begin(conn)
+	if !ok {
+		return
+	}
+	defer cancel()
+	go func() {
+		_, _ = io.Copy(io.Discard, conn)
+		cancel()
+	}()
+	c := ModelsCall{ID: call.ID}
+	if call.Account != nil {
+		c.Account = *call.Account
+	}
+	var list *protocol.ModelList
+	var err error
+	if s.ext.Models == nil {
+		err = &llm.Error{Code: llm.CodeUnsupported, Message: "this extension does not list models", Scope: llm.ScopeRequest}
+	} else {
+		list, err = runModels(ctx, s.ext.Models, c)
+	}
+	if err == nil && list == nil {
+		list = &protocol.ModelList{}
+	}
+	if err == nil && list.Models == nil {
+		list.Models = []protocol.Model{}
+	}
+	reply := protocol.Reply{Event: llm.Event{Type: protocol.TypeModelsResult}, Models: list}
+	if err != nil {
+		reply = protocol.Reply{Event: llm.Event{Type: llm.EventError, Error: asError(ctx, err)}}
+	}
+	_ = protocol.WriteFrame(conn, reply)
+}
+
+func runModels(ctx context.Context, h ModelsHandler, c ModelsCall) (list *protocol.ModelList, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = &llm.Error{Code: llm.CodeInternal, Message: fmt.Sprintf("the extension panicked: %v", r)}
+		}
+	}()
+	return h(ctx, c)
 }
 
 func runRefresh(ctx context.Context, h RefreshHandler, c RefreshCall) (cred *protocol.Credential, err error) {

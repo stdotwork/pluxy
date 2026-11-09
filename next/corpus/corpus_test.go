@@ -153,13 +153,14 @@ func runCase(t *testing.T, c *Case, global *Global) Result {
 	volatile := append(append([]string(nil), global.Volatile...), c.Volatile...)
 
 	newObs, err := observe(t, c, "new", func(dir, upstreamURL, _, _ string) (*Core, error) {
-		return StartNewCore(binDir, dir, c.Provider, upstreamURL, c.AccountModels, UpstreamKeys(c.Accounts), c.NewCoreConfig)
+		return StartNewCore(binDir, dir, c.Provider, upstreamURL, c.AccountModels, UpstreamKeys(c.Accounts), c.NewCoreConfig, c.NewCore)
 	})
 	if err != nil {
 		res.Err = fmt.Errorf("new core: %w", err)
 		return res
 	}
 	Mask(newObs, volatile)
+	SortAt(newObs, c.Unordered)
 	if dir := os.Getenv("PLUXY_CORPUS_DUMP_NEW"); dir != "" {
 		b, _ := json.Marshal(newObs)
 		if b, err = FormatJSON(b); err == nil {
@@ -178,17 +179,19 @@ func runCase(t *testing.T, c *Case, global *Global) Result {
 			return res
 		}
 		Mask(ref, volatile)
+		SortAt(ref, c.Unordered)
 	}
 	if liveOld {
 		oldObs, err := observe(t, c, "old", func(dir, upstreamURL, proxyURL, caFile string) (*Core, error) {
 			return StartOldCore(OldCoreSetup{Binary: oldBinary, WorkDir: dir, Provider: c.Provider, UpstreamURL: upstreamURL, Models: caseModels(c), Keys: UpstreamKeys(c.Accounts),
-				ProxyURL: proxyURL, CAFile: caFile})
+				ProxyURL: proxyURL, CAFile: caFile, Override: c.OldCore})
 		})
 		if err != nil {
 			res.Err = fmt.Errorf("old core: %w", err)
 			return res
 		}
 		Mask(oldObs, volatile)
+		SortAt(oldObs, c.Unordered)
 		switch {
 		case record:
 			if err := c.SaveRecorded(oldObs); err != nil {

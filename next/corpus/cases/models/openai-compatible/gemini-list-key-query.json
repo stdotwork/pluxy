@@ -1,0 +1,31 @@
+{
+  "description": "Gemini's model list takes the client key in the key query parameter, as Gemini's clients send it.",
+  "source": ["core/internal/access/config_access/provider.go"],
+  "client": {"method":"GET","path":"/v1beta/models?key=corpus-client-key","auth":"none"},
+  "old_core": {"account":{"models":[{"name":"up-model-b"}]}},
+  "new_core": {"account":{"models":["up-model-b"]}},
+  "unordered": ["client.body.models"],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "models": [
+          {
+            "description": "up-model-b",
+            "displayName": "up-model-b",
+            "name": "models/up-model-b",
+            "supportedGenerationMethods": ["generateContent"]
+          }
+        ]
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8"
+      },
+      "status": 200
+    },
+    "upstream": []
+  }
+}

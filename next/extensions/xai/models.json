@@ -1,0 +1,200 @@
+{
+  "models": [
+    {
+      "id": "grok-4.7",
+      "name": "grok-4.7",
+      "display_name": "Grok 4.7",
+      "description": "SpaceXAI's frontier model for coding, agentic tasks, and knowledge work.",
+      "created": 1789948800,
+      "owned_by": "xai",
+      "context_length": 500000,
+      "max_completion_tokens": 500000,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "grok-4.7-build-fast",
+      "name": "grok-4.7-build-fast",
+      "display_name": "Grok 4.7 Fast",
+      "description": "Grok 4.7 Fast as served by the Grok Build chat-proxy. Same model as grok-4.7 on the faster tier.",
+      "created": 1789948800,
+      "owned_by": "xai",
+      "context_length": 500000,
+      "max_completion_tokens": 500000,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "grok-4.6",
+      "name": "grok-4.6",
+      "display_name": "Grok 4.6",
+      "description": "SpaceXAI's smartest model built for long-running agents, interactive and visual work.",
+      "created": 1785974400,
+      "owned_by": "xai",
+      "context_length": 500000,
+      "max_completion_tokens": 65536,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "grok-build-0.1",
+      "name": "grok-build-0.1",
+      "display_name": "Grok Build 0.1",
+      "description": "Grok Build 0.1 is xAI\u2019s fast coding model trained specifically for agentic software engineering workflows.",
+      "created": 1779321600,
+      "owned_by": "xai",
+      "context_length": 256000,
+      "max_completion_tokens": 256000,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "grok-4.5",
+      "name": "grok-4.5",
+      "display_name": "Grok 4.5",
+      "description": "SpaceXAI's intelligent coding model for agentic software, engineering, and workflow tasks.",
+      "created": 1783526400,
+      "owned_by": "xai",
+      "context_length": 500000,
+      "max_completion_tokens": 65536,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "grok-4.3",
+      "name": "grok-4.3",
+      "display_name": "Grok 4.3",
+      "description": "xAI Grok 4.3 model for the Responses API.",
+      "created": 1775606400,
+      "owned_by": "xai",
+      "context_length": 1000000,
+      "max_completion_tokens": 65536,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "grok-4.20-0309-reasoning",
+      "name": "grok-4.20-0309-reasoning",
+      "display_name": "Grok 4.20 0309 Reasoning",
+      "description": "xAI Grok 4.20 0309 reasoning model for the Responses API.",
+      "created": 1773014400,
+      "owned_by": "xai",
+      "context_length": 2000000,
+      "max_completion_tokens": 65536,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "grok-4.20-0309-non-reasoning",
+      "name": "grok-4.20-0309-non-reasoning",
+      "display_name": "Grok 4.20 0309 Non Reasoning",
+      "description": "xAI Grok 4.20 0309 non-reasoning model for the Responses API.",
+      "created": 1773014400,
+      "owned_by": "xai",
+      "context_length": 2000000,
+      "max_completion_tokens": 65536,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "grok-4.20-multi-agent-0309",
+      "name": "grok-4.20-multi-agent-0309",
+      "display_name": "Grok 4.20 Multi Agent 0309",
+      "description": "xAI Grok 4.20 multi-agent model for the Responses API.",
+      "created": 1773014400,
+      "owned_by": "xai",
+      "context_length": 2000000,
+      "max_completion_tokens": 65536,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "grok-3-mini",
+      "name": "grok-3-mini",
+      "display_name": "Grok 3 Mini",
+      "description": "xAI Grok 3 Mini model for the Responses API.",
+      "created": 1740960000,
+      "owned_by": "xai",
+      "context_length": 131072,
+      "max_completion_tokens": 32768,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "grok-3-mini-fast",
+      "name": "grok-3-mini-fast",
+      "display_name": "Grok 3 Mini Fast",
+      "description": "xAI Grok 3 Mini Fast model for the Responses API.",
+      "created": 1740960000,
+      "owned_by": "xai",
+      "context_length": 131072,
+      "max_completion_tokens": 32768,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "grok-composer-2.5-fast",
+      "name": "grok-composer-2.5-fast",
+      "display_name": "Composer 2.5 Fast",
+      "description": "xAI Composer 2.5 Fast model for the Responses API.",
+      "created": 1740960000,
+      "owned_by": "xai",
+      "context_length": 200000,
+      "max_completion_tokens": 32768
+    }
+  ],
+  "owned_by": "xai"
+}

@@ -1,0 +1,572 @@
+{
+  "description": "A Vertex express key whose config lists no models lists today's Vertex catalog in Gemini's shape.",
+  "source": [
+    "core/sdk/cliproxy/service_models.go",
+    "core/internal/registry/models/models.json vertex",
+    "core/sdk/api/handlers/gemini/gemini_handlers.go GeminiModels"
+  ],
+  "client": {"method":"GET","path":"/v1beta/models"},
+  "account_models": ["gemini-2.5-pro"],
+  "old_core": {"account":{"models":null}},
+  "new_core": {"account":{"models":null}},
+  "unordered": ["client.body.models"],
+  "exceptions": [
+    {
+      "path": "client.body.models",
+      "kind": "intended",
+      "reason": "Today's core lists Vertex's imagen-* models, whose only method is predict; the Gemini extension serves generateContent only, so it does not list them.",
+      "want": [
+        {
+          "description": "Gemini 3 Pro Image",
+          "displayName": "Gemini 3 Pro Image",
+          "inputTokenLimit": 1048576,
+          "name": "models/gemini-3-pro-image",
+          "outputTokenLimit": 65536,
+          "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+          ],
+          "supportedInputModalities": ["text","image"],
+          "supportedOutputModalities": ["text","image"],
+          "version": "3.0"
+        },
+        {
+          "description": "Gemini 3 Pro",
+          "displayName": "Gemini 3 Pro",
+          "inputTokenLimit": 1048576,
+          "name": "models/gemini-3-pro",
+          "outputTokenLimit": 65536,
+          "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+          ],
+          "supportedInputModalities": ["text","image","audio","video"],
+          "supportedOutputModalities": ["text"],
+          "version": "3.0"
+        },
+        {
+          "description": "Gemini 3.1 Flash Image",
+          "displayName": "Gemini 3.1 Flash Image",
+          "inputTokenLimit": 1048576,
+          "name": "models/gemini-3.1-flash-image",
+          "outputTokenLimit": 65536,
+          "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+          ],
+          "supportedInputModalities": ["text","image"],
+          "supportedOutputModalities": ["text","image"],
+          "version": "3.1"
+        },
+        {
+          "description": "Gemini 3.1 Pro Preview",
+          "displayName": "Gemini 3.1 Pro Preview",
+          "inputTokenLimit": 1048576,
+          "name": "models/gemini-3.1-pro-preview",
+          "outputTokenLimit": 65536,
+          "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+          ],
+          "supportedInputModalities": ["text","image","audio","video"],
+          "supportedOutputModalities": ["text"],
+          "version": "3.1"
+        },
+        {
+          "description": "Gemini 3.1 Pro",
+          "displayName": "Gemini 3.1 Pro",
+          "inputTokenLimit": 1048576,
+          "name": "models/gemini-3.1-pro",
+          "outputTokenLimit": 65536,
+          "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+          ],
+          "supportedInputModalities": ["text","image","audio","video"],
+          "supportedOutputModalities": ["text"],
+          "version": "3.1"
+        },
+        {
+          "description": "Gemini 3.5 Flash Lite",
+          "displayName": "Gemini 3.5 Flash Lite",
+          "inputTokenLimit": 1048576,
+          "name": "models/gemini-3.5-flash-lite",
+          "outputTokenLimit": 65536,
+          "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+          ],
+          "supportedInputModalities": ["text","image","audio","video"],
+          "supportedOutputModalities": ["text"],
+          "version": "3.5"
+        },
+        {
+          "description": "Gemini 3.6 Flash",
+          "displayName": "Gemini 3.6 Flash",
+          "inputTokenLimit": 1048576,
+          "name": "models/gemini-3.6-flash",
+          "outputTokenLimit": 65536,
+          "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+          ],
+          "supportedInputModalities": ["text","image","audio","video"],
+          "supportedOutputModalities": ["text"],
+          "version": "3.6"
+        },
+        {
+          "description": "Gemini 3.8 Flash",
+          "displayName": "Gemini 3.8 Flash",
+          "inputTokenLimit": 1048576,
+          "name": "models/gemini-3.8-flash",
+          "outputTokenLimit": 65536,
+          "supportedGenerationMethods": ["generateContent"],
+          "supportedInputModalities": ["text","image","audio","video"],
+          "supportedOutputModalities": ["text"]
+        },
+        {
+          "description": "Gemini 4 Argon",
+          "displayName": "Gemini 4 Argon",
+          "inputTokenLimit": 1048576,
+          "name": "models/gemini-4-argon",
+          "outputTokenLimit": 1048576,
+          "supportedGenerationMethods": ["generateContent"],
+          "supportedInputModalities": ["text","image","audio","video"],
+          "supportedOutputModalities": ["text"]
+        },
+        {
+          "description": "Our most intelligent model built for speed, combining frontier intelligence with superior search and grounding.",
+          "displayName": "Gemini 3 Flash",
+          "inputTokenLimit": 1048576,
+          "name": "models/gemini-3-flash",
+          "outputTokenLimit": 65536,
+          "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+          ],
+          "supportedInputModalities": ["text","image","audio","video"],
+          "supportedOutputModalities": ["text"],
+          "version": "3.0"
+        },
+        {
+          "description": "Our most intelligent model built for speed, combining frontier intelligence with superior search and grounding.",
+          "displayName": "Gemini 3.5 Flash",
+          "inputTokenLimit": 1048576,
+          "name": "models/gemini-3.5-flash",
+          "outputTokenLimit": 65536,
+          "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+          ],
+          "supportedInputModalities": ["text","image","audio","video"],
+          "supportedOutputModalities": ["text"],
+          "version": "3.5"
+        },
+        {
+          "description": "Our smallest and most cost effective model, built for at scale usage.",
+          "displayName": "Gemini 2.5 Flash Lite",
+          "inputTokenLimit": 1048576,
+          "name": "models/gemini-2.5-flash-lite",
+          "outputTokenLimit": 65536,
+          "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+          ],
+          "supportedInputModalities": ["text","image","audio","video"],
+          "supportedOutputModalities": ["text"],
+          "version": "2.5"
+        },
+        {
+          "description": "Our smallest and most cost effective model, built for at scale usage.",
+          "displayName": "Gemini 3.1 Flash Lite",
+          "inputTokenLimit": 1048576,
+          "name": "models/gemini-3.1-flash-lite",
+          "outputTokenLimit": 65536,
+          "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+          ],
+          "supportedInputModalities": ["text","image","audio","video"],
+          "supportedOutputModalities": ["text"],
+          "version": "3.1"
+        },
+        {
+          "description": "Our state-of-the-art image generation and editing model.",
+          "displayName": "Gemini 2.5 Flash Image",
+          "inputTokenLimit": 1048576,
+          "name": "models/gemini-2.5-flash-image",
+          "outputTokenLimit": 65536,
+          "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+          ],
+          "supportedInputModalities": ["text","image"],
+          "supportedOutputModalities": ["text","image"],
+          "version": "001"
+        },
+        {
+          "description": "Stable release (June 17th, 2025) of Gemini 2.5 Pro",
+          "displayName": "Gemini 2.5 Pro",
+          "inputTokenLimit": 1048576,
+          "name": "models/gemini-2.5-pro",
+          "outputTokenLimit": 65536,
+          "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+          ],
+          "supportedInputModalities": ["text","image","audio","video"],
+          "supportedOutputModalities": ["text"],
+          "version": "2.5"
+        },
+        {
+          "description": "Stable version of Gemini 2.5 Flash, our mid-size multimodal model that supports up to 1 million tokens, released in June of 2025.",
+          "displayName": "Gemini 2.5 Flash",
+          "inputTokenLimit": 1048576,
+          "name": "models/gemini-2.5-flash",
+          "outputTokenLimit": 65536,
+          "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+          ],
+          "supportedInputModalities": ["text","image","audio","video"],
+          "supportedOutputModalities": ["text"],
+          "version": "001"
+        }
+      ]
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "models": [
+          {
+            "description": "Gemini 3 Pro Image",
+            "displayName": "Gemini 3 Pro Image",
+            "inputTokenLimit": 1048576,
+            "name": "models/gemini-3-pro-image",
+            "outputTokenLimit": 65536,
+            "supportedGenerationMethods": [
+              "generateContent",
+              "countTokens",
+              "createCachedContent",
+              "batchGenerateContent"
+            ],
+            "supportedInputModalities": ["text","image"],
+            "supportedOutputModalities": ["text","image"],
+            "version": "3.0"
+          },
+          {
+            "description": "Gemini 3 Pro",
+            "displayName": "Gemini 3 Pro",
+            "inputTokenLimit": 1048576,
+            "name": "models/gemini-3-pro",
+            "outputTokenLimit": 65536,
+            "supportedGenerationMethods": [
+              "generateContent",
+              "countTokens",
+              "createCachedContent",
+              "batchGenerateContent"
+            ],
+            "supportedInputModalities": ["text","image","audio","video"],
+            "supportedOutputModalities": ["text"],
+            "version": "3.0"
+          },
+          {
+            "description": "Gemini 3.1 Flash Image",
+            "displayName": "Gemini 3.1 Flash Image",
+            "inputTokenLimit": 1048576,
+            "name": "models/gemini-3.1-flash-image",
+            "outputTokenLimit": 65536,
+            "supportedGenerationMethods": [
+              "generateContent",
+              "countTokens",
+              "createCachedContent",
+              "batchGenerateContent"
+            ],
+            "supportedInputModalities": ["text","image"],
+            "supportedOutputModalities": ["text","image"],
+            "version": "3.1"
+          },
+          {
+            "description": "Gemini 3.1 Pro Preview",
+            "displayName": "Gemini 3.1 Pro Preview",
+            "inputTokenLimit": 1048576,
+            "name": "models/gemini-3.1-pro-preview",
+            "outputTokenLimit": 65536,
+            "supportedGenerationMethods": [
+              "generateContent",
+              "countTokens",
+              "createCachedContent",
+              "batchGenerateContent"
+            ],
+            "supportedInputModalities": ["text","image","audio","video"],
+            "supportedOutputModalities": ["text"],
+            "version": "3.1"
+          },
+          {
+            "description": "Gemini 3.1 Pro",
+            "displayName": "Gemini 3.1 Pro",
+            "inputTokenLimit": 1048576,
+            "name": "models/gemini-3.1-pro",
+            "outputTokenLimit": 65536,
+            "supportedGenerationMethods": [
+              "generateContent",
+              "countTokens",
+              "createCachedContent",
+              "batchGenerateContent"
+            ],
+            "supportedInputModalities": ["text","image","audio","video"],
+            "supportedOutputModalities": ["text"],
+            "version": "3.1"
+          },
+          {
+            "description": "Gemini 3.5 Flash Lite",
+            "displayName": "Gemini 3.5 Flash Lite",
+            "inputTokenLimit": 1048576,
+            "name": "models/gemini-3.5-flash-lite",
+            "outputTokenLimit": 65536,
+            "supportedGenerationMethods": [
+              "generateContent",
+              "countTokens",
+              "createCachedContent",
+              "batchGenerateContent"
+            ],
+            "supportedInputModalities": ["text","image","audio","video"],
+            "supportedOutputModalities": ["text"],
+            "version": "3.5"
+          },
+          {
+            "description": "Gemini 3.6 Flash",
+            "displayName": "Gemini 3.6 Flash",
+            "inputTokenLimit": 1048576,
+            "name": "models/gemini-3.6-flash",
+            "outputTokenLimit": 65536,
+            "supportedGenerationMethods": [
+              "generateContent",
+              "countTokens",
+              "createCachedContent",
+              "batchGenerateContent"
+            ],
+            "supportedInputModalities": ["text","image","audio","video"],
+            "supportedOutputModalities": ["text"],
+            "version": "3.6"
+          },
+          {
+            "description": "Gemini 3.8 Flash",
+            "displayName": "Gemini 3.8 Flash",
+            "inputTokenLimit": 1048576,
+            "name": "models/gemini-3.8-flash",
+            "outputTokenLimit": 65536,
+            "supportedGenerationMethods": ["generateContent"],
+            "supportedInputModalities": ["text","image","audio","video"],
+            "supportedOutputModalities": ["text"]
+          },
+          {
+            "description": "Gemini 4 Argon",
+            "displayName": "Gemini 4 Argon",
+            "inputTokenLimit": 1048576,
+            "name": "models/gemini-4-argon",
+            "outputTokenLimit": 1048576,
+            "supportedGenerationMethods": ["generateContent"],
+            "supportedInputModalities": ["text","image","audio","video"],
+            "supportedOutputModalities": ["text"]
+          },
+          {
+            "description": "Imagen 3.0 fast image generation model",
+            "displayName": "Imagen 3.0 Fast Generate",
+            "name": "models/imagen-3.0-fast-generate-001",
+            "supportedGenerationMethods": ["predict"],
+            "supportedInputModalities": ["text"],
+            "supportedOutputModalities": ["image"],
+            "version": "3.0"
+          },
+          {
+            "description": "Imagen 3.0 image generation model",
+            "displayName": "Imagen 3.0 Generate",
+            "name": "models/imagen-3.0-generate-002",
+            "supportedGenerationMethods": ["predict"],
+            "supportedInputModalities": ["text"],
+            "supportedOutputModalities": ["image"],
+            "version": "3.0"
+          },
+          {
+            "description": "Imagen 4.0 Ultra high-quality image generation model",
+            "displayName": "Imagen 4.0 Ultra Generate",
+            "name": "models/imagen-4.0-ultra-generate-001",
+            "supportedGenerationMethods": ["predict"],
+            "supportedInputModalities": ["text"],
+            "supportedOutputModalities": ["image"],
+            "version": "4.0"
+          },
+          {
+            "description": "Imagen 4.0 fast image generation model",
+            "displayName": "Imagen 4.0 Fast Generate",
+            "name": "models/imagen-4.0-fast-generate-001",
+            "supportedGenerationMethods": ["predict"],
+            "supportedInputModalities": ["text"],
+            "supportedOutputModalities": ["image"],
+            "version": "4.0"
+          },
+          {
+            "description": "Imagen 4.0 image generation model",
+            "displayName": "Imagen 4.0 Generate",
+            "name": "models/imagen-4.0-generate-001",
+            "supportedGenerationMethods": ["predict"],
+            "supportedInputModalities": ["text"],
+            "supportedOutputModalities": ["image"],
+            "version": "4.0"
+          },
+          {
+            "description": "Our most intelligent model built for speed, combining frontier intelligence with superior search and grounding.",
+            "displayName": "Gemini 3 Flash",
+            "inputTokenLimit": 1048576,
+            "name": "models/gemini-3-flash",
+            "outputTokenLimit": 65536,
+            "supportedGenerationMethods": [
+              "generateContent",
+              "countTokens",
+              "createCachedContent",
+              "batchGenerateContent"
+            ],
+            "supportedInputModalities": ["text","image","audio","video"],
+            "supportedOutputModalities": ["text"],
+            "version": "3.0"
+          },
+          {
+            "description": "Our most intelligent model built for speed, combining frontier intelligence with superior search and grounding.",
+            "displayName": "Gemini 3.5 Flash",
+            "inputTokenLimit": 1048576,
+            "name": "models/gemini-3.5-flash",
+            "outputTokenLimit": 65536,
+            "supportedGenerationMethods": [
+              "generateContent",
+              "countTokens",
+              "createCachedContent",
+              "batchGenerateContent"
+            ],
+            "supportedInputModalities": ["text","image","audio","video"],
+            "supportedOutputModalities": ["text"],
+            "version": "3.5"
+          },
+          {
+            "description": "Our smallest and most cost effective model, built for at scale usage.",
+            "displayName": "Gemini 2.5 Flash Lite",
+            "inputTokenLimit": 1048576,
+            "name": "models/gemini-2.5-flash-lite",
+            "outputTokenLimit": 65536,
+            "supportedGenerationMethods": [
+              "generateContent",
+              "countTokens",
+              "createCachedContent",
+              "batchGenerateContent"
+            ],
+            "supportedInputModalities": ["text","image","audio","video"],
+            "supportedOutputModalities": ["text"],
+            "version": "2.5"
+          },
+          {
+            "description": "Our smallest and most cost effective model, built for at scale usage.",
+            "displayName": "Gemini 3.1 Flash Lite",
+            "inputTokenLimit": 1048576,
+            "name": "models/gemini-3.1-flash-lite",
+            "outputTokenLimit": 65536,
+            "supportedGenerationMethods": [
+              "generateContent",
+              "countTokens",
+              "createCachedContent",
+              "batchGenerateContent"
+            ],
+            "supportedInputModalities": ["text","image","audio","video"],
+            "supportedOutputModalities": ["text"],
+            "version": "3.1"
+          },
+          {
+            "description": "Our state-of-the-art image generation and editing model.",
+            "displayName": "Gemini 2.5 Flash Image",
+            "inputTokenLimit": 1048576,
+            "name": "models/gemini-2.5-flash-image",
+            "outputTokenLimit": 65536,
+            "supportedGenerationMethods": [
+              "generateContent",
+              "countTokens",
+              "createCachedContent",
+              "batchGenerateContent"
+            ],
+            "supportedInputModalities": ["text","image"],
+            "supportedOutputModalities": ["text","image"],
+            "version": "001"
+          },
+          {
+            "description": "Stable release (June 17th, 2025) of Gemini 2.5 Pro",
+            "displayName": "Gemini 2.5 Pro",
+            "inputTokenLimit": 1048576,
+            "name": "models/gemini-2.5-pro",
+            "outputTokenLimit": 65536,
+            "supportedGenerationMethods": [
+              "generateContent",
+              "countTokens",
+              "createCachedContent",
+              "batchGenerateContent"
+            ],
+            "supportedInputModalities": ["text","image","audio","video"],
+            "supportedOutputModalities": ["text"],
+            "version": "2.5"
+          },
+          {
+            "description": "Stable version of Gemini 2.5 Flash, our mid-size multimodal model that supports up to 1 million tokens, released in June of 2025.",
+            "displayName": "Gemini 2.5 Flash",
+            "inputTokenLimit": 1048576,
+            "name": "models/gemini-2.5-flash",
+            "outputTokenLimit": 65536,
+            "supportedGenerationMethods": [
+              "generateContent",
+              "countTokens",
+              "createCachedContent",
+              "batchGenerateContent"
+            ],
+            "supportedInputModalities": ["text","image","audio","video"],
+            "supportedOutputModalities": ["text"],
+            "version": "001"
+          }
+        ]
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8"
+      },
+      "status": 200
+    },
+    "upstream": []
+  }
+}

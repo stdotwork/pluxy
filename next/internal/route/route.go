@@ -47,6 +47,10 @@ type Config struct {
 	MaxWaitMS int64 `json:"max_wait_ms,omitempty"`
 	// SessionAffinity, when set, sends requests of the same session to the same account.
 	SessionAffinity *AffinityConfig `json:"session_affinity,omitempty"`
+	// ForceModelPrefix: an account with a Prefix serves its models only under
+	// "<prefix>/<model>", except a model whose name is the prefix itself (today's
+	// force-model-prefix).
+	ForceModelPrefix bool `json:"force_model_prefix,omitempty"`
 }
 
 // AffinityConfig turns on session affinity.
@@ -119,7 +123,8 @@ type Router struct {
 	picker   *picker
 	affinity *affinity // nil without session affinity
 	ttl      time.Duration
-	gen      uint64 // this router's generation, from state (see State.Retain)
+	gen      uint64    // this router's generation, from state (see State.Retain)
+	created  time.Time // when the router was made: the created time of models accounts list themselves
 
 	mu       sync.RWMutex // guards accounts and creds
 	accounts []*Account
@@ -142,7 +147,7 @@ func New(cfg Config, accounts []Account, attempt AttemptFunc, state *State) (*Ro
 	if state == nil {
 		state = NewState()
 	}
-	r := &Router{cfg: cfg, attempt: attempt, state: state, gen: state.nextGen(), now: time.Now, sleep: sleepCtx, rand: rand.Float64}
+	r := &Router{cfg: cfg, attempt: attempt, state: state, gen: state.nextGen(), created: time.Now(), now: time.Now, sleep: sleepCtx, rand: rand.Float64}
 	var err error
 	if r.accounts, err = accountList(accounts, r.gen); err != nil {
 		return nil, err
@@ -167,6 +172,9 @@ func accountList(accounts []Account, gen uint64) ([]*Account, error) {
 		a := accounts[i]
 		if a.ID == "" || seen[a.ID] {
 			return nil, fmt.Errorf("account IDs must be set and unique (%q)", a.ID)
+		}
+		if err := a.checkNames(); err != nil {
+			return nil, fmt.Errorf("account %q: %w", a.ID, err)
 		}
 		seen[a.ID] = true
 		a.gen = gen
@@ -241,12 +249,13 @@ type call struct {
 	ctx context.Context
 	req Request
 
-	started bool
-	final   *llm.Event // set when the request ended without a running attempt
-	cur     Stream     // the attempt whose reply reached the caller
-	acct    *Account
-	seq     uint64
-	ended   bool // the attempt's reservation is released
+	started  bool
+	final    *llm.Event // set when the request ended without a running attempt
+	cur      Stream     // the attempt whose reply reached the caller
+	acct     *Account
+	seq      uint64
+	upstream map[string]string // each capable account's name for the request's model, by account ID
+	ended    bool              // the attempt's reservation is released
 
 	creds   Credentials
 	renewed map[string]bool // accounts whose refused credential was renewed during this request
@@ -271,9 +280,9 @@ func (c *call) Next() llm.Event {
 		// After the reply has started, an outcome still updates the account's state, but the
 		// request is never retried: the caller may already have sent bytes to the client.
 		if ev.Type == llm.EventFinish {
-			c.r.state.success(c.acct, c.req.LLM.Model, c.seq)
+			c.r.state.success(c.acct, c.upstream[c.acct.ID], c.seq)
 		} else {
-			c.r.state.failure(c.acct, c.req.LLM.Model, ev.Error, c.r.now())
+			c.r.state.failure(c.acct, c.upstream[c.acct.ID], ev.Error, c.r.now())
 		}
 		c.release()
 	}
@@ -301,9 +310,15 @@ func (c *call) route() llm.Event {
 	accounts, creds := r.snapshot()
 	c.creds = creds
 	var capable []*Account
+	c.upstream = map[string]string{}
 	for _, a := range accounts {
-		if a.serves(model) && (c.req.Pin == "" || a.ID == c.req.Pin) && (r.picker.strategy != StrategyWeighted || a.weight() > 0) {
+		if c.req.Pin != "" && a.ID != c.req.Pin || r.picker.strategy == StrategyWeighted && a.weight() == 0 {
+			continue
+		}
+		// Blocks on a model are kept under its upstream name, which is the account's own.
+		if up, ok := a.resolve(model, r.cfg.ForceModelPrefix); ok {
 			capable = append(capable, a)
+			c.upstream[a.ID] = up
 		}
 	}
 	if len(capable) == 0 {
@@ -329,7 +344,7 @@ func (c *call) route() llm.Event {
 			if r.cfg.MaxAccounts > 0 && len(used) >= r.cfg.MaxAccounts && !used[a.ID] {
 				continue
 			}
-			until, reason, full := r.state.availability(a, model, now)
+			until, reason, full := r.state.availability(a, c.upstream[a.ID], now)
 			switch {
 			case full:
 				busy = true
@@ -355,7 +370,7 @@ func (c *call) route() llm.Event {
 			if r.beforeReserve != nil {
 				r.beforeReserve(a.ID)
 			}
-			seq, ok := r.state.reserve(a, model, r.now())
+			seq, ok := r.state.reserve(a, c.upstream[a.ID], r.now())
 			if !ok {
 				// Another request took the account's last slot, or a block landed, since the
 				// candidates were gathered: choose again.
@@ -463,7 +478,7 @@ func (c *call) try(a *Account, seq uint64) (ev llm.Event, started bool) {
 			call.Credential, version, e = c.creds.Credential(c.ctx, a.Extension, a.ID)
 		}
 		if e != nil {
-			r.state.failure(a, c.req.LLM.Model, e, r.now())
+			r.state.failure(a, c.upstream[a.ID], e, r.now())
 			r.state.end(a)
 			return errorEvent(e), false
 		}
@@ -472,7 +487,7 @@ func (c *call) try(a *Account, seq uint64) (ev llm.Event, started bool) {
 	if c.req.Attempt != nil {
 		attempt = c.req.Attempt
 	}
-	s := attempt(c.ctx, a.Extension, call, c.req.LLM)
+	s := attempt(c.ctx, a.Extension, call, renamed(c.req.LLM, c.upstream[a.ID]))
 	ev = s.Next()
 	if ev.Type == llm.EventError {
 		s.Close()
@@ -489,7 +504,7 @@ func (c *call) try(a *Account, seq uint64) (ev llm.Event, started bool) {
 				return ev, false
 			}
 		}
-		r.state.failure(a, c.req.LLM.Model, ev.Error, r.now())
+		r.state.failure(a, c.upstream[a.ID], ev.Error, r.now())
 		r.state.end(a)
 		return ev, false
 	}
@@ -499,7 +514,7 @@ func (c *call) try(a *Account, seq uint64) (ev llm.Event, started bool) {
 	}
 	if ev.Terminal() {
 		// A reply that is finished in its first event: record it now.
-		c.r.state.success(a, c.req.LLM.Model, seq)
+		c.r.state.success(a, c.upstream[a.ID], seq)
 		c.release()
 	}
 	return ev, true

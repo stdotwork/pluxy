@@ -3,8 +3,12 @@ package server
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/stdotwork/pluxy/next/internal/route"
+	"github.com/stdotwork/pluxy/next/protocol"
 )
 
 // An extension timing too large for a time.Duration is refused, not wrapped into a negative
@@ -95,5 +99,34 @@ claude-api-key:
 	// A JSON config is not read as YAML.
 	if _, err := ParseConfig([]byte("port: 9100\n"), "/srv/pluxy/config.json"); err == nil {
 		t.Error("a config.json in YAML was accepted")
+	}
+}
+
+// An extension's model_alias and excluded_models apply to its accounts added by login as today's
+// oauth-model-alias and oauth-excluded-models apply to auth files: the account's own aliases
+// come first and an alias it has is not added again; its own exclusions replace the extension's.
+// An account added with an API key gets neither, as today's skip API-key auth files.
+func TestLoginDefaults(t *testing.T) {
+	x := ExtensionConfig{
+		ModelAlias:     []route.ModelAlias{{Name: "m1", Alias: "one"}, {Name: "m2", Alias: "TWO"}},
+		ExcludedModels: []string{"x-*"},
+	}
+	got := x.LoginDefaults(Account{ID: "a", ModelAlias: []route.ModelAlias{{Name: "m3", Alias: "two"}}}, protocol.CredentialOAuth)
+	if want := []route.ModelAlias{{Name: "m3", Alias: "two"}, {Name: "m1", Alias: "one"}}; !reflect.DeepEqual(got.ModelAlias, want) {
+		t.Errorf("aliases = %+v, want %+v", got.ModelAlias, want)
+	}
+	if !reflect.DeepEqual(got.ExcludedModels, []string{"x-*"}) {
+		t.Errorf("excluded = %v, want the extension's", got.ExcludedModels)
+	}
+	own := x.LoginDefaults(Account{ID: "b", ExcludedModels: []string{"y"}}, protocol.CredentialOAuth)
+	if !reflect.DeepEqual(own.ExcludedModels, []string{"y"}) || len(own.ModelAlias) != 2 {
+		t.Errorf("account with its own exclusions: %+v", own)
+	}
+	if len(x.ModelAlias) != 2 {
+		t.Error("LoginDefaults changed the extension's aliases")
+	}
+	key := x.LoginDefaults(Account{ID: "c"}, protocol.CredentialAPIKey)
+	if len(key.ModelAlias) != 0 || len(key.ExcludedModels) != 0 {
+		t.Errorf("account added with an API key: %+v, want no extension aliases or exclusions", key)
 	}
 }

@@ -1,0 +1,220 @@
+{
+  "description": "A Claude key whose config lists no models lists today's Claude catalog in Anthropic's shape, with each model's display name, release time and limits.",
+  "source": [
+    "core/internal/registry/models/models.json claude",
+    "core/internal/client/claude/models/models.go BuildResponse"
+  ],
+  "client": {"method":"GET","path":"/v1/models","headers":{"Anthropic-Version":"2023-06-01"}},
+  "old_core": {"account":{"models":null}},
+  "new_core": {"account":{"models":null}},
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "data": [
+          {
+            "created_at": "2024-10-22T00:00:00Z",
+            "display_name": "Claude 3.5 Haiku",
+            "id": "claude-3-5-haiku-20241022",
+            "max_input_tokens": 128000,
+            "max_tokens": 8192,
+            "object": "model",
+            "owned_by": "anthropic",
+            "type": "model"
+          },
+          {
+            "created_at": "2024-02-19T00:00:00Z",
+            "display_name": "Claude 3.7 Sonnet",
+            "id": "claude-3-7-sonnet-20250219",
+            "max_input_tokens": 128000,
+            "max_tokens": 8192,
+            "object": "model",
+            "owned_by": "anthropic",
+            "type": "model"
+          },
+          {
+            "created_at": "2024-05-14T00:00:00Z",
+            "display_name": "Claude 4 Opus",
+            "id": "claude-opus-4-20250514",
+            "max_input_tokens": 200000,
+            "max_tokens": 32000,
+            "object": "model",
+            "owned_by": "anthropic",
+            "type": "model"
+          },
+          {
+            "created_at": "2024-05-14T00:00:00Z",
+            "display_name": "Claude 4 Sonnet",
+            "id": "claude-sonnet-4-20250514",
+            "max_input_tokens": 200000,
+            "max_tokens": 64000,
+            "object": "model",
+            "owned_by": "anthropic",
+            "type": "model"
+          },
+          {
+            "created_at": "2024-08-06T12:00:00Z",
+            "display_name": "Claude 4.1 Opus",
+            "id": "claude-opus-4-1-20250805",
+            "max_input_tokens": 200000,
+            "max_tokens": 32000,
+            "object": "model",
+            "owned_by": "anthropic",
+            "type": "model"
+          },
+          {
+            "created_at": "2025-10-01T00:00:00Z",
+            "display_name": "Claude 4.5 Haiku",
+            "id": "claude-haiku-4-5-20251001",
+            "max_input_tokens": 200000,
+            "max_tokens": 64000,
+            "object": "model",
+            "owned_by": "anthropic",
+            "type": "model"
+          },
+          {
+            "created_at": "2025-11-01T00:00:00Z",
+            "display_name": "Claude 4.5 Opus",
+            "id": "claude-opus-4-5-20251101",
+            "max_input_tokens": 200000,
+            "max_tokens": 64000,
+            "object": "model",
+            "owned_by": "anthropic",
+            "type": "model"
+          },
+          {
+            "created_at": "2025-09-29T00:00:00Z",
+            "display_name": "Claude 4.5 Sonnet",
+            "id": "claude-sonnet-4-5-20250929",
+            "max_input_tokens": 200000,
+            "max_tokens": 64000,
+            "object": "model",
+            "owned_by": "anthropic",
+            "type": "model"
+          },
+          {
+            "created_at": "2026-02-05T19:00:00Z",
+            "display_name": "Claude 4.6 Opus",
+            "id": "claude-opus-4-6",
+            "max_input_tokens": 1000000,
+            "max_tokens": 128000,
+            "object": "model",
+            "owned_by": "anthropic",
+            "type": "model"
+          },
+          {
+            "created_at": "2026-02-18T00:00:00Z",
+            "display_name": "Claude 4.6 Sonnet",
+            "id": "claude-sonnet-4-6",
+            "max_input_tokens": 200000,
+            "max_tokens": 64000,
+            "object": "model",
+            "owned_by": "anthropic",
+            "type": "model"
+          },
+          {
+            "created_at": "2026-06-10T00:00:00Z",
+            "display_name": "Claude Fable 5",
+            "id": "claude-fable-5",
+            "max_input_tokens": 1000000,
+            "max_tokens": 128000,
+            "object": "model",
+            "owned_by": "anthropic",
+            "type": "model"
+          },
+          {
+            "created_at": "2026-09-01T00:00:00Z",
+            "display_name": "Claude Fable 5.1",
+            "id": "claude-fable-5-1",
+            "max_input_tokens": 1000000,
+            "max_tokens": 128000,
+            "object": "model",
+            "owned_by": "anthropic",
+            "type": "model"
+          },
+          {
+            "created_at": "2026-09-28T00:00:00Z",
+            "display_name": "Claude Haiku 5.5",
+            "id": "claude-haiku-5-5",
+            "max_input_tokens": 1000000,
+            "max_tokens": 128000,
+            "object": "model",
+            "owned_by": "anthropic",
+            "type": "model"
+          },
+          {
+            "created_at": "2026-04-16T00:00:00Z",
+            "display_name": "Claude Opus 4.7",
+            "id": "claude-opus-4-7",
+            "max_input_tokens": 1000000,
+            "max_tokens": 128000,
+            "object": "model",
+            "owned_by": "anthropic",
+            "type": "model"
+          },
+          {
+            "created_at": "2026-05-28T16:00:00Z",
+            "display_name": "Claude Opus 4.8",
+            "id": "claude-opus-4-8",
+            "max_input_tokens": 1000000,
+            "max_tokens": 128000,
+            "object": "model",
+            "owned_by": "anthropic",
+            "type": "model"
+          },
+          {
+            "created_at": "2026-07-14T14:20:00Z",
+            "display_name": "Claude Opus 5",
+            "id": "claude-opus-5",
+            "max_input_tokens": 1000000,
+            "max_tokens": 128000,
+            "object": "model",
+            "owned_by": "anthropic",
+            "type": "model"
+          },
+          {
+            "created_at": "2026-09-22T00:00:00Z",
+            "display_name": "Claude Opus 5.5",
+            "id": "claude-opus-5-5",
+            "max_input_tokens": 1000000,
+            "max_tokens": 128000,
+            "object": "model",
+            "owned_by": "anthropic",
+            "type": "model"
+          },
+          {
+            "created_at": "2026-06-30T00:00:00Z",
+            "display_name": "Claude Sonnet 5",
+            "id": "claude-sonnet-5",
+            "max_input_tokens": 1000000,
+            "max_tokens": 128000,
+            "object": "model",
+            "owned_by": "anthropic",
+            "type": "model"
+          },
+          {
+            "created_at": "2026-09-28T00:00:00Z",
+            "display_name": "Claude Sonnet 5.5",
+            "id": "claude-sonnet-5-5",
+            "max_input_tokens": 1000000,
+            "max_tokens": 128000,
+            "object": "model",
+            "owned_by": "anthropic",
+            "type": "model"
+          }
+        ],
+        "first_id": "claude-3-5-haiku-20241022",
+        "has_more": false,
+        "last_id": "claude-sonnet-5-5"
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8"
+      },
+      "status": 200
+    },
+    "upstream": []
+  }
+}

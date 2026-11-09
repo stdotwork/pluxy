@@ -402,7 +402,7 @@ func TestFileBackendPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec, err := store.Create(Record{ID: "acct", Extension: provID, State: StateActive, Account: route.Account{Models: []string{"m"}},
+	rec, err := store.Create(Record{ID: "acct", Extension: provID, State: StateActive, Account: route.Account{Models: []route.ModelEntry{{Name: "m"}}},
 		Credential: protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: "a", RefreshToken: "r"}})
 	if err != nil {
 		t.Fatal(err)
