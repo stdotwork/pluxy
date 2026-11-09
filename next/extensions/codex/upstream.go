@@ -85,7 +85,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return statusError(resp, ur.model)
 	}
-	return relay(ctx, resp, &reporting{Stream: out, tr: ur.tr})
+	return relay(ctx, resp, renamer{&reporting{Stream: out, tr: ur.tr}, ur.names})
 }
 
 // setHeaders sets the upstream request's headers.
@@ -157,6 +157,22 @@ func (r *reporting) Send(ev llm.Event) error {
 		ev.Response = &info
 	}
 	return r.Stream.Send(ev)
+}
+
+// renamer gives a tool call the client's own name for the function, where the request sent the
+// upstream another (see shaper.limits).
+type renamer struct {
+	eventSender
+	names map[string]string
+}
+
+func (r renamer) Send(ev llm.Event) error {
+	if ev.Type == llm.EventItemStart && ev.Item != nil && r.names[ev.Item.Name] != "" {
+		item := *ev.Item
+		item.Name = r.names[item.Name]
+		ev.Item = &item
+	}
+	return r.eventSender.Send(ev)
 }
 
 type eventSender interface{ Send(llm.Event) error }

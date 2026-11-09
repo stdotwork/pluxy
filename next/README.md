@@ -266,8 +266,15 @@ reasoning's encrypted content included, sampling settings removed, and the Codex
 client's `User-Agent` and `originator` (turn off with `"codex_identity": false`). Chat
 Completions, Messages and Gemini requests are translated to Responses. A Messages client (such as
 Claude Code) gets each reasoning item's encrypted content as its thinking block's signature, and
-replaying the block sends the reasoning back, so it carries over between turns. Account
-`settings`, all optional:
+replaying the block sends the reasoning back, so it carries over between turns. Codex refuses IDs
+and names over its limits, so, as today's core does, every request's input item IDs are made at
+most 64 characters of ASCII letters, digits, `_` and `-` (an ID gets its item type's prefix
+such as `msg_`, a longer one is cut to 47 characters and ends with a hash, and a reasoning item
+with encrypted content and an ID over the limit is left out). A translated request also gets
+call IDs over 64 bytes cut the same way, and function names made at most 64 bytes of the same
+characters (an MCP name `mcp__server__tool` becomes `mcp__tool`; names that come out the same get
+`_1`, `_2`); the reply gives the client its own names back. A Responses client's function names
+and call IDs go as it wrote them. Account `settings`, all optional:
 
 | Field | Meaning |
 | --- | --- |
