@@ -216,23 +216,34 @@ type settingsView struct {
 }
 
 type routingView struct {
-	Strategy           string    `json:"strategy"`
-	SessionAffinity    bool      `json:"session-affinity"`
-	SessionAffinityTTL string    `json:"session-affinity-ttl"`
-	ForceModelPrefix   bool      `json:"force-model-prefix"`
-	Retry              retryView `json:"retry"`
+	Strategy           string       `json:"strategy"`
+	SessionAffinity    bool         `json:"session-affinity"`
+	SessionAffinityTTL string       `json:"session-affinity-ttl"`
+	ForceModelPrefix   bool         `json:"force-model-prefix"`
+	Retry              retryView    `json:"retry"`
+	Cooldown           cooldownView `json:"cooldown"`
 }
 
 type retryView struct {
-	MaxRetryCredentials int `json:"max-retry-credentials"`
+	// RequestRetry is null while the config leaves rounds to this core's own rules.
+	RequestRetry        *int `json:"request-retry"`
+	MaxRetryCredentials int  `json:"max-retry-credentials"`
 	// MaxRetryInterval is in seconds.
 	MaxRetryInterval float64 `json:"max-retry-interval"`
+}
+
+type cooldownView struct {
+	DisableCooling bool `json:"disable-cooling"`
+	// TransientErrorCooldownSeconds is 0 for this core's backoff, -1 for none.
+	TransientErrorCooldownSeconds float64 `json:"transient-error-cooldown-seconds"`
 }
 
 // settings returns the active config's settings by today's core's names.
 func settings(cfg *server.Config) settingsView {
 	r := cfg.Routing
-	v := routingView{Strategy: r.Strategy, ForceModelPrefix: r.ForceModelPrefix, Retry: retryView{MaxRetryCredentials: r.MaxAccounts, MaxRetryInterval: float64(r.MaxWaitMS) / 1000}}
+	v := routingView{Strategy: r.Strategy, ForceModelPrefix: r.ForceModelPrefix,
+		Retry:    retryView{RequestRetry: r.RequestRetry, MaxRetryCredentials: r.MaxAccounts, MaxRetryInterval: float64(r.MaxWaitMS) / 1000},
+		Cooldown: cooldownView{DisableCooling: r.DisableCooling, TransientErrorCooldownSeconds: float64(max(r.TransientErrorCooldownMS, -1000)) / 1000}}
 	switch r.Strategy {
 	case "":
 		v.Strategy = route.StrategyRoundRobin

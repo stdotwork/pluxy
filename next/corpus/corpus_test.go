@@ -151,15 +151,25 @@ func TestCorpus(t *testing.T) {
 
 func runCase(t *testing.T, c *Case, global *Global) Result {
 	res := Result{Case: c}
-	volatile := append(append([]string(nil), global.Volatile...), c.Volatile...)
+	var volatile []string
+	for _, v := range global.Volatile {
+		volatile = append(volatile, ForEachReply(v)...)
+	}
+	volatile = append(volatile, c.Volatile...)
 
 	newObs, err := observe(t, c, "new", func(dir, upstreamURL, _, _ string) (*Core, error) {
-		return StartNewCore(binDir, dir, c.Provider, upstreamURL, c.AccountModels, UpstreamKeys(c.Accounts), c.NewCoreConfig, c.NewCore)
+		return StartNewCore(binDir, dir, c.Provider, upstreamURL, newCoreModels(c), UpstreamKeys(c.Accounts), c.NewCoreConfig, c.NewCore)
 	})
 	if err != nil {
 		res.Err = fmt.Errorf("new core: %w", err)
 		return res
 	}
+	label := func(o Observation) {
+		if c.LabelAccounts {
+			LabelAccounts(o)
+		}
+	}
+	label(newObs)
 	Mask(newObs, volatile)
 	SortAt(newObs, c.Unordered)
 	if dir := os.Getenv("PLUXY_CORPUS_DUMP_NEW"); dir != "" {
@@ -191,6 +201,7 @@ func runCase(t *testing.T, c *Case, global *Global) Result {
 			res.Err = fmt.Errorf("old core: %w", err)
 			return res
 		}
+		label(oldObs)
 		Mask(oldObs, volatile)
 		SortAt(oldObs, c.Unordered)
 		switch {
@@ -272,6 +283,17 @@ func observe(t *testing.T, c *Case, label string, start func(dir, upstreamURL, p
 		t.Logf("%s core output:\n%s", label, core.Logs())
 	}
 	return obs, nil
+}
+
+// newCoreModels returns the models the new core's accounts list for the case: AccountModels, or
+// else, for a provider whose accounts today's core takes from its config's api-keys block, the
+// models the old core's config lists (caseModels), since both cores serve such an account only
+// the models it lists or, without a list, those of its provider's catalog.
+func newCoreModels(c *Case) []string {
+	if len(c.AccountModels) > 0 || Providers[c.Provider].OldCoreAuthFiles != nil {
+		return c.AccountModels
+	}
+	return caseModels(c)
 }
 
 // caseModels returns the models the old core lists for the case: AccountModels, or else the

@@ -1,0 +1,48 @@
+{
+  "description": "An account with no models list refuses a model its provider's catalog does not have, without calling the upstream.",
+  "source": ["core/sdk/api/handlers/handlers_routing.go:219"],
+  "client": {
+    "path": "/v1beta/models/corpus-not-in-catalog:generateContent",
+    "body": {"contents":[{"role":"user","parts":[{"text":"Say hello"}]}]}
+  },
+  "old_core": {"account":{"models":null}},
+  "new_core": {"account":{"models":null}},
+  "exceptions": [
+    {
+      "path": "client.status",
+      "kind": "gap",
+      "reason": "The old core answers an unknown model with 400 (unknown provider); the new core answers 404, as for any model no account serves."
+    },
+    {
+      "path": "client.body.error",
+      "kind": "gap",
+      "reason": "For an unknown model the old core answers in OpenAI's error shape (model_not_found, unknown provider) even to a Gemini client; the new core answers in Gemini's shape that no account serves the model.",
+      "want": {
+        "code": 404,
+        "message": "no account serves model \"corpus-not-in-catalog\"",
+        "status": "NOT_FOUND"
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {
+          "code": "model_not_found",
+          "message": "unknown provider for model corpus-not-in-catalog",
+          "param": "model",
+          "type": "invalid_request_error"
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json"
+      },
+      "status": 400
+    },
+    "upstream": []
+  }
+}

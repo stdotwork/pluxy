@@ -336,13 +336,13 @@ func TestBackoffWithoutRetryAfter(t *testing.T) {
 	e := &llm.Error{Code: llm.CodeRateLimit, Retryable: true}
 	var got []time.Duration
 	for range 3 {
-		st.failure(a, "m", e, now)
+		st.failure(a, "m", e, now, 0)
 		until, _, _ := st.availability(a, "m", now)
 		got = append(got, until.Sub(now))
 		now = until
 	}
-	st.failure(a, "m", e, now) // step 4 starts at now: 8s step, 4s block
-	st.failure(a, "m", e, now) // while live: same step, deadline unchanged
+	st.failure(a, "m", e, now, 0) // step 4 starts at now: 8s step, 4s block
+	st.failure(a, "m", e, now, 0) // while live: same step, deadline unchanged
 	until, _, _ := st.availability(a, "m", now)
 	got = append(got, until.Sub(now))
 	want := []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second}
@@ -356,8 +356,8 @@ func TestBlockOnlyExtends(t *testing.T) {
 	st := NewState()
 	a := &Account{ID: "a"}
 	now := time.Unix(0, 0)
-	st.failure(a, "m", &llm.Error{Code: llm.CodeRateLimit, RetryAfterMS: 60_000}, now)
-	st.failure(a, "m", &llm.Error{Code: llm.CodeRateLimit, RetryAfterMS: 1_000}, now)
+	st.failure(a, "m", &llm.Error{Code: llm.CodeRateLimit, RetryAfterMS: 60_000}, now, 0)
+	st.failure(a, "m", &llm.Error{Code: llm.CodeRateLimit, RetryAfterMS: 1_000}, now, 0)
 	if until, _, _ := st.availability(a, "m", now); until.Sub(now) != time.Minute {
 		t.Errorf("block = %v, want 1m", until.Sub(now))
 	}
@@ -664,7 +664,7 @@ func TestRetainDropsWhatBelongedToChangedAccounts(t *testing.T) {
 	h := newHarness(t, Config{SessionAffinity: &AffinityConfig{}}, ep("a", "shared"), ep("b", "solo"))
 	s1 := Request{LLM: llm.Request{Model: "m"}, Tenant: "t", Session: "s1"}
 	h.run(s1) // a, bound
-	h.r.state.failure(h.r.accounts[0], "m", &llm.Error{Code: llm.CodeUpstream, Scope: llm.ScopeEndpoint, RetryAfterMS: 60_000}, h.now)
+	h.r.state.failure(h.r.accounts[0], "m", &llm.Error{Code: llm.CodeUpstream, Scope: llm.ScopeEndpoint, RetryAfterMS: 60_000}, h.now, 0)
 
 	// a changes; a new account c joins the "shared" label. The outage on "shared" was a's
 	// endpoint, so c starts unblocked, and s1 is no longer bound to the changed a.
@@ -775,4 +775,126 @@ func TestRequestAttempt(t *testing.T) {
 	}
 	h.runOK("m") // the router's attempt; a is still rate-limited
 	h.wantAttempts("b")
+}
+
+func rounds(n int) *int { return &n }
+
+func upstreamDown() script {
+	return fail(llm.Error{Code: llm.CodeUpstream, Status: 503, Retryable: true, Scope: llm.ScopeEndpoint})
+}
+
+// With request_retry, a request runs at most that many rounds after the first; without blocks
+// (cooling off) each round starts at once, as today's core's request-retry does.
+func TestRequestRetryRounds(t *testing.T) {
+	h := newHarness(t, Config{RequestRetry: rounds(2), DisableCooling: true}, accts("a")...)
+	h.on("a", rateLimited(0), rateLimited(0), ok())
+	h.runOK("m")
+	h.wantAttempts("a", "a", "a")
+	if len(h.slept) != 0 {
+		t.Errorf("slept %v, want no wait without blocks", h.slept)
+	}
+
+	h = newHarness(t, Config{RequestRetry: rounds(1), DisableCooling: true}, accts("a")...)
+	h.on("a", rateLimited(0), rateLimited(0), ok())
+	if evs := h.run(h.req("m")); evs[0].Error == nil || evs[0].Error.Code != llm.CodeRateLimit {
+		t.Errorf("after the last round: %+v, want the upstream's rate limit", evs[0])
+	}
+	h.wantAttempts("a", "a")
+
+	// Without request_retry, no round starts without a wait.
+	h = newHarness(t, Config{DisableCooling: true}, accts("a")...)
+	h.on("a", rateLimited(0), ok())
+	h.run(h.req("m"))
+	h.wantAttempts("a")
+}
+
+// A refused key or a missing model starts no round.
+func TestRequestRetryStopsOnAuthAndNotFound(t *testing.T) {
+	for _, e := range []llm.Error{
+		{Code: llm.CodeAuth, Status: 401, Retryable: true, Scope: llm.ScopeCredential},
+		{Code: llm.CodeNotFound, Status: 404, Retryable: true, Scope: llm.ScopeModel},
+	} {
+		h := newHarness(t, Config{RequestRetry: rounds(3), DisableCooling: true}, accts("a")...)
+		h.on("a", fail(e), ok())
+		h.run(h.req("m"))
+		h.wantAttempts("a")
+	}
+}
+
+// A round waits for the first block to end when that is within max_wait_ms, each time; an
+// account refused for rate in this request waits at least 10 seconds.
+func TestRequestRetryWaits(t *testing.T) {
+	h := newHarness(t, Config{RequestRetry: rounds(2), MaxWaitMS: 3000, TransientErrorCooldownMS: 2000}, accts("a")...)
+	h.on("a", upstreamDown(), upstreamDown(), ok())
+	h.runOK("m")
+	h.wantAttempts("a", "a", "a")
+	if !slices.Equal(h.slept, []time.Duration{2 * time.Second, 2 * time.Second}) {
+		t.Errorf("slept %v, want 2s before each round", h.slept)
+	}
+
+	h = newHarness(t, Config{RequestRetry: rounds(1), MaxWaitMS: 5000}, accts("a")...)
+	h.on("a", rateLimited(time.Second), ok())
+	h.run(h.req("m"))
+	h.wantAttempts("a")
+
+	h = newHarness(t, Config{RequestRetry: rounds(1), MaxWaitMS: 15000}, accts("a")...)
+	h.on("a", rateLimited(time.Second), ok())
+	h.runOK("m")
+	h.wantAttempts("a", "a")
+	if len(h.slept) != 1 || h.slept[0] != 10*time.Second {
+		t.Errorf("slept %v, want the 10s floor", h.slept)
+	}
+
+	// request_retry 0: a request that finds every account blocked fails at once.
+	h = newHarness(t, Config{RequestRetry: rounds(0), MaxWaitMS: 60000}, accts("a")...)
+	h.on("a", rateLimited(time.Second), ok())
+	h.run(h.req("m"))
+	if evs := h.run(h.req("m")); evs[0].Error == nil || evs[0].Error.ProviderCode != "model_cooldown" || len(h.slept) != 0 {
+		t.Errorf("blocked at the start: %+v, slept %v; want model_cooldown at once", evs[0], h.slept)
+	}
+}
+
+// disable_cooling keeps every account eligible after failures; an account's own setting wins.
+func TestDisableCooling(t *testing.T) {
+	off, on := true, false
+	h := newHarness(t, Config{DisableCooling: true}, Account{ID: "a"}, Account{ID: "b", DisableCooling: &on})
+	h.on("a", rateLimited(time.Minute), ok())
+	h.on("b", rateLimited(time.Minute), ok())
+	h.run(Request{LLM: llm.Request{Model: "m"}, Pin: "a"})
+	h.run(Request{LLM: llm.Request{Model: "m"}, Pin: "b"})
+	h.attempts = nil
+	h.runOK("m")
+	h.wantAttempts("a")
+	if evs := h.run(Request{LLM: llm.Request{Model: "m"}, Pin: "b"}); evs[0].Error == nil {
+		t.Errorf("account b, cooling on for it: %+v, want its block", evs[0])
+	}
+
+	h = newHarness(t, Config{}, Account{ID: "a", DisableCooling: &off})
+	h.on("a", upstreamDown(), ok())
+	h.run(h.req("m"))
+	h.runOK("m")
+}
+
+// transient_error_cooldown_ms sets how long a failing upstream is blocked; below 0, not at all.
+func TestTransientErrorCooldown(t *testing.T) {
+	h := newHarness(t, Config{TransientErrorCooldownMS: 5000, MaxWaitMS: 60000}, accts("a")...)
+	h.on("a", upstreamDown(), ok())
+	h.run(h.req("m"))
+	h.runOK("m")
+	if len(h.slept) != 1 || h.slept[0] < 5*time.Second || h.slept[0] > 5*time.Second+2*time.Second {
+		t.Errorf("slept %v, want the 5s block", h.slept)
+	}
+
+	h = newHarness(t, Config{TransientErrorCooldownMS: -1}, accts("a")...)
+	h.on("a", fail(llm.Error{Code: llm.CodeUpstream, Status: 503, Retryable: true, Scope: llm.ScopeEndpoint, RetryAfterMS: 60000}), ok())
+	h.run(h.req("m"))
+	h.runOK("m")
+
+	// Rate limits keep their own blocks.
+	h = newHarness(t, Config{TransientErrorCooldownMS: -1}, accts("a")...)
+	h.on("a", rateLimited(time.Minute), ok())
+	h.run(h.req("m"))
+	if evs := h.run(h.req("m")); evs[0].Error == nil {
+		t.Errorf("rate limit with transient cooldown off: %+v, want its block", evs[0])
+	}
 }

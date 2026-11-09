@@ -65,16 +65,18 @@ func Run(ctx context.Context, c *Case, base string, up *FakeUpstream) (Observati
 		}
 		up.waitWebSockets(closeWait)
 	} else {
-		req, err := buildRequest(ctx, c, base)
+		var err error
+		if reply, err = send(ctx, c.Client, base); err != nil {
+			return nil, err
+		}
+	}
+	var then []any
+	for _, t := range c.Then {
+		r, err := send(ctx, t, base)
 		if err != nil {
 			return nil, err
 		}
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		reply = observeReply(resp)
-		resp.Body.Close()
+		then = append(then, r)
 	}
 
 	upstream := []any{}
@@ -97,26 +99,44 @@ func Run(ctx context.Context, c *Case, base string, up *FakeUpstream) (Observati
 		}
 		upstream = append(upstream, o)
 	}
-	return normalize(Observation{"client": reply, "upstream": upstream})
+	obs := Observation{"client": reply, "upstream": upstream}
+	if then != nil {
+		obs["then"] = then
+	}
+	return normalize(obs)
 }
 
-func buildRequest(ctx context.Context, c *Case, base string) (*http.Request, error) {
-	method := c.Client.Method
+// send sends one client request and observes its reply.
+func send(ctx context.Context, cr ClientRequest, base string) (map[string]any, error) {
+	req, err := buildRequest(ctx, cr, base)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return observeReply(resp), nil
+}
+
+func buildRequest(ctx context.Context, cr ClientRequest, base string) (*http.Request, error) {
+	method := cr.Method
 	if method == "" {
 		method = http.MethodPost
 	}
 	var body io.Reader
 	switch {
-	case c.Client.BodyText != nil:
-		body = strings.NewReader(*c.Client.BodyText)
-	case len(c.Client.Body) > 0:
+	case cr.BodyText != nil:
+		body = strings.NewReader(*cr.BodyText)
+	case len(cr.Body) > 0:
 		var buf bytes.Buffer
-		if err := json.Compact(&buf, c.Client.Body); err != nil {
+		if err := json.Compact(&buf, cr.Body); err != nil {
 			return nil, err
 		}
 		body = &buf
 	}
-	req, err := http.NewRequestWithContext(ctx, method, base+c.Client.Path, body)
+	req, err := http.NewRequestWithContext(ctx, method, base+cr.Path, body)
 	if err != nil {
 		return nil, err
 	}
@@ -124,14 +144,14 @@ func buildRequest(ctx context.Context, c *Case, base string) (*http.Request, err
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("User-Agent", ClientUserAgent)
-	switch c.Client.Auth {
+	switch cr.Auth {
 	case "", "client-key":
 		req.Header.Set("Authorization", "Bearer "+ClientKey)
 	case "none":
 	default:
-		req.Header.Set("Authorization", "Bearer "+c.Client.Auth)
+		req.Header.Set("Authorization", "Bearer "+cr.Auth)
 	}
-	for k, v := range c.Client.Headers {
+	for k, v := range cr.Headers {
 		req.Header.Set(k, v)
 	}
 	return req, nil

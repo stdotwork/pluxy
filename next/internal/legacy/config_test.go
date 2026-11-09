@@ -81,7 +81,7 @@ func TestExampleConfig(t *testing.T) {
 	equalJSON(t, r.Config, `{
 		"listen": ":8317",
 		"client_keys": ["your-api-key-1", "your-api-key-2", "your-api-key-3"],
-		"routing": {"max_wait_ms": 30000}
+		"routing": {"request_retry": 3, "max_wait_ms": 30000}
 	}`)
 	if r.AuthDir != "~/.cli-proxy-api" {
 		t.Errorf("AuthDir = %q", r.AuthDir)
@@ -89,9 +89,8 @@ func TestExampleConfig(t *testing.T) {
 	if r.Import != DefaultImportOptions {
 		t.Errorf("Import = %+v", r.Import)
 	}
-	// The example sets request-retry: 3; everything else it sets is supported, off or at
-	// today's default.
-	if len(r.Notices) != 1 || !strings.Contains(r.Notices[0], "routing.retry.request-retry") {
+	// Everything the example sets is supported, off or at today's default.
+	if len(r.Notices) != 0 {
 		t.Errorf("notices:\n%s", notices(r))
 	}
 }
@@ -120,7 +119,7 @@ func TestExampleProviderSections(t *testing.T) {
 	}
 	vertex := exts[Gemini].(map[string]any)["accounts"].([]any)[3]
 	equalJSON(t, vertex, `{
-		"id": "vertex-1", "weight": 5, "prefix": "test",
+		"id": "vertex-1", "weight": 5, "prefix": "test", "disable_cooling": false,
 		"models": [{"name": "gemini-2.5-flash", "alias": "vertex-flash"}, {"name": "gemini-2.5-pro", "alias": "vertex-pro"}],
 		"excluded_models": ["imagen-3.0-generate-002", "imagen-*"],
 		"settings": {"base_url": "https://example.com/api", "vertex": {}},
@@ -132,7 +131,7 @@ func TestExampleProviderSections(t *testing.T) {
 	equalJSON(t, first["excluded_models"], `["gemini-2.5-pro", "gemini-2.5-*", "*-preview", "*flash*"]`)
 	second := exts[Gemini].(map[string]any)["accounts"].([]any)[1]
 	equalJSON(t, second, `{
-		"id": "gemini-1-2", "priority": 0, "weight": 2, "prefix": "test",
+		"id": "gemini-1-2", "priority": 0, "weight": 2, "prefix": "test", "disable_cooling": false,
 		"models": [{"name": "gemini-2.5-flash", "alias": "gemini-flash"}],
 		"settings": {"base_url": "https://generativelanguage.googleapis.com"},
 		"credential": {"kind": "api_key", "api_key": "replace-with-second-gemini-key"}
@@ -202,7 +201,7 @@ openai-compatibility:
 		"listen": "127.0.0.1:9000",
 		"client_keys": ["client-a"],
 		"management_key": "manage-me",
-		"routing": {"strategy": "weighted", "max_accounts": 2, "session_affinity": {"ttl_ms": 600000}},
+		"routing": {"strategy": "weighted", "max_accounts": 2, "request_retry": 0, "session_affinity": {"ttl_ms": 600000}},
 		"extensions": {
 			"pluxy/codex": {"accounts": [{
 				"id": "codex-api-key-1", "priority": 2, "weight": 3,
@@ -251,6 +250,7 @@ api-keys:
 	equalJSON(t, r.Config, `{
 		"listen": ":9001",
 		"management_key": "new",
+		"routing": {"request_retry": 0},
 		"extensions": {"pluxy/codex": {"accounts": [{"id": "c", "credential": {"kind": "api_key", "api_key": "new-key"}}]}}
 	}`)
 	// allow-remote came from the older spelling and still counts: the v8 value wins only
@@ -282,7 +282,7 @@ observability:
 `)
 	n := notices(r)
 	for _, want := range []string{
-		"not supported yet, ignored: observability.logs, routing.cooldown.disable-cooling, routing.session-affinity-rebind-on, server.tls, upstream.claude.tool-search\n",
+		"not supported yet, ignored: observability.logs, routing.session-affinity-rebind-on, server.tls, upstream.claude.tool-search\n",
 		"dropped, ignored: plugins (replaced by packages), server.commercial-mode (it turns off features this core does not have), upstream.claude.session-date-pin-days (making other clients look like Claude Code is out of scope)\n",
 		"unknown keys, ignored: server.discovery-typo\n",
 		"management.allow-remote is not supported yet",
@@ -340,7 +340,7 @@ extensions:
 codex-api-key: [{api-key: from-yaml}]
 `)
 	equalJSON(t, r.Config, `{
-		"listen": ":8317", "routing": {"max_wait_ms": 30000},
+		"listen": ":8317", "routing": {"request_retry": 0},
 		"credentials_dir": "creds", "drop_policy": "reject", "packages": {"dir": "pk"},
 		"cors": {"allowed_origins": ["http://localhost:5173"]},
 		"extensions": {"pluxy/codex": {"idle_stop_ms": 0, "accounts": [
@@ -402,7 +402,7 @@ claude-api-key:
   - api-key: 987654
 `)
 	equalJSON(t, r.Config, `{
-		"listen": ":8317", "routing": {"max_wait_ms": 30000},
+		"listen": ":8317", "routing": {"request_retry": 0},
 		"client_keys": ["123456"],
 		"management_key": " spaced ",
 		"extensions": {"pluxy/claude": {"accounts": [{"id": "claude-api-key-1", "credential": {"kind": "api_key", "api_key": "987654"}}]}}
@@ -421,7 +421,7 @@ openai-compatibility:
     base-url: http://127.0.0.1:1234/v1
 `)
 	equalJSON(t, r.Config, `{
-		"listen": ":8317", "routing": {"max_wait_ms": 30000},
+		"listen": ":8317", "routing": {"request_retry": 0},
 		"extensions": {"pluxy/gemini": {"accounts": [{"id": "gemini-api-key-2", "credential": {"kind": "api_key", "api_key": "g"}}]}}
 	}`)
 	n := notices(r)
@@ -468,7 +468,7 @@ openai-compatibility:
     api-key-entries: [{api-key: k2}]
     models: [{name: m, alias: m}]
 `)
-	equalJSON(t, r.Config["routing"], `{"force_model_prefix": true, "max_wait_ms": 30000}`)
+	equalJSON(t, r.Config["routing"], `{"force_model_prefix": true, "request_retry": 0}`)
 	exts := asJSON(t, r.Config["extensions"]).(map[string]any)
 	equalJSON(t, exts[Codex].(map[string]any)["accounts"], `[{
 		"id": "codex-api-key-1", "prefix": "team", "excluded_models": ["*-mini"],

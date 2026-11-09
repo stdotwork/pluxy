@@ -395,6 +395,7 @@ func TestResponsesWebSocketSessionAcrossReload(t *testing.T) {
 				"manifest": filepath.Join(dir, "pluxy-extension.json"),
 				"accounts": []any{map[string]any{
 					"id":         "acct-a",
+					"models":     []string{"gpt-test"},
 					"settings":   map[string]any{"base_url": u.URL + "/v1", "websockets": true},
 					"credential": map[string]any{"kind": "api_key", "api_key": "sk-a"},
 				}},

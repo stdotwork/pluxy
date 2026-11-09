@@ -223,7 +223,10 @@ openai-compatibility:
 	}
 
 	base, logs := runCoreFile(t, path, "-bundled", bundled)
-	logs.waitFor(t, "config.yaml: not supported yet, ignored: routing.retry.request-retry")
+	// Everything the example sets is supported, off or at today's default.
+	if all := logs.waitFor(t, "config revision 1 active"); strings.Contains(all, "not supported yet, ignored") {
+		t.Errorf("core named settings it does not support:\n%s", all)
+	}
 	clientKey := "your-api-key-1" // the example's first client key
 
 	// A request through the provider section's account.

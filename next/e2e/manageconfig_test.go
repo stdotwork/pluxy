@@ -694,9 +694,14 @@ type settingsReply struct {
 		SessionAffinityTTL string `json:"session-affinity-ttl"`
 		ForceModelPrefix   bool   `json:"force-model-prefix"`
 		Retry              struct {
+			RequestRetry        *int    `json:"request-retry"`
 			MaxRetryCredentials int     `json:"max-retry-credentials"`
 			MaxRetryInterval    float64 `json:"max-retry-interval"`
 		} `json:"retry"`
+		Cooldown struct {
+			DisableCooling                bool    `json:"disable-cooling"`
+			TransientErrorCooldownSeconds float64 `json:"transient-error-cooldown-seconds"`
+		} `json:"cooldown"`
 	} `json:"routing"`
 }
 
@@ -710,17 +715,19 @@ func (c *mcore) settings(t *testing.T) settingsReply {
 }
 
 func TestManageSettings(t *testing.T) {
-	const patch = `{"routing": {"strategy": "fill-first", "session-affinity": true, "session-affinity-ttl": "2h", "force-model-prefix": true, "retry": {"max-retry-credentials": 2, "max-retry-interval": 5}}}`
+	const patch = `{"routing": {"strategy": "fill-first", "session-affinity": true, "session-affinity-ttl": "2h", "force-model-prefix": true, "retry": {"request-retry": 2, "max-retry-credentials": 2, "max-retry-interval": 5}, "cooldown": {"disable-cooling": true, "transient-error-cooldown-seconds": 20}}}`
 	for _, f := range formats() {
 		t.Run(f.name, func(t *testing.T) {
 			c := startManaged(t, f.yaml)
 			s := c.settings(t)
-			wantWait := 0.0
+			// A config.yaml that sets no rounds gets today's default of none; a JSON config
+			// leaves rounds to this core's rules.
+			wantRounds := s.Routing.Retry.RequestRetry == nil
 			if f.yaml {
-				wantWait = 30 // today's default wait, which a config.yaml gets when it sets none
+				wantRounds = s.Routing.Retry.RequestRetry != nil && *s.Routing.Retry.RequestRetry == 0
 			}
-			if s.Routing.Strategy != "round-robin" || s.Routing.SessionAffinity || s.Routing.SessionAffinityTTL != "1h" ||
-				s.Routing.Retry.MaxRetryCredentials != 0 || s.Routing.Retry.MaxRetryInterval != wantWait {
+			if s.Routing.Strategy != "round-robin" || s.Routing.SessionAffinity || s.Routing.SessionAffinityTTL != "1h" || !wantRounds ||
+				s.Routing.Retry.MaxRetryCredentials != 0 || s.Routing.Retry.MaxRetryInterval != 0 || s.Routing.Cooldown.DisableCooling || s.Routing.Cooldown.TransientErrorCooldownSeconds != 0 {
 				t.Errorf("settings = %+v", s)
 			}
 
@@ -731,7 +738,8 @@ func TestManageSettings(t *testing.T) {
 			}
 			for name, got := range map[string]settingsReply{"reply": reply, "a following GET": c.settings(t)} {
 				r := got.Routing
-				if r.Strategy != "fill-first" || !r.SessionAffinity || r.SessionAffinityTTL != "2h" || !r.ForceModelPrefix || r.Retry.MaxRetryCredentials != 2 || r.Retry.MaxRetryInterval != 5 {
+				if r.Strategy != "fill-first" || !r.SessionAffinity || r.SessionAffinityTTL != "2h" || !r.ForceModelPrefix || r.Retry.MaxRetryCredentials != 2 || r.Retry.MaxRetryInterval != 5 ||
+					r.Retry.RequestRetry == nil || *r.Retry.RequestRetry != 2 || !r.Cooldown.DisableCooling || r.Cooldown.TransientErrorCooldownSeconds != 20 {
 					t.Errorf("%s = %+v", name, got)
 				}
 			}
@@ -820,6 +828,9 @@ func TestManageSettingsRefusals(t *testing.T) {
 				"negative credentials":        `{"routing": {"retry": {"max-retry-credentials": -1}}}`,
 				"a negative interval":         `{"routing": {"retry": {"max-retry-interval": -5}}}`,
 				"an interval over 30 days":    `{"routing": {"retry": {"max-retry-interval": 2592001}}}`,
+				"negative rounds":             `{"routing": {"retry": {"request-retry": -1}}}`,
+				"an unknown cooldown field":   `{"routing": {"cooldown": {"nope": 1}}}`,
+				"a transient below -1":        `{"routing": {"cooldown": {"transient-error-cooldown-seconds": -2}}}`,
 				"a bad duration":              `{"routing": {"session-affinity": true, "session-affinity-ttl": "soon"}}`,
 				"a duration of zero":          `{"routing": {"session-affinity": true, "session-affinity-ttl": "0s"}}`,
 				"a valid field next to a bad": `{"routing": {"strategy": "fill-first", "retry": {"max-retry-credentials": -1}}}`,

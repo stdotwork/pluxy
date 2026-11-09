@@ -129,12 +129,24 @@ type RoutingPatch struct {
 	// "1h".
 	SessionAffinityTTL *string `json:"session-affinity-ttl"`
 	// ForceModelPrefix makes an account with a prefix serve its models only under the prefix.
-	ForceModelPrefix *bool       `json:"force-model-prefix"`
-	Retry            *RetryPatch `json:"retry"`
+	ForceModelPrefix *bool          `json:"force-model-prefix"`
+	Retry            *RetryPatch    `json:"retry"`
+	Cooldown         *CooldownPatch `json:"cooldown"`
+}
+
+// CooldownPatch is a change to the cooldown settings.
+type CooldownPatch struct {
+	// DisableCooling records no blocks after failures.
+	DisableCooling *bool `json:"disable-cooling"`
+	// TransientErrorCooldownSeconds is how long a failing upstream is blocked: 0 for this
+	// core's backoff, -1 for no block.
+	TransientErrorCooldownSeconds *int64 `json:"transient-error-cooldown-seconds"`
 }
 
 // RetryPatch is a change to the retry settings.
 type RetryPatch struct {
+	// RequestRetry is how many rounds a request may run after its first.
+	RequestRetry *int64 `json:"request-retry"`
 	// MaxRetryCredentials is how many accounts one request may try; 0 is no limit.
 	MaxRetryCredentials *int64 `json:"max-retry-credentials"`
 	// MaxRetryInterval is the longest one request waits for a blocked account, in seconds.
@@ -199,6 +211,14 @@ func (d *Doc) ApplySettings(p SettingsPatch) error {
 		}
 	}
 	if t := r.Retry; t != nil {
+		if n := t.RequestRetry; n != nil {
+			if *n < 0 || *n > 1000 {
+				return fmt.Errorf("%w: routing.retry.request-retry must be between 0 and 1000", ErrInvalid)
+			}
+			if err := d.Set(Int(*n), d.place("routing.request_retry", "routing.retry.request-retry", "request-retry")...); err != nil {
+				return err
+			}
+		}
 		if n := t.MaxRetryCredentials; n != nil {
 			if *n < 0 {
 				return fmt.Errorf("%w: routing.retry.max-retry-credentials must not be negative", ErrInvalid)
@@ -216,6 +236,25 @@ func (d *Doc) ApplySettings(p SettingsPatch) error {
 				v *= 1000
 			}
 			if err := d.Set(Int(v), d.place("routing.max_wait_ms", "routing.retry.max-retry-interval", "max-retry-interval")...); err != nil {
+				return err
+			}
+		}
+	}
+	if c := r.Cooldown; c != nil {
+		if c.DisableCooling != nil {
+			if err := d.Set(Bool(*c.DisableCooling), d.place("routing.disable_cooling", "routing.cooldown.disable-cooling", "disable-cooling")...); err != nil {
+				return err
+			}
+		}
+		if n := c.TransientErrorCooldownSeconds; n != nil {
+			if *n < -1 || *n > 30*24*60*60 {
+				return fmt.Errorf("%w: routing.cooldown.transient-error-cooldown-seconds must be -1 (no cooldown), 0 (the default) or up to 2592000 seconds (30 days)", ErrInvalid)
+			}
+			v := *n
+			if !d.YAML && v > 0 {
+				v *= 1000
+			}
+			if err := d.Set(Int(v), d.place("routing.transient_error_cooldown_ms", "routing.cooldown.transient-error-cooldown-seconds", "transient-error-cooldown-seconds")...); err != nil {
 				return err
 			}
 		}

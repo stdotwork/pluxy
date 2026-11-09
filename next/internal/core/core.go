@@ -465,13 +465,13 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 		return hostSession{s}, nil
 	}
 	next.Generation = server.Generation{Config: cfg, Attempt: attempt, Count: count, OpenSession: openSession}
-	if !c.opts.SafeMode {
-		next.Catalog = (&catalogs{}).lookup(next.exts)
-	}
 	router, err := route.New(cfg.Routing, c.configured(next), attempt, c.state)
 	if err != nil {
 		c.discard(next, prev)
 		return nil, fmt.Errorf("config: %w", err)
+	}
+	if !c.opts.SafeMode {
+		router.UseCatalog(catalog(next.exts))
 	}
 	next.Router = router
 	if c.creds == nil { // the first load: nothing is live yet

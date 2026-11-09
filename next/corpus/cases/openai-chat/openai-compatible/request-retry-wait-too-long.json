@@ -1,0 +1,72 @@
+{
+  "description": "With request-retry 1, a 2 s cooldown longer than max-retry-interval 1 starts no round.",
+  "source": [
+    "core/sdk/cliproxy/auth/conductor_selection.go (request-retry rounds)",
+    "core/config.example.yaml routing.retry"
+  ],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {"model":"gpt-test","messages":[{"role":"user","content":"Say hello"}]}
+  },
+  "upstream": [
+    {"status":503,"body":{"error":{"message":"upstream overloaded","type":"server_error"}}},
+    {
+      "body": {
+        "id": "chatcmpl-corpus-1",
+        "object": "chat.completion",
+        "created": 1700000001,
+        "model": "gpt-test-upstream",
+        "choices": [
+          {"index":0,"message":{"role":"assistant","content":"Hi 1."},"finish_reason":"stop"}
+        ],
+        "usage": {"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}
+      }
+    }
+  ],
+  "old_core": {
+    "config": {
+      "routing": {
+        "retry": {"request-retry":1,"max-retry-interval":1},
+        "cooldown": {"disable-cooling":false,"transient-error-cooldown-seconds":2}
+      }
+    }
+  },
+  "new_core": {
+    "config": {"routing":{"request_retry":1,"max_wait_ms":1000,"transient_error_cooldown_ms":2000}}
+  },
+  "recorded_old_core": {
+    "client": {
+      "body": {"error":{"message":"upstream overloaded","type":"server_error"}},
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 503
+    },
+    "upstream": [
+      {
+        "body": {"messages":[{"content":"Say hello","role":"user"}],"model":"gpt-test"},
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "client.body.error",
+      "kind": "intended",
+      "reason": "The new core answers upstream errors with an error body it builds itself (message, type and code), not the upstream's JSON passed through; recorded as a deliberate difference when the core skeleton was built.",
+      "want": {"code":"server_error","message":"upstream overloaded","type":"server_error"}
+    }
+  ]
+}

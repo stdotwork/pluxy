@@ -1,0 +1,109 @@
+{
+  "description": "A 503 leaves the upstream cooling for transient-error-cooldown-seconds (30): the next request is answered without calling it.",
+  "source": [
+    "core/sdk/cliproxy/auth/conductor_cooldown.go",
+    "core/config.example.yaml routing.cooldown"
+  ],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {"model":"gpt-test","messages":[{"role":"user","content":"Say hello"}]}
+  },
+  "then": [
+    {
+      "path": "/v1/chat/completions",
+      "body": {"model":"gpt-test","messages":[{"role":"user","content":"Say hello"}]}
+    }
+  ],
+  "upstream": [
+    {"status":503,"body":{"error":{"message":"upstream overloaded","type":"server_error"}}},
+    {
+      "body": {
+        "id": "chatcmpl-corpus-1",
+        "object": "chat.completion",
+        "created": 1700000001,
+        "model": "gpt-test-upstream",
+        "choices": [
+          {"index":0,"message":{"role":"assistant","content":"Hi 1."},"finish_reason":"stop"}
+        ],
+        "usage": {"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}
+      }
+    }
+  ],
+  "old_core": {
+    "config": {
+      "routing": {"cooldown":{"disable-cooling":false,"transient-error-cooldown-seconds":30}}
+    }
+  },
+  "new_core": {"config":{"routing":{"transient_error_cooldown_ms":30000}}},
+  "recorded_old_core": {
+    "client": {
+      "body": {"error":{"message":"upstream overloaded","type":"server_error"}},
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 503
+    },
+    "then": [
+      {
+        "body": {
+          "error": {
+            "code": "internal_server_error",
+            "message": "auth_unavailable: no auth available (providers=openai-compatible-corpus, model=gpt-test; last upstream error: server_error: upstream overloaded)",
+            "type": "server_error"
+          }
+        },
+        "headers": {
+          "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+          "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+          "Content-Type": "application/json",
+          "Retry-After": "30"
+        },
+        "status": 503
+      }
+    ],
+    "upstream": [
+      {
+        "body": {"messages":[{"content":"Say hello","role":"user"}],"model":"gpt-test"},
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "client.body.error",
+      "kind": "intended",
+      "reason": "The new core answers upstream errors with an error body it builds itself (message, type and code), not the upstream's JSON passed through; recorded as a deliberate difference when the core skeleton was built.",
+      "want": {"code":"server_error","message":"upstream overloaded","type":"server_error"}
+    },
+    {
+      "path": "then[0].status",
+      "kind": "gap",
+      "reason": "When every account is cooling after an upstream failure, today's core answers 503 auth_unavailable; the new core answers 429 model_cooldown, as for any cooldown, with the same Retry-After.",
+      "want": 429
+    },
+    {
+      "path": "then[0].body.error",
+      "kind": "gap",
+      "reason": "Follows from the status: the new core's model_cooldown error in place of today's auth_unavailable.",
+      "want": {
+        "code": "model_cooldown",
+        "message": "every account for model \"gpt-test\" is cooling down; try again in 30s",
+        "type": "rate_limit_error"
+      }
+    }
+  ]
+}

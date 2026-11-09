@@ -1,0 +1,152 @@
+{
+  "description": "An account with no models list serves a model of its provider's catalog (muse-spark-1.3).",
+  "source": [
+    "core/internal/registry (the embedded model catalog)",
+    "core/sdk/api/handlers/handlers_routing.go:219"
+  ],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {
+      "model": "muse-spark-1.3",
+      "stream": true,
+      "messages": [{"role":"user","content":"Say hello"}]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"event":"response.created","data":{"type":"response.created","sequence_number":0,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"in_progress","model":"grok-test-upstream","output":[],"usage":null}}},
+        {"event":"response.output_item.added","data":{"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"msg_corpus","type":"message","status":"in_progress","role":"assistant","content":[]}}},
+        {"event":"response.output_text.delta","data":{"type":"response.output_text.delta","sequence_number":2,"item_id":"msg_corpus","output_index":0,"content_index":0,"delta":"Hel"}},
+        {"event":"response.output_text.delta","data":{"type":"response.output_text.delta","sequence_number":3,"item_id":"msg_corpus","output_index":0,"content_index":0,"delta":"lo there."}},
+        {"event":"response.output_item.done","data":{"type":"response.output_item.done","sequence_number":4,"output_index":0,"item":{"id":"msg_corpus","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hello there.","annotations":[]}]}}},
+        {"event":"response.completed","data":{"type":"response.completed","sequence_number":5,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"completed","model":"grok-test-upstream","output":[{"id":"msg_corpus","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hello there.","annotations":[]}]}],"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}}}
+      ]
+    }
+  ],
+  "volatile": [
+    "upstream[*].headers.X-Meta-Ai-Gateway-Session-Id",
+    "upstream[*].headers.X-Tbh-Root-Session-Id",
+    "upstream[*].headers.X-Tbh-Session-Id",
+    "upstream[*].headers.X-Tbh-Thread-Id"
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[0].body.instructions",
+      "kind": "intended",
+      "reason": "Today's core's Codex translator sends empty instructions on every Responses request; the extension sends the request's instructions as the client wrote them.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.reasoning",
+      "kind": "intended",
+      "reason": "Today's core's Codex translator gives a translated request that names no effort the medium effort; the Meta extension sends the effort the client asked for (reasoning_effort, a Messages thinking budget's effort) and none when the client named none.",
+      "absent": true
+    },
+    {
+      "path": "client.events",
+      "kind": "intended",
+      "reason": "The new core writes Chat chunks from a Responses reply as OpenAI's own Chat streams are written: role and empty content in the first chunk only, finish_reason in its own chunk, usage only in the chunk stream_options.include_usage asks for, no native_finish_reason, and reasoning summary parts joined without a separator. Today's Codex translator repeats the role on every chunk, adds a non-standard native_finish_reason, puts usage on the finish chunk unasked and writes a blank line after each reasoning summary part.",
+      "want": [
+        {
+          "data": {
+            "choices": [{"delta":{"content":"","role":"assistant"},"finish_reason":null,"index":0}],
+            "created": 1700000000,
+            "id": "resp_corpus",
+            "model": "grok-test-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [{"delta":{"content":"Hel"},"finish_reason":null,"index":0}],
+            "created": 1700000000,
+            "id": "resp_corpus",
+            "model": "grok-test-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [{"delta":{"content":"lo there."},"finish_reason":null,"index":0}],
+            "created": 1700000000,
+            "id": "resp_corpus",
+            "model": "grok-test-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [{"delta":{},"finish_reason":"stop","index":0}],
+            "created": 1700000000,
+            "id": "resp_corpus",
+            "model": "grok-test-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {"data":"[DONE]"}
+      ]
+    },
+    {
+      "kind": "intended",
+      "absent": true,
+      "reason": "Today's core's Codex translator adds parallel_tool_calls true to every Responses request it sends to Meta, with or without tools; the extension sends the client's choice as the client wrote it, as the xAI extension does.",
+      "path": "upstream[0].body.parallel_tool_calls"
+    }
+  ],
+  "old_core": {"account":{"models":null}},
+  "new_core": {"account":{"models":null}},
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"choices":[{"delta":{"content":"Hel","role":"assistant"},"finish_reason":null,"index":0,"native_finish_reason":null}],"created":1700000000,"id":"resp_corpus","model":"grok-test-upstream","object":"chat.completion.chunk"}},
+        {"data":{"choices":[{"delta":{"content":"lo there.","role":"assistant"},"finish_reason":null,"index":0,"native_finish_reason":null}],"created":1700000000,"id":"resp_corpus","model":"grok-test-upstream","object":"chat.completion.chunk"}},
+        {"data":{"choices":[{"delta":{},"finish_reason":"stop","index":0,"native_finish_reason":"stop"}],"created":1700000000,"id":"resp_corpus","model":"grok-test-upstream","object":"chat.completion.chunk","usage":{"completion_tokens":7,"prompt_tokens":11,"total_tokens":18}}},
+        {"data":"[DONE]"}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": ["reasoning.encrypted_content"],
+          "input": [
+            {"content":[{"text":"Say hello","type":"input_text"}],"role":"user","type":"message"}
+          ],
+          "instructions": "",
+          "model": "muse-spark-1.3",
+          "parallel_tool_calls": true,
+          "reasoning": {"effort":"medium"},
+          "store": false,
+          "stream": true
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Cache-Control": "no-cache",
+          "Content-Type": "application/json",
+          "User-Agent": "muse-build/1.4.14 (non-interactive; linux-x86_64; build dec7d7497fecdad135ec5835a8161dbc92e55b58)",
+          "X-Client-Id": "tbh:exec",
+          "X-Meta-Ai-Gateway-Session-Id": "(volatile)",
+          "X-Tbh-Agent-Role": "main",
+          "X-Tbh-Contributor-Mode": "1",
+          "X-Tbh-Root-Session-Id": "(volatile)",
+          "X-Tbh-Session-Id": "(volatile)",
+          "X-Tbh-Thread-Id": "(volatile)"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      }
+    ]
+  }
+}

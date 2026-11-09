@@ -196,9 +196,9 @@ var rules = map[string]rule{
 	"routing.force-model-prefix":                        {supported, ""},
 	"routing.retry.max-retry-credentials":               {supported, ""},
 	"routing.retry.max-retry-interval":                  {supported, ""},
-	"routing.retry.request-retry":                       {supported, ""}, // reported in translate
-	"routing.cooldown.disable-cooling":                  {later, ""},
-	"routing.cooldown.transient-error-cooldown-seconds": {later, ""},
+	"routing.retry.request-retry":                       {supported, ""},
+	"routing.cooldown.disable-cooling":                  {supported, ""},
+	"routing.cooldown.transient-error-cooldown-seconds": {supported, ""},
 	"routing.cooldown.quota-response-mode":              {later, ""},
 	"routing.cooldown.save-cooldown-status":             {dropped, "no need found"},
 	"quota-exceeded.switch-project":                     {dead, ""},
@@ -279,7 +279,7 @@ var rules = map[string]rule{
 	"api-keys.*[].proxy-url":                                   {later, ""},
 	"api-keys.*[].connection-pool":                             {later, ""},
 	"api-keys.*[].request-scoped-errors":                       {later, ""},
-	"api-keys.*[].disable-cooling":                             {dropped, "no need found for per-key tuning"},
+	"api-keys.*[].disable-cooling":                             {supported, ""},
 	"api-keys.*[].request-retry":                               {dropped, "no need found for per-key tuning"},
 	"api-keys.codex[].websockets":                              {supported, ""},
 	"api-keys.codex[].disable-codex-cloaking":                  {supported, ""},
@@ -528,25 +528,30 @@ func (x *translator) routing() error {
 	} else if n > 0 {
 		r["max_accounts"] = n
 	}
-	wait := 30 // seconds; today's core's default
-	if v, ok := get(x.t, "routing.retry.max-retry-interval"); ok && v != nil {
-		n, err := integer(x.t, "routing.retry.max-retry-interval")
-		if err != nil {
-			return err
-		}
-		wait = max(n, 0)
-	}
+	// Rounds as today's core runs them; both settings default to 0 there (no extra rounds, no
+	// waits), whatever its example config shows.
 	retry, err := integer(x.t, "routing.retry.request-retry")
 	if err != nil {
 		return err
 	}
-	if _, set := get(x.t, "routing.retry.request-retry"); set && retry == 0 {
-		wait = 0 // no rounds after the first
-	} else if retry > 0 {
-		x.laterKeys = append(x.laterKeys, "routing.retry.request-retry (rounds are bounded by max-retry-interval, not counted)")
-	}
-	if wait > 0 {
+	r["request_retry"] = max(retry, 0)
+	if wait, err := integer(x.t, "routing.retry.max-retry-interval"); err != nil {
+		return err
+	} else if wait > 0 {
 		r["max_wait_ms"] = int64(wait) * 1000
+	}
+	if on, err := flag(x.t, "routing.cooldown.disable-cooling"); err != nil {
+		return err
+	} else if on {
+		r["disable_cooling"] = true
+	}
+	// 0 is today's fixed minute; this core's default backs off from a second to a minute.
+	if n, err := integer(x.t, "routing.cooldown.transient-error-cooldown-seconds"); err != nil {
+		return err
+	} else if n > 0 {
+		r["transient_error_cooldown_ms"] = int64(n) * 1000
+	} else if n < 0 {
+		r["transient_error_cooldown_ms"] = -1
 	}
 	if len(r) > 0 {
 		x.out["routing"] = r
@@ -752,6 +757,13 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 			return nil, fmt.Errorf("%s.priority must be a whole number", path)
 		}
 		a["priority"] = n
+	}
+	if d := field(g, k, "disable-cooling"); d != nil {
+		on, ok := d.(bool)
+		if !ok {
+			return nil, fmt.Errorf("%s.disable-cooling must be true or false", path)
+		}
+		a["disable_cooling"] = on
 	}
 	if w := k["weight"]; w != nil {
 		n, ok := w.(int)

@@ -27,6 +27,8 @@ type Account struct {
 	// Weight for the weighted strategy. Absent means 1; 0 leaves the account out of weighted
 	// routing.
 	Weight *int `json:"weight,omitempty"`
+	// DisableCooling, when set, overrides routing's DisableCooling for this account.
+	DisableCooling *bool `json:"disable_cooling,omitempty"`
 	// MaxConcurrency limits attempts running at once on this account. 0 means no limit.
 	MaxConcurrency int `json:"max_concurrency,omitempty"`
 	// Endpoint names the upstream endpoint this account calls. Accounts that name the same

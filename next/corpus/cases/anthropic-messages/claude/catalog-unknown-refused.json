@@ -1,0 +1,53 @@
+{
+  "description": "An account with no models list refuses a model its provider's catalog does not have, without calling the upstream.",
+  "source": ["core/sdk/api/handlers/handlers_routing.go:219"],
+  "client": {
+    "path": "/v1/messages",
+    "auth": "none",
+    "headers": {"x-api-key":"corpus-client-key","anthropic-version":"2023-06-01"},
+    "body": {
+      "model": "corpus-not-in-catalog",
+      "max_tokens": 256,
+      "system": "Be brief.",
+      "messages": [{"role":"user","content":"Say hello"}]
+    }
+  },
+  "old_core": {"account":{"models":null}},
+  "new_core": {"account":{"models":null}},
+  "exceptions": [
+    {
+      "path": "client.status",
+      "kind": "gap",
+      "reason": "The old core answers an unknown model with 400 (unknown provider); the new core answers 404, as for any model no account serves."
+    },
+    {
+      "path": "client.body.error",
+      "kind": "gap",
+      "reason": "For an unknown model the old core says unknown provider (invalid_request_error); the new core says no account serves the model, as Anthropic's not_found_error.",
+      "want": {
+        "message": "no account serves model \"corpus-not-in-catalog\"",
+        "type": "not_found_error"
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {
+          "message": "unknown provider for model corpus-not-in-catalog",
+          "type": "invalid_request_error"
+        },
+        "type": "error"
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json"
+      },
+      "status": 400
+    },
+    "upstream": []
+  }
+}

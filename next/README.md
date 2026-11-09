@@ -80,7 +80,9 @@ accounts, extensions and themes, the pages extensions bring and their settings. 
 management key. Extension pages are served from a listener of their own, on another site than
 the panel (`extension_pages` in the config); see [extension pages](ui/extension-pages/README.md).
 
-An account may list `models` it serves; without a list it serves any model. Accounts can rename,
+An account may list `models` it serves; without a list it serves the models its extension lists
+for it, as today's core serves an account the models of its provider's catalog, and any model
+when the extension has no list for it (the OpenAI-compatible extension has none). Accounts can rename,
 exclude and prefix models, and clients list the models on `GET /v1/models`: see
 [Model lists and model names](#model-lists-and-model-names). Core runs the
 extension the config names and every [installed package](#packages) that is enabled, and spreads
@@ -649,10 +651,14 @@ on), then the highest `priority`, then picks by strategy.
 | `strategy` | `round-robin` (default; takes turns after the account picked last), `weighted` (by `weight`, interleaved), `fill-first` (first eligible account in order), `least-active` (fewest running requests). |
 | `max_attempts` | Upstream attempts per request, counting the first. 0: no fixed limit; each account is tried once per round. |
 | `max_accounts` | Distinct accounts one request may try. 0: no limit. |
-| `max_wait_ms` | Longest a request waits, in total, for a blocked account. 0 (default): never; when every account is blocked the request fails at once with a 429 and `retry_after_ms`. A request never tries an account before the time the upstream gave. |
+| `max_wait_ms` | Longest a request waits, in total, for a blocked account; with `request_retry`, before each round. 0 (default): never; when every account is blocked the request fails at once with a 429 and `retry_after_ms`. A request never tries an account before the time the upstream gave. |
+| `request_retry` | When set, rounds run as today's `request-retry` runs them: at most this many after the first, each trying every eligible account again. A round starts at once when no account is blocked, or else when the first block ends if that is within `max_wait_ms`; an account refused for rate or quota in the request waits at least 10 seconds; a refused key (401) or a missing model (404) starts none. Unset: rounds are bounded by `max_attempts` and `max_wait_ms`, and each needs a wait. |
+| `disable_cooling` | `true`: failures leave no block, so every account stays eligible. |
+| `transient_error_cooldown_ms` | How long a failing upstream or endpoint (a 5xx or a broken connection) is blocked when it gave no `Retry-After`: 0 (default) backs off from a second to a minute, above 0 that long, below 0 not at all, `Retry-After` or not. |
 | `session_affinity` | When present, requests of one session go to the same account while it is eligible. The session comes from the `X-Claude-Code-Session-Id`, `Session-Id`, `X-Session-Id` or `X-Session-Affinity` header, or the body's `prompt_cache_key`; bindings are per client key and model. |
 | account `priority` | Higher first; lower accounts serve only while every higher one is blocked. Default 0. |
 | account `weight` | For `weighted`. Default 1; 0 leaves the account out. |
+| account `disable_cooling` | Overrides `disable_cooling` for the account. |
 | account `max_concurrency` | Requests running at once on the account. 0: no limit. |
 | account `endpoint` | Accounts naming the same endpoint share its outages. Default: the account's ID. |
 
@@ -709,8 +715,13 @@ A list holds each model the accounts serve, once under each name a client can as
 sorted by name. An account whose config lists `models` lists those. An account without `models`
 lists the models its extension says the account serves (the protocol's `models` operation, from
 version 0.3), under the account's naming rules below; an extension that cannot say adds nothing
-for it. Core asks an extension once per account and keeps the answer until the config is
-reloaded or the account's credential changes.
+for it. The same list decides which models such an account serves: a request for a model no
+account serves is refused without calling an upstream, as today's core refuses it (404
+`model_not_found`; today's core answers 400). An account whose extension has no list, an empty
+one, or one it could not read within 15 seconds serves any model, and core asks again a minute
+later. Core asks an
+extension once per account and keeps the answer until the accounts change: a reload, or an
+account added, removed or signed in again.
 
 An account names its models with these fields, applied in this order:
 
@@ -898,12 +909,15 @@ to `management.secret-key`, or `remote-management.secret-key` when only that is 
 | `routing.session-affinity-ttl` | `routing.session_affinity.ttl_ms` | A duration such as `1h` (default) or `30m`. In a JSON config it needs session affinity on. |
 | `routing.force-model-prefix` | `routing.force_model_prefix` | `true`: an account with a `prefix` serves its models only under the prefix. |
 | `routing.retry.max-retry-credentials` | `routing.max_accounts` | Accounts one request may try; 0 is no limit. |
-| `routing.retry.max-retry-interval` | `routing.max_wait_ms` (seconds × 1000) | Seconds one request may wait for a blocked account. In a `config.yaml`, `request-retry: 0` turns waiting off whatever this says, as in today's core. |
+| `routing.retry.max-retry-interval` | `routing.max_wait_ms` (seconds × 1000) | Seconds one request may wait for a blocked account: before each round with `request-retry` set, else in all. |
+| `routing.retry.request-retry` | `routing.request_retry` | Rounds a request may run after its first, as in today's core. `null` while a JSON config leaves rounds to this core's own rules; a `config.yaml` always has a number (default 0). |
+| `routing.cooldown.disable-cooling` | `routing.disable_cooling` | `true`: failures leave no cooldown. An account's own `disable_cooling` wins. |
+| `routing.cooldown.transient-error-cooldown-seconds` | `routing.transient_error_cooldown_ms` (seconds × 1000) | Seconds a failing upstream cools down: 0 for this core's backoff (1 second doubling to a minute), -1 for none. |
 
 The settings shown are those of the running config. Today's other basic settings (`debug`,
-logging to file, the request log, usage statistics, `proxy-url`, `ws-auth`, the cooldown
-settings and `request-retry` rounds) do not exist in this core yet; `max_attempts`, which today's
-core has no name for, is changed in the document.
+logging to file, the request log, usage statistics, `proxy-url`, `ws-auth` and
+`quota-response-mode`) do not exist in this core yet; `max_attempts`, which today's core has no
+name for, is changed in the document.
 
 ## Packages
 
@@ -1063,9 +1077,11 @@ are accepted silently.
 | `routing.session-affinity-subagents`, `routing.session-affinity-rebind-on` | | Later |
 | `routing.force-model-prefix` (`force-model-prefix`) | `routing.force_model_prefix`. | Supported |
 | `routing.retry.max-retry-credentials` (`max-retry-credentials`) | `routing.max_accounts`. | Supported |
-| `routing.retry.max-retry-interval` (`max-retry-interval`) | `routing.max_wait_ms`, in seconds as in today's core, default 30. Here it bounds the whole wait of one request; today's core bounds each wait between rounds. | Supported |
-| `routing.retry.request-retry` (`request-retry`) | `0` turns off waiting for another round (`max_wait_ms` 0). Above 0, rounds are bounded by `max-retry-interval`, not counted; the log says so. | Supported for 0; the round count later |
-| `routing.cooldown.disable-cooling` (`disable-cooling`), `routing.cooldown.transient-error-cooldown-seconds` (`transient-error-cooldown-seconds`), `routing.cooldown.quota-response-mode` (`quota-cooldown-response-mode`) | | Later |
+| `routing.retry.request-retry` (`request-retry`) | `routing.request_retry`: rounds after the first, run as today's core runs them. Default 0, as in today's core (its example config's 3 is only an example). | Supported |
+| `routing.retry.max-retry-interval` (`max-retry-interval`) | `routing.max_wait_ms`, in seconds as in today's core: the longest wait before each round. Default 0: a round that needs a wait does not start. | Supported |
+| `routing.cooldown.disable-cooling` (`disable-cooling`) | `routing.disable_cooling`. | Supported |
+| `routing.cooldown.transient-error-cooldown-seconds` (`transient-error-cooldown-seconds`) | `routing.transient_error_cooldown_ms`: above 0 that many seconds, below 0 none. 0 is this core's backoff, from a second doubling to a minute, where today's core waits a fixed minute. | Supported |
+| `routing.cooldown.quota-response-mode` (`quota-cooldown-response-mode`) | | Later |
 | `routing.cooldown.save-cooldown-status` (`save-cooldown-status`) | Blocks live in memory and carry over reloads. | Dropped: no need found |
 | `quota-exceeded.switch-project`, `quota-exceeded.switch-preview-model` | | Dead |
 | `requests.proxy-url` (`proxy-url`) and every `proxy-url` | | Later |
@@ -1093,7 +1109,8 @@ are accepted silently.
 | `oauth.providers.antigravity.*` (`antigravity`, `antigravity-signature-*`, `quota-exceeded.antigravity-credits`), `oauth.providers.devin.*` (`devin`) | | Later |
 | `api-keys.meta` (`meta-api-key`), `api-keys.interactions` (`interactions-api-key`) | | Later |
 | Every `headers` and `connection-pool` | | Later |
-| Every `disable-cooling` and `request-retry` on a group or key | | Dropped: no need found for per-key tuning |
+| Every `disable-cooling` on a group or key | The account's `disable_cooling`. | Supported |
+| Every `request-retry` on a group or key | | Dropped: no need found for per-key round counts |
 | The keys' `models[]` catalog fields (`display-name`, `max-context-length`, `force-mapping`, `is-compat`, `thinking`, `image`, `input-modalities`, `output-modalities`, `use-max-completion-tokens`, `support-configuration-update`, `openapi`) | A model's display name in lists is its upstream name. | Later |
 | Codex keys' `alpha-search`; Vertex keys' `interactions`, `openapi`, `openapi-location`; openai-compatibility's `support-prompt-cache-key`; xAI keys' `websockets` | | Later |
 | `multimedia.disable-image-generation` (`disable-image-generation`) | `true`, `"chat"` and `"passthrough"` are `image_generation_tool: false` on Codex accounts from the file and on those `-import-auth` adds. | Supported |
@@ -1138,7 +1155,8 @@ use it from one core only, or sign in again in the other.
 | anything else | Skipped, named in the output | Today's core does not load a file with no `type` or with `gemini` either. |
 
 From every file: `disabled: true` imports the account disabled, `priority` and `weight` are the
-account's, and `label` (else `email`) is its label. A file's `prefix` is the account's `prefix`,
+account's, `disable_cooling` (or `disable-cooling`) is its `disable_cooling`, and `label` (else
+`email`) is its label. A file's `prefix` is the account's `prefix`,
 its `excluded_models` (a list, or one comma-separated string) its `excluded_models`, and the
 entries of its `model_aliases` (or `models`) with a `name` and an `alias` its `model_alias`, as
 today's core reads them. A file's `proxy_url` and `headers` are not supported yet and are named

@@ -638,11 +638,13 @@ func TestApplySettingsJSON(t *testing.T) {
 				SessionAffinity:    flag(true),
 				SessionAffinityTTL: str("2h"),
 				ForceModelPrefix:   flag(true),
-				Retry:              &RetryPatch{MaxRetryCredentials: num(2), MaxRetryInterval: num(5)},
+				Retry:              &RetryPatch{RequestRetry: num(3), MaxRetryCredentials: num(2), MaxRetryInterval: num(5)},
+				Cooldown:           &CooldownPatch{DisableCooling: flag(true), TransientErrorCooldownSeconds: num(20)},
 			}})
 		})
 		r := loads(t, got, false).Routing
-		if r.Strategy != "weighted" || r.MaxAccounts != 2 || r.MaxWaitMS != 5000 || r.SessionAffinity == nil || r.SessionAffinity.TTLMS != 7200000 || !r.ForceModelPrefix {
+		if r.Strategy != "weighted" || r.MaxAccounts != 2 || r.MaxWaitMS != 5000 || r.SessionAffinity == nil || r.SessionAffinity.TTLMS != 7200000 || !r.ForceModelPrefix ||
+			r.RequestRetry == nil || *r.RequestRetry != 3 || !r.DisableCooling || r.TransientErrorCooldownMS != 20000 {
 			t.Errorf("routing = %+v (affinity %+v) in\n%s", r, r.SessionAffinity, got)
 		}
 		var raw struct {
@@ -651,11 +653,21 @@ func TestApplySettingsJSON(t *testing.T) {
 		if err := json.Unmarshal([]byte(got), &raw); err != nil {
 			t.Fatal(err)
 		}
-		if raw.Routing["strategy"] != "weighted" || raw.Routing["max_accounts"] != float64(2) || raw.Routing["max_wait_ms"] != float64(5000) || raw.Routing["force_model_prefix"] != true {
+		if raw.Routing["strategy"] != "weighted" || raw.Routing["max_accounts"] != float64(2) || raw.Routing["max_wait_ms"] != float64(5000) || raw.Routing["force_model_prefix"] != true ||
+			raw.Routing["request_retry"] != float64(3) || raw.Routing["disable_cooling"] != true || raw.Routing["transient_error_cooldown_ms"] != float64(20000) {
 			t.Errorf("routing keys = %v, want the JSON names", raw.Routing)
 		}
 		if !strings.HasPrefix(got, "{\n  \"listen\"") || strings.Index(got, `"listen"`) > strings.Index(got, `"routing"`) {
 			t.Errorf("indent or key order lost:\n%s", got)
+		}
+	})
+	t.Run("no transient cooldown", func(t *testing.T) {
+		got, err := apply(editJSON, SettingsPatch{Routing: &RoutingPatch{Cooldown: &CooldownPatch{TransientErrorCooldownSeconds: num(-1)}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ms := loads(t, got, false).Routing.TransientErrorCooldownMS; ms != -1 {
+			t.Errorf("transient_error_cooldown_ms = %d, want -1", ms)
 		}
 	})
 	t.Run("strategy names", func(t *testing.T) {
@@ -705,6 +717,8 @@ func TestApplySettingsJSON(t *testing.T) {
 			"negative accounts":    {Retry: &RetryPatch{MaxRetryCredentials: num(-1)}},
 			"negative interval":    {Retry: &RetryPatch{MaxRetryInterval: num(-1)}},
 			"interval over 30 day": {Retry: &RetryPatch{MaxRetryInterval: num(30*24*60*60 + 1)}},
+			"negative rounds":      {Retry: &RetryPatch{RequestRetry: num(-1)}},
+			"transient below -1":   {Cooldown: &CooldownPatch{TransientErrorCooldownSeconds: num(-2)}},
 			"bad duration":         {SessionAffinity: flag(true), SessionAffinityTTL: str("soon")},
 			"zero duration":        {SessionAffinity: flag(true), SessionAffinityTTL: str("0s")},
 			"negative duration":    {SessionAffinity: flag(true), SessionAffinityTTL: str("-5m")},
@@ -872,6 +886,30 @@ func TestApplySettingsYAML(t *testing.T) {
 		ForceModelPrefix:   flag(true),
 		Retry:              &RetryPatch{MaxRetryCredentials: num(2), MaxRetryInterval: num(5)},
 	}}
+	t.Run("retry and cooldown", func(t *testing.T) {
+		got := edited(t, editYAMLV8, true, func(d *Doc) error {
+			return d.ApplySettings(SettingsPatch{Routing: &RoutingPatch{
+				Retry:    &RetryPatch{RequestRetry: num(2)},
+				Cooldown: &CooldownPatch{DisableCooling: flag(true), TransientErrorCooldownSeconds: num(-1)},
+			}})
+		})
+		var raw struct {
+			Routing struct {
+				Retry    map[string]int `yaml:"retry"`
+				Cooldown map[string]any `yaml:"cooldown"`
+			} `yaml:"routing"`
+		}
+		if err := yaml.Unmarshal([]byte(got), &raw); err != nil {
+			t.Fatal(err)
+		}
+		if raw.Routing.Retry["request-retry"] != 2 || raw.Routing.Cooldown["disable-cooling"] != true || raw.Routing.Cooldown["transient-error-cooldown-seconds"] != -1 {
+			t.Errorf("routing = %+v, want today's names in\n%s", raw.Routing, got)
+		}
+		r := loads(t, got, true).Routing
+		if r.RequestRetry == nil || *r.RequestRetry != 2 || !r.DisableCooling || r.TransientErrorCooldownMS != -1 {
+			t.Errorf("routing read back = %+v", r)
+		}
+	})
 	t.Run("v8 paths", func(t *testing.T) {
 		got := edited(t, editYAMLV8, true, func(d *Doc) error { return d.ApplySettings(patch) })
 		r := loads(t, got, true).Routing
@@ -949,6 +987,7 @@ func TestApplySettingsYAML(t *testing.T) {
 			"unknown strategy":  {Strategy: str("random")},
 			"negative accounts": {Retry: &RetryPatch{MaxRetryCredentials: num(-1)}},
 			"huge interval":     {Retry: &RetryPatch{MaxRetryInterval: num(30*24*60*60 + 1)}},
+			"too many rounds":   {Retry: &RetryPatch{RequestRetry: num(1001)}},
 			"bad duration":      {SessionAffinityTTL: str("1 hour")},
 			"zero duration":     {SessionAffinityTTL: str("0")},
 		} {
