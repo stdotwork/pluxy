@@ -209,6 +209,9 @@ type oauthFailure struct {
 	code         string
 	retryAfterMS int64
 	err          error
+	// sent is whether any of the request was written to the connection. Only a request that was
+	// not sent is safe to try again.
+	sent bool
 }
 
 // oauthPost posts form to endpoint with Kimi's device headers and decodes a 200 reply into out.
@@ -220,9 +223,10 @@ func oauthPost(ctx context.Context, endpoint, deviceID string, form url.Values, 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 	deviceHeaders(req.Header, deviceID)
+	req, sent := sdk.TrackSend(req)
 	resp, err := authClient.Do(req)
 	if err != nil {
-		return &oauthFailure{err: err}
+		return &oauthFailure{err: err, sent: sent()}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -230,10 +234,10 @@ func oauthPost(ctx context.Context, endpoint, deviceID string, form url.Values, 
 			Error string `json:"error"`
 		}
 		_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
-		return &oauthFailure{status: resp.StatusCode, code: sdk.LoginCode(e.Error), retryAfterMS: retryAfter(resp.Header.Get("Retry-After"), time.Now())}
+		return &oauthFailure{status: resp.StatusCode, code: sdk.LoginCode(e.Error), retryAfterMS: retryAfter(resp.Header.Get("Retry-After"), time.Now()), sent: true}
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(out); err != nil {
-		return &oauthFailure{status: resp.StatusCode, err: fmt.Errorf("the reply is not valid JSON: %w", err)}
+		return &oauthFailure{status: resp.StatusCode, err: fmt.Errorf("the reply is not valid JSON: %w", err), sent: true}
 	}
 	return nil
 }
@@ -245,17 +249,18 @@ func requestError(ctx context.Context, f *oauthFailure) error {
 	return tokenError(f)
 }
 
-// tokenError turns a failed token or device request into an error.
+// tokenError turns a failed token or device request into an error. Only a request that never
+// reached Kimi is retryable, apart from a 429, where Kimi refused to run the request.
 func tokenError(f *oauthFailure) error {
 	switch {
 	case f.status == 0:
-		return &llm.Error{Code: llm.CodeUnavailable, Message: fmt.Sprintf("could not reach Kimi's login: %v", f.err), Retryable: true, Scope: llm.ScopeEndpoint}
+		return &llm.Error{Code: llm.CodeUnavailable, Message: fmt.Sprintf("could not reach Kimi's login: %v", f.err), Retryable: !f.sent, Scope: llm.ScopeEndpoint}
 	case f.err != nil:
 		return &llm.Error{Code: llm.CodeUpstream, Message: f.err.Error(), Status: f.status, Scope: llm.ScopeEndpoint}
 	case f.status == http.StatusTooManyRequests:
 		return &llm.Error{Code: llm.CodeRateLimit, Message: "Kimi's login is rate limiting", Status: f.status, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: f.retryAfterMS}
 	case f.status >= 500:
-		return &llm.Error{Code: llm.CodeUnavailable, Message: fmt.Sprintf("Kimi's login answered %d", f.status), Status: f.status, Retryable: true, Scope: llm.ScopeEndpoint, RetryAfterMS: f.retryAfterMS}
+		return &llm.Error{Code: llm.CodeUnavailable, Message: fmt.Sprintf("Kimi's login answered %d", f.status), Status: f.status, Scope: llm.ScopeEndpoint, RetryAfterMS: f.retryAfterMS}
 	case f.code == "invalid_grant":
 		return &llm.Error{Code: llm.CodeAuth, Message: "Kimi refused the grant; log in again", Status: f.status, ProviderCode: f.code, Scope: llm.ScopeCredential}
 	}

@@ -48,7 +48,8 @@ type LoginCall struct {
 // LoginHandler signs in to an account and returns its credential. It may prompt the user and
 // wait for their input through s. ctx is cancelled when core cancels the login. An *llm.Error
 // is sent as it is (code auth when the user or provider refused), any other error as code
-// internal.
+// internal. An error is retryable only when the request never reached the provider: use
+// TrackSend to tell. A 5xx answer, and a request that failed after it was sent, are not.
 type LoginHandler func(ctx context.Context, call LoginCall, s *LoginSession) (*protocol.Grant, error)
 
 // RefreshCall is one refresh call.
@@ -60,8 +61,10 @@ type RefreshCall struct {
 
 // RefreshHandler renews a credential and returns the new one, whole: core replaces the stored
 // credential with it. A refusal of the grant itself (for example OAuth invalid_grant) is code
-// auth with scope credential and not retryable: the account then needs a new login. A
-// failure that may pass (the token endpoint is down or rate limited) is retryable.
+// auth with scope credential and not retryable: the account then needs a new login. Any other
+// failure is retryable only when the request never reached the token endpoint (use TrackSend to
+// tell), or when the endpoint rate limited it (429). A 5xx answer, and a request that failed after
+// it was sent, are not retryable: the endpoint may have run the request.
 type RefreshHandler func(ctx context.Context, call RefreshCall) (*protocol.Credential, error)
 
 // ModelsCall is one models call.

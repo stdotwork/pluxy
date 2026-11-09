@@ -44,7 +44,8 @@ func TestDeviceCodeExpiryStopsPolling(t *testing.T) {
 	}
 }
 
-// A login host that stops answering fails a renewal instead of holding it.
+// A login host that stops answering fails a renewal instead of holding it. The request was
+// sent, so the failure is not retryable.
 func TestRenewalTimesOut(t *testing.T) {
 	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	hung := make(chan struct{})
@@ -69,24 +70,26 @@ func TestRenewalTimesOut(t *testing.T) {
 	select {
 	case err := <-done:
 		var e *llm.Error
-		if !errors.As(err, &e) || e.Code != llm.CodeUnavailable || !e.Retryable {
-			t.Errorf("err = %v, want a retryable unavailable error", err)
+		if !errors.As(err, &e) || e.Code != llm.CodeUnavailable || e.Retryable {
+			t.Errorf("err = %v, want an unavailable error that is not retryable", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the renewal waits for a login host that never answers")
 	}
 }
 
-// A renewal that fails for now keeps the login host's Retry-After, in seconds or as a date.
+// A renewal that fails for now keeps the login host's Retry-After, in seconds or as a date. A 429
+// is retryable; a 503 is not, because the request reached the login host and may have run.
 func TestRenewalRetryAfter(t *testing.T) {
 	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	for _, c := range []struct {
-		status int
-		header string
-		min    int64
+		status    int
+		header    string
+		min       int64
+		retryable bool
 	}{
-		{http.StatusServiceUnavailable, "900", 900_000},
-		{http.StatusTooManyRequests, time.Now().Add(10 * time.Minute).UTC().Format(http.TimeFormat), 500_000},
+		{http.StatusServiceUnavailable, "900", 900_000, false},
+		{http.StatusTooManyRequests, time.Now().Add(10 * time.Minute).UTC().Format(http.TimeFormat), 500_000, true},
 	} {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Retry-After", c.header)
@@ -97,8 +100,8 @@ func TestRenewalRetryAfter(t *testing.T) {
 		_, err := refresh(context.Background(), sdk.RefreshCall{Account: acct})
 		ts.Close()
 		var e *llm.Error
-		if !errors.As(err, &e) || !e.Retryable || e.RetryAfterMS < c.min {
-			t.Errorf("%d with Retry-After %q: %+v, want retryable after at least %dms", c.status, c.header, err, c.min)
+		if !errors.As(err, &e) || e.Retryable != c.retryable || e.RetryAfterMS < c.min {
+			t.Errorf("%d with Retry-After %q: %+v, want retryable %v after at least %dms", c.status, c.header, err, c.retryable, c.min)
 		}
 	}
 }

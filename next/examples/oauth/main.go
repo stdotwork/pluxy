@@ -112,7 +112,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err != nil {
 		return err
 	}
-	resp, err := chat(ctx, base, token, call.Request.Model, call.Request.Stream)
+	resp, err := chat(ctx, base, token, call.Request.Model, call.Request.Stream, false)
 	if err != nil {
 		return err
 	}
@@ -159,8 +159,10 @@ type chatLine struct {
 	OutputTokens *int64 `json:"output_tokens"`
 }
 
-// chat sends a chat request with the bearer token. A cancelled ctx stops the request.
-func chat(ctx context.Context, base, token, model string, stream bool) (*http.Response, error) {
+// chat sends a chat request with the bearer token. A cancelled ctx stops the request. A request
+// that got no reply is a retryable error, except when login is set: a login error is retryable
+// only when the request never reached the provider.
+func chat(ctx context.Context, base, token, model string, stream, login bool) (*http.Response, error) {
 	body, err := json.Marshal(map[string]any{"model": model, "stream": stream})
 	if err != nil {
 		return nil, err
@@ -171,12 +173,13 @@ func chat(ctx context.Context, base, token, model string, stream bool) (*http.Re
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
+	req, sent := sdk.TrackSend(req)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach the provider", Retryable: true, Scope: llm.ScopeEndpoint}
+		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach the provider", Retryable: !login || !sent(), Scope: llm.ScopeEndpoint}
 	}
 	return resp, nil
 }
@@ -374,7 +377,7 @@ func apiKeyLogin(ctx context.Context, base string, input map[string]string) (*pr
 	if key == "" {
 		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "enter an API key", Scope: llm.ScopeRequest}
 	}
-	resp, err := chat(ctx, base, key, "key-check", false)
+	resp, err := chat(ctx, base, key, "key-check", false, true)
 	if err != nil {
 		return nil, err
 	}
@@ -516,6 +519,9 @@ type oauthFailure struct {
 	code         string
 	retryAfterMS int64
 	err          error
+	// sent is whether any of the request was written to the connection. Only a request that was
+	// not sent is safe to try again.
+	sent bool
 }
 
 // oauthPost posts form to endpoint and decodes a 200 reply into out. Any other outcome is returned
@@ -527,9 +533,10 @@ func oauthPost(ctx context.Context, endpoint string, form url.Values, out any) *
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
+	req, sent := sdk.TrackSend(req)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return &oauthFailure{err: err}
+		return &oauthFailure{err: err, sent: sent()}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -537,10 +544,10 @@ func oauthPost(ctx context.Context, endpoint string, form url.Values, out any) *
 			Error string `json:"error"`
 		}
 		_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
-		return &oauthFailure{status: resp.StatusCode, code: e.Error, retryAfterMS: retryAfterMS(resp)}
+		return &oauthFailure{status: resp.StatusCode, code: e.Error, retryAfterMS: retryAfterMS(resp), sent: true}
 	}
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return &oauthFailure{status: resp.StatusCode, err: fmt.Errorf("the reply is not valid JSON: %w", err)}
+		return &oauthFailure{status: resp.StatusCode, err: fmt.Errorf("the reply is not valid JSON: %w", err), sent: true}
 	}
 	return nil
 }
@@ -554,17 +561,18 @@ func requestError(ctx context.Context, f *oauthFailure) error {
 	return tokenError(f)
 }
 
-// tokenError turns a failed token or device request into an error.
+// tokenError turns a failed token or device request into an error. Only a request that never
+// reached the token endpoint is retryable, apart from a 429, where the endpoint refused to run it.
 func tokenError(f *oauthFailure) error {
 	switch {
 	case f.status == 0:
-		return &llm.Error{Code: llm.CodeUnavailable, Message: fmt.Sprintf("could not reach the token endpoint: %v", f.err), Retryable: true, Scope: llm.ScopeEndpoint}
+		return &llm.Error{Code: llm.CodeUnavailable, Message: fmt.Sprintf("could not reach the token endpoint: %v", f.err), Retryable: !f.sent, Scope: llm.ScopeEndpoint}
 	case f.err != nil:
 		return &llm.Error{Code: llm.CodeUpstream, Message: f.err.Error(), Status: f.status, Scope: llm.ScopeEndpoint}
 	case f.status == http.StatusTooManyRequests:
 		return &llm.Error{Code: llm.CodeRateLimit, Message: "the token endpoint is rate limiting", Status: f.status, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: f.retryAfterMS}
 	case f.status >= 500:
-		return &llm.Error{Code: llm.CodeUnavailable, Message: fmt.Sprintf("the token endpoint answered %d", f.status), Status: f.status, Retryable: true, Scope: llm.ScopeEndpoint}
+		return &llm.Error{Code: llm.CodeUnavailable, Message: fmt.Sprintf("the token endpoint answered %d", f.status), Status: f.status, Scope: llm.ScopeEndpoint}
 	case f.code == "invalid_grant":
 		return &llm.Error{Code: llm.CodeAuth, Message: "the provider refused the grant; log in again", Status: f.status, ProviderCode: f.code, Scope: llm.ScopeCredential}
 	default:

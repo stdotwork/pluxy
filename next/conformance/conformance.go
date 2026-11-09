@@ -78,8 +78,9 @@ const (
 	// RefreshRejected: the provider refuses the grant itself (OAuth invalid_grant). The
 	// extension must report code auth, scope credential, not retryable.
 	RefreshRejected LoginScenario = "refresh_rejected"
-	// RefreshUnavailable: the provider's token endpoint fails in a way that may pass. The
-	// extension must report a retryable error that is not code auth.
+	// RefreshUnavailable: the provider's token endpoint answers, but with a server failure
+	// (5xx). The extension must report an error that is not code auth and not retryable: the
+	// request reached the provider, so it may have run.
 	RefreshUnavailable LoginScenario = "refresh_unavailable"
 )
 
@@ -636,8 +637,8 @@ func (k *kit) refresh(t *testing.T) {
 	})
 	t.Run("unavailable", func(t *testing.T) {
 		_, _, e := run(t, RefreshUnavailable)
-		if e == nil || e.Code == llm.CodeAuth || !e.Retryable {
-			t.Errorf("transient refresh failure got %s, want a retryable error that is not code %s", jsonString(e), llm.CodeAuth)
+		if e == nil || e.Code == llm.CodeAuth || e.Retryable {
+			t.Errorf("server failure on refresh got %s, want an error that is not code %s and not retryable", jsonString(e), llm.CodeAuth)
 		}
 	})
 }

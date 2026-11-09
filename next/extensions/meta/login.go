@@ -148,7 +148,11 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 			if ctx.Err() != nil {
 				return nil, expired(ctx.Err())
 			}
-			// A poll that got no answer is tried again at the next interval, as today's core does.
+			if wasSent(err) {
+				// The poll may have run, so the login stops.
+				return nil, requestError(ctx, err)
+			}
+			// A poll that never left this machine is tried again at the next interval.
 			continue
 		}
 		if status == http.StatusOK {
@@ -164,6 +168,10 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 			}
 			return g, nil
 		}
+		if status >= 500 {
+			// A 5xx may have run the poll, whatever its body says, so the login stops.
+			return nil, hideSecrets(loginFailure(status, body, h), dc.DeviceCode)
+		}
 		var e struct {
 			Error string `json:"error"`
 		}
@@ -177,8 +185,8 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 		case "expired_token":
 			return nil, refused("the code expired before it was approved; start the login again")
 		case "":
-			// An answer with no OAuth error (an outage page, a 5xx) leaves the device code good:
-			// poll again at the next interval, as today's core does.
+			// Any other answer with no OAuth error (an outage page, a redirect) leaves the device
+			// code good: poll again at the next interval, as today's core does.
 		default:
 			// Core does not know the device code, so it cannot redact it.
 			return nil, hideSecrets(loginFailure(status, body, h), dc.DeviceCode)
@@ -268,28 +276,47 @@ func postForm(ctx context.Context, endpoint string, form url.Values) (int, []byt
 	return do(req)
 }
 
+// sentError is the error of a request that was written to the connection, in whole or in part,
+// before it failed.
+type sentError struct{ error }
+
+func (e sentError) Unwrap() error { return e.error }
+
+// wasSent reports whether err is the failure of a request that may have reached Meta.
+func wasSent(err error) bool {
+	var s sentError
+	return errors.As(err, &s)
+}
+
 func do(req *http.Request) (int, []byte, http.Header, error) {
+	req, sent := sdk.TrackSend(req)
 	resp, err := authClient.Do(req)
 	if err != nil {
+		if sent() {
+			err = sentError{err}
+		}
 		return 0, nil, nil, err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return 0, nil, nil, err
+		return 0, nil, nil, sentError{err}
 	}
 	return resp.StatusCode, body, resp.Header, nil
 }
 
+// requestError is the error for a request that got no whole answer. Only a request that never
+// reached Meta is retryable: one that did may have run.
 func requestError(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	return &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach Meta: " + err.Error(), Retryable: true, Scope: llm.ScopeEndpoint}
+	return &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach Meta: " + err.Error(), Retryable: !wasSent(err), Scope: llm.ScopeEndpoint}
 }
 
-// loginFailure turns a refusal from Meta's login or key endpoint into an error, with the wait a
-// 429 or 5xx names in Retry-After.
+// loginFailure turns a refusal from Meta's login or key endpoint into an error. A 429 is
+// retryable, with the wait it names in Retry-After; a 5xx is not, because the request reached Meta
+// and may have run.
 func loginFailure(status int, body []byte, h http.Header) *llm.Error {
 	var b struct {
 		Error       json.RawMessage `json:"error"`
@@ -321,7 +348,7 @@ func loginFailure(status int, body []byte, h http.Header) *llm.Error {
 	case status == http.StatusTooManyRequests:
 		return &llm.Error{Code: llm.CodeRateLimit, Message: msg, Status: status, ProviderCode: code, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: retryAfter(h.Get("Retry-After"), time.Now())}
 	case status >= 500:
-		return &llm.Error{Code: llm.CodeUnavailable, Message: msg, Status: status, Retryable: true, Scope: llm.ScopeEndpoint, RetryAfterMS: retryAfter(h.Get("Retry-After"), time.Now())}
+		return &llm.Error{Code: llm.CodeUnavailable, Message: msg, Status: status, Scope: llm.ScopeEndpoint, RetryAfterMS: retryAfter(h.Get("Retry-After"), time.Now())}
 	}
 	return &llm.Error{Code: llm.CodeUpstream, Message: msg, Status: status, ProviderCode: code, Scope: llm.ScopeEndpoint}
 }

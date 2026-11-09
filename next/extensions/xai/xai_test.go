@@ -235,22 +235,28 @@ func TestDeviceLogin(t *testing.T) {
 	}
 }
 
-// A device poll that gets an outage with no OAuth error is tried again; one that gets another
-// error ends the login without echoing the device code.
+// A device poll that gets a 429, with no OAuth error or with xAI's own error text, is tried
+// again; one that gets another error ends the login without echoing the device code.
 func TestDevicePollErrors(t *testing.T) {
 	srv := xaitest.New(t)
-	failed := false
-	srv.Answer = func(w http.ResponseWriter, r *http.Request) bool {
-		if r.URL.Path != "/oauth2/token" || failed {
-			return false
-		}
-		failed = true
-		http.Error(w, "upstream connect error", http.StatusServiceUnavailable)
-		return true
-	}
+	old := waitPoll
+	t.Cleanup(func() { waitPoll = old })
+	waitPoll = func(ctx context.Context, _ time.Duration) bool { return ctx.Err() == nil }
 	set, _ := readSettings(srv.Settings())
-	if _, err := deviceLogin(context.Background(), set, promptFunc(func(p protocol.Prompt) { srv.Approve(p.UserCode) })); err != nil || !failed {
-		t.Fatalf("login after an outage: err %v (outage seen %v)", err, failed)
+	for _, refusal := range []string{"slow down\n", `{"code":"Too many requests","error":"Rate limit reached"}`} {
+		failed := false
+		srv.Answer = func(w http.ResponseWriter, r *http.Request) bool {
+			if r.URL.Path != "/oauth2/token" || failed {
+				return false
+			}
+			failed = true
+			w.WriteHeader(http.StatusTooManyRequests)
+			io.WriteString(w, refusal)
+			return true
+		}
+		if _, err := deviceLogin(context.Background(), set, promptFunc(func(p protocol.Prompt) { srv.Approve(p.UserCode) })); err != nil || !failed {
+			t.Fatalf("login after a 429 %q: err %v (429 seen %v)", refusal, err, failed)
+		}
 	}
 	srv.Answer = func(w http.ResponseWriter, r *http.Request) bool {
 		if r.URL.Path != "/oauth2/token" {
@@ -409,7 +415,8 @@ func TestDeviceSlowDown(t *testing.T) {
 	}
 }
 
-// A refused login call keeps xAI's Retry-After for a rate limit or an outage; a refused grant
+// A refused login call keeps xAI's Retry-After for a rate limit or an outage. A rate limit is
+// retryable; an outage is not, because the request reached xAI and may have run. A refused grant
 // asks for a new login and is not retried.
 func TestLoginFailure(t *testing.T) {
 	for _, c := range []struct {
@@ -422,7 +429,7 @@ func TestLoginFailure(t *testing.T) {
 		ms     int64
 	}{
 		{"rate limit", 429, "30", `{"error":"slow_down"}`, llm.CodeRateLimit, true, 30000},
-		{"outage", 503, "5", ``, llm.CodeUnavailable, true, 5000},
+		{"outage", 503, "5", ``, llm.CodeUnavailable, false, 5000},
 		{"refused grant", 400, "", `{"error":"invalid_grant"}`, llm.CodeAuth, false, 0},
 	} {
 		e := loginFailure(c.status, []byte(c.body), http.Header{"Retry-After": {c.ra}})

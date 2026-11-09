@@ -457,7 +457,7 @@ func findProject(ctx context.Context, set settings, token string) (string, error
 			return "", &llm.Error{Code: llm.CodeUpstream, Message: "Cloud Code finished onboarding without naming a project", Scope: llm.ScopeEndpoint}
 		}
 		if attempt >= onboardAttempts {
-			return "", &llm.Error{Code: llm.CodeUnavailable, Message: fmt.Sprintf("Cloud Code did not finish onboarding the account after %d attempts; log in again later", onboardAttempts), Retryable: true, Scope: llm.ScopeEndpoint}
+			return "", &llm.Error{Code: llm.CodeUnavailable, Message: fmt.Sprintf("Cloud Code did not finish onboarding the account after %d attempts; log in again later", onboardAttempts), Scope: llm.ScopeEndpoint}
 		}
 		select {
 		case <-ctx.Done():
@@ -506,20 +506,31 @@ func projectFailure(call string, status int, body []byte) error {
 	return e
 }
 
+// sentError is the error of a request that was written to the connection, in whole or in part,
+// before it failed.
+type sentError struct{ error }
+
+func (e sentError) Unwrap() error { return e.error }
+
 func do(req *http.Request) (int, []byte, error) {
+	req, sent := sdk.TrackSend(req)
 	resp, err := authClient.Do(req)
 	if err != nil {
+		if sent() {
+			err = sentError{err}
+		}
 		return 0, nil, err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, sentError{err}
 	}
 	return resp.StatusCode, body, nil
 }
 
-// requestError is the error for a login request that got no reply.
+// requestError is the error for a login request that got no whole reply. Only a request that never
+// reached Google is retryable: one that did may have run.
 func requestError(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -527,11 +538,13 @@ func requestError(ctx context.Context, err error) error {
 	if e, ok := err.(*llm.Error); ok {
 		return e
 	}
-	return &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach Google: " + err.Error(), Retryable: true, Scope: llm.ScopeEndpoint}
+	var sent sentError
+	return &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach Google: " + err.Error(), Retryable: !errors.As(err, &sent), Scope: llm.ScopeEndpoint}
 }
 
 // loginFailure turns a refusal from Google into an error. Its body is an OAuth error
-// ({"error": "invalid_grant", "error_description": ...}) or a Google API one ({"error": {...}}).
+// ({"error": "invalid_grant", "error_description": ...}) or a Google API one ({"error": {...}}). A
+// 429 is retryable; a 5xx is not, because the request reached Google and may have run.
 func loginFailure(status int, body []byte) *llm.Error {
 	var b struct {
 		Error       json.RawMessage `json:"error"`
@@ -565,7 +578,7 @@ func loginFailure(status int, body []byte) *llm.Error {
 	case status == http.StatusTooManyRequests:
 		return &llm.Error{Code: llm.CodeRateLimit, Message: msg, Status: status, ProviderCode: code, Retryable: true, Scope: llm.ScopeCredential}
 	case status >= 500:
-		return &llm.Error{Code: llm.CodeUnavailable, Message: msg, Status: status, Retryable: true, Scope: llm.ScopeEndpoint}
+		return &llm.Error{Code: llm.CodeUnavailable, Message: msg, Status: status, Scope: llm.ScopeEndpoint}
 	}
 	return &llm.Error{Code: llm.CodeUpstream, Message: msg, Status: status, ProviderCode: code, Scope: llm.ScopeEndpoint}
 }

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -487,25 +488,37 @@ func postJSON(ctx context.Context, endpoint string, v any) (int, []byte, error) 
 	return do(req)
 }
 
+// sentError is the error of a request that was written to the connection, in whole or in part,
+// before it failed.
+type sentError struct{ error }
+
+func (e sentError) Unwrap() error { return e.error }
+
 func do(req *http.Request) (int, []byte, error) {
+	req, sent := sdk.TrackSend(req)
 	resp, err := authClient.Do(req)
 	if err != nil {
+		if sent() {
+			err = sentError{err}
+		}
 		return 0, nil, err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, sentError{err}
 	}
 	return resp.StatusCode, body, nil
 }
 
-// requestError is the error for a login server request that got no reply.
+// requestError is the error for a login server request that got no whole reply. Only a request
+// that never reached the login server is retryable: one that did may have run.
 func requestError(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	return &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach the login server: " + err.Error(), Retryable: true, Scope: llm.ScopeEndpoint}
+	var sent sentError
+	return &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach the login server: " + err.Error(), Retryable: !errors.As(err, &sent), Scope: llm.ScopeEndpoint}
 }
 
 // grantRefusals are the error codes with which the login server refuses a grant for good: only a
@@ -513,7 +526,8 @@ func requestError(ctx context.Context, err error) error {
 var grantRefusals = []string{"invalid_grant", "refresh_token_reused", "refresh_token_expired", "refresh_token_invalidated", "token_revoked", "invalid_client"}
 
 // loginFailure turns a refusal from the login server into an error. Its body is an OAuth error
-// ({"error": "invalid_grant"}) or an OpenAI one ({"error": {"code": ...}}).
+// ({"error": "invalid_grant"}) or an OpenAI one ({"error": {"code": ...}}). A 429 is retryable; a
+// 5xx is not, because the request reached the login server and may have run.
 func loginFailure(status int, body []byte) *llm.Error {
 	var b struct {
 		Error json.RawMessage `json:"error"`
@@ -543,7 +557,7 @@ func loginFailure(status int, body []byte) *llm.Error {
 	case status == http.StatusTooManyRequests:
 		return &llm.Error{Code: llm.CodeRateLimit, Message: "the login server is rate limiting", Status: status, ProviderCode: code, Retryable: true, Scope: llm.ScopeCredential}
 	case status >= 500:
-		return &llm.Error{Code: llm.CodeUnavailable, Message: fmt.Sprintf("the login server answered %d", status), Status: status, Retryable: true, Scope: llm.ScopeEndpoint}
+		return &llm.Error{Code: llm.CodeUnavailable, Message: fmt.Sprintf("the login server answered %d", status), Status: status, Scope: llm.ScopeEndpoint}
 	}
 	return &llm.Error{Code: llm.CodeUpstream, Message: fmt.Sprintf("the login server answered %d (%s)", status, code), Status: status, ProviderCode: code, Scope: llm.ScopeEndpoint}
 }
