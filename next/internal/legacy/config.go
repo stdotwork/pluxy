@@ -183,7 +183,7 @@ var rules = map[string]rule{
 	"server.max-request-body-bytes":         {dropped, "requests are capped at 24 MiB"},
 	"server.response-compression":           {later, ""},
 	"server.trusted-proxies":                {later, ""},
-	"server.tls":                            {later, ""},
+	"server.tls":                            {supported, ""},
 	"server.commercial-mode":                {dropped, "it turns off features this core does not have"},
 	"server.discovery":                      {later, ""},
 	"server.discovery.advertise-management": {dead, ""},
@@ -417,6 +417,7 @@ func (x *translator) run() error {
 // malformed parent must not make a setting such as the client keys read as absent.
 var readPaths = []string{
 	"server.host", "server.port", "access.api-keys", "management.secret-key", "management.allow-remote",
+	"server.tls.enable", "server.tls.cert", "server.tls.key",
 	"routing.strategy", "routing.session-affinity", "routing.session-affinity-ttl",
 	"routing.retry.max-retry-credentials", "routing.retry.max-retry-interval", "routing.retry.request-retry",
 	"routing.force-model-prefix", "oauth.model-alias", "oauth.excluded-models",
@@ -461,6 +462,20 @@ func (x *translator) server() error {
 		return fmt.Errorf("server.port %d is not a port", port)
 	}
 	x.out["listen"] = net.JoinHostPort(strings.TrimSpace(host), strconv.Itoa(port))
+
+	if on, err := flag(x.t, "server.tls.enable"); err != nil {
+		return err
+	} else if on {
+		cert, err := str(x.t, "server.tls.cert")
+		if err != nil {
+			return err
+		}
+		key, err := str(x.t, "server.tls.key")
+		if err != nil {
+			return err
+		}
+		x.out["tls"] = map[string]any{"enable": true, "cert": strings.TrimSpace(cert), "key": strings.TrimSpace(key)}
+	}
 
 	if v, ok := get(x.t, "access.api-keys"); ok && v != nil {
 		keys, err := stringList(v, "access.api-keys")

@@ -170,6 +170,24 @@ origin on every route; here CORS covers the client API only, never the panel or 
 {"cors": {"allowed_origins": ["http://localhost:5173"]}}
 ```
 
+With `tls.enable`, core serves `listen` over HTTPS, with HTTP/2 or HTTP/1.1, using the
+certificate in `tls.cert` (PEM, the certificate first, then its chain) and its private key in
+`tls.key` (PEM); relative paths are relative to the config file. Core does not start when the
+files do not load. It looks at the files at most once a second while connections arrive and,
+when they change, serves the new pair from the next connection on, so a renewed certificate
+needs no restart; while the files do not make a pair (one written, the other not yet) it keeps
+serving the one it has. Turning TLS on or off, or pointing it at other files, needs a restart.
+Today's core reads the files once at start. The extension pages listener stays plain HTTP: the
+[Mixed Content](https://www.w3.org/TR/mixed-content/) rules let an HTTPS page embed a page from a
+[potentially trustworthy](https://www.w3.org/TR/secure-contexts/) address, which `127.0.0.1`
+always is and `localhost` is where the browser resolves it only to loopback; those are the
+default pages sites. For a panel reached by another name, put the site `extension_pages.url`
+names behind HTTPS of your own.
+
+```json
+{"tls": {"enable": true, "cert": "certs/fullchain.pem", "key": "certs/privkey.pem"}}
+```
+
 A reply to a request that went to an account carries `X-CPA-TRACE-ID`, as today's core sends it:
 the time and a random part, such as `20261109061500-3f9a0c2e5b7d4e18`. Core's log lines about the
 request (a failure, what translation lost) carry the same ID and the account, so a reply can be
@@ -833,7 +851,7 @@ in the middle of saving), is skipped; the file watcher waits until the file has 
 A reload that fails at any step, from broken JSON to an extension that does not start, leaves
 the running config in place, and management shows why. That reason, in the log, in status, and
 when core refuses to start or `-import-auth` refuses the config, has the config's secrets replaced by placeholders, as `GET
-/v0/management/config` shows them. `listen`, `credentials_dir`,
+/v0/management/config` shows them. `listen`, `tls`, `credentials_dir`,
 `packages.dir` and `extension_pages.listen` cannot change without a restart.
 
 When the extension's manifest or program changes, a reload starts the new version and waits for
@@ -1098,7 +1116,8 @@ are accepted silently.
 | `management.base-url` | | Dropped: no terminal UI |
 | `server.max-request-body-bytes` | Request bodies are capped at 24 MiB. | Dropped: core needs a fixed cap for its request frame |
 | `server.response-compression.*` | | Later |
-| `server.trusted-proxies` (`trusted-proxies`), `server.tls.*` (`tls`) | | Later |
+| `server.tls.enable`, `.cert`, `.key` (`tls`) | `tls`, the same three keys. Relative paths are relative to the config file, where today's core reads them relative to the folder it was started in. | Supported |
+| `server.trusted-proxies` (`trusted-proxies`) | | Later |
 | `server.commercial-mode` (`commercial-mode`) | | Dropped: it turns off features this core does not have |
 | `server.discovery.*` (`discovery`) | | Later |
 | `server.discovery.advertise-management` | | Dead |
