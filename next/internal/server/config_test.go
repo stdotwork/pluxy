@@ -79,8 +79,10 @@ claude-api-key:
 	if len(a) != 1 || a[0].ID != "claude-api-key-1" || a[0].Priority != 1 || a[0].Credential.APIKey != "k" || string(a[0].Settings) != `{"base_url":"http://127.0.0.1:1"}` {
 		t.Errorf("claude accounts: %+v", a)
 	}
-	if c.Routing.MaxWaitMS != 30000 {
-		t.Errorf("max_wait_ms = %d, want today's default of 30 s", c.Routing.MaxWaitMS)
+	// Today's core runs no extra rounds and never waits unless request-retry and
+	// max-retry-interval say otherwise.
+	if r := c.Routing; r.MaxWaitMS != 0 || r.RequestRetry == nil || *r.RequestRetry != 0 {
+		t.Errorf("routing %+v, want today's defaults: request_retry 0, max_wait_ms 0", r)
 	}
 
 	// A relative auth-dir is relative to the config file; with it, the config needs no

@@ -201,7 +201,7 @@ openai-compatibility:
 		"listen": "127.0.0.1:9000",
 		"client_keys": ["client-a"],
 		"management_key": "manage-me",
-		"routing": {"strategy": "weighted", "max_accounts": 2, "request_retry": 0, "max_wait_ms": 30000, "session_affinity": {"ttl_ms": 600000}},
+		"routing": {"strategy": "weighted", "max_accounts": 2, "request_retry": 0, "session_affinity": {"ttl_ms": 600000}},
 		"extensions": {
 			"pluxy/codex": {"accounts": [{
 				"id": "codex-api-key-1", "priority": 2, "weight": 3,
@@ -250,6 +250,7 @@ api-keys:
 	equalJSON(t, r.Config, `{
 		"listen": ":9001",
 		"management_key": "new",
+		"routing": {"request_retry": 0},
 		"extensions": {"pluxy/codex": {"accounts": [{"id": "c", "credential": {"kind": "api_key", "api_key": "new-key"}}]}}
 	}`)
 	// allow-remote came from the older spelling and still counts: the v8 value wins only
@@ -339,7 +340,7 @@ extensions:
 codex-api-key: [{api-key: from-yaml}]
 `)
 	equalJSON(t, r.Config, `{
-		"listen": ":8317", "routing": {"max_wait_ms": 30000},
+		"listen": ":8317", "routing": {"request_retry": 0},
 		"credentials_dir": "creds", "drop_policy": "reject", "packages": {"dir": "pk"},
 		"cors": {"allowed_origins": ["http://localhost:5173"]},
 		"extensions": {"pluxy/codex": {"idle_stop_ms": 0, "accounts": [
@@ -401,7 +402,7 @@ claude-api-key:
   - api-key: 987654
 `)
 	equalJSON(t, r.Config, `{
-		"listen": ":8317", "routing": {"max_wait_ms": 30000},
+		"listen": ":8317", "routing": {"request_retry": 0},
 		"client_keys": ["123456"],
 		"management_key": " spaced ",
 		"extensions": {"pluxy/claude": {"accounts": [{"id": "claude-api-key-1", "credential": {"kind": "api_key", "api_key": "987654"}}]}}
@@ -420,7 +421,7 @@ openai-compatibility:
     base-url: http://127.0.0.1:1234/v1
 `)
 	equalJSON(t, r.Config, `{
-		"listen": ":8317", "routing": {"max_wait_ms": 30000},
+		"listen": ":8317", "routing": {"request_retry": 0},
 		"extensions": {"pluxy/gemini": {"accounts": [{"id": "gemini-api-key-2", "credential": {"kind": "api_key", "api_key": "g"}}]}}
 	}`)
 	n := notices(r)
@@ -467,7 +468,7 @@ openai-compatibility:
     api-key-entries: [{api-key: k2}]
     models: [{name: m, alias: m}]
 `)
-	equalJSON(t, r.Config["routing"], `{"force_model_prefix": true, "max_wait_ms": 30000}`)
+	equalJSON(t, r.Config["routing"], `{"force_model_prefix": true, "request_retry": 0}`)
 	exts := asJSON(t, r.Config["extensions"]).(map[string]any)
 	equalJSON(t, exts[Codex].(map[string]any)["accounts"], `[{
 		"id": "codex-api-key-1", "prefix": "team", "excluded_models": ["*-mini"],

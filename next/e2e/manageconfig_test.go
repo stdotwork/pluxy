@@ -720,12 +720,14 @@ func TestManageSettings(t *testing.T) {
 		t.Run(f.name, func(t *testing.T) {
 			c := startManaged(t, f.yaml)
 			s := c.settings(t)
-			wantWait := 0.0
+			// A config.yaml that sets no rounds gets today's default of none; a JSON config
+			// leaves rounds to this core's rules.
+			wantRounds := s.Routing.Retry.RequestRetry == nil
 			if f.yaml {
-				wantWait = 30 // today's default wait, which a config.yaml gets when it sets none
+				wantRounds = s.Routing.Retry.RequestRetry != nil && *s.Routing.Retry.RequestRetry == 0
 			}
-			if s.Routing.Strategy != "round-robin" || s.Routing.SessionAffinity || s.Routing.SessionAffinityTTL != "1h" || s.Routing.Retry.RequestRetry != nil ||
-				s.Routing.Retry.MaxRetryCredentials != 0 || s.Routing.Retry.MaxRetryInterval != wantWait || s.Routing.Cooldown.DisableCooling || s.Routing.Cooldown.TransientErrorCooldownSeconds != 0 {
+			if s.Routing.Strategy != "round-robin" || s.Routing.SessionAffinity || s.Routing.SessionAffinityTTL != "1h" || !wantRounds ||
+				s.Routing.Retry.MaxRetryCredentials != 0 || s.Routing.Retry.MaxRetryInterval != 0 || s.Routing.Cooldown.DisableCooling || s.Routing.Cooldown.TransientErrorCooldownSeconds != 0 {
 				t.Errorf("settings = %+v", s)
 			}
 

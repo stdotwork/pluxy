@@ -528,23 +528,16 @@ func (x *translator) routing() error {
 	} else if n > 0 {
 		r["max_accounts"] = n
 	}
-	// Rounds as today's core runs them, when the file sets request-retry.
-	if v, ok := get(x.t, "routing.retry.request-retry"); ok && v != nil {
-		retry, err := integer(x.t, "routing.retry.request-retry")
-		if err != nil {
-			return err
-		}
-		r["request_retry"] = max(retry, 0)
+	// Rounds as today's core runs them; both settings default to 0 there (no extra rounds, no
+	// waits), whatever its example config shows.
+	retry, err := integer(x.t, "routing.retry.request-retry")
+	if err != nil {
+		return err
 	}
-	wait := 30 // seconds
-	if v, ok := get(x.t, "routing.retry.max-retry-interval"); ok && v != nil {
-		n, err := integer(x.t, "routing.retry.max-retry-interval")
-		if err != nil {
-			return err
-		}
-		wait = max(n, 0)
-	}
-	if wait > 0 {
+	r["request_retry"] = max(retry, 0)
+	if wait, err := integer(x.t, "routing.retry.max-retry-interval"); err != nil {
+		return err
+	} else if wait > 0 {
 		r["max_wait_ms"] = int64(wait) * 1000
 	}
 	if on, err := flag(x.t, "routing.cooldown.disable-cooling"); err != nil {
