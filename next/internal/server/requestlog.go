@@ -163,8 +163,10 @@ func (l *RequestLog) write(e *requestEntry) {
 	if !l.All {
 		name = "error-" + name
 	}
-	// Always a new file: an existing name, or a link planted under it, is never written through.
-	f, err := os.OpenFile(filepath.Join(l.Dir, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	// Written in full under a name no reader lists, then linked to its own: a reader finds the
+	// whole log or none. Linking fails when the name exists, so an existing name, or a link
+	// planted under it, is never written through.
+	f, err := os.CreateTemp(l.Dir, ".writing-*")
 	if err != nil {
 		log.Printf("request log: %v", err)
 		return
@@ -173,6 +175,10 @@ func (l *RequestLog) write(e *requestEntry) {
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
+	if err == nil {
+		err = os.Link(f.Name(), filepath.Join(l.Dir, name))
+	}
+	_ = os.Remove(f.Name())
 	if err != nil {
 		log.Printf("request log: %v", err)
 		return

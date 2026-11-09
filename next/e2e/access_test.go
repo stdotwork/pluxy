@@ -138,7 +138,9 @@ func TestManagementLockout(t *testing.T) {
 // a proxy on this machine forwards from elsewhere is not from this machine: when core does not
 // trust the proxy, any forwarding header says so; when it does, the forwarded client decides.
 func TestManagementRemoteGate(t *testing.T) {
-	cfg := accessConfig(newUpstream(t))
+	u := newUpstream(t)
+	u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) { okReply(w) } // the client API call below reaches it
+	cfg := accessConfig(u)
 	base, path, _ := runCoreArgs(t, cfg, noWatch...)
 
 	if resp := managementFrom(t, base, "", managementKey); resp.StatusCode != http.StatusOK {
