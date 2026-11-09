@@ -296,3 +296,18 @@ openai-compatibility:
 		t.Error("core says files are not imported yet after the import")
 	}
 }
+
+// -import-auth with a config that core refuses prints the reason without the config's secrets.
+func TestImportAuthRefusalShowsNoSecret(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	cfg := `{"listen": "127.0.0.1:0", "client_keys": ["fake-client-key-e2e"], "management_key": "fake-management-e2e",
+		"routing": {"strategy": "fake-management-e2e"}}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(filepath.Join(binDir, "pluxy"), "-config", path, "-import-auth", t.TempDir()).CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "routing strategy") || strings.Contains(string(out), "fake-management-e2e") {
+		t.Errorf("import exited with %v:\n%s\nwant a refusal without the management key", err, out)
+	}
+}

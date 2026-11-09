@@ -825,7 +825,9 @@ then switches to it in one step; requests that already started finish on the con
 extension version they started with. A file core has already seen, or an empty one (an editor
 in the middle of saving), is skipped; the file watcher waits until the file has stopped changing.
 A reload that fails at any step, from broken JSON to an extension that does not start, leaves
-the running config in place, and management shows why. `listen`, `credentials_dir`,
+the running config in place, and management shows why. That reason, in the log, in status, and
+when core refuses to start or `-import-auth` refuses the config, has the config's secrets replaced by placeholders, as `GET
+/v0/management/config` shows them. `listen`, `credentials_dir`,
 `packages.dir` and `extension_pages.listen` cannot change without a restart.
 
 When the extension's manifest or program changes, a reload starts the new version and waits for

@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stdotwork/pluxy/next/internal/server"
 )
 
 func dirNames(t *testing.T, dir string) []string {
@@ -198,5 +200,56 @@ func TestRefusedSettingsReplyShowsNoFileSecret(t *testing.T) {
 	c.Management().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "pluxy-redacted-") || strings.Contains(rec.Body.String(), "fake-provider-secret") {
 		t.Errorf("reply %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// leakyConfig refuses to load with a message that quotes the strategy, whose value is the
+// account's API key.
+const leakyConfig = `{"listen": "127.0.0.1:0", "client_keys": ["fake-client-key-1"], "management_key": "fake-management-key",
+	"routing": {"strategy": "fake-provider-secret"},
+	"extension": {"manifest": "missing.json", "accounts": [{"id": "a", "credential": {"kind": "api_key", "api_key": "fake-provider-secret"}}]}}` + "\n"
+
+func TestFailedReloadLogsNoSecret(t *testing.T) {
+	c, path := safeCore(t, safeConfig)
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	if err := os.WriteFile(path, []byte(leakyConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := c.Reload("test")
+	if err == nil || strings.Contains(err.Error(), "fake-provider-secret") || !strings.Contains(err.Error(), "pluxy-redacted-") {
+		t.Fatalf("Reload = %v, want a refusal without the secret", err)
+	}
+	if !strings.Contains(buf.String(), "not applied") || strings.Contains(buf.String(), "fake-provider-secret") {
+		t.Errorf("log: %s", buf.String())
+	}
+	if s := c.Status(); s.Desired.Error == "" || strings.Contains(s.Desired.Error, "fake-provider-secret") {
+		t.Errorf("status desired.error = %q", s.Desired.Error)
+	}
+}
+
+func TestFailedStartShowsNoSecret(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(leakyConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Start(Options{ConfigPath: path, SafeMode: true})
+	if err == nil || strings.Contains(err.Error(), "fake-provider-secret") || !strings.Contains(err.Error(), "pluxy-redacted-") {
+		t.Fatalf("Start = %v, want a refusal without the secret", err)
+	}
+}
+
+func TestScrubConfigError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(leakyConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := server.LoadConfig(path)
+	if err == nil || !strings.Contains(err.Error(), "fake-provider-secret") {
+		t.Fatalf("LoadConfig = %v, want a refusal that quotes the value", err)
+	}
+	if got := ScrubConfigError(path, err); strings.Contains(got.Error(), "fake-provider-secret") || !errors.Is(got, err) {
+		t.Errorf("ScrubConfigError = %v", got)
 	}
 }

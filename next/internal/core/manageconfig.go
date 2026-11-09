@@ -137,11 +137,36 @@ func (c *Core) scrub(msg string, docs ...[]byte) string {
 			secrets = append(secrets, d.Secrets()...)
 		}
 	}
-	if cfg := c.Config(); cfg != nil {
-		secrets = append(append(secrets, cfg.ManagementKey), cfg.ClientKeys...)
+	if cur := c.cur.Load(); cur != nil { // nil while core starts
+		secrets = append(append(secrets, cur.Config.ManagementKey), cur.Config.ClientKeys...)
 	}
 	return c.redactor.Scrub(msg, secrets)
 }
+
+// ScrubConfigError returns err with the secrets of the config file at path taken out of its
+// message, for a command that reads the config without starting core (-import-auth).
+func ScrubConfigError(path string, err error) error {
+	c := &Core{opts: Options{ConfigPath: path}, redactor: configdoc.NewRedactor()}
+	return c.scrubbed(err)
+}
+
+// scrubbed returns err with the secrets scrub finds taken out of its message; errors.Is and
+// errors.As still see err.
+func (c *Core) scrubbed(err error, docs ...[]byte) error {
+	msg := c.scrub(err.Error(), docs...)
+	if msg == err.Error() {
+		return err
+	}
+	return &scrubbedError{msg, err}
+}
+
+type scrubbedError struct {
+	msg string
+	err error
+}
+
+func (e *scrubbedError) Error() string { return e.msg }
+func (e *scrubbedError) Unwrap() error { return e.err }
 
 // writeChangeError writes why a change to the config file failed; docs are the config
 // contents involved, whose secrets the message must not show.

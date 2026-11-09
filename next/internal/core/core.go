@@ -123,7 +123,7 @@ func Start(opts Options) (*Core, error) {
 	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor(), checks: newChecks()}
 	cfg, err := server.LoadConfig(opts.ConfigPath)
 	if err != nil {
-		return nil, err
+		return nil, c.scrubbed(err)
 	}
 	c.pkgDir = cfg.Packages.Dir
 	// No publisher's folder can be called .settings: IDs start with a letter or digit.
@@ -305,6 +305,9 @@ func (c *Core) transact(force bool, why string, change func(packages.State), str
 		return err
 	}
 	if err != nil {
+		// The message may quote the file (a value core refused), so its secrets are taken out
+		// before it is logged, shown in status or returned.
+		err = c.scrubbed(err, b)
 		c.mu.Lock()
 		c.desired.Error = err.Error()
 		c.mu.Unlock()
