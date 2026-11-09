@@ -149,6 +149,11 @@ each turn is a request that carries the whole conversation so far, which core ke
 socket. `response.append`,
 `response.interrupt` and warmups (`"generate": false`) are served as today's core serves them.
 
+The Codex CLI sends its requests to `POST /backend-api/codex/responses` and opens its WebSocket on
+`GET /backend-api/codex/responses` when its `chatgpt_base_url` points at core. As in today's core,
+both paths are aliases of `/v1/responses` and its WebSocket: the same handlers and the same client
+key check.
+
 When an upstream ends a Responses stream with a `response.completed`, `response.incomplete` or
 `response.failed` whose `output` is empty, core fills it with the items the stream's
 `response.output_item.done` events finished, as today's core does.

@@ -540,3 +540,45 @@ func TestResponsesWebSocketAnyOriginWithClientKey(t *testing.T) {
 		t.Fatalf("turn ended with %v", m)
 	}
 }
+
+// The Codex CLI's direct routes, which it uses when its chatgpt_base_url points at core, are
+// aliases of /v1/responses: a POST and a WebSocket on them get what /v1/responses gets, and a
+// request without the client key is refused on each.
+func TestCodexDirectRoutesAliasResponses(t *testing.T) {
+	u := newWSUpstream(t)
+	base := startWSCore(t, u, true, "sk-a")
+	paths := []string{"/v1/responses", "/backend-api/codex/responses"}
+	for _, path := range paths {
+		resp := postPath(t, context.Background(), base, path, clientKey, `{"model":"gpt-test","input":"hi"}`)
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || !strings.Contains(string(raw), "reply") {
+			t.Errorf("POST %s: status %d: %s", path, resp.StatusCode, raw)
+		}
+		resp = postPath(t, context.Background(), base, path, "", `{"model":"gpt-test","input":"hi"}`)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("POST %s without a key: status %d, want 401", path, resp.StatusCode)
+		}
+	}
+	for _, path := range paths {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		c, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(base, "http")+path,
+			&websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer " + clientKey}}})
+		cancel()
+		if err != nil {
+			t.Fatalf("WebSocket %s: %v", path, err)
+		}
+		if m := wsTurn(t, c, wsCreate("one", "")); m["type"] != "response.completed" {
+			t.Errorf("WebSocket %s: turn ended with %v", path, m)
+		}
+		c.CloseNow()
+
+		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+		_, resp, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(base, "http")+path, nil)
+		cancel()
+		if err == nil || resp == nil || resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("WebSocket %s without a key: err %v, want a 401", path, err)
+		}
+	}
+}
