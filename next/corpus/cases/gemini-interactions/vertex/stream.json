@@ -1,0 +1,70 @@
+{
+  "description": "Interactions client on an opted-in Vertex service account, streamed: alt=sse is added to the Vertex URL and each event reaches the client.",
+  "source": ["core/internal/runtime/executor/gemini_vertex_executor.go:1529-1544,1680-1760"],
+  "client": {
+    "path": "/v1beta/interactions",
+    "body": {"model":"gemini-2.5-pro","input":"Say hello","stream":true}
+  },
+  "old_core": {"account":{"interactions":true}},
+  "new_core": {"account":{"settings":{"interactions":true}}},
+  "upstream": [
+    {"body":{"access_token":"ya29.corpus-token","expires_in":3599,"token_type":"Bearer"}},
+    {
+      "sse": [
+        {"event":"interaction.start","data":{"event_type":"interaction.start","interaction":{"id":"int-corpus","object":"interaction","model":"gemini-2.5-flash","status":"in_progress"}}},
+        {"event":"content.start","data":{"event_type":"content.start","index":0,"content":{"type":"text"}}},
+        {"event":"content.delta","data":{"event_type":"content.delta","index":0,"delta":{"type":"text","text":"Hello"}}},
+        {"event":"content.delta","data":{"event_type":"content.delta","index":0,"delta":{"type":"text","text":" there!"}}},
+        {"event":"content.stop","data":{"event_type":"content.stop","index":0}},
+        {"event":"interaction.complete","data":{"event_type":"interaction.complete","interaction":{"id":"int-corpus","object":"interaction","model":"gemini-2.5-flash","status":"completed","usage":{"total_input_tokens":12,"total_output_tokens":4,"total_tokens":16}}}}
+      ]
+    }
+  ],
+  "volatile": ["upstream[0].body"],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"event_type":"interaction.start","interaction":{"id":"int-corpus","model":"gemini-2.5-flash","object":"interaction","status":"in_progress"}},"event":"interaction.start"},
+        {"data":{"content":{"type":"text"},"event_type":"content.start","index":0},"event":"content.start"},
+        {"data":{"delta":{"text":"Hello","type":"text"},"event_type":"content.delta","index":0},"event":"content.delta"},
+        {"data":{"delta":{"text":" there!","type":"text"},"event_type":"content.delta","index":0},"event":"content.delta"},
+        {"data":{"event_type":"content.stop","index":0},"event":"content.stop"},
+        {"data":{"event_type":"interaction.complete","interaction":{"id":"int-corpus","model":"gemini-2.5-flash","object":"interaction","status":"completed","usage":{"total_input_tokens":12,"total_output_tokens":4,"total_tokens":16}}},"event":"interaction.complete"}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": "(volatile)",
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Content-Type": "application/x-www-form-urlencoded",
+          "User-Agent": "Go-http-client/1.1"
+        },
+        "method": "POST",
+        "path": "/token"
+      },
+      {
+        "body": {"input":"Say hello","model":"gemini-2.5-pro","stream":true},
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Api-Revision": "2026-05-20",
+          "Authorization": "Bearer ya29.corpus-token",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1"
+        },
+        "method": "POST",
+        "path": "/v1beta1/projects/corpus-project/locations/global/interactions?alt=sse"
+      }
+    ]
+  }
+}

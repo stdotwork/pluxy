@@ -520,6 +520,33 @@ var Providers = map[string]Provider{
 			return "gemini", accounts
 		},
 	},
+	// Gemini's Interactions API with an API key: the Gemini extension with "interactions": true
+	// against today's interactions api-keys group, both with a custom base URL. Both send
+	// Interactions requests to {upstream}/v1beta/interactions with the key in x-goog-api-key.
+	"interactions": {
+		OldCore: func(upstreamURL string, models, keys []string) map[string]any {
+			return map[string]any{"interactions": oldCoreGeminiAPIKey(upstreamURL, models, keys)["gemini"]}
+		},
+		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
+			var accounts []any
+			for i, k := range keys {
+				id := "corpus"
+				if i > 0 {
+					id = fmt.Sprintf("corpus-%d", i+1)
+				}
+				acct := map[string]any{
+					"id":         id,
+					"settings":   map[string]any{"base_url": upstreamURL, "interactions": true},
+					"credential": map[string]any{"kind": "api_key", "api_key": k},
+				}
+				if len(models) > 0 {
+					acct["models"] = models
+				}
+				accounts = append(accounts, acct)
+			}
+			return "gemini", accounts
+		},
+	},
 	// Vertex AI with an express mode API key: the Gemini extension with vertex settings against
 	// today's vertex-api-key entry, both with a custom base URL. Both send requests to
 	// {upstream}/v1/publishers/google/models/{model}:{method} with the key in x-goog-api-key.

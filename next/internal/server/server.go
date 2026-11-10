@@ -187,7 +187,7 @@ func NewHandler(src Source) http.Handler {
 	})
 	handle("/v1beta/models/{action...}", geminiFormat, geminiAction)
 	for path, ep := range endpointRoutes {
-		handle(path, clientFormat{}, func(w http.ResponseWriter, r *http.Request, g *Generation) { serveEndpoint(w, r, g, ep) })
+		handle(path, clientFormat{googleKeys: ep.googleKeys, errorBody: ep.errorBody}, func(w http.ResponseWriter, r *http.Request, g *Generation) { serveEndpoint(w, r, g, ep) })
 	}
 	// The WebSocket, on /v1/responses and on the Codex CLI's alias of it (see above).
 	for _, path := range []string{"/v1/responses", "/backend-api/codex/responses"} {

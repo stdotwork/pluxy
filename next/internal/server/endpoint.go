@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/format/geminigenerate"
 	"github.com/stdotwork/pluxy/next/format/openaichat"
 	"github.com/stdotwork/pluxy/next/format/openairesponses"
 	"github.com/stdotwork/pluxy/next/internal/route"
@@ -32,6 +34,15 @@ type endpoint struct {
 	// check refuses a request the endpoint does not take, before it is routed. fromForm is true
 	// for a body that came as multipart/form-data.
 	check func(body map[string]json.RawMessage, fromForm bool) *llm.Error
+	// notJSON, when set, is the message that refuses a body that is not a JSON object.
+	notJSON string
+	// modelPrefix is a prefix the body's model may carry that is not part of the model's name;
+	// routing reads the model without it.
+	modelPrefix string
+	// googleKeys accepts the client key where Google's clients send it (clientFormat.googleKeys).
+	googleKeys bool
+	// errorBody returns the status and body of an error reply; nil means the OpenAI shape.
+	errorBody func(e *llm.Error) (int, []byte)
 }
 
 // compactEndpoint is OpenAI's Responses compaction, which the Codex CLI calls to shorten a long
@@ -57,6 +68,48 @@ var alphaSearchEndpoint = endpoint{
 	modelOptional: true,
 }
 
+// interactionsEndpoint is Gemini's Interactions API. A request names a model or an agent (a
+// Google-run agent, which has no model); one with an agent goes to any account, and only a native
+// Interactions account serves it. The checks and their messages are today's core's
+// (core/sdk/api/handlers/gemini/interactions_handlers.go), and so is the models/ prefix it
+// removes from the model. Whether the reply streams is the extension's to say.
+var interactionsEndpoint = endpoint{
+	format:        llm.FormatGeminiInteractions,
+	headers:       []string{"api-revision"},
+	modelOptional: true,
+	notJSON:       "invalid JSON body",
+	modelPrefix:   "models/",
+	googleKeys:    true,
+	errorBody:     interactionsError,
+	check: func(body map[string]json.RawMessage, _ bool) *llm.Error {
+		bad := func(msg string) *llm.Error {
+			return &llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusBadRequest, Scope: llm.ScopeRequest, Message: msg}
+		}
+		named := func(k string) bool {
+			var v string
+			_ = json.Unmarshal(body[k], &v)
+			return strings.TrimSpace(v) != ""
+		}
+		if named("model") == named("agent") {
+			return bad("request requires exactly one of model or agent")
+		}
+		if s, ok := body["stream"]; ok && string(s) != "true" && string(s) != "false" {
+			return bad("stream must be a boolean")
+		}
+		return nil
+	},
+}
+
+// interactionsError writes an Interactions error as today's core does: an upstream's Google error
+// in Google's shape (geminigenerate.ErrorResponse keeps its code, message, status and details),
+// and an error core or the extension raised itself in the OpenAI shape.
+func interactionsError(e *llm.Error) (int, []byte) {
+	if len(e.Raw) > 0 && e.ProviderCode != "" {
+		return geminigenerate.ErrorResponse(e)
+	}
+	return openaichat.ErrorResponse(e)
+}
+
 // endpointRoutes are the client routes endpoint calls serve, by path. /backend-api/codex is where
 // the Codex CLI sends a ChatGPT sign-in's requests (its chatgpt_base_url), as today's core serves
 // it.
@@ -67,6 +120,7 @@ var endpointRoutes = map[string]endpoint{
 	"/backend-api/codex/alpha/search":      alphaSearchEndpoint,
 	"/v1/images/generations":               imagesGenerationsEndpoint,
 	"/v1/images/edits":                     imagesEditsEndpoint,
+	"/v1beta/interactions":                 interactionsEndpoint,
 }
 
 // serveEndpoint serves a client request to a provider endpoint: the body, a JSON object, goes to
@@ -74,7 +128,7 @@ var endpointRoutes = map[string]endpoint{
 // reply. Routing moves on to another account until a reply starts, as for a generate request.
 func serveEndpoint(w http.ResponseWriter, r *http.Request, g *Generation, ep endpoint) {
 	arrived := time.Now()
-	var f clientFormat // OpenAI-shaped errors
+	f := clientFormat{errorBody: ep.errorBody} // OpenAI-shaped errors unless the endpoint has its own
 	if g.Endpoint == nil {
 		f.writeError(w, &llm.Error{Code: llm.CodeNotFound, Status: http.StatusNotFound, Message: "this endpoint is not served"})
 		return
@@ -107,7 +161,8 @@ func serveEndpoint(w http.ResponseWriter, r *http.Request, g *Generation, ep end
 	}
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(body, &fields) != nil || fields == nil {
-		f.writeError(w, &llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusBadRequest, Scope: llm.ScopeRequest, Message: "the request body is not a JSON object"})
+		msg := cmp.Or(ep.notJSON, "the request body is not a JSON object")
+		f.writeError(w, &llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusBadRequest, Scope: llm.ScopeRequest, Message: msg})
 		return
 	}
 	if ep.check != nil {
@@ -118,6 +173,9 @@ func serveEndpoint(w http.ResponseWriter, r *http.Request, g *Generation, ep end
 	}
 	var model string
 	_ = json.Unmarshal(fields["model"], &model)
+	if rest, ok := strings.CutPrefix(strings.TrimSpace(model), ep.modelPrefix); ok && ep.modelPrefix != "" && rest != "" {
+		model = rest
+	}
 	if strings.TrimSpace(model) == "" {
 		model = ep.defaultModel
 	}
@@ -126,7 +184,7 @@ func serveEndpoint(w http.ResponseWriter, r *http.Request, g *Generation, ep end
 	clientFormat{headers: ep.headers}.nativeHeaders(r, &req)
 
 	r, t := requestTrace(r)
-	m := g.newMeter(r, arrived, req, clientToken(r, false))
+	m := g.newMeter(r, arrived, req, clientToken(r, ep.googleKeys))
 	rr := routeRequest(r, req, body)
 	rr.Attempt = g.Endpoint
 	rr.AnyModel = ep.modelOptional

@@ -1,0 +1,100 @@
+{
+  "description": "Chat Completions client on an interactions account: today's core translates the request to the Interactions API; the new core serves it through generateContent with the same key. The upstream's reply carries both an Interactions reply and a generateContent reply, so each core reads its own.",
+  "source": [
+    "core/internal/runtime/executor/gemini_executor.go:549-815",
+    "core/internal/translator/interactions"
+  ],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {"model":"gemini-2.5-flash","messages":[{"role":"user","content":"Say hello"}]}
+  },
+  "upstream": [
+    {
+      "body": {
+        "id": "int-corpus",
+        "object": "interaction",
+        "model": "gemini-2.5-flash",
+        "status": "completed",
+        "usage": {"total_input_tokens":3,"total_output_tokens":1,"total_tokens":4},
+        "candidates": [
+          {"content":{"role":"model","parts":[{"text":"Hi"}]},"finishReason":"STOP","index":0}
+        ],
+        "usageMetadata": {"promptTokenCount":3,"candidatesTokenCount":1,"totalTokenCount":4},
+        "modelVersion": "gemini-2.5-flash",
+        "responseId": "int-corpus",
+        "steps": [{"type":"model_output","content":[{"type":"text","text":"Hi"}]}]
+      }
+    }
+  ],
+  "volatile": ["client.body.created"],
+  "exceptions": [
+    {
+      "path": "upstream[0].path",
+      "kind": "intended",
+      "want": "/v1beta/models/gemini-2.5-flash:generateContent",
+      "reason": "An interactions account serves other client formats through generateContent with the same key and the same models, not through the Interactions API as today's core does; under the owner's parity rule the implementation is free, and the Chat client gets the same reply."
+    },
+    {
+      "path": "upstream[0].body",
+      "kind": "intended",
+      "want": {
+        "contents": [{"parts":[{"text":"Say hello"}],"role":"user"}],
+        "model": "gemini-2.5-flash",
+        "safetySettings": [
+          {"category":"HARM_CATEGORY_HARASSMENT","threshold":"OFF"},
+          {"category":"HARM_CATEGORY_HATE_SPEECH","threshold":"OFF"},
+          {"category":"HARM_CATEGORY_SEXUALLY_EXPLICIT","threshold":"OFF"},
+          {"category":"HARM_CATEGORY_DANGEROUS_CONTENT","threshold":"OFF"},
+          {"category":"HARM_CATEGORY_CIVIC_INTEGRITY","threshold":"BLOCK_NONE"}
+        ]
+      },
+      "reason": "An interactions account serves other client formats through generateContent with the same key and the same models, not through the Interactions API as today's core does; under the owner's parity rule the implementation is free, and the Chat client gets the same reply."
+    },
+    {
+      "path": "upstream[0].headers.Api-Revision",
+      "kind": "intended",
+      "absent": true,
+      "reason": "An interactions account serves other client formats through generateContent with the same key and the same models, not through the Interactions API as today's core does; under the owner's parity rule the implementation is free, and the Chat client gets the same reply."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "choices": [
+          {"finish_reason":"stop","index":0,"message":{"content":"Hi","role":"assistant"}}
+        ],
+        "created": "(volatile)",
+        "id": "int-corpus",
+        "model": "gemini-2.5-flash",
+        "object": "chat.completion",
+        "usage": {"completion_tokens":1,"prompt_tokens":3,"total_tokens":4}
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "input": [{"content":[{"text":"Say hello","type":"text"}],"type":"user_input"}],
+          "model": "gemini-2.5-flash"
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Api-Revision": "2026-05-20",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1",
+          "X-Goog-Api-Key": "sk-corpus-upstream"
+        },
+        "method": "POST",
+        "path": "/v1beta/interactions"
+      }
+    ]
+  }
+}

@@ -157,7 +157,7 @@ var families = []family{
 	{"xai", "xai-api-key", XAI},
 	{"openai-compatibility", "openai-compatibility", OpenAICompatible},
 	{"meta", "meta-api-key", ""},
-	{"interactions", "interactions-api-key", ""},
+	{"interactions", "interactions-api-key", Gemini},
 }
 
 // Statuses of a setting, as next/README.md names them.
@@ -298,7 +298,7 @@ var rules = map[string]rule{
 	"api-keys.codex[].disable-codex-cloaking":                  {supported, ""},
 	"api-keys.codex[].alpha-search":                            {supported, ""},
 	"api-keys.xai[].websockets":                                {later, ""},
-	"api-keys.vertex[].interactions":                           {later, ""},
+	"api-keys.vertex[].interactions":                           {supported, ""},
 	"api-keys.vertex[].openapi":                                {later, ""},
 	"api-keys.vertex[].openapi-location":                       {later, ""},
 	"api-keys.openai-compatibility[].disabled":                 {supported, ""},
@@ -310,7 +310,6 @@ var rules = map[string]rule{
 	"api-keys.claude[].rebuild-mid-system-message":             {later, ""},
 	"api-keys.claude[].experimental-cch-signing":               {dead, ""},
 	"api-keys.meta":                                            {later, ""},
-	"api-keys.interactions":                                    {later, ""},
 }
 
 // tree is a decoded YAML mapping.
@@ -980,6 +979,15 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 		}
 	case "vertex":
 		settings["vertex"] = map[string]any{}
+		on, err := boolean_(field(g, k, "interactions"), path+".interactions")
+		if err != nil {
+			return nil, err
+		}
+		if on {
+			settings["interactions"] = true
+		}
+	case "interactions":
+		settings["interactions"] = true
 	}
 	if len(settings) > 0 {
 		a["settings"] = settings

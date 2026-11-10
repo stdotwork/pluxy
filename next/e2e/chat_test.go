@@ -54,6 +54,7 @@ func build(dir string) error {
 		{filepath.Join("codex", "codex"), "../extensions/codex"},
 		{filepath.Join("claude", "claude"), "../extensions/claude"},
 		{filepath.Join("kimi", "kimi"), "../extensions/kimi"},
+		{filepath.Join("gemini", "gemini"), "../extensions/gemini"},
 		{"testext", "./testext"},
 	} {
 		cmd := exec.Command("go", "build", "-buildvcs=false", "-o", filepath.Join(dir, b.out), b.pkg)
@@ -73,7 +74,7 @@ func build(dir string) error {
 	if err := os.WriteFile(filepath.Join(dir, "pluxy-extension.json"), b, 0o644); err != nil {
 		return err
 	}
-	for id, name := range map[string]string{"example/oauth": "oauth", "pluxy/codex": "codex", "pluxy/claude": "claude"} {
+	for id, name := range map[string]string{"example/oauth": "oauth", "pluxy/codex": "codex", "pluxy/claude": "claude", "pluxy/gemini": "gemini"} {
 		manifest["id"] = id
 		manifest["programs"] = map[string]string{runtime.GOOS + "/" + runtime.GOARCH: name}
 		b, _ = json.Marshal(manifest)

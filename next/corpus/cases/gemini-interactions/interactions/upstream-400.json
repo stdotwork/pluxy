@@ -1,0 +1,58 @@
+{
+  "description": "An upstream 400 before the reply starts reaches the client as an invalid-request error.",
+  "source": ["core/internal/runtime/executor/gemini_executor.go:549-815 (newGoogleStatusErr)"],
+  "client": {
+    "path": "/v1beta/interactions",
+    "body": {"model":"gemini-2.5-flash","input":"Say hello","generation_config":{"temperature":9}}
+  },
+  "upstream": [
+    {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": 400,
+          "message": "temperature must be between 0 and 2",
+          "status": "INVALID_ARGUMENT"
+        }
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {
+          "code": 400,
+          "message": "temperature must be between 0 and 2",
+          "status": "INVALID_ARGUMENT"
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 400
+    },
+    "upstream": [
+      {
+        "body": {
+          "generation_config": {"temperature":9},
+          "input": "Say hello",
+          "model": "gemini-2.5-flash"
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Api-Revision": "2026-05-20",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1",
+          "X-Goog-Api-Key": "sk-corpus-upstream"
+        },
+        "method": "POST",
+        "path": "/v1beta/interactions"
+      }
+    ]
+  }
+}

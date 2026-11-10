@@ -1,0 +1,88 @@
+{
+  "description": "A thinking suffix on the model name: today's core removes it and sets generation_config.thinking_level; the new core refuses it.",
+  "source": [
+    "core/internal/runtime/executor/helps/gemini_interactions.go:185-192",
+    "core/internal/thinking/provider/interactions/apply.go"
+  ],
+  "client": {
+    "path": "/v1beta/interactions",
+    "body": {"model":"gemini-2.5-flash(high)","input":"Say hello"}
+  },
+  "upstream": [
+    {
+      "body": {
+        "id": "int-corpus",
+        "object": "interaction",
+        "model": "gemini-2.5-flash",
+        "status": "completed",
+        "usage": {"total_input_tokens":3,"total_output_tokens":1,"total_tokens":4},
+        "steps": [{"type":"model_output","content":[{"type":"text","text":"Hi"}]}]
+      }
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "client.status",
+      "kind": "intended",
+      "want": 400,
+      "reason": "Today's core turns a thinking suffix into generation_config.thinking_level through its thinking pipeline (field stripping, per-model level normalisation, budget-to-level conversion), which this core does not port for the Interactions API; it refuses the suffix with 400 and the client sets generation_config.thinking_level itself, which goes upstream as it came (thinking-level case)."
+    },
+    {
+      "path": "client.body",
+      "kind": "intended",
+      "want": {
+        "error": {
+          "code": "invalid_request",
+          "message": "a thinking suffix on the model name is not supported for the Interactions API; set generation_config.thinking_level instead",
+          "type": "invalid_request_error"
+        }
+      },
+      "reason": "The suffix is refused; see client.status."
+    },
+    {
+      "path": "upstream[0]",
+      "kind": "intended",
+      "absent": true,
+      "reason": "The suffix is refused before any upstream request; see client.status."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "id": "int-corpus",
+        "model": "gemini-2.5-flash",
+        "object": "interaction",
+        "status": "completed",
+        "steps": [{"content":[{"text":"Hi","type":"text"}],"type":"model_output"}],
+        "usage": {"total_input_tokens":3,"total_output_tokens":1,"total_tokens":4}
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "generation_config": {"thinking_level":"high"},
+          "input": "Say hello",
+          "model": "gemini-2.5-flash"
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Api-Revision": "2026-05-20",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1",
+          "X-Goog-Api-Key": "sk-corpus-upstream"
+        },
+        "method": "POST",
+        "path": "/v1beta/interactions"
+      }
+    ]
+  }
+}

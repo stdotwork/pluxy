@@ -1,0 +1,100 @@
+{
+  "description": "Input IDs the Interactions API refuses are cleaned before the request goes upstream: a function_call step takes its call_id as its id, other steps and content parts lose their id, a thought step keeps only its signature, and a thought step without a signature is left out.",
+  "source": [
+    "core/internal/runtime/executor/helps/gemini_interactions.go:44-138 (SanitizeGeminiInteractionsUnsupportedInputIDsDoc)"
+  ],
+  "client": {
+    "path": "/v1beta/interactions",
+    "body": {
+      "model": "gemini-2.5-flash",
+      "input": [
+        {
+          "type": "user_input",
+          "id": "step-1",
+          "content": [{"type":"text","text":"What is the weather?","id":"part-1"}]
+        },
+        {"type":"thought","id":"th-0","summary":[{"type":"text","text":"unsigned"}]},
+        {
+          "type": "thought",
+          "id": "th-1",
+          "thought_signature": "EiYKJGUyNDgzMGE3LTVjZDYtNDJmZS05OThiLWVlNTM5ZTcyYjljMw==",
+          "text": "thinking",
+          "content": [{"type":"text","text":"x"}]
+        },
+        {
+          "type": "function_call",
+          "call_id": "call-1",
+          "name": "get_weather",
+          "arguments": {"city":"Paris"}
+        },
+        {"type":"function_call","id":"fc-2","call_id":"call-2","name":"get_time","arguments":{}},
+        {
+          "type": "function_result",
+          "id": "fr-1",
+          "call_id": "call-1",
+          "name": "get_weather",
+          "result": "sunny"
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "id": "int-corpus",
+        "object": "interaction",
+        "model": "gemini-2.5-flash",
+        "status": "completed",
+        "usage": {"total_input_tokens":3,"total_output_tokens":1,"total_tokens":4},
+        "steps": [{"type":"model_output","content":[{"type":"text","text":"Hi"}]}]
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "id": "int-corpus",
+        "model": "gemini-2.5-flash",
+        "object": "interaction",
+        "status": "completed",
+        "steps": [{"content":[{"text":"Hi","type":"text"}],"type":"model_output"}],
+        "usage": {"total_input_tokens":3,"total_output_tokens":1,"total_tokens":4}
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "input": [
+            {"content":[{"text":"What is the weather?","type":"text"}],"type":"user_input"},
+            {
+              "signature": "EiYKJGUyNDgzMGE3LTVjZDYtNDJmZS05OThiLWVlNTM5ZTcyYjljMw==",
+              "type": "thought"
+            },
+            {"arguments":{"city":"Paris"},"id":"call-1","name":"get_weather","type":"function_call"},
+            {"arguments":{},"id":"fc-2","name":"get_time","type":"function_call"},
+            {"call_id":"call-1","name":"get_weather","result":"sunny","type":"function_result"}
+          ],
+          "model": "gemini-2.5-flash"
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Api-Revision": "2026-05-20",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1",
+          "X-Goog-Api-Key": "sk-corpus-upstream"
+        },
+        "method": "POST",
+        "path": "/v1beta/interactions"
+      }
+    ]
+  }
+}

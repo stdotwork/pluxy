@@ -3,7 +3,7 @@
 //
 // Account settings (all optional):
 //
-//	{"base_url": "https://generativelanguage.googleapis.com"}
+//	{"base_url": "https://generativelanguage.googleapis.com", "interactions": false}
 //
 // base_url is where the Gemini API lives; requests go to
 // {base_url}/v1beta/models/{model}:generateContent, or :streamGenerateContent?alt=sse for a
@@ -12,6 +12,10 @@
 // An account check (core's check call) of a Gemini API account reads the model list,
 // GET {base_url}/v1beta/models with x-goog-api-key, which costs the account nothing. A Vertex
 // account, and any credential that is not an API key, is left not checked, without a request.
+//
+// An account whose settings say "interactions": true also serves Gemini's Interactions API to
+// Interactions clients, as endpoint calls (interactions.go); any other account answers them
+// unsupported.
 //
 // A Gemini GenerateContent request is sent unchanged, thought signatures included. Requests in
 // other formats (Chat Completions, Responses, Messages) are translated to GenerateContent, with
@@ -58,6 +62,7 @@ func main() {
 		CountTokens:  countTokens,
 		Models:       listModels,
 		Check:        check,
+		Endpoint:     endpoint,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gemini:", err)
@@ -70,6 +75,8 @@ type settings struct {
 	BaseURL string `json:"base_url"`
 	// Vertex, when set, sends the account's requests to Vertex AI (vertex.go).
 	Vertex *vertexSettings `json:"vertex"`
+	// Interactions serves Gemini's Interactions API to Interactions clients (interactions.go).
+	Interactions bool `json:"interactions"`
 }
 
 // readSettings reads an account's settings and fills in the defaults.

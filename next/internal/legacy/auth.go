@@ -197,6 +197,13 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 			v["project"] = project
 		}
 		settings["vertex"] = v
+		// As today's core reads them: JSON true at the top of the file, not the text "true" and
+		// not a key inside service_account.
+		interactions, _ := m["interactions"].(bool)
+		native, _ := m["native_interactions"].(bool)
+		if interactions || native {
+			settings["interactions"] = true
+		}
 	case "antigravity":
 		// The file holds no OAuth client secret (today's core has it built in, and so does the
 		// extension), so the account renews on its own.

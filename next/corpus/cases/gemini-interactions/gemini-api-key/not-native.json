@@ -1,0 +1,83 @@
+{
+  "description": "Interactions client on a plain Gemini API key (no interactions opt-in): today's core translates the request to generateContent; the new core serves Interactions only on native accounts, so no account serves it.",
+  "source": [
+    "core/internal/translator/interactions",
+    "core/internal/runtime/executor/gemini_executor.go"
+  ],
+  "client": {"path":"/v1beta/interactions","body":{"model":"gemini-2.5-flash","input":"Say hello"}},
+  "upstream": [
+    {
+      "body": {
+        "candidates": [
+          {"content":{"role":"model","parts":[{"text":"Hi"}]},"finishReason":"STOP","index":0}
+        ],
+        "usageMetadata": {"promptTokenCount":3,"candidatesTokenCount":1,"totalTokenCount":4},
+        "modelVersion": "gemini-2.5-flash",
+        "responseId": "resp-corpus"
+      }
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "client.status",
+      "kind": "intended",
+      "want": 400,
+      "reason": "Interactions clients are served only by native Interactions accounts (a Gemini key or Vertex account with interactions: true). Today's core translates them onto every other account (here a plain Gemini key, through generateContent); the new core does not carry those translators (about 10k lines in today's core), and the Interactions API's server-side state (previous_interaction_id, agents) cannot be carried to other providers. A request no account serves gets the core's usual error: the last account's unsupported answer, 400."
+    },
+    {
+      "path": "client.body",
+      "kind": "intended",
+      "want": {
+        "error": {
+          "code": "unsupported",
+          "message": "this account does not serve the Interactions API (its interactions setting is off)",
+          "type": "invalid_request_error"
+        }
+      },
+      "reason": "Interactions clients are served only by native Interactions accounts (a Gemini key or Vertex account with interactions: true). Today's core translates them onto every other account (here a plain Gemini key, through generateContent); the new core does not carry those translators (about 10k lines in today's core), and the Interactions API's server-side state (previous_interaction_id, agents) cannot be carried to other providers. A request no account serves gets the core's usual error: the last account's unsupported answer, 400."
+    },
+    {
+      "path": "upstream[0]",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Interactions clients are served only by native Interactions accounts (a Gemini key or Vertex account with interactions: true). Today's core translates them onto every other account (here a plain Gemini key, through generateContent); the new core does not carry those translators (about 10k lines in today's core), and the Interactions API's server-side state (previous_interaction_id, agents) cannot be carried to other providers. A request no account serves gets the core's usual error: the last account's unsupported answer, 400."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "id": "resp-corpus",
+        "model": "gemini-2.5-flash",
+        "object": "interaction",
+        "status": "completed",
+        "steps": [{"content":[{"text":"Hi"}],"type":"model_output"}],
+        "usage": {"input_tokens":3,"output_tokens":1,"total_tokens":4}
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "contents": [{"parts":[{"text":"Say hello"}],"role":"user"}],
+          "model": "gemini-2.5-flash"
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1",
+          "X-Goog-Api-Key": "sk-corpus-upstream"
+        },
+        "method": "POST",
+        "path": "/v1beta/models/gemini-2.5-flash:generateContent"
+      }
+    ]
+  }
+}

@@ -465,6 +465,7 @@ that login for you (see [Accounts added by login](#accounts-added-by-login)).
 | `base_url` | The Gemini API (default `https://generativelanguage.googleapis.com`; requests go to `{base_url}/v1beta/models/{model}:generateContent`), or for Vertex the host that replaces Google's. |
 | `vertex.project` | The Google Cloud project; default the service account key's `project_id` when the credential holds the whole key. |
 | `vertex.location` | Default `global` (`aiplatform.googleapis.com`); `us` and `eu` use the multi-region hosts, any other location `{location}-aiplatform.googleapis.com`. |
+| `interactions` | `true` serves the Interactions API (below) to Interactions clients. Default `false`. |
 
 A Gemini request goes upstream unchanged. Chat Completions, Responses and Messages requests are
 translated to GenerateContent with every safety filter off (as today's core sends them); their
@@ -476,6 +477,37 @@ signature and a Responses client as a reasoning item's `encrypted_content`; when
 it, the signature goes back on the part that follows it, so Gemini 3's function calls keep their
 reasoning between turns. A function call with no signature gets the value Google documents for
 calls it did not issue.
+
+**Interactions API.** Core serves Gemini's Interactions API at `POST /v1beta/interactions` (Google's
+clients may send the client key in `x-goog-api-key` or `?key=`). Only accounts whose settings say
+`"interactions": true` serve it, as today's core serves it only on its `interactions-api-key`
+group and on Vertex accounts that opt in:
+
+```json
+{"id": "gemini-interactions", "settings": {"interactions": true}, "credential": {"kind": "api_key", "api_key": "AIza..."}}
+```
+
+A request names a `model` or an `agent` (one of Google's agents, such as Deep Research); core
+refuses one that names both or neither, a `stream` that is not a boolean, and a body that is not
+JSON, each with 400, and removes a `models/` prefix from the model. A request with an agent goes
+to any account that serves the API. The body goes upstream as the client sent it, with the model
+renamed for the account, and with the input IDs the API refuses removed as today's core removes
+them: a `function_call` step takes its `call_id` as its `id`, other steps and content parts lose
+their `id`, a `thought` step keeps only its signature, and one without a signature is left out.
+The client's `Api-Revision` header goes with it (default `2026-05-20`). A Gemini API key sends it
+to `{base_url}/v1beta/interactions`; a Vertex service account to
+`/v1beta1/projects/{project}/locations/global/interactions` on the Vertex host (always `global`, as
+in today's core), and an express key to `/v1beta1/interactions` (or the project path when
+`vertex.project` is set). The upstream's reply comes back as it is: one JSON object, or, for
+`"stream": true` (Vertex is also asked with `alt=sse`), each server-sent event with its name as soon
+as it arrives. Its `usage` counts toward usage statistics.
+
+Not served: Interactions clients on any other account (today's core translates them onto every
+provider; here a request no opted-in account serves gets the usual error), a thinking suffix on the
+model name (refused with 400; set `generation_config.thinking_level` instead), and today's check
+that drops a thought step whose signature does not look like one Gemini issued. An
+`"interactions": true` account still serves Chat Completions, Responses, Messages and Gemini
+clients, through GenerateContent with the same key.
 
 Today's core can also relay Gemini requests through a browser tab signed in to AI Studio, which
 connects to core over a WebSocket. This extension does not: the extension protocol gives a
@@ -1415,7 +1447,8 @@ needs none) is not supported yet: it adds no account and is named in the log.
 | `api-keys.codex` (`codex-api-key`) | `pluxy/codex` | `base-url` is `base_url`; `websockets` is `websockets`; `alpha-search` is `alpha_search`; `disable-codex-cloaking: true` is `codex_identity: false` |
 | `api-keys.claude` (`claude-api-key`) | `pluxy/claude` | `base-url` is `base_url` |
 | `api-keys.gemini` (`gemini-api-key`) | `pluxy/gemini` | `base-url` is `base_url` |
-| `api-keys.vertex` (`vertex-api-key`) | `pluxy/gemini`, Vertex AI with the key as an express mode key | `base-url` is `base_url` |
+| `api-keys.vertex` (`vertex-api-key`) | `pluxy/gemini`, Vertex AI with the key as an express mode key | `base-url` is `base_url`; `interactions: true` on a key is `interactions: true` in the account's settings, which serves the Interactions API |
+| `api-keys.interactions` (`interactions-api-key`) | `pluxy/gemini` | `base-url` is `base_url`; every account gets `interactions: true`, which serves the Interactions API (see [Gemini](#gemini)) |
 | `api-keys.xai` (`xai-api-key`) | `pluxy/xai` | `base-url` is `base_url` |
 | `api-keys.openai-compatibility` (`openai-compatibility`) | `pluxy/openai-compatible`, one account per entry in `keys` (`api-key-entries`) | `base-url` is `base_url`; a group with `disabled: true` adds no accounts |
 
@@ -1490,12 +1523,12 @@ are accepted silently.
 | `oauth.providers.codex.live-media-relay.*` | | Dropped: realtime and WebRTC are out of scope |
 | `oauth.providers.codex.signin-with-chatgpt-identifier` (`codex.signin-with-chatgpt-identifier`) | `signin_with_chatgpt_identifier` on the Sign in with ChatGPT (SIWC) accounts `-import-auth` adds. Left unset, they use the extension's default, `pluxy`. | Supported when importing |
 | `oauth.providers.antigravity.*` (`antigravity`, `antigravity-signature-*`, `quota-exceeded.antigravity-credits`), `oauth.providers.devin.*` (`devin`) | | Later |
-| `api-keys.meta` (`meta-api-key`), `api-keys.interactions` (`interactions-api-key`) | | Later |
+| `api-keys.meta` (`meta-api-key`) | | Later |
 | Every `headers` and `connection-pool` | | Later |
 | Every `disable-cooling` on a group or key | The account's `disable_cooling`. | Supported |
 | Every `request-retry` on a group or key | The account's `request_retry`: a key's own, else its group's (an `openai-compatibility` group's for all its keys, which have none of their own there). A negative one inherits `routing.retry.request-retry`, as in today's core. | Supported |
 | The keys' `models[]` catalog fields (`display-name`, `max-context-length`, `force-mapping`, `is-compat`, `thinking`, `image`, `input-modalities`, `output-modalities`, `use-max-completion-tokens`, `support-configuration-update`, `openapi`) | A model's display name in lists is its upstream name. | Later |
-| Vertex keys' `interactions`, `openapi`, `openapi-location`; openai-compatibility's `support-prompt-cache-key`; xAI keys' `websockets` | | Later |
+| Vertex keys' `openapi`, `openapi-location`; openai-compatibility's `support-prompt-cache-key`; xAI keys' `websockets` | | Later |
 | `multimedia.disable-image-generation` (`disable-image-generation`) | `true`, `"chat"` and `"passthrough"` are `image_generation_tool: false` on Codex accounts from the file and on those `-import-auth` adds; `true` is also `images: false` there, which turns the Images API off on them (today's core answers its image routes 404). | Supported |
 | `multimedia.gpt-image-2-base-model`, `multimedia.video-result-auth-cache-ttl` (each also at the top level) | Images are served through the Codex upstream's Images API, the path today's core takes for its built-in image models; the Responses-based path this model sets is not built, and there are no video routes yet. | Later |
 | `observability.logs.logging-to-file` (`logging-to-file`), `observability.logs.logs-max-total-size-mb` (`logs-max-total-size-mb`) | `logs.to_file` and `logs.max_total_size_mb`: [log files](#log-files). A negative cap is none, as in today's core. | Supported |
@@ -1534,7 +1567,7 @@ use it from one core only, or sign in again in the other.
 | `codex` | `pluxy/codex` subscription account | `access_token`, `refresh_token`, `expired` (the expiry); `id_token` and `account_id` stay with the credential; `websockets` is the account's `websockets`. A `siwc` section with a token (`access_token`, else `access`, or `refresh_token`) also becomes a [SIWC](#codex) account, `<file id>-siwc` (with `-2`, `-3` and so on when another file in the folder imports as that ID), even when the file's own tokens are missing: its `access_token`, `refresh_token`, `expires_at` (else `expired`), and `client_id`, `device_id`, `scope` and `id_token` with the credential. It is disabled unless the file says `use_siwc: true`; it shares the file's label and routing fields below, and takes only `websockets` and the identifier setting of the account settings. |
 | `claude` | `pluxy/claude` subscription account | `access_token`, `refresh_token`, `expired`. |
 | `kimi`, `kimi-ai` | `pluxy/kimi` account | `access_token`, `refresh_token`, `expired`, `device_id`; `base_url` is an account setting, and so is the site, `domain`, decided as today's core decides it: from `domain`, else `base_url`'s host, else the type (`kimi.ai` for `kimi-ai`). |
-| `vertex` | `pluxy/gemini` Vertex AI account with a service account | `service_account` is the credential; `project_id` and `location` (default `us-central1`, as in today's core) are the account's `vertex` settings. |
+| `vertex` | `pluxy/gemini` Vertex AI account with a service account | `service_account` is the credential; `project_id` and `location` (default `us-central1`, as in today's core) are the account's `vertex` settings. `interactions` or `native_interactions` set to JSON `true` at the top of the file is the account's `interactions` setting. |
 | `antigravity` | `pluxy/antigravity` account | `access_token`, `refresh_token`, `expired`; `project_id` stays with the credential and `base_url` is an account setting. The file holds no OAuth client secret (today's core has it built in, and so does the extension), so the account renews on its own, as it does in today's core. |
 | `xai` | `pluxy/xai` Grok login account | `access_token`, `refresh_token`, `expired`; `token_endpoint` stays with the credential and `base_url` is an account setting. |
 | `meta` | `pluxy/meta` Muse Code login account | `api_key` (else `access_token`) is the minted key and `dca_token` (else a `dca:` `access_token`) the device token that mints a new one; `base_url` stays with the credential. A file with only the device token mints its key on the first request. |

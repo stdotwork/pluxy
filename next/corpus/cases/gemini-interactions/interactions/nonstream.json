@@ -1,0 +1,71 @@
+{
+  "description": "Interactions client on a native Interactions account, non-stream: the client's body goes to {base-url}/v1beta/interactions with the key in x-goog-api-key and the default Api-Revision, and the upstream's JSON reply reaches the client as it came.",
+  "source": [
+    "core/internal/api/server_routes.go:130-138 (POST /v1beta/interactions)",
+    "core/sdk/api/handlers/gemini/interactions_handlers.go",
+    "core/internal/runtime/executor/gemini_executor.go:549-815 (native Interactions upstream)"
+  ],
+  "client": {
+    "path": "/v1beta/interactions",
+    "body": {
+      "model": "gemini-2.5-flash",
+      "input": "Say hello",
+      "system_instruction": "Be brief.",
+      "generation_config": {"temperature":0.2,"max_output_tokens":256}
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "id": "int-corpus",
+        "object": "interaction",
+        "model": "gemini-2.5-flash",
+        "status": "completed",
+        "role": "model",
+        "usage": {"input_tokens":12,"output_tokens":4,"total_tokens":16},
+        "steps": [{"type":"model_output","content":[{"type":"text","text":"Hello there!"}]}]
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "id": "int-corpus",
+        "model": "gemini-2.5-flash",
+        "object": "interaction",
+        "role": "model",
+        "status": "completed",
+        "steps": [{"content":[{"text":"Hello there!","type":"text"}],"type":"model_output"}],
+        "usage": {"input_tokens":12,"output_tokens":4,"total_tokens":16}
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "generation_config": {"max_output_tokens":256,"temperature":0.2},
+          "input": "Say hello",
+          "model": "gemini-2.5-flash",
+          "system_instruction": "Be brief."
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Api-Revision": "2026-05-20",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1",
+          "X-Goog-Api-Key": "sk-corpus-upstream"
+        },
+        "method": "POST",
+        "path": "/v1beta/interactions"
+      }
+    ]
+  }
+}
