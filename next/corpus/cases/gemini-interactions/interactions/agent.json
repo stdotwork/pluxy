@@ -1,0 +1,62 @@
+{
+  "description": "A request that names an agent and no model goes to the native Interactions account with its body as it came (agent kept, no model added).",
+  "source": [
+    "core/sdk/api/handlers/gemini/interactions_handlers.go:19,51-90 (agent forces the native Interactions provider)"
+  ],
+  "client": {
+    "path": "/v1beta/interactions",
+    "body": {
+      "agent": "deep-research-pro-preview-12-2025",
+      "input": "Research corpus testing",
+      "background": true
+    }
+  },
+  "account_models": ["gemini-2.5-flash"],
+  "upstream": [
+    {
+      "body": {
+        "id": "int-agent-corpus",
+        "object": "interaction",
+        "agent": "deep-research-pro-preview-12-2025",
+        "status": "in_progress"
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "agent": "deep-research-pro-preview-12-2025",
+        "id": "int-agent-corpus",
+        "object": "interaction",
+        "status": "in_progress"
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "agent": "deep-research-pro-preview-12-2025",
+          "background": true,
+          "input": "Research corpus testing"
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Api-Revision": "2026-05-20",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1",
+          "X-Goog-Api-Key": "sk-corpus-upstream"
+        },
+        "method": "POST",
+        "path": "/v1beta/interactions"
+      }
+    ]
+  }
+}

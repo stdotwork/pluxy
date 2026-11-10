@@ -1,0 +1,85 @@
+{
+  "description": "A thought step whose signature does not look like one Gemini issued: today's core leaves the step out; the new core keeps every signed thought step, unchecked.",
+  "source": [
+    "core/internal/runtime/executor/helps/gemini_interactions.go:58-82 (CompatibleSignatureForProviderBlock)"
+  ],
+  "client": {
+    "path": "/v1beta/interactions",
+    "body": {
+      "model": "gemini-2.5-flash",
+      "input": [
+        {"type":"user_input","content":[{"type":"text","text":"Go on"}]},
+        {"type":"thought","signature":"sig-corpus"},
+        {"type":"model_output","content":[{"type":"text","text":"Sure"}]},
+        {"type":"user_input","content":[{"type":"text","text":"More"}]}
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "id": "int-corpus",
+        "object": "interaction",
+        "model": "gemini-2.5-flash",
+        "status": "completed",
+        "steps": [{"type":"model_output","content":[{"type":"text","text":"Hi"}]}],
+        "usage": {"total_input_tokens":3,"total_output_tokens":1,"total_tokens":4}
+      }
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[0].body.input",
+      "kind": "intended",
+      "want": [
+        {"content":[{"text":"Go on","type":"text"}],"type":"user_input"},
+        {"signature":"sig-corpus","type":"thought"},
+        {"content":[{"text":"Sure","type":"text"}],"type":"model_output"},
+        {"content":[{"text":"More","type":"text"}],"type":"user_input"}
+      ],
+      "reason": "Today's core leaves out a thought step whose signature it does not recognise as one Gemini issued (its signature-shape checks); the new core drops only thought steps with no signature and keeps every signed one unchecked, leaving the upstream to judge the signature."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "id": "int-corpus",
+        "model": "gemini-2.5-flash",
+        "object": "interaction",
+        "status": "completed",
+        "steps": [{"content":[{"text":"Hi","type":"text"}],"type":"model_output"}],
+        "usage": {"total_input_tokens":3,"total_output_tokens":1,"total_tokens":4}
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "input": [
+            {"content":[{"text":"Go on","type":"text"}],"type":"user_input"},
+            {"content":[{"text":"Sure","type":"text"}],"type":"model_output"},
+            {"content":[{"text":"More","type":"text"}],"type":"user_input"}
+          ],
+          "model": "gemini-2.5-flash"
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Api-Revision": "2026-05-20",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1",
+          "X-Goog-Api-Key": "sk-corpus-upstream"
+        },
+        "method": "POST",
+        "path": "/v1beta/interactions"
+      }
+    ]
+  }
+}

@@ -112,7 +112,7 @@ func TestExampleProviderSections(t *testing.T) {
 	want := map[string][]string{
 		Codex:            {"codex-1"},
 		Claude:           {"claude-1", "claude-2"},
-		Gemini:           {"gemini-1-1", "gemini-1-2", "gemini-2", "vertex-1"},
+		Gemini:           {"gemini-1-1", "gemini-1-2", "gemini-2", "vertex-1", "interactions-1"},
 		XAI:              {"xai-1"},
 		OpenAICompatible: {"openrouter-1", "openrouter-2"},
 	}
@@ -138,9 +138,18 @@ func TestExampleProviderSections(t *testing.T) {
 		"settings": {"base_url": "https://generativelanguage.googleapis.com"},
 		"credential": {"kind": "api_key", "api_key": "replace-with-second-gemini-key"}
 	}`)
+	// The Interactions key group is a Gemini account that serves the Interactions API.
+	interactions := exts[Gemini].(map[string]any)["accounts"].([]any)[4]
+	equalJSON(t, interactions, `{
+		"id": "interactions-1", "weight": 5, "prefix": "native", "disable_cooling": false, "request_retry": 3,
+		"models": [{"name": "gemini-2.5-flash", "alias": "native-gemini-flash"}],
+		"excluded_models": ["gemini-2.5-pro"],
+		"settings": {"base_url": "https://generativelanguage.googleapis.com", "interactions": true},
+		"credential": {"kind": "api_key", "api_key": "AIzaSy...03"}
+	}`)
 	n := notices(r)
 	for _, want := range []string{
-		"api-keys.xai.websockets", "api-keys.meta", "api-keys.interactions",
+		"api-keys.xai.websockets", "api-keys.meta",
 		"api-keys.claude.cloak (making other clients look like Claude Code is out of scope)",
 	} {
 		if !strings.Contains(n, want) {
@@ -654,5 +663,82 @@ func TestSIWCIdentifier(t *testing.T) {
 	}
 	if _, err := Translate([]byte("codex:\n  signin-with-chatgpt-identifier: [a]")); err == nil {
 		t.Error("an identifier that is not text loaded")
+	}
+}
+
+// An interactions-api-key entry (older spelling) and an api-keys.interactions group (v8) are Gemini
+// accounts with "interactions": true, with the usual fields as the gemini section maps them, and
+// no notice.
+func TestInteractionsKeys(t *testing.T) {
+	r := translate(t, `
+interactions-api-key:
+  - name: native
+    api-key: k1
+    weight: 3
+    base-url: https://generativelanguage.googleapis.com
+    prefix: native
+    disable-cooling: true
+    request-retry: 2
+    models: [{name: gemini-3-pro-preview, alias: pro}]
+    excluded-models: [gemini-x]
+`)
+	equalJSON(t, r.Config["extensions"], `{"pluxy/gemini": {"accounts": [{
+		"id": "native", "weight": 3, "prefix": "native", "disable_cooling": true, "request_retry": 2,
+		"models": [{"name": "gemini-3-pro-preview", "alias": "pro"}], "excluded_models": ["gemini-x"],
+		"settings": {"base_url": "https://generativelanguage.googleapis.com", "interactions": true},
+		"credential": {"kind": "api_key", "api_key": "k1"}
+	}]}}`)
+	if n := notices(r); n != "" {
+		t.Errorf("notices:\n%s", n)
+	}
+	r = translate(t, `
+api-keys:
+  interactions:
+    - name: v8
+      base-url: https://example.com/api
+      keys: [{api-key: k2, priority: 4}]
+`)
+	equalJSON(t, r.Config["extensions"], `{"pluxy/gemini": {"accounts": [{
+		"id": "v8", "priority": 4,
+		"settings": {"base_url": "https://example.com/api", "interactions": true},
+		"credential": {"kind": "api_key", "api_key": "k2"}
+	}]}}`)
+	if n := notices(r); n != "" {
+		t.Errorf("notices:\n%s", n)
+	}
+}
+
+// A vertex key's interactions: true turns on the Interactions API for its Vertex account, as the
+// setting "interactions": true beside "vertex"; false or absent does not, and a text "true" is
+// refused, as other boolean settings are.
+func TestVertexInteractions(t *testing.T) {
+	r := translate(t, `
+api-keys:
+  vertex:
+    - name: on
+      keys: [{api-key: vk-on, interactions: true}]
+    - name: off
+      keys: [{api-key: vk-off, interactions: false}]
+    - name: unset
+      keys: [{api-key: vk-unset}]
+`)
+	equalJSON(t, r.Config["extensions"], `{"pluxy/gemini": {"accounts": [
+		{"id": "on", "settings": {"vertex": {}, "interactions": true}, "credential": {"kind": "api_key", "api_key": "vk-on"}},
+		{"id": "off", "settings": {"vertex": {}}, "credential": {"kind": "api_key", "api_key": "vk-off"}},
+		{"id": "unset", "settings": {"vertex": {}}, "credential": {"kind": "api_key", "api_key": "vk-unset"}}
+	]}}`)
+	if n := notices(r); n != "" {
+		t.Errorf("notices:\n%s", n)
+	}
+	// The older spelling holds interactions in its entry, which oldGroup moves into the key.
+	r = translate(t, "vertex-api-key:\n  - api-key: vk-old\n    interactions: true\n")
+	equalJSON(t, r.Config["extensions"], `{"pluxy/gemini": {"accounts": [
+		{"id": "vertex-api-key-1", "settings": {"vertex": {}, "interactions": true}, "credential": {"kind": "api_key", "api_key": "vk-old"}}
+	]}}`)
+	if _, err := Translate([]byte("api-keys: {vertex: [{name: v, keys: [{api-key: k, interactions: sometimes}]}]}")); err == nil {
+		t.Error("an interactions that is not true or false loaded")
+	}
+	if _, err := Translate([]byte("api-keys: {vertex: [{name: v, keys: [{api-key: k, interactions: \"true\"}]}]}")); err == nil {
+		t.Error("an interactions written as text loaded")
 	}
 }

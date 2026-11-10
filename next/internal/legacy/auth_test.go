@@ -230,6 +230,48 @@ func TestReadAuthDir(t *testing.T) {
 	}
 }
 
+// A Vertex file opts in to the Interactions API when "interactions" or "native_interactions" is JSON
+// true at the top of the file, as today's core reads them: the text "true", a false value and a key
+// inside service_account do not.
+func TestVertexInteractionsFlags(t *testing.T) {
+	key := fakePrivateKey(t)
+	vertex := func(top map[string]any) map[string]any {
+		m := map[string]any{"type": "vertex", "project_id": "my-project",
+			"service_account": map[string]any{"client_email": "sa@my-project.iam.gserviceaccount.com", "private_key": key}}
+		for k, v := range top {
+			m[k] = v
+		}
+		return m
+	}
+	inside := vertex(nil)
+	inside["service_account"].(map[string]any)["interactions"] = true
+	dir := writeFiles(t, map[string]any{
+		"vertex-on.json":     vertex(map[string]any{"interactions": true}),
+		"vertex-native.json": vertex(map[string]any{"native_interactions": true}),
+		"vertex-text.json":   vertex(map[string]any{"interactions": "true", "native_interactions": "true"}),
+		"vertex-off.json":    vertex(map[string]any{"interactions": false, "native_interactions": false}),
+		"vertex-inside.json": inside,
+		"vertex-plain.json":  vertex(nil),
+	})
+	files, _, err := ReadAuthDir(dir, DefaultImportOptions, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]AuthFile{}
+	for _, f := range files {
+		byID[f.Record.ID] = f
+	}
+	if len(byID) != 6 {
+		t.Fatalf("read %d accounts, want 6: %v", len(byID), byID)
+	}
+	on := `{"vertex": {"project": "my-project", "location": "us-central1"}, "interactions": true}`
+	off := `{"vertex": {"project": "my-project", "location": "us-central1"}}`
+	for id, want := range map[string]string{"vertex-on": on, "vertex-native": on, "vertex-text": off,
+		"vertex-off": off, "vertex-inside": off, "vertex-plain": off} {
+		equalJSON(t, byID[id].Record.Account.Settings, want)
+	}
+}
+
 func mustJSON(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)

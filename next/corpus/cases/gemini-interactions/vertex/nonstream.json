@@ -1,0 +1,66 @@
+{
+  "description": "Interactions client on a Vertex service account that opts in (interactions in its auth file; the interactions setting in the new core): after the token exchange, the body goes to /v1beta1/projects/{project}/locations/global/interactions with the access token.",
+  "source": ["core/internal/runtime/executor/gemini_vertex_executor.go:1505-1625"],
+  "client": {"path":"/v1beta/interactions","body":{"model":"gemini-2.5-pro","input":"Say hello"}},
+  "old_core": {"account":{"interactions":true}},
+  "new_core": {"account":{"settings":{"interactions":true}}},
+  "upstream": [
+    {"body":{"access_token":"ya29.corpus-token","expires_in":3599,"token_type":"Bearer"}},
+    {
+      "body": {
+        "id": "int-corpus",
+        "object": "interaction",
+        "model": "gemini-2.5-flash",
+        "status": "completed",
+        "usage": {"total_input_tokens":3,"total_output_tokens":1,"total_tokens":4},
+        "steps": [{"type":"model_output","content":[{"type":"text","text":"Hi"}]}]
+      }
+    }
+  ],
+  "volatile": ["upstream[0].body"],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "id": "int-corpus",
+        "model": "gemini-2.5-flash",
+        "object": "interaction",
+        "status": "completed",
+        "steps": [{"content":[{"text":"Hi","type":"text"}],"type":"model_output"}],
+        "usage": {"total_input_tokens":3,"total_output_tokens":1,"total_tokens":4}
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": "(volatile)",
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Content-Type": "application/x-www-form-urlencoded",
+          "User-Agent": "Go-http-client/1.1"
+        },
+        "method": "POST",
+        "path": "/token"
+      },
+      {
+        "body": {"input":"Say hello","model":"gemini-2.5-pro"},
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Api-Revision": "2026-05-20",
+          "Authorization": "Bearer ya29.corpus-token",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1"
+        },
+        "method": "POST",
+        "path": "/v1beta1/projects/corpus-project/locations/global/interactions"
+      }
+    ]
+  }
+}
