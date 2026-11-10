@@ -77,6 +77,8 @@ go build -o extensions/claude/claude ./extensions/claude
 ./pluxy -config config.json
 ```
 
+Then `curl http://127.0.0.1:8400/healthz` answers `ok`.
+
 With a `management_key` set, the web panel is at `http://127.0.0.1:8400/panel/`: core's status,
 accounts, extensions and themes, the pages extensions bring and their settings. Sign in with the
 management key. Extension pages are served from a listener of their own, on another site than
@@ -184,6 +186,12 @@ public, so as in today's core (its example API-key safe mode) core starts with o
 until none is left; it logs that at every load, and the management API stays open, so the keys
 can be replaced there. The refusal goes to a request that carries a configured key; a request
 without one gets the 401 it always gets, where today's core answers every request with the 403.
+
+`GET /healthz` is the health probe for a container or load balancer. It answers `200` with the
+text `ok` and needs no key. It is not affected by the panel, CORS, trusted proxies or the
+management lockout, writes no request log, and with `tls.enable` it is served over HTTPS too.
+`HEAD /healthz` gets the same status and headers with no body. Any other method does not get a
+`200`.
 
 Web pages may call the client API from a browser only from the origins listed in
 `cors.allowed_origins` (each `scheme://host[:port]`, or `"*"` for every origin): core then adds
