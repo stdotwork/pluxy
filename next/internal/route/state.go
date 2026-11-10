@@ -596,14 +596,16 @@ func classify(e *llm.Error) (kind, scope string, fixed, base, max time.Duration)
 	scope = e.Scope
 	switch e.Code {
 	case llm.CodeRateLimit:
+		// Without a scope, only the model waits on the account, as today's core cools only the
+		// model that answered unless the provider says the whole credential is limited.
 		kind, base, max = blockRateLimit, limitBackoffBase, limitBackoffMax
 		if scope == "" {
-			scope = scopeCredential
+			scope = scopeModel
 		}
 	case llm.CodeQuota:
 		kind, base, max = blockQuota, limitBackoffBase, limitBackoffMax
 		if scope == "" {
-			scope = scopeCredential
+			scope = scopeModel
 		}
 	case llm.CodeAuth, llm.CodePermission:
 		kind, fixed = blockCooldown, authCooldown

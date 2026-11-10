@@ -168,11 +168,12 @@ func TestCapacityRefusalIsAModelRateLimit(t *testing.T) {
 	if e.Code != llm.CodeQuota || e.Scope != llm.ScopeCredential || e.RetryAfterMS != 3_600_000 {
 		t.Errorf("usage limit with the turn code: %+v; want quota on the credential, retry after 3600000 ms", e)
 	}
-	// A plain rate limit keeps blocking the account.
+	// A plain rate limit holds back only the model, as today's core cools only the model that
+	// answered.
 	e = statusError(capacityReply(http.StatusTooManyRequests, nil,
 		`{"error":{"type":"rate_limit_error","code":"rate_limit_exceeded","message":"Codex is at capacity"}}`), "m")
-	if e.Code != llm.CodeRateLimit || e.Scope != llm.ScopeCredential {
-		t.Errorf("plain rate limit: %+v; want a rate limit on the credential", e)
+	if e.Code != llm.CodeRateLimit || e.Scope != llm.ScopeModel || !e.Retryable {
+		t.Errorf("plain rate limit: %+v; want a retryable rate limit on the model", e)
 	}
 }
 
@@ -184,5 +185,16 @@ func TestCapacityRefusalInStream(t *testing.T) {
 	e, ok := err.(*llm.Error)
 	if !ok || e.Code != llm.CodeRateLimit || e.Scope != llm.ScopeModel || e.Status != http.StatusTooManyRequests || e.Retryable {
 		t.Errorf("classify = %+v; want a rate limit on the model, status 429, not retryable", err)
+	}
+}
+
+// A plain rate limit reported inside the stream holds back only the model too, as today's core
+// cools only the model that answered.
+func TestRateLimitInStreamBlocksTheModel(t *testing.T) {
+	raw := `{"type":"response.failed","response":{"status":"failed","error":{"type":"rate_limit_error","code":"rate_limit_exceeded","message":"Rate limit reached"}}}`
+	err := classify(&llm.Error{Code: llm.CodeUpstream, Message: "Rate limit reached", Raw: llm.RawJSON([]byte(raw))})
+	e, ok := err.(*llm.Error)
+	if !ok || e.Code != llm.CodeRateLimit || e.Scope != llm.ScopeModel || e.Status != http.StatusTooManyRequests {
+		t.Errorf("classify = %+v; want a rate limit on the model, status 429", err)
 	}
 }

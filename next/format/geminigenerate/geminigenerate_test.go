@@ -354,8 +354,8 @@ func TestStreamDecoderFailures(t *testing.T) {
 	if !errors.As(err, &e) {
 		t.Fatalf("error chunk: %v, want an *llm.Error", err)
 	}
-	if e.Code != llm.CodeRateLimit || e.ProviderCode != "RESOURCE_EXHAUSTED" {
-		t.Errorf("error = code %q provider code %q, want rate_limit and RESOURCE_EXHAUSTED", e.Code, e.ProviderCode)
+	if e.Code != llm.CodeRateLimit || e.Scope != llm.ScopeModel || e.ProviderCode != "RESOURCE_EXHAUSTED" {
+		t.Errorf("error = code %q scope %q provider code %q, want rate_limit on the model and RESOURCE_EXHAUSTED", e.Code, e.Scope, e.ProviderCode)
 	}
 
 	// A stream that fails after reporting usage keeps it on the error, whether the upstream sends

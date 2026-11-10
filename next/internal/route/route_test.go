@@ -515,6 +515,21 @@ func TestScopes(t *testing.T) {
 	h.wantAttempts("c")
 }
 
+// A rate limit or quota that names no scope holds back only the model on the account, as today's
+// core cools only the model that answered a 429 unless the provider says the whole credential is
+// limited.
+func TestRateLimitWithoutScopeBlocksTheModel(t *testing.T) {
+	for _, code := range []string{llm.CodeRateLimit, llm.CodeQuota} {
+		t.Run(code, func(t *testing.T) {
+			h := newHarness(t, Config{Strategy: StrategyFillFirst}, accts("a", "b")...)
+			h.on("a", fail(llm.Error{Code: code, Status: 429, Retryable: true, RetryAfterMS: 60_000}), ok())
+			h.runOK("m1") // a refuses m1 → b
+			h.runOK("m2") // a still serves m2
+			h.wantAttempts("a", "b", "a")
+		})
+	}
+}
+
 // When every account is blocked and the wait does not fit, the request fails at once with
 // the time the first block ends, and no attempt.
 func TestAllBlocked(t *testing.T) {

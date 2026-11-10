@@ -542,7 +542,8 @@ func upstreamError(resp *http.Response, model string) *llm.Error {
 			e.Retryable = true
 		}
 	case s == http.StatusTooManyRequests:
-		e.Code, e.Scope, e.Retryable = llm.CodeRateLimit, llm.ScopeCredential, true
+		// Only the model waits on this account, as today's core cools only the model that answered.
+		e.Code, e.Scope, e.Retryable = llm.CodeRateLimit, llm.ScopeModel, true
 		if e.ProviderCode == "insufficient_quota" {
 			e.Code = llm.CodeQuota
 		}

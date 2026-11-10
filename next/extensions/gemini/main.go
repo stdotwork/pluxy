@@ -483,7 +483,8 @@ func upstreamError(resp *http.Response, model string) *llm.Error {
 		// another account may serve the model.
 		e.Retryable = model != "" && strings.Contains(e.Message, model)
 	case s == http.StatusTooManyRequests:
-		e.Code, e.Scope, e.Retryable = llm.CodeRateLimit, llm.ScopeCredential, true
+		// Only the model waits on this account, as today's core cools only the model that answered.
+		e.Code, e.Scope, e.Retryable = llm.CodeRateLimit, llm.ScopeModel, true
 		if parsed.Error.Status == "RESOURCE_EXHAUSTED" && parsed.reason() == "QUOTA_EXHAUSTED" {
 			// A quota is used up, not a request rate exceeded (RATE_LIMIT_EXCEEDED).
 			e.Code = llm.CodeQuota

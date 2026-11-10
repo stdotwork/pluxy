@@ -16,7 +16,7 @@ func TestRuntimeAndReset(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	a := Account{ID: "a"}
 	other := Account{ID: "b"}
-	s.failure(&a, "m1", 0, &llm.Error{Code: llm.CodeRateLimit, Message: "slow down", RetryAfterMS: 60_000, Raw: json.RawMessage(`{"x":1}`)}, now, 0)
+	s.failure(&a, "m1", 0, &llm.Error{Code: llm.CodeRateLimit, Scope: llm.ScopeCredential, Message: "slow down", RetryAfterMS: 60_000, Raw: json.RawMessage(`{"x":1}`)}, now, 0)
 	s.failure(&a, "m2", 0, &llm.Error{Code: llm.CodeNotFound, Message: "no such model"}, now, 0)
 	s.failure(&a, "m1", 0, &llm.Error{Code: llm.CodeUpstream, Message: "bad gateway", Status: 502}, now, 0)
 	s.failure(&other, "m1", 0, &llm.Error{Code: llm.CodeQuota, Message: "used up", RetryAfterMS: 3_600_000}, now, 0)

@@ -649,7 +649,7 @@ Usage, in `finish.usage`; a field that is absent was not reported, which is diff
     "status": 429,
     "provider_code": "rate_limit_exceeded",
     "retryable": true,
-    "scope": "credential",
+    "scope": "model",
     "retry_after_ms": 20000
   }
 }
@@ -662,7 +662,7 @@ Usage, in `finish.usage`; a field that is absent was not reported, which is diff
 | `status` | The upstream HTTP status, when there was one. |
 | `provider_code` | The upstream's own error code, when there was one. |
 | `retryable` | True only when the upstream certainly did not run the request (it was refused), so trying again, on this account later or on another account, is safe. For `login` and `refresh` calls, see [Errors in login and refresh calls](#errors-in-login-and-refresh-calls). |
-| `scope` | What the failure is about: `request` (this request is bad), `credential` (this account), `model` (this model on this account), `endpoint` (the upstream endpoint). |
+| `scope` | What the failure is about: `request` (this request is bad), `credential` (this account), `model` (this model on this account), `endpoint` (the upstream endpoint). A rate limit or quota is `model` unless the provider says it covers the whole account, such as a subscription's used-up usage window; today's core also holds back only the model for a plain 429. When `scope` is absent, core takes `model` for `rate_limit`, `quota` and `not_found`, `credential` for `auth` and `permission`, and `endpoint` for `upstream` and `unavailable`. |
 | `retry_after_ms` | When the upstream said to try again, in milliseconds from now. |
 | `raw` | The upstream's error body, unchanged. |
 | `usage` | Usage the upstream reported before the failure, in the same form as `finish.usage`; absent when it reported none. A reply that fails partway may still have cost tokens. |

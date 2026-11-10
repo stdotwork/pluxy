@@ -55,7 +55,8 @@ func TestDeviceTokenIsNotAKey(t *testing.T) {
 	}
 }
 
-// A 429 is a used-up subscription quota when Meta says so, and waits until Meta's reset time; a
+// A 429 is a used-up subscription quota on the account when Meta says so, and waits until Meta's
+// reset time; any other 429 holds back only the model, as today's core cools only that model; a
 // 404 holds the account back from the model for five minutes when Meta names no reset.
 func TestUpstreamErrors(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
@@ -65,16 +66,17 @@ func TestUpstreamErrors(t *testing.T) {
 		status int
 		body   string
 		code   string
+		scope  string
 		waitMS int64
 	}{
-		{"subscription quota", 429, `{"error":{"message":"Subscription quota exhausted","type":"rate_limit_error","code":"rate_limit_exceeded","resets_at":` + jsonInt(reset) + `}}`, llm.CodeQuota, 90 * 60 * 1000},
-		{"rate limit", 429, `{"error":{"message":"Slow down","type":"rate_limit_error"}}`, llm.CodeRateLimit, 0},
-		{"string error", 429, `{"code":"Too many requests","error":"Rate limit reached for requests"}`, llm.CodeRateLimit, 0},
-		{"model not found", 404, `{"error":{"message":"model muse-x not found","type":"not_found_error"}}`, llm.CodeNotFound, notFoundCooldownMS},
+		{"subscription quota", 429, `{"error":{"message":"Subscription quota exhausted","type":"rate_limit_error","code":"rate_limit_exceeded","resets_at":` + jsonInt(reset) + `}}`, llm.CodeQuota, llm.ScopeCredential, 90 * 60 * 1000},
+		{"rate limit", 429, `{"error":{"message":"Slow down","type":"rate_limit_error"}}`, llm.CodeRateLimit, llm.ScopeModel, 0},
+		{"string error", 429, `{"code":"Too many requests","error":"Rate limit reached for requests"}`, llm.CodeRateLimit, llm.ScopeModel, 0},
+		{"model not found", 404, `{"error":{"message":"model muse-x not found","type":"not_found_error"}}`, llm.CodeNotFound, llm.ScopeModel, notFoundCooldownMS},
 	} {
 		e := upstreamError(c.status, []byte(c.body), http.Header{}, "muse-x", now)
-		if e.Code != c.code || e.RetryAfterMS != c.waitMS || e.Message == "" || strings.HasPrefix(e.Message, "upstream returned") {
-			t.Errorf("%s: %s after %dms (%q), want %s after %dms with Meta's message", c.name, e.Code, e.RetryAfterMS, e.Message, c.code, c.waitMS)
+		if e.Code != c.code || e.Scope != c.scope || e.RetryAfterMS != c.waitMS || e.Message == "" || strings.HasPrefix(e.Message, "upstream returned") {
+			t.Errorf("%s: %s on %s after %dms (%q), want %s on %s after %dms with Meta's message", c.name, e.Code, e.Scope, e.RetryAfterMS, e.Message, c.code, c.scope, c.waitMS)
 		}
 	}
 }
