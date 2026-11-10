@@ -350,7 +350,7 @@ func TestSIWCRefusals(t *testing.T) {
 	}
 	unsupported("Codex client", generate(context.Background(), siwcCall(c, llm.FormatOpenAIResponses, `{"model":"gpt-6.1-sol","input":"hi"}`, codex), nil))
 	unsupported("Codex client compaction", endpoint(context.Background(), siwcCall(c, llm.FormatOpenAIResponsesCompact, `{"model":"gpt-6.1-sol","input":[]}`, codex), nil))
-	for _, f := range []string{llm.FormatOpenAIImagesGenerations, llm.FormatOpenAIImagesEdits, "openai.some.later.endpoint"} {
+	for _, f := range []string{llm.FormatOpenAIImagesGenerations, llm.FormatOpenAIImagesEdits, llm.FormatCodexAlphaSearch, "openai.some.later.endpoint"} {
 		unsupported(f, endpoint(context.Background(), siwcCall(c, f, `{"model":"gpt-image-2","prompt":"p"}`, nil), nil))
 	}
 	sess, acct := wsSessionFor(t, newFakeWS(t), siwcCred("siwc-access", "r"))

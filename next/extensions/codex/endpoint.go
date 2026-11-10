@@ -27,7 +27,8 @@ func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	}
 	if isSIWC(call.Account.Credential) {
 		// A SIWC account serves compaction only: today's core makes its images through
-		// Responses instead, which this extension does not.
+		// Responses instead, which this extension does not, and sends its Alpha Search with the
+		// ChatGPT sign-in's own token, which a SIWC account does not have.
 		switch {
 		case format != llm.FormatOpenAIResponsesCompact:
 			return siwcUnsupported(fmt.Sprintf("%q", format))
