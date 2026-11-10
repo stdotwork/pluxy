@@ -598,6 +598,22 @@ request names pluxy in Kimi's device headers, with the device ID made at login (
 name, which Kimi's CLI also sends, is left out. A 429 that says the quota is used up is reported
 as a used-up quota, not a rate limit.
 
+**Thinking replay.** Kimi's Messages API wants an assistant tool-use turn back with its signed
+thinking, and some Messages clients resend earlier turns without it. As today's core does, the
+extension keeps each Messages reply that has signed thinking and a tool call, and when a later
+Messages request resends that turn without thinking but otherwise exactly as Kimi sent it, puts the
+kept thinking back. What is kept belongs to one client key (the request's protocol `caller`), one
+Claude Code conversation (its `X-Claude-Code-Session-Id` header, else the session in
+`metadata.user_id`) and one model family; a request without a client key or a session is sent as
+written. Kept turns expire an hour after their last use; at most 10,240 turns and 256 MiB are kept,
+and a turn over 8 MiB or 512 blocks is not. Kimi refusing a request whose thinking was put back
+(400, 422 or an error in the stream) drops that turn. The turns are kept in the extension's memory,
+so they are lost when core stops the idle extension (after 10 minutes without requests) or
+restarts it. Unlike today's core, which keeps only a conversation's latest reply, every kept turn
+stays until it expires, so Claude Code's subagents, which share their conversation's session ID,
+do not replace each other's turns. Chat clients are not covered, as in today's core: a Chat tool
+call gets Kimi's `reasoning_content` from the request itself (above).
+
 **Quota.** For a device login, quota reads `GET {base_url}/v1/usages` and the plan from `GET {base_url}/v1/me` (`user_level_name`) on the account's Kimi Code host, with the access token and the same device headers (`X-Msh-*`, `User-Agent`) the account's requests carry. It reports each entry of `limits` (labelled by its name, else by its window length, else "Limit #n"), the usage summary ("Weekly limit") and the monthly ratios ("Monthly limit", "Monthly coding limit"). An API key answers unsupported. Kimi's device login returns no user ID, so its grant has no identity and a re-login is not checked, as in today's core.
 
 ## xAI

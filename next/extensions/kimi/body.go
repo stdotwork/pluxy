@@ -23,7 +23,8 @@ import (
 //   - Responses: a batch of function call outputs must follow its calls with nothing between,
 //     so items between them move after the outputs;
 //   - Messages: Claude Code's billing block is removed from the system prompt, since Kimi reads
-//     it as prompt text.
+//     it as prompt text; an assistant tool-use turn resent without its signed thinking gets it
+//     back when the extension kept it (replay.go).
 
 // codingModels are Kimi Code's model aliases.
 var codingModels = map[string]string{
@@ -61,8 +62,9 @@ func effortOf(effort string) string {
 	return "high"
 }
 
-// buildBody returns the request body for up and how it was built.
-func buildBody(req llm.Request, up upstream) ([]byte, *llm.Translation, error) {
+// buildBody returns the request body for up and how it was built. turn, when not nil, puts kept
+// thinking back into a Messages body (replay.go).
+func buildBody(req llm.Request, up upstream, turn *replayTurn) ([]byte, *llm.Translation, error) {
 	tr := &llm.Translation{To: up.format}
 	var body []byte
 	if n := req.Native; n != nil {
@@ -96,6 +98,7 @@ func buildBody(req llm.Request, up upstream) ([]byte, *llm.Translation, error) {
 		patchResponses(m, req)
 	case upMessages:
 		stripBillingBlock(m)
+		turn.restore(m)
 	}
 	out, err := marshal(m)
 	if err != nil {

@@ -23,8 +23,9 @@ const Version = 0
 // describe (Info.ProtocolMinor); core uses what a minor version adds only with an extension that
 // reports it. Minor 1 adds sessions; minor 2 adds token counting and the request's thinking
 // suffix; minor 3 adds model listing; minor 4 adds account checks; minor 5 adds quota and the
-// identity of a login's grant; minor 6 adds an error's quota window; minor 7 adds endpoint calls.
-const Minor = 7
+// identity of a login's grant; minor 6 adds an error's quota window; minor 7 adds endpoint calls;
+// minor 8 adds the request's caller.
+const Minor = 8
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
