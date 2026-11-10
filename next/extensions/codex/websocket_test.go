@@ -277,6 +277,47 @@ func TestRelayEvents(t *testing.T) {
 	}
 }
 
+// A turn that ends with an empty response.incomplete (nothing produced, exactly 0 output tokens)
+// fails as an error on the request, and no terminal event is sent.
+func TestSessionRelayEmptyIncomplete(t *testing.T) {
+	f := newFakeWS(t)
+	f.replies = func(c *websocket.Conn, _ []byte) {
+		for _, m := range []string{
+			`{"type":"response.created","sequence_number":0,"response":{"id":"resp_1","object":"response","status":"in_progress","model":"gpt-test","output":[]}}`,
+			incompleteZero,
+		} {
+			_ = c.Write(context.Background(), websocket.MessageText, []byte(m))
+		}
+	}
+	s, acct := wsSessionFor(t, f, &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-test"})
+	a, _ := accountOf(acct.Credential)
+	req := wsRequest(t, `{"model":"gpt-test","input":[]}`)
+	ur, _ := buildRequest(req, acct.ID, s.set, a, true)
+	c, err := s.dial(context.Background(), req, ur, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := make(chan struct{})
+	c.mu.Lock()
+	c.turn = turn
+	c.mu.Unlock()
+	defer close(turn)
+	if err := c.c.Write(context.Background(), websocket.MessageText, []byte(`{"type":"response.create"}`)); err != nil {
+		t.Fatal(err)
+	}
+	out := &collected{}
+	err = s.relay(context.Background(), c, out)
+	var e *llm.Error
+	if !errors.As(err, &e) || e.Code != llm.CodeUpstream || e.Scope != llm.ScopeRequest || e.Retryable {
+		t.Fatalf("relay: %v; want the empty incomplete error", err)
+	}
+	for _, ev := range out.events {
+		if ev.Terminal() {
+			t.Errorf("sent the terminal event %+v", ev)
+		}
+	}
+}
+
 // wsFrameError is the error relay makes of one upstream error message.
 func wsFrameError(t *testing.T, data string) *llm.Error {
 	t.Helper()

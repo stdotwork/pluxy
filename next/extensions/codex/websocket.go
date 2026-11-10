@@ -210,7 +210,7 @@ func (s *wsSession) Turn(ctx context.Context, call sdk.Call, out *sdk.Stream) er
 // relay turns the upstream's messages into events until the turn's terminal message.
 func (s *wsSession) relay(ctx context.Context, c *wsConn, out eventSender) error {
 	dec := openairesponses.NewStreamDecoder()
-	done := map[int]json.RawMessage{} // output_index -> finished item
+	rep := newRepairs()
 	idle := time.NewTimer(wsIdleTimeout)
 	defer idle.Stop()
 	for {
@@ -228,7 +228,11 @@ func (s *wsSession) relay(ctx context.Context, c *wsConn, out eventSender) error
 			return lostError(c.err)
 		}
 		idle.Reset(wsIdleTimeout)
-		events, err := dec.Decode(repair(data, done))
+		repaired, err := rep.apply(data)
+		if err != nil {
+			return err
+		}
+		events, err := dec.Decode(repaired)
 		if err != nil {
 			return frameError(data, classify(err))
 		}
