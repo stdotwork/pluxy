@@ -187,3 +187,24 @@ func TestRelayEmptyIncomplete(t *testing.T) {
 		}
 	}
 }
+
+// usageLimitFailedFirst is a stream's first event: response.failed with a used-up usage limit.
+const usageLimitFailedFirst = `{"type":"response.failed","sequence_number":0,"response":{"id":"r","object":"response","status":"failed","model":"gpt-test","output":[],` +
+	`"error":{"type":"usage_limit_reached","code":"usage_limit_reached","message":"The usage limit has been reached","resets_in_seconds":7200}}}`
+
+// A usage limit in a response.failed that is the stream's first event is the account's quota, a
+// 429 with its reset time, as when it comes later in the stream or as an HTTP 429; nothing is
+// sent before it.
+func TestRelayFailedFirstEvent(t *testing.T) {
+	resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}},
+		Body: io.NopCloser(strings.NewReader("event: response.failed\ndata: " + usageLimitFailedFirst + "\n\n"))}
+	out := &collected{}
+	err := relay(context.Background(), resp, out)
+	var e *llm.Error
+	if !errors.As(err, &e) || e.Code != llm.CodeQuota || e.Status != http.StatusTooManyRequests || e.Scope != llm.ScopeCredential || e.RetryAfterMS != 7_200_000 {
+		t.Fatalf("relay: %+v; want the usage limit's 429 quota error on the credential, retry after 7200000 ms", err)
+	}
+	if len(out.events) != 0 {
+		t.Errorf("sent %+v before the failure", out.events)
+	}
+}

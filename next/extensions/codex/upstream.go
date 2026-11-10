@@ -251,7 +251,7 @@ func relay(ctx context.Context, resp *http.Response, out eventSender) error {
 			}
 			events, err = dec.Decode(data)
 			if err != nil {
-				return classify(err)
+				return classify(failedFirst(events, err))
 			}
 		}
 		for _, ev := range events {
@@ -485,6 +485,17 @@ func statusError(resp *http.Response, model string) *llm.Error {
 		e.Code, e.Scope = llm.CodeInvalidRequest, llm.ScopeRequest
 	}
 	return e
+}
+
+// failedFirst puts back on err the event a stream failed with when it was the stream's first
+// event: the decoder then moves that event's raw onto the response.start it opens the reply with,
+// which is never sent because the stream failed, and classify reads the failure from the raw.
+func failedFirst(events []llm.Event, err error) error {
+	var e *llm.Error
+	if errors.As(err, &e) && len(e.Raw) == 0 && len(events) > 0 && events[0].Type == llm.EventResponseStart {
+		e.Raw = events[0].Raw
+	}
+	return err
 }
 
 // classify gives a failure reported inside the stream (an error or response.failed event) the

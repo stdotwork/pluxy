@@ -377,3 +377,69 @@ func TestFrameErrorCapacityScope(t *testing.T) {
 		}
 	}
 }
+
+// A usage limit in a response.failed that is the turn's first message is the account's quota, a
+// 429 with its reset time, as on HTTP.
+func TestSessionRelayFailedFirstMessage(t *testing.T) {
+	f := newFakeWS(t)
+	f.replies = func(c *websocket.Conn, _ []byte) {
+		_ = c.Write(context.Background(), websocket.MessageText, []byte(usageLimitFailedFirst))
+	}
+	s, acct := wsSessionFor(t, f, &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-test"})
+	a, _ := accountOf(acct.Credential)
+	req := wsRequest(t, `{"model":"gpt-test","input":[]}`)
+	ur, _ := buildRequest(req, acct.ID, s.set, a, true)
+	c, err := s.dial(context.Background(), req, ur, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := make(chan struct{})
+	c.mu.Lock()
+	c.turn = turn
+	c.mu.Unlock()
+	defer close(turn)
+	if err := c.c.Write(context.Background(), websocket.MessageText, []byte(`{"type":"response.create"}`)); err != nil {
+		t.Fatal(err)
+	}
+	out := &collected{}
+	err = s.relay(context.Background(), c, out)
+	var e *llm.Error
+	if !errors.As(err, &e) || e.Code != llm.CodeQuota || e.Status != http.StatusTooManyRequests || e.Scope != llm.ScopeCredential || e.RetryAfterMS != 7_200_000 {
+		t.Fatalf("relay: %+v; want the usage limit's 429 quota error on the credential, retry after 7200000 ms", err)
+	}
+	if len(out.events) != 0 {
+		t.Errorf("sent %+v before the failure", out.events)
+	}
+}
+
+// A response.failed message that also carries a status keeps what its response.error means, as
+// today's core reads only an error message's status: a usage limit stays the account's quota
+// with its reset time.
+func TestSessionRelayFailedWithStatus(t *testing.T) {
+	f := newFakeWS(t)
+	f.replies = func(c *websocket.Conn, _ []byte) {
+		_ = c.Write(context.Background(), websocket.MessageText, []byte(`{"type":"response.failed","status":429,"response":{"id":"r","status":"failed","output":[],`+
+			`"error":{"type":"usage_limit_reached","code":"usage_limit_reached","message":"limit","resets_in_seconds":60}}}`))
+	}
+	s, acct := wsSessionFor(t, f, &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-test"})
+	a, _ := accountOf(acct.Credential)
+	req := wsRequest(t, `{"model":"gpt-test","input":[]}`)
+	ur, _ := buildRequest(req, acct.ID, s.set, a, true)
+	c, err := s.dial(context.Background(), req, ur, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := make(chan struct{})
+	c.mu.Lock()
+	c.turn = turn
+	c.mu.Unlock()
+	defer close(turn)
+	if err := c.c.Write(context.Background(), websocket.MessageText, []byte(`{"type":"response.create"}`)); err != nil {
+		t.Fatal(err)
+	}
+	err = s.relay(context.Background(), c, &collected{})
+	var e *llm.Error
+	if !errors.As(err, &e) || e.Code != llm.CodeQuota || e.Scope != llm.ScopeCredential || e.RetryAfterMS != 60_000 {
+		t.Fatalf("relay: %+v; want the usage limit's quota error on the credential, retry after 60000 ms", err)
+	}
+}
