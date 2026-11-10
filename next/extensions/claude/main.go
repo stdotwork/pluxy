@@ -591,6 +591,11 @@ func upstreamError(resp *http.Response, model string, modelLevelCooling bool) *l
 		var wait time.Duration
 		e.Code, e.Scope, wait, e.QuotaWindowMinutes = rateLimit(resp.Header, raw, modelLevelCooling, time.Now())
 		e.Retryable = true
+		if model == "" && e.Scope == llm.ScopeModel {
+			// A call that names no model (an account check, quota, a login) has no model to keep
+			// out: its 429 is the account's.
+			e.Scope = llm.ScopeCredential
+		}
 		e.RetryAfterMS = int64((wait + time.Millisecond - 1) / time.Millisecond)
 	case s == http.StatusServiceUnavailable || s == 529:
 		// 529 is Anthropic's overloaded_error: the request was refused, not run.
