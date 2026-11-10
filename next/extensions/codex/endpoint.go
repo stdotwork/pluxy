@@ -51,9 +51,9 @@ func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 }
 
 // compact serves Responses compaction: the client's body goes to {base_url}/responses/compact
-// as today's core sends it, nearly as it came (the stream flag removed, instructions given, the
-// model renamed and a thinking suffix's effort applied), and the upstream's JSON reply comes back
-// as it is. The Codex CLI calls it to shorten a long conversation; the reply's compaction item
+// as today's core sends it, nearly as it came (the stream flag removed, instructions given unless
+// the request is Responses-lite, the model renamed and a thinking suffix's effort applied), and the
+// upstream's JSON reply comes back as it is. The Codex CLI calls it to shorten a long conversation; the reply's compaction item
 // goes back in the next request's input.
 func compact(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	s, err := readSettings(call.Account.Settings)
@@ -75,7 +75,8 @@ func compact(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		// Today's core leaves store to the OpenAI API's default on a SIWC compaction.
 		delete(m, "store")
 	}
-	if v, ok := m["instructions"]; !ok || string(v) == "null" {
+	// A Responses-lite request goes without instructions when it has none, as on /responses.
+	if v, ok := m["instructions"]; (!ok || string(v) == "null") && !liteRequest(req.Native.Headers, m) {
 		m["instructions"] = raw("")
 	}
 	if sfx := req.Options.ThinkingSuffix; sfx != "" {

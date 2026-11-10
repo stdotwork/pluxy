@@ -1,0 +1,162 @@
+{
+  "description": "A Responses-lite compaction request (X-Openai-Internal-Codex-Responses-Lite: true) without instructions goes to the upstream without instructions, not with empty ones.",
+  "source": [
+    "core/internal/runtime/executor/codex_executor_execute.go (executeCompact: normalizeCodexInstructionsDoc with IsNativeCodexRequest)",
+    "core/internal/runtime/executor/helps/codex_native.go"
+  ],
+  "client": {
+    "path": "/v1/responses/compact",
+    "headers": {
+      "X-Openai-Internal-Codex-Responses-Lite": "true"
+    },
+    "body": {
+      "model": "gpt-test",
+      "input": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Say hello"
+            }
+          ]
+        }
+      ],
+      "prompt_cache_key": "pck-corpus"
+    }
+  },
+  "upstream": [
+    {
+      "headers": {
+        "Content-Type": "application/json",
+        "X-Request-Id": "req_corpus"
+      },
+      "body": {
+        "id": "resp_compact_corpus",
+        "object": "response.compaction",
+        "created_at": 1700000000,
+        "output": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Say hello"
+              }
+            ]
+          },
+          {
+            "type": "compaction",
+            "id": "cmp_corpus",
+            "encrypted_content": "enc-compaction-corpus"
+          }
+        ],
+        "usage": {
+          "input_tokens": 120,
+          "input_tokens_details": {
+            "cached_tokens": 0
+          },
+          "output_tokens": 30,
+          "output_tokens_details": {
+            "reasoning_tokens": 10
+          },
+          "total_tokens": 150
+        }
+      }
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[0].body.parallel_tool_calls",
+      "kind": "gap",
+      "absent": true,
+      "reason": "Today's core also turns parallel tool calls off (parallel_tool_calls false) on a Responses-lite compaction request, as on /responses; the new core's compaction does not do that yet."
+    },
+    {
+      "path": "upstream[*].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "created_at": 1700000000,
+        "id": "resp_compact_corpus",
+        "object": "response.compaction",
+        "output": [
+          {
+            "content": [
+              {
+                "text": "Say hello",
+                "type": "input_text"
+              }
+            ],
+            "role": "user",
+            "type": "message"
+          },
+          {
+            "encrypted_content": "enc-compaction-corpus",
+            "id": "cmp_corpus",
+            "type": "compaction"
+          }
+        ],
+        "usage": {
+          "input_tokens": 120,
+          "input_tokens_details": {
+            "cached_tokens": 0
+          },
+          "output_tokens": 30,
+          "output_tokens_details": {
+            "reasoning_tokens": 10
+          },
+          "total_tokens": 150
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "input": [
+            {
+              "content": [
+                {
+                  "text": "Say hello",
+                  "type": "input_text"
+                }
+              ],
+              "role": "user",
+              "type": "message"
+            }
+          ],
+          "model": "gpt-test",
+          "parallel_tool_calls": false,
+          "prompt_cache_key": "pck-corpus"
+        },
+        "headers": {
+          "Accept": "application/json",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "Originator": "codex-tui",
+          "Session-Id": "pck-corpus",
+          "User-Agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)",
+          "X-Openai-Internal-Codex-Responses-Lite": "true"
+        },
+        "method": "POST",
+        "path": "/v1/responses/compact"
+      }
+    ]
+  }
+}
