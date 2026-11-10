@@ -314,8 +314,8 @@ Account `settings`, all optional:
 its `chatgpt_base_url` points at core). Core routes it by its `model` to an account's extension as
 an [endpoint call](protocol/README.md#endpoint); the Codex extension sends the body to
 `{base_url}/responses/compact` as today's core does, nearly as it came: `stream` removed,
-`instructions` set to `""` when absent (left out for a Responses-lite request), the model renamed
-for the account, a thinking suffix's
+`instructions` set to `""` when absent (left out for a Responses-lite request), parallel tool
+calls turned off on a Responses-lite request, the model renamed for the account, a thinking suffix's
 effort applied, and a prompt cache key (with `Session-Id`) derived as for `/responses` when the
 client names none; the upstream's JSON reply comes back to the client as it is. A request with
 `"stream": true` is refused with a 400, as today's core refuses it. An account of another extension

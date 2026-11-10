@@ -71,12 +71,16 @@ func compact(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	}
 	m["model"] = raw(req.Model)
 	delete(m, "stream")
+	lite := liteRequest(req.Native.Headers, m)
+	if lite {
+		m["parallel_tool_calls"] = raw(false)
+	}
 	if a.siwc {
 		// Today's core leaves store to the OpenAI API's default on a SIWC compaction.
 		delete(m, "store")
 	}
 	// A Responses-lite request goes without instructions when it has none, as on /responses.
-	if v, ok := m["instructions"]; (!ok || string(v) == "null") && !liteRequest(req.Native.Headers, m) {
+	if v, ok := m["instructions"]; (!ok || string(v) == "null") && !lite {
 		m["instructions"] = raw("")
 	}
 	if sfx := req.Options.ThinkingSuffix; sfx != "" {
@@ -104,7 +108,7 @@ func compact(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	}
 	// Replayed web searches need a web search tool, as on /responses. Lite is read from the whole
 	// body, since client_metadata may say it.
-	webSearchForHistory(m, liteRequest(req.Native.Headers, m))
+	webSearchForHistory(m, lite)
 	// The endpoint rejects the same tool schema forms as /responses; today's core rewrites them
 	// in compaction requests too.
 	var tools []json.RawMessage
