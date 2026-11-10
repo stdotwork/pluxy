@@ -353,3 +353,29 @@ func TestCompactFixesToolSchemas(t *testing.T) {
 		t.Errorf("tools upstream = %s, want %s", got, want)
 	}
 }
+
+// A compaction request whose client_metadata says it is Responses-lite has its replayed web
+// searches removed, as on /responses.
+func TestCompactLiteFromClientMetadata(t *testing.T) {
+	manifest := conformance.BuildExtension(t, "pluxy-extension.json", ".")
+	ext, err := host.Start(manifest, host.Options{Log: io.Discard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(ext.Stop)
+	u := newSearchUpstream(t)
+	acct := searchAccount(t, u, "/v1", &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-compact"}, nil)
+	body := `{"model":"m","input":[` + userMsg + `,` + webSearchItem + `],"client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":"true"}}`
+	s := ext.Endpoint(t.Context(), acct, llm.Request{Model: "m", Native: &llm.Native{Format: llm.FormatOpenAIResponsesCompact, Body: json.RawMessage(body)}})
+	for ev := s.Next(); !ev.Terminal(); ev = s.Next() {
+	}
+	s.Close()
+	reqs := u.requests()
+	if len(reqs) != 1 {
+		t.Fatalf("upstream requests = %+v", reqs)
+	}
+	got, _ := json.Marshal(reqs[0].body["input"])
+	if strings.Contains(string(got), "web_search_call") || reqs[0].body["tools"] != nil {
+		t.Errorf("input upstream = %s, tools %v; want the replayed search removed and no tool", got, reqs[0].body["tools"])
+	}
+}

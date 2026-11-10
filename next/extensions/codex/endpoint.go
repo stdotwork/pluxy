@@ -101,8 +101,9 @@ func compact(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if a.siwc {
 		siwcBody(m, req.Options.ThinkingSuffix != "")
 	}
-	// Replayed web searches need a web search tool, as on /responses.
-	webSearchForHistory(m, sh.lite())
+	// Replayed web searches need a web search tool, as on /responses. Lite is read from the whole
+	// body, since client_metadata may say it.
+	webSearchForHistory(m, liteRequest(req.Native.Headers, m))
 	// The endpoint rejects the same tool schema forms as /responses; today's core rewrites them
 	// in compaction requests too.
 	var tools []json.RawMessage

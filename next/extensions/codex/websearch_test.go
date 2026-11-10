@@ -147,3 +147,33 @@ func TestWebSearchForHistoryOnABody(t *testing.T) {
 		t.Errorf("a body without input changed: %v", m)
 	}
 }
+
+// A request is Responses-lite when the X-Openai-Internal-Codex-Responses-Lite header says true, in
+// any case, or when client_metadata carries the flag as true or "true", as today's core reads it;
+// another header value, or a false flag, is not. A lite request turns parallel tool calls off.
+func TestLiteDetection(t *testing.T) {
+	const tool = `"tools":[{"type":"function","name":"f","parameters":{"type":"object"}}]`
+	header := func(v string) map[string]string {
+		return map[string]string{"x-openai-internal-codex-responses-lite": v}
+	}
+	for _, c := range []struct {
+		name    string
+		body    string
+		headers map[string]string
+		lite    bool
+	}{
+		{"header true", `{"model":"m",` + tool + `}`, header("true"), true},
+		{"header TRUE with spaces", `{"model":"m",` + tool + `}`, header(" TRUE "), true},
+		{"header 1", `{"model":"m",` + tool + `}`, header("1"), false},
+		{"header false", `{"model":"m",` + tool + `}`, header("false"), false},
+		{"metadata string", `{"model":"m",` + tool + `,"client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":"true"}}`, nil, true},
+		{"metadata bool", `{"model":"m",` + tool + `,"client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":true}}`, nil, true},
+		{"metadata false", `{"model":"m",` + tool + `,"client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":"false"}}`, nil, false},
+		{"neither", `{"model":"m",` + tool + `}`, nil, false},
+	} {
+		m := shapedBody(t, c.body, c.headers, false)
+		if got := string(m["parallel_tool_calls"]) == "false"; got != c.lite {
+			t.Errorf("%s: parallel_tool_calls %s, want lite %v", c.name, m["parallel_tool_calls"], c.lite)
+		}
+	}
+}
