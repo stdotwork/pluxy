@@ -323,7 +323,8 @@ other requests do. The extension sends the body to `{base_url}/alpha/search` as 
 (today's core renames it only for an API key). It sends `originator: codex_cli_rs`, the bearer token, a sign-in's `Chatgpt-Account-Id`
 and the client's `Version`, `User-Agent`, `Session_id` and `X-Client-Request-Id` as they came; the
 upstream's JSON reply comes back to the client whole, with its content type. An upstream error
-reaches the client as an error in OpenAI's shape (a 404 blocks no model on the account), and an API key without `alpha_search` is skipped
+reaches the client as an error in OpenAI's shape (a 404 blocks no model on the account), and an API key without `alpha_search`, or
+without a `base_url` of its own (today's core keeps no Codex API key without one), is skipped
 for this endpoint only. When no account is eligible the client gets an error saying so.
 
 **Capacity refusals.** A refusal that says the turn or the model is full, not that the account's allowance is used up, is a rate limit on that model for that account: the code `turn_rate_limit_exceeded`, `model_at_capacity` or `model_is_at_capacity`, or, with no code, an "at capacity" message from a `rate_limit_error` or about the model. Whatever status the upstream gave, the client sees a 429, core tries another account, and the account keeps serving its other models. The upstream's `Retry-After` is kept; `Retry-After: 0` (retry at once) cannot be passed on, so the model waits about a second. The same refusal inside an open stream blocks the model the same way, but the request is not tried again, as in today's core. A WebSocket `websocket_connection_limit_reached` message is an error message like any other: it keeps its status (a 429 is then a retryable rate limit on the account, a 400 an invalid request), and the next turn opens a new upstream socket.
