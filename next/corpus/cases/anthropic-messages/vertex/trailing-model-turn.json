@@ -1,0 +1,201 @@
+{
+  "description": "A Messages request whose history ends with an assistant turn, streamed, to Vertex AI with a service account.",
+  "source": [
+    "core/internal/runtime/executor/helps/gemini_content_turns.go",
+    "core/internal/runtime/executor/helps/gemini_content_turns_test.go",
+    "core/internal/runtime/executor/gemini_vertex_executor.go:468-471,755-764"
+  ],
+  "client": {
+    "path": "/v1/messages",
+    "body": {
+      "model": "gemini-2.5-pro",
+      "stream": true,
+      "max_tokens": 512,
+      "messages": [
+        {"role":"user","content":"Say hello"},
+        {"role":"assistant","content":"Sure, I will"}
+      ]
+    }
+  },
+  "upstream": [
+    {"body":{"access_token":"ya29.corpus-token","expires_in":3599,"token_type":"Bearer"}},
+    {
+      "sse": [
+        {"data":{"candidates":[{"content":{"role":"model","parts":[{"text":"thinking...","thought":true}]},"index":0}],"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus"}},
+        {"data":{"candidates":[{"content":{"role":"model","parts":[{"text":"Hello"}]},"index":0}],"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus"}},
+        {"data":{"candidates":[{"content":{"role":"model","parts":[{"text":" world"},{"text":"","thoughtSignature":"CiQB0e2Kb7sigA1"}]},"index":0}],"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus"}},
+        {"data":{"candidates":[{"content":{"role":"model","parts":[{"text":""}]},"index":0,"finishReason":"STOP"}],"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus","usageMetadata":{"promptTokenCount":40,"cachedContentTokenCount":8,"candidatesTokenCount":12,"thoughtsTokenCount":20,"totalTokenCount":72}}}
+      ]
+    }
+  ],
+  "volatile": ["upstream[0].body"],
+  "exceptions": [
+    {
+      "path": "client.events",
+      "kind": "intended",
+      "reason": "The new core writes a Messages stream from a Gemini reply with each thought signature as a thinking block of its own holding the signature, before the part it came on, as today's core does, but without the empty text block today's core adds after a signature that came on an empty text part, and tool_use ids as call_<n> when Gemini sends none (today's core uses the function name and a counter).",
+      "want": [
+        {
+          "data": {
+            "message": {
+              "content": [],
+              "id": "resp-corpus",
+              "model": "gemini-corpus-upstream",
+              "role": "assistant",
+              "stop_reason": null,
+              "stop_sequence": null,
+              "type": "message",
+              "usage": {"input_tokens":0,"output_tokens":0}
+            },
+            "type": "message_start"
+          },
+          "event": "message_start"
+        },
+        {
+          "data": {
+            "content_block": {"thinking":"","type":"thinking"},
+            "index": 0,
+            "type": "content_block_start"
+          },
+          "event": "content_block_start"
+        },
+        {
+          "data": {
+            "delta": {"thinking":"thinking...","type":"thinking_delta"},
+            "index": 0,
+            "type": "content_block_delta"
+          },
+          "event": "content_block_delta"
+        },
+        {"data":{"index":0,"type":"content_block_stop"},"event":"content_block_stop"},
+        {
+          "data": {"content_block":{"text":"","type":"text"},"index":1,"type":"content_block_start"},
+          "event": "content_block_start"
+        },
+        {
+          "data": {
+            "delta": {"text":"Hello","type":"text_delta"},
+            "index": 1,
+            "type": "content_block_delta"
+          },
+          "event": "content_block_delta"
+        },
+        {
+          "data": {
+            "delta": {"text":" world","type":"text_delta"},
+            "index": 1,
+            "type": "content_block_delta"
+          },
+          "event": "content_block_delta"
+        },
+        {"data":{"index":1,"type":"content_block_stop"},"event":"content_block_stop"},
+        {
+          "data": {
+            "content_block": {"thinking":"","type":"thinking"},
+            "index": 2,
+            "type": "content_block_start"
+          },
+          "event": "content_block_start"
+        },
+        {
+          "data": {
+            "delta": {"signature":"CiQB0e2Kb7sigA1","type":"signature_delta"},
+            "index": 2,
+            "type": "content_block_delta"
+          },
+          "event": "content_block_delta"
+        },
+        {"data":{"index":2,"type":"content_block_stop"},"event":"content_block_stop"},
+        {
+          "data": {
+            "delta": {"stop_reason":"end_turn","stop_sequence":null},
+            "type": "message_delta",
+            "usage": {
+              "cache_read_input_tokens": 8,
+              "input_tokens": 32,
+              "output_tokens": 32,
+              "output_tokens_details": {"thinking_tokens":20}
+            }
+          },
+          "event": "message_delta"
+        },
+        {"data":{"type":"message_stop"},"event":"message_stop"}
+      ]
+    },
+    {
+      "path": "upstream[1].headers.Accept",
+      "kind": "intended",
+      "reason": "The new core asks a streaming upstream for text/event-stream; today's Gemini provider sends no Accept header. Gemini answers alt=sse either way.",
+      "want": "text/event-stream"
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"message":{"content":[],"id":"resp-corpus","model":"gemini-corpus-upstream","role":"assistant","stop_reason":null,"stop_sequence":null,"type":"message","usage":{"input_tokens":11,"output_tokens":0}},"type":"message_start"},"event":"message_start"},
+        {"data":{"content_block":{"thinking":"","type":"thinking"},"index":0,"type":"content_block_start"},"event":"content_block_start"},
+        {"data":{"delta":{"thinking":"thinking...","type":"thinking_delta"},"index":0,"type":"content_block_delta"},"event":"content_block_delta"},
+        {"data":{"index":0,"type":"content_block_stop"},"event":"content_block_stop"},
+        {"data":{"content_block":{"text":"","type":"text"},"index":1,"type":"content_block_start"},"event":"content_block_start"},
+        {"data":{"delta":{"text":"Hello","type":"text_delta"},"index":1,"type":"content_block_delta"},"event":"content_block_delta"},
+        {"data":{"delta":{"text":" world","type":"text_delta"},"index":1,"type":"content_block_delta"},"event":"content_block_delta"},
+        {"data":{"index":1,"type":"content_block_stop"},"event":"content_block_stop"},
+        {"data":{"content_block":{"thinking":"","type":"thinking"},"index":2,"type":"content_block_start"},"event":"content_block_start"},
+        {"data":{"delta":{"signature":"CiQB0e2Kb7sigA1","type":"signature_delta"},"index":2,"type":"content_block_delta"},"event":"content_block_delta"},
+        {"data":{"index":2,"type":"content_block_stop"},"event":"content_block_stop"},
+        {"data":{"content_block":{"text":"","type":"text"},"index":3,"type":"content_block_start"},"event":"content_block_start"},
+        {"data":{"delta":{"text":"","type":"text_delta"},"index":3,"type":"content_block_delta"},"event":"content_block_delta"},
+        {"data":{"index":3,"type":"content_block_stop"},"event":"content_block_stop"},
+        {"data":{"delta":{"stop_reason":"end_turn","stop_sequence":null},"type":"message_delta","usage":{"cache_read_input_tokens":8,"input_tokens":32,"output_tokens":32}},"event":"message_delta"},
+        {"data":{"type":"message_stop"},"event":"message_stop"}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": "(volatile)",
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Content-Type": "application/x-www-form-urlencoded",
+          "User-Agent": "Go-http-client/1.1"
+        },
+        "method": "POST",
+        "path": "/token"
+      },
+      {
+        "body": {
+          "contents": [
+            {"parts":[{"text":"Say hello"}],"role":"user"},
+            {"parts":[{"text":"Sure, I will"}],"role":"model"},
+            {"parts":[{"text":""}],"role":"user"}
+          ],
+          "model": "gemini-2.5-pro",
+          "safetySettings": [
+            {"category":"HARM_CATEGORY_HARASSMENT","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_HATE_SPEECH","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_SEXUALLY_EXPLICIT","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_DANGEROUS_CONTENT","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_CIVIC_INTEGRITY","threshold":"BLOCK_NONE"}
+          ]
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer ya29.corpus-token",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1"
+        },
+        "method": "POST",
+        "path": "/v1/projects/corpus-project/locations/global/publishers/google/models/gemini-2.5-pro:streamGenerateContent?alt=sse"
+      }
+    ]
+  }
+}

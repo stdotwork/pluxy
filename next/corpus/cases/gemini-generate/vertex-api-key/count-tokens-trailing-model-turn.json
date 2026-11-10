@@ -1,0 +1,65 @@
+{
+  "description": "A Gemini client's countTokens request whose history ends with a model turn is sent as it is (no trailing user turn), to Vertex AI with an express mode key.",
+  "source": [
+    "core/internal/runtime/executor/helps/gemini_content_turns.go",
+    "core/internal/runtime/executor/helps/gemini_content_turns_test.go",
+    "core/internal/runtime/executor/gemini_vertex_executor.go:623-626,985-988"
+  ],
+  "client": {
+    "path": "/v1beta/models/gemini-corpus:countTokens",
+    "body": {
+      "contents": [
+        {"role":"user","parts":[{"text":"Say hello"}]},
+        {"role":"model","parts":[{"text":"Sure, I will"}]}
+      ]
+    }
+  },
+  "upstream": [{"body":{"totalTokens":3}}],
+  "exceptions": [
+    {
+      "path": "upstream[0].body.model",
+      "kind": "intended",
+      "reason": "The new core sends a Gemini client's countTokens body to the upstream as the client wrote it; today's core adds the model's name to the body (the model is already in the path).",
+      "absent": true
+    },
+    {
+      "path": "client.body.promptTokensDetails",
+      "kind": "intended",
+      "reason": "The new core gives a Gemini client the upstream's countTokens reply as it came; today's core rebuilds it from totalTokens alone, with a promptTokensDetails entry of modality TEXT it makes up.",
+      "absent": true
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {"promptTokensDetails":[{"modality":"TEXT","tokenCount":3}],"totalTokens":3},
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "contents": [
+            {"parts":[{"text":"Say hello"}],"role":"user"},
+            {"parts":[{"text":"Sure, I will"}],"role":"model"}
+          ],
+          "model": "gemini-corpus"
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1",
+          "X-Goog-Api-Key": "sk-corpus-upstream"
+        },
+        "method": "POST",
+        "path": "/v1/publishers/google/models/gemini-corpus:countTokens"
+      }
+    ]
+  }
+}

@@ -172,6 +172,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
 	if err != nil {
 		return err
 	}
+	body = fixTurns(body, s.Vertex != nil, call.Request.Stream, !tr.Passthrough)
 	send := &reporting{Stream: out, tr: tr}
 	t, err := resolve(ctx, s, call.Account.Credential, call.Request.Model, call.Request.Stream)
 	if err != nil {
