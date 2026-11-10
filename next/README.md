@@ -507,6 +507,18 @@ is moved into `anthropic-beta`. The client's own betas are never removed. Not bu
 `anthropic-beta-strip` and `anthropic-beta-append` settings, and the Claude Code beta profile
 today's core sends for clients it makes look like Claude Code.
 
+**Web search.** A Responses client's `web_search` tool becomes Claude's server web search tool
+(`web_search_20250305`, with its `name`, `max_uses`, `filters.allowed_domains` and `user_location`;
+none when `external_web_access` is `false`), as today's core sends it. Claude's `server_tool_use`
+and `web_search_tool_result` blocks come back as one `web_search_call` item with the query, status
+and results (each hit as Claude sent it, so its `encrypted_content` survives); a search Claude left
+without results when it paused the turn (`pause_turn`) stays `in_progress`. A replayed
+`web_search_call` goes back as the two blocks, in the assistant message around it; a paused search
+at the end of the history goes back as its `server_tool_use` alone, so Claude carries on. Chat
+clients get the text without the search blocks, as today. Not built: citations (today's core gives
+Claude's `citations` to a Responses client as the text's `annotations` and sends them back), the
+web search result cache and Codex's tool search on Claude.
+
 **Tool shapes.** A translated request's tools get the shapes Messages takes, as today's core
 gives them: a function name with characters other than letters, digits, `_` and `-`, or longer than
 64, is sent with each other character as `_` and cut to 64 (two names that would come out the same
@@ -1719,7 +1731,7 @@ are accepted silently.
 | `upstream.codex.upstream-request-compression`, `-min-bytes`, `upstream.codex.stream-bootstrap-buffering`, `stream-bootstrap-timeout` | | Later |
 | `upstream.codex.response-steering`, `upstream.codex.orphan-delegation-compatibility`, `oauth.providers.codex.header-defaults.*` (`codex-header-defaults`) | | Dropped: experimental or off by default, no need found |
 | `upstream.claude.header-defaults.*`, `disable-claude-cloak-mode`, `disable-cloaking-model-list`, `session-date-pin-days` (also `claude`, `claude-code`, `claude-header-defaults`), and the Claude keys' `cloak` and `fingerprint-profile` | This core never changes how a client presents itself. | Dropped: making other clients look like Claude Code is out of scope |
-| `upstream.claude.tool-search`, the Claude keys' `native-tool-search` | | Later |
+| `upstream.claude.tool-search`, the Claude keys' `native-tool-search` | | Dropped: Codex's tool search on Claude accounts, off by default with no panel or app control |
 | `rebuild-mid-system-message` (Claude keys) | The account's `rebuild_mid_system_message`. | Supported |
 | `upstream.xai.inject-x-search` (`oauth.providers.xai.inject-x-search`, `xai.inject-x-search`) | xAI accounts get `inject_x_search`; applies to API keys and imported Grok logins | Supported |
 | `experimental-cch-signing` (Claude keys) | | Dead |
