@@ -130,7 +130,7 @@ func TestAPIKeyLoginRetryOnlyWhenNotSent(t *testing.T) {
 func TestModelRequestOutageStaysRetryable(t *testing.T) {
 	rec := httptest.NewRecorder()
 	rec.WriteHeader(http.StatusServiceUnavailable)
-	if e := upstreamError(rec.Result(), "m"); e.Code != llm.CodeUnavailable || !e.Retryable {
+	if e := upstreamError(rec.Result(), "m", false); e.Code != llm.CodeUnavailable || !e.Retryable {
 		t.Errorf("503 on a model request: %+v, want unavailable and retryable", e)
 	}
 }

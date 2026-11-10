@@ -561,3 +561,15 @@ func TestSIWCAccountIDCollision(t *testing.T) {
 		}
 	}
 }
+
+// upstream.claude.model-level-cooling reaches imported Claude accounts as model_level_cooling.
+func TestImportClaudeModelLevelCooling(t *testing.T) {
+	dir := writeFiles(t, map[string]any{"claude-a.json": map[string]any{"type": "claude", "access_token": "fake-a"}})
+	opts := DefaultImportOptions
+	opts.ClaudeModelLevelCooling = true
+	files, _, err := ReadAuthDir(dir, opts, time.Now())
+	if err != nil || len(files) != 1 {
+		t.Fatalf("read %v, %v", files, err)
+	}
+	equalJSON(t, files[0].Record.Account.Settings, `{"model_level_cooling": true}`)
+}
