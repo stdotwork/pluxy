@@ -48,6 +48,9 @@ var loginMethods = []protocol.LoginMethod{
 	{Method: "api_key", Kind: protocol.LoginAPIKey, Label: "API key", Inputs: []protocol.LoginInput{
 		{Name: "api_key", Label: "Anthropic API key", Secret: true},
 	}},
+	{Method: "setup_token", Kind: protocol.LoginAPIKey, Label: "Setup token", Inputs: []protocol.LoginInput{
+		{Name: "setup_token", Label: "Token from claude setup-token", Secret: true},
+	}},
 }
 
 // login signs in with the method the call names.
@@ -61,6 +64,8 @@ func login(ctx context.Context, call sdk.LoginCall, s *sdk.LoginSession) (*proto
 		return subscriptionLogin(ctx, set, s)
 	case "api_key":
 		return apiKeyLogin(ctx, set, call.Input["api_key"])
+	case "setup_token":
+		return setupTokenLogin(call.Input["setup_token"])
 	}
 	return nil, &llm.Error{Code: llm.CodeUnsupported, Message: fmt.Sprintf("unknown login method %q", call.Method), Scope: llm.ScopeRequest}
 }
@@ -139,12 +144,30 @@ func readCallback(pasted string) (code, state, failure string) {
 	return code, state, ""
 }
 
+// setupTokenLogin keeps the long-lived OAuth token `claude setup-token` prints, as an api_key
+// credential: it is static and has no refresh token, so core never renews it, and every
+// request sends it as an OAuth token (see authorize). It is stored unchecked: no call is known
+// that checks such a token without spending from the subscription.
+func setupTokenLogin(token string) (*protocol.Grant, error) {
+	token = strings.TrimSpace(token)
+	switch {
+	case token == "":
+		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "enter the token claude setup-token printed", Scope: llm.ScopeRequest}
+	case !isOAuthToken(token):
+		return nil, refused("this is not a setup token (a setup token contains sk-ant-oat); add an API key with the api_key method")
+	}
+	return &protocol.Grant{Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: token}}, nil
+}
+
 // apiKeyLogin checks a key by listing models, which costs nothing, and keeps it when Anthropic
-// accepts it.
+// accepts it. A setup token entered as a key is kept as setup_token keeps it.
 func apiKeyLogin(ctx context.Context, set settings, key string) (*protocol.Grant, error) {
 	key = strings.TrimSpace(key)
 	if key == "" {
 		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "enter an API key", Scope: llm.ScopeRequest}
+	}
+	if isOAuthToken(key) {
+		return setupTokenLogin(key)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, set.BaseURL+"/v1/models?limit=1", nil)
 	if err != nil {

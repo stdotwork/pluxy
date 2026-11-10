@@ -107,6 +107,12 @@ func prepareLogin(t *testing.T, s conformance.LoginScenario, method string) conf
 				key = srv.IssueKey()
 			}
 			return conformance.LoginSetup{Account: account, Input: map[string]string{"api_key": key}}
+		case "setup_token":
+			token := "sk-ant-api-not-a-setup-token"
+			if approve {
+				token = srv.SetupToken()
+			}
+			return conformance.LoginSetup{Account: account, Input: map[string]string{"setup_token": token}}
 		}
 	case conformance.LoginAbandoned:
 		if method == "subscription" {

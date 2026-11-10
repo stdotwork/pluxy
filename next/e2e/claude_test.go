@@ -186,6 +186,57 @@ func TestClaudeSubscription(t *testing.T) {
 	}
 }
 
+// A setup token added by the setup_token login serves a Claude Code request as an OAuth token: a
+// bearer token with the OAuth beta after the client's betas, the body and the client's headers
+// unchanged.
+func TestClaudeSetupToken(t *testing.T) {
+	srv := claudetest.New(t)
+	base := startClaudeCore(t)
+	token := srv.SetupToken()
+	var l struct {
+		Login struct {
+			ID    string                          `json:"id"`
+			State string                          `json:"state"`
+			Error *struct{ Code, Message string } `json:"error"`
+		} `json:"login"`
+	}
+	if code := manage(t, base, "POST", "/accounts", map[string]any{
+		"id": "setup", "method": "setup_token", "settings": srv.Settings(""), "input": map[string]string{"setup_token": token},
+	}, &l); code != http.StatusAccepted {
+		t.Fatalf("starting the login: status %d, %+v", code, l.Login)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for l.Login.State == "pending" {
+		if time.Now().After(deadline) {
+			t.Fatal("the login did not finish")
+		}
+		time.Sleep(50 * time.Millisecond)
+		manage(t, base, "GET", "/logins/"+l.Login.ID, nil, &l)
+	}
+	if l.Login.State != "done" {
+		t.Fatalf("login ended %s: %+v", l.Login.State, l.Login.Error)
+	}
+
+	if code, body := postClaudeCode(t, base); code != http.StatusOK {
+		t.Fatalf("Claude Code request: status %d: %s", code, body)
+	}
+	got := srv.Requests()[0]
+	if !bytes.Equal(got.Body, []byte(claudeCodeBody)) {
+		t.Errorf("upstream body changed:\n got %s\nwant %s", got.Body, claudeCodeBody)
+	}
+	for h, want := range map[string]string{
+		"Authorization":  "Bearer " + token,
+		"X-Api-Key":      "",
+		"Anthropic-Beta": "claude-code-20250219,interleaved-thinking-2025-05-14,oauth-2025-04-20",
+		"User-Agent":     "claude-cli/2.1.0 (external, cli)",
+		"X-App":          "cli",
+	} {
+		if v := got.Header.Get(h); v != want {
+			t.Errorf("upstream %s = %q, want %q", h, v, want)
+		}
+	}
+}
+
 // An API key account sends the key in x-api-key, never as a bearer token, and adds no OAuth beta.
 func TestClaudeAPIKey(t *testing.T) {
 	srv := claudetest.New(t)
