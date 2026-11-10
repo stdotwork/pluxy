@@ -62,6 +62,9 @@ type Provider struct {
 	// Proto, when set, decodes the provider's protobuf requests over Connect into JSON for
 	// comparison (see connect.go).
 	Proto *ProtoSchema
+	// TestLoginHosts starts the new core with PLUXY_TEST_LOGIN_HOSTS=1 in every case, for a
+	// provider whose accounts name a login or token endpoint on the fake upstream.
+	TestLoginHosts bool
 }
 
 // Providers maps a provider directory name to its setup. Later slices add theirs here.
@@ -565,8 +568,9 @@ var Providers = map[string]Provider{
 	// (the project is in its settings). The upstream's first reply in each case
 	// is therefore the token endpoint's. The key is an RSA key made for the run.
 	"vertex": {
-		Intercept: true,
-		OldCore:   func(string, []string, []string) map[string]any { return map[string]any{} },
+		Intercept:      true,
+		TestLoginHosts: true, // the key's token_uri is the fake upstream's
+		OldCore:        func(string, []string, []string) map[string]any { return map[string]any{} },
 		OldCoreAuthFiles: func(proxyURL, _ string, models, keys []string) map[string]any {
 			files := map[string]any{}
 			for i := range keys {
@@ -1041,7 +1045,7 @@ func StartNewCore(binDir, workDir, provider, upstreamURL string, models, keys []
 	cmd := exec.Command(filepath.Join(binDir, "pluxy"), "-config", path)
 	cmd.Dir = workDir
 	cmd.Env = isolatedEnv(workDir)
-	if managementKey != "" {
+	if managementKey != "" || p.TestLoginHosts {
 		cmd.Env = append(cmd.Env, "PLUXY_TEST_LOGIN_HOSTS=1")
 	}
 	return startProcess(cmd, regexp.MustCompile(`pluxy: listening on (http://\S+)`), "")

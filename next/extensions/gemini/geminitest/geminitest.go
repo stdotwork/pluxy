@@ -30,6 +30,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stdotwork/pluxy/next/protocol"
 )
 
 // Request is a GenerateContent request the server received with a valid credential.
@@ -70,6 +72,8 @@ type Server struct {
 
 // New starts a fake that is closed when the test ends.
 func New(t testing.TB) *Server {
+	// The fake's token endpoint is not Google's, which the extension takes only under a test.
+	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	s := &Server{keys: map[string]bool{}, tokens: map[string]bool{}, accounts: map[string]*rsa.PublicKey{}}
 	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
 	t.Cleanup(s.Close)
