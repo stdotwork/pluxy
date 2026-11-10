@@ -30,12 +30,12 @@ import (
 // sends its requests there, authorised one of two ways (Google's Vertex AI authentication guide):
 //
 //   - a service account: credential {"kind": "service_account", "data": {"client_email": ...,
-//     "private_key": ...}}, the secret part of the JSON key Google Cloud's console downloads
-//     (with token_uri when the key names another token endpoint). The whole key is accepted
-//     too, but core redacts every string of a credential from replies, so its project ID and
-//     other plain fields would be cut out of them. The extension signs a JWT with the key
-//     and trades it at the key's token_uri for an access token (OAuth 2.0 JWT bearer grant, RFC
-//     7523), which it keeps until five minutes before it expires. Requests go to
+//     "private_key": ...}}, the secret part of the JSON key Google Cloud's console downloads.
+//     The whole key is accepted too, but core redacts every string of a credential from
+//     replies, so its project ID and other plain fields would be cut out of them. The extension
+//     signs a JWT with the key and trades it at Google's token endpoint for an access token
+//     (OAuth 2.0 JWT bearer grant, RFC 7523), which it keeps until five minutes before it
+//     expires. A key whose token_uri names any other endpoint is refused. Requests go to
 //     {host}/v1/projects/{project}/locations/{location}/publishers/google/models/{model}:{method};
 //   - an API key (Vertex AI express mode): credential {"kind": "api_key"}, sent in x-goog-api-key
 //     to {host}/v1/publishers/google/models/{model}:{method}.
@@ -60,6 +60,13 @@ const cloudPlatformScope = "https://www.googleapis.com/auth/cloud-platform"
 
 // defaultTokenURI is Google's token endpoint, for a key that names none.
 const defaultTokenURI = "https://oauth2.googleapis.com/token"
+
+// googleTokenURIs are the token endpoints the keys Google Cloud makes name: today's, and the
+// one older keys name.
+var googleTokenURIs = map[string]bool{
+	defaultTokenURI: true,
+	"https://accounts.google.com/o/oauth2/token": true,
+}
 
 type vertexSettings struct {
 	Project  string `json:"project"`
@@ -168,9 +175,17 @@ func readServiceAccount(raw json.RawMessage) (*serviceAccount, error) {
 	if sa.TokenURI == "" {
 		sa.TokenURI = defaultTokenURI
 	}
-	if u, err := url.Parse(sa.TokenURI); err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && loopback(u.Hostname()))) {
-		// The signed assertion goes to token_uri, so it must not cross a network in the clear.
-		return nil, bad("has a token_uri that is not an https URL (plain http only to this machine)")
+	if !googleTokenURIs[sa.TokenURI] {
+		// The extension posts to token_uri and sends the token it gets back to Vertex, so a key
+		// file must not choose where that goes. Keys Google makes name its own endpoint; only a
+		// test (core started with PLUXY_TEST_LOGIN_HOSTS=1) may name a fake one.
+		if sdk.TestLoginHost(sa.TokenURI) == "" {
+			return nil, bad("has a token_uri that is not Google's token endpoint (" + defaultTokenURI + ")")
+		}
+		if u, err := url.Parse(sa.TokenURI); err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && loopback(u.Hostname()))) {
+			// The signed assertion goes to token_uri, so it must not cross a network in the clear.
+			return nil, bad("has a token_uri that is not an https URL (plain http only to this machine)")
+		}
 	}
 	// Keys pasted through forms often have their newlines escaped.
 	block, _ := pem.Decode([]byte(strings.ReplaceAll(sa.PrivateKey, `\n`, "\n")))

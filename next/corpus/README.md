@@ -99,7 +99,9 @@ A Vertex service account works the same way: today's core always calls
 `https://aiplatform.googleapis.com` and trades the account's signed JWT for a token at
 `https://oauth2.googleapis.com/token`, so both hosts go through the proxy, and each `vertex`
 case's first upstream reply is the token endpoint's. The new core's account points `base_url`
-and the key's `token_uri` at the fake upstream. The key is an RSA key made for the run; the JWT
+and the key's `token_uri` at the fake upstream, and the new core runs with
+`PLUXY_TEST_LOGIN_HOSTS=1`, without which the Gemini extension takes only Google's token
+endpoint. The key is an RSA key made for the run; the JWT
 body is volatile. These cases use `gemini-2.5-pro`, a model in today's catalog.
 
 ## Case files

@@ -145,6 +145,32 @@ func TestTokenCacheDropsUnusable(t *testing.T) {
 	}
 }
 
+// A key file names where its signed assertion goes, so only Google's token endpoints are taken;
+// a fake one only under a test.
+func TestTokenURIOnlyGoogle(t *testing.T) {
+	srv := geminitest.New(t)
+	t.Setenv(protocol.EnvTestLoginHosts, "")
+	for uri, ok := range map[string]bool{
+		"": true, "https://oauth2.googleapis.com/token": true, "https://accounts.google.com/o/oauth2/token": true,
+		"https://oauth2.example.test/token": false, "http://127.0.0.1:9/token": false, "https://oauth2.googleapis.com/token/": false,
+		"https://oauth2.googleapis.com.example.test/token": false, "http://oauth2.googleapis.com/token": false,
+	} {
+		var raw map[string]any
+		_ = json.Unmarshal(srv.ServiceAccount("p", true), &raw)
+		raw["token_uri"] = uri
+		b, _ := json.Marshal(raw)
+		sa, err := readServiceAccount(b)
+		if (err == nil) != ok {
+			t.Errorf("token_uri %q: err = %v, want accepted %v", uri, err, ok)
+		}
+		if uri == "" && err == nil && sa.TokenURI != defaultTokenURI {
+			t.Errorf("no token_uri: TokenURI = %q, want %q", sa.TokenURI, defaultTokenURI)
+		}
+	}
+}
+
+// Under a test, a fake token endpoint is taken, but the assertion still never crosses a network
+// in the clear.
 func TestTokenURIPlainHTTPOnlyLocal(t *testing.T) {
 	srv := geminitest.New(t)
 	for uri, ok := range map[string]bool{

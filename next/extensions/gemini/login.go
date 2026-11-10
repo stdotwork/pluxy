@@ -87,8 +87,8 @@ func apiKeyLogin(ctx context.Context, set settings, key string) (*protocol.Grant
 }
 
 // serviceAccountLogin checks a service account key by fetching an access token with it. The
-// credential keeps only what is secret or names the key (client_email, private_key and a
-// token_uri other than Google's): core redacts every string of a credential from what reaches
+// credential keeps only what is secret or names the key (client_email and private_key, and a
+// token_uri other than the default: an older key's, or a test's fake): core redacts every string of a credential from what reaches
 // clients, so the key's other fields, such as its project ID, would be cut out of replies. The
 // project goes in the account's settings (vertex.project) instead.
 func serviceAccountLogin(ctx context.Context, set settings, key string) (*protocol.Grant, error) {

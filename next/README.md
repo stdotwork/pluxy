@@ -437,8 +437,11 @@ API key:
 ```
 
 The service account's credential holds the secret part of the JSON key Google Cloud gives you
-(`client_email`, `private_key`, and `token_uri` if the key names another token endpoint; it must
-be https, or plain http only to this machine, since the signed assertion goes there). The
+(`client_email` and `private_key`). The key's `token_uri` must name Google's token endpoint,
+`https://oauth2.googleapis.com/token` (or `https://accounts.google.com/o/oauth2/token`, which
+older keys name), as every key Google Cloud makes does; a key naming any other
+endpoint is refused, since the extension sends that endpoint a signed assertion and sends Vertex
+the token it gets back. Today's core uses whatever endpoint the key names. The
 whole key file works too, but core removes every string of a credential from replies, so its
 project ID and other plain fields would be cut out of model output; keep them in settings. The
 extension signs a JWT with the key, trades it for an access token at Google's token endpoint and
