@@ -78,6 +78,12 @@ func compact(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if k, ok := sh.m["prompt_cache_key"]; ok {
 		m["prompt_cache_key"] = k
 	}
+	// The endpoint rejects the same tool schema forms as /responses; today's core rewrites them
+	// in compaction requests too.
+	var tools []json.RawMessage
+	if json.Unmarshal(m["tools"], &tools) == nil && fixToolSchemas(tools) {
+		m["tools"] = raw(tools)
+	}
 	body, err := json.Marshal(m)
 	if err != nil {
 		return err

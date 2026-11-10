@@ -2,11 +2,15 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/stdotwork/pluxy/next/conformance"
+	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/llm"
+	"github.com/stdotwork/pluxy/next/protocol"
 )
 
 func TestRejectedPattern(t *testing.T) {
@@ -322,4 +326,30 @@ func TestBuildRequestFixesToolSchemas(t *testing.T) {
 			sameJSON(t, p, wantBad)
 		}
 	})
+}
+
+// A compaction request's tools go upstream with the same schema rewrites as on /responses, as
+// today's core sends them.
+func TestCompactFixesToolSchemas(t *testing.T) {
+	manifest := conformance.BuildExtension(t, "pluxy-extension.json", ".")
+	ext, err := host.Start(manifest, host.Options{Log: io.Discard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(ext.Stop)
+	u := newSearchUpstream(t)
+	acct := searchAccount(t, u, "/v1", &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-compact"}, nil)
+	body := `{"model":"m","input":"hi","tools":[{"type":"function","name":"f","parameters":{"type":"object","properties":{"s":{"type":"string","pattern":"^\\p{L}+$"}}}}]}`
+	s := ext.Endpoint(t.Context(), acct, llm.Request{Model: "m", Native: &llm.Native{Format: llm.FormatOpenAIResponsesCompact, Body: json.RawMessage(body)}})
+	for ev := s.Next(); !ev.Terminal(); ev = s.Next() {
+	}
+	s.Close()
+	reqs := u.requests()
+	if len(reqs) != 1 || reqs[0].path != "/v1/responses/compact" {
+		t.Fatalf("upstream requests = %+v", reqs)
+	}
+	got, _ := json.Marshal(reqs[0].body["tools"])
+	if want := `[{"name":"f","parameters":{"properties":{"s":{"type":"string"}},"type":"object"},"type":"function"}]`; string(got) != want {
+		t.Errorf("tools upstream = %s, want %s", got, want)
+	}
 }

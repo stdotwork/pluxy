@@ -1,0 +1,259 @@
+{
+  "description": "POST /v1/responses/compact on a Codex API key with tools whose schemas use forms the Codex endpoint rejects: the compaction body goes upstream with the same rewrites as on /responses (rejected patterns and out-of-range bounds removed, long const unions turned into an enum), as today's core sends it.",
+  "source": [
+    "core/internal/runtime/executor/codex_executor_execute.go",
+    "core/internal/runtime/executor/helps/codex_tool_schema.go"
+  ],
+  "client": {
+    "path": "/v1/responses/compact",
+    "headers": {"Session-Id":"sess-corpus"},
+    "body": {
+      "model": "gpt-test",
+      "input": [
+        {"type":"message","role":"user","content":[{"type":"input_text","text":"Say hello"}]}
+      ],
+      "tools": [
+        {
+          "type": "function",
+          "name": "mcp_search",
+          "description": "Search",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "name": {"type":"string","pattern":"^\\p{L}[\\p{L}\\p{N}_]*$"},
+              "raw": {"type":"string","pattern":"^[^\\0]*$"},
+              "slug": {"type":"string","pattern":"^[a-z0-9-]+$"},
+              "paths": {"type":"array","items":{"type":"string","pattern":"\\P{L}"}},
+              "limit": {"type":"integer","minimum":0,"maximum":18446744073709551615},
+              "offset": {
+                "type": "integer",
+                "minimum": -9223372036854775808,
+                "maximum": 9223372036854775807
+              },
+              "ratio": {"type":"number","exclusiveMinimum":-1e+30,"exclusiveMaximum":1.5},
+              "mode": {
+                "type": "string",
+                "description": "What to do.",
+                "oneOf": [
+                  {"const":"list","description":"Meaning of list"},
+                  {"const":"get","description":"Meaning of get"},
+                  {"const":"create","description":"Meaning of create"},
+                  {"const":"update","description":"Meaning of update"},
+                  {"const":"delete","description":"Meaning of delete"},
+                  {"const":"archive","description":"Meaning of archive"},
+                  {"const":"restore","description":"Meaning of restore"},
+                  {"const":"export","description":"Meaning of export"}
+                ]
+              },
+              "level": {
+                "anyOf": [
+                  {"const":1,"description":"Meaning of 1"},
+                  {"const":2,"description":"Meaning of 2"},
+                  {"const":3,"description":"Meaning of 3"},
+                  {"const":4,"description":"Meaning of 4"},
+                  {"const":5,"description":"Meaning of 5"},
+                  {"const":6,"description":"Meaning of 6"},
+                  {"const":7,"description":"Meaning of 7"},
+                  {"const":8,"description":"Meaning of 8"}
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": ["export","restore","archive","delete","update","create","get","list"],
+                "oneOf": [
+                  {"const":"list","description":"Meaning of list"},
+                  {"const":"get","description":"Meaning of get"},
+                  {"const":"create","description":"Meaning of create"},
+                  {"const":"update","description":"Meaning of update"},
+                  {"const":"delete","description":"Meaning of delete"},
+                  {"const":"archive","description":"Meaning of archive"},
+                  {"const":"restore","description":"Meaning of restore"},
+                  {"const":"export","description":"Meaning of export"}
+                ]
+              },
+              "few": {
+                "type": "string",
+                "oneOf": [
+                  {"const":"list","description":"Meaning of list"},
+                  {"const":"get","description":"Meaning of get"},
+                  {"const":"create","description":"Meaning of create"}
+                ]
+              },
+              "shape": {
+                "oneOf": [
+                  {"const":"a","type":"string"},
+                  {"const":"get","description":"Meaning of get"},
+                  {"const":"create","description":"Meaning of create"},
+                  {"const":"update","description":"Meaning of update"},
+                  {"const":"delete","description":"Meaning of delete"},
+                  {"const":"archive","description":"Meaning of archive"},
+                  {"const":"restore","description":"Meaning of restore"},
+                  {"const":"export","description":"Meaning of export"}
+                ]
+              },
+              "nested": {
+                "type": "object",
+                "properties": {"inner":{"type":"string","pattern":"\\p{N}"}}
+              }
+            },
+            "required": ["name"],
+            "patternProperties": {"^\\p{L}+$":{"type":"string"},"^x-":{"type":"string"}},
+            "additionalProperties": false
+          }
+        },
+        {
+          "type": "function",
+          "name": "plain",
+          "description": "Needs nothing",
+          "parameters": {
+            "type": "object",
+            "properties": {"q":{"type":"string","pattern":"^[a-z]+$","minimum":1}}
+          }
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "headers": {"Content-Type":"application/json"},
+      "body": {
+        "id": "resp_compact_corpus",
+        "object": "response.compaction",
+        "created_at": 1700000000,
+        "output": [
+          {"type":"compaction","id":"cmp_corpus","encrypted_content":"enc-compaction-corpus"}
+        ],
+        "usage": {
+          "input_tokens": 120,
+          "input_tokens_details": {"cached_tokens":0},
+          "output_tokens": 30,
+          "output_tokens_details": {"reasoning_tokens":0},
+          "total_tokens": 150
+        }
+      }
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[*].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "created_at": 1700000000,
+        "id": "resp_compact_corpus",
+        "object": "response.compaction",
+        "output": [
+          {"encrypted_content":"enc-compaction-corpus","id":"cmp_corpus","type":"compaction"}
+        ],
+        "usage": {
+          "input_tokens": 120,
+          "input_tokens_details": {"cached_tokens":0},
+          "output_tokens": 30,
+          "output_tokens_details": {"reasoning_tokens":0},
+          "total_tokens": 150
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "input": [
+            {"content":[{"text":"Say hello","type":"input_text"}],"role":"user","type":"message"}
+          ],
+          "instructions": "",
+          "model": "gpt-test",
+          "tools": [
+            {
+              "description": "Search",
+              "name": "mcp_search",
+              "parameters": {
+                "additionalProperties": false,
+                "patternProperties": {"^x-":{"type":"string"}},
+                "properties": {
+                  "few": {
+                    "oneOf": [
+                      {"const":"list","description":"Meaning of list"},
+                      {"const":"get","description":"Meaning of get"},
+                      {"const":"create","description":"Meaning of create"}
+                    ],
+                    "type": "string"
+                  },
+                  "kind": {
+                    "enum": ["export","restore","archive","delete","update","create","get","list"],
+                    "type": "string"
+                  },
+                  "level": {"enum":[1,2,3,4,5,6,7,8]},
+                  "limit": {"minimum":0,"type":"integer"},
+                  "mode": {
+                    "description": "What to do.",
+                    "enum": ["list","get","create","update","delete","archive","restore","export"],
+                    "type": "string"
+                  },
+                  "name": {"type":"string"},
+                  "nested": {"properties":{"inner":{"type":"string"}},"type":"object"},
+                  "offset": {
+                    "maximum": 9223372036854775807,
+                    "minimum": -9223372036854775808,
+                    "type": "integer"
+                  },
+                  "paths": {"items":{"type":"string"},"type":"array"},
+                  "ratio": {"exclusiveMaximum":1.5,"type":"number"},
+                  "raw": {"type":"string"},
+                  "shape": {
+                    "oneOf": [
+                      {"const":"a","type":"string"},
+                      {"const":"get","description":"Meaning of get"},
+                      {"const":"create","description":"Meaning of create"},
+                      {"const":"update","description":"Meaning of update"},
+                      {"const":"delete","description":"Meaning of delete"},
+                      {"const":"archive","description":"Meaning of archive"},
+                      {"const":"restore","description":"Meaning of restore"},
+                      {"const":"export","description":"Meaning of export"}
+                    ]
+                  },
+                  "slug": {"pattern":"^[a-z0-9-]+$","type":"string"}
+                },
+                "required": ["name"],
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "description": "Needs nothing",
+              "name": "plain",
+              "parameters": {
+                "properties": {"q":{"minimum":1,"pattern":"^[a-z]+$","type":"string"}},
+                "type": "object"
+              },
+              "type": "function"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "application/json",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "Originator": "codex-tui",
+          "Session-Id": "sess-corpus",
+          "User-Agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
+        },
+        "method": "POST",
+        "path": "/v1/responses/compact"
+      }
+    ]
+  }
+}
