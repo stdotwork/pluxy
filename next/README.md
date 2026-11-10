@@ -110,10 +110,10 @@ Gemini clients call `POST /v1beta/models/{model}:generateContent` or `:streamGen
 
 Token counts (Anthropic's `POST /v1/messages/count_tokens` and Gemini's `:countTokens`) come from
 the upstream's own count endpoint: Anthropic's for a Claude account on Anthropic's own API (base URL
-`https://api.anthropic.com`, the default) or an OpenAI-compatible account with `"wire_api": "messages"`, Gemini's for a Gemini account (Gemini API or Vertex AI) or one with
+`https://api.anthropic.com`, the default) or an OpenAI-compatible account with `"wire_api": "messages"`, Kimi's Messages count endpoint for a Kimi account, Gemini's for a Gemini account (Gemini API or Vertex AI) or one with
 `"wire_api": "gemini"`. A count from an upstream of the client's own kind comes back as the upstream sent it;
 otherwise core answers with the count in the client's shape. An account whose upstream has no count
-endpoint (Codex, xAI, Kimi, Meta, Devin, Antigravity, and Chat or Responses accounts), and a Claude
+endpoint (Codex, xAI, Meta, Devin, Antigravity, and Chat or Responses accounts), and a Claude
 account whose `base_url` is not Anthropic's own (today's core draws the same line), cannot count:
 core tries the model's next account, and when the count gets no answer and one of the accounts
 tried could not count, it answers with its own estimate in the client's shape, as today's core
@@ -613,6 +613,14 @@ restarts it. Unlike today's core, which keeps only a conversation's latest reply
 stays until it expires, so Claude Code's subagents, which share their conversation's session ID,
 do not replace each other's turns. Chat clients are not covered, as in today's core: a Chat tool
 call gets Kimi's `reasoning_content` from the request itself (above).
+
+**Token counts.** A count (`POST /v1/messages/count_tokens`, or Gemini's `countTokens`) goes to
+Kimi's own count endpoint, `{base_url}/v1/messages/count_tokens?beta=true`, as today's core sends
+it, for every account. A Messages client's body goes as for generating (Kimi's model name, no
+billing block), with its Messages headers; any other client's request is rebuilt as Messages with
+the fields a count takes. The client's `anthropic-beta` gets `token-counting-2024-11-01` added.
+Kimi's count comes back as it is; an error from Kimi reaches the client, with no estimate in its
+place.
 
 **Quota.** For a device login, quota reads `GET {base_url}/v1/usages` and the plan from `GET {base_url}/v1/me` (`user_level_name`) on the account's Kimi Code host, with the access token and the same device headers (`X-Msh-*`, `User-Agent`) the account's requests carry. It reports each entry of `limits` (labelled by its name, else by its window length, else "Limit #n"), the usage summary ("Weekly limit") and the monthly ratios ("Monthly limit", "Monthly coding limit"). An API key answers unsupported. Kimi's device login returns no user ID, so its grant has no identity and a re-login is not checked, as in today's core.
 
