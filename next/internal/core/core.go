@@ -35,6 +35,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/internal/buildinfo"
 	"github.com/stdotwork/pluxy/next/internal/configdoc"
 	"github.com/stdotwork/pluxy/next/internal/cred"
 	"github.com/stdotwork/pluxy/next/internal/extconfig"
@@ -781,12 +782,18 @@ type Status struct {
 	Desired    Revision          `json:"desired"`
 	Active     Revision          `json:"active"`
 	Extensions []ExtensionStatus `json:"extensions"`
+	// Version, Commit and Built say which build of core runs (see buildinfo).
+	Version string `json:"version"`
+	Commit  string `json:"commit"`
+	Built   string `json:"built"`
 }
 
 // Status returns core's live state.
 func (c *Core) Status() Status {
+	version, commit, built := buildinfo.Get()
 	c.mu.Lock() // publish switches the snapshot and the revisions under it
-	s := Status{SafeMode: c.opts.SafeMode, Desired: c.desired, Active: c.active, Extensions: []ExtensionStatus{}}
+	s := Status{SafeMode: c.opts.SafeMode, Desired: c.desired, Active: c.active, Extensions: []ExtensionStatus{},
+		Version: version, Commit: commit, Built: built}
 	draining := append([]*host.Managed(nil), c.draining...)
 	cur := c.cur.Load()
 	c.mu.Unlock()
