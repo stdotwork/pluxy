@@ -41,3 +41,12 @@ func TestTooManyRequestsBlocksTheModel(t *testing.T) {
 		}
 	}
 }
+
+// A 429 on a call for no model (the model list) is the account's.
+func TestTooManyRequestsWithoutModelIsTheAccounts(t *testing.T) {
+	resp := &http.Response{StatusCode: http.StatusTooManyRequests, Status: "429 Too Many Requests",
+		Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"Rate limit reached"}}`))}
+	if e := upstreamError(resp, ""); e.Code != llm.CodeRateLimit || e.Scope != llm.ScopeCredential {
+		t.Errorf("code %q scope %q, want a rate limit on the credential", e.Code, e.Scope)
+	}
+}

@@ -55,6 +55,11 @@ func TestUpstreamErrors(t *testing.T) {
 	if e := upstreamError(resp, "m"); e.Code != llm.CodeQuota || e.Scope != llm.ScopeModel || !e.Retryable || e.RetryAfterMS != 3_600_000 {
 		t.Errorf("429 QUOTA_EXHAUSTED = %+v, want a retryable quota error on the model with the retry delay", e)
 	}
+	// The same 429 on a call for no model (login or the model list) is the account's.
+	resp = post(t, srv.URL+"/v1beta/models/m:generateContent", key)
+	if e := upstreamError(resp, ""); e.Code != llm.CodeQuota || e.Scope != llm.ScopeCredential {
+		t.Errorf("429 for no model = %+v, want it on the credential", e)
+	}
 	resp = post(t, srv.URL+"/v1beta/models/m:generateContent", "not-a-key")
 	if e := upstreamError(resp, "m"); e.Code != llm.CodeAuth || !e.Retryable || e.Scope != llm.ScopeCredential || e.Status != http.StatusBadRequest {
 		t.Errorf("400 API_KEY_INVALID = %+v, want a retryable auth error with Google's status", e)
