@@ -28,13 +28,17 @@ const (
 
 // quota reads a subscription's usage windows and extra usage, and its plan (protocol minor
 // version 4). An API key has no plan to report. The plan is a nicety: when the profile cannot be
-// read, the usage is still reported.
+// read, the usage is still reported. A setup token belongs to a subscription, so its usage is
+// read, but not its profile: such a token is made for inference and lacks the profile scope
+// (today's core skips its profile lookup too).
 func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
 		return nil, err
 	}
-	if c := call.Account.Credential; c != nil && c.Kind == protocol.CredentialAPIKey {
+	c := call.Account.Credential
+	setupToken := c != nil && c.Kind == protocol.CredentialAPIKey && isOAuthToken(c.APIKey)
+	if c != nil && c.Kind == protocol.CredentialAPIKey && !setupToken {
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: "an API key has no subscription plan to report", Scope: llm.ScopeCredential}
 	}
 	usage, err := getJSON(ctx, call.Account.Credential, s.BaseURL+usagePath)
@@ -47,7 +51,7 @@ func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	}
 	q := &protocol.Quota{Limits: usageLimits(u)}
 	raw := map[string]json.RawMessage{"usage": usage}
-	if ctx.Err() == nil {
+	if ctx.Err() == nil && !setupToken {
 		if profile, err := getJSON(ctx, call.Account.Credential, s.BaseURL+profilePath); err == nil {
 			raw["profile"] = profile
 			q.Plan = planOf(profile)

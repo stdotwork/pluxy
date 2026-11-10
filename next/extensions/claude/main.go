@@ -11,7 +11,9 @@
 //
 // Credentials: an api_key credential is sent in x-api-key, as Anthropic's API defines; an oauth
 // credential (a subscription login) is sent as a bearer token, with the OAuth beta added to
-// anthropic-beta. A Messages request is sent unchanged, with the client's own Messages headers
+// anthropic-beta. A setup token (the long-lived OAuth token `claude setup-token` prints) is kept
+// as an api_key credential, since it is static and cannot be renewed, and is sent as a bearer
+// token with the OAuth beta: any key containing sk-ant-oat is, as in today's core. A Messages request is sent unchanged, with the client's own Messages headers
 // (API version, betas and its identification headers such as User-Agent and X-App), so thinking
 // blocks, their signatures and cache_control markers reach Anthropic as the client wrote them.
 // Requests in other formats (Chat Completions, Responses, Gemini) are translated to Messages,
@@ -24,8 +26,8 @@
 //
 // An account check (core's check call) of an api_key account reads Anthropic's model list,
 // GET {base_url}/v1/models with x-api-key and anthropic-version, which costs the account nothing.
-// A subscription login (oauth) has no such call here, so it is left not checked, without a
-// request.
+// A subscription login (oauth) and a setup token have no such call here, so they are left not
+// checked, without a request.
 //
 // The extension never changes how a client presents itself: a client that is not Claude Code is
 // not made to look like Claude Code.
@@ -150,15 +152,32 @@ func sameOrigin(req *http.Request, via []*http.Request) error {
 func authorize(h http.Header, cred *protocol.Credential) error {
 	switch {
 	case cred == nil:
+	case cred.Kind == protocol.CredentialAPIKey && isOAuthToken(cred.APIKey):
+		// A setup token, kept as a key: it is an OAuth token, so it goes as one.
+		bearer(h, cred.APIKey)
+		return nil
 	case cred.Kind == protocol.CredentialAPIKey && cred.APIKey != "":
 		h.Set("X-Api-Key", cred.APIKey)
 		return nil
 	case cred.Kind == protocol.CredentialOAuth && cred.AccessToken != "":
-		h.Set("Authorization", "Bearer "+cred.AccessToken)
-		h.Set("Anthropic-Beta", withBeta(h.Get("Anthropic-Beta"), oauthBeta))
+		bearer(h, cred.AccessToken)
 		return nil
 	}
 	return &llm.Error{Code: llm.CodeAuth, Message: "the account has no usable credential; add an API key or log in again", Scope: llm.ScopeCredential}
+}
+
+// bearer sets an OAuth access token on an upstream request: a bearer token, with the OAuth beta
+// Anthropic requires added to anthropic-beta.
+func bearer(h http.Header, token string) {
+	h.Set("Authorization", "Bearer "+token)
+	h.Set("Anthropic-Beta", withBeta(h.Get("Anthropic-Beta"), oauthBeta))
+}
+
+// isOAuthToken reports whether a key is a Claude OAuth access token rather than an API key. The
+// long-lived token `claude setup-token` prints is one; Anthropic's access tokens contain
+// sk-ant-oat (API keys sk-ant-api), which is the test today's core uses.
+func isOAuthToken(key string) bool {
+	return strings.Contains(key, "sk-ant-oat")
 }
 
 // withBeta adds beta to a comma-separated anthropic-beta value unless it is already there.
@@ -265,6 +284,9 @@ func check(ctx context.Context, call sdk.CheckCall) (*protocol.CheckResult, erro
 	cred := call.Account.Credential
 	if cred != nil && cred.Kind != protocol.CredentialAPIKey {
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: "only an API key can be checked without a generation; a login is not checked", Scope: llm.ScopeCredential}
+	}
+	if cred != nil && isOAuthToken(cred.APIKey) {
+		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: "a setup token cannot be checked without a generation; it is not checked", Scope: llm.ScopeCredential}
 	}
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {

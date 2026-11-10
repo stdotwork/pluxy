@@ -125,6 +125,17 @@ func (s *Server) IssueKey() string {
 	return k
 }
 
+// SetupToken returns a new long-lived OAuth token, as `claude setup-token` prints one: an access
+// token in the sk-ant-oat form with no refresh token.
+func (s *Server) SetupToken() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.n++
+	t := fmt.Sprintf("sk-ant-oat01-claudetest-%d", s.n)
+	s.access[t] = true
+	return t
+}
+
 // Grant returns a new access and refresh token pair, as a finished login would.
 func (s *Server) Grant() (access, refresh string) {
 	s.mu.Lock()

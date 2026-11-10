@@ -400,7 +400,13 @@ A subscription account is added by login through the management API (below), wit
 `subscription`: the reply's prompt carries a sign-in URL; after signing in, send the address the
 browser was sent to (or the code Claude's page shows) as `{"input": {"redirect_url": "..."}}` to
 `POST /logins/{id}/input`. Method `api_key` adds an account from a key, after checking it with
-Anthropic. Core renews a subscription's token an hour before it expires.
+Anthropic. Method `setup_token` adds an account from the long-lived token `claude setup-token`
+prints, sent as `{"input": {"setup_token": "sk-ant-oat01-..."}}`: the token is stored as an
+`api_key` credential, unchecked, because no call is known that checks it without spending from the
+subscription, and it is never renewed (it has no refresh token). Any key that contains
+`sk-ant-oat` is such an OAuth token, however it was added (this login, `api_key`, the config or a
+`claude-api-key` entry in a `config.yaml`), and is sent as one, as today's core does. Core renews a
+subscription's token an hour before it expires.
 
 | Setting | Meaning |
 | --- | --- |
@@ -410,8 +416,8 @@ Anthropic. Core renews a subscription's token an hour before it expires.
 A Messages request goes to Anthropic unchanged: its body, so thinking blocks, signatures and
 `cache_control` markers arrive as the client wrote them, and its `anthropic-version`,
 `anthropic-beta` and identification headers (`User-Agent`, `X-App`, the `X-Stainless-*` headers of
-Anthropic's SDKs). An API key goes in `x-api-key`; a subscription's token goes as a bearer token,
-with the `oauth-2025-04-20` beta added. Chat Completions, Responses and Gemini requests are
+Anthropic's SDKs). An API key goes in `x-api-key`; a subscription's token or a setup token goes as
+a bearer token, with the `oauth-2025-04-20` beta added after the client's betas. Chat Completions, Responses and Gemini requests are
 translated to Messages; their reasoning effort becomes adaptive thinking with that effort on
 Claude 4.6 and later, and a thinking budget from Claude 3.7 to 4.5 (low 1024, medium 8192, high
 24576 tokens); a model name the extension does not know as a Claude model gets no thinking
@@ -421,7 +427,10 @@ not Claude Code is not made to look like Claude Code.
 A 429 from a subscription whose usage window is used up blocks the account until the window
 resets; a 529 (overloaded) moves the request to another account.
 
-**Quota.** For a subscription account, quota reads `GET {base_url}/api/oauth/usage` and `GET {base_url}/api/oauth/profile` (default base `https://api.anthropic.com`) with the access token, the OAuth beta in `anthropic-beta` and `anthropic-version`. Like the account's requests, it presents no client identity of its own. It reports the 5-hour window (`five_hour`), the weekly windows (`seven_day`, `seven_day_oauth_apps`, `seven_day_opus`, `seven_day_sonnet`, `seven_day_cowork`, the Fable window), any window counted in dollars, and extra usage (`extra_usage`), with the share used and reset time; the plan (Free, Pro, Max, Max 5x, Max 20x or Team) comes from the profile, and usage is still reported when the profile cannot be read. An API key answers unsupported. A subscription login's grant carries `identity` `{"email", "account_id", "organization_id"}` from the token reply, the fields today's core compares on a re-login.
+**Quota.** For a subscription account, quota reads `GET {base_url}/api/oauth/usage` and `GET {base_url}/api/oauth/profile` (default base `https://api.anthropic.com`) with the access token, the OAuth beta in `anthropic-beta` and `anthropic-version`. Like the account's requests, it presents no client identity of its own. It reports the 5-hour window (`five_hour`), the weekly windows (`seven_day`, `seven_day_oauth_apps`, `seven_day_opus`, `seven_day_sonnet`, `seven_day_cowork`, the Fable window), any window counted in dollars, and extra usage (`extra_usage`), with the share used and reset time; the plan (Free, Pro, Max, Max 5x, Max 20x or Team) comes from the profile, and usage is still reported when the profile cannot be read. A setup token's quota reads only the
+usage, not the profile: such a token is made for inference and lacks the profile scope (today's core
+skips its profile lookup too), so no plan is reported. An API key answers unsupported. An account
+check (`check`) reads the model list for an API key; a subscription or a setup token is not checked. A subscription login's grant carries `identity` `{"email", "account_id", "organization_id"}` from the token reply, the fields today's core compares on a re-login.
 
 ## Gemini
 
