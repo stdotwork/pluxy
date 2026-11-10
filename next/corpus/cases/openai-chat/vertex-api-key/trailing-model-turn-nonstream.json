@@ -1,0 +1,149 @@
+{
+  "description": "A Chat request whose history ends with an assistant turn, not streamed, to Vertex AI with an express mode key.",
+  "source": [
+    "core/internal/runtime/executor/helps/gemini_content_turns.go",
+    "core/internal/runtime/executor/helps/gemini_content_turns_test.go",
+    "core/internal/runtime/executor/gemini_vertex_executor.go:623-626,985-988"
+  ],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {
+      "model": "gemini-corpus",
+      "messages": [
+        {"role":"user","content":"Say hello"},
+        {"role":"assistant","content":"Sure, I will"}
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "candidates": [
+          {
+            "content": {
+              "role": "model",
+              "parts": [{"text":"thinking...","thought":true},{"text":"Hello world"}]
+            },
+            "finishReason": "STOP",
+            "index": 0
+          }
+        ],
+        "usageMetadata": {
+          "promptTokenCount": 40,
+          "cachedContentTokenCount": 8,
+          "candidatesTokenCount": 12,
+          "thoughtsTokenCount": 20,
+          "totalTokenCount": 72
+        },
+        "modelVersion": "gemini-corpus-upstream",
+        "responseId": "resp-corpus"
+      }
+    }
+  ],
+  "volatile": ["client.body.created","client.events[*].data.created"],
+  "exceptions": [
+    {
+      "path": "client.body",
+      "kind": "intended",
+      "reason": "The new core writes a Chat completion from a Gemini reply with only the fields that are set (today's core adds tool_calls null and a non-standard native_finish_reason).",
+      "want": {
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "Hello world",
+              "reasoning_content": "thinking...",
+              "role": "assistant"
+            }
+          }
+        ],
+        "created": "(volatile)",
+        "id": "resp-corpus",
+        "model": "gemini-corpus-upstream",
+        "object": "chat.completion",
+        "usage": {
+          "completion_tokens": 32,
+          "completion_tokens_details": {"reasoning_tokens":20},
+          "prompt_tokens": 40,
+          "prompt_tokens_details": {"cached_tokens":8},
+          "total_tokens": 72
+        }
+      }
+    },
+    {
+      "path": "upstream[0].body.contents[1]",
+      "kind": "gap",
+      "reason": "Today's translator drops a trailing assistant message from a Chat or Responses request (an assistant prefill) before the turn fixes run, so the request ends with the user's turn. The new core keeps the assistant message, and the trailing-turn fix then adds the empty user turn after it, as it does for a Messages or Gemini client.",
+      "want": {"parts":[{"text":"Sure, I will"}],"role":"model"}
+    },
+    {
+      "path": "upstream[0].body.contents[2]",
+      "kind": "gap",
+      "reason": "Today's translator drops a trailing assistant message from a Chat or Responses request (an assistant prefill) before the turn fixes run, so the request ends with the user's turn. The new core keeps the assistant message, and the trailing-turn fix then adds the empty user turn after it, as it does for a Messages or Gemini client.",
+      "want": {"parts":[{"text":""}],"role":"user"}
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "Hello world",
+              "reasoning_content": "thinking...",
+              "role": "assistant",
+              "tool_calls": null
+            },
+            "native_finish_reason": "stop"
+          }
+        ],
+        "created": "(volatile)",
+        "id": "resp-corpus",
+        "model": "gemini-corpus-upstream",
+        "object": "chat.completion",
+        "usage": {
+          "completion_tokens": 32,
+          "completion_tokens_details": {"reasoning_tokens":20},
+          "prompt_tokens": 40,
+          "prompt_tokens_details": {"cached_tokens":8},
+          "total_tokens": 72
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "contents": [{"parts":[{"text":"Say hello"}],"role":"user"}],
+          "model": "gemini-corpus",
+          "safetySettings": [
+            {"category":"HARM_CATEGORY_HARASSMENT","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_HATE_SPEECH","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_SEXUALLY_EXPLICIT","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_DANGEROUS_CONTENT","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_CIVIC_INTEGRITY","threshold":"BLOCK_NONE"}
+          ]
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1",
+          "X-Goog-Api-Key": "sk-corpus-upstream"
+        },
+        "method": "POST",
+        "path": "/v1/publishers/google/models/gemini-corpus:generateContent"
+      }
+    ]
+  }
+}

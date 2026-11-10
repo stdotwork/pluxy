@@ -467,7 +467,7 @@ that login for you (see [Accounts added by login](#accounts-added-by-login)).
 | `vertex.location` | Default `global` (`aiplatform.googleapis.com`); `us` and `eu` use the multi-region hosts, any other location `{location}-aiplatform.googleapis.com`. |
 | `interactions` | `true` serves the Interactions API (below) to Interactions clients. Default `false`. |
 
-A Gemini request goes upstream unchanged. Chat Completions, Responses and Messages requests are
+A Gemini request goes upstream as the client wrote it, except for the turn fixes below. Chat Completions, Responses and Messages requests are
 translated to GenerateContent with every safety filter off (as today's core sends them); their
 reasoning effort becomes a thinking level on Gemini 3 and later and a thinking budget on Gemini 2.5
 (low 1024, medium 8192, high 24576 tokens, within the model's range), with thought summaries
@@ -508,6 +508,20 @@ model name (refused with 400; set `generation_config.thinking_level` instead), a
 that drops a thought step whose signature does not look like one Gemini issued. An
 `"interactions": true` account still serves Chat Completions, Responses, Messages and Gemini
 clients, through GenerateContent with the same key.
+**Turn fixes.** Google refuses some conversations that clients send, so the extension changes the
+turns of every GenerateContent request to the Gemini API or Vertex AI, as today's core does, a
+Gemini client's own request included. A first turn from the model gets an empty user turn
+(`{"role":"user","parts":[{"text":""}]}`) before it. A last turn from the model gets the same turn
+after it, except a last turn of function responses, which the model answers; a function response
+that carries an image or file is not answered, so it gets the user turn too. On Vertex AI, trailing
+model turns made only of thoughts are dropped first (at least one turn is kept), and so are the
+turns holding only a replayed thought signature that a translated request has where a client
+replayed reasoning. A countTokens request gets the first fix only. A request that needs no change
+is sent byte for byte. Today's core orders the first fix and the Vertex drop differently for a
+stream than for a reply that is not streamed, which shows only for a request that is a single
+thought turn; the extension keeps that order. Today's core leaves out a trailing assistant
+message of a Chat Completions or Responses request (an assistant prefill), so its request ends
+with the user's turn; this extension keeps the message and adds the user turn after it.
 
 Today's core can also relay Gemini requests through a browser tab signed in to AI Studio, which
 connects to core over a WebSocket. This extension does not: the extension protocol gives a

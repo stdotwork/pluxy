@@ -1,0 +1,415 @@
+{
+  "description": "A Responses request whose input ends with a reasoning item, streamed, to Vertex AI with a service account.",
+  "source": [
+    "core/internal/runtime/executor/helps/gemini_content_turns.go",
+    "core/internal/runtime/executor/helps/gemini_content_turns_test.go",
+    "core/internal/runtime/executor/gemini_vertex_executor.go:468-471,755-764"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "body": {
+      "model": "gemini-2.5-pro",
+      "stream": true,
+      "instructions": "Be brief.",
+      "input": [
+        {"role":"user","content":"What is the weather in Oslo?"},
+        {
+          "type": "reasoning",
+          "id": "rs_1",
+          "summary": [{"type":"summary_text","text":"Thinking about Oslo."}],
+          "encrypted_content": "CiQB0e2Kb7sigA1"
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {"body":{"access_token":"ya29.corpus-token","expires_in":3599,"token_type":"Bearer"}},
+    {
+      "sse": [
+        {"data":{"candidates":[{"content":{"role":"model","parts":[{"text":"thinking...","thought":true}]},"index":0}],"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus"}},
+        {"data":{"candidates":[{"content":{"role":"model","parts":[{"text":"Hello"}]},"index":0}],"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus"}},
+        {"data":{"candidates":[{"content":{"role":"model","parts":[{"text":" world"},{"text":"","thoughtSignature":"CiQB0e2Kb7sigA1"}]},"index":0}],"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus"}},
+        {"data":{"candidates":[{"content":{"role":"model","parts":[{"text":""}]},"index":0,"finishReason":"STOP"}],"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus","usageMetadata":{"promptTokenCount":40,"cachedContentTokenCount":8,"candidatesTokenCount":12,"thoughtsTokenCount":20,"totalTokenCount":72}}}
+      ]
+    }
+  ],
+  "volatile": [
+    "client.body.created_at",
+    "client.events[*].data.response.created_at",
+    "upstream[0].body"
+  ],
+  "exceptions": [
+    {
+      "path": "client.events",
+      "kind": "intended",
+      "reason": "The new core writes a Responses stream from a Gemini reply with Gemini's responseId as the response id (today's core prefixes it with resp_), item ids built from it, call ids as call_<n> when Gemini sends none (today's core makes them from the time), and each thought signature as its own reasoning item holding the signature unchanged in encrypted_content, before the part it came on, with an empty summary part (today's core wraps it in its own carrier string, cpa-gemini-responses-carrier-v1:, that records which part it belongs to).",
+      "want": [
+        {
+          "data": {
+            "response": {
+              "background": false,
+              "created_at": "(volatile)",
+              "error": null,
+              "id": "resp-corpus",
+              "model": "gemini-2.5-pro",
+              "object": "response",
+              "output": [],
+              "status": "in_progress"
+            },
+            "sequence_number": 1,
+            "type": "response.created"
+          },
+          "event": "response.created"
+        },
+        {
+          "data": {
+            "response": {
+              "created_at": "(volatile)",
+              "id": "resp-corpus",
+              "model": "gemini-2.5-pro",
+              "object": "response",
+              "output": [],
+              "status": "in_progress"
+            },
+            "sequence_number": 2,
+            "type": "response.in_progress"
+          },
+          "event": "response.in_progress"
+        },
+        {
+          "data": {
+            "item": {"id":"rs_resp-corpus_0","status":"in_progress","summary":[],"type":"reasoning"},
+            "output_index": 0,
+            "sequence_number": 3,
+            "type": "response.output_item.added"
+          },
+          "event": "response.output_item.added"
+        },
+        {
+          "data": {
+            "item_id": "rs_resp-corpus_0",
+            "output_index": 0,
+            "part": {"text":"","type":"summary_text"},
+            "sequence_number": 4,
+            "summary_index": 0,
+            "type": "response.reasoning_summary_part.added"
+          },
+          "event": "response.reasoning_summary_part.added"
+        },
+        {
+          "data": {
+            "delta": "thinking...",
+            "item_id": "rs_resp-corpus_0",
+            "output_index": 0,
+            "sequence_number": 5,
+            "summary_index": 0,
+            "type": "response.reasoning_summary_text.delta"
+          },
+          "event": "response.reasoning_summary_text.delta"
+        },
+        {
+          "data": {
+            "item_id": "rs_resp-corpus_0",
+            "output_index": 0,
+            "sequence_number": 6,
+            "summary_index": 0,
+            "text": "thinking...",
+            "type": "response.reasoning_summary_text.done"
+          },
+          "event": "response.reasoning_summary_text.done"
+        },
+        {
+          "data": {
+            "item_id": "rs_resp-corpus_0",
+            "output_index": 0,
+            "part": {"text":"thinking...","type":"summary_text"},
+            "sequence_number": 7,
+            "summary_index": 0,
+            "type": "response.reasoning_summary_part.done"
+          },
+          "event": "response.reasoning_summary_part.done"
+        },
+        {
+          "data": {
+            "item": {
+              "encrypted_content": "",
+              "id": "rs_resp-corpus_0",
+              "summary": [{"text":"thinking...","type":"summary_text"}],
+              "type": "reasoning"
+            },
+            "output_index": 0,
+            "sequence_number": 8,
+            "type": "response.output_item.done"
+          },
+          "event": "response.output_item.done"
+        },
+        {
+          "data": {
+            "item": {
+              "content": [],
+              "id": "msg_resp-corpus_0",
+              "role": "assistant",
+              "status": "in_progress",
+              "type": "message"
+            },
+            "output_index": 1,
+            "sequence_number": 9,
+            "type": "response.output_item.added"
+          },
+          "event": "response.output_item.added"
+        },
+        {
+          "data": {
+            "content_index": 0,
+            "item_id": "msg_resp-corpus_0",
+            "output_index": 1,
+            "part": {"annotations":[],"logprobs":[],"text":"","type":"output_text"},
+            "sequence_number": 10,
+            "type": "response.content_part.added"
+          },
+          "event": "response.content_part.added"
+        },
+        {
+          "data": {
+            "content_index": 0,
+            "delta": "Hello",
+            "item_id": "msg_resp-corpus_0",
+            "logprobs": [],
+            "output_index": 1,
+            "sequence_number": 11,
+            "type": "response.output_text.delta"
+          },
+          "event": "response.output_text.delta"
+        },
+        {
+          "data": {
+            "content_index": 0,
+            "delta": " world",
+            "item_id": "msg_resp-corpus_0",
+            "logprobs": [],
+            "output_index": 1,
+            "sequence_number": 12,
+            "type": "response.output_text.delta"
+          },
+          "event": "response.output_text.delta"
+        },
+        {
+          "data": {
+            "content_index": 0,
+            "item_id": "msg_resp-corpus_0",
+            "logprobs": [],
+            "output_index": 1,
+            "sequence_number": 13,
+            "text": "Hello world",
+            "type": "response.output_text.done"
+          },
+          "event": "response.output_text.done"
+        },
+        {
+          "data": {
+            "content_index": 0,
+            "item_id": "msg_resp-corpus_0",
+            "output_index": 1,
+            "part": {"annotations":[],"logprobs":[],"text":"Hello world","type":"output_text"},
+            "sequence_number": 14,
+            "type": "response.content_part.done"
+          },
+          "event": "response.content_part.done"
+        },
+        {
+          "data": {
+            "item": {
+              "content": [
+                {"annotations":[],"logprobs":[],"text":"Hello world","type":"output_text"}
+              ],
+              "id": "msg_resp-corpus_0",
+              "role": "assistant",
+              "status": "completed",
+              "type": "message"
+            },
+            "output_index": 1,
+            "sequence_number": 15,
+            "type": "response.output_item.done"
+          },
+          "event": "response.output_item.done"
+        },
+        {
+          "data": {
+            "item": {"id":"rs_resp-corpus_1","status":"in_progress","summary":[],"type":"reasoning"},
+            "output_index": 2,
+            "sequence_number": 16,
+            "type": "response.output_item.added"
+          },
+          "event": "response.output_item.added"
+        },
+        {
+          "data": {
+            "item_id": "rs_resp-corpus_1",
+            "output_index": 2,
+            "part": {"text":"","type":"summary_text"},
+            "sequence_number": 17,
+            "summary_index": 0,
+            "type": "response.reasoning_summary_part.added"
+          },
+          "event": "response.reasoning_summary_part.added"
+        },
+        {
+          "data": {
+            "item_id": "rs_resp-corpus_1",
+            "output_index": 2,
+            "sequence_number": 18,
+            "summary_index": 0,
+            "text": "",
+            "type": "response.reasoning_summary_text.done"
+          },
+          "event": "response.reasoning_summary_text.done"
+        },
+        {
+          "data": {
+            "item_id": "rs_resp-corpus_1",
+            "output_index": 2,
+            "part": {"text":"","type":"summary_text"},
+            "sequence_number": 19,
+            "summary_index": 0,
+            "type": "response.reasoning_summary_part.done"
+          },
+          "event": "response.reasoning_summary_part.done"
+        },
+        {
+          "data": {
+            "item": {
+              "encrypted_content": "CiQB0e2Kb7sigA1",
+              "id": "rs_resp-corpus_1",
+              "summary": [{"text":"","type":"summary_text"}],
+              "type": "reasoning"
+            },
+            "output_index": 2,
+            "sequence_number": 20,
+            "type": "response.output_item.done"
+          },
+          "event": "response.output_item.done"
+        },
+        {
+          "data": {
+            "response": {
+              "background": false,
+              "created_at": "(volatile)",
+              "error": null,
+              "id": "resp-corpus",
+              "instructions": "Be brief.",
+              "model": "gemini-2.5-pro",
+              "object": "response",
+              "output": [
+                {
+                  "id": "rs_resp-corpus_0",
+                  "summary": [{"text":"thinking...","type":"summary_text"}],
+                  "type": "reasoning"
+                },
+                {
+                  "content": [
+                    {"annotations":[],"logprobs":[],"text":"Hello world","type":"output_text"}
+                  ],
+                  "id": "msg_resp-corpus_0",
+                  "role": "assistant",
+                  "status": "completed",
+                  "type": "message"
+                },
+                {
+                  "encrypted_content": "CiQB0e2Kb7sigA1",
+                  "id": "rs_resp-corpus_1",
+                  "summary": [{"text":"","type":"summary_text"}],
+                  "type": "reasoning"
+                }
+              ],
+              "status": "completed",
+              "usage": {
+                "input_tokens": 40,
+                "input_tokens_details": {"cached_tokens":8},
+                "output_tokens": 32,
+                "output_tokens_details": {"reasoning_tokens":20},
+                "total_tokens": 72
+              }
+            },
+            "sequence_number": 21,
+            "type": "response.completed"
+          },
+          "event": "response.completed"
+        }
+      ]
+    },
+    {
+      "path": "upstream[1].headers.Accept",
+      "kind": "intended",
+      "reason": "The new core asks a streaming upstream for text/event-stream; today's Gemini provider sends no Accept header. Gemini answers alt=sse either way.",
+      "want": "text/event-stream"
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"response":{"background":false,"created_at":"(volatile)","error":null,"id":"resp_resp-corpus","model":"gemini-2.5-pro","object":"response","output":[],"status":"in_progress"},"sequence_number":1,"type":"response.created"},"event":"response.created"},
+        {"data":{"response":{"created_at":"(volatile)","id":"resp_resp-corpus","model":"gemini-2.5-pro","object":"response","output":[],"status":"in_progress"},"sequence_number":2,"type":"response.in_progress"},"event":"response.in_progress"},
+        {"data":{"item":{"encrypted_content":"","id":"rs_resp_resp-corpus_0","status":"in_progress","summary":[],"type":"reasoning"},"output_index":0,"sequence_number":3,"type":"response.output_item.added"},"event":"response.output_item.added"},
+        {"data":{"item_id":"rs_resp_resp-corpus_0","output_index":0,"part":{"text":"","type":"summary_text"},"sequence_number":4,"summary_index":0,"type":"response.reasoning_summary_part.added"},"event":"response.reasoning_summary_part.added"},
+        {"data":{"delta":"thinking...","item_id":"rs_resp_resp-corpus_0","output_index":0,"sequence_number":5,"summary_index":0,"type":"response.reasoning_summary_text.delta"},"event":"response.reasoning_summary_text.delta"},
+        {"data":{"item_id":"rs_resp_resp-corpus_0","output_index":0,"sequence_number":6,"summary_index":0,"text":"thinking...","type":"response.reasoning_summary_text.done"},"event":"response.reasoning_summary_text.done"},
+        {"data":{"item_id":"rs_resp_resp-corpus_0","output_index":0,"part":{"text":"thinking...","type":"summary_text"},"sequence_number":7,"summary_index":0,"type":"response.reasoning_summary_part.done"},"event":"response.reasoning_summary_part.done"},
+        {"data":{"item":{"encrypted_content":"","id":"rs_resp_resp-corpus_0","summary":[{"text":"thinking...","type":"summary_text"}],"type":"reasoning"},"output_index":0,"sequence_number":8,"type":"response.output_item.done"},"event":"response.output_item.done"},
+        {"data":{"item":{"content":[],"id":"msg_resp_resp-corpus_1","role":"assistant","status":"in_progress","type":"message"},"output_index":1,"sequence_number":9,"type":"response.output_item.added"},"event":"response.output_item.added"},
+        {"data":{"content_index":0,"item_id":"msg_resp_resp-corpus_1","output_index":1,"part":{"annotations":[],"logprobs":[],"text":"","type":"output_text"},"sequence_number":10,"type":"response.content_part.added"},"event":"response.content_part.added"},
+        {"data":{"content_index":0,"delta":"Hello","item_id":"msg_resp_resp-corpus_1","logprobs":[],"output_index":1,"sequence_number":11,"type":"response.output_text.delta"},"event":"response.output_text.delta"},
+        {"data":{"content_index":0,"delta":" world","item_id":"msg_resp_resp-corpus_1","logprobs":[],"output_index":1,"sequence_number":12,"type":"response.output_text.delta"},"event":"response.output_text.delta"},
+        {"data":{"content_index":0,"item_id":"msg_resp_resp-corpus_1","logprobs":[],"output_index":1,"sequence_number":13,"text":"Hello world","type":"response.output_text.done"},"event":"response.output_text.done"},
+        {"data":{"content_index":0,"item_id":"msg_resp_resp-corpus_1","output_index":1,"part":{"annotations":[],"logprobs":[],"text":"Hello world","type":"output_text"},"sequence_number":14,"type":"response.content_part.done"},"event":"response.content_part.done"},
+        {"data":{"item":{"content":[{"annotations":[],"logprobs":[],"text":"Hello world","type":"output_text"}],"id":"msg_resp_resp-corpus_1","role":"assistant","status":"completed","type":"message"},"output_index":1,"sequence_number":15,"type":"response.output_item.done"},"event":"response.output_item.done"},
+        {"data":{"item":{"encrypted_content":"cpa-gemini-responses-carrier-v1:previous:text:Q2lRQjBlMktiN3NpZ0Ex","id":"rs_resp_resp-corpus_detached_after_2","status":"in_progress","summary":[],"type":"reasoning"},"output_index":2,"sequence_number":16,"type":"response.output_item.added"},"event":"response.output_item.added"},
+        {"data":{"item":{"encrypted_content":"cpa-gemini-responses-carrier-v1:previous:text:Q2lRQjBlMktiN3NpZ0Ex","id":"rs_resp_resp-corpus_detached_after_2","summary":[],"type":"reasoning"},"output_index":2,"sequence_number":17,"type":"response.output_item.done"},"event":"response.output_item.done"},
+        {"data":{"response":{"background":false,"created_at":"(volatile)","error":null,"id":"resp_resp-corpus","instructions":"Be brief.","model":"gemini-2.5-pro","object":"response","output":[{"encrypted_content":"","id":"rs_resp_resp-corpus_0","summary":[{"text":"thinking...","type":"summary_text"}],"type":"reasoning"},{"content":[{"annotations":[],"logprobs":[],"text":"Hello world","type":"output_text"}],"id":"msg_resp_resp-corpus_1","role":"assistant","status":"completed","type":"message"},{"encrypted_content":"cpa-gemini-responses-carrier-v1:previous:text:Q2lRQjBlMktiN3NpZ0Ex","id":"rs_resp_resp-corpus_detached_after_2","summary":[],"type":"reasoning"}],"status":"completed","usage":{"input_tokens":40,"input_tokens_details":{"cached_tokens":8},"output_tokens":32,"output_tokens_details":{"reasoning_tokens":20},"total_tokens":72}},"sequence_number":18,"type":"response.completed"},"event":"response.completed"}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": "(volatile)",
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Content-Type": "application/x-www-form-urlencoded",
+          "User-Agent": "Go-http-client/1.1"
+        },
+        "method": "POST",
+        "path": "/token"
+      },
+      {
+        "body": {
+          "contents": [{"parts":[{"text":"What is the weather in Oslo?"}],"role":"user"}],
+          "model": "gemini-2.5-pro",
+          "safetySettings": [
+            {"category":"HARM_CATEGORY_HARASSMENT","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_HATE_SPEECH","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_SEXUALLY_EXPLICIT","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_DANGEROUS_CONTENT","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_CIVIC_INTEGRITY","threshold":"BLOCK_NONE"}
+          ],
+          "systemInstruction": {"parts":[{"text":"Be brief."}]}
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer ya29.corpus-token",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1"
+        },
+        "method": "POST",
+        "path": "/v1/projects/corpus-project/locations/global/publishers/google/models/gemini-2.5-pro:streamGenerateContent?alt=sse"
+      }
+    ]
+  }
+}

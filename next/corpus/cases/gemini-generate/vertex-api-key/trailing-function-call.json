@@ -1,0 +1,108 @@
+{
+  "description": "A Gemini request whose last turn is a function call with no response, streamed, to Vertex AI with an express mode key.",
+  "source": [
+    "core/internal/runtime/executor/helps/gemini_content_turns.go",
+    "core/internal/runtime/executor/helps/gemini_content_turns_test.go",
+    "core/internal/runtime/executor/gemini_vertex_executor.go:623-626,985-988"
+  ],
+  "client": {
+    "path": "/v1beta/models/gemini-corpus:streamGenerateContent?alt=sse",
+    "body": {
+      "contents": [
+        {"role":"user","parts":[{"text":"Weather in Paris?"}]},
+        {
+          "role": "model",
+          "parts": [
+            {
+              "functionCall": {"name":"get_weather","args":{"city":"Paris"}},
+              "thoughtSignature": "skip_thought_signature_validator"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"data":{"candidates":[{"content":{"role":"model","parts":[{"text":"thinking...","thought":true}]},"index":0}],"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus"}},
+        {"data":{"candidates":[{"content":{"role":"model","parts":[{"text":"Hello"}]},"index":0}],"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus"}},
+        {"data":{"candidates":[{"content":{"role":"model","parts":[{"text":" world"},{"text":"","thoughtSignature":"CiQB0e2Kb7sigA1"}]},"index":0}],"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus"}},
+        {"data":{"candidates":[{"content":{"role":"model","parts":[{"text":""}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":40,"cachedContentTokenCount":8,"candidatesTokenCount":12,"thoughtsTokenCount":20,"totalTokenCount":72},"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus"}}
+      ]
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[0].body.model",
+      "kind": "intended",
+      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: it adds model and default safetySettings that turn every filter off, renames functionDeclarations to function_declarations, parameters to parametersJsonSchema and responseSchema to responseJsonSchema, fills in empty functionResponse names, and replaces a thoughtSignature it does not recognise as one Gemini issued (as with this case's synthetic signature) with skip_thought_signature_validator, which throws that reasoning state away. The new core keeps every thought signature on the part it came with, unchecked."
+    },
+    {
+      "path": "upstream[0].body.safetySettings",
+      "kind": "intended",
+      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: it adds model and default safetySettings that turn every filter off, renames functionDeclarations to function_declarations, parameters to parametersJsonSchema and responseSchema to responseJsonSchema, fills in empty functionResponse names, and replaces a thoughtSignature it does not recognise as one Gemini issued (as with this case's synthetic signature) with skip_thought_signature_validator, which throws that reasoning state away. The new core keeps every thought signature on the part it came with, unchecked.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.Accept",
+      "kind": "intended",
+      "reason": "The new core asks a streaming upstream for text/event-stream; today's Gemini provider sends no Accept header. Gemini answers alt=sse either way."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"candidates":[{"content":{"parts":[{"text":"thinking...","thought":true}],"role":"model"},"index":0}],"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus"}},
+        {"data":{"candidates":[{"content":{"parts":[{"text":"Hello"}],"role":"model"},"index":0}],"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus"}},
+        {"data":{"candidates":[{"content":{"parts":[{"text":" world"},{"text":"","thoughtSignature":"CiQB0e2Kb7sigA1"}],"role":"model"},"index":0}],"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus"}},
+        {"data":{"candidates":[{"content":{"parts":[{"text":""}],"role":"model"},"finishReason":"STOP","index":0}],"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus","usageMetadata":{"cachedContentTokenCount":8,"candidatesTokenCount":12,"promptTokenCount":40,"thoughtsTokenCount":20,"totalTokenCount":72}}}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "contents": [
+            {"parts":[{"text":"Weather in Paris?"}],"role":"user"},
+            {
+              "parts": [
+                {
+                  "functionCall": {"args":{"city":"Paris"},"name":"get_weather"},
+                  "thoughtSignature": "skip_thought_signature_validator"
+                }
+              ],
+              "role": "model"
+            },
+            {"parts":[{"text":""}],"role":"user"}
+          ],
+          "model": "gemini-corpus",
+          "safetySettings": [
+            {"category":"HARM_CATEGORY_HARASSMENT","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_HATE_SPEECH","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_SEXUALLY_EXPLICIT","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_DANGEROUS_CONTENT","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_CIVIC_INTEGRITY","threshold":"BLOCK_NONE"}
+          ]
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1",
+          "X-Goog-Api-Key": "sk-corpus-upstream"
+        },
+        "method": "POST",
+        "path": "/v1/publishers/google/models/gemini-corpus:streamGenerateContent?alt=sse"
+      }
+    ]
+  }
+}
