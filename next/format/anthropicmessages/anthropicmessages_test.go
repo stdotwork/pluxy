@@ -803,7 +803,7 @@ func TestGeminiRequestEncodesToMessages(t *testing.T) {
 	}
 	sameJSON(t, "body", out, `{"model":"m","stream":false,"max_tokens":32000,"temperature":0.5,"stop_sequences":["X"],
 	 "system":[{"type":"text","text":"Be brief."}],
-	 "tools":[{"name":"w","input_schema":{"type":"object"}}],
+	 "tools":[{"name":"w","input_schema":{"type":"object","properties":{}}}],
 	 "messages":[
 	  {"role":"user","content":[{"type":"text","text":"Weather?"}]},
 	  {"role":"assistant","content":[
