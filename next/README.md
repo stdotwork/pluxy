@@ -294,7 +294,8 @@ A request is Responses-lite, as today's core reads it, when its
 `X-Openai-Internal-Codex-Responses-Lite` header is `true` or its `client_metadata` carries
 `ws_request_header_x_openai_internal_codex_responses_lite` as `true` (a WebSocket client sends the
 header that way); another header value is not. A Responses-lite request gets no image generation
-tool and has parallel tool calls off.
+tool and has parallel tool calls off, and a Responses client's lite request without `instructions`
+goes without them rather than with `""`.
 Account `settings`, all optional:
 
 | Field | Meaning |
@@ -313,7 +314,8 @@ Account `settings`, all optional:
 its `chatgpt_base_url` points at core). Core routes it by its `model` to an account's extension as
 an [endpoint call](protocol/README.md#endpoint); the Codex extension sends the body to
 `{base_url}/responses/compact` as today's core does, nearly as it came: `stream` removed,
-`instructions` set to `""` when absent, the model renamed for the account, a thinking suffix's
+`instructions` set to `""` when absent (left out for a Responses-lite request), the model renamed
+for the account, a thinking suffix's
 effort applied, and a prompt cache key (with `Session-Id`) derived as for `/responses` when the
 client names none; the upstream's JSON reply comes back to the client as it is. A request with
 `"stream": true` is refused with a 400, as today's core refuses it. An account of another extension

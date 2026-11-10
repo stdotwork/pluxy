@@ -150,7 +150,9 @@ func (h *shaper) shape() error {
 	}
 	h.streamOptions()
 	h.serviceTier()
-	if v, ok := m["instructions"]; !ok || string(v) == "null" {
+	// A Responses-lite request from a Responses client goes without instructions when it has
+	// none, as today's core sends it; any other request gets empty instructions.
+	if v, ok := m["instructions"]; (!ok || string(v) == "null") && !(h.passthrough() && h.lite()) {
 		m["instructions"] = raw("")
 	}
 	h.reasoning()
