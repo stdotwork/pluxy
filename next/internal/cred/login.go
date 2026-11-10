@@ -35,6 +35,10 @@ type LoginRequest struct {
 	// Label names the new account for people when the provider's grant carries none. A new
 	// login to an existing account (Reauth) keeps the account's label.
 	Label string
+	// Registration, when set with Reauth, is the registration of the account the caller
+	// checked: the login is refused if the account was removed and added again since, so a
+	// check made before starting still holds when it starts (and finishLogin fences the rest).
+	Registration string
 	// Method is one of the provider's login methods.
 	Method string
 	// Input is what the user entered when starting the login.
@@ -141,6 +145,9 @@ func (m *Manager) StartLogin(ctx context.Context, req LoginRequest) (LoginView, 
 	case exists && rec.Extension != ext:
 		m.mu.Unlock()
 		return LoginView{}, fmt.Errorf("%w: account %q belongs to extension %s", ErrConflict, id, rec.Extension)
+	case exists && req.Registration != "" && rec.Registration != req.Registration:
+		m.mu.Unlock()
+		return LoginView{}, fmt.Errorf("%w: account %q was removed and added again", ErrConflict, id)
 	case exists:
 		l.registration, l.fields = rec.Registration, rec.Account
 	}

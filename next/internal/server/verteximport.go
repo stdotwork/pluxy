@@ -126,14 +126,18 @@ func (m *Management) importVertex(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), vertexImportWait)
 	defer cancel()
-	l, err := m.creds.StartLogin(ctx, cred.LoginRequest{
+	req := cred.LoginRequest{
 		Account:   route.Account{ID: id, Settings: settings},
 		Extension: legacy.Gemini,
 		Method:    vertexImportLoginMethod,
 		Input:     map[string]string{"service_account": string(data)},
 		Label:     vertexLabel(project, email),
 		Reauth:    existing != nil,
-	})
+	}
+	if existing != nil {
+		req.Registration = existing.Registration
+	}
+	l, err := m.creds.StartLogin(ctx, req)
 	if err != nil {
 		writeCredError(w, err)
 		return

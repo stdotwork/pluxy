@@ -671,3 +671,24 @@ func TestRenewalNeverReturnsAnotherExtensionsCredential(t *testing.T) {
 		t.Error("no error for an account that was removed")
 	}
 }
+
+// A new login that names the registration its caller checked is refused, before the provider is
+// asked, once the account has been removed and added again.
+func TestReauthOfAnotherRegistrationIsRefused(t *testing.T) {
+	m, store := newManager(t, &fakeProvider{}, time.Hour)
+	rec, _ := store.Get("acct")
+	if err := store.Delete("acct"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(Record{ID: "acct", Extension: provID, State: StateActive, Credential: protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "k"}}); err != nil {
+		t.Fatal(err)
+	}
+	// fakeProvider.Login panics: reaching the provider fails the test. The deadline keeps a
+	// login that did start from waiting for a first prompt that never comes.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err := m.StartLogin(ctx, LoginRequest{Account: route.Account{ID: "acct"}, Method: "device", Reauth: true, Registration: rec.Registration})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("StartLogin = %v, want ErrConflict", err)
+	}
+}
