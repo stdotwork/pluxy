@@ -246,6 +246,56 @@ openai-compatibility:
 	}
 }
 
+// Today's core keeps no Codex API key without a base-url: the key is dropped and named in the
+// notices. A key takes its group's base-url when it has none of its own; other providers' keys
+// without one stay.
+func TestCodexKeyWithoutBaseURLIsDropped(t *testing.T) {
+	r := translate(t, `
+codex-api-key:
+  - api-key: no-url
+  - api-key: blank-url
+    base-url: "   "
+  - api-key: has-url
+    base-url: https://codex.example.com
+claude-api-key:
+  - api-key: claude-key
+`)
+	equalJSON(t, r.Config, `{
+		"listen": ":8317", "routing": {"request_retry": 0},
+		"extensions": {
+			"pluxy/codex": {"accounts": [
+				{"id": "codex-api-key-3", "settings": {"base_url": "https://codex.example.com"}, "credential": {"kind": "api_key", "api_key": "has-url"}}
+			]},
+			"pluxy/claude": {"accounts": [{"id": "claude-api-key-1", "credential": {"kind": "api_key", "api_key": "claude-key"}}]}
+		}
+	}`)
+	for _, id := range []string{"codex-api-key-1", "codex-api-key-2"} {
+		if want := "key " + id + " has no base-url: dropped"; !strings.Contains(notices(r), want) {
+			t.Errorf("notices lack %q:\n%s", want, notices(r))
+		}
+	}
+	if n := notices(r); strings.Contains(n, "codex-api-key-3") || strings.Contains(n, "claude") {
+		t.Errorf("notices name a key that stays:\n%s", n)
+	}
+
+	r = translate(t, `
+api-keys:
+  codex:
+    - name: grouped
+      base-url: https://group.example.com
+      keys: [{api-key: inherits}, {api-key: own, base-url: https://own.example.com}]
+    - name: bare
+      keys: [{api-key: bare-key}]
+`)
+	equalJSON(t, r.Config["extensions"], `{"pluxy/codex": {"accounts": [
+		{"id": "grouped-1", "settings": {"base_url": "https://group.example.com"}, "credential": {"kind": "api_key", "api_key": "inherits"}},
+		{"id": "grouped-2", "settings": {"base_url": "https://own.example.com"}, "credential": {"kind": "api_key", "api_key": "own"}}
+	]}}`)
+	if n := notices(r); !strings.Contains(n, "api-keys.codex key bare has no base-url: dropped") || strings.Contains(n, "grouped") {
+		t.Errorf("notices:\n%s", n)
+	}
+}
+
 func TestV8SpellingWins(t *testing.T) {
 	r := translate(t, `
 port: 9000
@@ -256,9 +306,11 @@ max-retry-interval: 7
 routing: {retry: {max-retry-interval: 0}}
 codex-api-key:
   - api-key: old-key
+    base-url: https://old.example.com
 api-keys:
   codex:
     - name: c
+      base-url: https://new.example.com
       keys: [{api-key: new-key}]
 `)
 	equalJSON(t, r.Config, `{
@@ -266,7 +318,7 @@ api-keys:
 		"management_key": "new",
 		"management_allow_remote": true,
 		"routing": {"request_retry": 0},
-		"extensions": {"pluxy/codex": {"accounts": [{"id": "c", "credential": {"kind": "api_key", "api_key": "new-key"}}]}}
+		"extensions": {"pluxy/codex": {"accounts": [{"id": "c", "settings": {"base_url": "https://new.example.com"}, "credential": {"kind": "api_key", "api_key": "new-key"}}]}}
 	}`)
 	// allow-remote came from the older spelling and still counts: the v8 value wins only
 	// field by field.
@@ -352,7 +404,7 @@ packages: {dir: pk}
 cors: {allowed_origins: ["http://localhost:5173"]}
 extensions:
   pluxy/codex: {idle_stop_ms: 0, accounts: [{id: own, credential: {kind: api_key, api_key: k}}]}
-codex-api-key: [{api-key: from-yaml}]
+codex-api-key: [{api-key: from-yaml, base-url: "https://yaml.example.com"}]
 `)
 	equalJSON(t, r.Config, `{
 		"listen": ":8317", "routing": {"request_retry": 0},
@@ -360,7 +412,7 @@ codex-api-key: [{api-key: from-yaml}]
 		"cors": {"allowed_origins": ["http://localhost:5173"]},
 		"extensions": {"pluxy/codex": {"idle_stop_ms": 0, "accounts": [
 			{"id": "own", "credential": {"kind": "api_key", "api_key": "k"}},
-			{"id": "codex-api-key-1", "credential": {"kind": "api_key", "api_key": "from-yaml"}}
+			{"id": "codex-api-key-1", "settings": {"base_url": "https://yaml.example.com"}, "credential": {"kind": "api_key", "api_key": "from-yaml"}}
 		]}}
 	}`)
 }
@@ -472,6 +524,7 @@ oauth-excluded-models:
   qwen: [qwen-max]
 codex-api-key:
   - api-key: k1
+    base-url: https://codex.example.com
     prefix: " /team/ "
     excluded-models: ["*-Mini"]
     models:
@@ -490,6 +543,7 @@ openai-compatibility:
 	exts := asJSON(t, r.Config["extensions"]).(map[string]any)
 	equalJSON(t, exts[Codex].(map[string]any)["accounts"], `[{
 		"id": "codex-api-key-1", "prefix": "team", "excluded_models": ["*-mini"],
+		"settings": {"base_url": "https://codex.example.com"},
 		"models": [{"name": "up-a", "alias": "pub-a"}, "up-b"],
 		"credential": {"kind": "api_key", "api_key": "k1"}
 	}]`)
@@ -595,6 +649,7 @@ func TestKeyRequestRetry(t *testing.T) {
 api-keys:
   codex:
     - request-retry: 2
+      base-url: https://codex.example.com
       keys:
         - api-key: a
         - api-key: b
