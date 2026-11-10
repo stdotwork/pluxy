@@ -284,3 +284,33 @@ func TestModelListsEndWithImageModels(t *testing.T) {
 		}
 	}
 }
+
+// roundTripFunc is an http.RoundTripper made of a function.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// An API key with alpha_search on but no base_url of its own does not serve search: it is refused
+// for the account before anything is sent, so core tries another account, as today's core, which
+// keeps no Codex API key without a base URL, never serves search with one.
+func TestAlphaSearchAPIKeyWithoutBaseURL(t *testing.T) {
+	saved := client.Transport
+	t.Cleanup(func() { client.Transport = saved })
+	var sent []string
+	client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		sent = append(sent, r.URL.String())
+		return nil, io.ErrUnexpectedEOF // never reaches the network
+	})
+	raw, _ := json.Marshal(map[string]any{"alpha_search": true})
+	err := alphaSearch(context.Background(), sdk.Call{
+		Account: protocol.Account{ID: "a", Settings: raw, Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-test"}},
+		Request: llm.Request{Model: "m", Native: &llm.Native{Format: llm.FormatCodexAlphaSearch, Body: json.RawMessage(`{"model":"m","query":"q"}`)}},
+	}, nil)
+	var e *llm.Error
+	if !asError(err, &e) || e.Code != llm.CodeUnsupported || e.Scope != llm.ScopeCredential || !e.Retryable {
+		t.Errorf("err = %+v, want unsupported for the account, retryable", err)
+	}
+	if len(sent) != 0 {
+		t.Errorf("sent %v, want nothing sent", sent)
+	}
+}

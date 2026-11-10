@@ -164,7 +164,7 @@ func endpointStatusError(resp *http.Response, model string) *llm.Error {
 // alphaSearch serves Codex's search endpoint: the client's body goes to {base_url}/alpha/search
 // as today's core sends it, nearly as it came, and the upstream's reply comes back whole. A
 // subscription always serves it; an API key only when its account sets alpha_search, since not
-// every upstream has the endpoint.
+// every upstream has the endpoint, and names its base_url.
 func alphaSearch(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
@@ -177,6 +177,13 @@ func alphaSearch(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if !a.subscription && !s.AlphaSearch {
 		return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
 			Message: "this API key does not serve Alpha Search (the account's alpha_search setting is off)"}
+	}
+	if !a.subscription && strings.TrimSpace(s.BaseURL) == "" {
+		// Today's core keeps no Codex API key without a base URL, so such a key never serves
+		// search there; the search is not sent to the default API host, which has no such
+		// endpoint, and core tries another account.
+		return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
+			Message: "this API key does not serve Alpha Search (the account has no base_url)"}
 	}
 	req := call.Request
 	var m map[string]json.RawMessage
