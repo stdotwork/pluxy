@@ -154,7 +154,7 @@ func setupTokenLogin(token string) (*protocol.Grant, error) {
 	case token == "":
 		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "enter the token claude setup-token printed", Scope: llm.ScopeRequest}
 	case !isOAuthToken(token):
-		return nil, refused("this is not a setup token (one starts with sk-ant-oat); add an API key with the api_key method")
+		return nil, refused("this is not a setup token (a setup token contains sk-ant-oat); add an API key with the api_key method")
 	}
 	return &protocol.Grant{Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: token}}, nil
 }
