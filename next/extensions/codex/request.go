@@ -153,10 +153,69 @@ func (h *shaper) shape() error {
 		m["instructions"] = raw("")
 	}
 	h.reasoning()
+	// Before tools(), which adds the image generation tool after any web search tool.
+	webSearchForHistory(h.m, h.lite())
 	h.tools()
 	h.limits()
 	h.promptCacheKey()
 	return nil
+}
+
+// lite reports whether the client is a Responses-lite client (the
+// X-Openai-Internal-Codex-Responses-Lite header).
+func (h *shaper) lite() bool {
+	return h.header("x-openai-internal-codex-responses-lite") != ""
+}
+
+// webSearchTools are the tool types that declare hosted web search.
+var webSearchTools = []string{"web_search", "web_search_preview", "web_search_preview_2025_03_11"}
+
+// webSearchForHistory makes a request that replays web searches acceptable to the Codex endpoint,
+// which refuses ("response protection is unavailable") a web_search_call in input when the
+// request declares no web search tool. A request with such an item and no web search tool in
+// tools gets {"type":"web_search"} added to tools; a Responses-lite request, which does not
+// declare hosted tools, has the items removed instead. m holds the request's top-level fields.
+func webSearchForHistory(m map[string]json.RawMessage, lite bool) {
+	itemType := func(raw json.RawMessage) string {
+		var o struct {
+			Type string `json:"type"`
+		}
+		_ = json.Unmarshal(raw, &o)
+		return strings.TrimSpace(o.Type)
+	}
+	var items []json.RawMessage
+	if json.Unmarshal(m["input"], &items) != nil {
+		return
+	}
+	replayed := false
+	for _, it := range items {
+		if itemType(it) == "web_search_call" {
+			replayed = true
+			break
+		}
+	}
+	if !replayed {
+		return
+	}
+	var tools []json.RawMessage
+	_ = json.Unmarshal(m["tools"], &tools)
+	for _, t := range tools {
+		if slices.Contains(webSearchTools, itemType(t)) {
+			return
+		}
+	}
+	if lite {
+		kept := make([]json.RawMessage, 0, len(items))
+		for _, it := range items {
+			if itemType(it) != "web_search_call" {
+				kept = append(kept, it)
+			}
+		}
+		m["input"] = raw(kept)
+		return
+	}
+	// tools that is missing or not a list is replaced.
+	m["tools"] = raw(append(tools, raw(map[string]string{"type": "web_search"})))
 }
 
 // input makes input a list of items (a string is one user message), gives system messages the
@@ -304,7 +363,7 @@ func (h *shaper) tools() {
 		// Messages and Gemini requests leave the choice to the model when they name none.
 		h.m["tool_choice"] = raw("auto")
 	}
-	lite := h.header("x-openai-internal-codex-responses-lite") != ""
+	lite := h.lite()
 	if h.s.imageTool() && !lite && !strings.HasSuffix(h.model, "spark") && !strings.EqualFold(h.a.planType, "free") && !hasTool(tools, "image_generation") {
 		tools = append(tools, raw(map[string]string{"type": "image_generation", "output_format": "png"}))
 		h.m["tools"] = raw(tools)

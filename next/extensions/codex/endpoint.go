@@ -83,6 +83,8 @@ func compact(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if k, ok := sh.m["prompt_cache_key"]; ok {
 		m["prompt_cache_key"] = k
 	}
+	// Replayed web searches need a web search tool, as on /responses.
+	webSearchForHistory(m, sh.lite())
 	// The endpoint rejects the same tool schema forms as /responses; today's core rewrites them
 	// in compaction requests too.
 	var tools []json.RawMessage

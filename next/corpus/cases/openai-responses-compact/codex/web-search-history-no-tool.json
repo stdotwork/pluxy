@@ -1,0 +1,128 @@
+{
+  "description": "A compaction request that replays web_search_call items in input and declares no web search tool gets a {\"type\":\"web_search\"} tool added to tools, as on /v1/responses.",
+  "source": [
+    "core/internal/runtime/executor/codex_executor_request.go",
+    "core/internal/runtime/executor/codex_executor_execute.go",
+    "core/internal/runtime/executor/codex_executor_compact_test.go"
+  ],
+  "client": {
+    "path": "/v1/responses/compact",
+    "headers": {"Session-Id":"sess-corpus","Version":"0.154.0"},
+    "body": {
+      "model": "gpt-test",
+      "prompt_cache_key": "pck-corpus",
+      "input": [
+        {"type":"message","role":"user","content":[{"type":"input_text","text":"search docs"}]},
+        {
+          "id": "ws_1",
+          "type": "web_search_call",
+          "status": "completed",
+          "action": {"type":"search","query":"openai responses web search"}
+        },
+        {
+          "id": "ws_2",
+          "type": "web_search_call",
+          "status": "completed",
+          "action": {"type":"open_page","url":"https://platform.openai.com/docs"}
+        },
+        {"type":"compaction_trigger"}
+      ],
+      "instructions": "Be brief."
+    }
+  },
+  "upstream": [
+    {
+      "headers": {"Content-Type":"application/json","X-Request-Id":"req_corpus"},
+      "body": {
+        "id": "resp_compact_corpus",
+        "object": "response.compaction",
+        "created_at": 1700000000,
+        "output": [
+          {"type":"message","role":"user","content":[{"type":"input_text","text":"Say hello"}]},
+          {"type":"compaction","id":"cmp_corpus","encrypted_content":"enc-compaction-corpus"}
+        ],
+        "usage": {
+          "input_tokens": 120,
+          "input_tokens_details": {"cached_tokens":0},
+          "output_tokens": 30,
+          "output_tokens_details": {"reasoning_tokens":10},
+          "total_tokens": 150
+        }
+      }
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[*].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "created_at": 1700000000,
+        "id": "resp_compact_corpus",
+        "object": "response.compaction",
+        "output": [
+          {"content":[{"text":"Say hello","type":"input_text"}],"role":"user","type":"message"},
+          {"encrypted_content":"enc-compaction-corpus","id":"cmp_corpus","type":"compaction"}
+        ],
+        "usage": {
+          "input_tokens": 120,
+          "input_tokens_details": {"cached_tokens":0},
+          "output_tokens": 30,
+          "output_tokens_details": {"reasoning_tokens":10},
+          "total_tokens": 150
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "input": [
+            {"content":[{"text":"search docs","type":"input_text"}],"role":"user","type":"message"},
+            {
+              "action": {"query":"openai responses web search","type":"search"},
+              "id": "ws_1",
+              "status": "completed",
+              "type": "web_search_call"
+            },
+            {
+              "action": {"type":"open_page","url":"https://platform.openai.com/docs"},
+              "id": "ws_2",
+              "status": "completed",
+              "type": "web_search_call"
+            },
+            {"type":"compaction_trigger"}
+          ],
+          "instructions": "Be brief.",
+          "model": "gpt-test",
+          "prompt_cache_key": "pck-corpus",
+          "tools": [{"type":"web_search"}]
+        },
+        "headers": {
+          "Accept": "application/json",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "Originator": "codex-tui",
+          "Session-Id": "sess-corpus",
+          "User-Agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)",
+          "Version": "0.154.0"
+        },
+        "method": "POST",
+        "path": "/v1/responses/compact"
+      }
+    ]
+  }
+}
