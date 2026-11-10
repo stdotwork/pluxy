@@ -326,7 +326,7 @@ upstream's JSON reply comes back to the client whole, with its content type. An 
 reaches the client as an error in OpenAI's shape (a 404 blocks no model on the account), and an API key without `alpha_search` is skipped
 for this endpoint only. When no account is eligible the client gets an error saying so.
 
-**Capacity refusals.** A refusal that says the turn or the model is full, not that the account's allowance is used up, is a rate limit on that model for that account: the code `turn_rate_limit_exceeded`, `model_at_capacity` or `model_is_at_capacity`, or, with no code, an "at capacity" message from a `rate_limit_error` or about the model. Whatever status the upstream gave, the client sees a 429, core tries another account, and the account keeps serving its other models. The upstream's `Retry-After` is kept; `Retry-After: 0` (retry at once) cannot be passed on, so the model waits about a second. The same refusal inside an open stream blocks the model the same way, but the request is not tried again, as in today's core. A WebSocket `websocket_connection_limit_reached` message is an error message like any other: it keeps its status (a 429 is then a retryable rate limit on the account, a 400 an invalid request), and the next turn opens a new upstream socket.
+**Capacity refusals.** A refusal that says the turn or the model is full, not that the account's allowance is used up, is a rate limit on that model for that account: the code `turn_rate_limit_exceeded`, `model_at_capacity` or `model_is_at_capacity`, or, with no code, an "at capacity" message from a `rate_limit_error` or about the model. Whatever status the upstream gave, the client sees a 429, core tries another account, and the account keeps serving its other models. The upstream's `Retry-After` is kept; `Retry-After: 0` (retry at once) cannot be passed on, so the model waits about a second. The same refusal inside an open stream blocks the model the same way, but the request is not tried again, as in today's core. A WebSocket `websocket_connection_limit_reached` message is an error message like any other: it keeps its status (a 429 is then a retryable rate limit on that model for the account, a 400 an invalid request), and the next turn opens a new upstream socket.
 
 **Stream repairs.** As today's core does, on HTTP and on the upstream WebSocket alike: an output
 item of a terminal `response.completed` or `response.incomplete` that has no `id` (or a null or
@@ -563,7 +563,7 @@ What changes in a request:
 
 Errors: 401, and a 403 whose body says the credential is bad, are authentication errors. Other 403
 replies are permission errors. A 429 that says the free usage is used up is a quota error, which
-holds the account back for 24 hours. Other 429 replies are rate limits and keep xAI's `Retry-After`.
+holds the model back on the account for 24 hours. Other 429 replies are rate limits and keep xAI's `Retry-After`.
 A 404 is a model error, and a 5xx is an upstream error.
 
 Not built, and why:
@@ -803,8 +803,9 @@ retry on their own.
 
 An account is eligible when it serves the model, no block covers it and it is under its
 concurrency limit. Refusals block what they are about, for as long as the upstream said
-(`Retry-After`) or else by backoff: a rate limit or quota on the credential or on one model,
-a refused key for 30 minutes, a missing model for 12 hours, a failing endpoint with backoff up
+(`Retry-After`) or else by backoff: a rate limit or quota on one model (a plain 429, as today's
+core cools only the model that answered) or on the whole credential (when the provider says the
+account's allowance is used up, such as a subscription's usage window), a refused key for 30 minutes, a missing model for 12 hours, a failing endpoint with backoff up
 to a minute. Results count in the order their requests started on the account: a success
 clears the blocks that failures of earlier-started requests left on its account (its credential,
 its model and its endpoint), and a failure that ends after a later-started request succeeded on

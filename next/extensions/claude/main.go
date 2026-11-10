@@ -505,10 +505,16 @@ func upstreamError(resp *http.Response, model string) *llm.Error {
 		// and another account may serve the model.
 		e.Retryable = model != "" && strings.Contains(e.Message, model)
 	case s == http.StatusTooManyRequests:
-		e.Code, e.Scope, e.Retryable = llm.CodeRateLimit, llm.ScopeCredential, true
+		// Only the model waits on this account, as today's core cools only the model that answered.
+		e.Code, e.Scope, e.Retryable = llm.CodeRateLimit, llm.ScopeModel, true
+		if model == "" {
+			// A call for no model (the usage endpoint): the account is the one limited.
+			e.Scope = llm.ScopeCredential
+		}
 		if strings.EqualFold(resp.Header.Get("Anthropic-Ratelimit-Unified-Status"), "rejected") {
-			// A subscription's usage window is used up; it opens again at the unified reset.
-			e.Code = llm.CodeQuota
+			// A subscription's usage window is used up for every model; it opens again at the
+			// unified reset.
+			e.Code, e.Scope = llm.CodeQuota, llm.ScopeCredential
 		}
 		e.RetryAfterMS = rateLimitWait(resp.Header, time.Now())
 	case s == http.StatusServiceUnavailable || s == 529:

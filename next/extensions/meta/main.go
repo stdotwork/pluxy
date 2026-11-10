@@ -378,7 +378,9 @@ func upstreamError(status int, raw []byte, h http.Header, model string, now time
 			e.RetryAfterMS = notFoundCooldownMS
 		}
 	case status == http.StatusTooManyRequests:
-		e.Code, e.Scope, e.Retryable = llm.CodeRateLimit, llm.ScopeCredential, true
+		// Only the model waits on this account, as today's core cools only the model that
+		// answered; a used-up subscription quota is the account's.
+		e.Code, e.Scope, e.Retryable = llm.CodeRateLimit, llm.ScopeModel, true
 		if h != nil {
 			e.RetryAfterMS = retryAfter(h.Get("Retry-After"), now)
 		}
@@ -386,7 +388,7 @@ func upstreamError(status int, raw []byte, h http.Header, model string, now time
 			e.RetryAfterMS = resetMS
 		}
 		if subscriptionQuota(parsed, code) {
-			e.Code = llm.CodeQuota
+			e.Code, e.Scope = llm.CodeQuota, llm.ScopeCredential
 		}
 	case status == http.StatusServiceUnavailable || status == 529:
 		e.Code, e.Scope = llm.CodeUnavailable, llm.ScopeEndpoint

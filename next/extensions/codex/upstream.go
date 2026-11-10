@@ -463,7 +463,13 @@ func statusError(resp *http.Response, model string) *llm.Error {
 			e.Retryable = true
 		}
 	case s == http.StatusTooManyRequests:
-		e.Code, e.Scope, e.Retryable = llm.CodeRateLimit, llm.ScopeCredential, true
+		// Only the model waits on this account, as today's core cools only the model that answered;
+		// a used-up plan allowance (usage_limit_reached, above) is the account's.
+		e.Code, e.Scope, e.Retryable = llm.CodeRateLimit, llm.ScopeModel, true
+		if model == "" {
+			// A call for no model (the usage endpoint): the account is the one limited.
+			e.Scope = llm.ScopeCredential
+		}
 		if e.ProviderCode == "insufficient_quota" {
 			e.Code = llm.CodeQuota
 		}
@@ -501,7 +507,7 @@ func classify(err error) error {
 		// another account unless its opt-in bootstrap buffering is on.
 		e.Code, e.Scope, e.Status = llm.CodeRateLimit, llm.ScopeModel, http.StatusTooManyRequests
 	case code == "rate_limit_exceeded" || ce.Type == "rate_limit_error":
-		e.Code, e.Scope, e.Status = llm.CodeRateLimit, llm.ScopeCredential, http.StatusTooManyRequests
+		e.Code, e.Scope, e.Status = llm.CodeRateLimit, llm.ScopeModel, http.StatusTooManyRequests
 	case ce.Type == "invalid_request_error":
 		e.Code, e.Scope, e.Status = llm.CodeInvalidRequest, llm.ScopeRequest, http.StatusBadRequest
 	}

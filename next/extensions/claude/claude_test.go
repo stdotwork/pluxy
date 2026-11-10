@@ -77,7 +77,7 @@ func TestUpstreamError(t *testing.T) {
 		minWaitMS int64
 	}{
 		{"overloaded", response(529, nil, `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`), llm.CodeUnavailable, llm.ScopeEndpoint, true, 0},
-		{"rate limit", response(429, map[string]string{"Retry-After": "20"}, `{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`), llm.CodeRateLimit, llm.ScopeCredential, true, 20000},
+		{"rate limit", response(429, map[string]string{"Retry-After": "20"}, `{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`), llm.CodeRateLimit, llm.ScopeModel, true, 20000},
 		{"subscription window used up", response(429, map[string]string{
 			"Anthropic-Ratelimit-Unified-Status": "rejected", "Anthropic-Ratelimit-Unified-Reset": itoa(int(reset)),
 		}, `{"type":"error","error":{"type":"rate_limit_error","message":"limit reached"}}`), llm.CodeQuota, llm.ScopeCredential, true, 80 * 60 * 1000},

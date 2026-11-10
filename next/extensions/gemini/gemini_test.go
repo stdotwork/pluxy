@@ -40,8 +40,8 @@ func TestUpstreamErrors(t *testing.T) {
 	srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) { geminitest.RateLimited(w, 7) }
 	key := srv.IssueKey()
 	resp := post(t, srv.URL+"/v1beta/models/m:generateContent", key)
-	if e := upstreamError(resp, "m"); e.Code != llm.CodeRateLimit || !e.Retryable || e.RetryAfterMS != 7000 || e.ProviderCode != "RESOURCE_EXHAUSTED" {
-		t.Errorf("429 with RetryInfo 7s = %+v", e)
+	if e := upstreamError(resp, "m"); e.Code != llm.CodeRateLimit || e.Scope != llm.ScopeModel || !e.Retryable || e.RetryAfterMS != 7000 || e.ProviderCode != "RESOURCE_EXHAUSTED" {
+		t.Errorf("429 with RetryInfo 7s = %+v, want a retryable rate limit on the model", e)
 	}
 	// A used-up quota (ErrorInfo reason QUOTA_EXHAUSTED) is a quota error, not a rate limit.
 	srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
@@ -52,8 +52,13 @@ func TestUpstreamErrors(t *testing.T) {
 			`{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"3600s"}]}}`)
 	}
 	resp = post(t, srv.URL+"/v1beta/models/m:generateContent", key)
-	if e := upstreamError(resp, "m"); e.Code != llm.CodeQuota || !e.Retryable || e.RetryAfterMS != 3_600_000 {
-		t.Errorf("429 QUOTA_EXHAUSTED = %+v, want a retryable quota error with the retry delay", e)
+	if e := upstreamError(resp, "m"); e.Code != llm.CodeQuota || e.Scope != llm.ScopeModel || !e.Retryable || e.RetryAfterMS != 3_600_000 {
+		t.Errorf("429 QUOTA_EXHAUSTED = %+v, want a retryable quota error on the model with the retry delay", e)
+	}
+	// The same 429 on a call for no model (login or the model list) is the account's.
+	resp = post(t, srv.URL+"/v1beta/models/m:generateContent", key)
+	if e := upstreamError(resp, ""); e.Code != llm.CodeQuota || e.Scope != llm.ScopeCredential {
+		t.Errorf("429 for no model = %+v, want it on the credential", e)
 	}
 	resp = post(t, srv.URL+"/v1beta/models/m:generateContent", "not-a-key")
 	if e := upstreamError(resp, "m"); e.Code != llm.CodeAuth || !e.Retryable || e.Scope != llm.ScopeCredential || e.Status != http.StatusBadRequest {

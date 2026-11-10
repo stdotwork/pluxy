@@ -102,7 +102,7 @@ var googleStatus = map[string]struct{ code, scope string }{
 	"UNAUTHENTICATED":     {llm.CodeAuth, llm.ScopeCredential},
 	"PERMISSION_DENIED":   {llm.CodePermission, llm.ScopeCredential},
 	"NOT_FOUND":           {llm.CodeNotFound, llm.ScopeModel},
-	"RESOURCE_EXHAUSTED":  {llm.CodeRateLimit, llm.ScopeCredential},
+	"RESOURCE_EXHAUSTED":  {llm.CodeRateLimit, llm.ScopeModel},
 	"UNAVAILABLE":         {llm.CodeUnavailable, llm.ScopeEndpoint},
 	"CANCELLED":           {llm.CodeCancelled, llm.ScopeRequest},
 }
