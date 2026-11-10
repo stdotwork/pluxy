@@ -139,6 +139,7 @@ func NewManagement(cfg func() *Config, creds *cred.Manager, state *route.State) 
 	m.Handle("GET /logins/{id}", m.login)
 	m.Handle("POST /logins/{id}/input", m.input)
 	m.Handle("DELETE /logins/{id}", m.cancel)
+	m.Handle("POST /vertex/import", m.importVertex)
 	return m
 }
 

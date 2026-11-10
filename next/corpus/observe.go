@@ -99,13 +99,13 @@ func run(ctx context.Context, c *Case, base string, up *FakeUpstream, old bool) 
 		up.waitWebSockets(closeWait)
 	default:
 		var err error
-		if reply, err = send(ctx, c.Client, base); err != nil {
+		if reply, err = send(ctx, expandBodyText(c.Client, up.URL), base); err != nil {
 			return nil, err
 		}
 	}
 	var then []any
 	for _, t := range c.Then {
-		r, err := send(ctx, t, base)
+		r, err := send(ctx, expandBodyText(t, up.URL), base)
 		if err != nil {
 			return nil, err
 		}
@@ -162,6 +162,23 @@ const (
 	placeholderAuthIndex = "{{auth_index}}"
 )
 
+// placeholderPrivateKey stands, in a request's body_text, for the RSA private key the corpus
+// makes for the run (corpusRSA), written as the inside of a JSON string, so a case can send a
+// service account key file without holding a key.
+const placeholderPrivateKey = "{{private_key}}"
+
+// expandBodyText replaces the placeholders in a request's body_text, for either core:
+// {{upstream}} with the fake upstream's base URL and {{private_key}} with the run's RSA key.
+func expandBodyText(cr ClientRequest, upstreamURL string) ClientRequest {
+	if cr.BodyText == nil {
+		return cr
+	}
+	key, _ := json.Marshal(corpusRSA())
+	s := strings.NewReplacer(placeholderUpstream, upstreamURL, placeholderPrivateKey, string(key[1:len(key)-1])).Replace(*cr.BodyText)
+	cr.BodyText = &s
+	return cr
+}
+
 // expandOldRequests returns the old core's requests for the case with the placeholders replaced:
 // the fake upstream's URL, and the auth_index the old core at base gives its one auth file (it
 // hashes the file's path, which changes every run, so the runner asks for it).
@@ -186,6 +203,7 @@ func expandOldRequests(ctx context.Context, c *Case, base, upstreamURL string) (
 		if err := json.Unmarshal(b, &out[i]); err != nil {
 			return nil, err
 		}
+		out[i] = expandBodyText(out[i], upstreamURL)
 	}
 	return out, nil
 }

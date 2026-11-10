@@ -32,6 +32,13 @@ type LoginRequest struct {
 	// Extension is the ID of the extension that signs in and owns the account. Empty: the one
 	// extension that runs (for a reauth, the account's own).
 	Extension string
+	// Label names the new account for people when the provider's grant carries none. A new
+	// login to an existing account (Reauth) keeps the account's label.
+	Label string
+	// Registration, when set with Reauth, is the registration of the account the caller
+	// checked: the login is refused if the account was removed and added again since, so a
+	// check made before starting still holds when it starts (and finishLogin fences the rest).
+	Registration string
 	// Method is one of the provider's login methods.
 	Method string
 	// Input is what the user entered when starting the login.
@@ -56,6 +63,7 @@ type login struct {
 	extension           string
 	reauth              bool
 	registration        string // the account's, for a reauth
+	label               string // the request's, for the label of a new account
 	fields              route.Account
 	call                LoginCall // set under Manager.mu once the call has started
 	cancel              context.CancelFunc
@@ -117,7 +125,7 @@ func (m *Manager) StartLogin(ctx context.Context, req LoginRequest) (LoginView, 
 	if !slices.ContainsFunc(info.LoginMethods, func(lm protocol.LoginMethod) bool { return lm.Method == req.Method }) {
 		return LoginView{}, fmt.Errorf("%w: extension %s has no login method %q", ErrInvalid, info.ID, req.Method)
 	}
-	l := &login{account: id, extension: ext, method: req.Method, reauth: req.Reauth, fields: req.Account, first: make(chan struct{}), state: LoginPending}
+	l := &login{account: id, extension: ext, method: req.Method, reauth: req.Reauth, fields: req.Account, label: req.Label, first: make(chan struct{}), state: LoginPending}
 	m.mu.Lock()
 	m.dropOldLogins()
 	for _, o := range m.logins {
@@ -137,6 +145,9 @@ func (m *Manager) StartLogin(ctx context.Context, req LoginRequest) (LoginView, 
 	case exists && rec.Extension != ext:
 		m.mu.Unlock()
 		return LoginView{}, fmt.Errorf("%w: account %q belongs to extension %s", ErrConflict, id, rec.Extension)
+	case exists && req.Registration != "" && rec.Registration != req.Registration:
+		m.mu.Unlock()
+		return LoginView{}, fmt.Errorf("%w: account %q was removed and added again", ErrConflict, id)
 	case exists:
 		l.registration, l.fields = rec.Registration, rec.Account
 	}
@@ -246,7 +257,11 @@ func (m *Manager) finishLogin(l *login, g *protocol.Grant) error {
 	if m.reserved(l.account) {
 		return fmt.Errorf("account %q is now set in core's config", l.account)
 	}
-	_, err := m.store.Create(Record{ID: l.account, Extension: l.extension, State: StateActive, Label: g.Label, Identity: g.Identity,
+	label := g.Label
+	if label == "" {
+		label = l.label
+	}
+	_, err := m.store.Create(Record{ID: l.account, Extension: l.extension, State: StateActive, Label: label, Identity: g.Identity,
 		Account: l.fields, Credential: *g.Credential})
 	if err != nil {
 		return err
