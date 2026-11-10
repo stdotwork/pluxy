@@ -378,4 +378,7 @@ func TestCompactLiteFromClientMetadata(t *testing.T) {
 	if strings.Contains(string(got), "web_search_call") || reqs[0].body["tools"] != nil {
 		t.Errorf("input upstream = %s, tools %v; want the replayed search removed and no tool", got, reqs[0].body["tools"])
 	}
+	if got := reqs[0].body["parallel_tool_calls"]; got != false {
+		t.Errorf("parallel_tool_calls upstream = %v, want false", got)
+	}
 }

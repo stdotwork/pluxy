@@ -69,12 +69,6 @@
   ],
   "exceptions": [
     {
-      "path": "upstream[0].body.parallel_tool_calls",
-      "kind": "gap",
-      "absent": true,
-      "reason": "Today's core also turns parallel tool calls off (parallel_tool_calls false) on a Responses-lite compaction request, as on /responses; the new core's compaction does not do that yet."
-    },
-    {
       "path": "upstream[*].headers.Accept-Encoding",
       "kind": "intended",
       "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."
