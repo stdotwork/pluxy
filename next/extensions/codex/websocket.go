@@ -270,14 +270,16 @@ func lostError(err error) error {
 // frameError gives an upstream error message the meaning its HTTP status has, as today's core
 // does: the WebSocket carries in the message ("status", "headers", and the error in "error" or
 // "body.error") what an HTTP reply carries in its response, so the message is read as that
-// reply would be (statusError), whatever its body's error type says. A message without a status
-// keeps what its error type means (err).
+// reply would be (statusError), whatever its body's error type says. Only an error message is read
+// this way, as today's core reads it: a response.failed keeps what its response.error means (err),
+// whatever status it carries, and so does a message without a status.
 func frameError(data []byte, err error) error {
 	var e *llm.Error
 	if !errors.As(err, &e) {
 		return err
 	}
 	var f struct {
+		Type       string                     `json:"type"`
 		Status     int                        `json:"status"`
 		StatusCode int                        `json:"status_code"`
 		Headers    map[string]json.RawMessage `json:"headers"`
@@ -291,7 +293,7 @@ func frameError(data []byte, err error) error {
 	if status == 0 {
 		status = f.StatusCode
 	}
-	if status < 400 || status > 599 {
+	if f.Type != "error" || status < 400 || status > 599 {
 		return e
 	}
 	errObj := f.Body.Error
