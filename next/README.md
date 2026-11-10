@@ -546,6 +546,13 @@ thought turn; the extension keeps that order. Today's core leaves out a trailing
 message of a Chat Completions or Responses request (an assistant prefill), so its request ends
 with the user's turn; this extension keeps the message and adds the user turn after it.
 
+**Function call IDs.** A translated request names a function call and its response with the call's
+ID. On Vertex AI the extension leaves the IDs out of requests from Responses and Chat Completions
+clients, as today's core does: Vertex rejects the IDs of a Responses client's calls, and today's core
+never writes a Chat client's tool call IDs to a Gemini upstream. The response is still matched to
+its call by the function's name. A Messages client's IDs, a Gemini client's own, and every ID sent
+to the Gemini API are kept.
+
 Today's core can also relay Gemini requests through a browser tab signed in to AI Studio, which
 connects to core over a WebSocket. This extension does not: the extension protocol gives a
 program no listener that outlives its calls, and core stops idle programs.

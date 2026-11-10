@@ -188,6 +188,9 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
 			}
 		}()
 	}
+	if s.Vertex != nil && !vertexCallIDs(tr.From) {
+		body = stripCallIDs(body)
+	}
 	resp, err := postBody(ctx, t, body, call.Request.Stream, call.Request.Model)
 	if err != nil {
 		return err
