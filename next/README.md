@@ -281,7 +281,8 @@ characters (an MCP name `mcp__server__tool` becomes `mcp__tool`; names that come
 `_1`, `_2`); the reply gives the client its own names back. A Responses client's function names
 and call IDs go as it wrote them. Three schema forms
 the Codex endpoint rejects, which MCP servers' tools often use, are rewritten in every function
-tool's parameters (also inside namespace tools), whichever client sent them: a `pattern` or
+tool's parameters (also inside namespace tools, and in compaction requests), whichever client
+sent them: a `pattern` or
 `patternProperties` key with a Unicode property escape (`\p{...}`) or `\0` is removed, a numeric
 bound that is a whole number outside the 64-bit integer range is removed, and a property whose
 `oneOf` or `anyOf` has eight or more branches that are only distinct constants becomes an `enum`.
