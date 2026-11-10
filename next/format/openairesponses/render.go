@@ -289,6 +289,10 @@ type StreamWriter struct {
 	// output_index, and those without one in order (see repairOutput).
 	done      map[int]json.RawMessage
 	unindexed []json.RawMessage
+	// KeepOutput, set by the caller before the first Write, passes a terminal event's output on
+	// as the upstream sent it: an empty output stays empty. Today's core does so for a
+	// Responses-lite WebSocket turn on a Codex account.
+	KeepOutput bool
 }
 
 // NewStreamWriter returns a writer for one client stream of req.
@@ -359,7 +363,7 @@ func (s *StreamWriter) repairOutput(typ string, raw json.RawMessage) json.RawMes
 	default:
 		return raw
 	}
-	if len(s.done) == 0 && len(s.unindexed) == 0 {
+	if s.KeepOutput || len(s.done) == 0 && len(s.unindexed) == 0 {
 		return raw
 	}
 	var ev map[string]json.RawMessage
