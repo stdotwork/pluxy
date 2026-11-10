@@ -25,6 +25,17 @@ func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if call.Request.Native != nil {
 		format = call.Request.Native.Format
 	}
+	if isSIWC(call.Account.Credential) {
+		// A SIWC account serves compaction only: today's core makes its images through
+		// Responses instead, which this extension does not, and sends its Alpha Search with the
+		// ChatGPT sign-in's own token, which a SIWC account does not have.
+		switch {
+		case format != llm.FormatOpenAIResponsesCompact:
+			return siwcUnsupported(fmt.Sprintf("%q", format))
+		case codexClient(call.Request):
+			return siwcCodexClient()
+		}
+	}
 	switch format {
 	case llm.FormatOpenAIResponsesCompact:
 		return compact(ctx, call, out)
@@ -60,6 +71,10 @@ func compact(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	}
 	m["model"] = raw(req.Model)
 	delete(m, "stream")
+	if a.siwc {
+		// Today's core leaves store to the OpenAI API's default on a SIWC compaction.
+		delete(m, "store")
+	}
 	if v, ok := m["instructions"]; !ok || string(v) == "null" {
 		m["instructions"] = raw("")
 	}
@@ -82,6 +97,9 @@ func compact(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	sh.promptCacheKey()
 	if k, ok := sh.m["prompt_cache_key"]; ok {
 		m["prompt_cache_key"] = k
+	}
+	if a.siwc {
+		siwcBody(m, req.Options.ThinkingSuffix != "")
 	}
 	// Replayed web searches need a web search tool, as on /responses.
 	webSearchForHistory(m, sh.lite())

@@ -1,0 +1,98 @@
+{
+  "description": "Sign in with ChatGPT: an OpenAI error body from api.openai.com (400, invalid_request_error) reaches a Responses client with its status and error object.",
+  "source": [
+    "core/internal/runtime/executor/codex_executor_request.go (SIWC rules: applyCodexSIWCRequestBodyRulesDoc, applyCodexHeadersWithSIWC)",
+    "core/internal/runtime/executor/codex_executor_execute.go",
+    "core/internal/runtime/executor/codex_executor_auth.go (codexCredsForRequest: the SIWC access token and https://api.openai.com/v1)"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "body": {"model":"gpt-6.1-sol","input":"Say hello","stream":true}
+  },
+  "upstream": [
+    {
+      "status": 400,
+      "headers": {"Content-Type":"application/json"},
+      "body": {
+        "error": {
+          "type": "invalid_request_error",
+          "message": "Unsupported parameter: 'corpus_field'.",
+          "code": "unsupported_parameter"
+        }
+      }
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[*].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."
+    },
+    {
+      "path": "upstream[*].headers.User-Agent",
+      "kind": "intended",
+      "reason": "A Sign in with ChatGPT (SIWC) account names this program in its User-Agent (\"<identifier> (<GOOS>; <GOARCH>)\", from the signin_with_chatgpt_identifier setting); the new core's default identifier is pluxy, today's core's CLIProxyAPI, its own name. With the identifier set on both cores the values match (configuration-update).",
+      "want": "pluxy (linux; amd64)"
+    },
+    {
+      "path": "upstream[*].headers.Session_id",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    },
+    {
+      "path": "upstream[*].headers.X-Client-Request-Id",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    },
+    {
+      "path": "upstream[*].body.prompt_cache_key",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {
+          "code": "unsupported_parameter",
+          "message": "Unsupported parameter: 'corpus_field'.",
+          "type": "invalid_request_error"
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 400
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": ["reasoning.encrypted_content"],
+          "input": [
+            {"content":[{"text":"Say hello","type":"input_text"}],"role":"user","type":"message"}
+          ],
+          "model": "gpt-6.1-sol",
+          "prompt_cache_key": "f674c4c7-551b-57dd-ab73-9724cff0fe39",
+          "store": false,
+          "stream": true
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0NDQ4MDAsInN1YiI6ImNvcnB1cy1zaXdjfHNrLWNvcnB1cy11cHN0cmVhbSJ9.corpus",
+          "Content-Type": "application/json",
+          "Session_id": "f674c4c7-551b-57dd-ab73-9724cff0fe39",
+          "User-Agent": "CLIProxyAPI (linux; amd64)",
+          "X-Client-Request-Id": "f674c4c7-551b-57dd-ab73-9724cff0fe39"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      }
+    ]
+  }
+}

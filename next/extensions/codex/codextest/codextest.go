@@ -2,7 +2,9 @@
 // testing the Codex provider extension without reaching OpenAI. It speaks the login endpoints the
 // extension uses (the authorization code grant with PKCE, OpenAI's device-code flow and refresh),
 // answers POST /responses and /backend-api/codex/responses with scripted streams, and answers
-// GET /backend-api/wham/usage, the ChatGPT usage endpoint.
+// GET /backend-api/wham/usage, the ChatGPT usage endpoint. It also speaks Sign in with ChatGPT
+// (SIWC): GET /api/accounts/authorize, whose result carries the client ID it issues, and
+// POST /api/accounts/oauth/token for that client.
 //
 // Tokens are unsigned JWTs. Refresh tokens rotate: each one works once, and using one again is
 // refused as refresh_token_reused, as OpenAI does.
@@ -30,6 +32,15 @@ import (
 // ClientID is the OAuth client the extension must identify as.
 const ClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
 
+// SIWC: the client a SIWC sign-in asks to register, the client ID the fake issues to it, the API
+// the tokens are for, and the scope it grants.
+const (
+	SIWCClientID       = "dynamic_agent_client"
+	SIWCIssuedClientID = "siwc-client-codextest"
+	SIWCResource       = "https://api.openai.com/v1"
+	SIWCScope          = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"
+)
+
 // Account is the ChatGPT account every sign-in belongs to.
 const (
 	AccountID = "acct-codextest"
@@ -49,6 +60,8 @@ type Server struct {
 	Usage string
 	// AccessTTL is how long the n-th issued access token lasts (n from 1). Default: an hour.
 	AccessTTL func(n int) time.Duration
+	// SIWCGrantScope, if set, is the scope a SIWC grant names in place of SIWCScope.
+	SIWCGrantScope string
 
 	mu        sync.Mutex
 	codes     map[string]codeGrant // authorization code -> grant
@@ -58,6 +71,7 @@ type Server struct {
 	issued    int
 	refreshes int
 	requests  []Request
+	siwc      []url.Values // SIWC authorize queries and token forms, in order
 	hangs     map[string]chan struct{}
 	block     chan struct{}
 	started   chan struct{}
@@ -90,6 +104,8 @@ func New(t testing.TB) *Server {
 	mux.HandleFunc("POST /oauth/token", s.token)
 	mux.HandleFunc("POST /api/accounts/deviceauth/usercode", s.userCode)
 	mux.HandleFunc("POST /api/accounts/deviceauth/token", s.deviceToken)
+	mux.HandleFunc("GET /api/accounts/authorize", s.siwcAuthorize)
+	mux.HandleFunc("POST /api/accounts/oauth/token", s.siwcToken)
 	mux.HandleFunc("POST /responses", s.responses)
 	mux.HandleFunc("POST /backend-api/codex/responses", s.responses)
 	mux.HandleFunc("GET /backend-api/wham/usage", s.usage)
@@ -207,6 +223,112 @@ func (s *Server) Requests() []Request {
 	return append([]Request(nil), s.requests...)
 }
 
+// SIWCCalls returns the query of each SIWC authorize request and the form of each SIWC token
+// request, in the order they came.
+func (s *Server) SIWCCalls() []url.Values {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]url.Values(nil), s.siwc...)
+}
+
+// siwcAuthorize is the SIWC sign-in page: it checks the request as OpenAI would need it and
+// sends the browser back with a code and the client ID it issued.
+func (s *Server) siwcAuthorize(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	s.mu.Lock()
+	s.siwc = append(s.siwc, q)
+	s.mu.Unlock()
+	if q.Get("client_id") != SIWCClientID || q.Get("response_type") != "code" || q.Get("code_challenge_method") != "S256" ||
+		q.Get("code_challenge") == "" || q.Get("state") == "" || q.Get("nonce") == "" || q.Get("agent_name_hint") == "" ||
+		!strings.HasPrefix(q.Get("ext_agent_host_id"), "urn:uuid:") || q.Get("resource") != SIWCResource || q.Get("scope") != SIWCScope {
+		http.Error(w, "bad authorize request", http.StatusBadRequest)
+		return
+	}
+	back, err := url.Parse(q.Get("redirect_uri"))
+	if err != nil {
+		http.Error(w, "bad redirect_uri", http.StatusBadRequest)
+		return
+	}
+	v := url.Values{"state": {q.Get("state")}}
+	if s.DenyBrowser {
+		v.Set("error", "access_denied")
+	} else {
+		code := random()
+		s.mu.Lock()
+		s.codes[code] = codeGrant{challenge: q.Get("code_challenge"), redirect: q.Get("redirect_uri")}
+		s.mu.Unlock()
+		v.Set("code", code)
+		v.Set("client_id", SIWCIssuedClientID)
+	}
+	back.RawQuery = v.Encode()
+	http.Redirect(w, r, back.String(), http.StatusFound)
+}
+
+// siwcToken is the SIWC token endpoint: the code exchange and renewal of the issued client, for
+// the API resource; refresh tokens rotate as on the Codex token endpoint.
+func (s *Server) siwcToken(w http.ResponseWriter, r *http.Request) {
+	if r.ParseForm() != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
+		return
+	}
+	f := r.PostForm
+	s.mu.Lock()
+	s.siwc = append(s.siwc, f)
+	s.mu.Unlock()
+	if f.Get("client_id") != SIWCIssuedClientID {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid_client"})
+		return
+	}
+	if f.Get("resource") != SIWCResource {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_target"})
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch f.Get("grant_type") {
+	case "authorization_code":
+		g, ok := s.codes[f.Get("code")]
+		delete(s.codes, f.Get("code"))
+		sum := sha256.Sum256([]byte(f.Get("code_verifier")))
+		if !ok || g.redirect != f.Get("redirect_uri") || base64.RawURLEncoding.EncodeToString(sum[:]) != g.challenge {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_grant"})
+			return
+		}
+	case "refresh_token":
+		s.refreshes++
+		if s.RefreshFailure == "unavailable" {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "temporarily_unavailable"})
+			return
+		}
+		valid, known := s.refresh[f.Get("refresh_token")]
+		if !known || !valid {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_grant"})
+			return
+		}
+		s.refresh[f.Get("refresh_token")] = false
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unsupported_grant_type"})
+		return
+	}
+	t := s.issueLocked()
+	t.Scope = SIWCScope
+	if s.SIWCGrantScope != "" {
+		t.Scope = s.SIWCGrantScope
+	}
+	if f.Get("grant_type") == "refresh_token" {
+		t.IDToken = "" // a renewal need not send one
+	}
+	writeJSON(w, http.StatusOK, t)
+}
+
+// SIWCGrant signs in with ChatGPT directly and returns the tokens a SIWC login would have given.
+func (s *Server) SIWCGrant() (access, refresh string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := s.issueLocked()
+	return t.AccessToken, t.RefreshToken
+}
+
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	if q.Get("client_id") != ClientID || q.Get("response_type") != "code" || q.Get("code_challenge_method") != "S256" ||
@@ -286,6 +408,7 @@ type tokens struct {
 	IDToken      string `json:"id_token"`
 	TokenType    string `json:"token_type"`
 	ExpiresIn    int64  `json:"expires_in"`
+	Scope        string `json:"scope,omitempty"`
 }
 
 func (s *Server) token(w http.ResponseWriter, r *http.Request) {

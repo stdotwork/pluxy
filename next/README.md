@@ -8,7 +8,7 @@ OpenAI-compatible API-key provider, which talks to an upstream that speaks any o
 in the upstream's own format passes through unchanged; a Responses, Messages or Gemini request to a
 Chat upstream, a Messages or Gemini request to a Responses upstream, and a Gemini request to a
 Messages upstream are translated, and what the translation could not carry is logged. The
-[Codex provider](#codex) serves OpenAI's Codex models from an API key or a ChatGPT subscription.
+[Codex provider](#codex) serves OpenAI's Codex models from an API key, a ChatGPT subscription or a Sign in with ChatGPT (SIWC) sign-in.
 
 ## Layout
 
@@ -21,7 +21,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `conformance/` | The conformance kit extensions run in their tests. |
 | `format/` | Client and upstream formats as libraries extensions build in: `sse`, `openaichat`, `openairesponses`, `anthropicmessages`, `geminigenerate`. |
 | `extensions/openai-compatible` | Provider extension for OpenAI-compatible APIs with an API key. |
-| `extensions/codex` | Provider extension for OpenAI's Codex models: an OpenAI API key or a ChatGPT subscription (sign-in in a browser or with a device code), with a fake OpenAI login server and Codex endpoint for tests (`codextest`). |
+| `extensions/codex` | Provider extension for OpenAI's Codex models: an OpenAI API key, a ChatGPT subscription (sign-in in a browser or with a device code) or a Sign in with ChatGPT (SIWC) sign-in, with a fake OpenAI login server and Codex endpoint for tests (`codextest`). |
 | `extensions/claude` | Provider extension for Anthropic's Claude, with an API key or a Claude subscription login; `claudetest` is a fake Anthropic for its tests. |
 | `extensions/gemini` | Provider extension for Google's Gemini: the Gemini API with an API key, and Vertex AI with a service account or an express mode key; `geminitest` is a fake Google for its tests. |
 | `extensions/kimi` | Provider extension for Kimi Code, Moonshot AI's coding subscription, signed in with a device code; `kimitest` is a fake Kimi for its tests. |
@@ -245,7 +245,7 @@ A config written for today's core, with its key names, works too: see
 ## Codex
 
 The Codex provider extension (`extensions/codex`) serves OpenAI's Codex models from an OpenAI API
-key or a ChatGPT subscription. Build it as `extensions/codex/codex` and name its manifest:
+key, a ChatGPT subscription or a Sign in with ChatGPT (SIWC) sign-in (below). Build it as `extensions/codex/codex` and name its manifest:
 
 ```json
 {
@@ -294,11 +294,12 @@ Account `settings`, all optional:
 
 | Field | Meaning |
 | --- | --- |
-| `base_url` | Default `https://api.openai.com/v1` for an API key, `https://chatgpt.com/backend-api/codex` for a subscription. |
+| `base_url` | Default `https://api.openai.com/v1` for an API key and a SIWC sign-in, `https://chatgpt.com/backend-api/codex` for a subscription. |
 | `codex_identity` | Default `true`: send the Codex client's `User-Agent` and `originator`. |
 | `image_generation_tool` | Default `true`: offer the hosted `image_generation` tool, as today's core does (never to a free plan or a `-spark` model). |
-| `callback_listen` | Default `true`: let a browser sign-in listen on `localhost:1455`. |
+| `callback_listen` | Default `true`: let a browser or SIWC sign-in listen on port 1455. |
 | `images` | Default `true`: serve the Images API on the account (below). |
+| `signin_with_chatgpt_identifier` | Default `pluxy`: the name a SIWC sign-in gives this program, shown on the sign-in page (`agent_name_hint`) and starting its requests' `User-Agent`. Today's core calls it `codex.signin-with-chatgpt-identifier`, with the default `CLIProxyAPI`. |
 | `websockets` | Default `false`: send a Responses WebSocket client's turns to `{base_url}/responses` over one upstream WebSocket per client socket (Codex's WebSocket transport), as today's core does with `websockets: true`. A socket the upstream drops is not replaced in the middle of a turn: the client gets `upstream_websocket_lost` and sends the whole conversation again. |
 | `alpha_search` | Default `false` ("Enable Alpha Search"): let an API key account serve Codex's Alpha Search, as today's core does with `alpha-search: true`; a key without it is not asked, since not every upstream has the endpoint. A ChatGPT sign-in always serves it. |
 
@@ -348,7 +349,34 @@ an image file, is refused with a 400. The image models are `gpt-image-1.5`, `gpt
 lists, as in today's core; any other model is refused. A free ChatGPT plan, and an account with
 `"images": false`, does not serve them, so core tries another account.
 
-**Quota.** For a ChatGPT sign-in account, `GET /v0/management/accounts/{id}/quota` reads `GET {backend}/wham/usage`, where `{backend}` is the account's `base_url` without a trailing `/codex` (default `https://chatgpt.com/backend-api`), with the access token, the `Chatgpt-Account-Id` header and the same `User-Agent` and `Originator` the account's requests carry (so `codex_identity` applies). It reports the plan (`plan_type`), the 5-hour and weekly or monthly windows (`five_hour`, `weekly`, `monthly`), code review's windows (`code_review_*`), each extra limit such as one model's (`<name>_five_hour` and so on) and the credit balance (`credits`), with the share used, reset time and window length. An API key answers unsupported. A sign-in's grant carries `identity` `{"email", "account_id"}`: members of one ChatGPT workspace share its account ID, so the e-mail address tells them apart.
+**Sign in with ChatGPT (SIWC).** Login method `siwc` ("Sign in with ChatGPT (SIWC)") signs in to
+ChatGPT as an agent other than the Codex client and adds an account whose token calls the OpenAI
+API on the user's ChatGPT plan, as the `siwc` section of a Codex credential does in today's core.
+It runs like the browser sign-in (a redirect to port 1455 on `127.0.0.1`, or the pasted address as
+the `redirect_url` input), as OpenAI's agent client `dynamic_agent_client`, for the resource
+`https://api.openai.com/v1` with the `chatgpt.tokens.use.direct` scope, which the grant must
+include, naming a new device ID and `signin_with_chatgpt_identifier` as the agent's name. The code
+exchange and every renewal use the client ID the sign-in result carries; core renews the tokens
+five minutes before they expire. The account's requests follow today's core's SIWC rules. They go
+to `{base_url}/responses` (default `https://api.openai.com/v1`) with the SIWC token and the
+`User-Agent` `<identifier> (<GOOS>; <GOARCH>)`, the session (when there is one) as `session_id`
+and `X-Client-Request-Id`, and none of the Codex client's headers, `Originator`,
+`Chatgpt-Account-Id` or routing hint; `codex_identity` and `image_generation_tool` do not apply,
+and no image tool is offered. `configuration_update` input items, which the OpenAI API refuses on
+such a token, are removed and the last one's reasoning effort becomes the request's (a thinking
+suffix's effort wins); `temperature`, `prompt_cache_retention`, `prompt_cache_options` and
+`max_completion_tokens` are removed, and blank `instructions` are left out. Compaction goes to
+`{base_url}/responses/compact` under the same rules, without `store`; a WebSocket turn goes without
+`stream` and `background`. The account answers unsupported, so core tries another account, for a
+request from a Codex client (a `User-Agent` naming `codex-tui`, `codex_cli_rs`, `codex-rs`,
+`codex_exec` or Codex Desktop), which today's core serves with the subscription's own token, which
+a SIWC account does not have; and for every endpoint but compaction, so it serves no Images API
+(today's core makes a SIWC account's images through Responses, which is not built). It lists its
+plan's models without the image models and has no quota to report. Binding SIWC to an existing
+subscription, as today's core does through its management API (`/v8/management/oauth/siwc/*`)
+and its `-siwc-bind` flag, is not built: the login method replaces it.
+
+**Quota.** For a ChatGPT sign-in account, `GET /v0/management/accounts/{id}/quota` reads `GET {backend}/wham/usage`, where `{backend}` is the account's `base_url` without a trailing `/codex` (default `https://chatgpt.com/backend-api`), with the access token, the `Chatgpt-Account-Id` header and the same `User-Agent` and `Originator` the account's requests carry (so `codex_identity` applies). It reports the plan (`plan_type`), the 5-hour and weekly or monthly windows (`five_hour`, `weekly`, `monthly`), code review's windows (`code_review_*`), each extra limit such as one model's (`<name>_five_hour` and so on) and the credit balance (`credits`), with the share used, reset time and window length. An API key or a SIWC account answers unsupported. A sign-in's grant carries `identity` `{"email", "account_id"}`: members of one ChatGPT workspace share its account ID, so the e-mail address tells them apart.
 
 ## Claude
 
@@ -1445,7 +1473,7 @@ are accepted silently.
 | `oauth.request-scoped-errors` (`oauth-request-scoped-errors`) and every `request-scoped-errors` | | Later |
 | `oauth.providers.aistudio.ws-auth` (`ws-auth`) | | Later: the AI Studio relay is not built |
 | `oauth.providers.codex.live-media-relay.*` | | Dropped: realtime and WebRTC are out of scope |
-| `oauth.providers.codex.signin-with-chatgpt-identifier` | | Later |
+| `oauth.providers.codex.signin-with-chatgpt-identifier` (`codex.signin-with-chatgpt-identifier`) | `signin_with_chatgpt_identifier` on the Sign in with ChatGPT (SIWC) accounts `-import-auth` adds. Left unset, they use the extension's default, `pluxy`. | Supported when importing |
 | `oauth.providers.antigravity.*` (`antigravity`, `antigravity-signature-*`, `quota-exceeded.antigravity-credits`), `oauth.providers.devin.*` (`devin`) | | Later |
 | `api-keys.meta` (`meta-api-key`), `api-keys.interactions` (`interactions-api-key`) | | Later |
 | Every `headers` and `connection-pool` | | Later |
@@ -1488,7 +1516,7 @@ use it from one core only, or sign in again in the other.
 
 | File `type` | Becomes | Notes |
 | --- | --- | --- |
-| `codex` | `pluxy/codex` subscription account | `access_token`, `refresh_token`, `expired` (the expiry); `id_token` and `account_id` stay with the credential; `websockets` is the account's `websockets`. |
+| `codex` | `pluxy/codex` subscription account | `access_token`, `refresh_token`, `expired` (the expiry); `id_token` and `account_id` stay with the credential; `websockets` is the account's `websockets`. A `siwc` section with a token (`access_token`, else `access`, or `refresh_token`) also becomes a [SIWC](#codex) account, `<file id>-siwc` (with `-2`, `-3` and so on when another file in the folder imports as that ID), even when the file's own tokens are missing: its `access_token`, `refresh_token`, `expires_at` (else `expired`), and `client_id`, `device_id`, `scope` and `id_token` with the credential. It is disabled unless the file says `use_siwc: true`; it shares the file's label and routing fields below, and takes only `websockets` and the identifier setting of the account settings. |
 | `claude` | `pluxy/claude` subscription account | `access_token`, `refresh_token`, `expired`. |
 | `kimi`, `kimi-ai` | `pluxy/kimi` account | `access_token`, `refresh_token`, `expired`, `device_id`; `base_url` is an account setting, and so is the site, `domain`, decided as today's core decides it: from `domain`, else `base_url`'s host, else the type (`kimi.ai` for `kimi-ai`). |
 | `vertex` | `pluxy/gemini` Vertex AI account with a service account | `service_account` is the credential; `project_id` and `location` (default `us-central1`, as in today's core) are the account's `vertex` settings. |

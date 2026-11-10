@@ -67,6 +67,7 @@ Providers with their own folder of cases:
 | `openai-responses`, `anthropic`, `gemini` | OpenAI-compatible extension, `wire_api` responses, messages or gemini | a Codex API key without the Codex identity, a Claude API key, a Gemini API key |
 | `codex` | Codex extension, API key | a Codex API key (Codex identity on) |
 | `codex-oauth` | Codex extension, a ChatGPT subscription's OAuth credential | a Codex auth file |
+| `codex-siwc` | Codex extension, the OAuth credential a Sign in with ChatGPT login produces (`siwc` in its data) with `base_url` | a Codex auth file with a nested `siwc` token set and `use_siwc`. Today's core sends a non-Codex client's requests to `https://api.openai.com/v1` whatever the file says, so it runs through the intercepting proxy (below) |
 | `gemini-api-key` | Gemini extension, API key | a Gemini API key |
 | `vertex-api-key` | Gemini extension, Vertex settings and an express mode key | a `vertex` API-key entry |
 | `vertex` | Gemini extension, a Vertex service account | a Vertex service account auth file |

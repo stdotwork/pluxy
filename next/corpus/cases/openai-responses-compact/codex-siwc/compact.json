@@ -1,0 +1,105 @@
+{
+  "description": "Sign in with ChatGPT: compaction goes to api.openai.com's /v1/responses/compact with the SIWC access token (Accept application/json, the SIWC User-Agent); stream, store, temperature and blank instructions are removed, the client's Session-Id header is not forwarded, and the reply comes back unchanged.",
+  "source": [
+    "core/internal/runtime/executor/codex_executor_request.go (SIWC rules: applyCodexSIWCRequestBodyRulesDoc, applyCodexHeadersWithSIWC)",
+    "core/internal/runtime/executor/codex_executor_execute.go",
+    "core/internal/runtime/executor/codex_executor_auth.go (codexCredsForRequest: the SIWC access token and https://api.openai.com/v1)",
+    "core/internal/runtime/executor/codex_executor_compact_test.go"
+  ],
+  "client": {
+    "path": "/v1/responses/compact",
+    "headers": {"Session-Id":"corpus-session-1"},
+    "body": {
+      "model": "gpt-6.1-sol",
+      "stream": false,
+      "store": true,
+      "instructions": "  ",
+      "temperature": 0.5,
+      "input": [
+        {"type":"message","role":"user","content":[{"type":"input_text","text":"Say hello"}]}
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "headers": {"Content-Type":"application/json"},
+      "body": {
+        "id": "resp_compact_corpus",
+        "object": "response.compaction",
+        "created_at": 1700000000,
+        "output": [
+          {"type":"message","role":"user","content":[{"type":"input_text","text":"Say hello"}]},
+          {"type":"compaction","id":"cmp_corpus","encrypted_content":"enc-compaction-corpus"}
+        ],
+        "usage": {
+          "input_tokens": 120,
+          "input_tokens_details": {"cached_tokens":0},
+          "output_tokens": 30,
+          "output_tokens_details": {"reasoning_tokens":10},
+          "total_tokens": 150
+        }
+      }
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[*].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."
+    },
+    {
+      "path": "upstream[*].headers.User-Agent",
+      "kind": "intended",
+      "reason": "A Sign in with ChatGPT (SIWC) account names this program in its User-Agent (\"<identifier> (<GOOS>; <GOARCH>)\", from the signin_with_chatgpt_identifier setting); the new core's default identifier is pluxy, today's core's CLIProxyAPI, its own name. With the identifier set on both cores the values match (configuration-update).",
+      "want": "pluxy (linux; amd64)"
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "created_at": 1700000000,
+        "id": "resp_compact_corpus",
+        "object": "response.compaction",
+        "output": [
+          {"content":[{"text":"Say hello","type":"input_text"}],"role":"user","type":"message"},
+          {"encrypted_content":"enc-compaction-corpus","id":"cmp_corpus","type":"compaction"}
+        ],
+        "usage": {
+          "input_tokens": 120,
+          "input_tokens_details": {"cached_tokens":0},
+          "output_tokens": 30,
+          "output_tokens_details": {"reasoning_tokens":10},
+          "total_tokens": 150
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "input": [
+            {"content":[{"text":"Say hello","type":"input_text"}],"role":"user","type":"message"}
+          ],
+          "model": "gpt-6.1-sol"
+        },
+        "headers": {
+          "Accept": "application/json",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0NDQ4MDAsInN1YiI6ImNvcnB1cy1zaXdjfHNrLWNvcnB1cy11cHN0cmVhbSJ9.corpus",
+          "Content-Type": "application/json",
+          "User-Agent": "CLIProxyAPI (linux; amd64)"
+        },
+        "method": "POST",
+        "path": "/v1/responses/compact"
+      }
+    ]
+  }
+}

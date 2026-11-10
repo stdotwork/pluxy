@@ -45,6 +45,10 @@ type ImportOptions struct {
 	// Images is false when multimedia.disable-image-generation is true, which also turns off the
 	// Images API routes: imported Codex accounts then get "images": false.
 	Images bool `json:"images"`
+	// SIWCIdentifier is codex.signin-with-chatgpt-identifier, trimmed: imported Sign in with
+	// ChatGPT accounts then get it as "signin_with_chatgpt_identifier". Empty: the extension's
+	// default.
+	SIWCIdentifier string `json:"signin_with_chatgpt_identifier,omitempty"`
 }
 
 // DefaultImportOptions are the import settings when the config sets none.
@@ -243,7 +247,7 @@ var rules = map[string]rule{
 	"oauth.request-scoped-errors":                          {later, ""},
 	"oauth.providers.aistudio.ws-auth":                     {later, "the AI Studio relay is not built"},
 	"oauth.providers.codex.live-media-relay":               {dropped, "realtime and WebRTC are out of scope"},
-	"oauth.providers.codex.signin-with-chatgpt-identifier": {later, ""},
+	"oauth.providers.codex.signin-with-chatgpt-identifier": {supported, ""}, // reported in options
 	"oauth.providers.antigravity":                          {later, ""},
 	"oauth.providers.devin":                                {later, ""},
 
@@ -434,6 +438,7 @@ var readPaths = []string{
 	"routing.retry.max-retry-credentials", "routing.retry.max-retry-interval", "routing.retry.request-retry",
 	"routing.force-model-prefix", "oauth.model-alias", "oauth.excluded-models",
 	"upstream.codex.disable-codex-cloaking", "upstream.codex.websocket-compression",
+	"oauth.providers.codex.signin-with-chatgpt-identifier",
 	"multimedia.disable-image-generation", "oauth.auth-dir", "observability.usage.usage-statistics-enabled",
 	"observability.logs.logging-to-file", "observability.logs.logs-max-total-size-mb",
 	"observability.logs.request-log", "observability.logs.error-logs-max-files",
@@ -630,6 +635,11 @@ func (x *translator) options() error {
 			x.notes = append(x.notes, "config.yaml: upstream.codex.websocket-compression: false is not supported: compression stays on")
 		}
 	}
+	id, err := str(x.t, "oauth.providers.codex.signin-with-chatgpt-identifier")
+	if err != nil {
+		return err
+	}
+	x.res.Import.SIWCIdentifier = strings.TrimSpace(id)
 	dir, err := str(x.t, "oauth.auth-dir")
 	if err != nil {
 		return err
@@ -1191,7 +1201,6 @@ var defaults = map[string]any{
 	"upstream.codex.upstream-request-compression-min-bytes":   1024,
 	"upstream.claude.session-date-pin-days":                   7,
 	"oauth.providers.aistudio.ws-auth":                        true,
-	"oauth.providers.codex.signin-with-chatgpt-identifier":    "CLIProxyAPI",
 	"oauth.providers.antigravity.antigravity-credits":         true,
 	"oauth.providers.antigravity.signature-cache-enabled":     true,
 	"multimedia.gpt-image-2-base-model":                       "gpt-5.4-mini",

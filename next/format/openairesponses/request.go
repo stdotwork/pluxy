@@ -21,11 +21,12 @@ import (
 const format = llm.FormatOpenAIResponses
 
 // Headers are the client request headers that belong to a Responses body (lower-case): those the
-// Codex CLI sends to name its session, window and turn and its own version and originator. A
-// Codex upstream reads them; an upstream that does not ignores them.
+// Codex CLI sends to name its session, window and turn and its own version and originator, and
+// the User-Agent, which tells a Codex client from others. A Codex upstream reads them; an
+// upstream that does not ignores them.
 var Headers = []string{
 	"session-id", "thread-id", "x-codex-window-id", "x-codex-turn-metadata", "x-codex-turn-state",
-	"x-codex-beta-features", "x-client-request-id", "version", "originator",
+	"x-codex-beta-features", "x-client-request-id", "version", "originator", "user-agent",
 	"x-openai-internal-codex-responses-lite",
 }
 

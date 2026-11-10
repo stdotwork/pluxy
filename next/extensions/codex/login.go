@@ -48,6 +48,7 @@ const (
 var loginMethods = []protocol.LoginMethod{
 	{Method: "browser", Kind: protocol.LoginBrowser, Label: "ChatGPT (browser)"},
 	{Method: "device", Kind: protocol.LoginDevice, Label: "ChatGPT (device code)"},
+	{Method: "siwc", Kind: protocol.LoginBrowser, Label: "Sign in with ChatGPT (SIWC)"},
 	{Method: "api_key", Kind: protocol.LoginAPIKey, Label: "OpenAI API key", Inputs: []protocol.LoginInput{
 		{Name: "api_key", Label: "API key", Secret: true},
 	}},
@@ -71,6 +72,8 @@ func login(ctx context.Context, call sdk.LoginCall, s *sdk.LoginSession) (*proto
 		return browserLogin(ctx, set, s)
 	case "device":
 		return deviceLogin(ctx, set, s)
+	case "siwc":
+		return siwcLogin(ctx, set, s)
 	case "api_key":
 		key := strings.TrimSpace(call.Input["api_key"])
 		if key == "" {
@@ -102,23 +105,36 @@ func browserLogin(ctx context.Context, set settings, s *sdk.LoginSession) (*prot
 		"codex_cli_simplified_flow":  {"true"},
 	}
 	authURL := strings.TrimRight(set.authBase(), "/") + "/oauth/authorize?" + q.Encode()
+	params, err := awaitRedirect(ctx, set, s, authURL, state,
+		"Open the link and sign in to ChatGPT. If the page you end on does not load, paste its address here.")
+	if err != nil {
+		return nil, err
+	}
+	tr, err := exchangeCode(ctx, set, params.Get("code"), verifier, redirectURI)
+	if err != nil {
+		return nil, err
+	}
+	return grantFrom(tr, nil)
+}
 
+// awaitRedirect shows the sign-in link authURL and waits for the browser's return from it: to the
+// callback the extension serves when it can, or as the address the user pastes. It returns the
+// query of the result for this login (state), which has an authorization code.
+func awaitRedirect(ctx context.Context, set settings, s *sdk.LoginSession, authURL, state, message string) (url.Values, error) {
 	results := make(chan url.Values, 2)
 	if set.CallbackListen == nil || *set.CallbackListen {
 		if stop := listenCallback(callbackHandler(state, results)); stop != nil {
 			defer stop()
 		}
 	}
-	if err := s.Prompt(protocol.Prompt{Kind: protocol.LoginBrowser, URL: authURL, ExpiresIn: 900,
-		Message: "Open the link and sign in to ChatGPT. If the page you end on does not load, paste its address here.",
-		Inputs:  []protocol.LoginInput{{Name: "redirect_url", Label: "Address the browser ended on"}}}); err != nil {
+	if err := s.Prompt(protocol.Prompt{Kind: protocol.LoginBrowser, URL: authURL, ExpiresIn: 900, Message: message,
+		Inputs: []protocol.LoginInput{{Name: "redirect_url", Label: "Address the browser ended on"}}}); err != nil {
 		return nil, err
 	}
 	fwdCtx, stopInputs := context.WithCancel(ctx)
 	defer stopInputs()
 	inputs, inputErr := forwardInputs(fwdCtx, s.Input)
-	var code string
-	for code == "" {
+	for {
 		var params url.Values
 		select {
 		case <-ctx.Done():
@@ -139,25 +155,19 @@ func browserLogin(ctx context.Context, set settings, s *sdk.LoginSession) (*prot
 				params = u.Query()
 			}
 		}
-		c, ok, err := signInResult(params, state)
+		_, ok, err := signInResult(params, state)
 		if err != nil {
 			return nil, err
 		}
-		if !ok {
-			if err := s.Prompt(protocol.Prompt{Kind: protocol.LoginBrowser, URL: authURL,
-				Message: "That address is not the result of this sign-in; open the link, sign in, and paste the whole address the browser ended on.",
-				Inputs:  []protocol.LoginInput{{Name: "redirect_url", Label: "Address the browser ended on"}}}); err != nil {
-				return nil, err
-			}
-			continue
+		if ok {
+			return params, nil
 		}
-		code = c
+		if err := s.Prompt(protocol.Prompt{Kind: protocol.LoginBrowser, URL: authURL,
+			Message: "That address is not the result of this sign-in; open the link, sign in, and paste the whole address the browser ended on.",
+			Inputs:  []protocol.LoginInput{{Name: "redirect_url", Label: "Address the browser ended on"}}}); err != nil {
+			return nil, err
+		}
 	}
-	tr, err := exchangeCode(ctx, set, code, verifier, redirectURI)
-	if err != nil {
-		return nil, err
-	}
-	return grantFrom(tr, nil)
 }
 
 // forwardInputs reads the login's inputs on its own goroutine, so the login can wait for an
@@ -328,10 +338,11 @@ type tokenResponse struct {
 	RefreshToken string `json:"refresh_token"`
 	IDToken      string `json:"id_token"`
 	ExpiresIn    int64  `json:"expires_in"`
+	Scope        string `json:"scope"`
 }
 
 func exchangeCode(ctx context.Context, set settings, code, verifier, redirect string) (*tokenResponse, error) {
-	return tokenRequest(ctx, set, url.Values{
+	return tokenRequest(ctx, set, "/oauth/token", url.Values{
 		"grant_type":    {"authorization_code"},
 		"client_id":     {clientID},
 		"code":          {code},
@@ -350,7 +361,14 @@ func refresh(ctx context.Context, call sdk.RefreshCall) (*protocol.Credential, e
 	if c == nil || c.Kind != protocol.CredentialOAuth || c.RefreshToken == "" {
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: "this credential cannot be renewed", Scope: llm.ScopeRequest}
 	}
-	tr, err := tokenRequest(ctx, set, url.Values{
+	var d credentialData
+	if len(c.Data) > 0 {
+		_ = json.Unmarshal(c.Data, &d)
+	}
+	if d.SIWC {
+		return siwcRefresh(ctx, set, c, d)
+	}
+	tr, err := tokenRequest(ctx, set, "/oauth/token", url.Values{
 		"client_id":     {clientID},
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {c.RefreshToken},
@@ -366,8 +384,9 @@ func refresh(ctx context.Context, call sdk.RefreshCall) (*protocol.Credential, e
 	return g.Credential, nil
 }
 
-func tokenRequest(ctx context.Context, set settings, form url.Values) (*tokenResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(set.authBase(), "/")+"/oauth/token", strings.NewReader(form.Encode()))
+// tokenRequest posts form to the login server's token endpoint at path.
+func tokenRequest(ctx context.Context, set settings, path string, form url.Values) (*tokenResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(set.authBase(), "/")+path, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad auth_base_url: " + err.Error(), Scope: llm.ScopeCredential}
 	}

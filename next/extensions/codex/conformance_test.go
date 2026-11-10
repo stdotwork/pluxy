@@ -64,7 +64,7 @@ func prepareLogin(t *testing.T, s conformance.LoginScenario, method string) conf
 				}
 				return nil
 			}}
-		case "browser":
+		case "browser", "siwc":
 			srv.DenyBrowser = !approve
 			return conformance.LoginSetup{Account: testAccount(srv, nil), Act: browserUser}
 		case "api_key":

@@ -157,6 +157,9 @@ func (s *wsSession) Turn(ctx context.Context, call sdk.Call, out *sdk.Stream) er
 	if err != nil {
 		return err
 	}
+	if a.siwc && codexClient(call.Request) {
+		return siwcCodexClient()
+	}
 	ur, err := buildRequest(call.Request, call.Account.ID, s.set, a, true)
 	if err != nil {
 		return err
@@ -332,12 +335,30 @@ func (s *wsSession) dial(ctx context.Context, req llm.Request, ur *upstreamReque
 	h := http.Header{}
 	h.Set("Authorization", "Bearer "+a.token)
 	h.Set("OpenAI-Beta", openAIBeta)
-	if ur.sessionID != "" {
-		// Today's core names the session in both, with these spellings.
-		h["session_id"] = []string{ur.sessionID}
-		h["Conversation_id"] = []string{ur.sessionID}
+	switch {
+	case a.siwc:
+		// As over HTTP, with the client's own session or request ID when the request has
+		// none.
+		var client map[string]string
+		if req.Native != nil {
+			client = req.Native.Headers
+		}
+		sid := ur.sessionID
+		if sid == "" {
+			sid = client["session-id"]
+		}
+		setSIWCHeaders(h, sid, s.set)
+		if sid == "" && client["x-client-request-id"] != "" {
+			h.Set("X-Client-Request-Id", client["x-client-request-id"])
+		}
+	default:
+		if ur.sessionID != "" {
+			// Today's core names the session in both, with these spellings.
+			h["session_id"] = []string{ur.sessionID}
+			h["Conversation_id"] = []string{ur.sessionID}
+		}
+		setClientHeaders(h, req, ur, s.set, a)
 	}
-	setClientHeaders(h, req, ur, s.set, a)
 	dctx, cancel := context.WithTimeout(ctx, wsDialTimeout)
 	defer cancel()
 	conn, resp, err := websocket.Dial(dctx, u, &websocket.DialOptions{HTTPClient: wsClient, HTTPHeader: h,
