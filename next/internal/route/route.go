@@ -139,6 +139,11 @@ type Request struct {
 	Session string
 	// Pin, when set, restricts the request to the account with this ID.
 	Pin string
+	// Endpoint marks an endpoint call (Alpha Search, Interactions, images, compaction): when
+	// every account refused it as unsupported, the request ends with today's no-usable-auth
+	// reply, 503 auth_not_found. Any other request keeps the refusal it was given, such as a
+	// rejected drop policy or a token count that no account can give.
+	Endpoint bool
 	// AnyModel, for a request of an endpoint that takes no model, makes every account capable
 	// when LLM.Model is empty; the attempt then names no upstream model. A request that names a
 	// model is routed by it as any other.
@@ -538,7 +543,7 @@ func (c *call) attempts() llm.Event {
 		// Nothing is eligible now: wait for the first account to come back, if that fits.
 		if next.IsZero() {
 			if last != nil {
-				return errorEvent(last)
+				return c.noAccountEvent(last)
 			}
 			if busy {
 				return errorEvent(&llm.Error{Code: llm.CodeRateLimit, Status: 429, ProviderCode: "accounts_busy",
@@ -562,7 +567,7 @@ func (c *call) attempts() llm.Event {
 		} else if wait <= 0 && last != nil {
 			// Every eligible account was tried this round and none is blocked: trying them
 			// again at once could loop. A new round starts only after a wait.
-			return errorEvent(last)
+			return c.noAccountEvent(last)
 		}
 		if wait > budget {
 			if last != nil {
@@ -828,6 +833,22 @@ func coolingError(model string, wait time.Duration, reason *llm.Error) *llm.Erro
 		e.Code = llm.CodeQuota
 	}
 	return e
+}
+
+// noAccountEvent is how an endpoint call ends when every account that serves its model refused
+// it as unsupported: today's core finds no usable auth and answers 503 auth_not_found. Other
+// requests keep the refusal: a request-scoped one is about the client's request, and a
+// generate or count refusal is the documented reply of drop_policy and token_count_estimate.
+func (c *call) noAccountEvent(last *llm.Error) llm.Event {
+	if !c.req.Endpoint || last == nil || last.Code != llm.CodeUnsupported || last.Scope == "" || last.Scope == llm.ScopeRequest {
+		return errorEvent(last)
+	}
+	return errorEvent(&llm.Error{
+		Code:         llm.CodeUnavailable,
+		Status:       http.StatusServiceUnavailable,
+		ProviderCode: "auth_not_found",
+		Message:      "no auth available",
+	})
 }
 
 func errorEvent(e *llm.Error) llm.Event {

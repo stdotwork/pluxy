@@ -187,6 +187,7 @@ func serveEndpoint(w http.ResponseWriter, r *http.Request, g *Generation, ep end
 	m := g.newMeter(r, arrived, req, clientToken(r, ep.googleKeys))
 	rr := routeRequest(r, req, body)
 	rr.Attempt = g.Endpoint
+	rr.Endpoint = true
 	rr.AnyModel = ep.modelOptional
 	rr.Attempting = func(a route.Attempt) {
 		t.account = a.Account
