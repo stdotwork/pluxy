@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -171,11 +172,28 @@ func TestThinkingEffort(t *testing.T) {
 	}
 }
 
+// A message whose role is system, whatever its case and spacing, is a system item where it
+// stands, as today's core matches it; other roles are still matched exactly.
+func TestParseRequestSystemMessage(t *testing.T) {
+	for _, role := range []string{"system", "System", " SYSTEM "} {
+		req, err := ParseRequest([]byte(`{"model":"m","messages":[{"role":"user","content":"hi"},{"role":` + strconv.Quote(role) + `,"content":"Rules"}]}`))
+		if err != nil {
+			t.Fatalf("role %q: %v", role, err)
+		}
+		if len(req.Items) != 2 || req.Items[1].Role != llm.RoleSystem {
+			t.Errorf("role %q: items %+v, want the second a system item", role, req.Items)
+		}
+	}
+	if _, err := ParseRequest([]byte(`{"model":"m","messages":[{"role":" User ","content":"x"}]}`)); err == nil {
+		t.Error("role \" User \": accepted, want it refused as before")
+	}
+}
+
 func TestParseRequestRejects(t *testing.T) {
 	for _, body := range []string{
 		`not json`,
 		`{"messages":[]}`,
-		`{"model":"m","messages":[{"role":"system","content":"x"}]}`,
+		`{"model":"m","messages":[{"role":"tool","content":"x"}]}`,
 		`{"model":"m","messages":[{"role":"user","content":7}]}`,
 		`{"model":"m","messages":[{"role":"user","content":["x"]}]}`,
 		`{"model":"m","system":7,"messages":[]}`,

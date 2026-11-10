@@ -307,7 +307,7 @@ var rules = map[string]rule{
 	"api-keys.claude[].cloak":                                  {dropped, "making other clients look like Claude Code is out of scope"},
 	"api-keys.claude[].fingerprint-profile":                    {dropped, "making other clients look like Claude Code is out of scope"},
 	"api-keys.claude[].native-tool-search":                     {later, ""},
-	"api-keys.claude[].rebuild-mid-system-message":             {later, ""},
+	"api-keys.claude[].rebuild-mid-system-message":             {supported, ""},
 	"api-keys.claude[].experimental-cch-signing":               {dead, ""},
 	"api-keys.meta":                                            {later, ""},
 }
@@ -976,6 +976,14 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 		}
 		if !x.res.Import.Images {
 			settings["images"] = false
+		}
+	case "claude":
+		rebuild, err := boolean_(field(g, k, "rebuild-mid-system-message"), path+".rebuild-mid-system-message")
+		if err != nil {
+			return nil, err
+		}
+		if rebuild {
+			settings["rebuild_mid_system_message"] = true
 		}
 	case "vertex":
 		settings["vertex"] = map[string]any{}
