@@ -254,7 +254,7 @@ are set to it.
 - `client` goes to the new core. `old_client`, when set, goes to the old core instead, in the
   same schema. `old_client_more` lists further requests the old core gets after it, in order, one
   reply each.
-- In the old core's requests, `{{upstream}}` stands for the fake upstream's base URL, and
+- In the old core's requests (and in any request's `body_text`), `{{upstream}}` stands for the fake upstream's base URL, and
   `{{auth_index}}` for the `auth_index` the old core gives its one auth file (a hash of the file's
   path, so it changes every run; the runner reads it from the old core's `GET
   /v0/management/auth-files`). The old core's `POST /v0/management/api-call` relay needs both: it
@@ -284,6 +284,19 @@ aside.
 /v0/management/auth-files/models?name=<auth file>` for the same login. Model ids, display names and
 owners must be equal and in the same order; the fields only one list has are exceptions, each
 pinned or covered by a `*` path.
+
+`vertex-import/vertex/*.json` compares the new core's `POST /v0/management/vertex/import` with
+today's route of the same path. Both cores get the same request, so there is no `old_client`: a
+multipart body written as `body_text` with a fixed boundary in the `Content-Type` header. A request's
+`body_text` (for either core) may hold two placeholders: `{{upstream}}`, the fake upstream's base
+URL (the key's `token_uri` is `{{upstream}}/token`), and `{{private_key}}`, the RSA key the runner
+makes for the run (`corpusRSA`), as the inside of a JSON string, so no case holds a key. The old
+core saves the key without contacting Google; the new core fetches a token at the key's
+`token_uri`, so a success case scripts the token reply as its first upstream reply and the new
+core's request for it is an exception, as is the new reply (the account in place of the saved
+file's path, which is volatile) and the new management error shape. Cases where the key is
+refused by the token endpoint, a login is repeated or the account is in the config have no
+counterpart in today's core and are in `e2e/verteximport_test.go`.
 
 ## Adding cases
 
