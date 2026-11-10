@@ -416,9 +416,11 @@ subscription's token an hour before it expires.
 A Messages request goes to Anthropic unchanged: its body, so thinking blocks, signatures and
 `cache_control` markers arrive as the client wrote them, and its `anthropic-version`,
 `anthropic-beta` and identification headers (`User-Agent`, `X-App`, the `X-Stainless-*` headers of
-Anthropic's SDKs, and Claude Code's session, subagent, request and remote-session headers such as
-`X-Claude-Code-Session-Id`, `X-Claude-Code-Agent-Id` and `X-Claude-Remote-Session-Id`, with
-`X-Client-App` and `X-Anthropic-Additional-Protection`). An API key goes in `x-api-key`; a
+Anthropic's SDKs, `X-Claude-Code-Session-Id`, `X-Client-App` and
+`X-Anthropic-Additional-Protection`; and, only from a request that names itself as Claude Code
+(`X-App: cli`, a `claude-cli/` User-Agent and the `claude-code-20250219` beta), Claude Code's
+subagent, request-class and remote-session headers such as `X-Claude-Code-Agent-Id` and
+`X-Claude-Remote-Session-Id`, as today's core forwards them only from Claude Code). An API key goes in `x-api-key`; a
 subscription's token or a setup token goes as a bearer token, with the `oauth-2025-04-20` beta added
 after the client's betas. Chat Completions, Responses and Gemini requests are
 translated to Messages; their reasoning effort becomes adaptive thinking with that effort on

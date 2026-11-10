@@ -49,12 +49,16 @@ func bodyBetas(body []byte, count bool) ([]byte, []string) {
 		}
 	}
 	if raw, ok := m["betas"]; ok {
-		var list []string
-		var one string
-		if json.Unmarshal(raw, &list) == nil {
-			betas = append(betas, list...)
-		} else if json.Unmarshal(raw, &one) == nil {
-			betas = append(betas, one)
+		// As today's core reads it: each item of a list, or the one value, as text (see
+		// betaText).
+		var list []json.RawMessage
+		if json.Unmarshal(raw, &list) != nil {
+			list = []json.RawMessage{raw}
+		}
+		for _, item := range list {
+			if b := betaText(item); b != "" {
+				betas = append(betas, b)
+			}
 		}
 		delete(m, "betas")
 		// The rest of the body is written back as the client sent it: values verbatim, without
@@ -76,6 +80,27 @@ func bodyBetas(body []byte, count bool) ([]byte, []string) {
 		}
 	}
 	return body, betas
+}
+
+// betaText is one item of a body's betas list as text: a string's value, or a number or boolean
+// as written. Null, an object or a list is nothing, and so is text with a control character,
+// which no header can carry: the client's own request would fail on it, not the account.
+func betaText(item json.RawMessage) string {
+	var t string
+	var v any
+	if json.Unmarshal(item, &v) != nil {
+		return ""
+	}
+	switch v := v.(type) {
+	case string:
+		t = strings.TrimSpace(v)
+	case float64, bool:
+		t = strings.TrimSpace(string(item))
+	}
+	if strings.ContainsFunc(t, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return ""
+	}
+	return t
 }
 
 // cacheable is a tool or a block, as far as betas care: its type and cache marker.

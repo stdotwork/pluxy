@@ -254,7 +254,11 @@ func post(ctx context.Context, call sdk.Call, s settings, path string, body []by
 	if passthrough {
 		// The client's own Messages headers go with its body. Passthrough means the client
 		// spoke Messages, so these are its headers, not ones made up for it.
-		for _, h := range slices.Concat(anthropicmessages.Headers, anthropicmessages.ClientHeaders) {
+		names := slices.Concat(anthropicmessages.Headers, anthropicmessages.ClientHeaders)
+		if anthropicmessages.IsClaudeCode(call.Request.Native.Headers) {
+			names = append(names, anthropicmessages.ClaudeCodeHeaders...)
+		}
+		for _, h := range names {
 			if v := call.Request.Native.Headers[h]; v != "" {
 				req.Header.Set(h, v)
 			}

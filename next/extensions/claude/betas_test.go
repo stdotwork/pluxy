@@ -33,7 +33,10 @@ func TestBodyBetas(t *testing.T) {
 		{"all, in order", `{"betas":["b1","b2"],"thinking":{"type":"adaptive","block_binding":{}},"system":[{"type":"text","text":"s","cache_control":{"type":"ephemeral","ttl":"1h"}}],"tools":[{"type":"advisor_20260301","name":"advisor"}]}`, false,
 			[]string{advisorBeta, "b1", "b2", extendedCacheTTLBeta, thinkingBindingBeta}},
 		{"betas as one string", `{"betas":"b1","messages":[]}`, false, []string{"b1"}},
+		{"betas of mixed items", `{"betas":["b1",7,null,"",{"x":1},["b9"],true," b2 ","bad\nbeta"]}`, false, []string{"b1", "7", "true", "b2"}},
 		{"not an object", `["advisor_"]`, false, nil},
+		{"not JSON", `{"tools":[{"type":"advisor_x"`, false, nil},
+		{"odd shapes", `{"tools":"advisor_x","system":"s \"1h\"","messages":[{"role":"user","content":"\"1h\""}],"thinking":"block_binding"}`, false, nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, got := bodyBetas([]byte(c.body), c.count)
@@ -102,6 +105,55 @@ func TestPostAddsBodyBetas(t *testing.T) {
 			}
 			if strings.Contains(string(got.Body), `"betas"`) {
 				t.Errorf("upstream body %s still has the betas field", got.Body)
+			}
+		})
+	}
+}
+
+// Claude Code's own agent, request-class and remote-session headers go upstream only with a
+// request that names itself as Claude Code (X-App cli, a claude-cli User-Agent and the
+// claude-code beta); a client's other identification headers go either way.
+func TestPostClaudeCodeHeadersOnlyFromClaudeCode(t *testing.T) {
+	srv := claudetest.New(t)
+	s, err := readSettings(srv.Settings(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := srv.IssueKey()
+	claudeCode := map[string]string{"x-app": "cli", "user-agent": "claude-cli/2.1.280 (external, cli)", "anthropic-beta": "claude-code-20250219,interleaved-thinking-2025-05-14"}
+	for _, c := range []struct {
+		name    string
+		headers map[string]string
+		want    bool
+	}{
+		{"Claude Code", claudeCode, true},
+		{"no X-App", map[string]string{"user-agent": claudeCode["user-agent"], "anthropic-beta": claudeCode["anthropic-beta"]}, false},
+		{"another User-Agent", map[string]string{"x-app": "cli", "user-agent": "my-app/1.0", "anthropic-beta": claudeCode["anthropic-beta"]}, false},
+		{"no claude-code beta", map[string]string{"x-app": "cli", "user-agent": claudeCode["user-agent"], "anthropic-beta": "interleaved-thinking-2025-05-14"}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := map[string]string{"x-client-app": "app", "x-claude-code-agent-id": "agent-1", "x-claude-remote-session-id": "remote-1"}
+			for k, v := range c.headers {
+				h[k] = v
+			}
+			call := sdk.Call{
+				Account: protocol.Account{ID: "a", Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: key}},
+				Request: llm.Request{Model: "claude-test", Native: &llm.Native{Format: llm.FormatAnthropicMessages, Headers: h}},
+			}
+			n := len(srv.Requests())
+			resp, err := post(context.Background(), call, s, "/v1/messages", []byte(`{"model":"claude-test","max_tokens":5,"messages":[{"role":"user","content":"hi"}]}`), true, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			got := srv.Requests()[n].Header
+			if got.Get("X-Client-App") != "app" {
+				t.Errorf("X-Client-App = %q, want the client's", got.Get("X-Client-App"))
+			}
+			sent := got.Get("X-Claude-Code-Agent-Id") == "agent-1" && got.Get("X-Claude-Remote-Session-Id") == "remote-1"
+			none := got.Get("X-Claude-Code-Agent-Id") == "" && got.Get("X-Claude-Remote-Session-Id") == ""
+			if (c.want && !sent) || (!c.want && !none) {
+				t.Errorf("agent id %q, remote session %q; want them sent: %v", got.Get("X-Claude-Code-Agent-Id"), got.Get("X-Claude-Remote-Session-Id"), c.want)
 			}
 		})
 	}
