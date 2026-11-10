@@ -233,8 +233,10 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 
 // post sends body to the Messages API at path (under base_url) and returns the upstream's
 // successful reply; a failure is returned as the error to report. passthrough sends the client's
-// own Messages headers with its body; stream asks for a stream.
+// own Messages headers with its body; stream asks for a stream. The betas the body needs are
+// added (betas.go).
 func post(ctx context.Context, call sdk.Call, s settings, path string, body []byte, passthrough, stream bool) (*http.Response, error) {
+	body, betas := bodyBetas(body, path == "/v1/messages/count_tokens")
 	// ?beta=true is how Anthropic's SDKs, Claude Code among them, call the API with betas.
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.BaseURL+path+"?beta=true", bytes.NewReader(body))
 	if err != nil {
@@ -260,6 +262,9 @@ func post(ctx context.Context, call sdk.Call, s settings, path string, body []by
 	}
 	if err := authorize(req.Header, call.Account.Credential); err != nil {
 		return nil, err
+	}
+	if list := addBetas(req.Header.Get("Anthropic-Beta"), betas); list != "" {
+		req.Header.Set("Anthropic-Beta", list)
 	}
 	resp, err := client.Do(req)
 	if err != nil {

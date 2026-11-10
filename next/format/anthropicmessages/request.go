@@ -43,6 +43,20 @@ var ClientHeaders = []string{
 	"x-stainless-retry-count",
 	"x-stainless-timeout",
 	"x-stainless-helper-method",
+	"x-stainless-async",
+	// Claude Code's subagent, request and remote-session headers, and the client app it runs
+	// in, which today's core passes on from a Claude Code client.
+	"x-claude-code-agent-id",
+	"x-claude-code-parent-agent-id",
+	"x-claude-code-agent-type",
+	"x-claude-code-request-class",
+	"x-claude-code-prev-tool-durations",
+	"x-claude-code-compaction",
+	"x-claude-code-context-compacted",
+	"x-claude-remote-container-id",
+	"x-claude-remote-session-id",
+	"x-client-app",
+	"x-anthropic-additional-protection",
 }
 
 func invalid(msg string, args ...any) *llm.Error {
