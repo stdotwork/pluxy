@@ -13,11 +13,14 @@
 // credential (a subscription login) is sent as a bearer token, with the OAuth beta added to
 // anthropic-beta. A setup token (the long-lived OAuth token `claude setup-token` prints) is kept
 // as an api_key credential, since it is static and cannot be renewed, and is sent as a bearer
-// token with the OAuth beta: any key containing sk-ant-oat is, as in today's core. A Messages request is sent unchanged, with the client's own Messages headers
-// (API version, betas and its identification headers such as User-Agent and X-App), so thinking
-// blocks, their signatures and cache_control markers reach Anthropic as the client wrote them.
+// token with the OAuth beta: any key containing sk-ant-oat is, as in today's core. A Messages
+// request is sent unchanged, with the client's own Messages headers (API version, betas and its
+// identification headers such as User-Agent and X-App), so thinking blocks, their signatures and
+// cache_control markers reach Anthropic as the client wrote them.
 // Requests in other formats (Chat Completions, Responses, Gemini) are translated to Messages,
-// with the client's reasoning effort turned into Claude's thinking settings (thinking.go).
+// with the client's reasoning effort turned into Claude's thinking settings (thinking.go). Every
+// body, the client's own Messages body included, has two parts Anthropic refuses repaired: empty
+// web search domain lists and tool call IDs with characters it does not take (tools.go).
 //
 // Token counts (core's count_tokens call) go to Anthropic's count_tokens endpoint only when
 // base_url is Anthropic's own origin (https://api.anthropic.com). For any other base_url the
@@ -203,7 +206,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err != nil {
 		return err
 	}
-	send := &reporting{Stream: out, tr: tr}
+	send := &reporting{Stream: out, tr: tr, names: replyNames(call.Request, tr)}
 	resp, err := post(ctx, call, s, "/v1/messages", body, tr.Passthrough, call.Request.Stream)
 	if err != nil {
 		return err
@@ -392,10 +395,10 @@ func isAnthropicBase(baseURL string) bool {
 }
 
 // buildBody returns the Messages request body for req and how it was built. A Messages request
-// is sent unchanged; any other is rebuilt from the model, with its reasoning effort as thinking
-// settings. A thinking suffix on the model name sets the thinking settings either way, in place
-// of the request's own. Under the reject drop policy a translation that drops anything is
-// refused.
+// is sent unchanged but for the repairs every body gets (fixBody); any other is rebuilt from the
+// model, with its reasoning effort as thinking settings. A thinking suffix on the model name sets
+// the thinking settings either way, in place of the request's own. Under the reject drop policy a
+// translation that drops anything is refused.
 func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 	tr := &llm.Translation{To: llm.FormatAnthropicMessages}
 	if n := req.Native; n != nil {
@@ -409,6 +412,10 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 					return nil, nil, err
 				}
 			}
+			body, err := fixBody(body)
+			if err != nil {
+				return nil, nil, err
+			}
 			return body, tr, nil
 		}
 	}
@@ -417,6 +424,9 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 		return nil, nil, err
 	}
 	if body, err = addCacheBreakpoints(body); err != nil {
+		return nil, nil, err
+	}
+	if body, err = fixBody(body); err != nil {
 		return nil, nil, err
 	}
 	effort := req.Options.ReasoningEffort
@@ -448,10 +458,12 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 	return body, tr, nil
 }
 
-// reporting adds the translation report to the reply's response.start event.
+// reporting adds the translation report to the reply's response.start event, and gives each tool
+// call the client's own name for the tool when the request was sent under another (names).
 type reporting struct {
 	*sdk.Stream
-	tr *llm.Translation
+	tr    *llm.Translation
+	names map[string]string
 }
 
 func (r *reporting) Send(ev llm.Event) error {
@@ -460,7 +472,27 @@ func (r *reporting) Send(ev llm.Event) error {
 		info.Translation = r.tr
 		ev.Response = &info
 	}
+	if ev.Type == llm.EventItemStart && ev.Item != nil && ev.Item.Kind == llm.ItemToolCall {
+		if name, ok := r.names[ev.Item.Name]; ok {
+			item := *ev.Item
+			item.Name = name
+			ev.Item = &item
+		}
+	}
 	return r.Stream.Send(ev)
+}
+
+// replyNames maps each tool name a translated request was sent under back to the client's
+// (anthropicmessages.ToolNames). A Messages body passed through keeps the client's names.
+func replyNames(req llm.Request, tr *llm.Translation) map[string]string {
+	if tr.Passthrough {
+		return nil
+	}
+	back := map[string]string{}
+	for from, to := range anthropicmessages.ToolNames(req) {
+		back[to] = from
+	}
+	return back
 }
 
 // relayStream decodes the upstream Messages stream and sends each event as soon as it is

@@ -438,6 +438,18 @@ is moved into `anthropic-beta`. The client's own betas are never removed. Not bu
 `anthropic-beta-strip` and `anthropic-beta-append` settings, and the Claude Code beta profile
 today's core sends for clients it makes look like Claude Code.
 
+**Tool shapes.** A translated request's tools get the shapes Messages takes, as today's core
+gives them: a function name with characters other than letters, digits, `_` and `-`, or longer than
+64, is sent with each other character as `_` and cut to 64 (two names that would come out the same
+each get a hash of the client's name), and the reply's calls go back to the client under its own
+name, in every client format (today's core maps them back for Responses clients only). A parameter
+schema becomes an object schema without `anyOf`, `oneOf` or `allOf` at its root: the branches'
+properties move to the root, and `allOf`'s required names too. Patterns stay as written, `\p{...}`
+included, which Messages takes. Every request, a Messages client's own body included, has two parts
+Anthropic refuses repaired: an empty `allowed_domains` or `blocked_domains` list on a built-in
+`web_search_*` tool is removed, and a `tool_use` id or `tool_result` `tool_use_id` with other
+characters becomes `cpa_tid_v1_` and the ID in URL-safe base64, the same ID the same way.
+
 A 429 from a subscription whose usage window is used up blocks the account until the window
 resets; a 529 (overloaded) moves the request to another account.
 
