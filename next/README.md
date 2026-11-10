@@ -290,6 +290,11 @@ Today's core also turns `number` into `integer` for named tools of the Codex app
 A Responses request (compaction too) that replays `web_search_call` items in `input` but declares
 no web search tool gets `{"type":"web_search"}` added to `tools`, because the upstream refuses such
 a history without one; a Responses-lite request has those items removed instead.
+A request is Responses-lite, as today's core reads it, when its
+`X-Openai-Internal-Codex-Responses-Lite` header is `true` or its `client_metadata` carries
+`ws_request_header_x_openai_internal_codex_responses_lite` as `true` (a WebSocket client sends the
+header that way); another header value is not. A Responses-lite request gets no image generation
+tool and has parallel tool calls off.
 Account `settings`, all optional:
 
 | Field | Meaning |

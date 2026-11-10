@@ -170,10 +170,32 @@ func (h *shaper) shape() error {
 	return nil
 }
 
-// lite reports whether the client is a Responses-lite client (the
-// X-Openai-Internal-Codex-Responses-Lite header).
+// lite reports whether the client is a Responses-lite client (see liteRequest).
 func (h *shaper) lite() bool {
-	return h.header("x-openai-internal-codex-responses-lite") != ""
+	var headers map[string]string
+	if h.req.Native != nil {
+		headers = h.req.Native.Headers
+	}
+	return liteRequest(headers, h.m)
+}
+
+// liteRequest reports whether a request comes from a Responses-lite client, as today's core reads
+// it: the X-Openai-Internal-Codex-Responses-Lite header (lower-case in headers) says true, or the
+// body's client_metadata carries the same flag, as a WebSocket client sends it
+// (ws_request_header_x_openai_internal_codex_responses_lite, true or "true"). m holds the
+// request's top-level fields.
+func liteRequest(headers map[string]string, m map[string]json.RawMessage) bool {
+	if strings.EqualFold(strings.TrimSpace(headers["x-openai-internal-codex-responses-lite"]), "true") {
+		return true
+	}
+	var meta struct {
+		Lite json.RawMessage `json:"ws_request_header_x_openai_internal_codex_responses_lite"`
+	}
+	if json.Unmarshal(m["client_metadata"], &meta) != nil {
+		return false
+	}
+	var s string
+	return string(meta.Lite) == "true" || json.Unmarshal(meta.Lite, &s) == nil && strings.EqualFold(strings.TrimSpace(s), "true")
 }
 
 // webSearchTools are the tool types that declare hosted web search.
