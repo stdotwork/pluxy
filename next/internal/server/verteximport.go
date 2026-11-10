@@ -50,6 +50,11 @@ func (m *Management) importVertex(w http.ResponseWriter, r *http.Request) {
 		writeManagementError(w, http.StatusBadRequest, codeFileRequired, "file required: send multipart/form-data with the service account key in the field file")
 		return
 	}
+	defer r.MultipartForm.RemoveAll()
+	if len(r.MultipartForm.File["file"]) > 1 {
+		writeManagementError(w, http.StatusBadRequest, "invalid_request", "send one service account key in the field file, not several")
+		return
+	}
 	file, _, err := r.FormFile("file")
 	if err != nil {
 		writeManagementError(w, http.StatusBadRequest, codeFileRequired, "file required")
@@ -101,6 +106,14 @@ func (m *Management) importVertex(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if existing != nil {
+		// Only the same project's Vertex service account is signed in to again: another account
+		// that happens to have this ID (an API key, another project whose ID sanitises the same)
+		// must not get this key with its own settings.
+		if existing.Extension != legacy.Gemini || existing.Credential.Kind != vertexImportLoginMethod || vertexProject(existing.Account.Settings) != project {
+			writeManagementError(w, http.StatusConflict, "conflict", fmt.Sprintf(
+				"account %q exists and is not project %q's Vertex service account; remove it or import into another account", id, project))
+			return
+		}
 		have := vertexLocation(existing.Account.Settings)
 		if asked && location != have {
 			writeManagementError(w, http.StatusConflict, "conflict", fmt.Sprintf(
@@ -126,8 +139,15 @@ func (m *Management) importVertex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if l.State == cred.LoginPending {
-		// The login ended nothing in time (or waits for input a key import never gets).
+		// The login ended nothing in time (or waits for input a key import never gets), or the
+		// client went away. Cancel it and wait, briefly, for it to end, so an import tried again
+		// at once is not refused as a login already running.
 		_ = m.creds.CancelLogin(l.ID)
+		for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+			if v, ok := m.creds.Login(l.ID); !ok || v.State != cred.LoginPending {
+				break
+			}
+		}
 		writeManagementError(w, http.StatusGatewayTimeout, llm.CodeUnavailable, "the service account login did not finish in time")
 		return
 	}
@@ -174,6 +194,17 @@ func vertexLabel(project, email string) string {
 		return project
 	}
 	return project + " (" + email + ")"
+}
+
+// vertexProject returns the vertex.project in an account's settings, or "".
+func vertexProject(settings json.RawMessage) string {
+	var s struct {
+		Vertex struct {
+			Project string `json:"project"`
+		} `json:"vertex"`
+	}
+	_ = json.Unmarshal(settings, &s)
+	return s.Vertex.Project
 }
 
 // vertexLocation returns the vertex.location in an account's settings; "global" (the Gemini

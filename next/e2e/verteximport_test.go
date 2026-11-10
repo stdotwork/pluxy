@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 var (
@@ -582,5 +583,70 @@ func TestVertexImportNeedsManagementKey(t *testing.T) {
 	}
 	if ids := listedIDs(t, base); len(ids) != 0 {
 		t.Fatalf("accounts = %v", ids)
+	}
+}
+
+// An account a login added under the import's ID that is not the same project's Vertex service
+// account is never signed in to with the key: a Gemini API key account, and an account for
+// another project whose ID sanitises to the same account ID, are refused before any token fetch.
+func TestVertexImportOtherAccountWithTheIDIsRefused(t *testing.T) {
+	tok := newFakeTokenEndpoint(t)
+	base, credDir := startVertexImportCore(t)
+	k := newImportKey(t, "import@demo.iam.gserviceaccount.example")
+	tok.accept(k)
+
+	// A Vertex express key account named vertex-demo, added by login.
+	var started map[string]any
+	if code := manage(t, base, "POST", "/accounts", map[string]any{"id": "vertex-demo", "extension": "pluxy/gemini", "method": "api_key",
+		"input": map[string]string{"api_key": "express-key-e2e"}, "settings": map[string]any{"vertex": map[string]any{}}}, &started); code != http.StatusAccepted {
+		t.Fatalf("POST /accounts = %d %v", code, started)
+	}
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if _, err := os.Stat(filepath.Join(credDir, "vertex-demo.json")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the API key login did not add vertex-demo")
+		}
+	}
+	before := readStored(t, credDir, "vertex-demo")
+	code, body := importKeyFile(t, base, "/vertex/import", k.json("demo", tok.URL+"/token"))
+	if c, msg := errorOf(t, body); code != http.StatusConflict || c != "conflict" || !strings.Contains(msg, "vertex-demo") {
+		t.Fatalf("import over an API key account = %d %s %q, want 409 conflict", code, c, msg)
+	}
+	if now := readStored(t, credDir, "vertex-demo"); now.Credential.Kind != "api_key" || now.Version != before.Version {
+		t.Fatalf("a refused import changed the account: %+v", now)
+	}
+
+	// Two projects whose IDs give the same account ID: the second does not take the first's account.
+	if code, body := importKeyFile(t, base, "/vertex/import", k.json("dom.example:proj", tok.URL+"/token")); code != http.StatusOK || body["account"] != "vertex-dom.example_proj" {
+		t.Fatalf("import of dom.example:proj = %d %v", code, body)
+	}
+	first := readStored(t, credDir, "vertex-dom.example_proj")
+	code, body = importKeyFile(t, base, "/vertex/import", k.json("dom.example_proj", tok.URL+"/token"))
+	if c, msg := errorOf(t, body); code != http.StatusConflict || c != "conflict" || !strings.Contains(msg, "dom.example_proj") {
+		t.Fatalf("import of the colliding project = %d %s %q, want 409 conflict", code, c, msg)
+	}
+	if now := readStored(t, credDir, "vertex-dom.example_proj"); now.Account.Settings.Vertex.Project != "dom.example:proj" || now.Version != first.Version {
+		t.Fatalf("the colliding import changed the account: %+v", now)
+	}
+	if n := len(tok.sent()); n != 1 {
+		t.Fatalf("the token endpoint got %d assertions, want 1 (the first project's import)", n)
+	}
+}
+
+// A request with several key files is refused rather than importing one of them.
+func TestVertexImportSeveralFilesAreRefused(t *testing.T) {
+	tok := newFakeTokenEndpoint(t)
+	base, _ := startVertexImportCore(t)
+	k := newImportKey(t, "import@two.iam.gserviceaccount.example")
+	tok.accept(k)
+	code, body := importRaw(t, base, "/vertex/import", managementKey,
+		importPart{"file", "a.json", "not json"}, importPart{"file", "b.json", string(k.json("two", tok.URL+"/token"))})
+	if c, _ := errorOf(t, body); code != http.StatusBadRequest || c != "invalid_request" {
+		t.Fatalf("import of two files = %d %v, want 400 invalid_request", code, body)
+	}
+	if ids := listedIDs(t, base); len(ids) != 0 || len(tok.sent()) != 0 {
+		t.Fatalf("accounts = %v, assertions = %d; want none", ids, len(tok.sent()))
 	}
 }
