@@ -1,0 +1,162 @@
+{
+  "description": "A request with Claude Code's own header set, including its subagent and remote-session headers: the client's identification headers reach the upstream as it sent them, and nothing is made up for it.",
+  "source": [
+    "core/internal/runtime/executor/claude_executor_request.go (applyClaudeHeadersWithNativeProfile: caller-owned betas, then body-required betas)",
+    "core/internal/runtime/executor/claude_executor_request.go (copyClaudeCallerFingerprintHeaders; the confirmed Claude Code header passthrough)"
+  ],
+  "client": {
+    "path": "/v1/messages",
+    "headers": {
+      "anthropic-version": "2023-06-01",
+      "anthropic-beta": "claude-code-20250219,interleaved-thinking-2025-05-14",
+      "anthropic-dangerous-direct-browser-access": "true",
+      "User-Agent": "claude-cli/2.1.280 (external, cli)",
+      "x-app": "cli",
+      "x-stainless-arch": "x64",
+      "x-stainless-lang": "js",
+      "x-stainless-os": "Linux",
+      "x-stainless-package-version": "0.112.1",
+      "x-stainless-retry-count": "0",
+      "x-stainless-runtime": "node",
+      "x-stainless-runtime-version": "v24.3.0",
+      "x-stainless-timeout": "600",
+      "x-stainless-helper-method": "stream",
+      "x-claude-code-session-id": "7f3c2a10-1b2c-4d5e-8f90-a1b2c3d4e5f6",
+      "x-claude-code-agent-id": "agent-corpus-1",
+      "x-claude-code-parent-agent-id": "agent-corpus-0",
+      "x-claude-remote-session-id": "remote-corpus-1",
+      "x-claude-remote-container-id": "container-corpus-1",
+      "x-client-app": "corpus-app",
+      "x-anthropic-additional-protection": "true",
+      "x-client-request-id": "5d6e7f80-9a0b-4c1d-8e2f-3a4b5c6d7e8f",
+      "x-claude-code-request-class": "main",
+      "x-claude-code-agent-type": "general-purpose",
+      "x-stainless-async": "async"
+    },
+    "body": {
+      "model": "claude-test",
+      "max_tokens": 256,
+      "stream": true,
+      "metadata": {
+        "user_id": "{\"device_id\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"account_uuid\":\"\",\"session_id\":\"7f3c2a10-1b2c-4d5e-8f90-a1b2c3d4e5f6\"}"
+      },
+      "system": "Be brief.",
+      "messages": [{"role":"user","content":"Say hello"}]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"event":"message_start","data":{"type":"message_start","message":{"id":"msg_corpus","type":"message","role":"assistant","content":[],"model":"claude-test-upstream","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":12,"cache_read_input_tokens":100,"cache_creation_input_tokens":0,"output_tokens":1}}}},
+        {"event":"ping","data":{"type":"ping"}},
+        {"event":"content_block_start","data":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}},
+        {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}},
+        {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" there"}}},
+        {"event":"content_block_stop","data":{"type":"content_block_stop","index":0}},
+        {"event":"message_delta","data":{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":6}}},
+        {"event":"message_stop","data":{"type":"message_stop"}}
+      ]
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[0].headers.Authorization",
+      "kind": "intended",
+      "reason": "The Claude extension sends an API key in x-api-key, as Anthropic's API defines it; today's core sends it as a bearer token whenever the base URL is not api.anthropic.com (it uses x-api-key only there).",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.X-Api-Key",
+      "kind": "intended",
+      "reason": "The Claude extension sends an API key in x-api-key, as Anthropic's API defines it; today's core sends it as a bearer token whenever the base URL is not api.anthropic.com (it uses x-api-key only there).",
+      "want": "sk-corpus-upstream"
+    },
+    {
+      "path": "upstream[0].headers.X-Client-Request-Id",
+      "kind": "intended",
+      "reason": "The client's own identification headers go upstream as it sent them. Today's core, for a client it confirms as Claude Code, replaces X-Stainless-Runtime-Version with the value it pins for Claude Code, and drops X-Stainless-Helper-Method and, on a base URL other than Anthropic's, X-Client-Request-Id (on Anthropic's it makes one up when the client sent none). This core makes up and replaces none of them.",
+      "want": "5d6e7f80-9a0b-4c1d-8e2f-3a4b5c6d7e8f"
+    },
+    {
+      "path": "upstream[0].headers.X-Stainless-Helper-Method",
+      "kind": "intended",
+      "reason": "The client's own identification headers go upstream as it sent them. Today's core, for a client it confirms as Claude Code, replaces X-Stainless-Runtime-Version with the value it pins for Claude Code, and drops X-Stainless-Helper-Method and, on a base URL other than Anthropic's, X-Client-Request-Id (on Anthropic's it makes one up when the client sent none). This core makes up and replaces none of them.",
+      "want": "stream"
+    },
+    {
+      "path": "upstream[0].headers.X-Stainless-Runtime-Version",
+      "kind": "intended",
+      "reason": "The client's own identification headers go upstream as it sent them. Today's core, for a client it confirms as Claude Code, replaces X-Stainless-Runtime-Version with the value it pins for Claude Code, and drops X-Stainless-Helper-Method and, on a base URL other than Anthropic's, X-Client-Request-Id (on Anthropic's it makes one up when the client sent none). This core makes up and replaces none of them.",
+      "want": "v24.3.0"
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"message":{"content":[],"id":"msg_corpus","model":"claude-test-upstream","role":"assistant","stop_reason":null,"stop_sequence":null,"type":"message","usage":{"cache_creation_input_tokens":0,"cache_read_input_tokens":100,"input_tokens":12,"output_tokens":1}},"type":"message_start"},"event":"message_start"},
+        {"data":{"type":"ping"},"event":"ping"},
+        {"data":{"content_block":{"text":"","type":"text"},"index":0,"type":"content_block_start"},"event":"content_block_start"},
+        {"data":{"delta":{"text":"Hello","type":"text_delta"},"index":0,"type":"content_block_delta"},"event":"content_block_delta"},
+        {"data":{"delta":{"text":" there","type":"text_delta"},"index":0,"type":"content_block_delta"},"event":"content_block_delta"},
+        {"data":{"index":0,"type":"content_block_stop"},"event":"content_block_stop"},
+        {"data":{"delta":{"stop_reason":"end_turn","stop_sequence":null},"type":"message_delta","usage":{"output_tokens":6}},"event":"message_delta"},
+        {"data":{"type":"message_stop"},"event":"message_stop"}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 256,
+          "messages": [{"content":"Say hello","role":"user"}],
+          "metadata": {
+            "user_id": "{\"device_id\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"account_uuid\":\"\",\"session_id\":\"7f3c2a10-1b2c-4d5e-8f90-a1b2c3d4e5f6\"}"
+          },
+          "model": "claude-test",
+          "stream": true,
+          "system": "Be brief."
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "identity",
+          "Anthropic-Beta": "claude-code-20250219,interleaved-thinking-2025-05-14",
+          "Anthropic-Dangerous-Direct-Browser-Access": "true",
+          "Anthropic-Version": "2023-06-01",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "claude-cli/2.1.280 (external, cli)",
+          "X-Anthropic-Additional-Protection": "true",
+          "X-App": "cli",
+          "X-Claude-Code-Agent-Id": "agent-corpus-1",
+          "X-Claude-Code-Agent-Type": "general-purpose",
+          "X-Claude-Code-Parent-Agent-Id": "agent-corpus-0",
+          "X-Claude-Code-Request-Class": "main",
+          "X-Claude-Code-Session-Id": "7f3c2a10-1b2c-4d5e-8f90-a1b2c3d4e5f6",
+          "X-Claude-Remote-Container-Id": "container-corpus-1",
+          "X-Claude-Remote-Session-Id": "remote-corpus-1",
+          "X-Client-App": "corpus-app",
+          "X-Stainless-Arch": "x64",
+          "X-Stainless-Async": "async",
+          "X-Stainless-Lang": "js",
+          "X-Stainless-Os": "Linux",
+          "X-Stainless-Package-Version": "0.112.1",
+          "X-Stainless-Retry-Count": "0",
+          "X-Stainless-Runtime": "node",
+          "X-Stainless-Runtime-Version": "v26.3.0",
+          "X-Stainless-Timeout": "600"
+        },
+        "method": "POST",
+        "path": "/v1/messages?beta=true"
+      }
+    ]
+  }
+}

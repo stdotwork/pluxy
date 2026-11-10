@@ -416,13 +416,27 @@ subscription's token an hour before it expires.
 A Messages request goes to Anthropic unchanged: its body, so thinking blocks, signatures and
 `cache_control` markers arrive as the client wrote them, and its `anthropic-version`,
 `anthropic-beta` and identification headers (`User-Agent`, `X-App`, the `X-Stainless-*` headers of
-Anthropic's SDKs). An API key goes in `x-api-key`; a subscription's token or a setup token goes as
-a bearer token, with the `oauth-2025-04-20` beta added after the client's betas. Chat Completions, Responses and Gemini requests are
+Anthropic's SDKs, `X-Claude-Code-Session-Id`, `X-Client-App` and
+`X-Anthropic-Additional-Protection`; and, only from a request that names itself as Claude Code
+(`X-App: cli`, a `claude-cli/` User-Agent and the `claude-code-20250219` beta), Claude Code's
+subagent, request-class and remote-session headers such as `X-Claude-Code-Agent-Id` and
+`X-Claude-Remote-Session-Id`, as today's core forwards them only from Claude Code). An API key goes in `x-api-key`; a
+subscription's token or a setup token goes as a bearer token, with the `oauth-2025-04-20` beta added
+after the client's betas. Chat Completions, Responses and Gemini requests are
 translated to Messages; their reasoning effort becomes adaptive thinking with that effort on
 Claude 4.6 and later, and a thinking budget from Claude 3.7 to 4.5 (low 1024, medium 8192, high
 24576 tokens); a model name the extension does not know as a Claude model gets no thinking
 settings, and the effort is reported as dropped. The extension never changes how a client presents itself: a client that is
 not Claude Code is not made to look like Claude Code.
+
+Every request, a Messages client's or a translated one, also gets the betas its body needs, after
+the client's own and without repeats, as today's core adds them: `advisor-tool-2026-03-01` for a
+tool whose type starts with `advisor_`, `extended-cache-ttl-2025-04-11` for a `cache_control`
+marker with `ttl` `"1h"` (not on a token count), and `thinking-binding-controls-2026-08-01` for
+`thinking.block_binding`. A top-level `betas` list in the body, which Messages does not take there,
+is moved into `anthropic-beta`. The client's own betas are never removed. Not built: today's
+`anthropic-beta-strip` and `anthropic-beta-append` settings, and the Claude Code beta profile
+today's core sends for clients it makes look like Claude Code.
 
 A 429 from a subscription whose usage window is used up blocks the account until the window
 resets; a 529 (overloaded) moves the request to another account.

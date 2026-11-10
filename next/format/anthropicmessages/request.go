@@ -43,6 +43,41 @@ var ClientHeaders = []string{
 	"x-stainless-retry-count",
 	"x-stainless-timeout",
 	"x-stainless-helper-method",
+	"x-stainless-async",
+	"x-client-app",
+	"x-anthropic-additional-protection",
+}
+
+// ClaudeCodeHeaders are Claude Code's own subagent, request and remote-session headers. Core
+// passes them on with the native body like ClientHeaders, but a provider sends them upstream only
+// for a request that names itself as Claude Code (IsClaudeCode), as today's core sends them only
+// for a client it takes for Claude Code: another client must not present itself as one of Claude
+// Code's agents or request classes through core.
+var ClaudeCodeHeaders = []string{
+	"x-claude-code-agent-id",
+	"x-claude-code-parent-agent-id",
+	"x-claude-code-agent-type",
+	"x-claude-code-request-class",
+	"x-claude-code-prev-tool-durations",
+	"x-claude-code-compaction",
+	"x-claude-code-context-compacted",
+	"x-claude-remote-container-id",
+	"x-claude-remote-session-id",
+}
+
+// IsClaudeCode reports whether native headers (by lower-case name) are those of a request that
+// names itself as Claude Code: X-App cli, a claude-cli User-Agent and the claude-code-20250219
+// beta, the header signals today's core requires before it takes a client for Claude Code.
+func IsClaudeCode(headers map[string]string) bool {
+	if headers["x-app"] != "cli" || !strings.HasPrefix(headers["user-agent"], "claude-cli/") {
+		return false
+	}
+	for _, b := range strings.Split(headers["anthropic-beta"], ",") {
+		if strings.TrimSpace(b) == "claude-code-20250219" {
+			return true
+		}
+	}
+	return false
 }
 
 func invalid(msg string, args ...any) *llm.Error {

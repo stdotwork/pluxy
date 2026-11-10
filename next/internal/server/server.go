@@ -108,7 +108,7 @@ var messagesFormat = clientFormat{
 	stream:    func(w io.Writer, _ llm.Request) eventWriter { return anthropicmessages.NewStreamWriter(w) },
 	aggregate: func(llm.Request) aggregator { return anthropicmessages.NewAggregator() },
 	errorBody: anthropicmessages.ErrorResponse,
-	headers:   slices.Concat(anthropicmessages.Headers, anthropicmessages.ClientHeaders),
+	headers:   slices.Concat(anthropicmessages.Headers, anthropicmessages.ClientHeaders, anthropicmessages.ClaudeCodeHeaders),
 }
 
 // geminiFormat serves Gemini's GenerateContent at /v1beta/models/{model}:{method}. The model may

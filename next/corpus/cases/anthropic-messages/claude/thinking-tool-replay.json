@@ -175,6 +175,12 @@
       "kind": "intended",
       "reason": "The Claude extension sends an API key in x-api-key, as Anthropic's API defines it; today's core sends it as a bearer token whenever the base URL is not api.anthropic.com (it uses x-api-key only there).",
       "want": "sk-corpus-upstream"
+    },
+    {
+      "path": "upstream[0].headers.Anthropic-Beta",
+      "kind": "gap",
+      "want": "extended-cache-ttl-2025-04-11",
+      "reason": "The body has a 1h cache breakpoint after a 5-minute one. Today's core turns it into a 5-minute one (it removes the ttl), so the body needs no extended cache beta. This core keeps the client's 1h ttl, so it sends the beta that ttl needs; the rule for the TTL order comes in a later PR."
     }
   ],
   "recorded_old_core": {
