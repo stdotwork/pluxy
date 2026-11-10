@@ -25,9 +25,9 @@ import (
 )
 
 var (
-	geminiBuild    sync.Once
-	geminiManifest string
-	geminiErr      error
+	geminiBuild          sync.Once
+	vertexImportManifest string
+	geminiErr            error
 )
 
 // geminiExtension builds the Gemini extension once and returns its manifest's path.
@@ -47,13 +47,13 @@ func geminiExtension(t *testing.T) string {
 		if b, geminiErr = os.ReadFile("../extensions/gemini/pluxy-extension.json"); geminiErr != nil {
 			return
 		}
-		geminiManifest = filepath.Join(dir, "pluxy-extension.json")
-		geminiErr = os.WriteFile(geminiManifest, b, 0o644)
+		vertexImportManifest = filepath.Join(dir, "pluxy-extension.json")
+		geminiErr = os.WriteFile(vertexImportManifest, b, 0o644)
 	})
 	if geminiErr != nil {
 		t.Fatal(geminiErr)
 	}
-	return geminiManifest
+	return vertexImportManifest
 }
 
 // importKey is a service account key pair made for a test.
