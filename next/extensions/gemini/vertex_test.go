@@ -154,6 +154,12 @@ func TestTokenURIOnlyGoogle(t *testing.T) {
 		"": true, "https://oauth2.googleapis.com/token": true, "https://accounts.google.com/o/oauth2/token": true,
 		"https://oauth2.example.test/token": false, "http://127.0.0.1:9/token": false, "https://oauth2.googleapis.com/token/": false,
 		"https://oauth2.googleapis.com.example.test/token": false, "http://oauth2.googleapis.com/token": false,
+		// Only the exact strings: no case, port, userinfo, trailing dot, encoding or space variants.
+		"HTTPS://oauth2.googleapis.com/token": false, "https://OAUTH2.googleapis.com/token": false,
+		"https://oauth2.googleapis.com:443/token": false, "https://user@oauth2.googleapis.com/token": false,
+		"https://oauth2.googleapis.com./token": false, "https://oauth2.googleapis.com/%74oken": false,
+		"https://oauth2.googleapis.com%2Ftoken": false, " https://oauth2.googleapis.com/token": false,
+		"https://oauth2.googleapis.com/token ": false, "https://oauth2.googleapis.com/token?x=1": false,
 	} {
 		var raw map[string]any
 		_ = json.Unmarshal(srv.ServiceAccount("p", true), &raw)

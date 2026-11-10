@@ -61,8 +61,9 @@ const cloudPlatformScope = "https://www.googleapis.com/auth/cloud-platform"
 // defaultTokenURI is Google's token endpoint, for a key that names none.
 const defaultTokenURI = "https://oauth2.googleapis.com/token"
 
-// googleTokenURIs are the token endpoints the keys Google Cloud makes name: today's, and the
-// one older keys name.
+// googleTokenURIs are the token endpoints the keys Google Cloud makes for its standard universe
+// name: today's, and the one older keys name. A key is matched exactly, as written. Keys for a
+// sovereign-cloud universe name that universe's endpoint and are not supported.
 var googleTokenURIs = map[string]bool{
 	defaultTokenURI: true,
 	"https://accounts.google.com/o/oauth2/token": true,
