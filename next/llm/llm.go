@@ -132,6 +132,16 @@ const (
 	// FormatCodexAlphaSearch is Codex's search endpoint, POST /v1/alpha/search: a search request
 	// in Codex's own shape, which may name no model, answered with one JSON object.
 	FormatCodexAlphaSearch = "codex.alpha_search"
+	// FormatOpenAIImagesGenerations is OpenAI's Images API generation, POST
+	// /v1/images/generations: a JSON body, answered with one JSON object, or server-sent events
+	// when it asks for a stream.
+	FormatOpenAIImagesGenerations = "openai.images.generations"
+	// FormatOpenAIImagesEdits is OpenAI's Images API edit, POST /v1/images/edits, as for
+	// generations. A multipart/form-data edit arrives in its JSON form: each field a member (n,
+	// output_compression and partial_images as numbers, stream as a boolean, mask[file_id] and
+	// mask[image_url] as mask.file_id and mask.image_url) and each file a data URL, the images
+	// (image[] or image) appended to images[].image_url and the mask as mask.image_url.
+	FormatOpenAIImagesEdits = "openai.images.edits"
 )
 
 // EndpointReply is the Raw of an endpoint call's response.start: how to send the reply's body,

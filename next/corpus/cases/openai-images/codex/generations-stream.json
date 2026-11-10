@@ -1,0 +1,60 @@
+{
+  "description": "A streamed generation goes upstream with stream true and the upstream's events reach the client as they came.",
+  "source": [
+    "core/internal/api/server_routes.go",
+    "core/sdk/api/handlers/openai/openai_images_handlers.go",
+    "core/internal/runtime/executor/codex_openai_images.go"
+  ],
+  "client": {
+    "path": "/v1/images/generations",
+    "body": {"model":"gpt-image-2","prompt":"a cat","stream":true,"partial_images":1}
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"event":"image_generation.partial_image","data":{"type":"image_generation.partial_image","partial_image_index":0,"b64_json":"cGFydA=="}},
+        {"event":"image_generation.completed","data":{"type":"image_generation.completed","b64_json":"aGVsbG8=","usage":{"input_tokens":10,"output_tokens":100,"total_tokens":110}}}
+      ]
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[*].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"b64_json":"cGFydA==","partial_image_index":0,"type":"image_generation.partial_image"},"event":"image_generation.partial_image"},
+        {"data":{"b64_json":"aGVsbG8=","type":"image_generation.completed","usage":{"input_tokens":10,"output_tokens":100,"total_tokens":110}},"event":"image_generation.completed"}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {"model":"gpt-image-2","partial_images":1,"prompt":"a cat","stream":true},
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "Originator": "codex-tui",
+          "User-Agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
+        },
+        "method": "POST",
+        "path": "/v1/images/generations"
+      }
+    ]
+  }
+}

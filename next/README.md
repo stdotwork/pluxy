@@ -295,6 +295,7 @@ Account `settings`, all optional:
 | `codex_identity` | Default `true`: send the Codex client's `User-Agent` and `originator`. |
 | `image_generation_tool` | Default `true`: offer the hosted `image_generation` tool, as today's core does (never to a free plan or a `-spark` model). |
 | `callback_listen` | Default `true`: let a browser sign-in listen on `localhost:1455`. |
+| `images` | Default `true`: serve the Images API on the account (below). |
 | `websockets` | Default `false`: send a Responses WebSocket client's turns to `{base_url}/responses` over one upstream WebSocket per client socket (Codex's WebSocket transport), as today's core does with `websockets: true`. A socket the upstream drops is not replaced in the middle of a turn: the client gets `upstream_websocket_lost` and sends the whole conversation again. |
 | `alpha_search` | Default `false` ("Enable Alpha Search"): let an API key account serve Codex's Alpha Search, as today's core does with `alpha-search: true`; a key without it is not asked, since not every upstream has the endpoint. A ChatGPT sign-in always serves it. |
 
@@ -331,6 +332,18 @@ output) and reports `output_tokens` of exactly `0` is an upstream that gave up s
 with an `upstream` error (502, scope `request`, not retryable) instead of finishing the reply. The
 error is not retried on another account, because the upstream may have run the request, and it puts
 no cooldown on the account.
+
+**Images.** `POST /v1/images/generations` and `POST /v1/images/edits` (OpenAI's Images API) go
+to a Codex account as [endpoint calls](protocol/README.md#endpoint), routed by `model` (default
+`gpt-image-2`), as today's core serves them: the body goes to `{base_url}/images/generations` or
+`{base_url}/images/edits` with the model named as the upstream knows it and `stream` left out
+unless it is `true`, and the upstream's reply (JSON, or server-sent events for a stream) comes back
+as it is. An edit may be JSON or `multipart/form-data`; core reads a form into its JSON form, the
+files as data URLs, as today's core sends it. A request without a `prompt`, or a form edit without
+an image file, is refused with a 400. The image models are `gpt-image-1.5`, `gpt-image-2`,
+`gpt-image-2.5`, `gpt-image-2.5-flare` and `gpt-image-2.5-sunburst`, which every Codex account
+lists, as in today's core; any other model is refused. A free ChatGPT plan, and an account with
+`"images": false`, does not serve them, so core tries another account.
 
 **Quota.** For a ChatGPT sign-in account, `GET /v0/management/accounts/{id}/quota` reads `GET {backend}/wham/usage`, where `{backend}` is the account's `base_url` without a trailing `/codex` (default `https://chatgpt.com/backend-api`), with the access token, the `Chatgpt-Account-Id` header and the same `User-Agent` and `Originator` the account's requests carry (so `codex_identity` applies). It reports the plan (`plan_type`), the 5-hour and weekly or monthly windows (`five_hour`, `weekly`, `monthly`), code review's windows (`code_review_*`), each extra limit such as one model's (`<name>_five_hour` and so on) and the credit balance (`credits`), with the share used, reset time and window length. An API key answers unsupported. A sign-in's grant carries `identity` `{"email", "account_id"}`: members of one ChatGPT workspace share its account ID, so the e-mail address tells them apart.
 
@@ -1437,8 +1450,8 @@ are accepted silently.
 | Every `request-retry` on a group or key | The account's `request_retry`: a key's own, else its group's (an `openai-compatibility` group's for all its keys, which have none of their own there). A negative one inherits `routing.retry.request-retry`, as in today's core. | Supported |
 | The keys' `models[]` catalog fields (`display-name`, `max-context-length`, `force-mapping`, `is-compat`, `thinking`, `image`, `input-modalities`, `output-modalities`, `use-max-completion-tokens`, `support-configuration-update`, `openapi`) | A model's display name in lists is its upstream name. | Later |
 | Vertex keys' `interactions`, `openapi`, `openapi-location`; openai-compatibility's `support-prompt-cache-key`; xAI keys' `websockets` | | Later |
-| `multimedia.disable-image-generation` (`disable-image-generation`) | `true`, `"chat"` and `"passthrough"` are `image_generation_tool: false` on Codex accounts from the file and on those `-import-auth` adds. | Supported |
-| `multimedia.gpt-image-2-base-model`, `multimedia.video-result-auth-cache-ttl` (each also at the top level) | No image or video routes yet. | Later |
+| `multimedia.disable-image-generation` (`disable-image-generation`) | `true`, `"chat"` and `"passthrough"` are `image_generation_tool: false` on Codex accounts from the file and on those `-import-auth` adds; `true` is also `images: false` there, which turns the Images API off on them (today's core answers its image routes 404). | Supported |
+| `multimedia.gpt-image-2-base-model`, `multimedia.video-result-auth-cache-ttl` (each also at the top level) | Images are served through the Codex upstream's Images API, the path today's core takes for its built-in image models; the Responses-based path this model sets is not built, and there are no video routes yet. | Later |
 | `observability.logs.logging-to-file` (`logging-to-file`), `observability.logs.logs-max-total-size-mb` (`logs-max-total-size-mb`) | `logs.to_file` and `logs.max_total_size_mb`: [log files](#log-files). A negative cap is none, as in today's core. | Supported |
 | `observability.logs.debug` (`debug`) | | Dropped: this core writes no debug-level lines |
 | `observability.logs.request-log` (`request-log`), `observability.logs.error-logs-max-files` (`error-logs-max-files`) | `logs.request_log` and `logs.error_logs_max_files`: [request logs](#request-logs). A negative count is the default, 10, as in today's core. | Supported |

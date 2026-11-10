@@ -28,12 +28,13 @@ func subscriptionWith(idToken string) *protocol.Credential {
 }
 
 // TestListModels checks the list for each kind of account against what today's core lists in
-// GET /v1/models (and /v1beta/models) for the same account with no models in its config, minus the
-// gpt-image-* models.
+// GET /v1/models (and /v1beta/models) for the same account with no models in its config, its
+// gpt-image-* models included.
 func TestListModels(t *testing.T) {
-	free := []string{"codex-auto-review", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-6-luna", "gpt-6.1-terra"}
-	full := []string{"codex-auto-review", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra",
-		"gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol", "gpt-6.1-terra"}
+	images := []string{"gpt-image-1.5", "gpt-image-2", "gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"}
+	free := append([]string{"codex-auto-review", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-6-luna", "gpt-6.1-terra"}, images...)
+	full := append([]string{"codex-auto-review", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra",
+		"gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol", "gpt-6.1-terra"}, images...)
 	apiKey := &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-test"}
 	for _, tc := range []struct {
 		name    string

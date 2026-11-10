@@ -139,6 +139,9 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (Aut
 		if !opts.ImageGenerationTool {
 			settings["image_generation_tool"] = false
 		}
+		if !opts.Images {
+			settings["images"] = false
+		}
 	case "claude":
 		r.Extension = Claude
 		renewAhead(claudeRefreshLead)

@@ -22,10 +22,16 @@ type endpoint struct {
 	format string
 	// headers are the client's request headers that travel with the body.
 	headers []string
-	// check refuses a request the endpoint does not take, before it is routed.
-	check func(body map[string]json.RawMessage) *llm.Error
 	// modelOptional makes a request that names no model go to any account (route.Request.AnyModel).
 	modelOptional bool
+	// form, when set, also takes a multipart/form-data body (or one without a Content-Type),
+	// read into its JSON form (formJSON); any other body but JSON is refused.
+	form bool
+	// defaultModel is the model of a request that names none.
+	defaultModel string
+	// check refuses a request the endpoint does not take, before it is routed. fromForm is true
+	// for a body that came as multipart/form-data.
+	check func(body map[string]json.RawMessage, fromForm bool) *llm.Error
 }
 
 // compactEndpoint is OpenAI's Responses compaction, which the Codex CLI calls to shorten a long
@@ -34,7 +40,7 @@ type endpoint struct {
 var compactEndpoint = endpoint{
 	format:  llm.FormatOpenAIResponsesCompact,
 	headers: openairesponses.Headers,
-	check: func(body map[string]json.RawMessage) *llm.Error {
+	check: func(body map[string]json.RawMessage, _ bool) *llm.Error {
 		if string(body["stream"]) == "true" {
 			return &llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusBadRequest, Scope: llm.ScopeRequest,
 				Message: "Streaming not supported for compact responses"}
@@ -59,6 +65,8 @@ var endpointRoutes = map[string]endpoint{
 	"/backend-api/codex/responses/compact": compactEndpoint,
 	"/v1/alpha/search":                     alphaSearchEndpoint,
 	"/backend-api/codex/alpha/search":      alphaSearchEndpoint,
+	"/v1/images/generations":               imagesGenerationsEndpoint,
+	"/v1/images/edits":                     imagesEditsEndpoint,
 }
 
 // serveEndpoint serves a client request to a provider endpoint: the body, a JSON object, goes to
@@ -80,20 +88,40 @@ func serveEndpoint(w http.ResponseWriter, r *http.Request, g *Generation, ep end
 		return
 	}
 	keepBody(r, body)
+	fromForm := false
+	if ep.form {
+		switch mt := mediaType(r.Header.Get("Content-Type")); {
+		case mt == "application/json":
+		case mt == "multipart/form-data" || mt == "":
+			form, e := formJSON(r.Header.Get("Content-Type"), body)
+			if e != nil {
+				f.writeError(w, e)
+				return
+			}
+			body, fromForm = form, true
+		default:
+			f.writeError(w, &llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusBadRequest, Scope: llm.ScopeRequest,
+				Message: fmt.Sprintf("Invalid request: unsupported Content-Type %q", mt)})
+			return
+		}
+	}
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(body, &fields) != nil || fields == nil {
 		f.writeError(w, &llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusBadRequest, Scope: llm.ScopeRequest, Message: "the request body is not a JSON object"})
 		return
 	}
 	if ep.check != nil {
-		if e := ep.check(fields); e != nil {
+		if e := ep.check(fields, fromForm); e != nil {
 			f.writeError(w, e)
 			return
 		}
 	}
 	var model string
 	_ = json.Unmarshal(fields["model"], &model)
-	req := llm.Request{Model: model, Native: &llm.Native{Format: ep.format, Body: body}}
+	if strings.TrimSpace(model) == "" {
+		model = ep.defaultModel
+	}
+	req := llm.Request{Model: model, Stream: string(fields["stream"]) == "true", Native: &llm.Native{Format: ep.format, Body: body}}
 	takeThinkingSuffix(&req)
 	clientFormat{headers: ep.headers}.nativeHeaders(r, &req)
 

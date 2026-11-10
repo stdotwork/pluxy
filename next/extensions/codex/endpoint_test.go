@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
+	"github.com/stdotwork/pluxy/next/sdk"
 )
 
 // searchUpstream is a fake Codex search endpoint: it records the requests it gets and answers
@@ -217,5 +219,68 @@ func TestAlphaSearchDefaultURL(t *testing.T) {
 	}
 	if got := baseURL(settings{BaseURL: "https://example.invalid/v1/"}, account{}) + "/alpha/search"; got != "https://example.invalid/v1/alpha/search" {
 		t.Errorf("API key URL = %q", got)
+	}
+}
+
+// An Images request that the account does not serve (a free plan, the images setting off) is
+// refused for the account, so core tries another; one for a model that is not an image model is
+// refused for the request. None reaches the upstream.
+func TestImagesRefusals(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("the upstream got %s %s", r.Method, r.URL.Path)
+	}))
+	defer srv.Close()
+	call := func(model string, settings map[string]any, cred *protocol.Credential) error {
+		settings["base_url"] = srv.URL
+		raw, _ := json.Marshal(settings)
+		return images(context.Background(), sdk.Call{
+			Account: protocol.Account{ID: "a", Settings: raw, Credential: cred},
+			Request: llm.Request{Model: model, Native: &llm.Native{Format: llm.FormatOpenAIImagesGenerations, Body: json.RawMessage(`{"prompt":"p"}`)}},
+		}, nil, "/images/generations")
+	}
+	key := &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-test"}
+	free, _ := json.Marshal(credentialData{IDToken: idTokenWithPlan("free")})
+	freePlan := &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: "at", Data: free}
+	// Today's core compares the plan without case or surrounding spaces.
+	freeWritten, _ := json.Marshal(credentialData{IDToken: idTokenWithPlan(" Free ")})
+	freeWrittenPlan := &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: "at", Data: freeWritten}
+	for _, tc := range []struct {
+		name     string
+		model    string
+		settings map[string]any
+		cred     *protocol.Credential
+		code     string
+		scope    string
+	}{
+		{"free plan", "gpt-image-2", map[string]any{}, freePlan, llm.CodeUnsupported, llm.ScopeCredential},
+		{"free plan in capitals", "gpt-image-2", map[string]any{}, freeWrittenPlan, llm.CodeUnsupported, llm.ScopeCredential},
+		{"images off", "gpt-image-2", map[string]any{"images": false}, key, llm.CodeUnsupported, llm.ScopeCredential},
+		{"not an image model", "gpt-6.1-sol", map[string]any{}, key, llm.CodeInvalidRequest, llm.ScopeRequest},
+	} {
+		var e *llm.Error
+		err := call(tc.model, tc.settings, tc.cred)
+		if !asError(err, &e) || e.Code != tc.code || e.Scope != tc.scope || (e.Code == llm.CodeUnsupported) != e.Retryable {
+			t.Errorf("%s: error = %v", tc.name, err)
+		}
+	}
+}
+
+func asError(err error, e **llm.Error) bool {
+	v, ok := err.(*llm.Error)
+	*e = v
+	return ok
+}
+
+// Every plan's model list ends with the image models, which the Images API serves.
+func TestModelListsEndWithImageModels(t *testing.T) {
+	for plan, list := range planModels {
+		if len(list) < len(imageModels) {
+			t.Fatalf("%s: %d models", plan, len(list))
+		}
+		for i, m := range list[len(list)-len(imageModels):] {
+			if m.ID != imageModels[i].ID {
+				t.Errorf("%s: model %d is %s, want %s", plan, i, m.ID, imageModels[i].ID)
+			}
+		}
 	}
 }

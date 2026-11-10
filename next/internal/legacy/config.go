@@ -42,10 +42,13 @@ type ImportOptions struct {
 	// hosted image_generation tool: imported Codex accounts then get
 	// "image_generation_tool": false.
 	ImageGenerationTool bool `json:"image_generation_tool"`
+	// Images is false when multimedia.disable-image-generation is true, which also turns off the
+	// Images API routes: imported Codex accounts then get "images": false.
+	Images bool `json:"images"`
 }
 
 // DefaultImportOptions are the import settings when the config sets none.
-var DefaultImportOptions = ImportOptions{CodexIdentity: true, ImageGenerationTool: true}
+var DefaultImportOptions = ImportOptions{CodexIdentity: true, ImageGenerationTool: true, Images: true}
 
 // Package IDs of the extensions today's provider sections and auth files map to.
 const (
@@ -612,7 +615,10 @@ func (x *translator) options() error {
 	}
 	switch v, _ := get(x.t, "multimedia.disable-image-generation"); v {
 	case nil, false, "false", "":
-	case true, "chat", "passthrough", "true":
+	case true, "true":
+		x.res.Import.ImageGenerationTool = false
+		x.res.Import.Images = false
+	case "chat", "passthrough":
 		x.res.Import.ImageGenerationTool = false
 	default:
 		return fmt.Errorf("multimedia.disable-image-generation must be false, true, \"chat\" or \"passthrough\"")
@@ -958,6 +964,9 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 		}
 		if !x.res.Import.ImageGenerationTool {
 			settings["image_generation_tool"] = false
+		}
+		if !x.res.Import.Images {
+			settings["images"] = false
 		}
 	case "vertex":
 		settings["vertex"] = map[string]any{}

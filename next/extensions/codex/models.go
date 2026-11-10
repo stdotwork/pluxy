@@ -15,9 +15,9 @@ const modelsOwner = "openai"
 
 // modelsJSON holds the model list of each ChatGPT plan, copied from the codex-free, codex-team,
 // codex-plus and codex-pro lists of today's core (core/internal/registry/models/models.json).
-// It leaves out the gpt-image-* models that core adds to every list (WithCodexBuiltins in
-// core/internal/registry/model_definitions.go): they need the image endpoints, which pluxy does
-// not serve.
+// Every list ends with the image models (imageModels), as today's core adds its gpt-image-*
+// models to every list (WithCodexBuiltins in core/internal/registry/model_definitions.go): they
+// serve the Images API.
 //
 //go:embed models.json
 var modelsJSON []byte
@@ -26,6 +26,9 @@ var planModels = func() map[string][]protocol.Model {
 	var m map[string][]protocol.Model
 	if err := json.Unmarshal(modelsJSON, &m); err != nil {
 		panic("codex: models.json: " + err.Error())
+	}
+	for plan, list := range m {
+		m[plan] = append(list, imageModels...)
 	}
 	return m
 }()
