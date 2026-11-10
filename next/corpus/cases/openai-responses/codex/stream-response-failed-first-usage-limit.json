@@ -1,0 +1,146 @@
+{
+  "description": "A stream whose first event is response.failed with a usage limit (error type usage_limit_reached) reaches the client as the usage limit's 429 before the stream starts, as when the limit comes as an HTTP 429, not as a 502.",
+  "source": [
+    "core/internal/runtime/executor/codex_executor_terminal.go (codexTerminalFailureBody, codexTerminalStreamErrShouldHandle, isCodexUsageLimitError)"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "body": {
+      "model": "gpt-test",
+      "input": "Say hello",
+      "stream": true
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {
+          "event": "response.failed",
+          "data": {
+            "type": "response.failed",
+            "sequence_number": 0,
+            "response": {
+              "id": "resp_corpus",
+              "object": "response",
+              "created_at": 1700000000,
+              "status": "failed",
+              "model": "gpt-test-upstream",
+              "output": [],
+              "usage": null,
+              "error": {
+                "type": "usage_limit_reached",
+                "code": "usage_limit_reached",
+                "message": "The usage limit has been reached",
+                "resets_in_seconds": 7200
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "client.body.error",
+      "kind": "intended",
+      "reason": "The new core builds the client's error body itself, as for every upstream (decision in slice 1): a Codex usage_limit_reached failure becomes a 429 with code usage_limit_reached and type rate_limit_error, as when the limit comes as an HTTP 429. Today's core passes the upstream's error object through, with its resets_in_seconds.",
+      "want": {
+        "code": "usage_limit_reached",
+        "message": "The usage limit has been reached",
+        "type": "rate_limit_error"
+      }
+    },
+    {
+      "path": "client.body.sequence_number",
+      "kind": "intended",
+      "reason": "Today's core copies the failed event's sequence_number into the error body it passes through; the new core builds the error body itself and the reply never started, so there is no stream position to report."
+    },
+    {
+      "path": "client.headers.Retry-After",
+      "kind": "intended",
+      "reason": "The new core sends the usage limit's reset time (resets_in_seconds) in Retry-After, as both cores do when the limit comes as an HTTP 429; today's core does not read it from a failed stream event.",
+      "want": "7200"
+    },
+    {
+      "path": "upstream[*].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."
+    },
+    {
+      "path": "upstream[*].headers.Session-Id",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    },
+    {
+      "path": "upstream[*].body.prompt_cache_key",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {
+          "code": "usage_limit_reached",
+          "message": "The usage limit has been reached",
+          "resets_in_seconds": 7200,
+          "type": "usage_limit_reached"
+        },
+        "sequence_number": 0
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 429
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": [
+            "reasoning.encrypted_content"
+          ],
+          "input": [
+            {
+              "content": [
+                {
+                  "text": "Say hello",
+                  "type": "input_text"
+                }
+              ],
+              "role": "user",
+              "type": "message"
+            }
+          ],
+          "instructions": "",
+          "model": "gpt-test",
+          "parallel_tool_calls": true,
+          "prompt_cache_key": "f674c4c7-551b-57dd-ab73-9724cff0fe39",
+          "store": false,
+          "stream": true,
+          "tools": [
+            {
+              "output_format": "png",
+              "type": "image_generation"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "Originator": "codex-tui",
+          "Session-Id": "f674c4c7-551b-57dd-ab73-9724cff0fe39",
+          "User-Agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      }
+    ]
+  }
+}

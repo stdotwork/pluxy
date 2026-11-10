@@ -237,7 +237,7 @@ func (s *wsSession) relay(ctx context.Context, c *wsConn, out eventSender) error
 		}
 		events, err := dec.Decode(repaired)
 		if err != nil {
-			return frameError(data, classify(err))
+			return frameError(data, classify(failedFirst(events, err)))
 		}
 		for _, ev := range events {
 			if err := out.Send(ev); err != nil {
