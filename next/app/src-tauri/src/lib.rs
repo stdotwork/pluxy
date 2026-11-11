@@ -944,6 +944,16 @@ pub fn run() {
             };
             show_status(&handle, &v);
             recovery::schedule(handle.clone(), plan);
+            // Temporary, to see the core-off native check fail: starts a core that Start Core on
+            // Launch left unstarted, after the first recovery delay.
+            #[cfg(feature = "native-test")]
+            if std::env::var_os("PLUXY_APP_TEST_STARTUP").is_some() {
+                let h = handle.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    let _ = h.state::<App>().conn.lock().unwrap().resume_core();
+                });
+            }
             if let Some(pid) = handle.state::<App>().conn.lock().unwrap().core_pid() {
                 eprintln!("pluxy-app: core started, pid {pid}");
             }
