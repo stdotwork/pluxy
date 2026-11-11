@@ -1,7 +1,7 @@
 // What a host gives the kit. The browser panel (panel/browserHost.ts) and the desktop app each
 // implement it; the kit's pages and shell use nothing else to reach core or keep settings.
 
-export type Method = "GET" | "POST" | "PATCH" | "DELETE";
+export type Method = "GET" | "POST" | "PATCH" | "DELETE" | "PUT";
 
 /** A management API reply. status 0 means core could not be reached. */
 export interface Reply<T> {
