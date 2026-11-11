@@ -143,6 +143,14 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
     if std::fs::read(&settings).ok().as_ref() != Some(&disk) {
         return Err("cancel changed saved settings".into());
     }
+    // Remove the preloaded key through the real IPC command before the positive control.
+    // Success must establish authentication, not merely retain the initial key.
+    main.eval("window.__keySignedOut = false; window.__TAURI_INTERNALS__.invoke('sign_out').then(v => window.__keySignedOut = !v.signed_in)")
+        .map_err(|_| "could not sign out before native entry")?;
+    wait_for("native sign-out", || eval(main, "window.__keySignedOut").filter(|v| v == true))?;
+    if app.state::<App>().conn.lock().unwrap().view().signed_in {
+        return Err("positive control did not start signed out".into());
+    }
     let good = enter(main, key, false, false)?;
     let view = app.state::<App>().conn.lock().unwrap().view();
     if good["status"] != "signed_in" || !view.signed_in || view.remembered {
