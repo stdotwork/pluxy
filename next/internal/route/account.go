@@ -3,7 +3,6 @@ package route
 import (
 	"encoding/json"
 	"errors"
-	"sync/atomic"
 
 	"github.com/stdotwork/pluxy/next/protocol"
 )
@@ -54,13 +53,10 @@ type Account struct {
 
 	// gen is the generation of the router that holds this copy (see State.Retain).
 	gen uint64
-	// retired is set on this copy once Router.SetAccounts replaced it with a changed account
-	// of the same ID (see State.restart); a copy made by accountList always has one.
-	retired *atomic.Bool
+	// rev is the account's revision in State when this copy was made: a copy of an older
+	// revision is about the account as it was before SetAccounts changed it (see State.restart).
+	rev uint64
 }
-
-// replaced reports whether a is a copy SetAccounts replaced with a changed account.
-func (a *Account) replaced() bool { return a.retired != nil && a.retired.Load() }
 
 // Check checks the account's routing and naming fields, as a config's accounts are checked.
 func (a *Account) Check() error {

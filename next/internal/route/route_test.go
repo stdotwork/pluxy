@@ -962,24 +962,36 @@ func (h *harness) setAccounts(accounts ...Account) {
 }
 
 // An account whose settings change in place starts clean, as on a reload: its blocks go, and an
-// attempt that began on it before the change records nothing. An unchanged account keeps its
-// blocks.
+// attempt that began on it before the change records nothing, also when the accounts were set
+// again unchanged, or a reload kept them, in between. An unchanged account keeps its blocks.
 func TestSetAccountsRestartsChangedAccounts(t *testing.T) {
-	h := newHarness(t, Config{Strategy: StrategyFillFirst}, accts("a", "b", "c")...)
-	h.on("a", rateLimited(time.Hour))
-	h.on("b", rateLimited(time.Hour))
-	h.on("c", script{start(), rateLimited(time.Hour)[0]}) // a 429 after the reply started
-	older := h.r.Generate(context.Background(), h.req("m"))
-	older.Next() // a and b fail and are blocked; the attempt on c starts its reply
-	h.wantAttempts("a", "b", "c")
-	h.setAccounts(Account{ID: "a"}, withSettings(Account{ID: "b"}, `{"x":1}`), withSettings(Account{ID: "c"}, `{"x":1}`))
-	older.Next() // the attempt on the old c now fails with a 429
-	older.Close()
-	h.on("b", rateLimited(time.Hour))
-	h.on("c", ok())
-	h.attempts = nil
-	h.runOK("m")
-	h.wantAttempts("b", "c") // a is still blocked; b's block went, and c's late failure set none
+	for _, between := range []struct {
+		name string
+		do   func(h *harness)
+	}{
+		{"nothing", func(*harness) {}},
+		{"unchanged SetAccounts", func(h *harness) { h.setAccounts(accts("a", "b", "c")...) }},
+		{"unchanged reload", func(h *harness) { h.reload(Config{Strategy: StrategyFillFirst}, accts("a", "b", "c")...) }},
+	} {
+		t.Run(between.name, func(t *testing.T) {
+			h := newHarness(t, Config{Strategy: StrategyFillFirst}, accts("a", "b", "c")...)
+			h.on("a", rateLimited(time.Hour))
+			h.on("b", rateLimited(time.Hour))
+			h.on("c", script{start(), rateLimited(time.Hour)[0]}) // a 429 after the reply started
+			older := h.r.Generate(context.Background(), h.req("m"))
+			older.Next() // a and b fail and are blocked; the attempt on c starts its reply
+			h.wantAttempts("a", "b", "c")
+			between.do(h)
+			h.setAccounts(Account{ID: "a"}, withSettings(Account{ID: "b"}, `{"x":1}`), withSettings(Account{ID: "c"}, `{"x":1}`))
+			older.Next() // the attempt on the old c now fails with a 429
+			older.Close()
+			h.on("b", rateLimited(time.Hour))
+			h.on("c", ok())
+			h.attempts = nil
+			h.runOK("m")
+			h.wantAttempts("b", "c") // a is still blocked; b's block went, and c's late failure set none
+		})
+	}
 }
 
 // An account whose settings change in place loses its session bindings; one whose settings stay

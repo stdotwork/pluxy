@@ -117,6 +117,9 @@ type State struct {
 	// generation of the router Retain carried the state to: an outcome seen by an older router
 	// is about the account as it was, so it records nothing.
 	since map[scopeKey]uint64
+	// revs holds, per account ID, how many times SetAccounts changed the account in place: its
+	// revision (see restart).
+	revs map[string]uint64
 	// last holds, per account ID, the latest failure an attempt on the account recorded a
 	// block for, until an attempt that started after it was recorded succeeds (block.mark's rule).
 	last map[string]lastFailure
@@ -238,7 +241,7 @@ func (s *State) reserve(a *Account, model string, now time.Time) (uint64, bool) 
 // NewState returns empty state.
 func NewState() *State {
 	return &State{scopes: map[scopeKey]*scopeState{}, active: map[string]int{}, affinity: newAffinity(), rotation: newRotation(),
-		since: map[scopeKey]uint64{}, last: map[string]lastFailure{}, running: map[uint64]struct{}{}, rand: rand.Float64}
+		since: map[scopeKey]uint64{}, revs: map[string]uint64{}, last: map[string]lastFailure{}, running: map[uint64]struct{}{}, rand: rand.Float64}
 }
 
 // nextGen returns the generation for a new router.
@@ -314,10 +317,10 @@ func (s *State) Retain(prevRouter, nextRouter *Router, same func(old, cur *Accou
 }
 
 // stale reports whether an outcome on key seen on copy a is about an account as it was before
-// Retain or restart dropped key's state: a is a copy SetAccounts replaced, or its router's
-// generation is older than the drop. s.mu is held.
+// Retain or restart dropped key's state: a is of an older revision than the account's, or its
+// router's generation is older than the drop. s.mu is held.
 func (s *State) stale(key scopeKey, a *Account) bool {
-	if a.replaced() {
+	if a.rev < s.revs[a.ID] {
 		return true
 	}
 	if key.kind == scopeModel {
@@ -326,34 +329,45 @@ func (s *State) stale(key scopeKey, a *Account) bool {
 	return a.gen < s.since[key]
 }
 
-// restart drops the state of the accounts Router.SetAccounts replaced with changed ones of the
-// same IDs (their old copies): blocks on their credentials and models, their last errors,
-// their session bindings, and blocks on their endpoints that no endpoint in kept names. Each
-// old copy is marked first, so an outcome an attempt on it sees afterwards records nothing
-// and binds no session. Running attempts stay counted until they end.
-func (s *State) restart(old []*Account, kept map[string]bool) {
+// revision returns account id's revision, for a new copy of it.
+func (s *State) revision(id string) uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.revs[id]
+}
+
+// restart drops the state of the accounts Router.SetAccounts changed in place (old, their
+// copies until now, and fresh, the copies that replace them): blocks on their credentials and
+// models, their last errors, their session bindings, and blocks on their endpoints that no
+// endpoint in kept names. Each account gets a new revision, which fresh takes, so an outcome an
+// attempt on any older copy sees afterwards, from any router, records nothing and binds no
+// session. Running attempts stay counted until they end.
+func (s *State) restart(old, fresh []*Account, kept map[string]bool) {
 	if len(old) == 0 {
 		return
 	}
-	ids, endpoints := map[string]bool{}, map[string]bool{}
+	revs, endpoints := map[string]uint64{}, map[string]bool{}
+	s.mu.Lock()
 	for _, a := range old {
-		a.retired.Store(true)
-		ids[a.ID] = true
+		s.revs[a.ID]++
+		revs[a.ID] = s.revs[a.ID]
 		if !kept[a.endpoint()] {
 			endpoints[a.endpoint()] = true
 		}
 	}
-	s.mu.Lock()
 	for k := range s.scopes {
-		if k.kind == scopeEndpoint && endpoints[k.id] || k.kind != scopeEndpoint && ids[k.id] {
+		if _, ok := revs[k.id]; k.kind == scopeEndpoint && endpoints[k.id] || k.kind != scopeEndpoint && ok {
 			s.drop(k)
 		}
 	}
-	for id := range ids {
+	for id := range revs {
 		delete(s.last, id)
 	}
 	s.mu.Unlock()
-	s.affinity.unbind(ids)
+	for _, a := range fresh {
+		a.rev = revs[a.ID]
+	}
+	s.affinity.unbind(revs)
 }
 
 // end releases the reservation reserve made for the attempt with sequence number seq on
