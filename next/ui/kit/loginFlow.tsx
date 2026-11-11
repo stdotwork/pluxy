@@ -1,5 +1,5 @@
 import type { TargetedInputEvent } from "preact";
-import { useEffect, useId, useRef, useState } from "preact/hooks";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { type Login, type LoginInput, type LoginMethod, problem } from "./api";
 import type { Reply } from "./host";
 import { strings } from "./strings";
@@ -34,6 +34,9 @@ const t = strings("loginFlow", {
   failed: "Authentication failed: {reason}",
   noReason: "No reason was provided.",
   invalidReply: "Core returned no login.",
+  pollStopped: "Could not check sign-in after three attempts. {reason}",
+  invalidId:
+    "Use 1–128 letters, digits, dots, underscores or hyphens, starting with a letter or digit. The ID must not end with a dot.",
   startOver: "Start over",
   cancel: "Cancel",
   cancelling: "Cancelling…",
@@ -56,8 +59,7 @@ function LoginField(props: {
   const label = props.callback ? t("callback") : props.field.label || props.field.name;
   const control = {
     id: controlId,
-    "aria-label": label,
-    autoComplete: "off",
+    autoComplete: props.field.secret ? "new-password" : "off",
     spellcheck: false,
     required: !props.field.optional,
     disabled: props.disabled || reading,
@@ -84,6 +86,10 @@ function LoginField(props: {
               const selected = input.files?.[0];
               input.value = "";
               if (!selected) return;
+              if (selected.size > 1024 * 1024) {
+                setError(t("readFailed"));
+                return;
+              }
               setReading(true);
               props.onReading(true);
               setError(undefined);
@@ -177,12 +183,16 @@ export interface LoginFlowProps {
   /** A new account ID already chosen by the caller; methods without inputs start at once. */
   newAccountId?: string;
   onSuccess(accountId: string): void;
-  onReset?(): void;
+  onReset?(completed: boolean): void;
 }
 
 export function suggestedAccountId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(6));
   return `account-${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+export function validAccountId(id: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(id) && !id.endsWith(".");
 }
 
 /** Shared by adding an account and signing in to an existing account again. Unmounting leaves
@@ -198,6 +208,8 @@ export function LoginFlow(props: LoginFlowProps) {
   const [starting, setStarting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState<string>();
+  const [pollError, setPollError] = useState<string>();
+  const [pollStopped, setPollStopped] = useState<string>();
   const [startError, setStartError] = useState<string>();
   const [deadline, setDeadline] = useState<number>();
   const [now, setNow] = useState(Date.now());
@@ -208,9 +220,13 @@ export function LoginFlow(props: LoginFlowProps) {
   const succeeded = useRef<string | undefined>(undefined);
   const locked = useRef(false);
   const success = useRef(props.onSuccess);
+  const root = useRef<HTMLElement>(null);
+  const typedId = useRef(false);
+  const idHint = useId();
   success.current = props.onSuccess;
   const id = props.existingAccountId ?? props.newAccountId ?? accountId;
   const inputs = props.method.inputs ?? [];
+  const validId = validAccountId(id);
   const readingFile = Object.values(reading).some(Boolean);
   const fileReading = (name: string, active: boolean) => setReading((all) => ({ ...all, [name]: active }));
 
@@ -245,7 +261,7 @@ export function LoginFlow(props: LoginFlowProps) {
   };
 
   const start = async () => {
-    if (locked.current || login || readingFile) return;
+    if (locked.current || login || readingFile || !validId) return;
     locked.current = true;
     setStarting(true);
     setStartError(undefined);
@@ -281,23 +297,38 @@ export function LoginFlow(props: LoginFlowProps) {
   }, []);
 
   useEffect(() => {
-    if (login?.state !== "pending") return;
+    if (login?.state !== "pending" || pollStopped) return;
     let disposed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let fetching = false;
+    let failures = 0;
+    let stopped = false;
     const poll = async () => {
-      if (disposed || document.visibilityState !== "visible" || fetching) return;
+      if (disposed || stopped || document.visibilityState !== "visible" || fetching) return;
       fetching = true;
       const version = operation.current;
       try {
         const r = await api.login(login.id);
         if (disposed || !live.current || version !== operation.current) return;
         if (replyError(r)) return;
-        setError(problem(r));
-        if (r.body?.login) accept(r.body.login);
+        const why = problem(r) ?? (!r.body?.login ? t("invalidReply") : undefined);
+        if (why) {
+          failures++;
+          if (r.status === 404 || failures >= 3) {
+            stopped = true;
+            setPollStopped(r.status === 404 ? why : t("pollStopped", { reason: why }));
+            setPollError(undefined);
+          } else setPollError(why);
+        } else if (r.body?.login) {
+          failures = 0;
+          setPollError(undefined);
+          stopped = r.body.login.state !== "pending";
+          accept(r.body.login);
+        }
       } finally {
         fetching = false;
-        if (!disposed && document.visibilityState === "visible") timer = setTimeout(poll, 2000);
+        if (!disposed && !stopped && document.visibilityState === "visible")
+          timer = setTimeout(poll, 2000 * 2 ** failures);
       }
     };
     const visibility = () => {
@@ -314,15 +345,15 @@ export function LoginFlow(props: LoginFlowProps) {
       clearTimeout(timer);
       document.removeEventListener("visibilitychange", visibility);
     };
-  }, [login?.id, login?.state, api, unauthorized]);
+  }, [login?.id, login?.state, pollStopped, api, unauthorized]);
 
   useEffect(() => {
-    if (!deadline || login?.state !== "pending") return;
+    if (!deadline || login?.state !== "pending" || pollStopped) return;
     const timer = setInterval(() => {
       if (document.visibilityState === "visible") setNow(Date.now());
     }, 1000);
     return () => clearInterval(timer);
-  }, [deadline, login?.state]);
+  }, [deadline, login?.state, pollStopped]);
 
   const submit = async () => {
     if (!login || locked.current || readingFile) return;
@@ -365,12 +396,17 @@ export function LoginFlow(props: LoginFlowProps) {
     }
   };
   const reset = () => {
-    if (props.onReset) return props.onReset();
+    if (props.onReset) return props.onReset(login?.state === "done");
     operation.current++;
     setLogin(undefined);
-    setAccountId(suggestedAccountId());
+    if (!typedId.current || login?.state === "done") {
+      setAccountId(suggestedAccountId());
+      typedId.current = false;
+    }
     setStartError(undefined);
     setError(undefined);
+    setPollError(undefined);
+    setPollStopped(undefined);
     setAnswer({});
     setValues({});
     setCancelling(false);
@@ -378,16 +414,34 @@ export function LoginFlow(props: LoginFlowProps) {
     promptKey.current = "";
   };
 
-  const prompt = login?.state === "pending" ? login.prompt : undefined;
+  const prompt = login?.state === "pending" && !pollStopped ? login.prompt : undefined;
   const url =
     safeLink(prompt?.kind === "browser" ? prompt.url : prompt?.verification_uri_complete) ??
     safeLink(prompt?.verification_uri);
   const promptInputs =
     prompt?.inputs ?? (prompt?.kind === "browser" ? [{ name: "redirect_url", label: t("callback") }] : []);
   const remaining = Math.max(0, Math.ceil(((deadline ?? now) - now) / 1000));
-  const terminalFailure = login?.state === "failed" || startError;
+  const terminalFailure = login?.state === "failed" || startError || pollStopped;
+  const focusState = [starting, login?.state, promptKey.current, error, startError, pollStopped].join("/");
+  useLayoutEffect(() => {
+    const element = root.current;
+    if (!element) return;
+    const target =
+      error && !terminalFailure
+        ? element.querySelector<HTMLElement>('[role="alert"]')
+        : (element.querySelector<HTMLElement>("input:not([hidden]):not(:disabled)") ??
+          (prompt?.kind === "device"
+            ? element.querySelector<HTMLElement>("[data-login-cancel] button")
+            : null) ??
+          element.querySelector<HTMLElement>("button:not(:disabled)") ??
+          element.querySelector<HTMLElement>('[role="status"], [role="alert"]'));
+    if (target) {
+      if (target.matches('[role="status"], [role="alert"]')) target.tabIndex = -1;
+      target.focus();
+    }
+  }, [focusState]);
   return (
-    <section class="login-flow stack" data-part="flow" aria-label={props.method.label || props.method.method}>
+    <section ref={root} class="login-flow stack" data-part="flow">
       {!login && !starting && !startError && (
         <form
           class="stack"
@@ -405,8 +459,18 @@ export function LoginFlow(props: LoginFlowProps) {
                 maxLength={128}
                 pattern="[A-Za-z0-9][A-Za-z0-9._\x2D]{0,127}"
                 value={accountId}
-                onInput={(e) => setAccountId(e.currentTarget.value)}
+                aria-invalid={!validId}
+                aria-describedby={!validId ? idHint : undefined}
+                onInput={(e) => {
+                  typedId.current = true;
+                  setAccountId(e.currentTarget.value);
+                }}
               />
+              {!validId && (
+                <small id={idHint} class="hint">
+                  {t("invalidId")}
+                </small>
+              )}
             </label>
           )}
           <LoginFields
@@ -417,7 +481,7 @@ export function LoginFlow(props: LoginFlowProps) {
             onChange={(name, value) => setValues((all) => ({ ...all, [name]: value }))}
           />
           <div class="actions">
-            <Button type="submit" variant="primary" disabled={readingFile}>
+            <Button type="submit" variant="primary" disabled={readingFile || !validId}>
               {t(props.existingAccountId ? "signInAgain" : "add")}
             </Button>
             {props.onReset && <Button onClick={reset}>{t("cancel")}</Button>}
@@ -436,7 +500,7 @@ export function LoginFlow(props: LoginFlowProps) {
           {prompt.kind === "device" && prompt.user_code && (
             <div class="stack">
               <span>{t("deviceCode")}</span>
-              <strong class="mono" data-part="device-code">
+              <strong class="mono" data-part="device-code" aria-live="polite" aria-atomic="true">
                 {prompt.user_code}
               </strong>
               <div>
@@ -494,11 +558,11 @@ export function LoginFlow(props: LoginFlowProps) {
           )}
         </>
       )}
-      {login?.state === "pending" && (
+      {login?.state === "pending" && !pollStopped && (
         <>
           <Notice tone="muted">{t(cancelling ? "cancelling" : "waiting")}</Notice>
           <p class="hint">{t("closing")}</p>
-          <div>
+          <div data-login-cancel="">
             <Button onClick={() => void cancel()} disabled={busy || cancelling}>
               {t("cancel")}
             </Button>
@@ -506,6 +570,7 @@ export function LoginFlow(props: LoginFlowProps) {
         </>
       )}
       {error && <Notice tone="danger">{error}</Notice>}
+      {pollError && <Notice tone="danger">{pollError}</Notice>}
       {login?.state === "done" && (
         <>
           <Notice tone="ok">{t("success")}</Notice>
@@ -517,14 +582,14 @@ export function LoginFlow(props: LoginFlowProps) {
             >
               {t("viewAccounts")}
             </Button>
-            <Button onClick={reset}>{t("another")}</Button>
+            {!props.existingAccountId && <Button onClick={reset}>{t("another")}</Button>}
           </div>
         </>
       )}
       {terminalFailure && (
         <>
           <Notice tone="danger">
-            {t("failed", { reason: startError ?? login?.error?.message ?? t("noReason") })}
+            {t("failed", { reason: pollStopped ?? startError ?? login?.error?.message ?? t("noReason") })}
           </Notice>
           <div>
             <Button onClick={reset}>{t("startOver")}</Button>

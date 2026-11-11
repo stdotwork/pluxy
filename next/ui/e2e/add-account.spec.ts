@@ -201,9 +201,12 @@ test("device sign-in shows its code and adds the account", async ({ page }) => {
     .filter({ hasText: "Test device" });
   await tile.getByRole("button", { name: "Test device" }).click();
   await expect(page.locator('[data-part="device-code"]')).toHaveText("TEST-1234");
+  await expect(page.locator('[data-part="device-code"]')).toHaveAttribute("aria-live", "polite");
+  await expect(page.getByRole("button", { name: "Cancel", exact: true })).toBeFocused();
   await expect(page.getByText(/^Time left: \d+:\d{2}$/)).toBeVisible();
   await expect(page.getByText("Waiting for authentication…", { exact: true })).toBeVisible();
   await expect(page.getByRole("status")).toContainText("Authentication successful!", { timeout: 15_000 });
+  await expect(page.getByRole("button", { name: "View accounts" })).toBeFocused();
   await page.getByRole("button", { name: "View accounts" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Accounts" })).toBeVisible();
   await expect(page.getByRole("button", { name: "device-added", exact: true })).toBeVisible();

@@ -1,6 +1,6 @@
-import { useState } from "preact/hooks";
+import { useId, useLayoutEffect, useRef, useState } from "preact/hooks";
 import type { LoginMethod } from "../api";
-import { LoginFlow, suggestedAccountId } from "../loginFlow";
+import { LoginFlow, suggestedAccountId, validAccountId } from "../loginFlow";
 import type { PageDef } from "../shell";
 import { strings } from "../strings";
 import { Button, Empty, List, Notice, PageHead, useKit, useLoad } from "../ui";
@@ -15,6 +15,8 @@ const t = strings("addAccount", {
   device: "Device code",
   api_key: "API key",
   accountId: "Account ID",
+  invalidId:
+    "Use 1–128 letters, digits, dots, underscores or hyphens, starting with a letter or digit. The ID must not end with a dot.",
   loading: "Loading sign-in methods…",
   empty: "No running extension offers a sign-in method.",
   retry: "Retry",
@@ -32,6 +34,12 @@ export function AddAccountPage() {
   const [accountId, setAccountId] = useState(suggestedAccountId);
   const [selected, setSelected] = useState<string>();
   const [attempt, setAttempt] = useState(0);
+  const typedId = useRef(false);
+  const idField = useRef<HTMLInputElement>(null);
+  const idHint = useId();
+  useLayoutEffect(() => {
+    if (selected === undefined && attempt > 0) idField.current?.focus();
+  }, [selected, attempt]);
   const tiles: MethodTile[] = (methods.data?.extensions ?? []).flatMap((extension) =>
     (extension.methods ?? []).map((method) => ({
       id: `${extension.extension}/${method.method}`,
@@ -39,12 +47,15 @@ export function AddAccountPage() {
       method,
     })),
   );
-  const reset = () => {
+  const reset = (completed = false) => {
     setSelected(undefined);
-    setAccountId(suggestedAccountId());
+    if (!typedId.current || completed) {
+      setAccountId(suggestedAccountId());
+      typedId.current = false;
+    }
     setAttempt((n) => n + 1);
   };
-  const validId = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(accountId) && !accountId.endsWith(".");
+  const validId = validAccountId(accountId);
   return (
     <>
       <PageHead title={t("title")} />
@@ -64,15 +75,26 @@ export function AddAccountPage() {
             <label class="field" data-part="field">
               <span class="label">{t("accountId")}</span>
               <input
+                ref={idField}
                 type="text"
                 required
                 maxLength={128}
                 pattern="[A-Za-z0-9][A-Za-z0-9._\x2D]{0,127}"
                 value={accountId}
+                aria-invalid={!validId}
+                aria-describedby={!validId ? idHint : undefined}
                 disabled={selected !== undefined}
                 autocomplete="off"
-                onInput={(e) => setAccountId(e.currentTarget.value)}
+                onInput={(e) => {
+                  typedId.current = true;
+                  setAccountId(e.currentTarget.value);
+                }}
               />
+              {!validId && (
+                <small id={idHint} class="hint">
+                  {t("invalidId")}
+                </small>
+              )}
             </label>
             <List<MethodTile>
               label={t("methods")}
@@ -82,11 +104,7 @@ export function AddAccountPage() {
                 {
                   label: t("method"),
                   value: (tile) => (
-                    <section
-                      class="account-method stack"
-                      data-part="method"
-                      aria-label={tile.method.label || tile.method.method}
-                    >
+                    <section class="account-method stack" data-part="method">
                       <div class="actions">
                         <Button
                           disabled={!validId || selected !== undefined}
