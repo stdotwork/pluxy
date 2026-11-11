@@ -77,7 +77,7 @@ pub struct Change {
 }
 
 /// The connection as the window sees it: never the key.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct View {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<Mode>,
@@ -99,6 +99,37 @@ pub struct View {
     /// drop a view that reaches it after a newer one.
     #[serde(skip)]
     pub version: u64,
+}
+
+/// Two views are equal when they show the same connection: `version` only orders them.
+impl PartialEq for View {
+    fn eq(&self, other: &Self) -> bool {
+        let View {
+            mode,
+            target,
+            signed_in,
+            remembered,
+            url,
+            ca_file,
+            core_path,
+            core,
+            error,
+            version: _,
+        } = self;
+        (
+            mode, target, signed_in, remembered, url, ca_file, core_path, core, error,
+        ) == (
+            &other.mode,
+            &other.target,
+            &other.signed_in,
+            &other.remembered,
+            &other.url,
+            &other.ca_file,
+            &other.core_path,
+            &other.core,
+            &other.error,
+        )
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
