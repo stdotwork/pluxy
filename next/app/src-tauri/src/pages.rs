@@ -137,15 +137,13 @@ pub fn serve(
     let Some(b) = pages.get(label) else {
         return (served(403, "text/plain", "not a page webview", none), None);
     };
-    let mut csp = format!(
+    let csp = format!(
         "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; \
          frame-src {}/; base-uri 'none'; form-action 'none'",
         b.pages_origin
     );
     #[cfg(feature = "native-test")]
-    if pages.ingress_fixture {
-        csp = csp.replace("frame-src ", "frame-src pluxy-page: ");
-    }
+    let csp = if pages.ingress_fixture { csp.replace("frame-src ", "frame-src pluxy-page: ") } else { csp };
     match (method, path) {
         ("GET", "/") => (served(200, "text/html; charset=utf-8", INDEX, csp), None),
         ("GET", "/frame.js") => (
@@ -154,20 +152,30 @@ pub fn serve(
         ),
         ("GET", "/frame.css") => (served(200, "text/css; charset=utf-8", STYLE, csp), None),
         ("GET", "/frame") => {
-            let mut info = serde_json::json!({"url": b.url.as_str(), "title": b.title});
+            let info = serde_json::json!({"url": b.url.as_str(), "title": b.title});
             #[cfg(feature = "native-test")]
-            if pages.ingress_fixture {
-                info["url"] = serde_json::json!("pluxy-page://localhost/ingress-test");
-            }
+            let info = if pages.ingress_fixture { serde_json::json!({"url":"pluxy-page://localhost/ingress-test", "title":b.title}) } else { info };
             (served(200, "application/json", info.to_string(), csp), None)
         }
         #[cfg(feature = "native-test")]
         ("GET", "/ingress-test.js") => (
-            served(200, "text/javascript", include_str!("../../page/ingress-test.js"), csp), None,
+            served(
+                200,
+                "text/javascript",
+                include_str!("../../page/ingress-test.js"),
+                csp,
+            ),
+            None,
         ),
         #[cfg(feature = "native-test")]
         ("GET", "/ingress-test") => (
-            served(200, "text/html", "<script type=module src=ingress-test.js></script>", csp), None,
+            served(
+                200,
+                "text/html",
+                "<script type=module src=ingress-test.js></script>",
+                csp,
+            ),
+            None,
         ),
         ("POST", "/send") => {
             if body.len() > MAX_SEND {

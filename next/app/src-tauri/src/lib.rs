@@ -378,7 +378,12 @@ fn page_scheme(
         )
     };
     #[cfg(feature = "native-test")]
-    native_test::ingress_count(request.method().as_str(), request.uri().path(), served.status, msg.is_some());
+    native_test::ingress_count(
+        request.method().as_str(),
+        request.uri().path(),
+        served.status,
+        msg.is_some(),
+    );
     if let Some(m) = msg {
         let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-page", m);
     }
@@ -394,7 +399,10 @@ fn page_scheme(
     #[cfg(feature = "native-test")]
     let resp = {
         let mut resp = resp;
-        resp.headers_mut().insert("Access-Control-Allow-Origin", tauri::http::HeaderValue::from_static("*"));
+        resp.headers_mut().insert(
+            "Access-Control-Allow-Origin",
+            tauri::http::HeaderValue::from_static("*"),
+        );
         resp
     };
     responder.respond(resp);
