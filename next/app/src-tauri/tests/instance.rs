@@ -43,20 +43,34 @@ fn holder() {
         true
     })
     .unwrap();
-    // A child, as the app's core is: it must not keep the lock when the holder dies.
+    // A child, as the app's core is: it must not keep the lock when the holder dies. The test
+    // that started this holder kills it.
+    #[allow(clippy::zombie_processes)]
     let child = Command::new("sleep").arg("120").spawn().unwrap();
     println!("held {}", child.id());
     std::thread::sleep(Duration::from_secs(120));
 }
 
-fn spawn_holder(dir: &Path) -> (Child, BufReader<std::process::ChildStdout>, u32) {
-    let mut holder = Command::new(std::env::current_exe().unwrap())
-        .args(["holder", "--exact", "--nocapture", "--test-threads=1"])
-        .env("PLUXY_TEST_HOLD", dir)
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut out = BufReader::new(holder.stdout.take().unwrap());
+/// A holder process, killed and waited for when this is dropped, also when the test fails.
+struct Holder(Child);
+
+impl Drop for Holder {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn spawn_holder(dir: &Path) -> (Holder, BufReader<std::process::ChildStdout>, u32) {
+    let mut holder = Holder(
+        Command::new(std::env::current_exe().unwrap())
+            .args(["holder", "--exact", "--nocapture", "--test-threads=1"])
+            .env("PLUXY_TEST_HOLD", dir)
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let mut out = BufReader::new(holder.0.stdout.take().unwrap());
     loop {
         let mut line = String::new();
         assert!(out.read_line(&mut line).unwrap() > 0, "the holder ended");
@@ -88,8 +102,8 @@ fn a_launch_raises_the_holder_and_a_killed_holders_lock_is_recovered() {
     assert_eq!(line.trim(), "activated");
 
     // The holder dies without cleaning up (SIGKILL); its child lives on.
-    holder.kill().unwrap();
-    holder.wait().unwrap();
+    holder.0.kill().unwrap();
+    holder.0.wait().unwrap();
     assert!(alive(sleeper), "the holder's child should outlive it");
     assert!(dir.join("activate.sock").exists(), "a stale socket stays");
 
