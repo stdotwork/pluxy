@@ -350,6 +350,7 @@ func (s *server) generate(conn net.Conn, call protocol.Call, h Handler, none str
 		return
 	}
 	defer cancel()
+	ctx = withUpstreamInfo(ctx, call)
 
 	// Core sends nothing after the call frame; the read ends when core closes the connection,
 	// which is how it cancels.
@@ -390,6 +391,7 @@ func (s *server) session(conn net.Conn, call protocol.Call) {
 		return
 	}
 	defer cancel()
+	ctx = withUpstreamInfo(ctx, call)
 	refuse := func(err error) {
 		_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: llm.EventError, Error: asError(ctx, err)}})
 	}
@@ -480,7 +482,7 @@ func (s *server) session(conn net.Conn, call protocol.Call) {
 		mu.Lock()
 		running = true
 		mu.Unlock()
-		err := runTurn(ctx, sess, c, out)
+		err := runTurn(withUpstreamInfo(ctx, f), sess, c, out)
 		mu.Lock()
 		running = false
 		mu.Unlock()
@@ -556,6 +558,7 @@ func (s *server) login(conn net.Conn, call protocol.Call) {
 		return
 	}
 	defer cancel()
+	ctx = withUpstreamInfo(ctx, call)
 	sess := &LoginSession{inputs: make(chan map[string]string, 1), w: conn}
 	// After the call frame core sends only login.input frames; the read ends when core closes
 	// the connection, which is how it cancels.
@@ -619,6 +622,7 @@ func (s *server) refresh(conn net.Conn, call protocol.Call) {
 		return
 	}
 	defer cancel()
+	ctx = withUpstreamInfo(ctx, call)
 	go func() {
 		_, _ = io.Copy(io.Discard, conn)
 		cancel()
@@ -650,6 +654,7 @@ func (s *server) models(conn net.Conn, call protocol.Call) {
 		return
 	}
 	defer cancel()
+	ctx = withUpstreamInfo(ctx, call)
 	go func() {
 		_, _ = io.Copy(io.Discard, conn)
 		cancel()
@@ -685,6 +690,7 @@ func (s *server) check(conn net.Conn, call protocol.Call) {
 		return
 	}
 	defer cancel()
+	ctx = withUpstreamInfo(ctx, call)
 	go func() {
 		_, _ = io.Copy(io.Discard, conn)
 		cancel()
@@ -726,6 +732,7 @@ func (s *server) quota(conn net.Conn, call protocol.Call) {
 		return
 	}
 	defer cancel()
+	ctx = withUpstreamInfo(ctx, call)
 	go func() {
 		_, _ = io.Copy(io.Discard, conn)
 		cancel()
