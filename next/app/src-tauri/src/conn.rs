@@ -395,6 +395,11 @@ impl Connection {
         }
     }
 
+    #[cfg(feature = "native-test")]
+    pub(crate) fn test_settings_path(&self) -> PathBuf {
+        self.dirs.settings()
+    }
+
     pub fn mode(&self) -> Option<Mode> {
         self.settings.mode
     }
