@@ -420,6 +420,10 @@ fn page_scheme(
         )
     };
     if let Some(m) = msg {
+        #[cfg(all(target_os = "linux", feature = "native-test"))]
+        if m.kind == "call" && m.data.get("id").and_then(Value::as_str) == Some("spoof-confirm") {
+            confirmation::native::PAGE_CLAIMS.fetch_add(1, Ordering::SeqCst);
+        }
         let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-page", m);
     }
     let resp = Response::builder()
@@ -485,6 +489,17 @@ pub fn run() {
                 quitting: AtomicBool::new(false),
             });
             let handle = app.handle().clone();
+            #[cfg(target_os = "linux")]
+            if let Some(message) = handle
+                .state::<App>()
+                .confirmations
+                .lock()
+                .unwrap()
+                .startup_warning
+                .take()
+            {
+                confirmation::ui_notice(&handle, message);
+            }
             match build_tray(&handle) {
                 Ok(()) => handle.state::<App>().has_tray.store(true, Ordering::SeqCst),
                 // No tray: closing the window quits the app.

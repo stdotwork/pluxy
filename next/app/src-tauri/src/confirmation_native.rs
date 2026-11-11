@@ -7,6 +7,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use std::sync::mpsc;
 use tauri::{Manager, Webview};
+pub(crate) static PAGE_CLAIMS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 
 fn x(args: &[&str]) -> Result<String, String> {
     let out = Command::new("xdotool")
@@ -65,7 +67,7 @@ fn prepare(app: &tauri::AppHandle, a: &Action) -> Result<Prepared, String> {
         .confirmations
         .lock()
         .unwrap()
-        .prepare(a.clone())
+        .prepare(a.clone(), Origin::Main)
 }
 fn ask(app: &tauri::AppHandle, main: &Webview, a: &Action) -> Result<String, String> {
     let p = prepare(app, a)?;
@@ -74,7 +76,7 @@ fn ask(app: &tauri::AppHandle, main: &Webview, a: &Action) -> Result<String, Str
         .confirmations
         .lock()
         .unwrap()
-        .queue(p, false)?;
+        .queue(p)?;
     main.eval(format!("window.__TAURI_INTERNALS__.invoke('confirmation_request', {{action: {}}}).catch(e => console.error(e))", serde_json::json!(id))).map_err(|e| e.to_string())?;
     wait_for("real GTK confirmation", || {
         window("pluxy native confirmation")
@@ -104,11 +106,16 @@ fn trusted_start(app: &tauri::AppHandle, a: &Action) -> Result<(bool, String), S
             let r = (|| {
                 let st = app.state::<crate::App>();
                 let mut c = st.confirmations.lock().unwrap();
-                let p = c.prepare(action.clone())?;
-                match c.remembered(p, Gesture::native_event()) {
+                let p = c.prepare(action.clone(), Origin::NativeUi)?;
+                match c.remembered(
+                    p,
+                    Gesture {
+                        created: Instant::now(),
+                    },
+                ) {
                     Ok(token) => Ok((true, token)),
                     Err(p) => {
-                        let id = c.queue(*p, false)?;
+                        let id = c.queue(*p)?;
                         drop(c);
                         request(&app, id.clone())?;
                         Ok((false, id))
@@ -164,39 +171,66 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
             }),
         };
         let id = ask(app, main, &a)?;
-        // A page-supplied approval message cannot complete an actual pending dialog.
+        let snapshot = || {
+            let st = app.state::<crate::App>();
+            let c = st.confirmations.lock().unwrap();
+            (
+                c.pending.len(),
+                c.issued.len(),
+                c.showing.len(),
+                c.approvals.len(),
+                c.results.len(),
+            )
+        };
+        let before = snapshot();
+        // Observe the actual channel response after main has handled the claim, not merely
+        // the POST completing at ingress. A valid config.get on the same route is the control.
+        main.eval("window.__claimReplies = {}; const originalPost = MessagePort.prototype.postMessage; MessagePort.prototype.postMessage = function(data, ...rest) { if (data?.id === 'spoof-confirm' || data?.id === 'confirm-control') window.__claimReplies[data.id] = data; return originalPost.call(this, data, ...rest); }").map_err(|e| e.to_string())?;
+        page.eval("fetch('/send', {method: 'POST', body: JSON.stringify({type: 'call', data: {v: 0, id: 'confirm-control', method: 'config.get', params: null}})})").map_err(|e| e.to_string())?;
+        let control = wait_for("positive page channel control", || {
+            eval(main, "window.__claimReplies['confirm-control'] ?? null")
+                .filter(|v| v.get("result").is_some() || v.get("error").is_some())
+        })?;
+        require(
+            control.get("result").is_some(),
+            "positive page channel control failed",
+        )?;
+        let claims = PAGE_CLAIMS.load(std::sync::atomic::Ordering::SeqCst);
+        // A real page channel call carries an approval claim to native ingress, but cannot
+        // mutate confirmation state or issue a token. Only the GTK response below can do that.
         page.eval(format!(
-            "fetch('/send', {{method: 'POST', body: JSON.stringify({{type: 'call', data: {{v: 0, id: 'spoof-confirm', method: 'confirmation.approve', params: {{action: {}, approved: true, remember: true}}}}}})}}).then(() => window.__approvalMessageSent = true)",
-            serde_json::json!(id)
-        ))
-        .map_err(|e| e.to_string())?;
-        page.eval(format!("window.__TAURI_INTERNALS__.invoke('confirmation_request', {{action: {}}}).then(() => window.__confirmSpoof = 'accepted', e => window.__confirmSpoof = String(e))", serde_json::json!(id))).map_err(|e| e.to_string())?;
-        wait_for("page approval message delivery", || {
-            eval(page, "window.__approvalMessageSent ?? null").filter(|v| v == true)
+            "fetch('/send', {{method: 'POST', body: JSON.stringify({{type: 'call', data: {{v: 0, id: 'spoof-confirm', method: 'confirmation_request', params: {{action: {}, approved: true, remember: true}}}}}})}}).then(r => window.__approvalMessageStatus = r.status)", serde_json::json!(id)
+        )).map_err(|e| e.to_string())?;
+        wait_for("page approval claim at native ingress", || {
+            (PAGE_CLAIMS.load(std::sync::atomic::Ordering::SeqCst) == claims + 1).then_some(())
         })?;
-        let refused = wait_for("page refusal", || {
-            eval(page, "window.__confirmSpoof ?? null").filter(|v| v.is_string())
+        wait_for("page approval message accepted by transport", || {
+            eval(page, "window.__approvalMessageStatus ?? null").filter(|v| v == 204)
+        })?;
+        let reply = wait_for("approval claim channel refusal", || {
+            eval(main, "window.__claimReplies['spoof-confirm'] ?? null")
+                .filter(|v| v.get("result").is_some() || v.get("error").is_some())
         })?;
         require(
-            refused.as_str().is_some_and(|s| s.contains("not allowed")),
-            "page confirmation command was not refused",
+            reply["error"]["code"] == "unknown_method",
+            "channel approval claim was not refused",
         )?;
-        page.eval("window.__TAURI_INTERNALS__.invoke('confirmation_consume', {action: 'forged', token: 'forged', approved: true}).then(() => window.__consumeSpoof = 'accepted', e => window.__consumeSpoof = String(e))").map_err(|e| e.to_string())?;
-        let refused = wait_for("page consume refusal", || {
-            eval(page, "window.__consumeSpoof ?? null").filter(|v| v.is_string())
-        })?;
+        for command in crate::COMMANDS
+            .iter()
+            .filter(|c| c.starts_with("confirmation_"))
+        {
+            page.eval(format!("window.__confirmSpoof = null; window.__TAURI_INTERNALS__.invoke({}, {{action: {}, approved: true}}).then(() => window.__confirmSpoof = 'accepted', e => window.__confirmSpoof = String(e))", serde_json::json!(command), serde_json::json!(id))).map_err(|e| e.to_string())?;
+            let refused = wait_for("real page confirmation command refusal", || {
+                eval(page, "window.__confirmSpoof ?? null").filter(|v| v.is_string())
+            })?;
+            require(
+                refused.as_str().is_some_and(|s| s.contains("not allowed")),
+                "real page confirmation command was not refused",
+            )?;
+        }
         require(
-            refused.as_str().is_some_and(|s| s != "accepted"),
-            "page reached a consumption endpoint",
-        )?;
-        require(
-            app.state::<crate::App>()
-                .confirmations
-                .lock()
-                .unwrap()
-                .issued
-                .is_empty(),
-            "spoof issued a token",
+            snapshot() == before,
+            "page approval claim changed native confirmation state",
         )?;
         key("pluxy native confirmation", "alt+c")?;
         require(result(app, &id)?.is_none(), "cancel issued token")?;
@@ -245,9 +279,40 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
         let id = ask(app, main, &a)?;
         let t = confirm(app, &id, true)?;
         consume(app, &t)?;
-        let p = prepare(app, &a)?;
+        let p = app
+            .state::<crate::App>()
+            .confirmations
+            .lock()
+            .unwrap()
+            .prepare_page(a.clone())?;
         let id = super::page_start(app, p)?;
         wait_for("page Start dialog", || window("pluxy native confirmation"))?;
+        let (tx, rx) = mpsc::channel();
+        app.run_on_main_thread(move || {
+            let dialog = gtk::Window::list_toplevels().into_iter().find_map(|w| {
+                w.downcast::<gtk::Dialog>()
+                    .ok()
+                    .filter(|d| d.title().as_deref() == Some("pluxy native confirmation"))
+            });
+            let state = dialog.map(|d| {
+                (
+                    !d.widget_for_response(gtk::ResponseType::Accept)
+                        .unwrap()
+                        .is_sensitive(),
+                    d.widget_for_response(gtk::ResponseType::Cancel)
+                        .unwrap()
+                        .is_focus(),
+                )
+            });
+            let _ = tx.send(state);
+        })
+        .map_err(|e| e.to_string())?;
+        require(
+            rx.recv_timeout(Duration::from_secs(5))
+                .map_err(|e| e.to_string())?
+                == Some((true, true)),
+            "page dialog did not delay Confirm and focus Cancel",
+        )?;
         require(
             app.state::<crate::App>()
                 .confirmations
@@ -258,7 +323,12 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
             "page Start reused remembered approval",
         )?;
         for _ in 0..10 {
-            let p = prepare(app, &a)?;
+            let p = app
+                .state::<crate::App>()
+                .confirmations
+                .lock()
+                .unwrap()
+                .prepare_page(a.clone())?;
             require(
                 super::page_start(app, p).is_err(),
                 "page flood was admitted",
@@ -286,11 +356,9 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
                 && (shown.contains("per second") || shown.contains("already pending")),
             "notice did not show the refused page Start",
         )?;
-        key("pluxy native confirmation", "alt+c")?;
-        require(
-            result(app, &id)?.is_none(),
-            "cancelled page Start got token",
-        )?;
+        std::thread::sleep(Duration::from_millis(1100));
+        let token = confirm(app, &id, false)?;
+        consume(app, &token)?;
         crate::native_test::log(
             "confirmations",
             serde_json::json!({"passed": true, "checks": ["confirm", "cancel", "page-spoof", "exact-native-gesture", "different-chain", "metadata", "replacement", "revoke", "page-flood-notice"]}),

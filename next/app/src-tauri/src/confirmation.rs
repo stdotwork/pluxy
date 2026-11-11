@@ -5,10 +5,13 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+const PAGE_PENDING_LIMIT: usize = 16;
+const TRUSTED_PENDING_LIMIT: usize = 64;
+const SETTINGS_VERSION: u32 = 1;
 const LIFETIME: Duration = Duration::from_secs(60);
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Package {
@@ -85,10 +88,16 @@ impl OpenTarget {
         if !path.is_absolute() {
             return Err("review requires an absolute path".into());
         }
+        if path.to_str().is_none() {
+            return Err("review requires UTF-8 paths".into());
+        }
         let canonical = fs::canonicalize(path).map_err(|e| e.to_string())?;
+        if canonical.to_str().is_none() {
+            return Err("resolved review target requires a UTF-8 path".into());
+        }
         let file = OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_NONBLOCK)
+            .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
             .open(&canonical)
             .map_err(|e| e.to_string())?;
         let kind = file.metadata().map_err(|e| e.to_string())?;
@@ -142,8 +151,40 @@ struct ExactAction {
     files: Vec<Target>,
     launch: Option<ExactLaunch>,
 }
+// Supersede an earlier approval for this launch recipe even after executable metadata,
+// environment policy or terminal-adapter revision changes; those still require fresh review.
+fn same_launch_recipe(a: &ExactAction, b: &ExactAction) -> bool {
+    a.chain == b.chain
+        && a.executor == b.executor
+        && match (&a.launch, &b.launch) {
+            (Some(a), Some(b)) => {
+                a.executable.selected == b.executable.selected
+                    && a.executable.canonical == b.executable.canonical
+                    && a.argv == b.argv
+                    && a.cwd == b.cwd
+            }
+            _ => false,
+        }
+}
+/// Set only by native entry points, never deserialized from page data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // Main/tray launcher handlers are added by the launcher slice.
+enum Origin {
+    Main,
+    Tray,
+    NativeUi,
+    Page,
+    Import,
+}
+impl Origin {
+    fn untrusted(self) -> bool {
+        matches!(self, Self::Page | Self::Import)
+    }
+}
+
 /// Immutable native preparation, including open identities. Never returned to JavaScript.
 pub struct Prepared {
+    origin: Origin,
     exact: ExactAction,
     files: Vec<OpenTarget>,
     executable: Option<OpenTarget>,
@@ -175,14 +216,14 @@ impl Prepared {
             .map(|l| l.environment_revision.as_str())
     }
     pub(crate) fn notice(&self) -> String {
-        format!(
+        escape_format_characters(&format!(
             "Requester: {}\nAction: {}",
             self.exact.chain[0].id, self.exact.what
-        )
+        ))
     }
-    pub fn review(&self) -> String {
+    pub fn review(&self) -> Result<String, String> {
         // JSON quoting makes argv boundaries, newlines and control characters unambiguous.
-        let mut s = serde_json::to_string_pretty(&self.exact).expect("review JSON");
+        let mut s = review_text(&self.exact)?;
         if self.exact.native_tool {
             s.insert_str(
                 0,
@@ -191,8 +232,27 @@ impl Prepared {
 ",
             );
         }
-        s
+        Ok(s)
     }
+}
+fn escape_format_characters(text: &str) -> String {
+    use gtk::glib::Unichar;
+    let mut out = String::new();
+    for ch in text.chars() {
+        if ch.unicode_type() == gtk::glib::UnicodeType::Format {
+            for unit in ch.encode_utf16(&mut [0; 2]).iter() {
+                out.push_str(&format!("\\u{unit:04x}"));
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+fn review_text(exact: &ExactAction) -> Result<String, String> {
+    serde_json::to_string_pretty(exact)
+        .map(|s| escape_format_characters(&s))
+        .map_err(|e| format!("cannot render native review: {e}"))
 }
 /// A launcher should execute this opened handle with fexecve where practical and use the opened
 /// cwd. Wrapper scripts check the script only, not the interpreter or transitively loaded code.
@@ -200,6 +260,9 @@ pub struct Authorized {
     pub prepared: Prepared,
 }
 impl Authorized {
+    /// Opened with O_CLOEXEC. In the child, clear FD_CLOEXEC before fexecve for #! scripts
+    /// (otherwise Linux returns ENOENT). The interpreter sees /dev/fd/N as the script path.
+    /// Only the script is checked; its interpreter and loaded code are outside this identity.
     pub fn executable(&self) -> Option<&File> {
         self.prepared.executable.as_ref().map(|e| &e.file)
     }
@@ -227,18 +290,57 @@ struct Approval {
 pub struct Gesture {
     created: Instant,
 }
-impl Gesture {
-    // Real launcher gesture handlers are added with the launcher slice.
-    #[cfg_attr(not(any(test, feature = "native-test")), allow(dead_code))]
-    pub(crate) fn native_event() -> Self {
-        Self {
-            created: Instant::now(),
-        }
+// No general constructor: tray/native-UI handlers in this module (and native-test fixtures)
+// create this only in their native event callbacks. DOM and IPC paths cannot create one.
+#[derive(Serialize, Deserialize)]
+struct SettingsFile {
+    version: u32,
+    approvals: Vec<Approval>,
+}
+fn private_file(file: &File) -> Result<(), String> {
+    let m = file.metadata().map_err(|e| e.to_string())?;
+    if !m.is_file() || m.uid() != unsafe { libc::geteuid() } || m.mode() & 0o022 != 0 {
+        return Err(
+            "settings must be a regular file owned by this user and not group/world-writable"
+                .into(),
+        );
     }
+    Ok(())
+}
+fn refuse_settings_symlink(path: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(m) if m.is_symlink() => Err("symlinked settings refused".into()),
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+fn load_settings(path: &Path) -> Result<Vec<Approval>, String> {
+    refuse_settings_symlink(path)?;
+    let mut f = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY)
+        .open(path)
+    {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.to_string()),
+    };
+    private_file(&f)?;
+    let mut b = Vec::new();
+    f.read_to_end(&mut b).map_err(|e| e.to_string())?;
+    let settings: SettingsFile =
+        serde_json::from_slice(&b).map_err(|e| format!("damaged or unsupported settings: {e}"))?;
+    if settings.version != SETTINGS_VERSION {
+        return Err("unsupported settings version".into());
+    }
+    Ok(settings.approvals)
 }
 
 pub struct Confirmations {
     settings: PathBuf,
+    pub(crate) startup_warning: Option<String>,
+    persistence_blocked: bool,
     approvals: Vec<Approval>,
     cache: HashMap<PathBuf, (Metadata, String)>,
     pending: HashMap<String, Pending>,
@@ -251,15 +353,49 @@ pub struct Confirmations {
 }
 impl Confirmations {
     pub fn open(settings: PathBuf) -> Result<Self, String> {
-        let approvals = match fs::read(&settings) {
-            Ok(b) => {
-                serde_json::from_slice(&b).map_err(|e| format!("confirmation settings: {e}"))?
+        let mut warning = None;
+        let mut persistence_blocked = false;
+        let approvals = match load_settings(&settings) {
+            Ok(a) => a,
+            Err(e) => {
+                let safe = OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY)
+                    .open(&settings)
+                    .ok()
+                    .is_some_and(|f| private_file(&f).is_ok());
+                let preservation = if safe {
+                    let time = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos();
+                    let backup = settings.with_file_name(format!(
+                        "{}.corrupt-{time}",
+                        settings.file_name().unwrap_or_default().to_string_lossy()
+                    ));
+                    match fs::rename(&settings, &backup) {
+                        Ok(()) => format!("Moved aside to {}.", backup.display()),
+                        Err(error) => {
+                            persistence_blocked = true;
+                            format!(
+                                "Could not preserve settings: {error}. Remembering is disabled."
+                            )
+                        }
+                    }
+                } else {
+                    persistence_blocked = true;
+                    "Unsafe or unreadable settings refused. Remembering is disabled.".into()
+                };
+                let message = format!("Remembered launches were not loaded: {e}. {preservation} No remembered approvals are active.");
+                eprintln!("pluxy-app: {message}");
+                warning = Some(message);
+                Vec::new()
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-            Err(e) => return Err(e.to_string()),
         };
         Ok(Self {
             settings,
+            startup_warning: warning,
+            persistence_blocked,
             approvals,
             cache: HashMap::new(),
             pending: HashMap::new(),
@@ -272,8 +408,25 @@ impl Confirmations {
         })
     }
     fn save(&self, approvals: &[Approval]) -> Result<(), String> {
+        if self.persistence_blocked {
+            return Err("unsafe settings refused; remembering is disabled".into());
+        }
         let dir = self.settings.parent().ok_or("settings has no parent")?;
-        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)
+            .map_err(|e| e.to_string())?;
+        refuse_settings_symlink(&self.settings)?;
+        match OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY)
+            .open(&self.settings)
+        {
+            Ok(f) => private_file(&f)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("settings refused: {e}")),
+        }
         let tmp = dir.join(format!(".confirmation-{}", crate::managed::random_key()));
         let result = (|| {
             let mut f = OpenOptions::new()
@@ -282,15 +435,29 @@ impl Confirmations {
                 .mode(0o600)
                 .open(&tmp)
                 .map_err(|e| e.to_string())?;
-            f.write_all(&serde_json::to_vec_pretty(approvals).map_err(|e| e.to_string())?)
-                .map_err(|e| e.to_string())?;
+            f.write_all(
+                &serde_json::to_vec_pretty(&SettingsFile {
+                    version: SETTINGS_VERSION,
+                    approvals: approvals.to_vec(),
+                })
+                .map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
             f.sync_all().map_err(|e| e.to_string())?;
             fs::rename(&tmp, &self.settings).map_err(|e| e.to_string())
         })();
         let _ = fs::remove_file(tmp);
         result
     }
-    pub fn prepare(&mut self, action: Action) -> Result<Prepared, String> {
+    /// Page routing fixes origin here; it cannot request a trusted origin or gesture.
+    pub fn prepare_page(&mut self, action: Action) -> Result<Prepared, String> {
+        self.prepare(action, Origin::Page)
+    }
+    pub fn prepare_import(&mut self, action: Action) -> Result<Prepared, String> {
+        self.prepare(action, Origin::Import)
+    }
+    // Trusted preparations are created only by native main/tray/UI handlers in this module.
+    fn prepare(&mut self, action: Action, origin: Origin) -> Result<Prepared, String> {
         if action.chain.is_empty() {
             return Err("action needs the whole requester chain".into());
         }
@@ -317,6 +484,8 @@ impl Confirmations {
             {
                 h.clone()
             } else {
+                // shortcut: the first hash runs under the mutex on the caller's thread;
+                // move preparation off the GTK thread when a real launcher lands.
                 let mut hash = Sha256::new();
                 let mut b = [0u8; 65536];
                 loop {
@@ -360,6 +529,7 @@ impl Confirmations {
             None
         };
         let p = Prepared {
+            origin,
             exact: ExactAction {
                 what: action.what,
                 chain: action.chain,
@@ -380,11 +550,12 @@ impl Confirmations {
         self.pending.retain(|_, p| p.expires > now);
         self.issued.retain(|_, t| t.expires > now);
     }
-    /// Native routing selects page ingress; never take this flag from a page message.
-    pub fn queue(&mut self, prepared: Prepared, page: bool) -> Result<String, String> {
+    /// Limits follow immutable native origin, never a page-supplied flag.
+    pub fn queue(&mut self, prepared: Prepared) -> Result<String, String> {
         self.prune();
         prepared.check()?;
         let package = &prepared.exact.chain[0].id;
+        let page = prepared.origin.untrusted();
         if page {
             if self
                 .last_page
@@ -404,7 +575,12 @@ impl Confirmations {
                 return Err("a launch confirmation is already pending for this package".into());
             }
         }
-        if self.pending.len() >= 64 {
+        let limit = if page {
+            PAGE_PENDING_LIMIT
+        } else {
+            TRUSTED_PENDING_LIMIT
+        };
+        if self.pending.values().filter(|p| p.page == page).count() >= limit {
             return Err("too many pending confirmations".into());
         }
         let id = crate::managed::random_key();
@@ -426,7 +602,7 @@ impl Confirmations {
             return Err("action was already confirmed".into());
         }
         p.prepared.check()?;
-        Ok((p.prepared.review(), p.prepared.exact.launch.is_some()))
+        Ok((p.prepared.review()?, p.prepared.exact.launch.is_some()))
     }
     /// Only the GTK response handler calls this; there is no webview approval-result command.
     fn finish(
@@ -452,7 +628,7 @@ impl Confirmations {
             let mut approvals: Vec<_> = self
                 .approvals
                 .iter()
-                .filter(|a| a.exact != p.prepared.exact)
+                .filter(|a| !same_launch_recipe(&a.exact, &p.prepared.exact))
                 .cloned()
                 .collect();
             approvals.push(Approval {
@@ -488,8 +664,9 @@ impl Confirmations {
     }
     pub fn remembered(&mut self, p: Prepared, gesture: Gesture) -> Result<String, Box<Prepared>> {
         self.prune();
-        if gesture.created.elapsed() >= Duration::from_secs(5)
-            || self.pending.len() >= 64
+        if p.origin.untrusted()
+            || gesture.created.elapsed() >= Duration::from_secs(5)
+            || self.pending.values().filter(|p| !p.page).count() >= TRUSTED_PENDING_LIMIT
             || p.check().is_err()
         {
             return Err(Box::new(p));
@@ -567,7 +744,7 @@ impl Confirmations {
 #[path = "confirmation_ui.rs"]
 mod ui;
 pub use ui::page_start;
-pub(crate) use ui::{request, settings};
+pub(crate) use ui::{notice as ui_notice, request, settings};
 
 #[cfg(test)]
 #[path = "confirmation_tests.rs"]

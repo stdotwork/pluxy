@@ -37,7 +37,7 @@ pub(crate) fn notice(app: &tauri::AppHandle, text: String) {
 }
 
 pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> {
-    let (review, launch, summary) = {
+    let (review, launch, summary, page) = {
         let st = app.state::<crate::App>();
         let mut c = st.confirmations.lock().unwrap();
         let review = c.review(&id)?;
@@ -45,7 +45,12 @@ pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> 
             return Err("confirmation already showing".into());
         }
         let summary = c.pending.get(&id).unwrap().prepared.notice();
-        (review.0, review.1, summary)
+        (
+            review.0,
+            review.1,
+            summary,
+            c.pending.get(&id).unwrap().page,
+        )
     };
     let handle = app.clone();
     app.run_on_main_thread(move || {
@@ -59,6 +64,27 @@ pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> 
             ],
         );
         dialog.set_default_response(gtk::ResponseType::Cancel);
+        if page {
+            let ready = std::rc::Rc::new(std::cell::Cell::new(false));
+            let gate = ready.clone();
+            let confirm = dialog
+                .widget_for_response(gtk::ResponseType::Accept)
+                .unwrap();
+            confirm.set_sensitive(false);
+            dialog.connect_map(move |d| {
+                if let Some(cancel) = d.widget_for_response(gtk::ResponseType::Cancel) {
+                    cancel.grab_focus();
+                }
+                if !gate.replace(true) {
+                    let weak = confirm.downgrade();
+                    gtk::glib::timeout_add_local_once(Duration::from_secs(1), move || {
+                        if let Some(button) = weak.upgrade() {
+                            button.set_sensitive(true);
+                        }
+                    });
+                }
+            });
+        }
         dialog
             .content_area()
             .pack_start(&text_view(&review), true, true, 8);
@@ -111,6 +137,11 @@ pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> 
             }
         });
         dialog.show_all();
+        if page {
+            if let Some(cancel) = dialog.widget_for_response(gtk::ResponseType::Cancel) {
+                cancel.grab_focus();
+            }
+        }
     })
     .map_err(|e| e.to_string())
 }
@@ -146,7 +177,7 @@ pub(crate) fn settings(app: &tauri::AppHandle) -> Result<(), String> {
         for (index, approval) in approvals.into_iter().rev().enumerate() {
             let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
             row.pack_start(
-                &text_view(&serde_json::to_string_pretty(&approval.exact).unwrap()),
+                &text_view(&review_text(&approval.exact).unwrap_or_else(std::convert::identity)),
                 true,
                 true,
                 4,
@@ -188,13 +219,16 @@ pub(crate) fn settings(app: &tauri::AppHandle) -> Result<(), String> {
 
 /// A host-resolved page Start always reviews, even when an identical approval exists.
 pub fn page_start(app: &tauri::AppHandle, prepared: Prepared) -> Result<String, String> {
+    if prepared.origin != Origin::Page {
+        return Err("page Start requires a page-origin preparation".into());
+    }
     let review = prepared.notice();
     let result = app
         .state::<crate::App>()
         .confirmations
         .lock()
         .unwrap()
-        .queue(prepared, true);
+        .queue(prepared);
     let outcome = match &result {
         Ok(_) => "awaiting native confirmation".to_string(),
         Err(e) => e.clone(),

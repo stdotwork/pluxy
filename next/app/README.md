@@ -103,21 +103,37 @@ revocation buttons. Approval binds the whole caller chain, executor, terminal ad
 argv, opened cwd identity, environment-profile revision, reviewed environment changes and permitted
 secret-reference uses. Native callers must never put secret bytes in argv or settings.
 
+The settings file has a format version. Damaged, unversioned or unsupported settings are moved
+to a sibling `remembered-launches.json.corrupt-<time>` file. The app starts with no approvals,
+a native notice and a log message. Symlinks, files owned by another user and group/world-writable files
+are refused; remembering stays disabled if the unsafe file cannot be safely preserved. Newly
+created settings folders use mode 0700 and files use 0600.
+
 An executable is opened before checking its canonical path, device/inode, size, mtime, ctime and
 mode. SHA-256 is computed once for that metadata and cached in memory; unchanged metadata reuses
 it. A new app process hashes once before using persisted approvals. Metadata changes or same-path
 replacement require review again. A consumed token exposes the checked open executable and cwd
-handles for a later launcher to use with `fexecve` and `fchdir`. Wrapper scripts check only the
-script, not its interpreter or code it loads. This is a cooperative local-file check, not a defense
-against malicious same-user metadata manipulation.
+handles for a later launcher to use with `fexecve` and `fchdir`. The executable handle is opened
+with `O_CLOEXEC`: in the child, a launcher must clear `FD_CLOEXEC` before `fexecve` of a `#!`
+script, or Linux returns `ENOENT`. The interpreter sees `/dev/fd/N` as the script's path.
+Wrapper scripts check only the script, not its interpreter or code it loads. This is a cooperative
+local-file check, not a defense against malicious same-user metadata manipulation.
 
-Only a native event handler can supply the gesture needed for remembered approval. Page Start uses
-the separate native entry point, always opens a fresh dialog, permits one pending confirmation per
-original package and one attempt per second, and shows a GTK notice with requester, action and
-outcome, including refusals. Import routing and real launchers are added separately; this module
-contains no launcher. Host callers must invalidate pending preparations/tokens when package,
-contract, environment or secret policy records change, and prepare a new action. Tokens and pending
-reviews expire after 60 seconds, work once for their preparation, and fail on changed file identity
+Each preparation records its native entry point's origin: Main, Tray, NativeUi, Page or Import.
+Page and Import origins cannot use remembered approval, even with a fresh native gesture; this
+rule is tested at the unit level. Import routing itself is separate work. Gesture construction
+is private to native handlers and fixtures, and a gesture expires after five seconds.
+
+Page Start uses the separate native entry point, always opens a fresh dialog, permits one pending
+confirmation per original package and one attempt per second, and shows a GTK notice with
+requester, action and outcome, including refusals. Page/Import pending entries have their own limit of 16; trusted
+requests have a separate limit of 64. Page dialogs focus Cancel and keep Confirm disabled for
+one second after mapping. Non-UTF-8 paths are refused before review; Unicode format characters
+(including bidi and zero-width characters) are displayed as escaped Unicode.
+
+Import routing and real launchers are added separately; this module contains no launcher. Host
+callers must invalidate pending preparations/tokens when package, contract, environment or secret
+policy records change, and prepare a new action. Tokens and pending reviews expire after 60 seconds, work once for their preparation, and fail on changed file identity
 or executable metadata. Revoking a remembered approval also invalidates its outstanding tokens.
 
 ## Build and check
@@ -157,7 +173,10 @@ in native settings. It checks one-use token consumption and open handles, page c
 spoof refusal, exact native-gesture reuse without a dialog, different-chain review, changed
 executable metadata and same-path replacement review, revoked-token refusal, and page Start flood
 refusal with a visible host-owned notice. Unit tests cover action binding, cache reuse, persistence,
-expiry, cancellation, invalidation and rate limits. Fixture actions do not execute a program.
+expiry, cancellation, invalidation, gesture freshness, Page/Import origin denial, separate pending
+limits, superseded approvals, unsafe/corrupt settings and Unicode/path handling. A unit test forks
+a child and runs a fixture script through `fexecve`, checking `FD_CLOEXEC` behavior and the
+`/dev/fd/N` script path. Native GUI fixture actions do not execute a program.
 
 Before the app, each run's session starts desktop services (`native/session.ts`, with the
 packages and paths in `native/services.ts`) and checks them for real; a missing or broken one
