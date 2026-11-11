@@ -99,8 +99,9 @@ const BUNDLER_SCRIPTS = ["linuxdeploy-plugin-gtk.sh", "linuxdeploy-plugin-gstrea
 
 /** The build's environment: nothing of the caller's but the toolchain's paths. Its Cargo home is a
  * temporary folder holding only links to the caller's dependency caches (registry and git, when
- * there), so the offline build finds the crates but not the caller's Cargo config or credentials. */
-function isolatedEnv(work: string, runtime: string): Record<string, string> {
+ * there), so the offline build finds the crates but not the caller's Cargo config or credentials.
+ * callerCargo is the caller's Cargo home as an absolute path, so the links lead to it. */
+function isolatedEnv(work: string, runtime: string, callerCargo: string): Record<string, string> {
   const closed = "http://127.0.0.1:9";
   const env: Record<string, string> = {
     PATH: process.env.PATH ?? "/usr/bin:/bin",
@@ -129,7 +130,6 @@ function isolatedEnv(work: string, runtime: string): Record<string, string> {
   for (const dir of ["home", "cache", "config", "data", "tmp", "cargo"]) {
     mkdirSync(join(work, dir), { recursive: true, mode: 0o700 });
   }
-  const callerCargo = process.env.CARGO_HOME ?? join(homedir(), ".cargo");
   for (const cache of ["registry", "git"]) {
     if (existsSync(join(callerCargo, cache)))
       symlinkSync(join(callerCargo, cache), join(work, "cargo", cache));
@@ -150,8 +150,14 @@ async function testPackage(outDir: string) {
     writeFileSync(runtime, await runtimeBytes(), { mode: 0o600 });
     // What the build needs from the network, fetched here by the lockfile with the caller's
     // Cargo; the build is offline.
-    run("cargo", ["fetch", "--locked"], tauriDir);
-    const env = isolatedEnv(work, runtime);
+    // One absolute Cargo home for the fetch and the build's links; Cargo reads a relative
+    // CARGO_HOME from its working folder.
+    const callerCargo = resolve(tauriDir, process.env.CARGO_HOME ?? join(homedir(), ".cargo"));
+    run("cargo", ["fetch", "--locked"], tauriDir, { ...process.env, CARGO_HOME: callerCargo } as Record<
+      string,
+      string
+    >);
+    const env = isolatedEnv(work, runtime, callerCargo);
     const tools = join(env.XDG_CACHE_HOME as string, "tauri");
     mkdirSync(tools, { mode: 0o700 });
     for (const tool of BUNDLER_TOOLS) {
