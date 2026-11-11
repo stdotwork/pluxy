@@ -573,9 +573,13 @@ and results (each hit as Claude sent it, so its `encrypted_content` survives); a
 without results when it paused the turn (`pause_turn`) stays `in_progress`. A replayed
 `web_search_call` goes back as the two blocks, in the assistant message around it; a paused search
 at the end of the history goes back as its `server_tool_use` alone, so Claude carries on. Chat
-clients get the text without the search blocks, as today. Not built: citations (today's core gives
-Claude's `citations` to a Responses client as the text's `annotations` and sends them back), the
-web search result cache and Codex's tool search on Claude.
+clients get the text without the search blocks, as today. Claude's `citations` on the answer's
+text are not passed on, and a replayed message's `annotations` are not sent back to Claude. Today's
+core copies each citation as it is into the text's `annotations`, in Claude's own shape
+(`web_search_result_location`), which is none of the annotation types Responses defines, so a
+Responses client has no defined way to show it. Claude does not need citations in the history: the
+replayed search blocks carry the results. Not built: the web search result cache and Codex's tool
+search on Claude.
 
 **Tool shapes.** A translated request's tools get the shapes Messages takes, as today's core
 gives them: a function name with characters other than letters, digits, `_` and `-`, or longer than
