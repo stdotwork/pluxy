@@ -116,6 +116,27 @@ closing the window leaves no webview and
 no web process, and that quitting stops only the app's own core. The `native-test` feature is
 for that test alone; release builds never have it.
 
+Before the app, each run's session starts desktop services (`native/session.ts`, with the
+packages and paths in `native/services.ts`) and checks them for real; a missing or broken one
+fails the run at setup, naming its package, and never skips:
+
+- the portal frontend with the gtk backend (`portals.conf` in the run's own config folder selects
+  it), which start the document portal and the permission store. A random file goes to the
+  document portal over D-Bus with a file descriptor (the probe `src-tauri/examples/session_probe.rs`,
+  built with gio, since gdbus and busctl cannot pass descriptors) and its bytes are read back
+  through the portal's mount;
+- the tray watcher service, which owns `org.kde.StatusNotifierWatcher`: the probe registers a
+  status notifier item with it and finds the item in `RegisteredStatusNotifierItems`;
+- a disposable AppImage, built from a pinned release of the AppImage type 2 runtime (downloaded
+  into `~/.cache/pluxy-app-native`, its SHA-256 checked; `mksquashfs` builds the image), which runs
+  with `APPIMAGE_EXTRACT_AND_RUN=1`, the FUSE-free way to run an AppImage, in the run's cleared
+  environment. It is a fixture, not the app's own package.
+
+When the app has exited, the session stops what it started. On Ubuntu 24.04 the packages are
+`xdg-desktop-portal` (frontend, document portal, permission store), `xdg-desktop-portal-gtk`,
+`ayatana-indicator-application` and `squashfs-tools`; the document portal also needs FUSE
+(`/dev/fuse`, `fusermount3`). CI installs them on a pinned `ubuntu-24.04` runner.
+
 ## Limits
 
 - Tested on Linux only. On Windows the page document's address is
@@ -129,7 +150,11 @@ for that test alone; release builds never have it.
   native entry dialog would keep them out of the webview entirely.
 - A kept key is stored in `connection.json`, not in the system keyring.
 - Whether a desktop shows the tray icon is not checked: on a desktop with no tray host, closing
-  the window leaves the app running with no way back to it but quitting it.
+  the window leaves the app running with no way back to it but quitting it. The native test's
+  session has a real tray watcher, but only a probe item is registered with it, not the app's own
+  icon.
+- The native test needs the desktop services above, and the pinned AppImage runtime from
+  github.com (or a copy in its cache folder), so it does not run offline on a bare machine.
 - An extension page's frame can post messages to WebKit's message handler for the webview; Tauri
   refuses them (the native test checks that no command is reached), but they are not filtered
   before that.
