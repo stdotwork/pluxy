@@ -16,7 +16,7 @@ const list = [
   account("login", { state: "reauth_required" }),
   account("check", { check: { state: "failed", error: { code: "invalid", message: "Invalid key" } } }),
   account("error", { last_error: { code: "rate_limit", message: "429 too many requests" } }),
-  account("cool", { cooldowns: [{ until: "2026-01-01T00:01:00Z" }] }),
+  account("cool", { cooldowns: [{ scope: "account", kind: "rate_limit", until: "2026-01-01T00:01:00Z" }] }),
   account("expired", { cooldown_until: "2025-12-31T23:59:00Z" }),
 ];
 

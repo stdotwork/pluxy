@@ -97,6 +97,8 @@ anything.
 | `color.focus` | Keyboard focus ring | `#2f5fd0` / `#7aa2ff` |
 | `color.meter-track` | Unused part of a quota meter | `var(--px-color-surface-raised)` |
 | `color.meter-fill` | Used share of a quota meter | `var(--px-color-accent)` |
+| `color.chart-success` | Successful requests in the Dashboard's traffic chart | `var(--px-color-ok)` |
+| `color.chart-failure` | Failed requests in the Dashboard's traffic chart | `var(--px-color-danger)` |
 | `color.diff-add` | Added lines in a diff | `#1f7a3d` / `#5cc98a` |
 | `color.diff-remove` | Removed lines in a diff | `#b42318` / `#ff7b72` |
 
@@ -197,7 +199,7 @@ These stay stable within a theme contract version:
 | --- | --- |
 | `data-appearance="light"` or `"dark"` | Root element |
 | `data-nav`, `data-list`, `data-detail`, `data-width`, `data-tabs` | Root element, set to the active layout value |
-| `data-page="<page id>"` | Root element: `status`, `accounts`, `add-account`, `quota`, `config`, `extensions`, `themes`, or an extension page's ID |
+| `data-page="<page id>"` | Root element: `status`, `accounts`, `add-account`, `quota`, `logs`, `usage`, `config`, `system`, `extensions`, `themes`, or an extension page's ID |
 | `data-part="shell"` | The whole UI below the root |
 | `data-part="nav"` | The navigation |
 | `data-part="nav-group"` | A group of navigation entries under its label; `data-group` is `operate`, `gateway`, `observe`, `control` or `extensions` (the extensions' pages) |
@@ -219,16 +221,34 @@ These stay stable within a theme contract version:
 | `data-part="diff"` | A group of changed lines |
 | `data-part="diff-line"` | One diff line; context lines have no change attribute; `data-change` is `add` or `remove` |
 | `data-part="dialog"` | A dialog window |
+| `data-part="log"` | A core log or request log text view |
+| `data-part="log-line"` | One core log line; `data-level` is `info`, `warn` or empty for a line without a level |
 | `data-part="toolbar"` | A page's search, filters and actions |
 | `data-part="pager"` | Page size and previous/next controls |
 | `data-part="select"` | An item's batch selection checkbox |
 | `data-part="batch"` | Batch selection and account actions |
 | `data-part="account-meta"` | Account totals, active accounts and problems |
+| `data-part="upload-results"` | The result of each auth file uploaded on Accounts: the account it became, or why it was not imported |
 | `data-part="key-notice"` | A notice revealing a newly generated key until closed or its tab is left |
 | `data-part="key-value"` | The selectable value of a newly generated key inside its notice |
 | `data-part="method"` | A sign-in method tile with its label, kind caption and selected flow. |
 | `data-part="flow"` | A reusable account sign-in flow: inputs, prompts, waiting and terminal states. |
 | `data-part="device-code"` | The user code to enter on a device sign-in page. |
+| `data-part="tile"` | One fact on the System page's about card: a label, its value and a note. |
+| `data-part="model-group"` | The models of one extension on the System page, under the extension's name and their count. |
+| `data-part="stat"` | A figure with its label and hint on the Dashboard (requests handled, success rate, credentials); `data-tone` is `ok`, `warn` or `danger` when the figure has a verdict. |
+| `data-part="chart"` | The Dashboard's traffic chart (an SVG). Each bar carries `data-outcome`, `success` or `failure`. |
+| `data-part="account-tools"` | Account detail health and tools. |
+| `data-part="account-check"` | Account check and recent request health. |
+| `data-part="account-cooldowns"` | Account routing cooldown list. |
+| `data-part="account-cooldown-confirm"` | Explanation of the local cooldown reset. |
+| `data-part="account-tool-actions"` | Account tool buttons. |
+| `data-part="account-config-link"` | Link to edit a config account. |
+| `data-part="account-test-hint"` | Account test cost and behavior. |
+| `data-part="account-models"` | Supported models and test model choice. |
+| `data-part="account-test-result"` | The last explicit account test result. |
+| `data-part="account-test-reply"` | The start of the test reply. |
+| `data-part="account-sign-in"` | Sign in to an existing account again. |
 
 Every other class name, element and attribute can change in any release.
 

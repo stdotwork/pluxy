@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/stdotwork/pluxy/next/internal/cred"
+	"github.com/stdotwork/pluxy/next/internal/proxyurl"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/llm"
 )
@@ -59,6 +60,9 @@ type AccountView struct {
 	ExcludedModels []string           `json:"excluded_models,omitempty"`
 	ModelAlias     []route.ModelAlias `json:"model_alias,omitempty"`
 	Endpoint       string             `json:"endpoint,omitempty"`
+	// ProxyURL is the account's own proxy_url, with "redacted" in place of its user name and
+	// password (proxyurl.Redact).
+	ProxyURL string `json:"proxy_url,omitempty"`
 
 	// What routing knows about the account now (route.Runtime). An account that receives no
 	// requests (disabled, or waiting for a new login) has none of it.
@@ -99,6 +103,7 @@ func (v *AccountView) fields(a route.Account, state *route.State) {
 	v.Priority, v.Weight, v.MaxConcurrency, v.Prefix = a.Priority, a.Weight, a.MaxConcurrency, a.Prefix
 	v.DisableCooling, v.RequestRetry = a.DisableCooling, a.RequestRetry
 	v.Models, v.ExcludedModels, v.ModelAlias, v.Endpoint = a.Models, a.ExcludedModels, a.ModelAlias, a.Endpoint
+	v.ProxyURL = proxyurl.Redact(a.ProxyURL)
 	if state == nil {
 		return
 	}
@@ -140,6 +145,7 @@ func NewManagement(cfg func() *Config, creds *cred.Manager, state *route.State) 
 	m.Handle("POST /logins/{id}/input", m.input)
 	m.Handle("DELETE /logins/{id}", m.cancel)
 	m.Handle("POST /vertex/import", m.importVertex)
+	m.Handle("POST /accounts/import", m.importAuthFile)
 	return m
 }
 
@@ -298,6 +304,10 @@ func (m *Management) add(w http.ResponseWriter, r *http.Request) {
 		writeManagementError(w, http.StatusBadRequest, "invalid_request", "request_retry must not be negative")
 		return
 	}
+	if err := proxyurl.Check("proxy_url", req.ProxyURL); err != nil {
+		writeManagementError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
 	m.startLogin(w, r, cred.LoginRequest{Account: req.Account, Extension: req.Extension, Method: req.Method, Input: req.Input})
 }
 
@@ -399,6 +409,18 @@ var patchFields = map[string]func(a *route.Account, raw json.RawMessage) error{
 	"model_alias": func(a *route.Account, raw json.RawMessage) error {
 		a.ModelAlias = nil
 		return unmarshalSet(raw, &a.ModelAlias)
+	},
+	"proxy_url": func(a *route.Account, raw json.RawMessage) error {
+		cur := a.ProxyURL
+		a.ProxyURL = ""
+		if err := unmarshalSet(raw, &a.ProxyURL); err != nil {
+			return err
+		}
+		// The proxy as GET /accounts shows it, sent back unchanged, keeps the password it hides.
+		if len(proxyurl.Password(cur)) > 0 && strings.TrimSpace(a.ProxyURL) == proxyurl.Redact(cur) {
+			a.ProxyURL = cur
+		}
+		return proxyurl.Check("value", a.ProxyURL)
 	},
 }
 
