@@ -414,13 +414,18 @@ func TestOutboundProxyPasswordStaysSecret(t *testing.T) {
 	logs.mu.Lock()
 	shown["core's log"] = strings.Join(logs.lines, "\n")
 	logs.mu.Unlock()
+	files := 0
 	_ = filepath.WalkDir(filepath.Join(filepath.Dir(path), "logs"), func(p string, d os.DirEntry, err error) error {
 		if err == nil && !d.IsDir() {
 			b, _ := os.ReadFile(p)
 			shown[filepath.Base(p)] = string(b)
+			files++
 		}
 		return nil
 	})
+	if files == 0 {
+		t.Error("the logs folder holds no request log to check")
+	}
 	for where, s := range shown {
 		if strings.Contains(s, proxyPassword) {
 			t.Errorf("%s holds the proxy's password:\n%s", where, s)
