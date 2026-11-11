@@ -1,6 +1,7 @@
 package host
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/stdotwork/pluxy/next/internal/proxyurl"
@@ -30,14 +31,19 @@ func (e *Extension) proxied(account *protocol.Account) (*protocol.Credential, *l
 			Message: fmt.Sprintf("extension %s implements protocol 0.%d, which cannot send through a proxy (0.%d adds proxy_url); account %q has one, so it is not sent there",
 				e.manifest.ID, e.info.ProtocolMinor, proxyMinor, account.ID)}
 	}
-	secrets := proxyurl.Password(account.ProxyURL)
-	if len(secrets) == 0 {
+	forms := proxyurl.Password(account.ProxyURL)
+	if len(forms) == 0 {
 		return nil, nil
 	}
-	c := &protocol.Credential{Kind: "proxy", APIKey: secrets[0]}
-	if len(secrets) > 1 {
-		c.AccessToken = secrets[1]
-	}
-	e.held.add(account.ID+" proxy", c)
+	data, _ := json.Marshal(forms)
+	c := &protocol.Credential{Kind: "proxy", Data: data}
+	e.held.addProxy(account.ID, c)
 	return c, nil
+}
+
+// proxyForms returns the forms of the proxy secret that c, a credential made by proxied, holds.
+func proxyForms(c *protocol.Credential) []string {
+	var forms []string
+	_ = json.Unmarshal(c.Data, &forms)
+	return forms
 }

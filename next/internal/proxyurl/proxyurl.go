@@ -7,6 +7,7 @@ package proxyurl
 import (
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -45,14 +46,15 @@ func Resolve(own, global string) string {
 }
 
 // Redact returns setting s fit to show: its scheme, host and port, with "redacted" in place of
-// a user name and password. A setting that does not parse shows as a fixed text.
+// a user name and password. A setting protocol.ParseProxyURL refuses shows as a fixed text, so
+// no part of a malformed value's user name or password is quoted.
 func Redact(s string) string {
 	s = strings.TrimSpace(s)
 	if s == "" || direct(s) {
 		return s
 	}
-	u, err := url.Parse(s)
-	if err != nil || u.Scheme == "" || u.Host == "" {
+	u, err := protocol.ParseProxyURL(s)
+	if err != nil {
 		return "(not a valid proxy URL)"
 	}
 	r := url.URL{Scheme: u.Scheme, Host: u.Host}
@@ -62,18 +64,73 @@ func Redact(s string) string {
 	return r.String()
 }
 
-// Password returns the secret part of a proxy URL: its user name and password as they are
-// written, then the password alone; nothing when it has none.
+// minBare is the shortest password or user name that is removed from text on its own. A shorter
+// one ("1", "pass", "proxy") would also remove it from unrelated text such as model names and
+// numbers, so it is removed only as part of the whole user name and password.
+const minBare = 8
+
+// Password returns the forms of a proxy URL's secret part that are removed from text, nothing
+// when it has no user name or password: its user info as it is written in the URL and decoded
+// ("alice:p%40ss", "alice:p@ss"), the "user:password" the proxy login sends (its Basic
+// Proxy-Authorization value is the base64 of it), and the password and the user name alone when
+// each is at least minBare bytes long.
 func Password(s string) []string {
-	u, err := url.Parse(strings.TrimSpace(s))
+	s = strings.TrimSpace(s)
+	u, err := url.Parse(s)
 	if err != nil || u.User == nil {
 		return nil
 	}
+	user := u.User.Username()
+	pass, hasPass := u.User.Password()
 	var out []string
-	if p, ok := u.User.Password(); ok && p != "" {
-		out = append(out, u.User.Username()+":"+p, p)
-	} else if n := u.User.Username(); n != "" {
-		out = append(out, n)
+	add := func(forms ...string) {
+		for _, f := range forms {
+			if f != "" && !slices.Contains(out, f) {
+				out = append(out, f)
+			}
+		}
+	}
+	written := writtenUserinfo(s)
+	decoded := user
+	if hasPass {
+		decoded += ":" + pass
+	}
+	if written == "" && decoded == "" {
+		return nil
+	}
+	add(written, decoded, user+":"+pass)
+	if before, after, ok := strings.Cut(written, ":"); ok {
+		if len(after) >= minBare {
+			add(after)
+		}
+		if len(before) >= minBare {
+			add(before)
+		}
+	} else if len(written) >= minBare {
+		add(written)
+	}
+	if len(pass) >= minBare {
+		add(pass)
+	}
+	if len(user) >= minBare {
+		add(user)
 	}
 	return out
+}
+
+// writtenUserinfo returns the user info of proxy URL s as it is written, before the last "@" of
+// its authority; "" when there is none.
+func writtenUserinfo(s string) string {
+	_, rest, ok := strings.Cut(s, "://")
+	if !ok {
+		return ""
+	}
+	if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+		rest = rest[:i]
+	}
+	i := strings.LastIndex(rest, "@")
+	if i < 0 {
+		return ""
+	}
+	return rest[:i]
 }
