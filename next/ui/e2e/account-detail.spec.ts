@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 import { goTo, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
@@ -24,6 +24,32 @@ async function openAccount(page: Page, id: string) {
   await expect(page.getByRole("heading", { level: 1, name: "Accounts" })).toBeVisible();
   await page.getByRole("button", { name: id, exact: true }).click();
   return page.getByRole("complementary", { name: `Details: ${id}`, exact: true });
+}
+
+async function noSplitWords(part: Locator) {
+  const split = await part.evaluate((root) => {
+    const words: string[] = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      for (const match of (node.textContent ?? "").matchAll(/\S+/g)) {
+        const range = document.createRange();
+        range.setStart(node, match.index);
+        range.setEnd(node, match.index + match[0].length);
+        if (range.getClientRects().length > 1) words.push(match[0]);
+      }
+    }
+    return words;
+  });
+  expect(split).toEqual([]);
+}
+
+async function settledShot(page: Page, path: string) {
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    await Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => {})));
+  });
+  await page.screenshot({ path, fullPage: true, animations: "disabled" });
 }
 
 test("account health, cooldown reset, models and a paid test", async ({ page }) => {
@@ -59,17 +85,20 @@ test("account health, cooldown reset, models and a paid test", async ({ page }) 
       .check();
     detail = await openAccount(page, "tools-key");
     await expect(detail.getByText("Cooling", { exact: true })).toBeVisible();
-    if (shots) await page.screenshot({ path: join(shots, `${theme}-cooldown.png`), fullPage: true });
+    await noSplitWords(detail.locator('[data-part="account-cooldowns"]'));
+    await noSplitWords(detail.locator("dt").filter({ hasText: "Last error at" }));
+    if (shots) await settledShot(page, join(shots, `${theme}-cooldown.png`));
     await detail.getByRole("button", { name: "Models", exact: true }).click();
     const models = detail.locator('[data-part="account-models"]');
     await expect(models).toContainText("Supported models");
     for (const id of ["fake-model", "rate-limited", "server-error"]) await expect(models).toContainText(id);
+    await noSplitWords(models);
     await detail.getByRole("button", { name: "Test (spends one request)", exact: true }).click();
     const result = detail.locator('[data-part="account-test-result"]');
     await expect(result).toContainText("v=0.2.0 pid=");
     await expect(result).toContainText("fake-model");
     await expect(result).toContainText(/[0-9]+ ms/);
-    if (shots) await page.screenshot({ path: join(shots, `${theme}-test.png`), fullPage: true });
+    if (shots) await settledShot(page, join(shots, `${theme}-test.png`));
     await expect(detail.getByText("Cooling", { exact: true })).toBeVisible();
   }
   await detail.getByRole("button", { name: "Clear cooldown", exact: true }).click();
