@@ -8,6 +8,9 @@
 //   refused by Tauri's command check, and the app never reaches a command from that webview;
 // - from inside the page's sandboxed frame nothing reaches the app (test/probe reports through
 //   its channel);
+// - in managed mode, this device's extension catalog installs, swaps, rolls back, disables and
+//   removes page-only packages from a local registry and from local files through the native
+//   file chooser, refusing reserved IDs and a failed candidate (device.ts, device_native.rs);
 // - closing the window leaves no webview and no web process, with the app still in the tray;
 // - quitting stops the app's own core, and leaves a local or remote core running.
 //
@@ -26,6 +29,7 @@ import { tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline";
 import { buildSmokeAppImage } from "./appimage";
+import { buildDeviceFixtures } from "./device";
 import { missingPrerequisites } from "./services";
 
 const app = join(import.meta.dir, "..");
@@ -197,6 +201,15 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
       mode: 0o600,
     });
     const quit = join(root, "quit");
+    // This device's extension catalog is the same in every mode: check it once, in managed mode.
+    const device = mode === "managed" ? join(root, "device") : undefined;
+    if (device) {
+      mkdirSync(device);
+      writeFileSync(
+        join(dirs.config, identifier, "device-registries.json"),
+        JSON.stringify(buildDeviceFixtures(device)),
+      );
+    }
     // Only what the app needs: no display or session bus but the run's own.
     const env: Record<string, string> = {
       PATH: process.env.PATH ?? "/usr/bin:/bin",
@@ -215,6 +228,7 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
       APPIMAGE_EXTRACT_AND_RUN: "1",
       PLUXY_APP_TEST_PAGE: PAGE,
       PLUXY_APP_TEST_QUIT: quit,
+      ...(device ? { PLUXY_APP_TEST_DEVICE: device } : {}),
     };
     // The session script starts and checks the desktop services, then runs the app.
     const session = [
@@ -235,6 +249,7 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
     });
     const steps = new Map<string, Step>();
     const reached: string[] = [];
+    const assets: { label: string; path: string; status: number }[] = [];
     let before = 0;
     let after = -1;
     const pid = proc.pid ?? 0;
@@ -263,6 +278,10 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
       const value = JSON.parse(json);
       if (step === "reached") {
         reached.push(value.webview);
+        return;
+      }
+      if (step === "asset") {
+        assets.push(value);
         return;
       }
       steps.set(step, value);
@@ -377,6 +396,32 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
     if (ingress) console.log(`${mode} native ingress ${JSON.stringify(ingress)}`);
 
     check(steps.get("confirmations")?.passed === true, "native confirmation checks did not complete");
+
+    // This device's catalog: the driver's own checks passed, and the asset scheme served the
+    // swapped-in release to its page webview and refused that webview the replaced one's files.
+    if (device) {
+      const d = steps.get("device") as
+        | { passed?: boolean; v2_label?: string; digests?: Record<string, string> }
+        | undefined;
+      check(d?.passed === true, "the device catalog check did not complete");
+      const dg = d?.digests ?? {};
+      const served = (label: string | undefined, digest: string | undefined, status: number) =>
+        assets.some((a) => a.label === label && a.path.includes(`/${digest}/`) && a.status === status);
+      check(
+        dg.notes2 && served(d?.v2_label, dg.notes2, 200),
+        `the asset scheme did not serve 2.0.0 to ${d?.v2_label}`,
+      );
+      check(
+        dg.notes1 && served(d?.v2_label, dg.notes1, 404),
+        `the asset scheme did not refuse 1.0.0 to ${d?.v2_label}`,
+      );
+      for (const k of ["spoof", "pluxy_local", "notes3"])
+        check(
+          dg[k] && !assets.some((a) => a.path.includes(`/${dg[k]}/`) && a.status === 200),
+          `the asset scheme served refused package ${k}`,
+        );
+      console.log(`${mode} device ${JSON.stringify(d)} (${assets.length} asset requests)`);
+    }
 
     // Closing the window frees its webviews; the app stays in the tray.
     const closed = steps.get("closed") as
