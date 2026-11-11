@@ -466,6 +466,17 @@ Anthropic refuses repaired: an empty `allowed_domains` or `blocked_domains` list
 `web_search_*` tool is removed, and a `tool_use` id or `tool_result` `tool_use_id` with other
 characters becomes `cpa_tid_v1_` and the ID in URL-safe base64, the same ID the same way.
 
+**Fast mode.** A request whose body has `"speed": "fast"` (a Messages client's own, or a
+Responses client's `"service_tier": "priority"`, which becomes it as in today's core; Chat
+Completions has no such mapping) gets the `fast-mode-2026-02-01` beta in `anthropic-beta`, which
+Anthropic requires with that field, also on a token count. A request that names that beta itself,
+in its `anthropic-beta` header or in the `betas` list of its body, is a fast-mode request too, as in
+today's core. A 429 saying fast mode needs usage credits is the request's: it blocks nothing and
+the request is not moved to another account, since no account fares better for it and the account
+serves other requests. On Anthropic's own API (`https://api.anthropic.com`), every failure of a
+fast-mode request is the request's in the same way, except a refused shared usage window, as in
+today's core.
+
 A 429 is read as today's core reads Anthropic's rate-limit headers. A refused shared 5-hour or
 7-day window (`anthropic-ratelimit-unified-5h-status` or `-7d-status` `rejected`, or the
 aggregate `anthropic-ratelimit-unified-status` `rejected` for another reason than below) is a

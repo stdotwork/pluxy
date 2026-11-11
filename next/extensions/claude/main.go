@@ -252,7 +252,8 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 // post sends body to the Messages API at path (under base_url) and returns the upstream's
 // successful reply; a failure is returned as the error to report. passthrough sends the client's
 // own Messages headers with its body; stream asks for a stream. The betas the body needs are
-// added (betas.go).
+// added (betas.go). A fast-mode body ("speed": "fast") gets the fast-mode beta, and on
+// Anthropic's own API its failure is the request's (fast.go).
 func post(ctx context.Context, call sdk.Call, s settings, path string, body []byte, passthrough, stream bool) (*http.Response, error) {
 	body, betas := bodyBetas(body, path == "/v1/messages/count_tokens")
 	// ?beta=true is how Anthropic's SDKs, Claude Code among them, call the API with betas.
@@ -282,11 +283,24 @@ func post(ctx context.Context, call sdk.Call, s settings, path string, body []by
 			}
 		}
 	}
+	// Anthropic refuses "speed": "fast" without the fast-mode beta, so the beta follows the body.
+	// A client may name the beta in the body's betas list too, which bodyBetas has already taken
+	// out of the body (betas holds it).
+	fast := isFast(body, req.Header.Get("Anthropic-Beta")) || slices.Contains(betas, fastBeta)
+	if fast {
+		req.Header.Set("Anthropic-Beta", withBeta(req.Header.Get("Anthropic-Beta"), fastBeta))
+	}
 	if err := authorize(req.Header, call.Account.Credential); err != nil {
 		return nil, err
 	}
 	if list := addBetas(req.Header.Get("Anthropic-Beta"), betas); list != "" {
 		req.Header.Set("Anthropic-Beta", list)
+	}
+	fail := func(e *llm.Error) *llm.Error {
+		if fast && isAnthropicBase(s.BaseURL) {
+			return fastFailure(e)
+		}
+		return e
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -296,11 +310,11 @@ func post(ctx context.Context, call sdk.Call, s settings, path string, body []by
 		var op *net.OpError
 		dial := errors.As(err, &op) && op.Op == "dial"
 		// A failed dial never reached the upstream, so trying again is safe.
-		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint, Retryable: dial}
+		return nil, fail(&llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint, Retryable: dial})
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		defer resp.Body.Close()
-		return nil, upstreamError(resp, call.Request.Model, s.ModelLevelCooling)
+		return nil, fail(upstreamError(resp, call.Request.Model, s.ModelLevelCooling))
 	}
 	return resp, nil
 }
@@ -449,6 +463,11 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 	if body, err = fixBody(body); err != nil {
 		return nil, nil, err
 	}
+	if priorityTier(req.Native) {
+		if body, err = withFastSpeed(body); err != nil {
+			return nil, nil, err
+		}
+	}
 	effort := req.Options.ReasoningEffort
 	if s := req.Options.ThinkingSuffix; s != "" {
 		effort = s
@@ -595,6 +614,10 @@ func upstreamError(resp *http.Response, model string, modelLevelCooling bool) *l
 			// A call that names no model (an account check, quota, a login) has no model to keep
 			// out: its 429 is the account's.
 			e.Scope = llm.ScopeCredential
+		}
+		if !(e.Code == llm.CodeQuota && e.Scope == llm.ScopeCredential) && fastCredits(raw) {
+			// Fast mode refused for want of usage credits: the request's, as in today's core.
+			e.Scope = llm.ScopeRequest
 		}
 		e.RetryAfterMS = int64((wait + time.Millisecond - 1) / time.Millisecond)
 	case s == http.StatusServiceUnavailable || s == 529:
