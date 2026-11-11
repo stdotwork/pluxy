@@ -208,14 +208,14 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return err
 	}
 
-	body, tr, patch, err := buildRequest(call.Request, s.InjectXSearch)
+	body, tr, bridge, err := buildRequest(call.Request, s.InjectXSearch)
 	if err != nil {
 		return err
 	}
 	rep := &reporting{Stream: out, tr: tr}
 	var send eventSender = rep
-	if patch != nil {
-		send = bridgeSender{b: patch, next: rep}
+	if bridge != nil {
+		send = bridgeSender{b: bridge, next: rep}
 	}
 	url := tg.base + "/responses"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
@@ -269,9 +269,9 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err != nil {
 		return err
 	}
-	if patch != nil {
+	if bridge != nil {
 		// The reply is checked before any of it is sent.
-		if events, err = convert(patch, events); err != nil {
+		if events, err = convert(bridge, events); err != nil {
 			return err
 		}
 		send = rep
@@ -286,8 +286,8 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 
 type eventSender interface{ Send(llm.Event) error }
 
-// convert runs the bridge over a whole reply.
-func convert(b *patchBridge, events []llm.Event) ([]llm.Event, error) {
+// convert runs a bridge over a whole reply.
+func convert(b transformer, events []llm.Event) ([]llm.Event, error) {
 	var out []llm.Event
 	for _, ev := range events {
 		more, err := b.Transform(ev)

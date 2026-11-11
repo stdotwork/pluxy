@@ -23,11 +23,12 @@ import (
 //   - input: a custom tool call and its output are sent as a function call and its output
 //     (normalizeXAIInputCustomToolCallsDoc);
 //   - apply_patch: Codex's patch tool is sent as a function with an input argument, and xAI's call
-//     to it is turned back into a custom tool call (patch.go).
+//     to it is turned back into a custom tool call (patch.go);
+//   - namespace tools: the Codex app's namespaces are sent as functions, flattened or folded, and
+//     xAI's calls to them are turned back into calls in their namespaces (namespace.go); the
+//     Codex app's automation_update tool gets parameters that accept any object.
 //
-// Not done here, and why it is left out: namespace tools are not folded into functions with
-// qualified names, and their responses are not restored (the Codex app's tools; the extension
-// sends them as the client wrote them); image references and encrypted reasoning content are not rewritten
+// Not done here, and why it is left out: image references and encrypted reasoning content are not rewritten
 // (sanitizeXAIInputEncryptedContent and normalizeXAIImageRefsDoc); the reasoning effort is not
 // checked against each model's levels, which needs today's model catalog. Today's core also
 // sets instructions and a list input, and the Codex translator's tool defaults (tool_choice,
@@ -54,10 +55,11 @@ func buildSearchBody(req llm.Request, injectXSearch bool) ([]byte, *llm.Translat
 	return body, tr, err
 }
 
-// buildRequest is buildSearchBody that also returns the bridge that turns xAI's calls to the custom
-// apply_patch tool back into custom tool calls (patch.go), or nil when the request has no such
-// tool.
-func buildRequest(req llm.Request, injectXSearch bool) ([]byte, *llm.Translation, *patchBridge, error) {
+// buildRequest is buildSearchBody that also returns what turns xAI's reply back for the client:
+// calls to the custom apply_patch tool become custom tool calls (patch.go) and calls to the
+// functions that stand for namespace tools become calls in their namespaces (namespace.go). It is
+// nil when the request has neither.
+func buildRequest(req llm.Request, injectXSearch bool) ([]byte, *llm.Translation, *replyBridge, error) {
 	tr := &llm.Translation{To: llm.FormatOpenAIResponses}
 	var body []byte
 	if n := req.Native; n != nil {
@@ -95,12 +97,18 @@ func buildRequest(req llm.Request, injectXSearch bool) ([]byte, *llm.Translation
 		m["store"] = false
 	}
 	m["include"] = withEncryptedReasoning(m["include"])
-	var patch *patchBridge
+	reply := &replyBridge{}
+	var namespaces *namespaceTools
 	if tools, ok := m["tools"].([]any); ok {
 		tools, active := rewriteApplyPatchTools(tools)
 		if active {
-			patch = newPatchBridge()
+			reply.patch = newPatchBridge()
 			rewriteApplyPatchChoice(m["tool_choice"])
+		}
+		tools, namespaces = rewriteNamespaces(tools)
+		if namespaces != nil {
+			reply.ns = newNSRestorer(namespaces.refs)
+			namespaces.rewriteChoice(m["tool_choice"])
 		}
 		m["tools"] = rewriteTools(tools)
 	}
@@ -115,13 +123,19 @@ func buildRequest(req llm.Request, injectXSearch bool) ([]byte, *llm.Translation
 		if err != nil {
 			return nil, nil, nil, err
 		}
+		if namespaces != nil {
+			namespaces.rewriteHistory(items)
+		}
 		m["input"] = items
 	}
 	out, err := marshal(m)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	return out, tr, patch, nil
+	if reply.patch == nil && reply.ns == nil {
+		reply = nil
+	}
+	return out, tr, reply, nil
 }
 
 // withEncryptedReasoning returns the client's include list with reasoning.encrypted_content added.
@@ -152,6 +166,7 @@ func rewriteTools(tools []any) []any {
 		if tm["type"] != "function" {
 			continue
 		}
+		simplifyAutomation(tm, "", str(tm, "name"))
 		if _, ok := tm["parameters"].(map[string]any); ok {
 			normalizeSchema(tm, "parameters")
 		} else {

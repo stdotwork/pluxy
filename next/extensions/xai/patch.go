@@ -565,9 +565,34 @@ func (b *patchBridge) finish(ev llm.Event) ([]llm.Event, error) {
 	return append(out, ev), nil
 }
 
+// replyBridge changes the events of one reply for the client: the namespace restorer first, which
+// changes events one for one, then the apply_patch bridge. Either may be nil.
+type replyBridge struct {
+	patch *patchBridge
+	ns    *nsRestorer
+}
+
+func (r *replyBridge) Transform(ev llm.Event) ([]llm.Event, error) {
+	if r.ns != nil {
+		var err error
+		if ev, err = r.ns.Transform(ev); err != nil {
+			return nil, err
+		}
+	}
+	if r.patch == nil {
+		return []llm.Event{ev}, nil
+	}
+	return r.patch.Transform(ev)
+}
+
+// transformer changes the events of a reply.
+type transformer interface {
+	Transform(llm.Event) ([]llm.Event, error)
+}
+
 // bridgeSender sends the events a bridge makes of each event it is given.
 type bridgeSender struct {
-	b    *patchBridge
+	b    transformer
 	next interface{ Send(llm.Event) error }
 }
 

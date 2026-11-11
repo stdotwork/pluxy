@@ -805,6 +805,20 @@ What changes in a request:
   arguments but no done event is finished when the reply ends, and is in the final output.
   Only a Responses client can declare a custom tool, so only its reply is turned back; today's core
   does not turn a Chat Completions client's `apply_patch` custom tool back either.
+- Namespace tools (from the Codex app, `{"type":"namespace","name":N,"tools":[...]}`) are sent as
+  functions, because xAI has no such tool. When the tools flattened are no more than 200, each
+  child is a function named `N__child` (a name that has the prefix, or starts with `mcp__`, keeps
+  its name), and `tool_search` children are left out. With more than 200, each namespace is one
+  function named `N` whose arguments are `{"name": child, "arguments": {...}}` and whose
+  description lists the children with their schemas; folded namespaces come first when the tools
+  are cut to 200. A function call in the history that names a namespace, and a `tool_choice` that
+  does, are written the same way. xAI's call to such a function goes back to a Responses client as
+  the call to the child in its namespace, in the added item, the done item and the final response;
+  a folded namespace's call is unwrapped when its arguments name one of the namespace's children,
+  and stays a call to the namespace otherwise. Where a name repeats, the first tool stays.
+- The Codex app's `automation_update` tool (in the `codex_app` or `codex_apps` namespace) is sent
+  with parameters that accept any object, and `strict` false: with its own schema, a large `oneOf`
+  with `$ref` references, xAI accepts the request and sends no events.
 - `store` is false unless the client set it: xAI keeps responses by default, and with
   `previous_response_id` removed a kept response is never used again. `include` asks for
   `reasoning.encrypted_content`, which carries a reasoning model's thinking to the next turn
@@ -839,9 +853,12 @@ and creates no account or model cooldown; a 404 naming a missing model is scoped
 
 Not built, and why:
 
-- Namespace tools (from the Codex app) are sent as the client wrote them. Today's core folds them
-  into functions and restores the names in the reply. The reply side exists now, for `apply_patch`
-  only; an `apply_patch` declared inside a namespace is not rewritten either.
+- Namespace tools in an `additional_tools` input item (Responses Lite) are sent as the client wrote
+  them, and so is an `apply_patch` declared inside a namespace. Today's core moves the first to
+  the tools list and handles the second.
+- The root-union schema rule of today's core (a function whose schema is a `oneOf` or `anyOf` with
+  `$ref` or non-object branches gets the permissive schema, and a union branch without a type gets
+  `object`) is built only for the Codex app's `automation_update`, which is what hangs xAI.
 - A custom tool other than `apply_patch` is sent as a function with no input field, and its call
   comes back as a function call, as today's core does it; a client cannot run it from that call.
 - Today's core sends an empty `instructions`, a string input as a list, and tool defaults
