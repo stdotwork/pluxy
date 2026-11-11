@@ -396,6 +396,7 @@ impl Catalog {
                 Err(e) => Err(e.to_string()),
             },
         };
+        let failed = read.is_err();
         let packages = read.unwrap_or_else(|why| {
             let aside = dirs.root.join(format!("{ASIDE}{}", now()));
             warning = Some(match fs::rename(dirs.catalog(), &aside) {
@@ -415,18 +416,34 @@ impl Catalog {
             BTreeMap::new()
         });
         // A catalog moved aside, now or before: its releases stay until it is removed.
-        let aside = fs::read_dir(&dirs.root).ok().and_then(|entries| {
-            entries.flatten().map(|e| e.path()).find(|p| {
-                p.file_name()
-                    .is_some_and(|n| n.to_string_lossy().starts_with(ASIDE))
-            })
-        });
-        let keep_store = locked.is_some() || aside.is_some();
-        if let (None, Some(a)) = (&warning, &aside) {
-            warning = Some(format!(
-                "a damaged catalog of this device's extensions is kept at {}; the releases it may name are kept until it is removed",
-                a.display()
-            ));
+        // A folder that cannot be listed may hold one: then nothing is deleted either.
+        let aside = match fs::read_dir(&dirs.root) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.to_string()),
+            Ok(entries) => entries
+                .map(|e| e.map(|e| e.path()))
+                .find(|e| {
+                    e.as_ref().map_or(true, |p| {
+                        p.file_name()
+                            .is_some_and(|n| n.to_string_lossy().starts_with(ASIDE))
+                    })
+                })
+                .transpose()
+                .map_err(|e| e.to_string()),
+        };
+        let keep_store = failed || !matches!(aside, Ok(None));
+        if warning.is_none() {
+            match &aside {
+                Ok(Some(a)) => warning = Some(format!(
+                    "a damaged catalog of this device's extensions is kept at {}; the releases it may name are kept until it is removed",
+                    a.display()
+                )),
+                Err(e) => warning = Some(format!(
+                    "{} could not be listed ({e}); no release is deleted until it can be",
+                    dirs.root.display()
+                )),
+                Ok(None) => {}
+            }
         }
         let mut c = Catalog {
             dirs,

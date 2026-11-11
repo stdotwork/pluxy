@@ -833,3 +833,30 @@ fn registry_files_must_be_regular_files_in_the_index_folder() {
     stage_from_registry(&d, "fixture", "example/notes", Some("1.0.0")).unwrap();
     done(root);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_catalog_folder_that_cannot_be_listed_keeps_the_store() {
+    use std::os::unix::fs::PermissionsExt;
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false);
+    let v1 = package("example/notes", "1.0.0");
+    install(&mut c, &v1, local("n")).unwrap();
+    drop(c);
+    fs::write(d.catalog(), b"{not json").unwrap();
+    // The damaged catalog can be moved aside, but the folder cannot be listed.
+    fs::set_permissions(&d.root, fs::Permissions::from_mode(0o300)).unwrap();
+    let c = Catalog::open(d.clone(), false);
+    fs::set_permissions(&d.root, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(
+        c.warning.as_deref().is_some_and(|w| w.contains("moved")),
+        "{:?}",
+        c.warning
+    );
+    assert_eq!(store_names(&d), BTreeSet::from([digest(&v1)]));
+    done(root);
+}
