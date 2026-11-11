@@ -875,6 +875,28 @@ func TestXAIInjectXSearch(t *testing.T) {
 	}
 }
 
+// Two names of one header that differ only in spaces or letter case make the file fail to load,
+// naming both and no value, instead of one of them being kept by chance.
+func TestProviderHeadersRefuseSameHeaderTwice(t *testing.T) {
+	_, err := Translate([]byte(`
+claude-api-key:
+  - api-key: k1
+    base-url: https://gw.example
+    headers: {X-Gateway-Key: fake-gw-one, " X-Gateway-Key ": fake-gw-two}
+`))
+	if err == nil {
+		t.Fatal("a headers mapping with the same header twice loaded")
+	}
+	for _, want := range []string{`"X-Gateway-Key"`, `" X-Gateway-Key "`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not name %s", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "fake-gw") {
+		t.Errorf("error shows a value: %q", err)
+	}
+}
+
 // A provider key's headers, as today's core reads them: values that are numbers or true or false
 // are their text, names and values are trimmed, empty ones are dropped, and a value today's core
 // takes from the client's request is named and not imported. In the older layout an entry's

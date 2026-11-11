@@ -80,13 +80,39 @@ func Secrets(h map[string]string) []string {
 	return out
 }
 
+// minBare is the shortest secret value that is removed from text on its own. A shorter one ("1",
+// "abc") would also remove it from unrelated text such as model names and numbers, so it is
+// removed only as part of its whole "Name: value" pair.
+const minBare = 8
+
+// Forms returns the strings to remove from text so that no secret value of h shows: for each
+// secret header its "Name: value" pair, and the value alone when it is at least minBare bytes
+// long. In name order.
+func Forms(h map[string]string) []string {
+	var out []string
+	for _, k := range slices.Sorted(maps.Keys(h)) {
+		v := h[k]
+		if !Secret(k) || v == "" {
+			continue
+		}
+		out = append(out, k+": "+v)
+		if len(v) >= minBare {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // Import turns headers as today's core reads them into this core's setting: names and values
 // trimmed, and pairs with an empty name or value dropped, as today's core drops them. Values that
 // today's core fills in from the client's request ("$" and a header name, or $CPA-SESSION-ID)
 // are not imported, since this core sends values only as written; their names are returned.
-func Import(h map[string]string) (out map[string]string, dynamic []string) {
-	for k, v := range h {
-		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+// Two names that are the same once trimmed and letter case is ignored are refused, naming both,
+// rather than one of them being kept by chance.
+func Import(h map[string]string) (out map[string]string, dynamic []string, err error) {
+	seen := map[string]string{} // canonical name -> the name as given
+	for _, raw := range slices.Sorted(maps.Keys(h)) {
+		k, v := strings.TrimSpace(raw), strings.TrimSpace(h[raw])
 		if k == "" || v == "" {
 			continue
 		}
@@ -94,11 +120,16 @@ func Import(h map[string]string) (out map[string]string, dynamic []string) {
 			dynamic = append(dynamic, k)
 			continue
 		}
+		c := http.CanonicalHeaderKey(k)
+		if other, dup := seen[c]; dup {
+			return nil, nil, fmt.Errorf("headers %q and %q are the same header: names that differ only in spaces or letter case", other, raw)
+		}
+		seen[c] = raw
 		if out == nil {
 			out = map[string]string{}
 		}
 		out[k] = v
 	}
 	slices.Sort(dynamic)
-	return out, dynamic
+	return out, dynamic, nil
 }

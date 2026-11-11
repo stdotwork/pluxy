@@ -529,7 +529,12 @@ whose describe reports `protocol_minor` 11 or more; for any other it fails the c
 proxy.
 
 In Go, `sdk.Upstream` does all of this for each client it wraps: requests made with the
-handler's context go through the call's proxy.
+handler's context go through the call's proxy. A proxy is honoured only by clients wrapped in
+`sdk.Upstream`; a client that is not, such as `http.DefaultClient`, sends direct. So the SDK
+answers a call that carries a proxy with `unsupported` (scope `credential`, retryable) and never
+runs the handler when the extension process has not created any `sdk.Upstream` transport. An
+extension that wraps some of its clients and not others still sends the others direct: wrap them
+all.
 
 ### Headers
 
@@ -545,14 +550,20 @@ or a value with a line break or another control character: its config load refus
 The value of a header whose name is about authentication (its name holds `auth`, `key`,
 `token`, `secret`, `cookie`, `session`, `password` or `signature`, letter case aside) is a
 secret: an extension never logs or shows it, and core removes it from everything a call sends
-back, as it does a credential's strings. Other values are not removed.
+back, as it does a credential's strings; a value shorter than 8 bytes is removed only as part
+of its `Name: value` pair, so it does not scrub unrelated text. Other values are not removed.
 
 Core sends a call that has headers only to an extension whose describe reports
 `protocol_minor` 12 or more; for any other it fails the call itself with `unsupported` (scope
 `credential`), so routing moves on, and the traffic never leaves without them. A `login` that
 adds a new account carries the `headers` the request to add it named.
 
-In Go, `sdk.Upstream` sets them on each request made with the handler's context.
+In Go, `sdk.Upstream` sets them on each request made with the handler's context. On a redirect
+to another host than the first request's it leaves out the headers whose names are secret, as
+`net/http` leaves out `Authorization` and `Cookie` there, so the redirect target never gets
+them; the other headers stay. As with a proxy, the SDK answers a call that carries headers with
+`unsupported` (scope `credential`, retryable) and never runs the handler when the extension
+process has not created any `sdk.Upstream` transport.
 
 ## The request
 
