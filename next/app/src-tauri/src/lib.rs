@@ -58,6 +58,9 @@ struct App {
     /// The page webviews' own web context's folder: nothing shared with the window's.
     pages_dir: std::path::PathBuf,
     pages: Mutex<Pages>,
+    /// Page webviews that could not be closed, unbound already: closed again at the next close,
+    /// so none is forgotten while it may still run.
+    unclosed: Mutex<Vec<String>>,
     /// This device's extension catalog. Installs check and stage a release without it.
     device: Mutex<device::Catalog>,
     device_dirs: device::Dirs,
@@ -148,12 +151,29 @@ fn close_pages(app: &AppHandle) {
         pages.clear();
         l
     };
-    for l in labels {
+    // Each one that cannot be closed stays in `unclosed`.
+    let _ = close_webviews(app, labels);
+}
+
+/// Closes page webviews whose pages are unbound already, and those that could not be closed
+/// before. One that cannot be closed is kept in `unclosed` and tried again at the next call;
+/// the answer says which could not be.
+fn close_webviews(app: &AppHandle, labels: Vec<String>) -> Vec<String> {
+    let st = app.state::<App>();
+    let mut todo = std::mem::take(&mut *st.unclosed.lock().unwrap());
+    todo.extend(labels);
+    let mut left = Vec::new();
+    for l in todo {
         place::forget(&l);
-        if let Some(w) = app.get_webview(&l) {
-            let _ = w.close();
+        let Some(w) = app.get_webview(&l) else {
+            continue;
+        };
+        if let Err(e) = w.close() {
+            left.push(format!("page webview {l} could not be closed: {e}"));
+            st.unclosed.lock().unwrap().push(l);
         }
     }
+    left
 }
 
 /// Stops the app's own core, if it runs one, and exits. A local or remote core keeps running.
@@ -425,11 +445,11 @@ fn add_page(webview: &Webview, label: String, site: Binding, rect: Rect) -> Resu
     });
     if let Err(e) = placed {
         state.pages.lock().unwrap().unbind(&label);
-        place::forget(&label);
-        if let Some(w) = webview.app_handle().get_webview(&label) {
-            let _ = w.close();
-        }
-        return Err(e);
+        let left = close_webviews(webview.app_handle(), vec![label]);
+        return Err(std::iter::once(e)
+            .chain(left)
+            .collect::<Vec<_>>()
+            .join("; "));
     }
     Ok(label)
 }
@@ -459,10 +479,14 @@ fn page_place(webview: Webview, label: String, rect: Rect) -> Result<(), String>
 #[tauri::command]
 fn page_close(webview: Webview, state: tauri::State<App>, label: String) -> Result<(), String> {
     trusted(&webview)?;
-    let w = page_webview(webview.app_handle(), &label);
+    page_webview(webview.app_handle(), &label)?;
     state.pages.lock().unwrap().unbind(&label);
-    place::forget(&label);
-    w?.close().map_err(|e| e.to_string())
+    let left = close_webviews(webview.app_handle(), vec![label]);
+    if left.is_empty() {
+        Ok(())
+    } else {
+        Err(left.join("; "))
+    }
 }
 
 /// Delivers a message of the window's channel to a page webview's app document.
@@ -603,14 +627,7 @@ fn device_changed(
         let left: Vec<String> = catalog.take_cleanup().into_iter().collect();
         (labels, catalog.view(), left)
     };
-    for l in labels {
-        place::forget(&l);
-        if let Some(w) = app.get_webview(&l) {
-            if let Err(e) = w.close() {
-                left.push(format!("page webview {l} could not be closed: {e}"));
-            }
-        }
-    }
+    left.extend(close_webviews(app, labels));
     let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-device", ());
     if left.is_empty() {
         Ok(view)
@@ -945,6 +962,7 @@ pub fn run() {
                 confirmations: Mutex::new(confirmations),
                 pages_dir,
                 pages: Mutex::new(Pages::default()),
+                unclosed: Mutex::new(Vec::new()),
                 device: Mutex::new(catalog),
                 device_dirs,
                 status: Mutex::new(None),
