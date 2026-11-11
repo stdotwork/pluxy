@@ -40,7 +40,7 @@ await launch("enable");
 check(existsSync(entry), "enabling did not write the XDG autostart entry");
 const text = readFileSync(entry, "utf8");
 const exec = text.split("\n").find((l) => l.startsWith("Exec="))?.slice(5);
-check(exec?.endsWith(" --silent-start"), "autostart entry has no silent flag");
+check(exec && exec.endsWith(" --silent-start"), "autostart entry has no silent flag");
 // Parse the generated Desktop Entry quoted argument, never a shell command.
 check(exec.startsWith('"') && exec.endsWith('" --silent-start'), "unexpected Exec quoting");
 const executable = exec.slice(1, -'" --silent-start'.length).replaceAll("%%", "%");
