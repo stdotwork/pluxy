@@ -731,6 +731,17 @@ replies are permission errors. A 429 that says the free usage is used up is a qu
 holds the model back on the account for 24 hours. Other 429 replies are rate limits and keep xAI's `Retry-After`.
 A 404 is a model error, and a 5xx is an upstream error.
 
+**Compaction.** `POST /v1/responses/compact` is served through the protocol's endpoint
+operation for API keys and Grok logins. It goes to `{base_url}/responses/compact`, using the
+official API when the base URL is the Grok CLI chat proxy: that proxy has no compaction endpoint
+and returns 404. A login uses its access token with standard API headers, without CLI identity
+headers. An explicit non-CLI base URL is kept. The request removes `stream`, `tools`,
+`tool_choice`, `max_output_tokens`, `temperature`, `top_p`, `top_k` and `stop`, removes
+`compaction_trigger` input items, and keeps a nonempty `previous_response_id`. As in today's
+core, compaction leaves `store` and `include` to the client. The upstream's JSON reply comes
+back whole, with usage recorded. Streaming is refused. An endpoint 404 is a request error
+and creates no account or model cooldown; a 404 naming a missing model is scoped to that model.
+
 Not built, and why:
 
 - Namespace tools (from the Codex app) are sent as the client wrote them. Today's core folds them
@@ -748,7 +759,7 @@ Not built, and why:
 - Checking the reasoning effort against each model's levels, and a default effort. Both need
   today's model catalog.
 - Image references, encrypted reasoning content, websockets, text to speech, image and video
-  generation, `/responses/compact`, and the optional `x_search` tool.
+  generation, and the optional `x_search` tool.
 - For a Grok login: reading the Grok CLI's latest version from npm every 3 hours (set
   `client_version` when xAI asks for a newer CLI), the file name and legacy-file adoption today's
   core uses for its auth files, and opening the browser at sign-in.

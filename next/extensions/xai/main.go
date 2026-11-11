@@ -62,7 +62,7 @@ const cliChatBaseURL = "https://cli-chat-proxy.grok.com/v1"
 const cliVersion = "1.0.46"
 
 func main() {
-	err := sdk.Serve(sdk.Extension{ID: id, Version: version, Generate: generate,
+	err := sdk.Serve(sdk.Extension{ID: id, Version: version, Generate: generate, Endpoint: endpoint,
 		LoginMethods: loginMethods, Login: login, Refresh: refresh, Models: models, Check: check, Quota: quota})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "xai:", err)
