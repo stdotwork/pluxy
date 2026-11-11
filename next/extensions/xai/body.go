@@ -105,7 +105,13 @@ func buildRequest(req llm.Request, injectXSearch bool) ([]byte, *llm.Translation
 			reply.patch = newPatchBridge()
 			rewriteApplyPatchChoice(m["tool_choice"])
 		}
-		tools, namespaces = rewriteNamespaces(tools)
+		// Today's core counts the x_search tool it will inject when it decides to fold. Its other
+		// condition, a forced hosted tool that is the only tool, cannot hold with a namespace there.
+		injected := 0
+		if injectXSearch && !requestHasSearch(m) {
+			injected = 1
+		}
+		tools, namespaces = rewriteNamespaces(tools, injected)
 		if namespaces != nil {
 			reply.ns = newNSRestorer(namespaces.refs)
 			namespaces.rewriteChoice(m["tool_choice"])

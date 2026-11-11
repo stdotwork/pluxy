@@ -808,7 +808,8 @@ What changes in a request:
 - Namespace tools (from the Codex app, `{"type":"namespace","name":N,"tools":[...]}`) are sent as
   functions, because xAI has no such tool. When the tools flattened are no more than 200, each
   child is a function named `N__child` (a name that has the prefix, or starts with `mcp__`, keeps
-  its name), and `tool_search` children are left out. With more than 200, each namespace is one
+  its name), and `tool_search` children are left out. The count includes the `x_search` tool that
+  `inject_x_search` adds, as today's core counts it. With more than 200, each namespace is one
   function named `N` whose arguments are `{"name": child, "arguments": {...}}` and whose
   description lists the children with their schemas; folded namespaces come first when the tools
   are cut to 200. A function call in the history that names a namespace, and a `tool_choice` that

@@ -104,8 +104,9 @@ func flattenedCount(tools []any) int {
 }
 
 // rewriteNamespaces sends the namespace tools in tools as functions. It returns nil when there
-// are none.
-func rewriteNamespaces(tools []any) ([]any, *namespaceTools) {
+// are none. injected is how many tools the extension adds after this (the x_search tool), which
+// count for the fold decision as today's core counts them.
+func rewriteNamespaces(tools []any, injected int) ([]any, *namespaceTools) {
 	has := false
 	for _, t := range tools {
 		if m, ok := t.(map[string]any); ok && m["type"] == namespaceType {
@@ -115,7 +116,7 @@ func rewriteNamespaces(tools []any) ([]any, *namespaceTools) {
 	if !has {
 		return tools, nil
 	}
-	st := &namespaceTools{fold: flattenedCount(tools) > maxTools, refs: map[string]*nsRef{}}
+	st := &namespaceTools{fold: flattenedCount(tools)+injected > maxTools, refs: map[string]*nsRef{}}
 	// A namespace declared more than once is one namespace with the children of every declaration.
 	decls := map[string][]map[string]any{}
 	for _, t := range tools {

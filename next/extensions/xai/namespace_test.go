@@ -360,3 +360,37 @@ func TestNamespacedApplyPatchIsNotThePatchTool(t *testing.T) {
 		t.Errorf("events:\n%s", strings.Join(got, "\n"))
 	}
 }
+
+// The fold decision counts the x_search tool the extension is going to inject, as today's core
+// counts it: 200 tools in a namespace are flattened, and with the injected tool they are 201 and
+// folded. A request that has x_search of its own gets no injected tool, so nothing is added.
+func TestNamespaceFoldCountsInjectedSearch(t *testing.T) {
+	build := func(body string, inject bool) []map[string]any {
+		t.Helper()
+		req, err := openairesponses.ParseRequest([]byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, _, err := buildSearchBody(req, inject)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return toolsOf(t, out)
+	}
+	ns := func(n int, more string) string {
+		return `{"model":"grok-4.6","input":[],"tools":[{"type":"namespace","name":"ns","tools":[` + lookups(n) + `]}` + more + `]}`
+	}
+	if got := build(ns(200, ""), false); len(got) != 200 || got[0]["name"] != "ns__lookup0" {
+		t.Errorf("200 tools, no injection: %d tools, the first %v", len(got), got[0]["name"])
+	}
+	got := build(ns(200, ""), true)
+	if len(got) != 2 || got[0]["name"] != "ns" || got[1]["type"] != "x_search" {
+		t.Errorf("200 tools and an injected x_search: %d tools, the first %v; want the dispatcher and x_search", len(got), got[0]["name"])
+	}
+	if got := build(ns(199, ""), true); len(got) != 200 || got[0]["name"] != "ns__lookup0" || got[199]["type"] != "x_search" {
+		t.Errorf("199 tools and an injected x_search: %d tools, the first %v, the last %v", len(got), got[0]["name"], got[len(got)-1]["type"])
+	}
+	if got := build(ns(199, `,{"type":"x_search"}`), true); len(got) != 200 || got[0]["name"] != "ns__lookup0" || got[199]["type"] != "x_search" {
+		t.Errorf("199 tools and the client's x_search: %d tools, the first %v", len(got), got[0]["name"])
+	}
+}
