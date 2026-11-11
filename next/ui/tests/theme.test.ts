@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { LAYOUT, MAX_THEME_BYTES, THEME_VERSION, TOKENS, tokenProperty } from "../kit/theme/contract";
+import { LAYOUT, MAX_THEME_BYTES, PARTS, THEME_VERSION, TOKENS, tokenProperty } from "../kit/theme/contract";
 import { type Choices, DEFAULT_CHOICES, resolve, tokensCss } from "../kit/theme/engine";
 import { parseTheme, parseThemeText } from "../kit/theme/validate";
 
@@ -54,6 +54,13 @@ describe("the README and the code agree", () => {
       ]),
     );
     expect(documented).toEqual(LAYOUT as unknown as Record<string, string[]>);
+  });
+
+  test("every data-part hook", () => {
+    const documented = rows("### Hooks you can rely on")
+      .map(([hook]) => hook?.match(/^`data-part="([^"]+)"`/)?.[1])
+      .filter((h) => h !== undefined);
+    expect(documented).toEqual([...PARTS]);
   });
 
   test("the version the README describes", () => {
@@ -120,6 +127,19 @@ describe("reading a theme", () => {
 });
 
 describe("resolving", () => {
+  test("quota meter tokens follow a theme's colours and accept overrides", () => {
+    expect(PARTS).toContain("meter");
+    const custom = ok({
+      ...base,
+      tokens: { "color.meter-track": "#123456", "color.meter-fill": "#abcdef" },
+    }).theme;
+    const resolved = resolve(custom, DEFAULT_CHOICES, env);
+    expect(resolved.tokens["color.meter-track"]).toBe("#123456");
+    expect(resolved.tokens["color.meter-fill"]).toBe("#abcdef");
+    expect(resolve(ok(base).theme, DEFAULT_CHOICES, env).tokens["color.meter-fill"]).toBe(
+      "var(--px-color-accent)",
+    );
+  });
   const theme = ok({
     ...base,
     tokens: { "color.bg": "#111111", density: "0.75" },

@@ -42,7 +42,7 @@ func chatBody(t *testing.T, body string) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, _, err := buildBody(req, upChat)
+	out, _, err := buildBody(req, upChat, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestResponsesOutputsContiguous(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, _, err := buildBody(req, upResponses)
+	got, _, err := buildBody(req, upResponses, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.7
+# pluxy extension protocol, version 0.9
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -14,9 +14,12 @@ the identity of a login's grant, so core can check that a new login to an accoun
 the same upstream account. Version 0.6 adds an error's `quota_window_minutes`: how long the
 usage window that ran out is. Version 0.7 adds [endpoint calls](#endpoint): client requests to a
 provider's endpoints beyond generation, such as Responses compaction, whose reply the extension
-writes. It is deliberately small; later versions add capabilities and more operations without changing
+writes. Version 0.8 adds the request's [`caller`](#the-request): a value that stands for the
+client key a request came with, so an extension can keep what it learns from replies per client.
+Version 0.9 adds optional non-secret account settings to a login grant.
+It is deliberately small; later versions add capabilities and more operations without changing
 what is described here. An extension written for version 0 works unchanged with a core that
-speaks 0.7 (see [Versioning](#versioning)).
+speaks 0.9 (see [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
 the details. A Go SDK (`github.com/stdotwork/pluxy/next/sdk`) implements the extension side of
@@ -513,6 +516,7 @@ version 0.
 | `native` | The client's original request body and its format, when core received one; `headers` holds the client's request headers that belong to that format, by lower-case name (for `anthropic.messages`: `anthropic-version` and `anthropic-beta`, and the headers the client names itself with: `user-agent`, `x-app`, `anthropic-dangerous-direct-browser-access`, `x-claude-code-session-id`, `x-client-request-id`, the `x-stainless-*` headers of Anthropic's SDKs, `x-client-app` and `x-anthropic-additional-protection`; and Claude Code's subagent, request and remote-session headers (`x-claude-code-agent-id`, `x-claude-code-parent-agent-id`, `x-claude-code-agent-type`, `x-claude-code-request-class`, `x-claude-code-prev-tool-durations`, `x-claude-code-compaction`, `x-claude-code-context-compacted`, `x-claude-remote-container-id`, `x-claude-remote-session-id`), which an extension should send upstream only for a request that names itself as Claude Code (`anthropicmessages.IsClaudeCode`: `x-app: cli`, a `claude-cli/` User-Agent and the `claude-code-20250219` beta); for `openai.responses`: the headers the Codex CLI sends, such as `session-id`, `x-codex-window-id`, `x-codex-turn-metadata`, `version`, `originator` and `user-agent`). |
 | `origin` | The request's top-level fields that have no place in the model (see Origin below). |
 | `drop_policy` | What to do when building the upstream request would drop part of this one: `report` (default: send it and report the losses) or `reject` (refuse with `unsupported`, naming what could not be carried). |
+| `caller` | Version 0.8. A value that stands for the client key the request came with: the same for every request with that key to this extension, different for another key or another extension, and not derivable from the key (core derives it with a secret it makes each time it starts, so it changes when core restarts). Absent when the client sent no key. Core sends it with `generate`, `count_tokens` and `endpoint` calls, to every extension. An extension that keeps state from replies across requests, such as reasoning to put back into a later turn, keys that state by `caller`, so one client never gets another's. |
 
 Item types:
 
@@ -748,6 +752,21 @@ entered for the last prompt; nothing else follows the call frame:
 {"type": "login.input", "input": {"redirect_url": "http://localhost:1455/callback?code=...&state=..."}}
 ```
 
+From version 0.9, a login grant may also carry a `settings` object of non-secret,
+extension-specific account settings. It must never hold a secret: secrets belong in
+`credential`. The extension validates and normalises these settings before returning them.
+When adding an account, core merges the grant's settings with those supplied by the caller:
+caller-supplied properties win, including explicit `null`; nested objects are replaced as a
+whole. On a login to an existing account, core ignores the grant's settings and keeps the
+account's existing settings. A grant without settings keeps the previous behaviour.
+Core validates grant settings at the extension boundary: `null` is treated as absent; any
+other value must be an object with an encoded size of at most 8192 bytes (8 KiB, matching
+the maximum total identity value bytes: 16 fields of 512 bytes). A non-object or oversized
+value fails the login with `extension_protocol`. Caller settings must be an object or
+absent (`null` also means absent); `POST /accounts` refuses a non-object with `invalid_request`
+before starting a login. Like a grant's `identity`, core uses grant settings regardless of
+the extension's reported minor version, an exception to the general minor-version rule.
+
 `login.done` carries the `grant`: the new `credential`, a `label` naming the account for people
 (not secret) and, from version 0.5, its `identity`: the upstream account the credential signs in
 to, as an object of the fields the provider knows it by, such as
@@ -937,7 +956,7 @@ removes `previous_response_id`.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.7. An extension reports the minor version it
+raise the minor version: this document is version 0.9. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -952,8 +971,10 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.5 | [Quota](#quota): the `quota` operation and its `quota.result` frame. A login grant's `identity`. |
 | 0.6 | An error's `quota_window_minutes`. |
 | 0.7 | [Endpoint calls](#endpoint): the `endpoint` operation. |
+| 0.8 | The request's `caller`. |
+| 0.9 | A login grant's optional `settings` object. |
 
-## What version 0.7 leaves out
+## What version 0.9 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

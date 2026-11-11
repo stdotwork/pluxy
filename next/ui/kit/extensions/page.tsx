@@ -3,11 +3,18 @@
 
 import { useLayoutEffect, useRef, useState } from "preact/hooks";
 import type { Api, UIExtension, UIPage } from "../api";
+import { strings } from "../strings";
 import { THEME_VERSION } from "../theme/contract";
 import type { Resolved } from "../theme/engine";
 import { Button, Notice, PageHead, useKit } from "../ui";
 import { type Channel, isHello, type Outcome, pickVersion, serve } from "./channel";
 import { pageProblem } from "./site";
+
+const t = strings("extensionPage", {
+  cannotShow: "This extension page cannot be shown: {problem}.",
+  closedNotice: "The page loaded another document, so the panel closed its connection to it.",
+  loadAgain: "Load the page again",
+});
 
 /** The theme as a page gets it: tokens and layout, never custom CSS. */
 export function themeSnapshot(r: Resolved) {
@@ -126,16 +133,14 @@ export function ExtensionPage(props: ExtensionPageProps) {
     <>
       <PageHead title={page.title} />
       {problem ? (
-        <Notice tone="warn">This extension page cannot be shown: {problem}.</Notice>
+        <Notice tone="warn">{t("cannotShow", { problem })}</Notice>
       ) : (
         <>
           {phase === "closed" && (
             <div class="actions">
-              <Notice tone="warn">
-                The page loaded another document, so the panel closed its connection to it.
-              </Notice>
+              <Notice tone="warn">{t("closedNotice")}</Notice>
               <Button variant="primary" onClick={() => setMount((n) => n + 1)}>
-                Load the page again
+                {t("loadAgain")}
               </Button>
             </div>
           )}

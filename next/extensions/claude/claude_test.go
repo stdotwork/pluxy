@@ -77,6 +77,7 @@ func TestUpstreamError(t *testing.T) {
 		minWaitMS int64
 	}{
 		{"overloaded", response(529, nil, `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`), llm.CodeUnavailable, llm.ScopeEndpoint, true, 0},
+		// A plain 429 keeps only the model out on the account, as in today's core.
 		{"rate limit", response(429, map[string]string{"Retry-After": "20"}, `{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`), llm.CodeRateLimit, llm.ScopeModel, true, 20000},
 		{"subscription window used up", response(429, map[string]string{
 			"Anthropic-Ratelimit-Unified-Status": "rejected", "Anthropic-Ratelimit-Unified-Reset": itoa(int(reset)),
@@ -86,10 +87,26 @@ func TestUpstreamError(t *testing.T) {
 		{"server error", response(500, nil, `{"type":"error","error":{"type":"api_error","message":"boom"}}`), llm.CodeUpstream, llm.ScopeEndpoint, false, 0},
 		{"bad request", response(400, nil, `{"type":"error","error":{"type":"invalid_request_error","message":"bad"}}`), llm.CodeInvalidRequest, llm.ScopeRequest, false, 0},
 	} {
-		e := upstreamError(c.resp, "claude-nope")
+		e := upstreamError(c.resp, "claude-nope", false)
 		if e.Code != c.code || e.Scope != c.scope || e.Retryable != c.retryable || e.RetryAfterMS < c.minWaitMS || e.ProviderCode == "" {
 			t.Errorf("%s: got %+v; want code %s, scope %s, retryable %v, wait at least %d ms", c.name, e, c.code, c.scope, c.retryable, c.minWaitMS)
 		}
+	}
+}
+
+// upstreamError carries the 429's window and the account's model_level_cooling (ratelimit.go).
+func TestUpstreamErrorSharedWindow(t *testing.T) {
+	reset := time.Now().Add(5 * time.Hour).Unix()
+	resp := func() *http.Response {
+		return response(429, map[string]string{"Anthropic-Ratelimit-Unified-5h-Status": "rejected", "Anthropic-Ratelimit-Unified-5h-Reset": itoa(int(reset))},
+			`{"type":"error","error":{"type":"rate_limit_error","message":"limit reached"}}`)
+	}
+	e := upstreamError(resp(), "claude-x", false)
+	if e.Code != llm.CodeQuota || e.Scope != llm.ScopeCredential || e.QuotaWindowMinutes != 300 || e.RetryAfterMS < 4*60*60*1000 {
+		t.Errorf("got %+v; want the account's quota with the 5-hour window and its reset", e)
+	}
+	if e := upstreamError(resp(), "claude-x", true); e.Code != llm.CodeQuota || e.Scope != llm.ScopeModel || e.QuotaWindowMinutes != 300 {
+		t.Errorf("model-level cooling: got %+v; want the quota kept on the model", e)
 	}
 }
 

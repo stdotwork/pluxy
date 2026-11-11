@@ -45,10 +45,17 @@ type ImportOptions struct {
 	// Images is false when multimedia.disable-image-generation is true, which also turns off the
 	// Images API routes: imported Codex accounts then get "images": false.
 	Images bool `json:"images"`
+	// InjectXSearch is true when upstream.xai.inject-x-search is set (or its older spelling): the
+	// xAI accounts of the config and imported xAI logins then get "inject_x_search": true, which
+	// injects xAI's native x_search tool. False by default.
+	InjectXSearch bool `json:"inject_x_search"`
 	// SIWCIdentifier is codex.signin-with-chatgpt-identifier, trimmed: imported Sign in with
 	// ChatGPT accounts then get it as "signin_with_chatgpt_identifier". Empty: the extension's
 	// default.
 	SIWCIdentifier string `json:"signin_with_chatgpt_identifier,omitempty"`
+	// ClaudeModelLevelCooling is upstream.claude.model-level-cooling: imported Claude accounts
+	// then get "model_level_cooling": true.
+	ClaudeModelLevelCooling bool `json:"model_level_cooling,omitempty"`
 }
 
 // DefaultImportOptions are the import settings when the config sets none.
@@ -237,7 +244,7 @@ var rules = map[string]rule{
 	"upstream.claude":                                       {dropped, "making other clients look like Claude Code is out of scope"},
 	"upstream.claude.tool-search":                           {later, ""},
 	"upstream.claude.header-defaults":                       {dropped, "making other clients look like Claude Code is out of scope"},
-	"upstream.xai.inject-x-search":                          {later, ""},
+	"upstream.xai.inject-x-search":                          {supported, ""},
 
 	"oauth.auth-dir":                                       {supported, ""},
 	"oauth.auth-auto-refresh-workers":                      {dropped, "each account is renewed shortly before it expires"},
@@ -307,7 +314,7 @@ var rules = map[string]rule{
 	"api-keys.claude[].cloak":                                  {dropped, "making other clients look like Claude Code is out of scope"},
 	"api-keys.claude[].fingerprint-profile":                    {dropped, "making other clients look like Claude Code is out of scope"},
 	"api-keys.claude[].native-tool-search":                     {later, ""},
-	"api-keys.claude[].rebuild-mid-system-message":             {later, ""},
+	"api-keys.claude[].rebuild-mid-system-message":             {supported, ""},
 	"api-keys.claude[].experimental-cch-signing":               {dead, ""},
 	"api-keys.meta":                                            {later, ""},
 }
@@ -437,6 +444,7 @@ var readPaths = []string{
 	"routing.retry.max-retry-credentials", "routing.retry.max-retry-interval", "routing.retry.request-retry",
 	"routing.force-model-prefix", "oauth.model-alias", "oauth.excluded-models",
 	"upstream.codex.disable-codex-cloaking", "upstream.codex.websocket-compression",
+	"upstream.xai.inject-x-search",
 	"oauth.providers.codex.signin-with-chatgpt-identifier",
 	"multimedia.disable-image-generation", "oauth.auth-dir", "observability.usage.usage-statistics-enabled",
 	"observability.logs.logging-to-file", "observability.logs.logs-max-total-size-mb",
@@ -617,6 +625,11 @@ func (x *translator) options() error {
 	} else if off {
 		x.res.Import.CodexIdentity = false
 	}
+	if on, err := flag(x.t, "upstream.xai.inject-x-search"); err != nil {
+		return err
+	} else if on {
+		x.res.Import.InjectXSearch = true
+	}
 	switch v, _ := get(x.t, "multimedia.disable-image-generation"); v {
 	case nil, false, "false", "":
 	case true, "true":
@@ -626,6 +639,11 @@ func (x *translator) options() error {
 		x.res.Import.ImageGenerationTool = false
 	default:
 		return fmt.Errorf("multimedia.disable-image-generation must be false, true, \"chat\" or \"passthrough\"")
+	}
+	if on, err := flag(x.t, "upstream.claude.model-level-cooling"); err != nil {
+		return err
+	} else if on {
+		x.res.Import.ClaudeModelLevelCooling = true
 	}
 	if v, ok := get(x.t, "upstream.codex.websocket-compression"); ok && v != nil {
 		if on, err := flag(x.t, "upstream.codex.websocket-compression"); err != nil {
@@ -771,6 +789,13 @@ func (x *translator) providers(v8 tree) error {
 				a, err := x.account(f, g, k, accountID(id, used), path)
 				if err != nil {
 					return err
+				}
+				// Today's core keeps no Codex API key without a base-url (SanitizeCodexKeys); the
+				// key is dropped and named in the log. A key added by a login, which asks for no
+				// base_url, still gets the extension's default.
+				if st, _ := a["settings"].(map[string]any); f.v8 == "codex" && st["base_url"] == nil {
+					x.notes = append(x.notes, fmt.Sprintf("config.yaml: %s key %s has no base-url: dropped, as today's core drops a Codex API key without one", display(path), id))
+					continue
 				}
 				accounts[f.extension] = append(accounts[f.extension], a)
 			}
@@ -976,6 +1001,21 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 		}
 		if !x.res.Import.Images {
 			settings["images"] = false
+		}
+	case "claude":
+		rebuild, err := boolean_(field(g, k, "rebuild-mid-system-message"), path+".rebuild-mid-system-message")
+		if err != nil {
+			return nil, err
+		}
+		if rebuild {
+			settings["rebuild_mid_system_message"] = true
+		}
+		if x.res.Import.ClaudeModelLevelCooling {
+			settings["model_level_cooling"] = true
+		}
+	case "xai":
+		if x.res.Import.InjectXSearch {
+			settings["inject_x_search"] = true
 		}
 	case "vertex":
 		settings["vertex"] = map[string]any{}

@@ -2,12 +2,36 @@
 // options. A host build passes the pages it offers; the shell knows nothing else about them.
 
 import type { VNode } from "preact";
-import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
+import { useCallback, useEffect, useId, useMemo, useState } from "preact/hooks";
 import { api } from "./api";
 import { ExtensionPage, type ExtensionPageProps } from "./extensions/page";
 import type { Host } from "./host";
+import { strings } from "./strings";
 import type { ThemeState } from "./theme/state";
 import { Button, type Kit, KitContext, Notice } from "./ui";
+
+const t = strings("shell", {
+  signInHint: "Sign in with the management key from core's config.",
+  key: "Management key",
+  remember: "Remember on this device",
+  signIn: "Sign in",
+  refused: "Core refused the management key. Sign in again.",
+  navigation: "Main",
+  signOut: "Sign out",
+  signOutShort: "Out",
+  "group.operate": "Operate",
+  "group.gateway": "Gateway",
+  "group.observe": "Observe",
+  "group.control": "Control",
+  "group.extensions": "Extension pages",
+});
+
+/**
+ * The navigation's groups, in the order it shows them; a group that holds no page is not shown.
+ * Extension pages are always in "extensions".
+ */
+export const PAGE_GROUPS = ["operate", "gateway", "observe", "control", "extensions"] as const;
+export type PageGroup = (typeof PAGE_GROUPS)[number];
 
 /**
  * A page in the navigation. Extension pages are pages too: their render mounts the extension's
@@ -22,6 +46,10 @@ export interface PageDef {
   title: string;
   /** A label of up to about six characters, for the rail navigation. */
   short: string;
+  /** The navigation group the page is listed in. */
+  group: PageGroup;
+  /** The navigation entry's tooltip, a few words on what the page is for. Default: the title. */
+  tip?: string;
   render: () => VNode;
 }
 
@@ -55,6 +83,7 @@ function useExtensionPages(on: boolean, kit: Kit, version: number, View: Extensi
             id: `ext/${ext.id}/${page.id}`,
             title: page.title,
             short: page.short,
+            group: "extensions" as const,
             render: () => (
               <View ext={ext} page={page} pagesOrigin={ui.pages_origin} pagesError={ui.pages_error} />
             ),
@@ -89,9 +118,9 @@ function SignIn(props: { host: Host; onDone: () => void; reason?: string }) {
         }}
       >
         <h1 data-part="page-title">pluxy</h1>
-        <p class="muted">Sign in with the management key from core's config.</p>
+        <p class="muted">{t("signInHint")}</p>
         <label class="field" data-part="field">
-          <span class="label">Management key</span>
+          <span class="label">{t("key")}</span>
           <input
             type="password"
             autocomplete="current-password"
@@ -102,11 +131,11 @@ function SignIn(props: { host: Host; onDone: () => void; reason?: string }) {
         </label>
         <label class="check">
           <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.currentTarget.checked)} />
-          <span>Remember on this device</span>
+          <span>{t("remember")}</span>
         </label>
         {error && <Notice tone="danger">{error}</Notice>}
         <Button type="submit" variant="primary" disabled={busy || key === ""}>
-          Sign in
+          {t("signIn")}
         </Button>
       </form>
     </main>
@@ -133,7 +162,7 @@ export function Shell(props: {
 
   const unauthorized = useCallback(() => {
     host.signOut();
-    setReason("Core refused the management key. Sign in again.");
+    setReason(t("refused"));
     setSignedIn(false);
   }, [host]);
   const extensionsChanged = useCallback(() => setUiVersion((n) => n + 1), []);
@@ -158,6 +187,7 @@ export function Shell(props: {
   }, [pages]);
 
   const active = pages.find((p) => p.id === page);
+  const navId = useId();
   useEffect(() => {
     document.documentElement.dataset.page = signedIn ? page : "signin";
     document.title =
@@ -182,28 +212,48 @@ export function Shell(props: {
   return (
     <KitContext.Provider value={kit}>
       <div class="shell" data-part="shell">
-        <nav class="nav" data-part="nav" aria-label="Main">
+        <nav class="nav" data-part="nav" aria-label={t("navigation")}>
           <a class="brand" href={`#/${pages[0]?.id ?? ""}`}>
             {props.brand ?? "pluxy"}
           </a>
-          <ul>
-            {pages.map((p) => (
-              <li key={p.id}>
-                <a
-                  href={`#/${p.id}`}
-                  class="nav-item"
-                  data-part="nav-item"
-                  aria-current={p.id === page ? "page" : undefined}
-                  title={p.title}
-                >
-                  <span class="full">{p.title}</span>
-                  <span class="short" aria-hidden="true">
-                    {p.short}
-                  </span>
-                </a>
-              </li>
-            ))}
-          </ul>
+          {PAGE_GROUPS.map((group) => {
+            const listed = pages.filter((p) => p.group === group);
+            if (listed.length === 0) return null;
+            const label = `${navId}-${group}`;
+            return (
+              // biome-ignore lint/a11y/useSemanticElements: a fieldset groups form controls; this groups links
+              <div
+                key={group}
+                class="nav-group"
+                data-part="nav-group"
+                data-group={group}
+                role="group"
+                aria-labelledby={label}
+              >
+                <span class="nav-group-label" id={label}>
+                  {t(`group.${group}`)}
+                </span>
+                <ul>
+                  {listed.map((p) => (
+                    <li key={p.id}>
+                      <a
+                        href={`#/${p.id}`}
+                        class="nav-item"
+                        data-part="nav-item"
+                        aria-current={p.id === page ? "page" : undefined}
+                        title={p.tip ?? p.title}
+                      >
+                        <span class="full">{p.title}</span>
+                        <span class="short" aria-hidden="true">
+                          {p.short}
+                        </span>
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })}
           {host.features.has("signOut") && (
             <button
               type="button"
@@ -213,9 +263,9 @@ export function Shell(props: {
                 setSignedIn(false);
               }}
             >
-              <span class="full">Sign out</span>
+              <span class="full">{t("signOut")}</span>
               <span class="short" aria-hidden="true">
-                Out
+                {t("signOutShort")}
               </span>
             </button>
           )}

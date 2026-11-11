@@ -163,6 +163,9 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 	case "claude":
 		r.Extension = Claude
 		renewAhead(claudeRefreshLead)
+		if opts.ClaudeModelLevelCooling {
+			settings["model_level_cooling"] = true
+		}
 	case "kimi", "kimi-ai":
 		r.Extension = Kimi
 		c.Data = object(map[string]any{"device_id": text(m, "device_id")})
@@ -219,6 +222,9 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 		c.Data = object(map[string]any{"token_endpoint": text(m, "token_endpoint")})
 		if u := text(m, "base_url"); u != "" {
 			settings["base_url"] = u
+		}
+		if opts.InjectXSearch {
+			settings["inject_x_search"] = true
 		}
 	case "meta":
 		// The minted API key is the access token and the device (dca:) token the refresh token,

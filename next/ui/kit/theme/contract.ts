@@ -28,6 +28,8 @@ export const TOKENS = {
   "color.warn": { light: "#9a5b00", dark: "#e6b450" },
   "color.danger": { light: "#b42318", dark: "#ff7b72" },
   "color.focus": { light: "#2f5fd0", dark: "#7aa2ff" },
+  "color.meter-track": { light: "var(--px-color-surface-raised)" },
+  "color.meter-fill": { light: "var(--px-color-accent)" },
   "font.body": { light: 'system-ui, -apple-system, "Segoe UI", sans-serif' },
   "font.mono": { light: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace' },
   "font.size": { light: "14px" },
@@ -58,6 +60,26 @@ export function isToken(name: string): name is TokenName {
 export function tokenProperty(name: string): string {
   return `--px-${name.replaceAll(".", "-")}`;
 }
+
+/** Every data-part hook a theme's CSS can rely on, in the order the README lists them. */
+export const PARTS = [
+  "shell",
+  "nav",
+  "nav-group",
+  "nav-item",
+  "main",
+  "page-title",
+  "list",
+  "item",
+  "detail",
+  "card",
+  "button",
+  "badge",
+  "field",
+  "meter",
+] as const;
+
+export type Part = (typeof PARTS)[number];
 
 /** Each layout option's values; the first is the default. */
 export const LAYOUT = {

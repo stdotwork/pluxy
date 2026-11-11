@@ -23,8 +23,9 @@ const Version = 0
 // describe (Info.ProtocolMinor); core uses what a minor version adds only with an extension that
 // reports it. Minor 1 adds sessions; minor 2 adds token counting and the request's thinking
 // suffix; minor 3 adds model listing; minor 4 adds account checks; minor 5 adds quota and the
-// identity of a login's grant; minor 6 adds an error's quota window; minor 7 adds endpoint calls.
-const Minor = 7
+// identity of a login's grant; minor 6 adds an error's quota window; minor 7 adds endpoint calls;
+// minor 8 adds the request's caller; minor 9 adds a login grant's account settings.
+const Minor = 9
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
@@ -242,6 +243,9 @@ type Prompt struct {
 // Grant is the result of a login or refresh.
 type Grant struct {
 	Credential *Credential `json:"credential"`
+	// Settings supplies non-secret defaults for a new account (minor version 9). Explicit
+	// caller properties win; a login to an existing account ignores these settings.
+	Settings json.RawMessage `json:"settings,omitempty"`
 	// Label names the account for people, for example the e-mail address it belongs to. Not
 	// secret; login only.
 	Label string `json:"label,omitempty"`
@@ -258,6 +262,10 @@ const (
 	MaxIdentityKey    = 64
 	MaxIdentityValue  = 512
 )
+
+// MaxGrantSettings bounds a login grant's encoded settings object to 8 KiB, the same
+// budget as the maximum total identity value bytes (16 fields of 512 bytes).
+const MaxGrantSettings = MaxIdentityFields * MaxIdentityValue
 
 // ModelList is the result of a models call: the models an account serves.
 type ModelList struct {

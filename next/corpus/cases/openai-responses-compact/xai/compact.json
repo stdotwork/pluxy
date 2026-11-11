@@ -1,0 +1,109 @@
+{
+  "description": "xAI compaction removes tools, streaming and sampling fields, removes compaction triggers, keeps previous_response_id and returns the compaction reply whole.",
+  "source": [
+    "core/internal/runtime/executor/xai_executor_execute.go",
+    "core/internal/runtime/executor/xai_executor_request.go"
+  ],
+  "client": {
+    "path": "/v1/responses/compact",
+    "body": {
+      "model": "grok-4.6",
+      "input": [
+        {"type":"compaction_trigger"},
+        {"type":"message","role":"user","content":[{"type":"input_text","text":"Say hello"}]}
+      ],
+      "instructions": "Be brief.",
+      "prompt_cache_key": "compact-corpus",
+      "previous_response_id": "resp_previous",
+      "tools": [{"type":"x_search"}],
+      "tool_choice": {"type":"x_search"},
+      "stream": false,
+      "max_output_tokens": 200,
+      "temperature": 0.3,
+      "top_p": 0.9,
+      "top_k": 2,
+      "stop": ["END"]
+    }
+  },
+  "upstream": [
+    {
+      "headers": {"Content-Type":"application/json","X-Request-Id":"req_corpus"},
+      "body": {
+        "id": "resp_compact_corpus",
+        "object": "response.compaction",
+        "created_at": 1700000000,
+        "output": [
+          {"type":"message","role":"user","content":[{"type":"input_text","text":"Say hello"}]},
+          {"type":"compaction","id":"cmp_corpus","encrypted_content":"enc-compaction-corpus"}
+        ],
+        "usage": {
+          "input_tokens": 120,
+          "input_tokens_details": {"cached_tokens":0},
+          "output_tokens": 30,
+          "output_tokens_details": {"reasoning_tokens":10},
+          "total_tokens": 150
+        }
+      }
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[0].headers.User-Agent",
+      "kind": "intended",
+      "reason": "The xAI extension names itself in its User-Agent (pluxy-xai and its version) and does not copy the Grok CLI's identity; today's core sends the Grok workspace's User-Agent unless the client sent one.",
+      "want": "pluxy-xai/0.1.0"
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "created_at": 1700000000,
+        "id": "resp_compact_corpus",
+        "object": "response.compaction",
+        "output": [
+          {"content":[{"text":"Say hello","type":"input_text"}],"role":"user","type":"message"},
+          {"encrypted_content":"enc-compaction-corpus","id":"cmp_corpus","type":"compaction"}
+        ],
+        "usage": {
+          "input_tokens": 120,
+          "input_tokens_details": {"cached_tokens":0},
+          "output_tokens": 30,
+          "output_tokens_details": {"reasoning_tokens":10},
+          "total_tokens": 150
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "input": [
+            {"content":[{"text":"Say hello","type":"input_text"}],"role":"user","type":"message"}
+          ],
+          "instructions": "Be brief.",
+          "model": "grok-4.6",
+          "previous_response_id": "resp_previous",
+          "prompt_cache_key": "compact-corpus"
+        },
+        "headers": {
+          "Accept": "application/json",
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0",
+          "X-Grok-Conv-Id": "compact-corpus"
+        },
+        "method": "POST",
+        "path": "/v1/responses/compact"
+      }
+    ]
+  }
+}

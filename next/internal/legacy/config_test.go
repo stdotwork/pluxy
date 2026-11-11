@@ -2,6 +2,7 @@ package legacy
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -194,6 +195,7 @@ codex-api-key:
 claude-api-key:
   - api-key: "claude-key"
     disable-codex-cloaking: true
+    rebuild-mid-system-message: true
 openai-compatibility:
   - name: "local model"
     base-url: "http://127.0.0.1:1234/v1"
@@ -222,7 +224,7 @@ openai-compatibility:
 				"credential": {"kind": "api_key", "api_key": "codex-key"}
 			}]},
 			"pluxy/claude": {"accounts": [{
-				"id": "claude-api-key-1",
+				"id": "claude-api-key-1", "settings": {"rebuild_mid_system_message": true},
 				"credential": {"kind": "api_key", "api_key": "claude-key"}
 			}]},
 			"pluxy/openai-compatible": {"accounts": [
@@ -245,6 +247,56 @@ openai-compatibility:
 	}
 }
 
+// Today's core keeps no Codex API key without a base-url: the key is dropped and named in the
+// notices. A key takes its group's base-url when it has none of its own; other providers' keys
+// without one stay.
+func TestCodexKeyWithoutBaseURLIsDropped(t *testing.T) {
+	r := translate(t, `
+codex-api-key:
+  - api-key: no-url
+  - api-key: blank-url
+    base-url: "   "
+  - api-key: has-url
+    base-url: https://codex.example.com
+claude-api-key:
+  - api-key: claude-key
+`)
+	equalJSON(t, r.Config, `{
+		"listen": ":8317", "routing": {"request_retry": 0},
+		"extensions": {
+			"pluxy/codex": {"accounts": [
+				{"id": "codex-api-key-3", "settings": {"base_url": "https://codex.example.com"}, "credential": {"kind": "api_key", "api_key": "has-url"}}
+			]},
+			"pluxy/claude": {"accounts": [{"id": "claude-api-key-1", "credential": {"kind": "api_key", "api_key": "claude-key"}}]}
+		}
+	}`)
+	for _, id := range []string{"codex-api-key-1", "codex-api-key-2"} {
+		if want := "key " + id + " has no base-url: dropped"; !strings.Contains(notices(r), want) {
+			t.Errorf("notices lack %q:\n%s", want, notices(r))
+		}
+	}
+	if n := notices(r); strings.Contains(n, "codex-api-key-3") || strings.Contains(n, "claude") {
+		t.Errorf("notices name a key that stays:\n%s", n)
+	}
+
+	r = translate(t, `
+api-keys:
+  codex:
+    - name: grouped
+      base-url: https://group.example.com
+      keys: [{api-key: inherits}, {api-key: own, base-url: https://own.example.com}]
+    - name: bare
+      keys: [{api-key: bare-key}]
+`)
+	equalJSON(t, r.Config["extensions"], `{"pluxy/codex": {"accounts": [
+		{"id": "grouped-1", "settings": {"base_url": "https://group.example.com"}, "credential": {"kind": "api_key", "api_key": "inherits"}},
+		{"id": "grouped-2", "settings": {"base_url": "https://own.example.com"}, "credential": {"kind": "api_key", "api_key": "own"}}
+	]}}`)
+	if n := notices(r); !strings.Contains(n, "api-keys.codex key bare has no base-url: dropped") || strings.Contains(n, "grouped") {
+		t.Errorf("notices:\n%s", n)
+	}
+}
+
 func TestV8SpellingWins(t *testing.T) {
 	r := translate(t, `
 port: 9000
@@ -255,9 +307,11 @@ max-retry-interval: 7
 routing: {retry: {max-retry-interval: 0}}
 codex-api-key:
   - api-key: old-key
+    base-url: https://old.example.com
 api-keys:
   codex:
     - name: c
+      base-url: https://new.example.com
       keys: [{api-key: new-key}]
 `)
 	equalJSON(t, r.Config, `{
@@ -265,7 +319,7 @@ api-keys:
 		"management_key": "new",
 		"management_allow_remote": true,
 		"routing": {"request_retry": 0},
-		"extensions": {"pluxy/codex": {"accounts": [{"id": "c", "credential": {"kind": "api_key", "api_key": "new-key"}}]}}
+		"extensions": {"pluxy/codex": {"accounts": [{"id": "c", "settings": {"base_url": "https://new.example.com"}, "credential": {"kind": "api_key", "api_key": "new-key"}}]}}
 	}`)
 	// allow-remote came from the older spelling and still counts: the v8 value wins only
 	// field by field.
@@ -351,7 +405,7 @@ packages: {dir: pk}
 cors: {allowed_origins: ["http://localhost:5173"]}
 extensions:
   pluxy/codex: {idle_stop_ms: 0, accounts: [{id: own, credential: {kind: api_key, api_key: k}}]}
-codex-api-key: [{api-key: from-yaml}]
+codex-api-key: [{api-key: from-yaml, base-url: "https://yaml.example.com"}]
 `)
 	equalJSON(t, r.Config, `{
 		"listen": ":8317", "routing": {"request_retry": 0},
@@ -359,7 +413,7 @@ codex-api-key: [{api-key: from-yaml}]
 		"cors": {"allowed_origins": ["http://localhost:5173"]},
 		"extensions": {"pluxy/codex": {"idle_stop_ms": 0, "accounts": [
 			{"id": "own", "credential": {"kind": "api_key", "api_key": "k"}},
-			{"id": "codex-api-key-1", "credential": {"kind": "api_key", "api_key": "from-yaml"}}
+			{"id": "codex-api-key-1", "settings": {"base_url": "https://yaml.example.com"}, "credential": {"kind": "api_key", "api_key": "from-yaml"}}
 		]}}
 	}`)
 }
@@ -396,6 +450,7 @@ func TestRefusedFiles(t *testing.T) {
 		"codex-api-key: [{api-key: k, base-url: [https://x]}]",
 		"codex-api-key: [{api-key: k, websockets: yes-please}]",
 		"codex-api-key: [{api-key: k, alpha-search: sometimes}]",
+		"claude-api-key: [{api-key: k, rebuild-mid-system-message: sometimes}]",
 		"routing: {session-affinity: sometimes}",
 		"disable-image-generation: sometimes",
 		"api-keys: {codex: [{name: c, keys: [{api-key: k, weight: -1}]}]}",
@@ -470,6 +525,7 @@ oauth-excluded-models:
   qwen: [qwen-max]
 codex-api-key:
   - api-key: k1
+    base-url: https://codex.example.com
     prefix: " /team/ "
     excluded-models: ["*-Mini"]
     models:
@@ -488,6 +544,7 @@ openai-compatibility:
 	exts := asJSON(t, r.Config["extensions"]).(map[string]any)
 	equalJSON(t, exts[Codex].(map[string]any)["accounts"], `[{
 		"id": "codex-api-key-1", "prefix": "team", "excluded_models": ["*-mini"],
+		"settings": {"base_url": "https://codex.example.com"},
 		"models": [{"name": "up-a", "alias": "pub-a"}, "up-b"],
 		"credential": {"kind": "api_key", "api_key": "k1"}
 	}]`)
@@ -593,6 +650,7 @@ func TestKeyRequestRetry(t *testing.T) {
 api-keys:
   codex:
     - request-retry: 2
+      base-url: https://codex.example.com
       keys:
         - api-key: a
         - api-key: b
@@ -740,5 +798,75 @@ api-keys:
 	}
 	if _, err := Translate([]byte("api-keys: {vertex: [{name: v, keys: [{api-key: k, interactions: \"true\"}]}]}")); err == nil {
 		t.Error("an interactions written as text loaded")
+	}
+}
+
+// claude.model-level-cooling (each spelling) becomes model_level_cooling on the Claude keys'
+// accounts and on imported Claude accounts; off, it adds nothing.
+func TestClaudeModelLevelCooling(t *testing.T) {
+	for _, y := range []string{
+		"claude:\n  model-level-cooling: true\n",
+		"upstream:\n  claude:\n    model-level-cooling: true\n",
+		"oauth:\n  providers:\n    claude:\n      model-level-cooling: true\n",
+	} {
+		r := translate(t, y+"claude-api-key:\n  - api-key: claude-key\n")
+		equalJSON(t, r.Config["extensions"], `{"pluxy/claude": {"accounts": [{
+			"id": "claude-api-key-1", "settings": {"model_level_cooling": true},
+			"credential": {"kind": "api_key", "api_key": "claude-key"}
+		}]}}`)
+		if !r.Import.ClaudeModelLevelCooling {
+			t.Errorf("%q: Import = %+v", y, r.Import)
+		}
+		if strings.Contains(notices(r), "model-level-cooling") {
+			t.Errorf("%q: notices name it:\n%s", y, notices(r))
+		}
+	}
+	r := translate(t, "claude:\n  model-level-cooling: false\nclaude-api-key:\n  - api-key: claude-key\n")
+	equalJSON(t, r.Config["extensions"], `{"pluxy/claude": {"accounts": [{"id": "claude-api-key-1", "credential": {"kind": "api_key", "api_key": "claude-key"}}]}}`)
+	if r.Import.ClaudeModelLevelCooling {
+		t.Errorf("off: Import = %+v", r.Import)
+	}
+}
+
+// upstream.xai.inject-x-search, and its older spellings (oauth.providers.xai.inject-x-search and
+// the top-level xai), is an import option like Codex's: the xAI API-key accounts of the config get
+// "inject_x_search": true, the imported xAI logins do too (see TestXAIInjectXSearchImport), and it
+// is off by default. The v8 value wins over an older one.
+func TestXAIInjectXSearch(t *testing.T) {
+	const keys = "api-keys: {xai: [{name: grok, keys: [{api-key: xk-1}]}]}"
+	account := func(on bool) string {
+		if on {
+			return `{"id": "grok", "settings": {"inject_x_search": true}, "credential": {"kind": "api_key", "api_key": "xk-1"}}`
+		}
+		return `{"id": "grok", "credential": {"kind": "api_key", "api_key": "xk-1"}}`
+	}
+	for _, tc := range []struct {
+		name, yaml string
+		on         bool
+	}{
+		{"v8", "upstream: {xai: {inject-x-search: true}}", true},
+		{"older oauth.providers", "oauth: {providers: {xai: {inject-x-search: true}}}", true},
+		{"older top-level xai", "xai: {inject-x-search: true}", true},
+		{"false", "upstream: {xai: {inject-x-search: false}}", false},
+		{"unset", "port: 8317", false},
+		{"v8 wins over older", "upstream: {xai: {inject-x-search: false}}\noauth: {providers: {xai: {inject-x-search: true}}}", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := translate(t, tc.yaml+"\n"+keys)
+			equalJSON(t, r.Config["extensions"], `{"pluxy/xai": {"accounts": [`+account(tc.on)+`]}}`)
+			equalJSON(t, r.Import, fmt.Sprintf(`{"codex_identity": true, "image_generation_tool": true, "images": true, "inject_x_search": %t}`, tc.on))
+			if n := notices(r); strings.Contains(n, "inject-x-search") {
+				t.Errorf("notices name the setting, which is supported:\n%s", n)
+			}
+		})
+	}
+	for _, y := range []string{
+		"upstream: {xai: {inject-x-search: \"true\"}}",
+		"oauth: {providers: {xai: {inject-x-search: sometimes}}}",
+		"upstream: {xai: true}",
+	} {
+		if _, err := Translate([]byte(y)); err == nil {
+			t.Errorf("%q loaded", y)
+		}
 	}
 }

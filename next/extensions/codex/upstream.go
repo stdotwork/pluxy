@@ -88,7 +88,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return statusError(resp, ur.model)
 	}
-	return relay(ctx, resp, renamer{&reporting{Stream: out, tr: ur.tr}, ur.names})
+	return relay(ctx, resp, renamer{&reporting{Stream: out, tr: ur.tr}, ur.names}, ur.repairs())
 }
 
 // setHeaders sets the upstream request's headers.
@@ -204,8 +204,8 @@ type eventSender interface{ Send(llm.Event) error }
 // items the stream finished (response.output_item.done) as its output; an output item without an
 // id gets the id of the finished item at its position; response.done, which some Codex streams
 // end with, counts as response.completed; and a response.incomplete that produced nothing is an
-// error (see repairs.apply).
-func relay(ctx context.Context, resp *http.Response, out eventSender) error {
+// error (see repairs.apply). rep says which of them a Responses-lite client's reply skips.
+func relay(ctx context.Context, resp *http.Response, out eventSender, rep *repairs) error {
 	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 		// The Codex endpoint answers with a stream; a JSON body is a whole Response.
 		raw, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
@@ -228,7 +228,6 @@ func relay(ctx context.Context, resp *http.Response, out eventSender) error {
 	}
 	r := sse.NewReader(resp.Body)
 	dec := openairesponses.NewStreamDecoder()
-	rep := newRepairs()
 	for {
 		e, err := r.Next()
 		eof := err == io.EOF
@@ -281,6 +280,9 @@ func emptyIncomplete() *llm.Error {
 type repairs struct {
 	done     map[int]json.RawMessage // output_index -> finished item
 	produced bool                    // a delta with text, or a finished item, came
+	// keepOutput leaves the terminal event's output as it came, ids and emptiness included: a
+	// Responses-lite client's reply, as today's core sends it.
+	keepOutput bool
 }
 
 func newRepairs() *repairs { return &repairs{done: map[int]json.RawMessage{}} }
@@ -332,6 +334,9 @@ func (p *repairs) apply(data []byte) ([]byte, error) {
 	}
 	if r != nil && len(p.done) > 0 {
 		if len(output) == 0 {
+			if p.keepOutput {
+				return raw(ev), nil
+			}
 			idx := make([]int, 0, len(p.done))
 			for i := range p.done {
 				idx = append(idx, i)
@@ -342,7 +347,7 @@ func (p *repairs) apply(data []byte) ([]byte, error) {
 			}
 			r["output"] = raw(output)
 			ev["response"] = raw(r)
-		} else if p.restoreIDs(output) {
+		} else if !p.keepOutput && p.restoreIDs(output) {
 			r["output"] = raw(output)
 			ev["response"] = raw(r)
 		}

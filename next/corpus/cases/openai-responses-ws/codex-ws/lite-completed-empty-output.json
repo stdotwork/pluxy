@@ -1,0 +1,196 @@
+{
+  "description": "A Responses-lite turn (client_metadata carries ws_request_header_x_openai_internal_codex_responses_lite: true) whose upstream response.completed has an empty output: the client gets the event as it came, with the empty output. Today's core keeps a native Responses-lite turn's output as the upstream sent it.",
+  "source": [
+    "core/internal/util/codex.go (IsCodexResponsesLiteRequest)",
+    "core/sdk/api/handlers/openai/openai_responses_websocket.go (preserveNativeOutput)",
+    "core/sdk/api/handlers/openai/openai_responses_websocket_forward.go (restoreResponsesWebsocketCompletionOutput)",
+    "core/internal/runtime/executor/codex_websockets_duplex.go (patchCodexCompletedOutput)"
+  ],
+  "client": {
+    "method": "GET",
+    "path": "/v1/responses",
+    "websocket": [
+      {
+        "send": {
+          "type": "response.create",
+          "model": "gpt-test",
+          "store": false,
+          "prompt_cache_key": "corpus-ws",
+          "input": [
+            {"type":"message","role":"user","content":[{"type":"input_text","text":"Say hello"}]}
+          ],
+          "client_metadata": {"ws_request_header_x_openai_internal_codex_responses_lite":"true"}
+        }
+      },
+      {"read":"turn"}
+    ]
+  },
+  "upstream": [
+    {
+      "websocket": [
+        {"receive":true},
+        {
+          "send": {
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": {
+              "id": "resp_corpus",
+              "object": "response",
+              "created_at": 1700000000,
+              "status": "in_progress",
+              "model": "gpt-test-upstream",
+              "output": [],
+              "usage": null
+            }
+          }
+        },
+        {
+          "send": {
+            "type": "response.output_item.added",
+            "sequence_number": 1,
+            "output_index": 0,
+            "item": {
+              "id": "msg_corpus",
+              "type": "message",
+              "status": "in_progress",
+              "role": "assistant",
+              "content": []
+            }
+          }
+        },
+        {
+          "send": {
+            "type": "response.output_item.done",
+            "sequence_number": 2,
+            "output_index": 0,
+            "item": {
+              "id": "msg_corpus",
+              "type": "message",
+              "status": "completed",
+              "role": "assistant",
+              "content": [{"type":"output_text","text":"Hello","annotations":[]}]
+            }
+          }
+        },
+        {
+          "send": {
+            "type": "response.completed",
+            "sequence_number": 3,
+            "response": {
+              "id": "resp_corpus",
+              "object": "response",
+              "created_at": 1700000000,
+              "status": "completed",
+              "model": "gpt-test-upstream",
+              "output": [],
+              "usage": {"input_tokens":5,"output_tokens":1,"total_tokens":6}
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "headers": {"Upgrade":"websocket"},
+      "messages": [
+        {
+          "response": {
+            "created_at": 1700000000,
+            "id": "resp_corpus",
+            "model": "gpt-test-upstream",
+            "object": "response",
+            "output": [],
+            "status": "in_progress",
+            "usage": null
+          },
+          "sequence_number": 0,
+          "type": "response.created"
+        },
+        {
+          "item": {
+            "content": [],
+            "id": "msg_corpus",
+            "role": "assistant",
+            "status": "in_progress",
+            "type": "message"
+          },
+          "output_index": 0,
+          "sequence_number": 1,
+          "type": "response.output_item.added"
+        },
+        {
+          "item": {
+            "content": [{"annotations":[],"text":"Hello","type":"output_text"}],
+            "id": "msg_corpus",
+            "role": "assistant",
+            "status": "completed",
+            "type": "message"
+          },
+          "output_index": 0,
+          "sequence_number": 2,
+          "type": "response.output_item.done"
+        },
+        {
+          "response": {
+            "created_at": 1700000000,
+            "id": "resp_corpus",
+            "model": "gpt-test-upstream",
+            "object": "response",
+            "output": [],
+            "status": "completed",
+            "usage": {
+              "input_tokens": 5,
+              "input_tokens_details": {"cached_tokens":0},
+              "output_tokens": 1,
+              "output_tokens_details": {"reasoning_tokens":0},
+              "total_tokens": 6
+            }
+          },
+          "sequence_number": 3,
+          "type": "response.completed"
+        }
+      ],
+      "status": 101
+    },
+    "upstream": [
+      {
+        "headers": {
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Conversation_id": "corpus-ws",
+          "Openai-Beta": "responses_websockets=2026-02-06",
+          "Originator": "codex-tui",
+          "Sec-Websocket-Extensions": "permessage-deflate; server_no_context_takeover; client_no_context_takeover",
+          "Sec-Websocket-Version": "13",
+          "Session_id": "corpus-ws",
+          "Upgrade": "websocket",
+          "User-Agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
+        },
+        "method": "GET",
+        "path": "/v1/responses",
+        "websocket": {
+          "close": {"code":1006},
+          "messages": [
+            {
+              "client_metadata": {"ws_request_header_x_openai_internal_codex_responses_lite":"true"},
+              "include": ["reasoning.encrypted_content"],
+              "input": [
+                {
+                  "content": [{"text":"Say hello","type":"input_text"}],
+                  "role": "user",
+                  "type": "message"
+                }
+              ],
+              "model": "gpt-test",
+              "parallel_tool_calls": false,
+              "prompt_cache_key": "corpus-ws",
+              "store": false,
+              "stream": true,
+              "type": "response.create"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

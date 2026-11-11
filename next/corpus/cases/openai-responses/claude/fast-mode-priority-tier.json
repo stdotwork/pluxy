@@ -1,0 +1,137 @@
+{
+  "description": "A Responses request with \"service_tier\": \"priority\" reaches Claude as fast mode: \"speed\": \"fast\" in the body and the fast-mode-2026-02-01 beta, as today's core maps it.",
+  "source": [
+    "core/internal/translator/claude/openai/responses/claude_openai-responses_request.go (Service Tier -> Speed)",
+    "core/internal/runtime/executor/claude_executor_request.go (claudeRequestUsesFastMode)"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "body": {
+      "model": "claude-test",
+      "instructions": "Be brief.",
+      "input": "Say hello",
+      "stream": false,
+      "service_tier": "priority"
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"event":"message_start","data":{"type":"message_start","message":{"id":"msg_corpus","type":"message","role":"assistant","content":[],"model":"claude-test-upstream","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":14,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}},
+        {"event":"ping","data":{"type":"ping"}},
+        {"event":"content_block_start","data":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}},
+        {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}},
+        {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" there"}}},
+        {"event":"content_block_stop","data":{"type":"content_block_stop","index":0}},
+        {"event":"message_delta","data":{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":4}}},
+        {"event":"message_stop","data":{"type":"message_stop"}}
+      ]
+    }
+  ],
+  "volatile": ["client.body.created_at","client.events[*].data.response.created_at"],
+  "exceptions": [
+    {
+      "path": "upstream[0].body.metadata",
+      "kind": "intended",
+      "reason": "Today's core adds metadata.user_id, a hash it derives from the request, to every request it translates to Claude; the new core does not make up a user identifier for the client.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.stream",
+      "kind": "intended",
+      "reason": "Today's core streams every translated request to Claude and assembles the reply; the new core asks Claude for a non-streamed reply when the client asked for one (stream false, Accept application/json, Accept-Encoding gzip, which Go's HTTP client decodes)."
+    },
+    {
+      "path": "upstream[0].headers.Accept",
+      "kind": "intended",
+      "reason": "Today's core streams every translated request to Claude and assembles the reply; the new core asks Claude for a non-streamed reply when the client asked for one (stream false, Accept application/json, Accept-Encoding gzip, which Go's HTTP client decodes)."
+    },
+    {
+      "path": "upstream[0].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "Today's core streams every translated request to Claude and assembles the reply; the new core asks Claude for a non-streamed reply when the client asked for one (stream false, Accept application/json, Accept-Encoding gzip, which Go's HTTP client decodes)."
+    },
+    {
+      "path": "upstream[0].headers.Authorization",
+      "kind": "intended",
+      "reason": "The Claude extension sends an API key in x-api-key, as Anthropic's API defines it; today's core sends it as a bearer token whenever the base URL is not api.anthropic.com (it uses x-api-key only there).",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.X-Api-Key",
+      "kind": "intended",
+      "reason": "The Claude extension sends an API key in x-api-key, as Anthropic's API defines it; today's core sends it as a bearer token whenever the base URL is not api.anthropic.com (it uses x-api-key only there).",
+      "want": "sk-corpus-upstream"
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "background": false,
+        "created_at": "(volatile)",
+        "error": null,
+        "id": "msg_corpus",
+        "incomplete_details": null,
+        "instructions": "Be brief.",
+        "model": "claude-test",
+        "object": "response",
+        "output": [
+          {
+            "content": [{"annotations":[],"logprobs":[],"text":"Hello there","type":"output_text"}],
+            "id": "msg_msg_corpus_0",
+            "role": "assistant",
+            "status": "completed",
+            "type": "message"
+          }
+        ],
+        "service_tier": "priority",
+        "status": "completed",
+        "usage": {
+          "input_tokens": 14,
+          "input_tokens_details": {"cached_tokens":0},
+          "output_tokens": 4,
+          "output_tokens_details": {"reasoning_tokens":0},
+          "total_tokens": 18
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 32000,
+          "messages": [
+            {
+              "content": [{"cache_control":{"type":"ephemeral"},"text":"Say hello","type":"text"}],
+              "role": "user"
+            }
+          ],
+          "metadata": {"user_id":"120226d8c5cb65e3acdd1f5e56fb3cf04f8bf909fe34ece9118dcc2d0e8b6c46"},
+          "model": "claude-test",
+          "speed": "fast",
+          "stream": true,
+          "system": [{"cache_control":{"type":"ephemeral"},"text":"Be brief.","type":"text"}]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "identity",
+          "Anthropic-Beta": "fast-mode-2026-02-01",
+          "Anthropic-Version": "2023-06-01",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/messages?beta=true"
+      }
+    ]
+  }
+}

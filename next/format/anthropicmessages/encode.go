@@ -72,7 +72,9 @@ type outMessage struct {
 // EncodeRequest builds a Messages request body from req's items, tools and options, and returns
 // what it could not carry over. System and developer messages become the system prompt; the
 // items of one source turn (a message split into text, tool calls and results) become one
-// message, in order; tool results go in a user message. Reasoning from another provider cannot be
+// message, in order; tool results go in a user message. Function names Messages does not take
+// are sent under the names ToolNames gives them, and each tool's parameter schema is made one
+// Messages takes (an object schema without a root union). Reasoning from another provider cannot be
 // replayed to a Messages upstream (its signatures do not verify), so it is dropped and reported,
 // as is the reasoning effort (thinking budgets are model-specific; the Claude provider sets
 // them). A user turn left with nothing to send after its unsupported parts are dropped is an
@@ -103,6 +105,7 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 		e.lose(llm.LossDropped, "response_format", "Messages has no response format")
 	}
 
+	names := ToolNames(req)
 	var tools []json.RawMessage
 	for i, t := range req.Tools {
 		if t.Type == llm.ToolNative {
@@ -113,12 +116,7 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 			}
 			continue
 		}
-		schema := t.Parameters
-		if len(schema) == 0 {
-			// Messages requires an input schema.
-			schema = json.RawMessage(`{"type":"object","properties":{}}`)
-		}
-		ft := map[string]any{"name": t.Name, "input_schema": schema}
+		ft := map[string]any{"name": toolName(names, t.Name), "input_schema": inputSchema(t.Parameters)}
 		if t.Description != "" {
 			ft["description"] = t.Description
 		}
@@ -129,7 +127,7 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 	}
 	if len(tools) > 0 {
 		out["tools"] = tools
-		if tc := encodeToolChoice(o.ToolChoice, o.ParallelToolCalls); tc != nil {
+		if tc := encodeToolChoice(o.ToolChoice, o.ParallelToolCalls, names); tc != nil {
 			out["tool_choice"] = tc
 		}
 	}
@@ -181,7 +179,7 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 				}
 				input = json.RawMessage("{}")
 			}
-			add(llm.RoleAssistant, turn, marshal(map[string]any{"type": "tool_use", "id": it.CallID, "name": it.Name, "input": input}, e.kept(it.Origin)))
+			add(llm.RoleAssistant, turn, marshal(map[string]any{"type": "tool_use", "id": it.CallID, "name": toolName(names, it.Name), "input": input}, e.kept(it.Origin)))
 		case llm.ItemTypeToolResult:
 			add(llm.RoleUser, turn, marshal(map[string]any{"type": "tool_result", "tool_use_id": it.CallID, "content": it.Output}, e.kept(it.Origin)))
 		case llm.ItemTypeReasoning:
@@ -220,7 +218,7 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 	return rawjson.Merge(b, e.kept(req.Origin)), e.losses, nil
 }
 
-func encodeToolChoice(tc *llm.ToolChoice, parallel *bool) map[string]any {
+func encodeToolChoice(tc *llm.ToolChoice, parallel *bool, names map[string]string) map[string]any {
 	var out map[string]any
 	if tc != nil {
 		switch tc.Mode {
@@ -231,7 +229,7 @@ func encodeToolChoice(tc *llm.ToolChoice, parallel *bool) map[string]any {
 		case llm.ToolChoiceRequired:
 			out = map[string]any{"type": "any"}
 		case llm.ToolChoiceTool:
-			out = map[string]any{"type": "tool", "name": tc.Name}
+			out = map[string]any{"type": "tool", "name": toolName(names, tc.Name)}
 		}
 	}
 	if parallel != nil && !*parallel {

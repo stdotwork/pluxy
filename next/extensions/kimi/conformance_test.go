@@ -80,6 +80,15 @@ func prepareLogin(t *testing.T, s conformance.LoginScenario, method string) conf
 	t.Helper()
 	srv := kimitest.New(t)
 	account := protocol.Account{ID: "conformance", Settings: srv.Settings()}
+	if method == "api_key" {
+		var key string
+		key, _ = srv.Grant()
+		if s == conformance.LoginDenied {
+			key = "made-up-rejected-key"
+		}
+		return conformance.LoginSetup{Account: account, Input: map[string]string{"api_key": key}}
+	}
+
 	switch s {
 	case conformance.LoginApproved:
 		return conformance.LoginSetup{Account: account, Act: func(t *testing.T, p protocol.Prompt) map[string]string {
