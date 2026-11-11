@@ -19,6 +19,7 @@ import (
 const (
 	defaultLogLines = 1000
 	maxLogLines     = 10000
+	// JSON can expand each content byte to six escaped bytes; stay below the app's 16 MiB reply cap.
 	maxJSONLogBytes = 2 << 20
 )
 
