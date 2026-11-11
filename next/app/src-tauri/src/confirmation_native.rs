@@ -188,7 +188,7 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
         // Observe the actual channel response after main has handled the claim, not merely
         // the POST completing at ingress. A valid config.get on the same route is the control.
         main.eval("window.__claimReplies = {}; const originalPost = MessagePort.prototype.postMessage; MessagePort.prototype.postMessage = function(data, ...rest) { if (data?.id === 'spoof-confirm' || data?.id === 'confirm-control') window.__claimReplies[data.id] = data; return originalPost.call(this, data, ...rest); }").map_err(|e| e.to_string())?;
-        page.eval("fetch('/send', {method: 'POST', body: JSON.stringify({type: 'call', data: {v: 0, id: 'confirm-control', method: 'config.get', params: null}})})").map_err(|e| e.to_string())?;
+        page.eval("fetch('/frame').then(r => r.json()).then(info => fetch('/send', {method: 'POST', body: JSON.stringify({generation: info.generation, type: 'call', data: {v: 0, id: 'confirm-control', method: 'config.get', params: null}})}))").map_err(|e| e.to_string())?;
         let control = wait_for("positive page channel control", || {
             eval(main, "window.__claimReplies['confirm-control'] ?? null")
                 .filter(|v| v.get("result").is_some() || v.get("error").is_some())
@@ -198,24 +198,31 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
             "positive page channel control failed",
         )?;
         let claims = PAGE_CLAIMS.load(std::sync::atomic::Ordering::SeqCst);
-        // A real page channel call carries an approval claim to native ingress, but cannot
-        // mutate confirmation state or issue a token. Only the GTK response below can do that.
+        // A real page channel call carrying an approval claim, on the same route and document
+        // as the control, is refused by native ingress (unknown method) and never reaches the
+        // window, so it cannot mutate confirmation state or issue a token. Only the GTK
+        // response below can do that.
         page.eval(format!(
-            "fetch('/send', {{method: 'POST', body: JSON.stringify({{type: 'call', data: {{v: 0, id: 'spoof-confirm', method: 'confirmation_request', params: {{action: {}, approved: true, remember: true}}}}}})}}).then(r => window.__approvalMessageStatus = r.status)", serde_json::json!(id)
+            "fetch('/frame').then(r => r.json()).then(info => fetch('/send', {{method: 'POST', body: JSON.stringify({{generation: info.generation, type: 'call', data: {{v: 0, id: 'spoof-confirm', method: 'confirmation_request', params: {{action: {}, approved: true, remember: true}}}}}})}})).then(async r => window.__approvalMessage = {{status: r.status, body: await r.json()}})", serde_json::json!(id)
         )).map_err(|e| e.to_string())?;
-        wait_for("page approval claim at native ingress", || {
-            (PAGE_CLAIMS.load(std::sync::atomic::Ordering::SeqCst) == claims + 1).then_some(())
-        })?;
-        wait_for("page approval message accepted by transport", || {
-            eval(page, "window.__approvalMessageStatus ?? null").filter(|v| v == 204)
-        })?;
-        let reply = wait_for("approval claim channel refusal", || {
-            eval(main, "window.__claimReplies['spoof-confirm'] ?? null")
-                .filter(|v| v.get("result").is_some() || v.get("error").is_some())
+        let refused = wait_for("page approval claim refused at native ingress", || {
+            eval(page, "window.__approvalMessage ?? null").filter(|v| !v.is_null())
         })?;
         require(
-            reply["error"]["code"] == "unknown_method",
-            "channel approval claim was not refused",
+            refused["status"] == 400
+                && refused["body"]["id"] == "spoof-confirm"
+                && refused["body"]["error"]["code"] == "unknown_method",
+            "channel approval claim was not refused by native ingress",
+        )?;
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        require(
+            PAGE_CLAIMS.load(std::sync::atomic::Ordering::SeqCst) == claims,
+            "channel approval claim reached the window",
+        )?;
+        require(
+            eval(main, "window.__claimReplies['spoof-confirm'] ?? null")
+                == Some(serde_json::Value::Null),
+            "channel approval claim got a window reply",
         )?;
         for command in crate::COMMANDS
             .iter()

@@ -1,0 +1,18 @@
+@layer kit {
+  .usage-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: calc(var(--s) * 4);
+    margin-bottom: calc(var(--s) * 4);
+  }
+  .usage-controls .field {
+    flex: 1;
+    min-width: min(100%, 12em);
+  }
+  .usage-paging {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 3);
+    margin-top: calc(var(--s) * 4);
+  }
+}

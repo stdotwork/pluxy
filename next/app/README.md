@@ -85,7 +85,24 @@ panel does, and does the panel's side of the page's hello
 ([extension pages](../ui/extension-pages/README.md)). Its `/send` address is the webview's one
 way out: the native side tags each message with the webview it came from and passes it to the
 window, which answers with the kit's channel, bound to the extension core lists the page under.
-So a page gets the same checks, permissions and limits as in the panel, and never the key.
+Before forwarding, native code enforces the 256 KiB transport body, 64 KiB channel call,
+exact version-0 call schema and known methods. Each document gets one hello, 30 admitted calls
+per rolling second and eight calls awaiting answers. A call remains in flight until the native
+reply callback confirms delivery, or the page closes. Requests and replies carry the document's
+native generation; a second document cannot reconnect. Native subframe navigation detection is
+verified on Linux WebKit. Windows currently reports only top-level navigation through this callback;
+subframe closure there still depends on the wrapper's load notification and has not been verified.
+Direct frame requests use these same checks.
+
+One extension may open four pages, with 60 admitted calls per rolling second and 16 in flight
+across them. Closing pages preserves the package's recent rate budget. At most 16 page webviews
+and 64 recent package budgets are retained. Replies are limited to 2 MiB each, covering 50 settings with 4,096 runes even when each rune
+needs six JSON bytes. Pending call replies use their existing in-flight reservations; theme
+events retain one delivery and one replacement per page. Failed call deliveries send a small
+native error; if even that cannot reach the renderer, the channel closes. The wrapper sends a
+bounded FIFO of eight calls one at a time; hello and closed messages always enter that FIFO. Refusals return an HTTP status and, for bodies within the transport limit with a readable id,
+the matching channel error. Oversized transport bodies are rejected without scanning for an id.
+Permissions and extension settings still use the shared kit's channel. No page receives a key.
 
 ## Native confirmations (Linux)
 
@@ -166,8 +183,14 @@ started by `go run ./e2e/panelcore` from `next/`, on random loopback ports in te
 and runs it on a private X server (`xvfb-run`) with a private session bus (`dbus-run-session`),
 a fresh HOME and XDG folders, once in each mode. In each it checks that the window's webview
 reaches every command, that at the top of an extension page's webview Tauri refuses every app
-command and the plugin commands tried, that the app reaches no command from that webview, that
-nothing reaches the app from the page's frame, that the page webview covers the page area, that
+command and the plugin commands tried, and that no app command is reached from that webview
+or its frame. It also runs a test-only sandboxed frame
+that posts directly to the native scheme: over-rate, over-in-flight, oversize, unknown method,
+invalid schema, repeated hello, wrong generation, explicit close and frame navigation while
+the wrapper's close message is suppressed. A separate real HTTP pages-site probe records whether
+that frame can reach the scheme, and navigation of that real frame closes native admission. It compares native handler arrivals,
+admissions, forwarding and real core settings operations, with a successful call on the same page.
+It checks that the page webview covers the page area, that
 closing the window leaves no webview and
 no web process, and that quitting stops only the app's own core. The `native-test` feature is
 for that test alone; release builds never have it.
@@ -224,6 +247,69 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
   icon.
 - The native test needs the desktop services above, and the pinned AppImage runtime from
   github.com (or a copy in its cache folder), so it does not run offline on a bare machine.
-- An extension page's frame can post messages to WebKit's message handler for the webview; Tauri
-  refuses them (the native test checks that no command is reached), but they are not filtered
-  before that.
+- Native admission bounds work after a scheme request reaches the handler. They do not bound
+  memory used by the browser engine before that point. Frames can also post to WebKit's IPC
+  handler; Tauri's capabilities refuse their commands before any app command runs.
+
+## Package signatures and trust
+
+The shared Rust verifier is `src-tauri/src/artifact.rs`. It verifies the exact descriptor bytes
+with Ed25519 before reading the archive, then checks its byte size and SHA-256 before extraction.
+The returned `VerifiedArchive<R>` retains the descriptor, signature and rewound archive reader.
+Consumers call `into_archive()` instead of reopening the pathname and prevent concurrent writes.
+After extraction, callers must
+check the manifest through that record before admitting a package. Installation, native admission,
+consent and installed-tree verification are separate consumers; this module does not extract or
+execute anything. See [the signed descriptor contract](app-host/README.md#signed-descriptor-bytes).
+
+Production publisher and updater roots are empty. The shared trust loader reports
+`not configured` for native-tier and updater trust and never substitutes test keys.
+The `artifact-test-trust` cargo feature permits a test runner to load public roots only from a
+private temporary HOME with a runner-created trust marker. A temporary HOME alone grants no trust.
+Private signing keys are generated at runtime and kept only in temporary fixture directories.
+Tauri updater signatures have their own format; descriptor signatures cannot replace them.
+
+The runner creates a private mode-0700 temporary HOME, calls `trust::write_test_marker(home)`,
+passes its returned per-run random nonce to the child as `PLUXY_TEST_TRUST_NONCE`, and writes
+`.pluxy-test-trust-roots.json` there. Both marker and nonce must match; TMPDIR grants no trust:
+
+```json
+{"roots":[{"kind":"test","publisher":"example","source":"https://example.invalid/index.json","key_id":"generated-key-id","public_key":"<64 lower-case hex digits>"}],"updater":null}
+```
+
+An optional `updater` object has `kind: "test"` and `public_key` in the updater verifier
+format. This loader checks profile isolation, not the updater signature. The updater consumer
+must check its compiled test marker, identifier, product name and profile before any updater
+plugin call. Publisher signatures and updater signatures remain separate.
+
+### Validate release inputs
+
+From `src-tauri/`, run this before packaging or publishing, with the final generated Tauri JSON
+(after all overrides), build snapshots from that app build, and the complete staged trust folder:
+
+```bash
+cargo run --locked --example validate-release-config -- \
+  /tmp/release/build/app-tauri-config.json \
+  /tmp/release/build/app-package-trust.json \
+  /tmp/release/stage/app-package-trust.json \
+  /tmp/release/build/app-cargo-features.json \
+  /tmp/release/stage/trust \
+  /tmp/release/pluxy.AppImage /tmp/release/pluxy-app
+```
+
+`build.rs` writes the config using tauri-utils' base/platform merge followed by `TAURI_CONFIG`,
+plus the trust and feature snapshots, in Cargo's `OUT_DIR`. A digest of all three is embedded in
+the app. The validator compares its own compiled inputs and requires the matching receipt in an
+artifact. Supply the actual app executable along with every compressed package: the validator
+streams each regular file for test markers; it cannot inspect compressed inner executables.
+The receipt checks consistency for trusted packaging tools, not a malicious packager rewriting
+the binary and its evidence. Every supplied artifact must exist.
+
+Test-feature and native-test apps retain `PLUXY_TEST_BUILD_DO_NOT_RELEASE`, referenced at startup
+even in optimized builds. Normal release builds omit the marker writer and validator code. Run
+the validator with a debug tooling build using the same config and features as the app.
+It rejects test roots/features, private trust material, updater keys, test identifiers/products,
+and test artifact basenames. Parent folders such as `.private` and `ci-test` are allowed.
+Referenced `bundle.resources` and staged trust files are checked too; resource paths must be
+expanded, without globs. Currently only empty trust JSON resources are allowed. Production key
+configuration needs an explicit policy change.
