@@ -196,9 +196,57 @@ pub struct View {
     pub warning: Option<String>,
 }
 
-/// The page webview address of file in package id's release digest.
+/// The page webview address of file in package id's release digest, each part of file
+/// percent-encoded (`asset_request` decodes it).
 pub fn asset_url(id: &str, digest: &str, file: &str) -> String {
-    format!("{}{id}/{digest}/{file}", asset_base())
+    let mut u = url::Url::parse(&asset_base()).expect("the asset scheme's root");
+    u.path_segments_mut()
+        .expect("the asset scheme's root has a path")
+        .pop_if_empty()
+        .extend(id.split('/'))
+        .push(digest)
+        .extend(file.split('/'));
+    u.into()
+}
+
+/// One percent-encoded path part, decoded: None when it is not valid UTF-8 after decoding,
+/// or holds a separator or NUL.
+fn decode_part(s: &str) -> Option<String> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            let h = s.get(i + 1..i + 3)?;
+            if !h.bytes().all(|c| c.is_ascii_hexdigit()) {
+                return None;
+            }
+            out.push(u8::from_str_radix(h, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    let s = String::from_utf8(out).ok()?;
+    (!s.contains(['/', '\\', '\0'])).then_some(s)
+}
+
+/// What a request on the asset scheme from a page webview bound to release folder (an
+/// `asset_url` with no file) asks for: the package ID, the release digest and the file under
+/// its ui folder, decoded. None when the request is outside folder.
+pub fn asset_request(folder: &str, request_path: &str) -> Option<(String, String, String)> {
+    let folder = url::Url::parse(folder).ok()?.path().to_string();
+    let file = request_path.strip_prefix(&folder)?;
+    let mut parts = folder.trim_matches('/').splitn(3, '/');
+    let id = format!("{}/{}", parts.next()?, parts.next()?);
+    let digest = parts.next()?.to_string();
+    let file = file
+        .split('/')
+        .map(decode_part)
+        .collect::<Option<Vec<_>>>()?
+        .join("/");
+    Some((id, digest, file))
 }
 
 /// The asset scheme's root, as page webviews address it.
@@ -617,9 +665,10 @@ impl Catalog {
         ))
     }
 
-    /// A file of package id's active release, by its path under the release's ui folder, while
-    /// it still has the digest it had at install.
-    pub fn asset(&self, id: &str, digest: &str, file: &str) -> Option<(Vec<u8>, &'static str)> {
+    /// Where a file of package id's active release is, by its path under the release's ui
+    /// folder, and the digest it had at install. The file is read with `Asset::read`, without
+    /// the catalog.
+    pub fn asset_file(&self, id: &str, digest: &str, file: &str) -> Option<Asset> {
         if self.safe_mode {
             return None;
         }
@@ -627,7 +676,7 @@ impl Catalog {
         if !p.enabled || p.active.sha256 != digest {
             return None;
         }
-        let want = p.active.files.get(file)?;
+        let sha256 = p.active.files.get(file)?.clone();
         let kind = content_type(file)?;
         let path = self
             .dirs
@@ -635,8 +684,28 @@ impl Catalog {
             .join(digest)
             .join(&p.active.ui_dir)
             .join(file);
-        let body = read_bounded(&path, MAX_UI_BYTES).ok()?;
-        (hex(&Sha256::digest(&body)) == *want).then_some((body, kind))
+        Some(Asset { path, sha256, kind })
+    }
+
+    #[cfg(test)]
+    fn asset(&self, id: &str, digest: &str, file: &str) -> Option<(Vec<u8>, &'static str)> {
+        let a = self.asset_file(id, digest, file)?;
+        Some((a.read()?, a.kind))
+    }
+}
+
+/// A file a page webview may be served: see `Catalog::asset_file`.
+pub struct Asset {
+    path: PathBuf,
+    sha256: String,
+    pub kind: &'static str,
+}
+
+impl Asset {
+    /// The file's bytes, while it still has the digest it had at install.
+    pub fn read(&self) -> Option<Vec<u8>> {
+        let body = read_bounded(&self.path, MAX_UI_BYTES).ok()?;
+        (hex(&Sha256::digest(&body)) == self.sha256).then_some(body)
     }
 }
 

@@ -760,7 +760,8 @@ fn asset_scheme(
     let app = ctx.app_handle().clone();
     let label = ctx.webview_label().to_string();
     let path = request.uri().path().to_string();
-    let found = (request.method() == "GET")
+    // Which file, under the locks; reading and hashing it, without them.
+    let asset = (request.method() == "GET")
         .then(|| {
             let folder = app
                 .state::<App>()
@@ -769,46 +770,52 @@ fn asset_scheme(
                 .unwrap()
                 .get(&label)
                 .and_then(|b| b.device.clone())?;
-            // The folder's path part: /<publisher>/<name>/<sha256>/.
-            let folder = Url::parse(&folder).ok()?.path().to_string();
-            let file = path.strip_prefix(&folder)?;
-            let mut parts = folder.trim_matches('/').splitn(3, '/');
-            let id = format!("{}/{}", parts.next()?, parts.next()?);
-            let digest = parts.next()?;
+            let (id, digest, file) = device::asset_request(&folder, &path)?;
             app.state::<App>()
                 .device
                 .lock()
                 .unwrap()
-                .asset(&id, digest, file)
+                .asset_file(&id, &digest, &file)
         })
         .flatten();
-    let status = if found.is_some() { 200 } else { 404 };
-    #[cfg(feature = "native-test")]
-    native_test::log(
-        "asset",
-        serde_json::json!({"label": label, "path": path, "status": status}),
-    );
-    let (body, kind) = found.unwrap_or((Vec::new(), "text/plain"));
-    // As core's pages site: sandboxed with scripts, loading only from the asset scheme (where
-    // this webview gets only its own folder), and no requests from script, frames or forms.
-    let s = device::ASSET_SCHEME;
-    let csp = if status == 200 {
-        format!("sandbox allow-scripts; default-src 'none'; script-src {s}:; style-src {s}:; img-src {s}: data: blob:; font-src {s}: data:; media-src {s}: data: blob:; connect-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'")
-    } else {
-        "sandbox; default-src 'none'".to_string()
-    };
-    let resp = Response::builder()
-        .status(status)
-        .header(header::CONTENT_TYPE, kind)
-        .header("Content-Security-Policy", csp)
-        // A sandboxed page has an opaque origin; its module scripts and fonts load with CORS.
-        .header("Access-Control-Allow-Origin", "*")
-        .header(header::CACHE_CONTROL, "no-store")
-        .header("X-Content-Type-Options", "nosniff")
-        .header("Referrer-Policy", "no-referrer")
-        .body(body)
-        .expect("a response");
-    responder.respond(resp);
+    tauri::async_runtime::spawn_blocking(move || {
+        // One file read at a time: a page asking for many large files at once holds one in
+        // memory, not all of them.
+        static READING: Mutex<()> = Mutex::new(());
+        let found = asset.and_then(|a| {
+            let _one = READING.lock().unwrap_or_else(|e| e.into_inner());
+            Some((a.read()?, a.kind))
+        });
+        let status = if found.is_some() { 200 } else { 404 };
+        #[cfg(feature = "native-test")]
+        native_test::log(
+            "asset",
+            serde_json::json!({"label": label, "path": path, "status": status}),
+        );
+        let (body, kind) = found.unwrap_or((Vec::new(), "text/plain"));
+        // As core's pages site: sandboxed with scripts, loading only from the asset scheme
+        // (where this webview gets only its own folder), and no requests from script, frames
+        // or forms.
+        let s = device::ASSET_SCHEME;
+        let csp = if status == 200 {
+            format!("sandbox allow-scripts; default-src 'none'; script-src {s}:; style-src {s}:; img-src {s}: data: blob:; font-src {s}: data:; media-src {s}: data: blob:; connect-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'")
+        } else {
+            "sandbox; default-src 'none'".to_string()
+        };
+        let resp = Response::builder()
+            .status(status)
+            .header(header::CONTENT_TYPE, kind)
+            .header("Content-Security-Policy", csp)
+            // A sandboxed page has an opaque origin; its module scripts and fonts load with
+            // CORS.
+            .header("Access-Control-Allow-Origin", "*")
+            .header(header::CACHE_CONTROL, "no-store")
+            .header("X-Content-Type-Options", "nosniff")
+            .header("Referrer-Policy", "no-referrer")
+            .body(body)
+            .expect("a response");
+        responder.respond(resp);
+    });
 }
 
 /// The `pluxy-page:` scheme: the page webviews' app document and their way to the window.

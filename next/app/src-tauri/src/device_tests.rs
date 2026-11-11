@@ -508,6 +508,46 @@ fn names_with_a_drive_or_stream_never_reach_the_store() {
 }
 
 #[test]
+fn page_files_with_spaces_and_unicode_are_served_at_their_address() {
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false);
+    let name = "my page #1 é.html";
+    let ui = serde_json::json!({"ui": {"version": 0, "dir": "pages",
+        "pages": [{"id": "p", "title": "P", "short": "P", "path": name}]}});
+    let m = manifest("example/notes", "1", ui);
+    let file = format!("pages/{name}");
+    let a = archive(&[("pluxy-extension.json", &m), (&file, b"hello")]);
+    install(&mut c, &a, local("n")).unwrap();
+    let (page, folder, _) = c.page("example/notes", "p").unwrap();
+    // As the webview asks for it: the address's path, still percent-encoded.
+    let u = url::Url::parse(&page).unwrap();
+    assert!(u.fragment().is_none() && u.query().is_none(), "{page}");
+    let (id, sha, got) = asset_request(&folder, u.path()).unwrap();
+    assert_eq!(
+        (id.as_str(), sha.as_str(), got.as_str()),
+        ("example/notes", digest(&a).as_str(), name)
+    );
+    assert_eq!(c.asset(&id, &sha, &got).unwrap().0, b"hello");
+    // An encoded separator or NUL, or another folder, asks for nothing.
+    let base = url::Url::parse(&folder).unwrap().path().to_string();
+    for bad in [
+        "a%2Fb.html",
+        "a%5Cb.html",
+        "a%00.html",
+        "a%zz.html",
+        "%C3.html",
+    ] {
+        assert!(
+            asset_request(&folder, &format!("{base}{bad}")).is_none(),
+            "{bad}"
+        );
+    }
+    assert!(asset_request(&folder, "/example/notes/other/index.html").is_none());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn go_platform_names() {
     assert_eq!(go_platform("macos", "aarch64"), "darwin/arm64");
     assert_eq!(go_platform("linux", "x86_64"), "linux/amd64");
