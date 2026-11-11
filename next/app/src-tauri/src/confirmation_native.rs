@@ -221,7 +221,7 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
         )?;
         require(
             eval(main, "window.__claimReplies['spoof-confirm'] ?? null")
-                .is_none_or(|v| v.is_null()),
+                == Some(serde_json::Value::Null),
             "channel approval claim got a window reply",
         )?;
         for command in crate::COMMANDS
