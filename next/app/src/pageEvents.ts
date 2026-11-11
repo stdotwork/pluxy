@@ -4,6 +4,7 @@
 
 export interface PageMessage {
   label: string;
+  generation: string;
   type: "hello" | "call" | "closed";
   data?: unknown;
 }

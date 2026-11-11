@@ -101,13 +101,13 @@ func readSettings(raw json.RawMessage) (settings, error) {
 // cancellation comes from the call's context. It follows a redirect only to the same scheme and
 // host, since Go keeps x-goog-api-key on a redirect to another host.
 var client = &http.Client{
-	Transport: &http.Transport{
+	Transport: sdk.Upstream(&http.Transport{
 		DialContext:         (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		TLSHandshakeTimeout: 30 * time.Second,
 		ForceAttemptHTTP2:   true,
 		MaxIdleConns:        100,
 		IdleConnTimeout:     90 * time.Second,
-	},
+	}),
 	CheckRedirect: sameOrigin,
 }
 

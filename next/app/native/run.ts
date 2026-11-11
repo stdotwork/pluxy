@@ -345,6 +345,37 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
       check(fine, `from the page's frame, "${what}" ${r.status}: ${r.detail}`);
     }
 
+    for (const [step, expected] of [
+      ["ingress_site", { attempts: 1, arrivals: 0, blocked: true }],
+      ["ingress_recovery", { error: "unavailable", control: true }],
+      [
+        "ingress_navigation",
+        { native_closed: true, wrapper_closed_suppressed: true, status: 409, window_closed: true },
+      ],
+      ["ingress_closed", { closed: 204, subsequent_call: 409 }],
+      [
+        "http_navigation",
+        {
+          native_closed: true,
+          status: 409,
+          wrapper_closed_suppressed: true,
+          window_closed: true,
+          fragment_open: true,
+        },
+      ],
+    ] as const) {
+      const value = steps.get(step);
+      check(
+        value && Object.entries(expected).every(([key, want]) => value[key] === want),
+        `${step} evidence missing or wrong: ${JSON.stringify(value)}`,
+      );
+      console.log(`${mode} ${step} ${JSON.stringify(value)}`);
+    }
+
+    const ingress = steps.get("ingress");
+    check(ingress?.control === true, "the native ingress check did not finish");
+    if (ingress) console.log(`${mode} native ingress ${JSON.stringify(ingress)}`);
+
     check(steps.get("confirmations")?.passed === true, "native confirmation checks did not complete");
 
     // Closing the window frees its webviews; the app stays in the tray.
