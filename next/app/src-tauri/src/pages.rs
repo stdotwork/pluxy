@@ -169,8 +169,10 @@ impl Pages {
     pub fn document_closed(&self, label: &str) -> bool {
         self.open.get(label).is_none_or(|w| w.document.closed)
     }
-    /// WebKit reports subframe navigation. Ignore fragment-only changes, but close on a
-    /// second document or a nested frame loading another pages-site document.
+    /// WebKit reports subframe navigation. Ignore fragment-only changes (a same-document
+    /// navigation: the new address has a fragment and differs only in it), but close on a
+    /// second document, including one that drops the fragment, or a nested frame loading another
+    /// pages-site document.
     pub fn frame_navigation(&mut self, label: &str, url: &Url) {
         let Some(w) = self.open.get_mut(label) else {
             return;
@@ -190,7 +192,8 @@ impl Pages {
             before.set_fragment(None);
             let mut after = url.clone();
             after.set_fragment(None);
-            if before == after && previous.fragment() != url.fragment() {
+            if url.fragment().is_some() && before == after && previous.fragment() != url.fragment()
+            {
                 w.document.frame_url = Some(url.clone());
                 return;
             }
@@ -1558,11 +1561,13 @@ mod tests {
             p.frame_navigation(&label, &hash);
             assert!(!p.document_closed(&label));
             assert!(p.take_closed(&label).is_none());
-            hash.set_fragment(None);
-            p.frame_navigation(&label, &hash);
+            let mut other = url.clone();
+            other.set_fragment(Some("other"));
+            p.frame_navigation(&label, &other);
             assert!(!p.document_closed(&label));
+            // Dropping the fragment loads a new document.
             let mut next = url.clone();
-            next.set_path("/next.html");
+            next.set_fragment(None);
             p.frame_navigation(&label, &next);
             let closed = p.take_closed(&label).unwrap();
             assert_eq!(closed.kind, "closed");
