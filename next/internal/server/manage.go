@@ -16,7 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/stdotwork/pluxy/next/internal/configdoc"
 	"github.com/stdotwork/pluxy/next/internal/cred"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/llm"
@@ -61,7 +60,7 @@ type AccountView struct {
 	ModelAlias     []route.ModelAlias `json:"model_alias,omitempty"`
 	Endpoint       string             `json:"endpoint,omitempty"`
 	// Settings are an account added by login's settings, with a placeholder in place of each
-	// secret (configdoc.Redactor), as GET /config shows the config file.
+	// secret (Management.Secrets), as GET /config shows the config file.
 	Settings json.RawMessage `json:"settings,omitempty"`
 
 	// What routing knows about the account now (route.Runtime). An account that receives no
@@ -128,16 +127,29 @@ type Management struct {
 	state *route.State
 	// lockout blocks a client that keeps sending a wrong key.
 	lockout *lockout
-	// redactor hides the secrets in accounts' settings, and puts them back in settings sent
-	// with a placeholder.
-	redactor *configdoc.Redactor
+	// Secrets, when set, hides the secrets in accounts' settings and puts them back in settings
+	// sent with a placeholder. While it is not set, settings are neither shown nor changed.
+	Secrets SettingsSecrets
 }
+
+// SettingsSecrets hides the secrets in an account's settings, a JSON object, and puts them back:
+// core's config redactor (configdoc.Redactor), which this package cannot import.
+type SettingsSecrets interface {
+	// Redact returns settings with a placeholder in place of each secret.
+	Redact(settings []byte) ([]byte, error)
+	// Restore returns sent with each placeholder replaced by the secret it stands for in
+	// current. A placeholder that matches no secret in current is an ErrStaleSecret; any other
+	// error means a placeholder is where no secret goes.
+	Restore(sent, current []byte) ([]byte, error)
+}
+
+// ErrStaleSecret marks a placeholder that matches no secret the account's settings hold now.
+var ErrStaleSecret = errors.New("a redacted value matches no secret the account's settings hold now")
 
 // NewManagement returns the management API with its account and login calls. cfg returns the
 // active config; state is the routing state accounts' cooldowns are read from (nil: none).
 func NewManagement(cfg func() *Config, creds *cred.Manager, state *route.State) *Management {
-	m := &Management{mux: http.NewServeMux(), cfg: cfg, creds: creds, state: state, lockout: newLockout(),
-		redactor: configdoc.NewRedactor()}
+	m := &Management{mux: http.NewServeMux(), cfg: cfg, creds: creds, state: state, lockout: newLockout()}
 	m.Handle("GET /accounts", m.list)
 	m.Handle("POST /accounts", m.add)
 	m.Handle("PATCH /accounts/{id}", m.patch)
@@ -221,8 +233,8 @@ func (m *Management) view(r cred.Record) AccountView {
 	a := r.Account
 	a.ID = r.ID
 	v.fields(a, m.state)
-	if len(a.Settings) > 0 {
-		s, err := m.redactor.Redact(a.Settings, false)
+	if len(a.Settings) > 0 && m.Secrets != nil {
+		s, err := m.Secrets.Redact(a.Settings)
 		if err != nil {
 			// Never shown unredacted; the settings are then left out of the view.
 			log.Printf("management: account %q: its settings cannot be shown with their secrets hidden", r.ID)
@@ -445,6 +457,10 @@ func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if name == "settings" {
+			if m.Secrets == nil {
+				writeManagementError(w, http.StatusInternalServerError, "internal", "settings cannot be changed: core set no redactor for them")
+				return
+			}
 			var obj map[string]json.RawMessage
 			if string(raw) != "null" && (json.Unmarshal(raw, &obj) != nil || obj == nil) {
 				writeManagementError(w, http.StatusBadRequest, "invalid_request", "settings must be an object, or null for none")
@@ -505,9 +521,9 @@ func (m *Management) restoreSettings(a *route.Account, sent json.RawMessage) err
 		a.Settings = nil
 		return nil
 	}
-	b, err := m.redactor.Restore(sent, a.Settings, false)
+	b, err := m.Secrets.Restore(sent, a.Settings)
 	switch {
-	case errors.Is(err, configdoc.ErrStale):
+	case errors.Is(err, ErrStaleSecret):
 		return fmt.Errorf("%w: settings: a redacted value matches no secret the account's settings hold now; read the account again", cred.ErrConflict)
 	case err != nil:
 		return fmt.Errorf("%w: settings: a redacted value is where no secret goes; write the value itself there", cred.ErrInvalid)

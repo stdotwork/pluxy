@@ -60,7 +60,10 @@ test("Edit sets priority and an excluded model, and asks before discarding", asy
   const shots = process.env.ACCOUNT_SETTINGS_SHOTS;
   if (shots) {
     mkdirSync(shots, { recursive: true });
-    await page.screenshot({ path: join(shots, "edit-form.png"), fullPage: true, animations: "disabled" });
+    // Tall enough for the whole form, so the shot shows every field.
+    await page.setViewportSize({ width: 1280, height: 2000 });
+    await form.screenshot({ path: join(shots, "edit-form.png"), animations: "disabled" });
+    await page.setViewportSize({ width: 1280, height: 800 });
   }
   await form.getByRole("button", { name: "Save", exact: true }).click();
   await expect(form).toHaveCount(0);

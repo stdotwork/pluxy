@@ -11,6 +11,7 @@ import {
   draftChanged,
   draftOf,
   type InvalidField,
+  modelRow,
   type SettingsDraft,
   settingsObject,
 } from "./accountSettings.helpers";
@@ -79,6 +80,9 @@ const t = strings("accountSettings", {
 const pairs = (rows: { name: string; alias?: string }[] | undefined) =>
   rows?.length ? rows.map((r) => (r.alias ? `${r.name} → ${r.alias}` : r.name)).join(", ") : undefined;
 
+/** A model entry as text: its name, or its name and the alias clients use. */
+const modelText = (entries: Account["models"]) => pairs(entries?.map(modelRow));
+
 /** The account's routing fields and settings, read-only. */
 export function AccountSettings(props: { account: Account }) {
   const a = props.account;
@@ -94,7 +98,7 @@ export function AccountSettings(props: { account: Account }) {
           [t("disableCooling"), flag(a.disable_cooling)],
           [t("retry"), a.request_retry ?? t("inherit")],
           [t("maxConcurrency"), a.max_concurrency || t("noLimit")],
-          [t("models"), pairs(a.models)],
+          [t("models"), modelText(a.models)],
           [t("excluded"), a.excluded_models?.join(", ")],
           [t("aliases"), pairs(a.model_alias)],
           [

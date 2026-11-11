@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/stdotwork/pluxy/next/internal/configdoc"
 	"github.com/stdotwork/pluxy/next/internal/packages"
 	"github.com/stdotwork/pluxy/next/internal/server"
 )
@@ -57,6 +58,7 @@ const maxManagementBody = 1 << 20
 func (c *Core) Management() http.Handler {
 	m := server.NewManagement(c.Config, c.creds, c.state)
 	m.Check = c.checks.result
+	m.Secrets = settingsSecrets{c.redactor}
 	m.Handle("GET /status", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, c.Status())
 	})
@@ -145,4 +147,18 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// settingsSecrets hides the secrets in accounts' settings for the management API with the config
+// redactor, so they read as GET /config shows the config file's (server.SettingsSecrets).
+type settingsSecrets struct{ r *configdoc.Redactor }
+
+func (s settingsSecrets) Redact(settings []byte) ([]byte, error) { return s.r.Redact(settings, false) }
+
+func (s settingsSecrets) Restore(sent, current []byte) ([]byte, error) {
+	b, err := s.r.Restore(sent, current, false)
+	if errors.Is(err, configdoc.ErrStale) {
+		return nil, server.ErrStaleSecret
+	}
+	return b, err
 }

@@ -31,7 +31,8 @@ export interface Account {
   max_concurrency?: number;
   request_retry?: number;
   prefix?: string;
-  models?: AccountModelEntry[];
+  /** Each model by its upstream name, or with the alias clients use for it. */
+  models?: (string | AccountModelEntry)[];
   excluded_models?: string[];
   model_alias?: AccountModelAlias[];
   endpoint?: string;

@@ -28,6 +28,11 @@ export type InvalidField =
   | "aliases"
   | "settings";
 
+/** A model entry as a row: core writes one without an alias as its name alone. */
+export function modelRow(m: string | AccountModelEntry): { name: string; alias: string } {
+  return typeof m === "string" ? { name: m, alias: "" } : { name: m.name, alias: m.alias ?? "" };
+}
+
 export function draftOf(a: Account): SettingsDraft {
   return {
     prefix: a.prefix ?? "",
@@ -37,7 +42,7 @@ export function draftOf(a: Account): SettingsDraft {
     maxConcurrency: a.max_concurrency ? String(a.max_concurrency) : "",
     retry: a.request_retry === undefined ? "inherit" : "custom",
     retryCount: a.request_retry === undefined ? "" : String(a.request_retry),
-    models: (a.models ?? []).map((m) => ({ name: m.name, alias: m.alias ?? "" })),
+    models: (a.models ?? []).map(modelRow),
     excluded: (a.excluded_models ?? []).join("\n"),
     aliases: (a.model_alias ?? []).map((r) => ({
       name: r.name,
@@ -146,7 +151,7 @@ export function accountChange(
 
   const models = modelEntries(d.models);
   if (models === undefined) return { invalid: "models" };
-  if (differs(models, modelEntries(a.models ?? []))) change.models = models;
+  if (differs(models, modelEntries((a.models ?? []).map(modelRow)))) change.models = models;
 
   const excluded = d.excluded
     .split("\n")
