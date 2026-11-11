@@ -422,12 +422,21 @@ export function LoginFlow(props: LoginFlowProps) {
     prompt?.inputs ?? (prompt?.kind === "browser" ? [{ name: "redirect_url", label: t("callback") }] : []);
   const remaining = Math.max(0, Math.ceil(((deadline ?? now) - now) / 1000));
   const terminalFailure = login?.state === "failed" || startError || pollStopped;
-  const focusState = [starting, login?.state, promptKey.current, error, startError, pollStopped].join("/");
+  const focusState = [
+    starting,
+    cancelling,
+    login?.state,
+    promptKey.current,
+    error,
+    pollError,
+    startError,
+    pollStopped,
+  ].join("/");
   useLayoutEffect(() => {
     const element = root.current;
     if (!element) return;
     const target =
-      error && !terminalFailure
+      (error || pollError) && !terminalFailure
         ? element.querySelector<HTMLElement>('[role="alert"]')
         : (element.querySelector<HTMLElement>("input:not([hidden]):not(:disabled)") ??
           (prompt?.kind === "device"
