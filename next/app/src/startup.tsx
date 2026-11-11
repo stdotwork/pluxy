@@ -73,7 +73,7 @@ export function StartupSettings() {
         </fieldset>
         {error && <Notice tone="danger">{error}</Notice>}
         {saved && (
-          <Notice tone="info">
+          <Notice tone="ok">
             Saved. Login registration is {preferences?.autostart_enabled ? "enabled" : "disabled"}. The other
             choices apply the next time the app starts.
           </Notice>
