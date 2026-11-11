@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/stdotwork/pluxy/next/internal/cred"
+	"github.com/stdotwork/pluxy/next/internal/proxyurl"
 	"github.com/stdotwork/pluxy/next/internal/route"
+	"github.com/stdotwork/pluxy/next/internal/upheader"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
@@ -82,15 +84,33 @@ func ReadAuthDir(dir string, opts ImportOptions, now time.Time) ([]AuthFile, []S
 	if err != nil {
 		return nil, nil, err
 	}
+	return readAuthFiles(files, func(name string) ([]byte, error) { return readLimited(filepath.Join(dir, name)) }, opts, now)
+}
+
+// ReadAuthFile reads one credential file of today's auth folder, named name and holding b, as
+// ReadAuthDir reads a folder that holds only that file: its account, and the SIWC account of a
+// Codex file, or why they are skipped.
+func ReadAuthFile(name string, b []byte, opts ImportOptions, now time.Time) ([]AuthFile, []Skipped) {
+	files, skipped, _ := readAuthFiles([]string{name}, func(string) ([]byte, error) {
+		if len(b) > MaxAuthFile {
+			return nil, errTooLarge
+		}
+		return b, nil
+	}, opts, now) // read never fails otherwise
+	return files, skipped
+}
+
+// readAuthFiles reads the credential files named files, each with read.
+func readAuthFiles(files []string, read func(name string) ([]byte, error), opts ImportOptions, now time.Time) ([]AuthFile, []Skipped, error) {
 	var out, siwcs []AuthFile
 	var skipped []Skipped
 	for _, name := range files {
-		b, err := readLimited(filepath.Join(dir, name))
+		b, err := read(name)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
 		if errors.Is(err, errTooLarge) {
-			skipped = append(skipped, Skipped{File: name, Reason: fmt.Sprintf("larger than %d KiB", maxAuthFile>>10)})
+			skipped = append(skipped, Skipped{File: name, Reason: TooLarge})
 			continue
 		}
 		if err != nil {
@@ -264,7 +284,8 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 	case "", "gemini":
 		return f, nil, "today's core does not load it either"
 	default:
-		return f, nil, fmt.Sprintf("type %q is not known", typ)
+		// The type is not quoted: a file may hold a token there.
+		return f, nil, "its type is not one the import takes"
 	}
 	if c.Kind == protocol.CredentialOAuth && c.AccessToken == "" && c.RefreshToken == "" {
 		if typ != "codex" {
@@ -310,9 +331,40 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 	}
 	r.Account.ExcludedModels = authExcluded(m)
 	r.Account.ModelAlias = authAliases(m)
-	for _, k := range []string{"proxy_url", "proxy-url", "headers"} {
+	// proxy_url (or proxy-url), as today's core reads it: the first that is set counts. A value
+	// this core cannot use skips the file rather than sending its traffic without the proxy.
+	for _, k := range []string{"proxy_url", "proxy-url"} {
 		if v, ok := m[k]; ok && !isZero(v) {
-			f.Ignored = append(f.Ignored, strings.ReplaceAll(k, "-", "_"))
+			p, isText := v.(string)
+			if !isText {
+				return f, nil, k + " is not text"
+			}
+			if err := proxyurl.Check(k, p); err != nil {
+				return f, nil, err.Error()
+			}
+			r.Account.ProxyURL = strings.TrimSpace(p)
+			break
+		}
+	}
+	// headers, as today's core reads them: text values only, trimmed, empty ones dropped. A
+	// header this core refuses skips the file rather than sending its traffic without it.
+	if raw, ok := m["headers"].(map[string]any); ok {
+		text := map[string]string{}
+		for k, v := range raw {
+			if s, isText := v.(string); isText {
+				text[k] = s
+			}
+		}
+		h, dynamic, err := upheader.Import(text)
+		if err != nil {
+			return f, nil, err.Error()
+		}
+		if err := upheader.Check("headers", h); err != nil {
+			return f, nil, err.Error()
+		}
+		r.Account.Headers = h
+		for _, k := range dynamic {
+			f.Ignored = append(f.Ignored, "headers."+k+" (a value taken from the client's request)")
 		}
 	}
 	f.Record = r
@@ -411,9 +463,12 @@ func authAliases(m map[string]any) []route.ModelAlias {
 	return out
 }
 
-// maxAuthFile bounds a credential file: today's are a few KiB, and a credential must fit in
+// MaxAuthFile bounds a credential file: today's are a few KiB, and a credential must fit in
 // one extension protocol frame.
-const maxAuthFile = 1 << 20
+const MaxAuthFile = 1 << 20
+
+// TooLarge is why a file larger than MaxAuthFile is skipped.
+var TooLarge = fmt.Sprintf("larger than %d KiB", MaxAuthFile>>10)
 
 var errTooLarge = errors.New("file too large")
 
@@ -423,8 +478,8 @@ func readLimited(path string) ([]byte, error) {
 		return nil, err
 	}
 	defer f.Close()
-	b, err := io.ReadAll(io.LimitReader(f, maxAuthFile+1))
-	if err == nil && len(b) > maxAuthFile {
+	b, err := io.ReadAll(io.LimitReader(f, MaxAuthFile+1))
+	if err == nil && len(b) > MaxAuthFile {
 		err = errTooLarge
 	}
 	return b, err
@@ -563,9 +618,16 @@ func object(m map[string]any) json.RawMessage {
 	return b
 }
 
+// Creator adds accounts: a credential store (cred.Store), or a running core's credential
+// manager (cred.Manager), which also makes them live.
+type Creator interface {
+	Create(r cred.Record) (cred.Record, error)
+}
+
 // Import adds the accounts of files to store, skipping those whose ID store or the config
-// (reserved) already uses. It returns the files it imported and those it skipped.
-func Import(store *cred.Store, files []AuthFile, reserved func(id string) bool) (imported []AuthFile, skipped []Skipped, err error) {
+// (reserved) already uses, or store refuses as taken (cred.ErrConflict: a login still running
+// will take it). It returns the files it imported and those it skipped.
+func Import(store Creator, files []AuthFile, reserved func(id string) bool) (imported []AuthFile, skipped []Skipped, err error) {
 	for _, f := range files {
 		if reserved(f.Record.ID) {
 			skipped = append(skipped, Skipped{File: f.File, Reason: fmt.Sprintf("the config already has an account %q", f.Record.ID)})
@@ -574,6 +636,10 @@ func Import(store *cred.Store, files []AuthFile, reserved func(id string) bool) 
 		switch _, err := store.Create(f.Record); {
 		case errors.Is(err, cred.ErrExists):
 			skipped = append(skipped, Skipped{File: f.File, Reason: fmt.Sprintf("the store already has an account %q", f.Record.ID)})
+		case errors.Is(err, cred.ErrConflict):
+			// A running core's manager: a login still running will take the ID. The file's other
+			// accounts still import.
+			skipped = append(skipped, Skipped{File: f.File, Reason: err.Error()})
 		case err != nil:
 			return imported, skipped, err
 		default:

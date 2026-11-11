@@ -57,6 +57,9 @@ describe("the README and the code agree", () => {
   });
 
   test("every data-part hook", () => {
+    expect(PARTS).toContain("log");
+    expect(PARTS).toContain("log-line");
+    expect(readme).toContain("`data-level` is `info`, `warn`");
     const documented = rows("### Hooks you can rely on")
       .map(([hook]) => hook?.match(/^`data-part="([^"]+)"`/)?.[1])
       .filter((h) => h !== undefined);
@@ -67,6 +70,11 @@ describe("the README and the code agree", () => {
     for (const part of ["toolbar", "tabs", "tab", "pager", "select", "batch", "account-meta"] as const) {
       expect(PARTS).toContain(part);
     }
+  });
+
+  test("routing tiers have a documented theme hook", () => {
+    expect(PARTS).toContain("tier");
+    expect(readme).toContain('data-part="tier"');
   });
 
   test("account sign-in hooks are part of the documented contract", () => {

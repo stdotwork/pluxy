@@ -21,11 +21,12 @@
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline";
 import { buildSmokeAppImage } from "./appimage";
+import { descendants, webProcesses } from "./processes";
 import { missingPrerequisites } from "./services";
 
 const app = join(import.meta.dir, "..");
@@ -83,38 +84,6 @@ async function startCore(
     if (proc.stdout) createInterface({ input: proc.stdout }).once("line", resolve);
   });
   return { proc, ...JSON.parse(line) };
-}
-
-/** The processes among pid's descendants, with their names. */
-function descendants(pid: number): Map<number, string> {
-  const parent = new Map<number, number>();
-  const name = new Map<number, string>();
-  for (const d of readdirSync("/proc")) {
-    if (!/^\d+$/.test(d)) continue;
-    try {
-      const stat = readFileSync(`/proc/${d}/stat`, "utf8");
-      const close = stat.lastIndexOf(")");
-      name.set(Number(d), stat.slice(stat.indexOf("(") + 1, close));
-      parent.set(Number(d), Number(stat.slice(close + 2).split(" ")[1]));
-    } catch {
-      // gone already
-    }
-  }
-  const found = new Map<number, string>();
-  for (const [p, comm] of name) {
-    for (let q = parent.get(p); q !== undefined && q > 1; q = parent.get(q)) {
-      if (q === pid) {
-        found.set(p, comm);
-        break;
-      }
-    }
-  }
-  return found;
-}
-
-/** The web processes among pid's descendants. */
-function webProcesses(pid: number): number {
-  return [...descendants(pid).values()].filter((comm) => comm.startsWith("WebKitWebProces")).length;
 }
 
 /** Sends signal to the process group pid leads (each session runs in a group of its own). */
@@ -176,7 +145,15 @@ async function managementStatus(base: string, key: string, ca?: string): Promise
 }
 
 /** Runs the app once with connection as its saved connection, and checks what it reports. */
-async function runApp(mode: Mode, bin: string, connection: object, base?: string): Promise<string[]> {
+async function runApp(
+  mode: Mode,
+  bin: string,
+  connection: object,
+  base?: string,
+  startup = false,
+  noTray = false,
+  key?: string,
+): Promise<string[]> {
   const root = mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
   const problems: string[] = [];
   const check = (ok: unknown, what: string) => {
@@ -197,6 +174,9 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
       mode: 0o600,
     });
     const quit = join(root, "quit");
+    const keyFile = join(root, "key-input");
+    const wrongKey = randomUUID();
+    if (key) writeFileSync(keyFile, JSON.stringify({ key, wrong: wrongKey }), { mode: 0o600 });
     // Only what the app needs: no display or session bus but the run's own.
     const env: Record<string, string> = {
       PATH: process.env.PATH ?? "/usr/bin:/bin",
@@ -215,6 +195,9 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
       APPIMAGE_EXTRACT_AND_RUN: "1",
       PLUXY_APP_TEST_PAGE: PAGE,
       PLUXY_APP_TEST_QUIT: quit,
+      ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: identifier } : {}),
+      ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
+      ...(key ? { PLUXY_APP_TEST_KEY_FILE: keyFile } : {}),
     };
     // The session script starts and checks the desktop services, then runs the app.
     const session = [
@@ -244,6 +227,10 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
     const log: string[] = []; // the app's last lines, shown when the run fails
     const setup: string[] = []; // session.ts's report of what failed at setup
     const onLine = (line: string) => {
+      if (key && [key, wrongKey].some((canary) => line.includes(canary))) {
+        problems.push("management key appeared on stdout/stderr");
+        return;
+      }
       // The session's service checks are always shown: they say what this run stood on.
       if (line.startsWith("native-prereq: ")) {
         console.log(`  ${mode} | ${line}`);
@@ -300,6 +287,31 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
     }
     check(code === 0, `the app exited with ${code}`);
     check(!steps.has("failed"), `the app's test steps failed: ${JSON.stringify(steps.get("failed"))}`);
+
+    if (startup) {
+      check(
+        log.some((l) => l.startsWith("startup preferences passed:")),
+        "startup suite gave no success report",
+      );
+      console.log(`${mode}: startup ${problems.length === 0 ? "ok" : "FAILED"}`);
+      for (const line of log) console.log(line);
+      return problems;
+    }
+
+    if (key) {
+      const entry = steps.get("keyentry");
+      for (const field of [
+        "good",
+        "bad_preserved",
+        "cancel_preserved",
+        "session",
+        "remember",
+        "webviews_clean",
+        "events_clean",
+      ])
+        check(entry?.[field] === true, `native key entry did not prove ${field}`);
+      console.log(`  ${mode} | native key entry: ${JSON.stringify(entry ?? {})}`);
+    }
 
     // The window: connected in this mode, every command reached, core's status through the app.
     const main = steps.get("main") as Probe | undefined;
@@ -450,6 +462,8 @@ try {
   try {
     const { core } = JSON.parse(run("go", ["run", "./e2e/panelcore", "-probe", "-prepare", prepared], next));
     const p = await runApp("managed", bin, { mode: "managed", core_path: core });
+    p.push(...(await runApp("managed", bin, { mode: "managed", core_path: core }, undefined, true)));
+    p.push(...(await runApp("managed", bin, { mode: "managed", core_path: core }, undefined, true, true)));
     problems.push(...p.map((x) => `managed: ${x}`));
   } finally {
     rmSync(prepared, { recursive: true, force: true });
@@ -459,7 +473,8 @@ try {
     const c = await startCore(mode === "remote");
     try {
       const conn = { mode, url: c.base, key: c.key, ...(c.ca ? { ca_file: c.ca } : {}) };
-      const p = await runApp(mode, bin, conn, c.base);
+      const p = await runApp(mode, bin, conn, c.base, false, false, c.key);
+      p.push(...(await runApp(mode, bin, conn, c.base, true)));
       // The app only connected: its quitting leaves this core running.
       if ((await managementStatus(c.base, c.key, c.ca)) !== 200) p.push("the core stopped when the app quit");
       problems.push(...p.map((x) => `${mode}: ${x}`));

@@ -17,8 +17,11 @@ import (
 	"time"
 
 	"github.com/stdotwork/pluxy/next/internal/cred"
+	"github.com/stdotwork/pluxy/next/internal/proxyurl"
 	"github.com/stdotwork/pluxy/next/internal/route"
+	"github.com/stdotwork/pluxy/next/internal/upheader"
 	"github.com/stdotwork/pluxy/next/llm"
+	"github.com/stdotwork/pluxy/next/protocol"
 )
 
 // ManagementPrefix is where the management API is served. The 0 is its version.
@@ -59,6 +62,12 @@ type AccountView struct {
 	ExcludedModels []string           `json:"excluded_models,omitempty"`
 	ModelAlias     []route.ModelAlias `json:"model_alias,omitempty"`
 	Endpoint       string             `json:"endpoint,omitempty"`
+	// ProxyURL is the account's own proxy_url, with "redacted" in place of its user name and
+	// password (proxyurl.Redact).
+	ProxyURL string `json:"proxy_url,omitempty"`
+	// Headers are the account's headers, with a placeholder in place of each secret value, the
+	// one GET /config shows for it (configdoc.Redactor.Headers).
+	Headers map[string]string `json:"headers,omitempty"`
 
 	// What routing knows about the account now (route.Runtime). An account that receives no
 	// requests (disabled, or waiting for a new login) has none of it.
@@ -94,11 +103,24 @@ type AccountCheck struct {
 	At *time.Time `json:"at,omitempty"`
 }
 
-// fields sets v's routing fields from a and its runtime state from state.
-func (v *AccountView) fields(a route.Account, state *route.State) {
+// fields sets v's routing fields from a, with its secret header values replaced by red's
+// placeholders, and its runtime state from state.
+func (v *AccountView) fields(a route.Account, state *route.State, red HeaderRedactor) {
 	v.Priority, v.Weight, v.MaxConcurrency, v.Prefix = a.Priority, a.Weight, a.MaxConcurrency, a.Prefix
 	v.DisableCooling, v.RequestRetry = a.DisableCooling, a.RequestRetry
 	v.Models, v.ExcludedModels, v.ModelAlias, v.Endpoint = a.Models, a.ExcludedModels, a.ModelAlias, a.Endpoint
+	v.ProxyURL = proxyurl.Redact(a.ProxyURL)
+	if red != nil {
+		v.Headers = red.Headers(a.Headers)
+	} else if len(a.Headers) > 0 {
+		v.Headers = map[string]string{}
+		for k, val := range a.Headers {
+			if upheader.Secret(k) {
+				val = protocol.Redacted
+			}
+			v.Headers[k] = val
+		}
+	}
 	if state == nil {
 		return
 	}
@@ -124,6 +146,19 @@ type Management struct {
 	state *route.State
 	// lockout blocks a client that keeps sending a wrong key.
 	lockout *lockout
+	// Redactor hides accounts' secret header values; core sets the one its config reads use, so
+	// an account shows the same placeholder in both. Nil: they show as protocol.Redacted and
+	// PATCH cannot change headers.
+	Redactor HeaderRedactor
+}
+
+// HeaderRedactor hides the secret values of accounts' headers (configdoc.Redactor is one).
+type HeaderRedactor interface {
+	// Headers returns h with a placeholder in place of each secret value.
+	Headers(h map[string]string) map[string]string
+	// RestoreHeaders returns sent with each placeholder Headers showed for a value of cur put
+	// back; a placeholder that stands for none is an error.
+	RestoreHeaders(sent, cur map[string]string) (map[string]string, error)
 }
 
 // NewManagement returns the management API with its account and login calls. cfg returns the
@@ -140,6 +175,7 @@ func NewManagement(cfg func() *Config, creds *cred.Manager, state *route.State) 
 	m.Handle("POST /logins/{id}/input", m.input)
 	m.Handle("DELETE /logins/{id}", m.cancel)
 	m.Handle("POST /vertex/import", m.importVertex)
+	m.Handle("POST /accounts/import", m.importAuthFile)
 	return m
 }
 
@@ -212,7 +248,7 @@ func (m *Management) view(r cred.Record) AccountView {
 	v.CreatedAt, v.UpdatedAt = &created, &updated
 	a := r.Account
 	a.ID = r.ID
-	v.fields(a, m.state)
+	v.fields(a, m.state, m.Redactor)
 	v.Check = m.check(r.ID)
 	return v
 }
@@ -231,7 +267,7 @@ func (m *Management) configView(a route.Account) AccountView {
 	if a.Credential != nil {
 		v.Kind = a.Credential.Kind
 	}
-	v.fields(a, m.state)
+	v.fields(a, m.state, m.Redactor)
 	v.Check = m.check(a.ID)
 	return v
 }
@@ -296,6 +332,14 @@ func (m *Management) add(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.RequestRetry != nil && *req.RequestRetry < 0 {
 		writeManagementError(w, http.StatusBadRequest, "invalid_request", "request_retry must not be negative")
+		return
+	}
+	if err := proxyurl.Check("proxy_url", req.ProxyURL); err != nil {
+		writeManagementError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := upheader.Check("headers", req.Headers); err != nil {
+		writeManagementError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
 	m.startLogin(w, r, cred.LoginRequest{Account: req.Account, Extension: req.Extension, Method: req.Method, Input: req.Input})
@@ -400,6 +444,41 @@ var patchFields = map[string]func(a *route.Account, raw json.RawMessage) error{
 		a.ModelAlias = nil
 		return unmarshalSet(raw, &a.ModelAlias)
 	},
+	"proxy_url": func(a *route.Account, raw json.RawMessage) error {
+		cur := a.ProxyURL
+		a.ProxyURL = ""
+		if err := unmarshalSet(raw, &a.ProxyURL); err != nil {
+			return err
+		}
+		// The proxy as GET /accounts shows it, sent back unchanged, keeps the password it hides.
+		if len(proxyurl.Password(cur)) > 0 && strings.TrimSpace(a.ProxyURL) == proxyurl.Redact(cur) {
+			a.ProxyURL = cur
+		}
+		return proxyurl.Check("value", a.ProxyURL)
+	},
+	// headers is set by Management.patchHeaders, which needs the management API's redactor.
+	"headers": nil,
+}
+
+// patchHeaders sets a.Headers to raw. A placeholder GET /accounts shows for a secret value,
+// sent back, keeps that value; one that stands for no value the account has is refused.
+func (m *Management) patchHeaders(a *route.Account, raw json.RawMessage) error {
+	var sent map[string]string
+	if err := unmarshalSet(raw, &sent); err != nil {
+		return err
+	}
+	if m.Redactor == nil {
+		return errors.New("headers cannot be changed here")
+	}
+	h, err := m.Redactor.RestoreHeaders(sent, a.Headers)
+	if err != nil {
+		return err
+	}
+	if err := upheader.Check("value", h); err != nil {
+		return err
+	}
+	a.Headers = h
+	return nil
 }
 
 // unmarshalSet decodes raw into v, leaving v as it is for null.
@@ -427,6 +506,9 @@ func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		set, ok := patchFields[name]
+		if ok && set == nil {
+			set = m.patchHeaders
+		}
 		if !ok {
 			writeManagementError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("%q cannot be changed here: send disabled or any of %s",
 				name, strings.Join(slices.Sorted(maps.Keys(patchFields)), ", ")))
@@ -443,8 +525,14 @@ func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 		writeManagementError(w, http.StatusBadRequest, "invalid_request", "nothing to change: send disabled or a routing field")
 		return
 	}
-	// Decode every field before changing anything, so a bad one changes nothing.
+	// Decode every field before changing anything, so a bad one changes nothing. The probe is
+	// the account as it is, so a field that keeps a stored value (a redacted header sent back)
+	// is checked against it.
 	var probe route.Account
+	recs := m.creds.Records()
+	if i := slices.IndexFunc(recs, func(r cred.Record) bool { return r.ID == id }); i >= 0 {
+		probe = recs[i].Account
+	}
 	for _, c := range changes {
 		if err := c(&probe); err != nil {
 			writeManagementError(w, http.StatusBadRequest, "invalid_request", err.Error())
