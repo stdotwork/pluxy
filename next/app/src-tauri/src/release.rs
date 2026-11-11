@@ -69,8 +69,8 @@ pub struct Feed {
     releases: Vec<(Version, Release)>,
 }
 
-/// An https address with a host and no user name or password, as a feed or notes address must
-/// be. Returns it as the URL parser writes it.
+/// An https address with a host and no user name or password, at most MAX_URL bytes both as given
+/// and as the URL parser writes it, as a feed or notes address must be. Returns the latter.
 pub fn https_url(s: &str) -> Result<String, String> {
     if s.len() > MAX_URL {
         return Err(format!("the address is longer than {MAX_URL} characters"));
@@ -85,7 +85,12 @@ pub fn https_url(s: &str) -> Result<String, String> {
     if !u.username().is_empty() || u.password().is_some() {
         return Err("the address may not hold a user name or password".into());
     }
-    Ok(u.to_string())
+    // Normalising can percent-encode characters: what is kept must also fit.
+    let u = u.to_string();
+    if u.len() > MAX_URL {
+        return Err(format!("the address is longer than {MAX_URL} characters"));
+    }
+    Ok(u)
 }
 
 /// RFC 3339 in UTC, such as `2026-11-01T12:00:00Z` (fractions of a second allowed), on a day
@@ -647,6 +652,18 @@ mod tests {
         let mut extra = rel("app", "1.0.0", "stable");
         extra["artifacts"] = serde_json::json!({"linux-x86_64": {}});
         assert!(feed(serde_json::json!([extra])).is_ok());
+    }
+
+    #[test]
+    fn addresses_keep_the_length_limit_after_normalising() {
+        // 2,020 bytes as given; each é becomes %C3%A9, so 6,020 once normalised.
+        let long = format!("https://example.com/{}", "é".repeat(1000));
+        assert!(long.len() <= MAX_URL);
+        assert!(https_url(&long).unwrap_err().contains("longer"));
+        // What https_url returns, it accepts again: a kept feed reloads after a restart.
+        let ok = format!("https://example.com/{}", "é".repeat(300));
+        let normal = https_url(&ok).unwrap();
+        assert_eq!(https_url(&normal).unwrap(), normal);
     }
 
     #[test]

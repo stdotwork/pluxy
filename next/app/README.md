@@ -189,7 +189,7 @@ takes a new format number, which this app refuses.
 | `channel` | `stable` or `preview`; a stable release has no pre-release part |
 | `published` | RFC 3339 in UTC, ending in `Z`, on a day its month has; second 60 (a leap second) is refused |
 | `notes` | Optional Markdown, at most 64 KiB |
-| `notes_url` | Optional `https://` address with a host and no user name or password, at most 2048 characters |
+| `notes_url` | Optional `https://` address with a host and no user name or password, at most 2048 bytes as given and once normalised (percent-encoded) |
 
 The whole feed is at most 1 MiB. The feed is not signed: https is its only protection, and
 nothing in it is trusted as markup. Signed update artifacts have their own signatures. Production
