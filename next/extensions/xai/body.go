@@ -99,14 +99,18 @@ func buildRequest(req llm.Request, injectXSearch bool) ([]byte, *llm.Translation
 		m["store"] = false
 	}
 	m["include"] = withEncryptedReasoning(m["include"])
+	topLevel := 0
+	if tools, ok := m["tools"].([]any); ok {
+		topLevel = len(tools)
+	}
 	promoteAdditionalTools(m)
 	reply := &replyBridge{}
 	var namespaces *namespaceTools
 	if tools, ok := m["tools"].([]any); ok {
-		tools, active := rewriteApplyPatchTools(tools)
-		if active {
-			reply.patch = newPatchBridge()
-			rewriteApplyPatchChoice(m["tool_choice"])
+		tools, patch := rewriteApplyPatchTools(tools, topLevel)
+		if patch.active() {
+			reply.patch = newPatchBridge(patch)
+			patch.rewriteChoice(m["tool_choice"])
 		}
 		// Today's core counts the x_search tool it will inject when it decides to fold. Its other
 		// condition, a forced hosted tool that is the only tool, cannot hold with a namespace there.
@@ -118,6 +122,16 @@ func buildRequest(req llm.Request, injectXSearch bool) ([]byte, *llm.Translation
 		if namespaces != nil {
 			reply.ns = newNSRestorer(namespaces.refs)
 			namespaces.rewriteChoice(m["tool_choice"])
+			// A folded namespace with a custom apply_patch may be called for it.
+			dispatchers := map[string]bool{}
+			for ns := range patch.namespaces {
+				if ref := namespaces.refs[ns]; ref != nil && ref.dispatcher {
+					dispatchers[ns] = true
+				}
+			}
+			if len(dispatchers) > 0 {
+				reply.hold = newDispatchHold(dispatchers, patch, namespaces.refs, reply.ns)
+			}
 		}
 		m["tools"] = rewriteTools(tools)
 	}
@@ -128,7 +142,7 @@ func buildRequest(req llm.Request, injectXSearch bool) ([]byte, *llm.Translation
 		m["tools"] = tools[:maxTools]
 	}
 	if input, ok := m["input"].([]any); ok {
-		items, err := rewriteCustomToolItems(input)
+		items, err := rewriteCustomToolItems(input, namespaces != nil)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -141,7 +155,7 @@ func buildRequest(req llm.Request, injectXSearch bool) ([]byte, *llm.Translation
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if reply.patch == nil && reply.ns == nil {
+	if reply.patch == nil && reply.ns == nil && reply.hold == nil {
 		reply = nil
 	}
 	return out, tr, reply, nil
@@ -240,8 +254,10 @@ func rewriteTools(tools []any) []any {
 // rewriteCustomToolItems turns each custom tool call into a function call and each custom tool
 // output into a function call output, the form xAI takes. An item without its call ID or name
 // is dropped, as today's core drops it. A call to apply_patch carries its patch text in the
-// input argument (patch.go), whatever the text looks like, and must have text for its input.
-func rewriteCustomToolItems(input []any) ([]any, error) {
+// input argument (patch.go), whatever the text looks like, and must have text for its input; one
+// in a namespace keeps its namespace when the request has namespace tools (namespaceTools is
+// true), which the rules for namespaces then write the way the tools were sent.
+func rewriteCustomToolItems(input []any, namespaceTools bool) ([]any, error) {
 	out := make([]any, 0, len(input))
 	for _, raw := range input {
 		item, ok := raw.(map[string]any)
@@ -258,8 +274,11 @@ func rewriteCustomToolItems(input []any) ([]any, error) {
 			if callID == "" || name == "" {
 				continue
 			}
-			arguments := ""
+			arguments, namespace := "", ""
 			if name == applyPatchName {
+				if namespaceTools {
+					namespace = strings.TrimSpace(str(item, "namespace"))
+				}
 				text, ok := item["input"].(string)
 				if !ok {
 					return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "apply_patch history input must be a string", Scope: llm.ScopeRequest}
@@ -268,8 +287,11 @@ func rewriteCustomToolItems(input []any) ([]any, error) {
 			} else {
 				arguments = customCallArguments(item["input"])
 			}
-			out = append(out, map[string]any{"type": "function_call", "call_id": callID, "name": name,
-				"arguments": arguments})
+			call := map[string]any{"type": "function_call", "call_id": callID, "name": name, "arguments": arguments}
+			if namespace != "" {
+				call["namespace"] = namespace
+			}
+			out = append(out, call)
 		case "custom_tool_call_output":
 			if callID == "" {
 				continue
