@@ -1225,6 +1225,10 @@ from the client's request) and `$CPA-SESSION-ID` are not supported. A login that
 uses the `headers` it names. `Host`, `Content-Length`, `Transfer-Encoding` and `Connection`, a
 name that is not a valid header name or is given twice (letter case aside), an empty value and a
 value with a line break fail the load with a message that names the header, never its value.
+A redirect to another host than the request's first one carries the headers that are not
+secret (below) but not the secret ones, as an HTTP client leaves out `Authorization` there.
+`PATCH /accounts/{id}` with `headers` as an object replaces all the account's headers (one left
+out is removed), and with `null` or `{}` removes them all.
 
 The value of a header whose name is about authentication (it holds `auth`, `key`, `token`,
 `secret`, `cookie`, `session`, `password` or `signature`, letter case aside) is a secret, by the
