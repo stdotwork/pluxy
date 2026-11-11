@@ -303,6 +303,8 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
       check(fine, `from the page's frame, "${what}" ${r.status}: ${r.detail}`);
     }
 
+    check(steps.get("confirmations")?.passed === true, "native confirmation checks did not complete");
+
     // Closing the window frees its webviews; the app stays in the tray.
     const closed = steps.get("closed") as
       | { webviews: string[]; tray: boolean; core_pid?: number }
