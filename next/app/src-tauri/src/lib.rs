@@ -806,8 +806,14 @@ pub fn run() {
                 // No tray: closing the window quits the app.
                 Err(e) => eprintln!("pluxy-app: no tray icon: {e}"),
             }
-            let v = handle.state::<App>().conn.lock().unwrap().view();
+            // A core that exited before the app state existed had no one to recover it.
+            let (plan, v) = {
+                let st = handle.state::<App>();
+                let mut c = st.conn.lock().unwrap();
+                (c.core_exited(), c.view())
+            };
             show_status(&handle, &v);
+            recovery::schedule(handle.clone(), plan);
             if let Some(pid) = handle.state::<App>().conn.lock().unwrap().core_pid() {
                 eprintln!("pluxy-app: core started, pid {pid}");
             }
