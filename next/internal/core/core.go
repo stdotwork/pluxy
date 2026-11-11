@@ -45,6 +45,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/packages"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/internal/server"
+	"github.com/stdotwork/pluxy/next/internal/upheader"
 	"github.com/stdotwork/pluxy/next/internal/usage"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -164,7 +165,7 @@ func Start(opts Options) (*Core, error) {
 }
 
 // configSecrets returns the redactor of every secret the config holds: the client keys, the
-// management key and the accounts' credentials.
+// management key, the accounts' credentials and their secret header values (upheader.Forms).
 func configSecrets(cfg *server.Config) *protocol.Redactor {
 	cs := []*protocol.Credential{{Kind: protocol.CredentialAPIKey, APIKey: cfg.ManagementKey}}
 	for _, k := range cfg.ClientKeys {
@@ -172,6 +173,9 @@ func configSecrets(cfg *server.Config) *protocol.Redactor {
 	}
 	for _, a := range cfg.Accounts() {
 		cs = append(cs, a.Credential)
+		for _, v := range upheader.Forms(a.Headers) {
+			cs = append(cs, &protocol.Credential{Kind: "header", APIKey: v})
+		}
 	}
 	return protocol.NewRedactor(cs...)
 }

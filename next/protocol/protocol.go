@@ -26,8 +26,9 @@ const Version = 0
 // suffix; minor 3 adds model listing; minor 4 adds account checks; minor 5 adds quota and the
 // identity of a login's grant; minor 6 adds an error's quota window; minor 7 adds endpoint calls;
 // minor 8 adds the request's caller; minor 9 adds a login grant's account settings;
-// minor 10 adds the subscription's end time to quota; minor 11 adds the account's proxy_url.
-const Minor = 11
+// minor 10 adds the subscription's end time to quota; minor 11 adds the account's proxy_url;
+// minor 12 adds the account's headers.
+const Minor = 12
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
@@ -147,6 +148,10 @@ type Account struct {
 	// an http, https, socks5 or socks5h URL (ParseProxyURL). Empty: no proxy. Its user name and
 	// password are secret.
 	ProxyURL string `json:"proxy_url,omitempty"`
+	// Headers are extra HTTP headers every upstream request of the call carries (minor version
+	// 12), set over the extension's own headers of the same names. Values of headers whose names
+	// are about authentication are secret.
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 // ParseProxyURL parses an account's ProxyURL: an http, https, socks5 or socks5h URL with a

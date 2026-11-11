@@ -57,7 +57,7 @@ func (e *Extension) OpenSession(ctx context.Context, account protocol.Account, i
 		return nil, &llm.Error{Code: llm.CodeExtensionUnavailable, Message: fmt.Sprintf("extension %s is not running", e.manifest.ID)}
 	default:
 	}
-	proxy, perr := e.proxied(&account)
+	proxy, perr := e.outbound(&account)
 	if perr != nil {
 		return nil, perr
 	}
@@ -180,7 +180,7 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 	if account.ID != s.accountID {
 		return refuse(&llm.Error{Code: llm.CodeInternal, Message: fmt.Sprintf("session of account %q got a turn for account %q", s.accountID, account.ID)})
 	}
-	proxy, perr := s.ext.proxied(&account)
+	proxy, perr := s.ext.outbound(&account)
 	if perr != nil {
 		return refuse(perr)
 	}

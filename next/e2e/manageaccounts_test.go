@@ -39,6 +39,7 @@ type accountView struct {
 	Settings          json.RawMessage
 	SettingsInexact   bool   `json:"settings_inexact"`
 	ProxyURL          string `json:"proxy_url"`
+	Headers           map[string]string
 }
 
 // startAccountsCore runs core with the example OAuth provider and two accounts in its config
@@ -210,7 +211,7 @@ func TestManageAccountSettings(t *testing.T) {
 	})
 	const secret = "sk-account-settings-e2e"
 	// Every value below a key named like a secret is one too, however deep.
-	hidden := []string{secret, "sk-nested-object-e2e", "sk-nested-list-e2e", "sk-other-e2e", "sk-first-e2e", "sk-second-e2e", "e2e-proxy-pass"}
+	hidden := []string{secret, "sk-nested-object-e2e", "sk-nested-list-e2e", "sk-other-e2e", "sk-first-e2e", "sk-second-e2e", "e2e-proxy-pass", "sk-header-e2e"}
 	var l loginReply
 	if code := manage(t, base, "POST", "/accounts", map[string]any{"id": "keyed", "method": "settings",
 		"input": map[string]string{"settings": `{"base_url":"https://one.example/v1","api_key":"` + secret +
@@ -398,6 +399,41 @@ func TestManageAccountSettings(t *testing.T) {
 	}
 	if got := received(); got["api_key"] != secret || got["proxied"] != false {
 		t.Fatalf("the extension received %v, want the kept secret and proxied false", got)
+	}
+
+	// Headers and settings in one PATCH, each with its placeholders kept. A stale settings
+	// placeholder is a 409 and a stale header placeholder a 400, and neither changes anything.
+	a = both(map[string]any{"settings": map[string]any{"api_key": key, "proxied": true}, "headers": map[string]string{"X-Api-Key": "sk-header-e2e", "X-Plain": "one"}})
+	hk := a.Headers["X-Api-Key"]
+	if !placeholder.MatchString(hk) || a.Headers["X-Plain"] != "one" || !strings.Contains(string(a.Settings), `"proxied":true`) {
+		t.Fatalf("after PATCH of headers and settings: headers %v, settings %s", a.Headers, a.Settings)
+	}
+	stale := "pluxy-redacted-000000000000000000000000"
+	for _, bad := range []struct {
+		body map[string]any
+		code int
+	}{
+		{map[string]any{"settings": map[string]any{"api_key": stale}, "headers": map[string]string{"X-Api-Key": hk, "X-Plain": "two"}}, http.StatusConflict},
+		{map[string]any{"settings": map[string]any{"api_key": key, "proxied": false}, "headers": map[string]string{"X-Api-Key": stale}}, http.StatusBadRequest},
+	} {
+		var raw json.RawMessage
+		if code := manage(t, base, "PATCH", "/accounts/keyed", bad.body, &raw); code != bad.code {
+			t.Errorf("PATCH %v: %d %s, want %d", bad.body, code, raw, bad.code)
+		}
+	}
+	if now := getAccount(t, base, "keyed"); now.Headers["X-Plain"] != "one" || !strings.Contains(string(now.Settings), `"proxied":true`) {
+		t.Fatalf("a refused PATCH changed the account: headers %v, settings %s", now.Headers, now.Settings)
+	}
+	a = both(map[string]any{"settings": map[string]any{"api_key": key, "proxied": false}, "headers": a.Headers})
+	if a.Headers["X-Api-Key"] != hk || a.Headers["X-Plain"] != "one" || !strings.Contains(string(a.Settings), `"proxied":false`) {
+		t.Fatalf("after PATCH with the shown headers and settings: headers %v, settings %s", a.Headers, a.Settings)
+	}
+	// The test extension takes no headers, so it is asked once they are gone.
+	if a = both(map[string]any{"headers": nil}); len(a.Headers) != 0 {
+		t.Fatalf("headers after null: %v", a.Headers)
+	}
+	if got := received(); got["api_key"] != secret || got["proxied"] != false {
+		t.Fatalf("the extension received %v, want the kept secret", got)
 	}
 
 	// A new secret replaces the old one; null removes the settings.

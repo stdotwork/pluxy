@@ -60,7 +60,7 @@ const maxManagementBody = 1 << 20
 func (c *Core) Management() http.Handler {
 	m := server.NewManagement(c.Config, c.creds, c.state)
 	m.Check = c.checks.result
-	m.Secrets = settingsSecrets{c.redactor}
+	m.Redactor = accountRedactor{c.redactor}
 	m.Handle("GET /status", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, c.Status())
 	})
@@ -156,14 +156,14 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// settingsSecrets hides the secrets in accounts' settings for the management API with the config
-// redactor, so they read as GET /config shows the config file's (server.SettingsSecrets).
-type settingsSecrets struct{ r *configdoc.Redactor }
+// accountRedactor is the config redactor as the management API uses it for accounts' headers
+// and settings (server.AccountRedactor), so they show the placeholders GET /config shows. It
+// only turns a stale settings placeholder into server.ErrStaleSecret, which the server package
+// can match: it cannot import configdoc, whose tests import it.
+type accountRedactor struct{ *configdoc.Redactor }
 
-func (s settingsSecrets) Redact(settings []byte) ([]byte, error) { return s.r.RedactSettings(settings) }
-
-func (s settingsSecrets) Restore(sent, current []byte) ([]byte, error) {
-	b, err := s.r.RestoreSettings(sent, current)
+func (r accountRedactor) RestoreSettings(sent, current []byte) ([]byte, error) {
+	b, err := r.Redactor.RestoreSettings(sent, current)
 	if errors.Is(err, configdoc.ErrStale) {
 		return nil, server.ErrStaleSecret
 	}

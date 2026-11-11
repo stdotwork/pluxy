@@ -20,7 +20,9 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/cred"
 	"github.com/stdotwork/pluxy/next/internal/proxyurl"
 	"github.com/stdotwork/pluxy/next/internal/route"
+	"github.com/stdotwork/pluxy/next/internal/upheader"
 	"github.com/stdotwork/pluxy/next/llm"
+	"github.com/stdotwork/pluxy/next/protocol"
 )
 
 // ManagementPrefix is where the management API is served. The 0 is its version.
@@ -64,8 +66,11 @@ type AccountView struct {
 	// ProxyURL is the account's own proxy_url, with "redacted" in place of its user name and
 	// password (proxyurl.Redact).
 	ProxyURL string `json:"proxy_url,omitempty"`
+	// Headers are the account's headers, with a placeholder in place of each secret value, the
+	// one GET /config shows for it (configdoc.Redactor.Headers).
+	Headers map[string]string `json:"headers,omitempty"`
 	// Settings are an account added by login's settings, with a placeholder in place of each
-	// secret (Management.Secrets), as GET /config shows the config file.
+	// secret (Management.Redactor), as GET /config shows the config file.
 	Settings json.RawMessage `json:"settings,omitempty"`
 	// SettingsInexact marks settings that hold a number a float64 does not hold exactly (a long
 	// fraction, a very large or very small exponent, an integer past 2^53), which a client that
@@ -106,12 +111,24 @@ type AccountCheck struct {
 	At *time.Time `json:"at,omitempty"`
 }
 
-// fields sets v's routing fields from a and its runtime state from state.
-func (v *AccountView) fields(a route.Account, state *route.State) {
+// fields sets v's routing fields from a, with its secret header values replaced by red's
+// placeholders, and its runtime state from state.
+func (v *AccountView) fields(a route.Account, state *route.State, red AccountRedactor) {
 	v.Priority, v.Weight, v.MaxConcurrency, v.Prefix = a.Priority, a.Weight, a.MaxConcurrency, a.Prefix
 	v.DisableCooling, v.RequestRetry = a.DisableCooling, a.RequestRetry
 	v.Models, v.ExcludedModels, v.ModelAlias, v.Endpoint = a.Models, a.ExcludedModels, a.ModelAlias, a.Endpoint
 	v.ProxyURL = proxyurl.Redact(a.ProxyURL)
+	if red != nil {
+		v.Headers = red.Headers(a.Headers)
+	} else if len(a.Headers) > 0 {
+		v.Headers = map[string]string{}
+		for k, val := range a.Headers {
+			if upheader.Secret(k) {
+				val = protocol.Redacted
+			}
+			v.Headers[k] = val
+		}
+	}
 	if state == nil {
 		return
 	}
@@ -137,20 +154,27 @@ type Management struct {
 	state *route.State
 	// lockout blocks a client that keeps sending a wrong key.
 	lockout *lockout
-	// Secrets, when set, hides the secrets in accounts' settings and puts them back in settings
-	// sent with a placeholder. While it is not set, settings are neither shown nor changed.
-	Secrets SettingsSecrets
+	// Redactor hides the secrets in accounts' headers and settings and puts them back from the
+	// placeholders a PATCH sends; core sets the one its config reads use, so an account shows
+	// the same placeholders in both. Nil: secret header values show as protocol.Redacted,
+	// settings are not shown, and PATCH changes neither.
+	Redactor AccountRedactor
 }
 
-// SettingsSecrets hides the secrets in an account's settings, a JSON object, and puts them back:
-// core's config redactor (configdoc.Redactor), which this package cannot import.
-type SettingsSecrets interface {
-	// Redact returns settings with a placeholder in place of each secret.
-	Redact(settings []byte) ([]byte, error)
-	// Restore returns sent with each placeholder replaced by the secret it stands for in
+// AccountRedactor hides the secrets in accounts' headers and settings and puts them back: core's
+// config redactor (configdoc.Redactor), which this package cannot import.
+type AccountRedactor interface {
+	// Headers returns h with a placeholder in place of each secret value.
+	Headers(h map[string]string) map[string]string
+	// RestoreHeaders returns sent with each placeholder Headers showed for a value of cur put
+	// back; a placeholder that stands for none is an error.
+	RestoreHeaders(sent, cur map[string]string) (map[string]string, error)
+	// RedactSettings returns settings, a JSON object, with a placeholder in place of each secret.
+	RedactSettings(settings []byte) ([]byte, error)
+	// RestoreSettings returns sent with each placeholder replaced by the secret it stands for in
 	// current. A placeholder that matches no secret in current is an ErrStaleSecret; any other
 	// error means a placeholder is where no secret goes.
-	Restore(sent, current []byte) ([]byte, error)
+	RestoreSettings(sent, current []byte) ([]byte, error)
 }
 
 // ErrStaleSecret marks a placeholder that matches no secret the account's settings hold now.
@@ -243,9 +267,9 @@ func (m *Management) view(r cred.Record) AccountView {
 	v.CreatedAt, v.UpdatedAt = &created, &updated
 	a := r.Account
 	a.ID = r.ID
-	v.fields(a, m.state)
-	if len(a.Settings) > 0 && m.Secrets != nil {
-		s, err := m.Secrets.Redact(a.Settings)
+	v.fields(a, m.state, m.Redactor)
+	if len(a.Settings) > 0 && m.Redactor != nil {
+		s, err := m.Redactor.RedactSettings(a.Settings)
 		if err != nil {
 			// Never shown unredacted; the settings are then left out of the view.
 			log.Printf("management: account %q: its settings cannot be shown with their secrets hidden", r.ID)
@@ -345,7 +369,7 @@ func (m *Management) configView(a route.Account) AccountView {
 	if a.Credential != nil {
 		v.Kind = a.Credential.Kind
 	}
-	v.fields(a, m.state)
+	v.fields(a, m.state, m.Redactor)
 	v.Check = m.check(a.ID)
 	return v
 }
@@ -413,6 +437,10 @@ func (m *Management) add(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := proxyurl.Check("proxy_url", req.ProxyURL); err != nil {
+		writeManagementError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := upheader.Check("headers", req.Headers); err != nil {
 		writeManagementError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
@@ -530,6 +558,29 @@ var patchFields = map[string]func(a *route.Account, raw json.RawMessage) error{
 		}
 		return proxyurl.Check("value", a.ProxyURL)
 	},
+	// headers is set by Management.patchHeaders, which needs the management API's redactor.
+	"headers": nil,
+}
+
+// patchHeaders sets a.Headers to raw. A placeholder GET /accounts shows for a secret value,
+// sent back, keeps that value; one that stands for no value the account has is refused.
+func (m *Management) patchHeaders(a *route.Account, raw json.RawMessage) error {
+	var sent map[string]string
+	if err := unmarshalSet(raw, &sent); err != nil {
+		return err
+	}
+	if m.Redactor == nil {
+		return errors.New("headers cannot be changed here")
+	}
+	h, err := m.Redactor.RestoreHeaders(sent, a.Headers)
+	if err != nil {
+		return err
+	}
+	if err := upheader.Check("value", h); err != nil {
+		return err
+	}
+	a.Headers = h
+	return nil
 }
 
 // unmarshalSet decodes raw into v, leaving v as it is for null.
@@ -558,7 +609,7 @@ func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if name == "settings" {
-			if m.Secrets == nil {
+			if m.Redactor == nil {
 				writeManagementError(w, http.StatusInternalServerError, "internal", "settings cannot be changed: core set no redactor for them")
 				return
 			}
@@ -571,6 +622,9 @@ func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		set, ok := patchFields[name]
+		if ok && set == nil {
+			set = m.patchHeaders
+		}
 		if !ok {
 			writeManagementError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("%q cannot be changed here: send disabled, settings or any of %s",
 				name, strings.Join(slices.Sorted(maps.Keys(patchFields)), ", ")))
@@ -587,8 +641,14 @@ func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 		writeManagementError(w, http.StatusBadRequest, "invalid_request", "nothing to change: send disabled, settings or a routing field")
 		return
 	}
-	// Decode every field before changing anything, so a bad one changes nothing.
+	// Decode every field before changing anything, so a bad one changes nothing. The probe is
+	// the account as it is, so a field that keeps a stored value (a redacted header sent back)
+	// is checked against it.
 	var probe route.Account
+	recs := m.creds.Records()
+	if i := slices.IndexFunc(recs, func(r cred.Record) bool { return r.ID == id }); i >= 0 {
+		probe = recs[i].Account
+	}
 	for _, c := range changes {
 		if err := c(&probe); err != nil {
 			writeManagementError(w, http.StatusBadRequest, "invalid_request", err.Error())
@@ -622,7 +682,7 @@ func (m *Management) restoreSettings(a *route.Account, sent json.RawMessage) err
 		a.Settings = nil
 		return nil
 	}
-	b, err := m.Secrets.Restore(sent, a.Settings)
+	b, err := m.Redactor.RestoreSettings(sent, a.Settings)
 	switch {
 	case errors.Is(err, ErrStaleSecret):
 		return fmt.Errorf("%w: settings: a redacted value matches no secret the account's settings hold now; read the account again", cred.ErrConflict)

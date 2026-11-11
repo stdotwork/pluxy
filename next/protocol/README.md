@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.11
+# pluxy extension protocol, version 0.12
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -19,9 +19,10 @@ client key a request came with, so an extension can keep what it learns from rep
 Version 0.9 adds optional non-secret account settings to a login grant. Version 0.10 adds the
 optional quota `plan_ends_at`, the end of the subscription in Unix seconds. Version 0.11 adds
 the account's [`proxy_url`](#accounts): the proxy the call's upstream traffic goes through.
+Version 0.12 adds the account's [`headers`](#headers): extra HTTP headers on that traffic.
 It is deliberately small; later versions add capabilities and more operations without changing
 what is described here. An extension written for version 0 works unchanged with a core that
-speaks 0.11 (see [Versioning](#versioning)).
+speaks 0.12 (see [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
 the details. A Go SDK (`github.com/stdotwork/pluxy/next/sdk`) implements the extension side of
@@ -221,7 +222,7 @@ Core opens a connection and writes one call frame:
 | --- | --- |
 | `id` | Call ID for logs and traces. Unique per core process. |
 | `op` | The operation. Version 0 has `describe`, `generate`, `login` and `refresh`; version 0.1 adds `session`; version 0.2 adds `count_tokens`; version 0.3 adds `models`; version 0.4 adds `check`; version 0.5 adds `quota`; version 0.7 adds `endpoint`. |
-| `account` | For `generate`, `count_tokens`, `endpoint`, `refresh`, `session`, `models`, `check` and `quota`: the account to use (below). For `login`: the account being signed in to, with its `id`, `settings` and `proxy_url` but no `credential`. |
+| `account` | For `generate`, `count_tokens`, `endpoint`, `refresh`, `session`, `models`, `check` and `quota`: the account to use (below). For `login`: the account being signed in to, with its `id`, `settings`, `proxy_url` and `headers` but no `credential`. |
 | `request` | For `generate`, `count_tokens` and `endpoint`: the model request (below). |
 | `login` | For `login`: what to sign in with (see [Login and refresh](#login-and-refresh)). |
 | `session` | For `session`: what kind of session to open (see [Sessions](#sessions)). |
@@ -482,6 +483,7 @@ the endpoint (or does not serve it for this account's credential) answers with c
 | `settings` | Extension-specific settings, passed through as configured. |
 | `credential` | The credential for this call (below). |
 | `proxy_url` | Since 0.11, optional: the proxy every upstream request of this call goes through (below). Absent: no proxy. |
+| `headers` | Since 0.12, optional: extra HTTP headers every upstream request of this call carries, an object of header name to value (below). Absent: none. |
 
 An extension only ever receives its own accounts: core stores each credential with the ID of the
 extension that created it and never sends it to another.
@@ -531,6 +533,39 @@ answers a call that carries a proxy with `unsupported` (scope `credential`, retr
 runs the handler when the extension process has not created any `sdk.Upstream` transport. An
 extension that wraps some of its clients and not others still sends the others direct: wrap them
 all.
+
+### Headers
+
+From version 0.12 an account may carry `headers`, an object of header name to value, such as
+`{"X-Gateway-Key": "..."}` for a gateway in front of the provider. The extension sends each of
+them on every upstream request and connection of the call, the same set `proxy_url` covers:
+model requests, WebSocket handshakes, token renewals in `refresh`, and everything a `login`
+sends. A configured header replaces the extension's own value for that name, letter case aside;
+the extension's other headers stay. Core never sends `Host`, `Content-Length`,
+`Transfer-Encoding` or `Connection`, two names that differ only in letter case, an empty value,
+or a value with a line break or another control character: its config load refuses them.
+
+The value of a header whose name is about authentication (its name holds `auth`, `key`,
+`token`, `secret`, `cookie`, `session`, `password` or `signature`, letter case aside) is a
+secret: an extension never logs or shows it, and core removes it from everything a call sends
+back, as it does a credential's strings; a value shorter than 8 bytes is removed only next to
+its name, as text shows a header (`Name: value`, `Name:value`, `Name=value`, JSON's
+`"Name":"value"`, with the name as configured, in canonical form, in lower case or in upper case),
+so it does not scrub unrelated text; in another spelling a value that short stays.
+Other values are not removed.
+
+Core sends a call that has headers only to an extension whose describe reports
+`protocol_minor` 12 or more; for any other it fails the call itself with `unsupported` (scope
+`credential`), so routing moves on, and the traffic never leaves without them. A `login` that
+adds a new account carries the `headers` the request to add it named.
+
+In Go, `sdk.Upstream` sets them on each request made with the handler's context. On a redirect
+to another host or scheme (`https` to `http`) than the first request's it removes the headers
+whose names are secret, including a value the extension set itself under such a name, as
+`net/http` leaves out `Authorization` and `Cookie` there, so the redirect target never gets
+them; the other headers stay. As with a proxy, the SDK answers a call that carries headers with
+`unsupported` (scope `credential`, retryable) and never runs the handler when the extension
+process has not created any `sdk.Upstream` transport.
 
 ## The request
 
@@ -1006,7 +1041,7 @@ removes `previous_response_id`.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.11. An extension reports the minor version it
+raise the minor version: this document is version 0.12. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1025,8 +1060,9 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.9 | A login grant's optional `settings` object. |
 | 0.10 | Quota's optional `plan_ends_at`. |
 | 0.11 | The account's optional [`proxy_url`](#proxy). |
+| 0.12 | The account's optional [`headers`](#headers). |
 
-## What version 0.11 leaves out
+## What version 0.12 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

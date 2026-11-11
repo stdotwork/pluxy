@@ -17,6 +17,8 @@ import (
 	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/stdotwork/pluxy/next/internal/upheader"
 )
 
 // A redacted document holds a placeholder in place of each secret: PlaceholderPrefix and the
@@ -98,14 +100,51 @@ func secretName(key string) bool {
 	return false
 }
 
-func secretHeader(name string) bool {
-	h := strings.ToLower(name)
-	for _, part := range []string{"auth", "key", "token", "secret", "cookie", "session", "password", "signature"} {
-		if strings.Contains(h, part) {
-			return true
-		}
+func secretHeader(name string) bool { return upheader.Secret(name) }
+
+// Headers returns an account's headers fit to show: the placeholder a redacted config document
+// holds in place of each secret value (upheader.Secret).
+func (r *Redactor) Headers(h map[string]string) map[string]string {
+	if len(h) == 0 {
+		return nil
 	}
-	return false
+	out := make(map[string]string, len(h))
+	for k, v := range h {
+		if upheader.Secret(k) {
+			v = r.Placeholder(v)
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// RestoreHeaders returns sent, headers sent back for an account, with each placeholder that
+// Headers showed for a secret value of cur, the account's headers now, replaced by that value.
+// A placeholder may only be the value of a secret header, and one that stands for no secret
+// value of cur is refused, so the placeholder itself is never stored.
+func (r *Redactor) RestoreHeaders(sent, cur map[string]string) (map[string]string, error) {
+	values := map[string]string{}
+	for _, v := range upheader.Secrets(cur) {
+		values[r.Placeholder(v)] = v
+	}
+	var out map[string]string
+	for k, v := range sent {
+		if p := strings.TrimSpace(v); placeholder.MatchString(p) {
+			if !upheader.Secret(k) {
+				return nil, fmt.Errorf("header %s holds a redacted value, but its value is not secret; write the value itself", k)
+			}
+			was, ok := values[p]
+			if !ok {
+				return nil, fmt.Errorf("header %s holds a redacted value that stands for none of the account's header values now; read the account again", k)
+			}
+			v = was
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[k] = v
+	}
+	return out, nil
 }
 
 func secretURL(s string) bool {
