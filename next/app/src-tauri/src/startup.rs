@@ -379,8 +379,10 @@ mod tests {
         let s = store();
         s.save(Preferences::default(), || Ok(s.xdg.join("pluxy app")))
             .unwrap();
-        // An existing directory at the atomic writer's temporary path makes saving fail.
-        std::fs::create_dir(s.file().with_extension("tmp")).unwrap();
+        // A directory where the settings file goes makes the atomic writer's rename fail, for
+        // root as well (the writer's temporary names are random, so they cannot be blocked).
+        std::fs::remove_file(s.file()).unwrap();
+        std::fs::create_dir(s.file()).unwrap();
         assert!(s
             .save(
                 Preferences {
@@ -391,6 +393,7 @@ mod tests {
             )
             .is_err());
         assert!(!s.entry().exists());
+        assert!(s.file().is_dir(), "the failed save replaced the settings");
         assert_eq!(s.load(), Preferences::default());
         std::fs::remove_dir_all(&s.xdg).unwrap();
     }
