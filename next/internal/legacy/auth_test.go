@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -325,6 +326,44 @@ func TestImportSkipsKnownAccounts(t *testing.T) {
 	}
 }
 
+// conflictCreator refuses one ID as a running core's manager refuses an ID a login will take.
+type conflictCreator struct {
+	Creator
+	id string
+}
+
+func (c conflictCreator) Create(r cred.Record) (cred.Record, error) {
+	if r.ID == c.id {
+		return cred.Record{}, fmt.Errorf("%w: a login for account %q is running", cred.ErrConflict, r.ID)
+	}
+	return c.Creator.Create(r)
+}
+
+// An ID the store refuses as taken by something else is skipped like one it already has: the
+// other accounts still import.
+func TestImportSkipsConflictingAccount(t *testing.T) {
+	dir := writeFiles(t, map[string]any{
+		"claude-a.json": map[string]any{"type": "claude", "access_token": "fake-a"},
+		"claude-b.json": map[string]any{"type": "claude", "access_token": "fake-b"},
+	})
+	store, err := cred.Open(cred.FileBackend{Dir: filepath.Join(t.TempDir(), "credentials")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, _, err := ReadAuthDir(dir, DefaultImportOptions, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	imported, skipped, err := Import(conflictCreator{store, "claude-a"}, files, func(string) bool { return false })
+	if err != nil || len(imported) != 1 || imported[0].Record.ID != "claude-b" ||
+		len(skipped) != 1 || !strings.Contains(skipped[0].Reason, "login") {
+		t.Fatalf("import: imported %v, skipped %v, err %v", imported, skipped, err)
+	}
+	if _, ok := store.Get("claude-a"); ok {
+		t.Error("claude-a was stored")
+	}
+}
+
 // The Kimi site is decided as today's core decides it: domain, then base_url's host, then type.
 func TestKimiDomain(t *testing.T) {
 	for _, c := range []struct{ domain, baseURL, typ, want string }{
@@ -343,7 +382,7 @@ func TestKimiDomain(t *testing.T) {
 }
 
 func TestLargeFileIsSkipped(t *testing.T) {
-	big := `{"type":"claude","access_token":"` + strings.Repeat("a", maxAuthFile) + `"}`
+	big := `{"type":"claude","access_token":"` + strings.Repeat("a", MaxAuthFile) + `"}`
 	dir := writeFiles(t, map[string]any{"claude-big.json": []byte(big)})
 	files, skipped, err := ReadAuthDir(dir, DefaultImportOptions, time.Now())
 	if err != nil || len(files) != 0 || len(skipped) != 1 || !strings.Contains(skipped[0].Reason, "larger than") {
@@ -627,6 +666,30 @@ func TestSIWCAccountIDCollision(t *testing.T) {
 		want := []string{"foo-siwc.json:foo-siwc", "foo-siwc.json:foo-siwc-siwc", "foo.json:foo", "foo.json:foo-siwc-2"}
 		if !slices.Equal(ids, want) {
 			t.Errorf("ids %v, want %v", ids, want)
+		}
+	}
+}
+
+// One file read on its own gives what reading a folder holding only it gives: a Codex file's own
+// account and its SIWC account, as foo and foo-siwc; a file over MaxAuthFile is skipped, and a
+// file that is not JSON says so.
+func TestReadAuthFile(t *testing.T) {
+	b, _ := json.Marshal(siwcFile(nil))
+	files, skipped := ReadAuthFile("foo.json", b, DefaultImportOptions, time.Now())
+	var ids []string
+	for _, f := range files {
+		ids = append(ids, f.File+":"+f.Record.ID)
+	}
+	if want := []string{"foo.json:foo", "foo.json:foo-siwc"}; !slices.Equal(ids, want) || len(skipped) != 0 {
+		t.Errorf("ids %v, skipped %v; want %v", ids, skipped, want)
+	}
+	for _, c := range []struct{ content, reason string }{
+		{`{"type":"claude","access_token":"` + strings.Repeat("a", MaxAuthFile) + `"}`, "larger than 1024 KiB"},
+		{`{"type":"claude",`, "not a JSON object"},
+	} {
+		files, skipped := ReadAuthFile("x.json", []byte(c.content), DefaultImportOptions, time.Now())
+		if len(files) != 0 || !slices.Equal(skipped, []Skipped{{File: "x.json", Reason: c.reason}}) {
+			t.Errorf("files %v, skipped %v; want skipped %q", files, skipped, c.reason)
 		}
 	}
 }
