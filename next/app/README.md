@@ -153,7 +153,7 @@ Private signing keys are generated at runtime and kept only in temporary fixture
 Tauri updater signatures have their own format; descriptor signatures cannot replace them.
 
 The runner creates a private mode-0700 temporary HOME, calls `trust::write_test_marker(home)`,
-passes its returned one-time random nonce to the child as `PLUXY_TEST_TRUST_NONCE`, and writes
+passes its returned per-run random nonce to the child as `PLUXY_TEST_TRUST_NONCE`, and writes
 `.pluxy-test-trust-roots.json` there. Both marker and nonce must match; TMPDIR grants no trust:
 
 ```json

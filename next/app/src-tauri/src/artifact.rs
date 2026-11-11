@@ -24,7 +24,7 @@ pub struct Descriptor {
     pub sha256: String,
 }
 
-/// Only constructed by verify_archive. Exact bytes, source and signer are retained for storage.
+/// Constructed by verify_descriptor. Retains the exact signed descriptor and signature bytes.
 #[derive(Debug)]
 pub struct VerifiedDescriptor {
     descriptor: Descriptor,

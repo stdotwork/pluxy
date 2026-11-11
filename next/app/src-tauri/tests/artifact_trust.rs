@@ -147,7 +147,9 @@ fn artifact_trust_feature_and_marker_are_both_required() {
             "https://example.invalid/index.json",
             "linux/amd64"
         )
-        .is_err());
+        .err()
+        .unwrap()
+        .contains("native-tier trust not configured"));
     f.profile();
     let store = TrustStore::load(&f.dir).unwrap();
     if cfg!(feature = "artifact-test-trust") {
@@ -177,12 +179,22 @@ fn artifact_trust_feature_and_marker_are_both_required() {
                 "https://example.invalid/index.json",
                 "linux/amd64"
             )
-            .is_err());
+            .err()
+            .unwrap()
+            .contains("native-tier trust not configured"));
     }
     fs::remove_file(f.dir.join(trust::MARKER_FILE)).unwrap();
     let without_marker = TrustStore::load(&f.dir).unwrap();
-    assert!(without_marker.require_native().is_err());
-    assert!(without_marker.updater_key().is_err());
+    assert!(without_marker
+        .require_native()
+        .err()
+        .unwrap()
+        .contains("native-tier trust not configured"));
+    assert!(without_marker
+        .updater_key()
+        .err()
+        .unwrap()
+        .contains("updater trust not configured"));
 }
 
 #[test]
@@ -217,11 +229,21 @@ fn artifact_trust_signed_package_and_denial_controls() {
     valid.check_manifest(&manifest).unwrap();
     let mut changed = f.descriptor.clone();
     changed.push(b' ');
-    assert!(verify(&changed, &signature, &f.archive, source, "linux/amd64").is_err());
+    assert!(
+        verify(&changed, &signature, &f.archive, source, "linux/amd64")
+            .err()
+            .unwrap()
+            .contains("invalid descriptor signature")
+    );
     positive();
     let mut changed = f.archive.clone();
     changed[0] ^= 1;
-    assert!(verify(&f.descriptor, &signature, &changed, source, "linux/amd64").is_err());
+    assert!(
+        verify(&f.descriptor, &signature, &changed, source, "linux/amd64")
+            .err()
+            .unwrap()
+            .contains("archive SHA-256 differs from signed descriptor")
+    );
     positive();
     let mut value: serde_json::Value = serde_json::from_slice(&f.descriptor).unwrap();
     value["size"] = json!(f.archive.len() + 1);
@@ -233,9 +255,16 @@ fn artifact_trust_signed_package_and_denial_controls() {
         source,
         "linux/amd64"
     )
-    .is_err());
+    .err()
+    .unwrap()
+    .contains("archive size differs from signed descriptor"));
     positive();
-    assert!(verify(&f.descriptor, &signature, &f.archive, source, "linux/arm64").is_err());
+    assert!(
+        verify(&f.descriptor, &signature, &f.archive, source, "linux/arm64")
+            .err()
+            .unwrap()
+            .contains("descriptor platform does not match selected artifact")
+    );
     positive();
     assert!(verify(
         &f.descriptor,
@@ -244,7 +273,9 @@ fn artifact_trust_signed_package_and_denial_controls() {
         "https://other.invalid/index.json",
         "linux/amd64"
     )
-    .is_err());
+    .err()
+    .unwrap()
+    .contains("unknown publisher key or changed source"));
     positive();
     for (field, value) in [
         ("id", json!("example/other")),
@@ -259,13 +290,20 @@ fn artifact_trust_signed_package_and_denial_controls() {
         }
         assert!(valid
             .check_manifest(&serde_json::to_vec(&wrong).unwrap())
-            .is_err());
+            .err()
+            .unwrap()
+            .contains("manifest identity differs from signed descriptor"));
         valid.check_manifest(&manifest).unwrap();
     }
     let mut seed = [0; 32];
     getrandom::fill(&mut seed).unwrap();
     let unknown = SigningKey::from_bytes(&seed).sign(&f.descriptor).to_bytes();
-    assert!(verify(&f.descriptor, &unknown, &f.archive, source, "linux/amd64").is_err());
+    assert!(
+        verify(&f.descriptor, &unknown, &f.archive, source, "linux/amd64")
+            .err()
+            .unwrap()
+            .contains("invalid descriptor signature")
+    );
     positive();
     assert!(artifact::verify_trusted_archive(
         &store,
@@ -276,7 +314,9 @@ fn artifact_trust_signed_package_and_denial_controls() {
         "linux/amd64",
         Cursor::new(&f.archive)
     )
-    .is_err());
+    .err()
+    .unwrap()
+    .contains("unknown publisher key or changed source"));
     positive();
     let mut noncanonical = signature.clone();
     noncanonical[63] |= 0x80;
@@ -287,7 +327,9 @@ fn artifact_trust_signed_package_and_denial_controls() {
         source,
         "linux/amd64"
     )
-    .is_err());
+    .err()
+    .unwrap()
+    .contains("invalid descriptor signature"));
     positive();
     // Add the group order L to a valid S. Its top bits remain clear; bit masking alone fails.
     let mut plus_l = signature.clone();
@@ -338,7 +380,9 @@ fn artifact_trust_signed_package_and_denial_controls() {
             source,
             "linux/amd64"
         )
-        .is_err());
+        .err()
+        .unwrap()
+        .contains("invalid UTF-8 descriptor JSON"));
         positive();
     }
     for (field, value) in [
@@ -357,7 +401,13 @@ fn artifact_trust_signed_package_and_denial_controls() {
             source,
             "linux/amd64"
         )
-        .is_err());
+        .err()
+        .unwrap()
+        .contains(match field {
+            "id" => "unknown publisher key or changed source",
+            "tier" => "invalid UTF-8 descriptor JSON",
+            _ => "invalid descriptor identity, platform or SHA-256",
+        }));
         positive();
     }
 }
@@ -390,7 +440,10 @@ fn artifact_trust_marker_mismatch_and_weak_key_refuse() {
         br#"{"format":1,"home":"/other","purpose":"pluxy-artifact-test-trust","nonce":"invalid"}"#,
     )
     .unwrap();
-    assert!(TrustStore::load(&f.dir).is_err());
+    assert!(TrustStore::load(&f.dir)
+        .err()
+        .unwrap()
+        .contains("test trust profile marker mismatch"));
     f.profile();
     TrustStore::load(&f.dir).unwrap().require_native().unwrap();
     let path = f.dir.join(trust::PROFILE_FILE);
@@ -399,7 +452,10 @@ fn artifact_trust_marker_mismatch_and_weak_key_refuse() {
     identity[0] = 1;
     roots["roots"][0]["public_key"] = json!(artifact::hex(&identity));
     fs::write(path, serde_json::to_vec(&roots).unwrap()).unwrap();
-    assert!(TrustStore::load(&f.dir).is_err());
+    assert!(TrustStore::load(&f.dir)
+        .err()
+        .unwrap()
+        .contains("weak publisher public key"));
     f.profile();
     TrustStore::load(&f.dir).unwrap().require_native().unwrap();
 }
@@ -467,4 +523,98 @@ fn rfc8032_public_known_answers() {
         assert!(artifact::verify_signature(&key, &message, &bad).unwrap_err().contains("signature"));
         artifact::verify_signature(&key, &message, &signature).unwrap();
     }
+}
+
+#[test]
+fn strict_signature_rejects_small_order_forgery() {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+    // A = identity (small order), R = identity, S = 0. Lax verification accepts this
+    // forged signature for every message; strict verification must reject it directly.
+    let mut identity = [0u8; 32];
+    identity[0] = 1;
+    let key = VerifyingKey::from_bytes(&identity).unwrap();
+    let mut forged = [0u8; 64];
+    forged[0] = 1;
+    let message = b"small-order forgery control";
+    key.verify(message, &Signature::from_bytes(&forged))
+        .unwrap();
+    assert_eq!(
+        artifact::verify_signature(&key, message, &forged).unwrap_err(),
+        "invalid descriptor signature"
+    );
+    let mut seed = [0; 32];
+    getrandom::fill(&mut seed).unwrap();
+    let legitimate = SigningKey::from_bytes(&seed);
+    artifact::verify_signature(
+        &legitimate.verifying_key(),
+        message,
+        &legitimate.sign(message).to_bytes(),
+    )
+    .unwrap();
+}
+
+#[cfg(feature = "artifact-test-trust")]
+#[test]
+fn real_trust_store_lookup_controls() {
+    use artifact::PublisherKeys;
+    if isolated("real_trust_store_lookup_controls") {
+        return;
+    }
+    let f = Fixture::new();
+    f.profile();
+    let source = "https://example.invalid/index.json";
+    let positive = |store: &TrustStore| {
+        assert_eq!(
+            store.publisher_key(source, "fixture", "example").unwrap(),
+            f.key.verifying_key()
+        );
+        f.verify(
+            store,
+            &f.descriptor,
+            &f.signature(&f.descriptor),
+            &f.archive,
+            source,
+            "linux/amd64",
+        )
+        .unwrap();
+    };
+    let store = TrustStore::load(&f.dir).unwrap();
+    positive(&store);
+    for (src, key, publisher) in [
+        ("https://other.invalid/index.json", "fixture", "example"),
+        (source, "unknown", "example"),
+        (source, "fixture", "other"),
+    ] {
+        assert_eq!(
+            store.publisher_key(src, key, publisher).unwrap_err(),
+            "unknown publisher key or changed source"
+        );
+        positive(&store);
+    }
+    let path = f.dir.join(trust::PROFILE_FILE);
+    let mut roots: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let duplicate = roots["roots"][0].clone();
+    roots["roots"].as_array_mut().unwrap().push(duplicate);
+    fs::write(path, serde_json::to_vec(&roots).unwrap()).unwrap();
+    let ambiguous = TrustStore::load(&f.dir).unwrap();
+    assert_eq!(
+        ambiguous
+            .publisher_key(source, "fixture", "example")
+            .unwrap_err(),
+        "ambiguous publisher key"
+    );
+    assert_eq!(
+        f.verify(
+            &ambiguous,
+            &f.descriptor,
+            &f.signature(&f.descriptor),
+            &f.archive,
+            source,
+            "linux/amd64"
+        )
+        .unwrap_err(),
+        "ambiguous publisher key"
+    );
+    f.profile();
+    positive(&TrustStore::load(&f.dir).unwrap());
 }

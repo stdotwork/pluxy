@@ -88,7 +88,7 @@ separate from Tauri updater signatures. Trust binds the publisher, key identity 
 trust domain; a changed source needs fresh trust. The feature-free `verify_descriptor` accepts
 an approved key from native settings for web resources or curated native admission; both use
 the same verifier. `PublisherKeys` supplies publisher/source/key lookup separately.
-`VerifiedArchive<R>` retains the rewound checked reader. Consumers e3/na/d use `into_archive()`
+`VerifiedArchive<R>` retains the rewound checked reader. Later folder-grant, native-admission and core-update code uses `into_archive()`
 instead of reopening a path, prevent concurrent writes, and check manifest identity after extraction.
 
 Version 2.2.0 is retained over stable 3.0.0 to avoid its curve25519-dalek 5, ed25519/signature 3
