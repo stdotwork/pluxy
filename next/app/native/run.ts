@@ -130,8 +130,8 @@ function signalGroup(pid: number, signal: NodeJS.Signals) {
 const sessions = new Set<number>();
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
-    for (const pid of sessions) signalGroup(pid, "SIGTERM");
-    process.exit(130);
+    // Bounded: TERM, a grace period, then KILL for each session, before the runner exits.
+    void Promise.all([...sessions].map(stopSession)).finally(() => process.exit(130));
   });
 }
 
@@ -282,7 +282,8 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
         problems.push(`the app did not finish within ${TIMEOUT / 1000}s`);
         stopping = stopSession(pid);
       }, TIMEOUT);
-      proc.on("exit", (c) => {
+      // "close", not "exit": it comes after the output is read, so the "ready" line is not missed.
+      proc.on("close", (c) => {
         clearTimeout(timer);
         resolve(c);
       });
