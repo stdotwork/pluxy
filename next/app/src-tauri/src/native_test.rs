@@ -72,7 +72,7 @@ fn probe_js(calls: &[&str]) -> String {
         inv(cmd, {{}}),
         new Promise((_, r) => setTimeout(() => r(new Error("timed out")), 3000)),
       ]);
-      out.calls[cmd] = {{ ok: true, detail: String(JSON.stringify(v)).slice(0, 200) }};
+      out.calls[cmd] = {{ ok: true, detail: String(JSON.stringify(v)).slice(0, 4000) }};
     }} catch (e) {{
       out.calls[cmd] = {{ ok: false, detail: String(e).slice(0, 300) }};
     }}
