@@ -60,9 +60,9 @@ struct App {
     /// The page webviews' own web context's folder: nothing shared with the window's.
     pages_dir: std::path::PathBuf,
     pages: Mutex<Pages>,
-    /// Page webviews that could not be closed, unbound already: closed again at the next close,
-    /// so none is forgotten while it may still run.
-    unclosed: Mutex<Vec<String>>,
+    /// Page webviews being closed, unbound already, until they are destroyed: one that could
+    /// not be closed is closed again at the next close, so none is forgotten while it may run.
+    closing: Mutex<Vec<String>>,
     /// This device's extension catalog. Installs check and stage a release without it.
     device: Mutex<device::Catalog>,
     device_dirs: device::Dirs,
@@ -155,29 +155,53 @@ fn close_pages(app: &AppHandle) {
         pages.clear();
         l
     };
-    // Each one that cannot be closed stays in `unclosed`.
+    // Each one that cannot be closed stays in `closing`.
     let _ = close_webviews(app, labels);
 }
 
 /// Closes page webviews whose pages are unbound already, and those that could not be closed
-/// before. One that cannot be closed is kept in `unclosed` and tried again at the next call;
-/// the answer says which could not be.
+/// before, and waits until they are destroyed. Each is tracked in `closing` from now until
+/// then; one that cannot be closed stays tracked and is tried again at the next call. The
+/// answer says which could not be closed.
+///
+/// The closes run on the main thread: there, tauri-runtime-wry 2.12.3 handles a webview's
+/// close inline (`send_user_message`), removing the webview's last reference, whose drop
+/// destroys the WebKit widget (wry 0.57.1, `InnerWebView::drop`), before `close` returns. From
+/// another thread `close` only posts the message.
 fn close_webviews(app: &AppHandle, labels: Vec<String>) -> Vec<String> {
-    let st = app.state::<App>();
-    let mut todo = std::mem::take(&mut *st.unclosed.lock().unwrap());
-    todo.extend(labels);
-    let mut left = Vec::new();
-    for l in todo {
-        place::forget(&l);
-        let Some(w) = app.get_webview(&l) else {
-            continue;
-        };
-        if let Err(e) = w.close() {
-            left.push(format!("page webview {l} could not be closed: {e}"));
-            st.unclosed.lock().unwrap().push(l);
+    let todo: Vec<String> = {
+        let st = app.state::<App>();
+        let mut closing = st.closing.lock().unwrap();
+        for l in labels {
+            if !closing.contains(&l) {
+                closing.push(l);
+            }
         }
+        closing.clone()
+    };
+    let (tx, rx) = std::sync::mpsc::channel();
+    let a = app.clone();
+    let sent = app.run_on_main_thread(move || {
+        let mut left = Vec::new();
+        for l in todo {
+            place::forget(&l);
+            let closed = match a.get_webview(&l) {
+                None => Ok(()),
+                Some(w) => w.close(),
+            };
+            match closed {
+                Ok(()) => a.state::<App>().closing.lock().unwrap().retain(|x| *x != l),
+                Err(e) => left.push(format!("page webview {l} could not be closed: {e}")),
+            }
+        }
+        let _ = tx.send(left);
+    });
+    match sent {
+        Ok(()) => rx.recv().unwrap_or_else(|_| {
+            vec!["page webviews could not be closed: the main thread stopped".into()]
+        }),
+        Err(e) => vec![format!("page webviews could not be closed: {e}")],
     }
-    left
 }
 
 /// Stops the app's own core, if it runs one, and exits. A local or remote core keeps running.
@@ -1086,7 +1110,7 @@ pub fn run() {
                 confirmations: Mutex::new(confirmations),
                 pages_dir,
                 pages: Mutex::new(Pages::default()),
-                unclosed: Mutex::new(Vec::new()),
+                closing: Mutex::new(Vec::new()),
                 device: Mutex::new(catalog),
                 device_dirs,
                 status: Mutex::new(None),
