@@ -282,7 +282,7 @@ mod linux {
         let path = format!("/{suffix}");
         let (menu,) = call(
             &conn,
-            &name,
+            name,
             &path,
             "org.freedesktop.DBus.Properties",
             "Get",
@@ -297,7 +297,7 @@ mod linux {
         let interface = "com.canonical.dbusmenu";
         let layout = call(
             &conn,
-            &name,
+            name,
             menu.as_str(),
             interface,
             "GetLayout",
@@ -338,7 +338,7 @@ mod linux {
             // Send even if disabled: the native action must refuse foreign-process control too.
             call(
                 &conn,
-                &name,
+                name,
                 menu.as_str(),
                 interface,
                 "Event",
