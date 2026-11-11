@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/stdotwork/pluxy/next/internal/proxyurl"
 )
 
 // Result is a config.yaml turned into this core's config.
@@ -218,7 +220,7 @@ var rules = map[string]rule{
 	"quota-exceeded.switch-project":                     {dead, ""},
 	"quota-exceeded.switch-preview-model":               {dead, ""},
 
-	"requests.proxy-url":                     {later, ""},
+	"requests.proxy-url":                     {supported, ""},
 	"requests.payload":                       {later, ""},
 	"requests.tls-handshake-timeout-seconds": {dropped, "off by default and no need found"},
 	"requests.passthrough-headers":           {dropped, "off by default and no need found"},
@@ -297,7 +299,7 @@ var rules = map[string]rule{
 	"api-keys.*[].prefix":                                      {supported, ""},
 	"api-keys.*[].excluded-models":                             {supported, ""},
 	"api-keys.*[].headers":                                     {later, ""},
-	"api-keys.*[].proxy-url":                                   {later, ""},
+	"api-keys.*[].proxy-url":                                   {supported, ""},
 	"api-keys.*[].connection-pool":                             {later, ""},
 	"api-keys.*[].request-scoped-errors":                       {later, ""},
 	"api-keys.*[].disable-cooling":                             {supported, ""},
@@ -445,7 +447,7 @@ var readPaths = []string{
 	"routing.retry.max-retry-credentials", "routing.retry.max-retry-interval", "routing.retry.request-retry",
 	"routing.force-model-prefix", "oauth.model-alias", "oauth.excluded-models",
 	"upstream.codex.disable-codex-cloaking", "upstream.codex.websocket-compression",
-	"upstream.xai.inject-x-search",
+	"upstream.xai.inject-x-search", "requests.proxy-url",
 	"oauth.providers.codex.signin-with-chatgpt-identifier",
 	"multimedia.disable-image-generation", "oauth.auth-dir", "observability.usage.usage-statistics-enabled",
 	"observability.logs.logging-to-file", "observability.logs.logs-max-total-size-mb",
@@ -664,6 +666,16 @@ func (x *translator) options() error {
 		return err
 	}
 	x.res.AuthDir = strings.TrimSpace(dir)
+	proxy, err := str(x.t, "requests.proxy-url")
+	if err != nil {
+		return err
+	}
+	if proxy = strings.TrimSpace(proxy); proxy != "" {
+		if err := proxyurl.Check("requests.proxy-url", proxy); err != nil {
+			return err
+		}
+		x.out["proxy_url"] = proxy
+	}
 	return nil
 }
 
@@ -970,6 +982,14 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 		return nil, err
 	} else if p = modelPrefix(p); p != "" {
 		a["prefix"] = p
+	}
+	if p, err := scalar(field(g, k, "proxy-url"), path+".proxy-url"); err != nil {
+		return nil, err
+	} else if p = strings.TrimSpace(p); p != "" {
+		if err := proxyurl.Check(display(path)+" key "+id+" proxy-url", p); err != nil {
+			return nil, err
+		}
+		a["proxy_url"] = p
 	}
 	if f.v8 != "openai-compatibility" {
 		if v := field(g, k, "excluded-models"); v != nil {
