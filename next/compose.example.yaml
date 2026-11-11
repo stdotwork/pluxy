@@ -1,0 +1,27 @@
+# An example for running pluxy with Docker Compose. Copy it to compose.yaml, make the config
+# folder (see "Run it in a container" in README.md), then:
+#
+#   docker compose up -d
+#
+# ./config must hold config.json with "listen": "0.0.0.0:8400" and be writable by user 65532,
+# the user the image runs as: chown -R 65532:65532 config
+services:
+  pluxy:
+    image: ghcr.io/stdotwork/pluxy:latest
+    # To run a build of this folder instead of a published image:
+    # build: .
+    restart: unless-stopped
+    ports:
+      # Only this machine reaches it. Drop "127.0.0.1:" to serve the network, and put TLS in
+      # front of it or turn on tls.enable first.
+      - "127.0.0.1:8400:8400"
+    volumes:
+      - ./config:/config
+    # pluxy keeps its files in /config; /tmp is for its extensions' sockets and scratch files.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
