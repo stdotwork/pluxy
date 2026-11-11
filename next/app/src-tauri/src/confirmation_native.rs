@@ -7,6 +7,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use std::sync::mpsc;
 use tauri::{Manager, Webview};
+pub(crate) static PAGE_MAPPED_DISABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 pub(crate) static PAGE_CLAIMS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
@@ -285,6 +287,7 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
             .lock()
             .unwrap()
             .prepare_page(a.clone())?;
+        PAGE_MAPPED_DISABLED.store(false, std::sync::atomic::Ordering::SeqCst);
         let id = super::page_start(app, p)?;
         wait_for("page Start dialog", || window("pluxy native confirmation"))?;
         let (tx, rx) = mpsc::channel();
@@ -296,9 +299,7 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
             });
             let state = dialog.map(|d| {
                 (
-                    !d.widget_for_response(gtk::ResponseType::Accept)
-                        .unwrap()
-                        .is_sensitive(),
+                    PAGE_MAPPED_DISABLED.load(std::sync::atomic::Ordering::SeqCst),
                     d.widget_for_response(gtk::ResponseType::Cancel)
                         .unwrap()
                         .is_focus(),

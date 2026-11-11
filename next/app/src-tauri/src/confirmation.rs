@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -239,7 +239,10 @@ fn escape_format_characters(text: &str) -> String {
     use gtk::glib::Unichar;
     let mut out = String::new();
     for ch in text.chars() {
-        if ch.unicode_type() == gtk::glib::UnicodeType::Format {
+        if ch.is_control()
+            || matches!(ch, '\u{2028}' | '\u{2029}')
+            || ch.unicode_type() == gtk::glib::UnicodeType::Format
+        {
             for unit in ch.encode_utf16(&mut [0; 2]).iter() {
                 out.push_str(&format!("\\u{unit:04x}"));
             }
@@ -251,7 +254,12 @@ fn escape_format_characters(text: &str) -> String {
 }
 fn review_text(exact: &ExactAction) -> Result<String, String> {
     serde_json::to_string_pretty(exact)
-        .map(|s| escape_format_characters(&s))
+        .map(|s| {
+            s.split('\n')
+                .map(escape_format_characters)
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
         .map_err(|e| format!("cannot render native review: {e}"))
 }
 /// A launcher should execute this opened handle with fexecve where practical and use the opened
@@ -287,11 +295,11 @@ struct Approval {
     exact: ExactAction,
 }
 /// Only native event handlers construct this. There is no JS gesture flag constructor.
+// No general constructor: tray/native-UI handlers in this module (and native-test fixtures)
+// create this only in their native event callbacks. DOM and IPC paths cannot create one.
 pub struct Gesture {
     created: Instant,
 }
-// No general constructor: tray/native-UI handlers in this module (and native-test fixtures)
-// create this only in their native event callbacks. DOM and IPC paths cannot create one.
 #[derive(Serialize, Deserialize)]
 struct SettingsFile {
     version: u32,
@@ -315,7 +323,36 @@ fn refuse_settings_symlink(path: &Path) -> Result<(), String> {
         Err(e) => Err(e.to_string()),
     }
 }
+fn secure_parent(path: &Path, create: bool) -> Result<(), String> {
+    let dir = path.parent().ok_or("settings has no parent")?;
+    if create {
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)
+            .map_err(|e| e.to_string())?;
+    }
+    let f = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_NOCTTY)
+        .open(dir)
+    {
+        Ok(f) => f,
+        Err(e) if !create && e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("settings folder refused: {e}")),
+    };
+    let m = f.metadata().map_err(|e| e.to_string())?;
+    if m.uid() != unsafe { libc::geteuid() } {
+        return Err("settings folder is not owned by this user".into());
+    }
+    if m.mode() & 0o022 != 0 {
+        f.set_permissions(fs::Permissions::from_mode(0o700))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
 fn load_settings(path: &Path) -> Result<Vec<Approval>, String> {
+    secure_parent(path, false)?;
     refuse_settings_symlink(path)?;
     let mut f = match OpenOptions::new()
         .read(true)
@@ -339,6 +376,7 @@ fn load_settings(path: &Path) -> Result<Vec<Approval>, String> {
 
 pub struct Confirmations {
     settings: PathBuf,
+    saving_warnings: HashMap<String, String>,
     pub(crate) startup_warning: Option<String>,
     persistence_blocked: bool,
     approvals: Vec<Approval>,
@@ -358,12 +396,13 @@ impl Confirmations {
         let approvals = match load_settings(&settings) {
             Ok(a) => a,
             Err(e) => {
-                let safe = OpenOptions::new()
-                    .read(true)
-                    .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY)
-                    .open(&settings)
-                    .ok()
-                    .is_some_and(|f| private_file(&f).is_ok());
+                let safe = secure_parent(&settings, false).is_ok()
+                    && OpenOptions::new()
+                        .read(true)
+                        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY)
+                        .open(&settings)
+                        .ok()
+                        .is_some_and(|f| private_file(&f).is_ok());
                 let preservation = if safe {
                     let time = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
@@ -386,7 +425,7 @@ impl Confirmations {
                     persistence_blocked = true;
                     "Unsafe or unreadable settings refused. Remembering is disabled.".into()
                 };
-                let message = format!("Remembered launches were not loaded: {e}. {preservation} No remembered approvals are active.");
+                let message = escape_format_characters(&format!("Remembered launches were not loaded: {e}. {preservation} No remembered approvals are active."));
                 eprintln!("pluxy-app: {message}");
                 warning = Some(message);
                 Vec::new()
@@ -395,6 +434,7 @@ impl Confirmations {
         Ok(Self {
             settings,
             startup_warning: warning,
+            saving_warnings: HashMap::new(),
             persistence_blocked,
             approvals,
             cache: HashMap::new(),
@@ -412,11 +452,7 @@ impl Confirmations {
             return Err("unsafe settings refused; remembering is disabled".into());
         }
         let dir = self.settings.parent().ok_or("settings has no parent")?;
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)
-            .map_err(|e| e.to_string())?;
+        secure_parent(&self.settings, true)?;
         refuse_settings_symlink(&self.settings)?;
         match OpenOptions::new()
             .read(true)
@@ -548,6 +584,8 @@ impl Confirmations {
     fn prune(&mut self) {
         let now = Instant::now();
         self.pending.retain(|_, p| p.expires > now);
+        self.saving_warnings
+            .retain(|id, _| self.pending.contains_key(id));
         self.issued.retain(|_, t| t.expires > now);
     }
     /// Limits follow immutable native origin, never a page-supplied flag.
@@ -602,7 +640,10 @@ impl Confirmations {
             return Err("action was already confirmed".into());
         }
         p.prepared.check()?;
-        Ok((p.prepared.review()?, p.prepared.exact.launch.is_some()))
+        Ok((
+            p.prepared.review()?,
+            p.prepared.exact.launch.is_some() && !self.persistence_blocked,
+        ))
     }
     /// Only the GTK response handler calls this; there is no webview approval-result command.
     fn finish(
@@ -624,7 +665,7 @@ impl Confirmations {
         }
         p.prepared.check()?;
         let approval = if remember && p.prepared.exact.launch.is_some() {
-            let id = crate::managed::random_key();
+            let approval_id = crate::managed::random_key();
             let mut approvals: Vec<_> = self
                 .approvals
                 .iter()
@@ -632,23 +673,35 @@ impl Confirmations {
                 .cloned()
                 .collect();
             approvals.push(Approval {
-                id: id.clone(),
+                id: approval_id.clone(),
                 exact: p.prepared.exact.clone(),
             });
-            self.save(&approvals)?;
-            self.approvals = approvals;
-            self.issued.retain(|_, t| {
-                t.approval
-                    .as_ref()
-                    .is_none_or(|id| self.approvals.iter().any(|a| &a.id == id))
-            });
-            Some(id)
+            let saved = self.save(&approvals);
+            if let Err(e) = saved {
+                let warning = escape_format_characters(&format!(
+                    "Confirmed for this use only. Could not remember launch: {e}"
+                ));
+                eprintln!("pluxy-app: {warning}");
+                self.saving_warnings.insert(id.to_string(), warning);
+                None
+            } else {
+                self.approvals = approvals;
+                self.issued.retain(|_, t| {
+                    t.approval
+                        .as_ref()
+                        .is_none_or(|id| self.approvals.iter().any(|a| &a.id == id))
+                });
+                Some(approval_id)
+            }
         } else {
             None
         };
         p.reviewed = true;
         self.pending.insert(id.into(), p);
         Ok(Some(self.issue(id, approval)))
+    }
+    pub(crate) fn saving_warning(&self, id: &str) -> Option<&str> {
+        self.saving_warnings.get(id).map(String::as_str)
     }
     fn issue(&mut self, action: &str, approval: Option<String>) -> String {
         let token = crate::managed::random_key();
@@ -739,6 +792,7 @@ impl Confirmations {
         self.pending.clear();
         self.issued.clear();
         self.results.clear();
+        self.saving_warnings.clear();
     }
 }
 #[path = "confirmation_ui.rs"]

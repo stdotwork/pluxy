@@ -75,6 +75,9 @@ pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> 
                 if let Some(cancel) = d.widget_for_response(gtk::ResponseType::Cancel) {
                     cancel.grab_focus();
                 }
+                #[cfg(feature = "native-test")]
+                super::native::PAGE_MAPPED_DISABLED
+                    .store(!confirm.is_sensitive(), std::sync::atomic::Ordering::SeqCst);
                 if !gate.replace(true) {
                     let weak = confirm.downgrade();
                     gtk::glib::timeout_add_local_once(Duration::from_secs(1), move || {
@@ -123,7 +126,10 @@ pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> 
                 Ok(None) => "cancelled",
                 Err(_) => "expired, changed or revoked",
             };
-            let text = format!("{summary}\nOutcome: {outcome}");
+            let mut text = format!("{summary}\nOutcome: {outcome}");
+            if let Some(warning) = c.saving_warning(&id) {
+                text.push_str(&format!("\n{warning}"));
+            }
             if c.results.len() >= 64 {
                 c.results.clear();
             }

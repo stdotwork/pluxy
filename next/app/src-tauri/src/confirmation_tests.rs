@@ -2,7 +2,10 @@ use super::*;
 use std::os::unix::fs::PermissionsExt;
 
 fn fixture() -> (PathBuf, Confirmations, Action) {
-    let dir = std::env::temp_dir().join(format!("pluxy-confirm-{}", crate::managed::random_key()));
+    fixture_in(&std::env::temp_dir())
+}
+fn fixture_in(root: &Path) -> (PathBuf, Confirmations, Action) {
+    let dir = root.join(format!("pluxy-confirm-{}", crate::managed::random_key()));
     fs::create_dir(&dir).unwrap();
     let exe = dir.join("tool");
     fs::write(&exe, b"#!/bin/sh\nexit 0\n").unwrap();
@@ -271,7 +274,9 @@ fn settings_version_permissions_and_symlinks_fail_closed() {
     assert!(loaded.persistence_blocked);
     let p = loaded.prepare(a.clone(), Origin::NativeUi).unwrap();
     let id = loaded.queue(p).unwrap();
-    assert!(loaded.finish(&id, true, true).is_err());
+    let token = loaded.finish(&id, true, true).unwrap().unwrap();
+    assert!(loaded.saving_warning(&id).is_some());
+    loaded.consume(&id, &token).unwrap();
     assert_eq!(fs::read(&c.settings).unwrap(), b"{}");
     fs::remove_file(&c.settings).unwrap();
     let target = dir.join("target");
@@ -438,7 +443,29 @@ fn self_update_supersedes_old_recipe_approval_and_outstanding_tokens() {
 #[test]
 fn opened_script_fexecve_requires_clearing_cloexec_and_uses_dev_fd_path() {
     use std::os::fd::AsRawFd;
-    let (dir, mut c, a) = fixture();
+    let target = std::env::var_os("CARGO_TARGET_TMPDIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from))
+        .unwrap_or_else(|| std::env::current_exe().unwrap().parent().unwrap().into());
+    fs::create_dir_all(&target).unwrap();
+    let mut executable_root = None;
+    for root in [target, std::env::temp_dir()] {
+        let f = File::open(&root).unwrap();
+        let mut vfs = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+        assert_eq!(
+            unsafe { libc::fstatvfs(f.as_raw_fd(), vfs.as_mut_ptr()) },
+            0
+        );
+        if unsafe { vfs.assume_init() }.f_flag & libc::ST_NOEXEC == 0 {
+            executable_root = Some(root);
+            break;
+        }
+    }
+    let Some(root) = executable_root else {
+        eprintln!("SKIP fexecve fixture: target temporary directory and system temporary directory are mounted noexec");
+        return;
+    };
+    let (dir, mut c, a) = fixture_in(&root);
     let exe = &a.launch.as_ref().unwrap().executable;
     fs::write(
         exe,
@@ -475,5 +502,91 @@ fn opened_script_fexecve_requires_clearing_cloexec_and_uses_dev_fd_path() {
         assert!(libc::WIFEXITED(status));
         assert_eq!(libc::WEXITSTATUS(status), if clear { 42 } else { 41 });
     }
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn failed_remembering_preserves_one_time_confirmation() {
+    let (dir, mut c, a) = fixture();
+    c.persistence_blocked = true;
+    let p = c.prepare(a.clone(), Origin::NativeUi).unwrap();
+    let id = c.queue(p).unwrap();
+    assert!(
+        !c.review(&id).unwrap().1,
+        "disabled persistence must hide Remember"
+    );
+    let token = c.finish(&id, true, true).unwrap().unwrap();
+    assert!(c.saving_warning(&id).is_some());
+    c.consume(&id, &token).unwrap();
+    assert!(c.approvals.is_empty());
+    c.persistence_blocked = false;
+    // Reproduce a real save failure after the native review was prepared.
+    let p = c.prepare(a, Origin::NativeUi).unwrap();
+    let id = c.queue(p).unwrap();
+    fs::create_dir(&c.settings).unwrap();
+    let token = c.finish(&id, true, true).unwrap().unwrap();
+    assert!(c.saving_warning(&id).is_some());
+    c.consume(&id, &token).unwrap();
+    assert!(c.approvals.is_empty());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn review_escapes_controls_and_pango_line_separators() {
+    let (dir, mut c, mut a) = fixture();
+    let chars = [
+        '\u{7f}', '\u{80}', '\u{85}', '\u{9f}', '\u{2028}', '\u{2029}',
+    ];
+    a.what.extend(chars);
+    let p = c.prepare(a, Origin::NativeUi).unwrap();
+    let review = p.review().unwrap();
+    for ch in chars {
+        assert!(!review.contains(ch));
+    }
+    for escaped in [
+        "\\u007f", "\\u0080", "\\u0085", "\\u009f", "\\u2028", "\\u2029",
+    ] {
+        assert!(review.contains(escaped));
+    }
+    assert!(
+        review.contains("\n  "),
+        "host JSON formatting must stay readable"
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn startup_warning_escapes_bad_file_text() {
+    let (dir, mut c, _) = fixture();
+    c.settings = dir.join("settings-\u{85}\u{202e}\u{2028}.json");
+    fs::write(
+        &c.settings,
+        "{\"version\":\"unsafe\u{85}\u{202e}\u{2028}\",\"approvals\":[]}",
+    )
+    .unwrap();
+    fs::set_permissions(&c.settings, fs::Permissions::from_mode(0o600)).unwrap();
+    let loaded = Confirmations::open(c.settings.clone()).unwrap();
+    let warning = loaded.startup_warning.unwrap();
+    assert!(warning.contains("\\u0085"));
+    assert!(warning.contains("\\u202e"));
+    assert!(warning.contains("\\u2028"));
+    assert!(
+        !warning.contains('\u{85}')
+            && !warning.contains('\u{202e}')
+            && !warning.contains('\u{2028}')
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn writable_settings_parent_is_tightened_on_open_and_save() {
+    let (dir, mut c, a) = fixture();
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o777)).unwrap();
+    let loaded = Confirmations::open(c.settings.clone()).unwrap();
+    assert!(!loaded.persistence_blocked);
+    assert_eq!(fs::metadata(&dir).unwrap().mode() & 0o777, 0o700);
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o777)).unwrap();
+    approve(&mut c, a, true);
+    assert_eq!(fs::metadata(&dir).unwrap().mode() & 0o777, 0o700);
     fs::remove_dir_all(dir).unwrap();
 }

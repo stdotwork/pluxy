@@ -105,9 +105,12 @@ secret-reference uses. Native callers must never put secret bytes in argv or set
 
 The settings file has a format version. Damaged, unversioned or unsupported settings are moved
 to a sibling `remembered-launches.json.corrupt-<time>` file. The app starts with no approvals,
-a native notice and a log message. Symlinks, files owned by another user and group/world-writable files
-are refused; remembering stays disabled if the unsafe file cannot be safely preserved. Newly
-created settings folders use mode 0700 and files use 0600.
+a native notice and a log message. Symlinks, files owned by another user and
+group/world-writable files are refused; remembering stays disabled if the unsafe file cannot be
+safely preserved. Newly created settings folders use mode 0700 and files use 0600. On open and
+save, an existing folder owned by this user is tightened to 0700 if group/world-writable; a folder
+owned by another user is refused. Disabled persistence hides Remember. If saving fails after
+confirmation, the one-time token is still issued and a native notice/log reports the failure.
 
 An executable is opened before checking its canonical path, device/inode, size, mtime, ctime and
 mode. SHA-256 is computed once for that metadata and cached in memory; unchanged metadata reuses
@@ -126,15 +129,17 @@ is private to native handlers and fixtures, and a gesture expires after five sec
 
 Page Start uses the separate native entry point, always opens a fresh dialog, permits one pending
 confirmation per original package and one attempt per second, and shows a GTK notice with
-requester, action and outcome, including refusals. Page/Import pending entries have their own limit of 16; trusted
-requests have a separate limit of 64. Page dialogs focus Cancel and keep Confirm disabled for
-one second after mapping. Non-UTF-8 paths are refused before review; Unicode format characters
-(including bidi and zero-width characters) are displayed as escaped Unicode.
+requester, action and outcome, including refusals. Page/Import pending entries have their own
+limit of 16; trusted requests have a separate limit of 64. Page dialogs focus Cancel and keep
+Confirm disabled for one second after mapping. Non-UTF-8 paths are refused before review;
+Unicode format characters (including bidi and zero-width characters), control characters and
+Pango line separators (U+2028/U+2029) are displayed as escaped Unicode.
 
 Import routing and real launchers are added separately; this module contains no launcher. Host
 callers must invalidate pending preparations/tokens when package, contract, environment or secret
-policy records change, and prepare a new action. Tokens and pending reviews expire after 60 seconds, work once for their preparation, and fail on changed file identity
-or executable metadata. Revoking a remembered approval also invalidates its outstanding tokens.
+policy records change, and prepare a new action. Tokens and pending reviews expire after 60
+seconds, work once for their preparation, and fail on changed file identity or executable metadata.
+Revoking a remembered approval also invalidates its outstanding tokens.
 
 ## Build and check
 
@@ -176,7 +181,9 @@ refusal with a visible host-owned notice. Unit tests cover action binding, cache
 expiry, cancellation, invalidation, gesture freshness, Page/Import origin denial, separate pending
 limits, superseded approvals, unsafe/corrupt settings and Unicode/path handling. A unit test forks
 a child and runs a fixture script through `fexecve`, checking `FD_CLOEXEC` behavior and the
-`/dev/fd/N` script path. Native GUI fixture actions do not execute a program.
+`/dev/fd/N` script path. The test prefers a target temporary folder and skips explicitly only
+when both it and the system temporary folder are mounted noexec. Native GUI fixture actions do
+not execute a program.
 
 Before the app, each run's session starts desktop services (`native/session.ts`, with the
 packages and paths in `native/services.ts`) and checks them for real; a missing or broken one
