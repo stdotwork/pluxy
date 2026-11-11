@@ -483,6 +483,28 @@ func TestProxyTransportClosesIdleConnections(t *testing.T) {
 	}
 }
 
+// A redirect that keeps the host but changes the scheme (https to http) is away from the first
+// request too: the account's secret headers would go out unencrypted.
+func TestRedirectedAwayOnSchemeChange(t *testing.T) {
+	first, _ := http.NewRequest(http.MethodGet, "https://api.example.test/start", nil)
+	for _, c := range []struct {
+		to   string
+		away bool
+	}{
+		{"https://api.example.test/next", false},
+		{"https://API.example.test/next", false},
+		{"http://api.example.test/next", true},
+		{"https://api.example.test:8443/next", true},
+		{"https://other.example.test/next", true},
+	} {
+		next, _ := http.NewRequest(http.MethodGet, c.to, nil)
+		next.Response = &http.Response{Request: first}
+		if got := redirectedAway(next); got != c.away {
+			t.Errorf("redirect to %s: away %v, want %v", c.to, got, c.away)
+		}
+	}
+}
+
 // A request that has no Header map (a RoundTripper may be given one) gets the call's headers
 // instead of panicking.
 func TestUpstreamHeadersOnRequestWithoutHeaderMap(t *testing.T) {
@@ -509,7 +531,8 @@ func TestUpstreamHeadersOnRequestWithoutHeaderMap(t *testing.T) {
 
 // A redirect to another host never carries the account's secret headers (net/http leaves
 // Authorization and Cookie out there, but the call's context still holds the configured ones), nor
-// does a later hop of the same chain; a header that is not secret does, and a redirect on the same
+// does a later hop of the same chain, even when the extension set one of those names itself (net/http
+// copies other headers to the redirect); a header that is not secret does, and a redirect on the same
 // host carries all of them.
 func TestUpstreamRedirectKeepsSecretHeadersOnTheirHost(t *testing.T) {
 	type seen struct{ secret, key, title string }
@@ -547,6 +570,7 @@ func TestUpstreamRedirectKeepsSecretHeadersOnTheirHost(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		req.Header["x-api-key"] = []string{"fake-extension-key"} // the extension's own, not canonical
 		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatal(err)
