@@ -44,6 +44,10 @@ var removedFields = []string{"stop", "previous_response_id", "prompt_cache_reten
 
 // buildBody returns the request body for xAI's Responses API and how it was built.
 func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
+	return buildSearchBody(req, false)
+}
+
+func buildSearchBody(req llm.Request, injectXSearch bool) ([]byte, *llm.Translation, error) {
 	tr := &llm.Translation{To: llm.FormatOpenAIResponses}
 	var body []byte
 	if n := req.Native; n != nil {
@@ -84,6 +88,12 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 	if tools, ok := m["tools"].([]any); ok {
 		m["tools"] = rewriteTools(tools)
 	}
+	if injectXSearch {
+		injectSearch(m)
+	}
+	if tools, ok := m["tools"].([]any); ok && len(tools) > maxTools {
+		m["tools"] = tools[:maxTools]
+	}
 	if input, ok := m["input"].([]any); ok {
 		m["input"] = rewriteCustomToolItems(input)
 	}
@@ -106,11 +116,8 @@ func withEncryptedReasoning(v any) []any {
 }
 
 // rewriteTools sends custom tools as function tools, gives each function a parameters schema
-// xAI accepts, and keeps the first maxTools.
+// xAI accepts. The caller caps the list after optional search injection.
 func rewriteTools(tools []any) []any {
-	if len(tools) > maxTools {
-		tools = tools[:maxTools]
-	}
 	for _, t := range tools {
 		tm, ok := t.(map[string]any)
 		if !ok {

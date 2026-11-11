@@ -59,6 +59,9 @@ const (
 	methodBrowser = "browser"
 	methodDevice  = "device"
 	methodAPIKey  = "api_key"
+	// methodSettings signs in with a grant that carries the account settings in the input "settings"
+	// (the grant-settings e2e test); the account gets a made-up key.
+	methodSettings = "settings"
 )
 
 const (
@@ -71,6 +74,7 @@ const (
 var loginMethods = []protocol.LoginMethod{
 	{Method: methodBrowser, Kind: protocol.LoginBrowser, Label: "Test browser"},
 	{Method: methodDevice, Kind: protocol.LoginDevice, Label: "Test device"},
+	{Method: methodSettings, Kind: protocol.LoginAPIKey, Label: "Test settings"},
 	{Method: methodAPIKey, Kind: protocol.LoginAPIKey, Label: "Test API key",
 		Inputs: []protocol.LoginInput{{Name: "api_key", Label: "API key", Secret: true}}},
 }
@@ -128,6 +132,9 @@ func main() {
 }
 
 func generate(ctx context.Context, call sdk.Call, out *sdk.Stream, reply string) error {
+	if call.Request.Model == "account-settings" {
+		reply = string(call.Account.Settings)
+	}
 	var s settings
 	_ = json.Unmarshal(call.Account.Settings, &s)
 	switch call.Request.Model {
@@ -210,6 +217,11 @@ func login(ctx context.Context, call sdk.LoginCall, s *sdk.LoginSession) (*proto
 		case <-time.After(deviceDelay):
 		}
 		return grant(call.Account.ID, oauthCredential("fake-refresh-token")), nil
+	case methodSettings:
+		var g protocol.Grant
+		raw, _ := json.Marshal(map[string]any{"credential": map[string]string{"kind": "api_key", "api_key": "testext-made-up-key"}, "settings": json.RawMessage(call.Input["settings"])})
+		err := json.Unmarshal(raw, &g)
+		return &g, err
 	case methodAPIKey:
 		key := call.Input["api_key"]
 		if key == refusedKey {

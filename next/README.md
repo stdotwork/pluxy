@@ -92,6 +92,19 @@ exclude and prefix models, and clients list the models on `GET /v1/models`: see
 extension the config names and every [installed package](#packages) that is enabled, and spreads
 requests over all their accounts: see [Accounts and routing](#accounts-and-routing).
 
+The OpenAI-compatible extension also adds accounts through the management API with method
+`api_key`. Its inputs are `api_key` (secret), `base_url` (required unless the account already has
+one), and optional `wire_api` (`chat`, `responses`, `messages` or `gemini`; default `chat`).
+`base_url` includes the API path, such as `https://api.openai.com/v1` or a Gemini host's `/v1beta`.
+The extension trims its trailing slash, checks the key with `GET {base_url}/models` using the
+selected API's authentication header, and returns the URL and wire API as non-secret account
+settings. Each key is a separate account; several keys for one upstream use the same URL.
+The key is kept only in core's credential store, never written to `config.yaml` or shown in
+management replies. A re-login needs only `api_key` and uses the account's existing settings.
+A refused key keeps the upstream's reason with secrets removed. The check accepts any 2xx
+reply from the model-list URL, so a wrong URL that answers 2xx is accepted too, as with Claude
+and Gemini key checks. Configured accounts continue to work as before.
+
 An account's `settings` may set `"wire_api": "responses"` for an upstream that speaks OpenAI
 Responses (`POST {base_url}/responses`), or `"wire_api": "messages"` for one that speaks Anthropic
 Messages (`POST {base_url}/messages`, with the key in `x-api-key` and the client's
@@ -619,7 +632,10 @@ through the management API (below) with method `device`: the reply's prompt carr
 Kimi's page to enter it on, and the login finishes once it is approved there. The sign-in is the
 OAuth device authorization grant (RFC 8628) at Kimi's login host, with the public client of Kimi's
 own CLI, since Kimi registers no other clients. Core renews the token five minutes before it
-expires. A Kimi Code API key works too, as an account in the config; it has no login method yet:
+expires. A Kimi Code API key can be added with method `api_key` and secret input `api_key`:
+the extension checks it with `GET {base_url}/v1/models` before storing it in core's credential
+store. Refused keys report Kimi's reason with secrets removed. A key also works as an account
+in the config:
 
 ```json
 {"id": "kimi", "credential": {"kind": "api_key", "api_key": "sk-kimi-..."}}
@@ -673,8 +689,10 @@ place.
 ## xAI
 
 The xAI extension (`extensions/xai`) serves xAI's Grok models with an xAI API key or a Grok
-account. Point `extension.manifest` at `extensions/xai/pluxy-extension.json`. An API key comes from
-the config, with the key as the credential:
+account. Point `extension.manifest` at `extensions/xai/pluxy-extension.json`. An API key can be
+added with method `api_key` and secret input `api_key`, or from the config with the key as the
+credential. The login checks `GET {base_url}/models` and keeps an accepted key only in core's
+credential store; a refusal reports xAI's reason with secrets removed:
 
 ```json
 {"id": "xai", "credential": {"kind": "api_key", "api_key": "xai-..."}}
@@ -703,6 +721,7 @@ sends them on every request of a login.
 | --- | --- |
 | `base_url` | Where xAI's API lives. Default `https://api.x.ai/v1`; requests go to `{base_url}/responses`. For a Grok login, the default means the Grok CLI's endpoint. |
 | `client_version` | Replaces the Grok CLI version a login's requests name (default 1.0.46). |
+| `inject_x_search` | Default `false`. Add xAI's native `x_search` tool when the request does not already have one, except when a forced hosted web search or image generation tool must be the only choice. Applies to API keys and Grok logins. |
 
 Every client format goes to xAI's Responses API. A Responses client's request passes through with
 the changes listed below. Chat Completions, Messages and Gemini clients are translated to
@@ -726,10 +745,31 @@ What changes in a request:
   without stored responses.
 - The `x-grok-conv-id` header is set to the request's `prompt_cache_key`, when the request has one.
 
+**X Search.** A client's native `{"type":"x_search"}` tool and its options go to xAI as
+written. With `inject_x_search`, the extension adds that tool once and also allows it in an
+`allowed_tools` selection. The final tools list keeps its first 200 entries. For requests using
+X Search, the extension hides its internal `x_user_search`, `x_semantic_search`,
+`x_keyword_search` and `x_thread_fetch` call traces, including their streamed deltas, and
+renumbers the remaining output indexes. The answer, citations, hosted search items and usage
+are kept. Client functions with those names are kept unless their call ID starts with
+`xs_call`; namespaced client calls are kept. Filtering applies to both JSON and streamed
+upstream replies and to every client format.
+
 Errors: 401, and a 403 whose body says the credential is bad, are authentication errors. Other 403
 replies are permission errors. A 429 that says the free usage is used up is a quota error, which
 holds the model back on the account for 24 hours. Other 429 replies are rate limits and keep xAI's `Retry-After`.
 A 404 is a model error, and a 5xx is an upstream error.
+
+**Compaction.** `POST /v1/responses/compact` is served through the protocol's endpoint
+operation for API keys and Grok logins. It goes to `{base_url}/responses/compact`, using the
+official API when the base URL is the Grok CLI chat proxy: that proxy has no compaction endpoint
+and returns 404. A login uses its access token with standard API headers, without CLI identity
+headers. An explicit non-CLI base URL is kept. The request removes `stream`, `tools`,
+`tool_choice`, `max_output_tokens`, `temperature`, `top_p`, `top_k` and `stop`, removes
+`compaction_trigger` input items, and keeps a nonempty `previous_response_id`. As in today's
+core, compaction leaves `store` and `include` to the client. The upstream's JSON reply comes
+back whole, with usage recorded. Streaming is refused. An endpoint 404 is a request error
+and creates no account or model cooldown; a 404 naming a missing model is scoped to that model.
 
 Not built, and why:
 
@@ -748,7 +788,7 @@ Not built, and why:
 - Checking the reasoning effort against each model's levels, and a default effort. Both need
   today's model catalog.
 - Image references, encrypted reasoning content, websockets, text to speech, image and video
-  generation, `/responses/compact`, and the optional `x_search` tool.
+  generation.
 - For a Grok login: reading the Grok CLI's latest version from npm every 3 hours (set
   `client_version` when xAI asks for a newer CLI), the file name and legacy-file adoption today's
   core uses for its auth files, and opening the browser at sign-in.
@@ -1149,6 +1189,12 @@ its owner (`credentials_dir`, default `credentials` beside the config file), and
 credential through the extension shortly before it expires. Only the extension that created an
 account ever receives its credential. The protocol side is in the
 [protocol README](protocol/README.md#login-and-refresh).
+
+An extension may return non-secret account settings with a login grant. When adding an
+account, core uses those as defaults: properties explicitly supplied in `POST /accounts.settings`
+win (including `null`; nested objects are replaced as a whole). The extension validates and
+normalises its defaults. Settings must never hold secrets. A login to an existing account
+ignores grant settings and keeps the account's existing settings.
 
 The management API is served under `/v0/management` when the config sets `management_key`;
 send it as a bearer token. With a management key set, the config may set no accounts.
@@ -1564,7 +1610,7 @@ needs none) is not supported yet: it adds no account and is named in the log.
 
 | Section (v8; older spelling) | Extension | Account settings |
 | --- | --- | --- |
-| `api-keys.codex` (`codex-api-key`) | `pluxy/codex` | `base-url` is `base_url`; `websockets` is `websockets`; `alpha-search` is `alpha_search`; `disable-codex-cloaking: true` is `codex_identity: false` |
+| `api-keys.codex` (`codex-api-key`) | `pluxy/codex` | `base-url` is `base_url`, and a key without one is dropped and named in the log, as today's core drops it; `websockets` is `websockets`; `alpha-search` is `alpha_search`; `disable-codex-cloaking: true` is `codex_identity: false` |
 | `api-keys.claude` (`claude-api-key`) | `pluxy/claude` | `base-url` is `base_url`; `rebuild-mid-system-message: true` is `rebuild_mid_system_message: true` |
 | `api-keys.gemini` (`gemini-api-key`) | `pluxy/gemini` | `base-url` is `base_url` |
 | `api-keys.vertex` (`vertex-api-key`) | `pluxy/gemini`, Vertex AI with the key as an express mode key | `base-url` is `base_url`; `interactions: true` on a key is `interactions: true` in the account's settings, which serves the Interactions API |
@@ -1635,7 +1681,7 @@ are accepted silently.
 | `upstream.claude.header-defaults.*`, `disable-claude-cloak-mode`, `disable-cloaking-model-list`, `session-date-pin-days` (also `claude`, `claude-code`, `claude-header-defaults`), and the Claude keys' `cloak` and `fingerprint-profile` | This core never changes how a client presents itself. | Dropped: making other clients look like Claude Code is out of scope |
 | `upstream.claude.tool-search`, the Claude keys' `native-tool-search` | | Later |
 | `rebuild-mid-system-message` (Claude keys) | The account's `rebuild_mid_system_message`. | Supported |
-| `upstream.xai.inject-x-search` (`xai`) | | Later |
+| `upstream.xai.inject-x-search` (`oauth.providers.xai.inject-x-search`, `xai.inject-x-search`) | xAI accounts get `inject_x_search`; applies to API keys and imported Grok logins | Supported |
 | `experimental-cch-signing` (Claude keys) | | Dead |
 | `oauth.auth-dir` (`auth-dir`) | The folder `-import-auth` reads (see below). Core never reads or writes it while it runs; at each load it logs how many credential files there are not imported yet. | Supported |
 | `oauth.auth-auto-refresh-workers` (`auth-auto-refresh-workers`) | Each account is renewed shortly before it expires. | Dropped: no need for a pool size |

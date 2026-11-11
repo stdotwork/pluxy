@@ -62,7 +62,7 @@ const cliChatBaseURL = "https://cli-chat-proxy.grok.com/v1"
 const cliVersion = "1.0.46"
 
 func main() {
-	err := sdk.Serve(sdk.Extension{ID: id, Version: version, Generate: generate,
+	err := sdk.Serve(sdk.Extension{ID: id, Version: version, Generate: generate, Endpoint: endpoint,
 		LoginMethods: loginMethods, Login: login, Refresh: refresh, Models: models, Check: check, Quota: quota})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "xai:", err)
@@ -71,6 +71,7 @@ func main() {
 }
 
 type settings struct {
+	InjectXSearch bool   `json:"inject_x_search"`
 	BaseURL       string `json:"base_url"`
 	ClientVersion string `json:"client_version"`
 	AuthIssuer    string `json:"auth_issuer"`
@@ -207,7 +208,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return err
 	}
 
-	body, tr, err := buildBody(call.Request)
+	body, tr, err := buildSearchBody(call.Request, s.InjectXSearch)
 	if err != nil {
 		return err
 	}
@@ -250,7 +251,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return upstreamError(resp, call.Request.Model)
 	}
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
-		return relayStream(ctx, resp.Body, send, openairesponses.NewStreamDecoder())
+		return relayStream(ctx, resp.Body, send, &searchDecoder{streamDecoder: openairesponses.NewStreamDecoder(), filter: newSearchFilter(body)})
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxFrame))
 	if err != nil {
@@ -259,6 +260,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		}
 		return &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream response: " + err.Error(), Scope: llm.ScopeEndpoint}
 	}
+	raw = newSearchFilter(body).response(raw)
 	events, err := openairesponses.DecodeResponse(raw)
 	if err != nil {
 		return err
