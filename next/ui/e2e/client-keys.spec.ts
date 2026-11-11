@@ -58,6 +58,7 @@ for (const theme of ["default", "terminal"]) {
       await screenshot(page, `${theme}-client-key`);
       await clients.getByRole("button", { name: "Copy", exact: true }).click();
       await expect(clients.getByText("Copied", { exact: true })).toBeVisible();
+      expect((await page.evaluate(() => navigator.clipboard.readText())) === key).toBe(true);
       expect(
         await page.evaluate(
           (secret) => !JSON.stringify([localStorage, sessionStorage]).includes(secret),
@@ -133,3 +134,103 @@ for (const theme of ["default", "terminal"]) {
     });
   });
 }
+
+test.describe("review regressions", () => {
+  test.beforeEach(async ({ page, context }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await openPanel(page, core);
+    await signIn(page, core);
+    await goTo(page, "config", "Config Panel");
+  });
+
+  test("search preserves notices, filters cards without false empty results, and avoids unrelated key reads", async ({ page }) => {
+    const clients = page.getByRole("region", { name: "Client API Keys (access.api-keys)", exact: true });
+    await clients.getByRole("button", { name: "Add", exact: true }).click();
+    const notice = clients.locator('[data-part="key-notice"]');
+    const key = await notice.locator('[data-part="key-value"]').textContent();
+    await expect(notice).toBeFocused();
+    expect(await notice.getAttribute("aria-live")).not.toBe("assertive");
+    const search = page.getByRole("searchbox");
+    for (const query of ["key", "api-keys", "management"]) {
+      await search.fill(query);
+      await expect(page.getByText("No results", { exact: true })).toHaveCount(0);
+    }
+    await search.fill("key");
+    expect((await notice.locator('[data-part="key-value"]').textContent()) === key).toBe(true);
+    await notice.getByRole("button", { name: "Copy", exact: true }).click();
+    expect((await page.evaluate(() => navigator.clipboard.readText())) === key).toBe(true);
+    await search.fill("");
+    const removed = clients.locator('[data-part="item"]').last();
+    await removed.getByRole("button", { name: "Delete", exact: true }).click();
+    await removed.getByRole("button", { name: "Yes, delete", exact: true }).click();
+    await expect(clients.getByRole("button", { name: "Add", exact: true })).toBeFocused();
+    expect((await notice.locator('[data-part="key-value"]').textContent()) === key).toBe(true);
+    await notice.getByRole("button", { name: "Close", exact: true }).click();
+    await page.getByRole("tab", { name: "Network", exact: true }).click();
+    let reads = 0;
+    page.on("request", (request) => { if (request.method() === "GET" && request.url().endsWith("/client-keys")) reads++; });
+    await search.fill("retry");
+    await expect(page.getByRole("spinbutton", { name: "Request Retry Count", exact: true })).toBeVisible();
+    expect(reads).toBe(0);
+  });
+
+  test("a second Add preserves both client-key notices", async ({ page }) => {
+    const clients = page.getByRole("region", { name: "Client API Keys (access.api-keys)", exact: true });
+    const notices = clients.locator('[data-part="key-notice"]');
+    await clients.getByRole("button", { name: "Add", exact: true }).click();
+    await expect(notices).toHaveCount(1);
+    const first = await notices.locator('[data-part="key-value"]').textContent();
+    await clients.getByRole("button", { name: "Add", exact: true }).click();
+    await expect(notices).toHaveCount(2);
+    expect((await notices.first().locator('[data-part="key-value"]').textContent()) === first).toBe(true);
+    const keys = await core.mgmt<{ keys: { id: string }[] }>("GET", "/client-keys");
+    for (const key of keys.body.keys.slice(1)) await core.mgmt("DELETE", `/client-keys/${key.id}`);
+  });
+
+  test("a rotation reply arriving after leaving its tab remains available on return", async ({ page }) => {
+    await page.getByRole("tab", { name: "Connectivity", exact: true }).click();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let received!: () => void;
+    const responseReady = new Promise<void>((resolve) => { received = resolve; });
+    await page.route("**/management-key/rotate", async (route) => {
+      const response = await route.fetch();
+      core.key = (await response.json()).value;
+      received();
+      await gate;
+      await route.fulfill({ response });
+    });
+    await page.getByRole("button", { name: "Rotate", exact: true }).click();
+    await responseReady;
+    await page.getByRole("tab", { name: "Network", exact: true }).click();
+    release();
+    await page.getByRole("tab", { name: "Connectivity", exact: true }).click();
+    const notice = page.getByRole("region", { name: "Management Key", exact: true }).locator('[data-part="key-notice"]');
+    await expect(notice).toBeVisible();
+    expect((await notice.locator('[data-part="key-value"]').textContent()) === core.key).toBe(true);
+    await expect(notice).toBeFocused();
+  });
+
+  test("a lost rotation reply explains config-file recovery", async ({ page }) => {
+    await page.getByRole("tab", { name: "Connectivity", exact: true }).click();
+    await page.route("**/management-key/rotate", async (route) => {
+      const response = await route.fetch();
+      core.key = (await response.json()).value;
+      await route.abort("failed");
+    });
+    await page.getByRole("button", { name: "Rotate", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("The management key may have changed. Find the current key in core's config file");
+  });
+
+  test("a failed Delete reloads stale IDs", async ({ page }) => {
+    const clients = page.getByRole("region", { name: "Client API Keys (access.api-keys)", exact: true });
+    await expect(clients.locator('[data-part="item"]')).toHaveCount(1);
+    let reloads = 0;
+    page.on("request", (request) => { if (request.method() === "GET" && request.url().endsWith("/client-keys")) reloads++; });
+    await page.route("**/client-keys/*", (route) => route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { code: "not_found", message: "no client key in the config file has this ID" } }) }));
+    await clients.getByRole("button", { name: "Delete", exact: true }).click();
+    await clients.getByRole("button", { name: "Yes, delete", exact: true }).click();
+    await expect(clients.getByRole("alert")).toBeVisible();
+    await expect.poll(() => reloads).toBe(1);
+  });
+});
