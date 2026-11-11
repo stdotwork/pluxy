@@ -49,8 +49,12 @@ const ACTING: &[&str] = &[
     "sign_out",
     "core_restart",
     "core_adopt",
+    "key_entry",
     "confirmation_settings",
 ];
+
+#[path = "key_entry_test.rs"]
+mod key_entry_test;
 
 pub(crate) fn log(step: &str, v: Value) {
     eprintln!("native-test: {step} {v}");
@@ -247,6 +251,7 @@ fn run(app: &AppHandle) -> Result<(), String> {
         );
     }
 
+    key_entry_test::check(app, &main)?;
     ingress::run(app, &main)?;
 
     // For screenshots: keep the window open until this file exists.

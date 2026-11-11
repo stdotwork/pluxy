@@ -6,7 +6,7 @@
 // - remote: a core on another computer, over https; shown with its address while connected.
 
 import { useEffect, useId, useState } from "preact/hooks";
-import { Badge, Button, Card, Choices, Empty, Facts, Notice, PageHead, Switch } from "../../ui/kit/ui";
+import { Badge, Button, Card, Choices, Empty, Facts, Notice, PageHead } from "../../ui/kit/ui";
 import {
   type Connection,
   type ConnectionChange,
@@ -16,6 +16,7 @@ import {
   coreRestart,
   coreRollback,
   coreVersions,
+  keyEntry,
   type Mode,
   type Versions,
 } from "./host";
@@ -26,13 +27,7 @@ const MODES = [
   { value: "remote" as const, label: "Remote core", note: "over https" },
 ];
 
-function Field(props: {
-  label: string;
-  hint?: string;
-  value: string;
-  secret?: boolean;
-  onInput: (v: string) => void;
-}) {
+function Field(props: { label: string; hint?: string; value: string; onInput: (v: string) => void }) {
   const id = useId();
   const common = {
     id,
@@ -44,7 +39,7 @@ function Field(props: {
   return (
     <label class="field" data-part="field" for={id}>
       <span class="label">{props.label}</span>
-      {props.secret ? <input type="password" {...common} /> : <input type="text" {...common} />}
+      <input type="text" {...common} />
       {props.hint && <small class="hint">{props.hint}</small>}
     </label>
   );
@@ -164,8 +159,6 @@ export function ConnectionPage(props: { connection: Connection; onChange: (c: Co
   const c = props.connection;
   const [mode, setMode] = useState<Mode | undefined>(c.mode);
   const [url, setUrl] = useState(c.url ?? "");
-  const [key, setKey] = useState("");
-  const [remember, setRemember] = useState(c.remembered);
   const [caFile, setCaFile] = useState(c.ca_file ?? "");
   const [corePath, setCorePath] = useState(c.core_path ?? "");
   const [coreSource, setCoreSource] = useState(c.core_source ?? "");
@@ -178,7 +171,6 @@ export function ConnectionPage(props: { connection: Connection; onChange: (c: Co
     try {
       const next = await run();
       if (next.error) setError(next.error);
-      else setKey(""); // the native side has it now
       props.onChange(next);
     } catch (e) {
       setError(String(e));
@@ -193,8 +185,6 @@ export function ConnectionPage(props: { connection: Connection; onChange: (c: Co
     return {
       mode: mode ?? "local",
       url,
-      key: key || undefined,
-      remember,
       ca_file: mode === "remote" ? caFile || undefined : undefined,
     };
   };
@@ -207,7 +197,9 @@ export function ConnectionPage(props: { connection: Connection; onChange: (c: Co
           <Facts rows={describe(c)} />
           {c.error && <Notice tone="danger">{c.error}</Notice>}
           {c.target && !c.signed_in && (
-            <Notice tone="warn">Not signed in to this core: give its management key below.</Notice>
+            <Notice tone="warn">
+              Not signed in to this core: enter its management key in the native dialog.
+            </Notice>
           )}
           {c.mode === "managed" && c.core?.state !== "missing" && (
             <div class="actions">
@@ -224,7 +216,12 @@ export function ConnectionPage(props: { connection: Connection; onChange: (c: Co
           aria-label="Connection"
           onSubmit={(e) => {
             e.preventDefault();
-            apply(() => connectionSet(change()));
+            apply(async () => {
+              const next = change();
+              if (next.mode === "managed") return connectionSet(next);
+              const result = await keyEntry(next);
+              return result.connection;
+            });
           }}
         >
           <Choices label="Mode" value={mode} choices={MODES} onChange={setMode} />
@@ -245,26 +242,16 @@ export function ConnectionPage(props: { connection: Connection; onChange: (c: Co
             </>
           )}
           {(mode === "local" || mode === "remote") && (
-            <>
-              <Field
-                label="Address"
-                hint={
-                  mode === "local"
-                    ? "This computer only, such as http://127.0.0.1:8400."
-                    : "https only, such as https://pluxy.example."
-                }
-                value={url}
-                onInput={setUrl}
-              />
-              <Field
-                label="Management key"
-                hint={c.mode === mode && c.url === url ? "Empty: keep the key the app has." : undefined}
-                secret
-                value={key}
-                onInput={setKey}
-              />
-              <Switch label="Keep the key on this device" checked={remember} onChange={setRemember} />
-            </>
+            <Field
+              label="Address"
+              hint={
+                mode === "local"
+                  ? "This computer only, such as http://127.0.0.1:8400."
+                  : "https only, such as https://pluxy.example."
+              }
+              value={url}
+              onInput={setUrl}
+            />
           )}
           {mode === "remote" && (
             <Field
@@ -276,7 +263,7 @@ export function ConnectionPage(props: { connection: Connection; onChange: (c: Co
           )}
           {error && <Notice tone="danger">{error}</Notice>}
           <Button type="submit" variant="primary" disabled={busy || !mode}>
-            {busy ? "Connecting…" : "Connect"}
+            {busy ? "Connecting…" : mode === "managed" ? "Connect" : "Enter management key"}
           </Button>
         </form>
       </Card>

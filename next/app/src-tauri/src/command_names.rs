@@ -9,7 +9,7 @@ pub const COMMANDS: &[&str] = &[
     "core_install",
     "core_rollback",
     "core_adopt",
-    "sign_in",
+    "key_entry",
     "sign_out",
     "page_open",
     "page_place",

@@ -20,6 +20,7 @@ pub mod confirmation;
 pub mod conn;
 mod core_updates;
 pub mod cores;
+mod key_entry;
 pub mod managed;
 #[cfg(feature = "native-test")]
 mod native_test;
@@ -64,6 +65,8 @@ struct App {
     status: Mutex<Option<MenuItem<Wry>>>,
     has_tray: AtomicBool,
     quitting: AtomicBool,
+    key_entry_open: AtomicBool,
+    key_entry_after: Mutex<Option<std::time::Instant>>,
 }
 
 /// Every command checks its caller too: the capability already allows only the window.
@@ -244,6 +247,11 @@ async fn with_conn(
 
 #[tauri::command]
 async fn connection_set(webview: Webview, change: Change) -> Result<View, String> {
+    trusted(&webview)?;
+    let app = webview.app_handle();
+    if app.state::<App>().key_entry_open.load(Ordering::SeqCst) {
+        return Err("finish native key entry first".into());
+    }
     with_conn(&webview, move |c| c.change(change)).await
 }
 
@@ -252,9 +260,87 @@ async fn core_restart(webview: Webview) -> Result<View, String> {
     with_conn(&webview, |c| c.restart_core()).await
 }
 
+/// This command accepts connection metadata only; GTK supplies the secret on the native side.
+#[derive(serde::Serialize)]
+struct KeyEntryResult {
+    status: &'static str,
+    connection: View,
+}
+
 #[tauri::command]
-async fn sign_in(webview: Webview, key: String, remember: bool) -> Result<View, String> {
-    with_conn(&webview, move |c| c.sign_in(&key, remember)).await
+async fn key_entry(webview: Webview, change: Option<Change>) -> Result<KeyEntryResult, String> {
+    trusted(&webview)?;
+    let app = webview.app_handle().clone();
+    if app
+        .state::<App>()
+        .key_entry_open
+        .swap(true, Ordering::SeqCst)
+    {
+        return Err("native key entry is already open".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        struct Pending(AppHandle);
+        impl Drop for Pending {
+            fn drop(&mut self) {
+                self.0
+                    .state::<App>()
+                    .key_entry_open
+                    .store(false, Ordering::SeqCst);
+            }
+        }
+        let _pending = Pending(app.clone());
+        let st = app.state::<App>();
+        let prepared = st.conn.lock().unwrap().prepare_key(change);
+        let target = match prepared {
+            Ok(target) => target,
+            Err(reason) => {
+                let mut connection = st.conn.lock().unwrap().view();
+                connection.error = Some(reason);
+                return KeyEntryResult {
+                    status: "error",
+                    connection,
+                };
+            }
+        };
+        if let Some(after) = *st.key_entry_after.lock().unwrap() {
+            std::thread::sleep(after.saturating_duration_since(std::time::Instant::now()));
+        }
+        // GTK must remain free to handle IPC/window close while the dialog is open.
+        let input = key_entry::request(&app, target.summary.clone());
+        let mut c = st.conn.lock().unwrap();
+        let mut error = None;
+        let status = match input {
+            Ok(None) => {
+                *st.key_entry_after.lock().unwrap() =
+                    Some(std::time::Instant::now() + std::time::Duration::from_secs(1));
+                "cancelled"
+            }
+            Ok(Some(input)) => match c.finish_key(target, &input.key, input.remember) {
+                Ok(()) => "signed_in",
+                Err(e) if e == "core refused this key" => {
+                    error = Some(e);
+                    "wrong_key"
+                }
+                Err(reason) => {
+                    error = Some(reason);
+                    "error"
+                }
+            },
+            Err(e) => {
+                error = Some(e.into());
+                "error"
+            }
+        };
+        let mut connection = c.view();
+        if error.is_some() {
+            connection.error = error;
+        }
+        drop(c);
+        show_status(&app, &connection);
+        KeyEntryResult { status, connection }
+    })
+    .await
+    .map_err(|_| "native key entry failed".into())
 }
 
 #[tauri::command]
@@ -582,7 +668,7 @@ pub fn run() {
             core_install,
             core_rollback,
             core_adopt,
-            sign_in,
+            key_entry,
             sign_out,
             page_open,
             page_place,
@@ -634,6 +720,8 @@ pub fn run() {
                 status: Mutex::new(None),
                 has_tray: AtomicBool::new(false),
                 quitting: AtomicBool::new(false),
+                key_entry_open: AtomicBool::new(false),
+                key_entry_after: Mutex::new(None),
             });
             let handle = app.handle().clone();
             #[cfg(target_os = "linux")]

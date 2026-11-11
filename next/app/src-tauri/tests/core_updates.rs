@@ -160,7 +160,10 @@ fn a_missing_core_is_installed_before_connecting_then_updated() {
     let staged = f.conn.prepare_install(&f.keys, "1.0.0").unwrap();
     let _ = (f.conn.view(), f.conn.versions());
     // The confirmation binds this file by its path.
-    assert!(staged.path().exists(), "reading the versions removed the checked copy");
+    assert!(
+        staged.path().exists(),
+        "reading the versions removed the checked copy"
+    );
     f.conn.apply(CoreChange::Install(staged)).unwrap();
     assert_eq!(f.reported(), (200, Some("1.0.0".into())));
     let v = f.conn.view();

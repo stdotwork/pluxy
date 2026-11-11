@@ -17,7 +17,7 @@
     "allow-core-install",
     "allow-core-rollback",
     "allow-core-adopt",
-    "allow-sign-in",
+    "allow-key-entry",
     "allow-sign-out",
     "allow-page-open",
     "allow-page-place",
