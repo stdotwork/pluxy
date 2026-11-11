@@ -57,7 +57,7 @@ export function StartupSettings() {
           />
           <Switch
             label="Silent Launch"
-            hint="At login, use the system tray if a tray host is available. Opening the app yourself shows its window."
+            hint="At login, run the managed core in the system tray if a tray host is available. Opening the app yourself shows its window."
             checked={preferences?.silent_start_enabled ?? false}
             onChange={(v) => change("silent_start_enabled", v)}
           />

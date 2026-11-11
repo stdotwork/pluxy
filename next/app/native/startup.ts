@@ -81,10 +81,16 @@ if (noTray) {
   );
   console.log("startup no-host fallback passed: exactly one window/webview");
 } else {
+  // Silent Launch keeps the app's own core in the tray; local and remote modes open normally.
+  const hidden = mode === "managed";
   const silent = await launch("observe", true);
   check(
-    silent.windows === 0 && silent.webviews === 0 && silent.tray === true,
-    "silent login created a window or missed its tray",
+    hidden
+      ? silent.windows === 0 && silent.webviews === 0 && silent.tray === true
+      : silent.windows === 1 && silent.webviews === 1,
+    hidden
+      ? "silent login created a window or missed its tray"
+      : `silent login in ${mode} mode must show one window`,
   );
   check(
     (mode === "managed") === (silent.core_pid !== null),
@@ -101,7 +107,9 @@ if (noTray) {
   prefs(true, false);
   const stopped = await launch("observe", true);
   check(
-    stopped.windows === 0 && stopped.webviews === 0 && stopped.core_pid === null,
+    stopped.windows === (hidden ? 0 : 1) &&
+      stopped.webviews === (hidden ? 0 : 1) &&
+      stopped.core_pid === null,
     "core-off silent login ignored preferences",
   );
 }
@@ -109,5 +117,5 @@ prefs(false);
 await launch("disable");
 check(!existsSync(entry), "disabling left the autostart entry behind");
 console.log(
-  `startup preferences passed: ${mode}; ${noTray ? "no host fallback" : "gio launch, login/menu choices, managed-only core, real tray"}; registration removed`,
+  `startup preferences passed: ${mode}; ${noTray ? "no host fallback" : "gio launch, login/menu choices, managed-only core and silence, real tray"}; registration removed`,
 );

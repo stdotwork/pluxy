@@ -225,8 +225,10 @@ fn validate_executable(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-pub fn wants_silent(preferences: Preferences, autostart: bool) -> bool {
-    preferences.silent_start_enabled && autostart
+/// Silent Launch keeps the app's own core in the tray. Local and remote modes host no core, so
+/// they open normally.
+pub fn wants_silent(preferences: Preferences, autostart: bool, managed: bool) -> bool {
+    preferences.silent_start_enabled && autostart && managed
 }
 
 /// GTK tray creation can succeed with no desktop host. Never hide a startup window then.
@@ -399,8 +401,9 @@ mod tests {
             serde_json::from_str(r#"{"silent_start_enabled":true,"future":42}"#).unwrap();
         assert!(p.silent_start_enabled);
         assert!(p.start_core_on_launch);
-        assert!(!wants_silent(p, false));
-        assert!(wants_silent(p, true));
+        assert!(!wants_silent(p, false, true));
+        assert!(wants_silent(p, true, true));
+        assert!(!wants_silent(p, true, false));
     }
 
     #[test]

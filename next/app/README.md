@@ -53,8 +53,9 @@ The Connection page has three startup choices:
   Turning Launch at startup off and saving removes pluxy's entry. Merely opening the app does
   not register it. The displayed choice is read from that entry, including desktop disable flags.
   A file without pluxy's ownership marker is shown as a conflict and left alone.
-- **Silent Launch** suppresses the window only for an autostart launch when the session has
-  a StatusNotifier watcher and a registered tray host. In that case no window or webview is
+- **Silent Launch** suppresses the window only for an autostart launch in managed mode when
+  the session has a StatusNotifier watcher and a registered tray host. Local and remote modes
+  host no core, so they open normally. In that case no window or webview is
   created. Without a host the app logs why and opens a window. Opening the app from its menu
   or shortcut always shows the window.
 - **Start Core on Launch** starts the app's own core in managed mode. Turning it off leaves
@@ -281,6 +282,8 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
 - A kept key is stored in `connection.json`, not in the system keyring.
 - The Linux native suite checks the app's own tray item in the watcher's registration list and
   startup without a watcher. It does not check every desktop's tray UI or later loss of its host.
+- On a desktop with no tray host, closing the window leaves the app running with no way back to
+  it but quitting it.
 - The native test needs the desktop services above, and the pinned AppImage runtime from
   github.com (or a copy in its cache folder), so it does not run offline on a bare machine.
 - Native admission bounds work after a scheme request reaches the handler. They do not bound

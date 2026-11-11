@@ -666,15 +666,18 @@ pub fn run() {
             if let Some(pid) = handle.state::<App>().conn.lock().unwrap().core_pid() {
                 eprintln!("pluxy-app: core started, pid {pid}");
             }
-            let silent =
-                startup::wants_silent(preferences, std::env::args_os().any(|a| a == "--autostart"));
-            let usable_tray = handle.state::<App>().has_tray.load(Ordering::SeqCst)
+            let managed = handle.state::<App>().conn.lock().unwrap().mode() == Some(Mode::Managed);
+            let silent = startup::wants_silent(
+                preferences,
+                std::env::args_os().any(|a| a == "--autostart"),
+                managed,
+            );
+            let usable_tray = silent
+                && handle.state::<App>().has_tray.load(Ordering::SeqCst)
                 && match startup::tray_host() {
                     Ok(()) => true,
                     Err(e) => {
-                        if silent {
-                            eprintln!("pluxy-app: opening startup window: {e}");
-                        }
+                        eprintln!("pluxy-app: opening startup window: {e}");
                         false
                     }
                 };
