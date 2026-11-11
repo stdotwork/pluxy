@@ -382,8 +382,8 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 	return out, nil
 }
 
-// paths returns where each node under root is: the keys leading to it, with [] for a list item
-// (any index, so items may be reordered within their list).
+// paths returns where each node under root is: the keys and list indexes leading to it. A list
+// item that is a scalar has [] for its index, so it may move within its own list, and only there.
 func paths(root *yaml.Node) map[*yaml.Node]string {
 	out := map[*yaml.Node]string{}
 	var walk func(n *yaml.Node, at string)
@@ -395,8 +395,12 @@ func paths(root *yaml.Node) map[*yaml.Node]string {
 				walk(n.Content[i+1], at+"."+strconv.Quote(n.Content[i].Value))
 			}
 		case yaml.SequenceNode:
-			for _, c := range n.Content {
-				walk(c, at+"[]")
+			for i, c := range n.Content {
+				if c.Kind == yaml.ScalarNode {
+					walk(c, at+"[]")
+				} else {
+					walk(c, at+"["+strconv.Itoa(i)+"]")
+				}
 			}
 		}
 	}

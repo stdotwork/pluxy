@@ -98,3 +98,23 @@ func TestRedactEmptyKey(t *testing.T) {
 		}
 	}
 }
+
+// A placeholder in a list item goes back only in that same list: not in the same-named list of
+// another item.
+func TestRestoreSettingsKeepsListItemsInTheirList(t *testing.T) {
+	r := NewRedactor()
+	cur := []byte(`{"targets":[{"name":"one","api_keys":["fake-a","fake-c"]},{"name":"two","api_keys":["fake-b"]}]}`)
+	a, b, c := r.Placeholder("fake-a"), r.Placeholder("fake-b"), r.Placeholder("fake-c")
+	moved := []byte(`{"targets":[{"name":"one","api_keys":["` + c + `"]},{"name":"two","api_keys":["` + a + `","` + b + `"]}]}`)
+	if _, err := r.RestoreSettings(moved, cur); !errors.Is(err, ErrInvalid) {
+		t.Errorf("a placeholder moved to another item's list: err = %v, want ErrInvalid", err)
+	}
+	out, err := r.RestoreSettings([]byte(`{"targets":[{"name":"one","api_keys":["`+c+`","`+a+`"]},{"name":"two","api_keys":["`+b+`"]}]}`), cur)
+	if want := `{"targets":[{"name":"one","api_keys":["fake-c","fake-a"]},{"name":"two","api_keys":["fake-b"]}]}`; err != nil || string(out) != want {
+		t.Errorf("reordered list = %s, %v; want %s", out, err, want)
+	}
+	nested := []byte(`{"api_keys":[["fake-a"],["fake-b"]]}`)
+	if _, err := r.RestoreSettings([]byte(`{"api_keys":[["`+b+`"],["`+a+`"]]}`), nested); !errors.Is(err, ErrInvalid) {
+		t.Errorf("a placeholder moved to another inner list: err = %v, want ErrInvalid", err)
+	}
+}
