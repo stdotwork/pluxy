@@ -44,3 +44,15 @@ test("problems include needs-login, failed check, last error and live cooldown",
   ]);
   expect(filterAccounts(list, { extension: "test/alpha" }, now).map((a) => a.id)).toEqual(["work-01"]);
 });
+
+test("sort orders and combined filters have exact results", () => {
+  const rows = [
+    account("z", { priority: 1 }),
+    account("a", { priority: 3 }),
+    account("m", { priority: 2, disabled: true }),
+  ];
+  expect(filterAccounts(rows, {}).map((a) => a.id)).toEqual(["z", "a", "m"]);
+  expect(filterAccounts(rows, { sort: "name" }).map((a) => a.id)).toEqual(["a", "m", "z"]);
+  expect(filterAccounts(rows, { sort: "priority" }).map((a) => a.id)).toEqual(["a", "m", "z"]);
+  expect(filterAccounts(rows, { status: "enabled", search: "z" }).map((a) => a.id)).toEqual(["z"]);
+});
