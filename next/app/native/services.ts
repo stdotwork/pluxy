@@ -54,5 +54,6 @@ export function missingPrerequisites(): string[] {
     if (!existsSync(s.file)) missing.push(`${s.what}: ${s.file} is not there (package ${s.package})`);
   }
   if (!Bun.which("mksquashfs")) missing.push(`${squashfs.what}: not on PATH (package ${squashfs.package})`);
+  if (!Bun.which("xdotool")) missing.push("xdotool: not on PATH (package xdotool)");
   return missing;
 }
