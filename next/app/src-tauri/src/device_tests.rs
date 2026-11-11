@@ -446,6 +446,19 @@ fn registry_pins_reserved_ids_and_paths() {
     assert_eq!(c.get("example/notes").unwrap().active.sha256, digest(&v1));
     let _ = fs::remove_dir_all(root);
 }
+
+/// Sets every folder under dir, and dir, writable again, so a test can change or remove it.
+#[cfg(unix)]
+fn thaw(dir: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).unwrap();
+    for e in fs::read_dir(dir).unwrap().flatten() {
+        if e.file_type().unwrap().is_dir() {
+            thaw(&e.path());
+        }
+    }
+}
+
 #[test]
 fn names_with_a_drive_or_stream_never_reach_the_store() {
     let root = temp();
@@ -499,6 +512,43 @@ fn go_platform_names() {
     assert_eq!(go_platform("macos", "aarch64"), "darwin/arm64");
     assert_eq!(go_platform("linux", "x86_64"), "linux/amd64");
     assert_eq!(go_platform("windows", "x86"), "windows/386");
+}
+
+#[cfg(unix)]
+#[test]
+fn installed_releases_are_read_only_to_their_top_folder() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false);
+    // No folder entries: `pages/` is made for its file.
+    let v1 = archive(&[
+        (
+            "pluxy-extension.json",
+            &manifest("example/notes", "1", Value::Null),
+        ),
+        ("pages/index.html", b"x"),
+    ]);
+    install(&mut c, &v1, local("n")).unwrap();
+    let release = d.store().join(digest(&v1));
+    let mut seen = 0;
+    let mut todo = vec![release.clone()];
+    while let Some(p) = todo.pop() {
+        let m = fs::symlink_metadata(&p).unwrap();
+        assert_eq!(
+            m.permissions().mode() & 0o222,
+            0,
+            "{} is writable",
+            p.display()
+        );
+        seen += 1;
+        if m.is_dir() {
+            todo.extend(fs::read_dir(&p).unwrap().flatten().map(|e| e.path()));
+        }
+    }
+    // The release folder, pages/, and the two files.
+    assert_eq!(seen, 4);
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -571,6 +621,35 @@ fn a_catalog_that_cannot_be_moved_aside_is_not_replaced() {
     let e = install(&mut c, &package("example/notes", "1"), local("n")).unwrap_err();
     assert!(e.contains("can be changed"), "{e}");
     assert_eq!(fs::read(d.catalog()).unwrap(), b"{not json");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_damaged_release_folder_is_replaced_when_installed_again() {
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false);
+    let v1 = package("example/notes", "1.0.0");
+    install(&mut c, &v1, local("n")).unwrap();
+    install(&mut c, &package("example/notes", "2.0.0"), local("n")).unwrap();
+    let release = d.store().join(digest(&v1));
+    #[cfg(unix)]
+    thaw(&release);
+    let file = release.join("pages/index.html");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    fs::write(&file, b"tampered").unwrap();
+    // 1.0.0, the last good release, installed again: its checked copy replaces the folder.
+    install(&mut c, &v1, local("n")).unwrap();
+    assert_eq!(
+        c.asset("example/notes", &digest(&v1), "index.html")
+            .unwrap()
+            .0,
+        b"<p>1.0.0"
+    );
     let _ = fs::remove_dir_all(root);
 }
 

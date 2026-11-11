@@ -282,6 +282,37 @@ fn remove_tree(p: &Path) -> Result<(), String> {
     }
 }
 
+/// Makes the folders under dir (and dir itself, when root is set) read-only and flushes them
+/// to disk, deepest first. The files in it were written read-only and flushed already.
+fn freeze(dir: &Path, root: bool) -> Result<(), String> {
+    for e in fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))? {
+        let e = e.map_err(|e| format!("{}: {e}", dir.display()))?;
+        if e.file_type().map_err(|e| e.to_string())?.is_dir() {
+            freeze(&e.path(), true)?;
+        }
+    }
+    #[cfg(unix)]
+    if root {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o500))
+            .map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    #[cfg(not(unix))]
+    let _ = root;
+    sync_dir(dir)
+}
+
+/// Flushes a folder's entries to disk, so a file renamed into it stays after a power loss.
+fn sync_dir(dir: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    fs::File::open(dir)
+        .and_then(|f| f.sync_all())
+        .map_err(|e| format!("{}: {e}", dir.display()))?;
+    #[cfg(not(unix))]
+    let _ = dir;
+    Ok(())
+}
+
 /// Writes bytes to path through a temporary file, readable only by this user.
 fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
@@ -299,7 +330,8 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
     fs::rename(&tmp, path).map_err(|e| {
         let _ = fs::remove_file(&tmp);
         format!("{}: {e}", path.display())
-    })
+    })?;
+    sync_dir(path.parent().unwrap_or(Path::new(".")))
 }
 
 impl Catalog {
@@ -472,9 +504,17 @@ impl Catalog {
         let store = self.dirs.store();
         private_dir(&store)?;
         let dest = store.join(&c.release.sha256);
-        if !dest.exists() {
+        // A folder of this digest already in the store (the last good release, installed
+        // again) is used only while its files are unchanged; otherwise the checked copy
+        // replaces it.
+        if !dest.exists() || verify(&dest, &c.release).is_err() {
+            if dest.exists() {
+                remove_tree(&dest)?;
+            }
             fs::rename(&c.staged, &dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+            sync_dir(&store)?;
         }
+        freeze(&dest, true)?;
         let package = match previous.clone() {
             Some(p) => Package {
                 enabled: p.enabled,
@@ -1006,7 +1046,6 @@ fn unpack(archive: &[u8], dest: &Path) -> Result<(), String> {
     let mut ar = tar::Archive::new(gz);
     let mut total = 0u64;
     let mut count = 0usize;
-    let mut dirs = Vec::new();
     for entry in ar.entries().map_err(|e| format!("archive: {e}"))? {
         let mut e = entry.map_err(|e| format!("archive: {e}"))?;
         count += 1;
@@ -1029,7 +1068,6 @@ fn unpack(archive: &[u8], dest: &Path) -> Result<(), String> {
         }
         if kind.is_dir() {
             private_dir(&path)?;
-            dirs.push(path);
             continue;
         }
         if !kind.is_file() {
@@ -1056,18 +1094,12 @@ fn unpack(archive: &[u8], dest: &Path) -> Result<(), String> {
         if copied != size {
             return Err(format!("archive: {name:?} is cut short"));
         }
+        f.sync_all()
+            .map_err(|err| format!("archive: {name:?}: {err}"))?;
     }
-    // The installed tree is read-only, its folders too, except the top one: moving a folder
-    // into the store needs write access to it (its `..` changes).
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        dirs.sort_by_key(|d| std::cmp::Reverse(d.components().count()));
-        for d in &dirs {
-            let _ = fs::set_permissions(d, fs::Permissions::from_mode(0o500));
-        }
-    }
-    Ok(())
+    // The installed tree is read-only, every folder in it too, except the top one until it is
+    // in the store: moving a folder into the store needs write access to it (its `..` changes).
+    freeze(dest, false)
 }
 
 /// The files under dir, by slash-separated path, with their SHA-256 digests.
