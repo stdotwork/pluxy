@@ -1,8 +1,9 @@
 // The kit's host in the desktop app. The native side holds the management key: every management
 // call goes to it (the core_call command), and it adds the key and sends the call to the core
-// the app is connected to. A key the person types passes through here once, to the native side.
+// the app is connected to. Keys are entered only in a native dialog.
 
 import { invoke } from "@tauri-apps/api/core";
+import { flushSync } from "preact/compat";
 import type { Feature, Host, Method, Reply } from "../../ui/kit/host";
 
 export type Mode = "managed" | "local" | "remote";
@@ -29,14 +30,18 @@ export interface Connection {
 export interface ConnectionChange {
   mode: Mode;
   url?: string;
-  key?: string;
-  remember?: boolean;
   ca_file?: string;
   core_path?: string;
 }
 
 export const connectionGet = () => invoke<Connection>("connection_get");
 export const connectionSet = (change: ConnectionChange) => invoke<Connection>("connection_set", { change });
+export interface KeyEntryResult {
+  status: "signed_in" | "wrong_key" | "cancelled" | "error";
+  connection: Connection;
+}
+export const keyEntry = (change?: ConnectionChange) =>
+  invoke<KeyEntryResult>("key_entry", { change: change ?? null });
 export const coreRestart = () => invoke<Connection>("core_restart");
 
 function read(name: string): string | null {
@@ -73,18 +78,16 @@ export function appHost(conn: Connection, changed: (c: Connection) => void): Hos
       }
     },
     signedIn: () => signed,
-    async signIn(key, remember) {
-      try {
-        const r = await invoke<Connection>("sign_in", { key, remember });
-        signed = r.signed_in;
-        // Also when signed in: keeping the key may have failed.
-        return r.error ?? (r.signed_in ? undefined : "core refused this key");
-      } catch (e) {
-        return String(e);
-      }
+    async signIn() {
+      const result = await keyEntry();
+      signed = result.connection.signed_in;
+      changed(result.connection);
+      return result.status === "signed_in" ? undefined : (result.connection.error ?? "Sign-in cancelled");
     },
     signOut() {
       signed = false;
+      // Remove Shell before it renders its browser sign-in form, including on a core 401.
+      flushSync(() => changed({ ...conn, signed_in: false }));
       invoke<Connection>("sign_out").then(changed, (e) =>
         changed({ ...conn, signed_in: false, error: `signing out: ${e}` }),
       );
