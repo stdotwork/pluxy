@@ -74,6 +74,10 @@ The package version, manifest version, protocol version and the versions of `ui`
 are separate on purpose: each can change without the others. Later versions add more optional
 parts (themes) with their own version fields.
 
+App contributions use manifest version 1. See the [app package contract](../app/app-host/README.md)
+and its [tutorial](../app/app-host/TUTORIAL.md). Core refuses app-only packages; mixed packages
+use only their provider part in core. Provider operations and wire version 0.7 are unchanged.
+
 ### Release archives
 
 A release of a package is published as one archive per platform: a gzip-compressed tar file
