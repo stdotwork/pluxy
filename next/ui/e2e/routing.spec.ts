@@ -91,6 +91,8 @@ for (const theme of ["default", "terminal"]) {
     await expect(page.getByRole("heading", { level: 1, name: /Routing$/ })).toBeVisible();
     await expect(page.locator('[data-part="tier"]')).toHaveCount(3);
     await expect(page.getByText(/^Cooling /).first()).toBeVisible();
+    await expect(page.locator('[data-part="card"]').first()).toBeVisible();
+    await expect(page.locator('[data-part="card"] [data-part="card"]')).toHaveCount(0);
     for (const badge of await page.locator('[data-part="tier"] [data-part="badge"]').all()) {
       expect
         .soft(
@@ -133,7 +135,10 @@ test("failed settings and account saves show core errors and reload current valu
   const reloaded = page.waitForResponse(
     (r) => r.url().endsWith("/v0/management/accounts") && r.request().method() === "GET",
   );
-  await bottom.getByRole("button", { name: "Move down a tier: route-bottom", exact: true }).click();
+  await expect(
+    bottom.getByRole("button", { name: "Move down a tier: route-bottom", exact: true }),
+  ).toBeDisabled();
+  await bottom.getByRole("button", { name: "Move up a tier: route-bottom", exact: true }).click();
   await reloaded;
   await expect(page.getByRole("alert")).toHaveText("The account could not be saved");
   await expect(page.locator('[data-part="tier"]').last()).toContainText("Priority -5");
@@ -193,6 +198,15 @@ test("weight and unavailable show only under weighted round-robin", async ({ pag
   await strategy.selectOption("weighted-round-robin");
   await expect(row.getByText("Weight 0", { exact: true })).toBeVisible();
   await expect(row.getByText("Unavailable", { exact: true })).toBeVisible();
+  await seed("route-off", 510);
+  await core.mgmt("PATCH", "/accounts/route-off", { disabled: true });
+  await strategy.selectOption("round-robin");
+  await expect(strategy).toHaveValue("round-robin");
+  await expect(
+    page.locator('[data-part="item"]').filter({ hasText: "route-off" }).getByText("Unavailable", {
+      exact: true,
+    }),
+  ).toBeVisible();
 });
 
 test("the weight editor cancels on Escape and does not lose a click on another action", async ({ page }) => {
@@ -224,7 +238,43 @@ test("a rejected value in a policy field is restored on blur", async ({ page }) 
   await credentials.fill("-3");
   await credentials.press("Tab");
   await expect(credentials).toHaveValue(saved);
+  await expect(page.getByRole("alert")).toContainText("Credentials per round");
   expect(
     (await core.mgmt<CoreSettings>("GET", "/settings")).body.routing.retry["max-retry-credentials"],
   ).toBe(Number(saved));
+});
+
+test("policy fields keep keyboard focus while a change is saved", async ({ page }) => {
+  await openPanel(page, core);
+  await signIn(page, core);
+  await goTo(page, "Routing");
+  const affinity = page.getByRole("switch", { name: "Session affinity", exact: true });
+  const saved = () =>
+    core.mgmt<CoreSettings>("GET", "/settings").then((r) => r.body.routing["session-affinity"]);
+  const before = await saved();
+  for (const expected of [!before, before]) {
+    await affinity.focus();
+    await page.keyboard.press("Space");
+    await expect.poll(saved).toBe(expected);
+    await expect(affinity).toBeEnabled();
+    await expect(affinity).toBeFocused();
+  }
+});
+
+test("the weight editor saves once on Enter", async ({ page }) => {
+  await seed("route-once", 700);
+  await openPanel(page, core);
+  await signIn(page, core);
+  await goTo(page, "Routing");
+  let patches = 0;
+  page.on("request", (r) => {
+    if (r.method() === "PATCH" && r.url().endsWith("/accounts/route-once")) patches++;
+  });
+  await page.getByRole("button", { name: "Set weight…: route-once", exact: true }).click();
+  const input = page.getByRole("spinbutton", { name: "Set weight…: route-once", exact: true });
+  await input.fill("2");
+  await input.press("Enter");
+  await expect.poll(async () => (await account("route-once"))?.weight).toBe(2);
+  await page.waitForTimeout(500);
+  expect(patches).toBe(1);
 });

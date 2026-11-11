@@ -39,6 +39,9 @@ test("a sole member of the top or bottom tier cannot move further out", () => {
   expect(canMove(tiers, 0, "down")).toBe(true);
   expect(canMove(tiers, -4, "up")).toBe(true);
   expect(canMove(tiers, -4, "down")).toBe(false);
+  const alone = groupTiers([account("a", 3)]);
+  expect(canMove(alone, 3, "up")).toBe(false);
+  expect(canMove(alone, 3, "down")).toBe(false);
   const shared = groupTiers([account("a", 8), account("b", 8)]);
   expect(canMove(shared, 8, "up")).toBe(true);
   expect(canMove(shared, 8, "down")).toBe(true);
