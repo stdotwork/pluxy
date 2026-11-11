@@ -542,33 +542,33 @@ func headersMatch(h http.Header, rules map[string]string) bool {
 }
 
 // matchPattern is a glob where `*` matches any run of characters (including none) and every
-// other character stands for itself. Both sides are trimmed, and an empty pattern matches nothing.
+// other character stands for itself, so a `*` in the pattern is always a wildcard, also when the
+// value has a `*` there. Both sides are trimmed, and an empty pattern matches nothing.
+//
+// The pattern is split at its stars: the first piece must start the value, the last must end it,
+// and the pieces between are found in order, so the work stays linear in the two lengths.
 func matchPattern(pattern, s string) bool {
 	pattern, s = strings.TrimSpace(pattern), strings.TrimSpace(s)
 	if pattern == "" {
 		return false
 	}
-	pi, si, star, mark := 0, 0, -1, 0
-	for si < len(s) {
-		switch {
-		case pi < len(pattern) && pattern[pi] == s[si]:
-			pi++
-			si++
-		case pi < len(pattern) && pattern[pi] == '*':
-			star, mark = pi, si
-			pi++
-		case star >= 0:
-			pi = star + 1
-			mark++
-			si = mark
-		default:
+	pieces := strings.Split(pattern, "*")
+	if len(pieces) == 1 {
+		return pattern == s
+	}
+	first, last := pieces[0], pieces[len(pieces)-1]
+	if len(s) < len(first)+len(last) || !strings.HasPrefix(s, first) || !strings.HasSuffix(s, last) {
+		return false
+	}
+	s = s[len(first) : len(s)-len(last)]
+	for _, piece := range pieces[1 : len(pieces)-1] {
+		at := strings.Index(s, piece)
+		if at < 0 {
 			return false
 		}
+		s = s[at+len(piece):]
 	}
-	for pi < len(pattern) && pattern[pi] == '*' {
-		pi++
-	}
-	return pi == len(pattern)
+	return true
 }
 
 // Validate checks the rules the way a config loader should before it keeps them: every path

@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // testdata/cases.json holds rules, inputs and bodies together with what the old core's payload
@@ -211,5 +212,91 @@ func TestApplyEdges(t *testing.T) {
 	}
 	if got, changed := Apply(r, []byte(`{"a":0}`), Input{}); changed || string(got) != `{"a":0}` {
 		t.Errorf("no model: got %q, changed %v", got, changed)
+	}
+}
+
+func TestMatchPattern(t *testing.T) {
+	long := func(n int, c string) string { return strings.Repeat(c, n) }
+	for _, c := range []struct {
+		pattern, s string
+		want       bool
+	}{
+		// A `*` in the pattern is always a wildcard, also when the value has a `*` there.
+		{"*", "*/*", true},
+		{"*", "*", true},
+		{"a*", "a*b", true},
+		{"a*b", "a*b", true},
+		{"*/*", "*/*", true},
+		{"a*", "*a", false},
+		{"*b", "a*", false},
+		// The usual glob cases.
+		{"gpt-*", "gpt-5", true},
+		{"gpt-*", "gpt-", true},
+		{"gpt-*", "gp", false},
+		{"*-mini", "gpt-5-mini", true},
+		{"*-mini", "gpt-5-minis", false},
+		{"*gpt*", "my-gpt-5", true},
+		{"a*b*c", "aXbYc", true},
+		{"a*b*c", "abc", true},
+		{"a*b*c", "acb", false},
+		{"a*b*c", "aXbYcZ", false},
+		{"a**b", "ab", true},
+		{"**", "", true},
+		{"*", "", true},
+		{"exact", "exact", true},
+		{"exact", "exacts", false},
+		{"exact", "exac", false},
+		{"EXACT", "exact", false},
+		// The prefix and the suffix may not share characters.
+		{"ab*ab", "ab", false},
+		{"ab*ab", "aba", false},
+		{"ab*ab", "abab", true},
+		{"a*a", "a", false},
+		{"a*a", "aa", true},
+		{"*a*a*", "a", false},
+		{"*a*a*", "aa", true},
+		// Segments are found in order, each after the one before.
+		{"*ab*ba*", "abba", true},
+		{"*ab*ab*", "aab", false},
+		{"*ab*ab*", "xabxab", true},
+		// Both sides are trimmed, and an empty pattern matches nothing.
+		{" gpt-* ", "  gpt-5 ", true},
+		{"", "", false},
+		{"  ", "x", false},
+		{"", "x", false},
+		// Multi-byte characters stand for themselves.
+		{"é*", "éa", true},
+		{"*é", "aé", true},
+		{"*é", "ae", false},
+		// A long pattern against a long value.
+		{"*" + long(2000, "a") + "b", long(4000, "a"), false},
+		{"*" + long(2000, "a") + "b*", long(4000, "a"), false},
+		{"*" + long(2000, "a") + "b", long(4000, "a") + "b", true},
+		{long(2000, "a*"), long(2000, "a"), true},
+		{long(2000, "a*") + "b", long(2000, "a"), false},
+	} {
+		if got := matchPattern(c.pattern, c.s); got != c.want {
+			t.Errorf("matchPattern(%.40q, %.40q) = %v, want %v", c.pattern, c.s, got, c.want)
+		}
+	}
+}
+
+// A client header can be as long as the server allows and the pattern comes from the config, so
+// matching must stay about as fast as reading both. The backtracking matcher took seconds here.
+func TestMatchPatternLongInputs(t *testing.T) {
+	const k, n = 50000, 100000
+	pat := "*" + strings.Repeat("a", k) + "b"
+	value := strings.Repeat("a", n)
+	done := make(chan bool, 1)
+	go func() {
+		done <- matchPattern(pat, value) || matchPattern(pat+"*", value)
+	}()
+	select {
+	case got := <-done:
+		if got {
+			t.Error("matched")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("matchPattern did not finish within 3s on a long pattern and a long value")
 	}
 }
