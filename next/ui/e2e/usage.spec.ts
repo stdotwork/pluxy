@@ -49,7 +49,7 @@ test("filters recorded requests and exports the matching rows", async ({ page })
     for (const theme of ["default", "terminal"]) {
       await nav(page).getByRole("link", { name: "Themes", exact: true }).click();
       await page.getByRole("radio", { name: new RegExp("^" + theme, "i") }).check();
-      await nav(page).getByRole("link", { name: "Usage", exact: true }).click();
+      await page.locator('nav a[href="#/usage"]').click();
       await expect(rows).toHaveCount(2);
       await page.screenshot({ path: process.env.USAGE_SHOTS + "/" + theme + "-rows.png", fullPage: true });
       await page.getByLabel("Model", { exact: true }).fill("fake-model");
