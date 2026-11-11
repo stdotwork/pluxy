@@ -255,3 +255,108 @@ func TestNoNamespacesNoRestorer(t *testing.T) {
 		t.Errorf("bridge %v, error %v; want none", bridge, err)
 	}
 }
+
+// The upstream may open with the call's added event, with no response.created before it. The call
+// is then restored from its first event on.
+func TestNamespaceReplyWithoutCreated(t *testing.T) {
+	args := `{"city":"Oslo"}`
+	started := `{"id":"fc_1","type":"function_call","status":"in_progress","call_id":"call_1","name":"weather__get_forecast","arguments":""}`
+	got, err := replyStream(t, nsRequest, sseOf(added(0, 0, started), argsDelta(1, 0, "fc_1", args), argsDone(2, 0, "fc_1", args),
+		itemDone(3, 0, nsCall("weather__get_forecast", args)), completed(4, nsCall("weather__get_forecast", args))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("function_call get_forecast ns=weather arguments=%q", args)
+	expect(t, got, []string{
+		`0 response.output_item.added [0] function_call get_forecast ns=weather arguments=""`,
+		`1 response.function_call_arguments.delta [0] delta=` + fmt.Sprintf("%q", args),
+		`2 response.function_call_arguments.done [0] arguments=` + fmt.Sprintf("%q", args),
+		`3 response.output_item.done [0] ` + want,
+		`4 response.completed output: ` + want,
+	})
+}
+
+// A history call and a tool choice in a namespace go to the namespace's function, not to a plain
+// function that has the namespace's name, when the namespace was flattened.
+func TestNamespaceNamedLikeAFunction(t *testing.T) {
+	got := responsesBody(t, `{"model":"grok-4.6","input":[{"type":"function_call","call_id":"c1","namespace":"ns","name":"a","arguments":"{\"x\":1}"}],
+		"tool_choice":{"type":"function","namespace":"ns","name":"a"},
+		"tools":[{"type":"function","name":"ns"},{"type":"namespace","name":"ns","tools":[{"type":"function","name":"a"}]}]}`)
+	var m struct {
+		Input  []json.RawMessage `json:"input"`
+		Choice json.RawMessage   `json:"tool_choice"`
+	}
+	_ = json.Unmarshal(got, &m)
+	sameJSON(t, "call", m.Input[0], `{"type":"function_call","call_id":"c1","name":"ns__a","arguments":"{\"x\":1}"}`)
+	sameJSON(t, "choice", m.Choice, `{"type":"function","name":"ns__a"}`)
+	if n := names(toolsOf(t, got)); n != "function:ns,function:ns__a" {
+		t.Errorf("tools = %s", n)
+	}
+}
+
+// A namespace declared more than once is one folded function that has the children of every
+// declaration, each child as its first declaration has it.
+func TestNamespaceDeclaredTwice(t *testing.T) {
+	body := `{"model":"grok-4.6","stream":true,"input":[],"tools":[
+		{"type":"namespace","name":"ns","description":"First.","tools":[` + lookups(201) + `]},
+		{"type":"namespace","name":"ns","description":"Second.","tools":[{"type":"function","name":"lookup0","description":"again"},{"type":"function","name":"last_child"}]}]}`
+	tools := toolsOf(t, responsesBody(t, body))
+	if len(tools) != 1 || tools[0]["name"] != "ns" {
+		t.Fatalf("tools = %s, want one folded function", names(tools))
+	}
+	params, _ := json.Marshal(tools[0]["parameters"])
+	var p struct {
+		Properties struct {
+			Name struct {
+				Enum []string `json:"enum"`
+			} `json:"name"`
+		} `json:"properties"`
+	}
+	_ = json.Unmarshal(params, &p)
+	enum := p.Properties.Name.Enum
+	if len(enum) != 202 || enum[0] != "lookup0" || enum[201] != "last_child" {
+		t.Errorf("%d children, the last %q; want 202, the last last_child", len(enum), enum[len(enum)-1])
+	}
+	if d, _ := tools[0]["description"].(string); !strings.HasPrefix(d, "First.\n\n") || strings.Contains(d, "again") {
+		t.Errorf("description %.80q: want the first declaration's, with lookup0 as it first had it", d)
+	}
+	// A call to the child only the second declaration has comes back as that child.
+	wrapper := `{"name":"last_child","arguments":{}}`
+	got, err := replyStream(t, body, sseOf(created(0), itemDone(1, 0, nsCall("ns", wrapper)), completed(2, nsCall("ns", wrapper))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `function_call last_child ns=ns arguments="{}"`
+	expect(t, got, []string{`0 response.created `, `1 response.output_item.done [0] ` + want, `2 response.completed output: ` + want})
+}
+
+// A function in a namespace that is called apply_patch is an ordinary function, whatever the
+// top-level custom apply_patch tool is: it is not given the patch rules.
+func TestNamespacedApplyPatchIsNotThePatchTool(t *testing.T) {
+	body := `{"model":"grok-4.6","stream":true,"input":[],"tools":[{"type":"custom","name":"apply_patch"},
+		{"type":"namespace","name":"ns","tools":[{"type":"function","name":"apply_patch","parameters":{"type":"object"}}]}]}`
+	started := `{"id":"fc_9","type":"function_call","status":"in_progress","call_id":"call_9","name":"ns__apply_patch","arguments":""}`
+	other := `{"id":"fc_9","type":"function_call","status":"completed","call_id":"call_9","name":"ns__apply_patch","arguments":"{}"}`
+	got, err := replyStream(t, body, sseOf(created(0), added(1, 0, started), argsDone(2, 0, "fc_9", "{}"), itemDone(3, 0, other), completed(4, other)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `function_call apply_patch ns=ns arguments="{}"`
+	expect(t, got, []string{`0 response.created `, `1 response.output_item.added [0] function_call apply_patch ns=ns arguments=""`,
+		`2 response.function_call_arguments.done [0] arguments="{}"`, `3 response.output_item.done [0] ` + want, `4 response.completed output: ` + want})
+	// Without any earlier event for it, the final response restores it the same way.
+	got, err = replyStream(t, body, sseOf(created(0), completed(1, other)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect(t, got, []string{`0 response.created `, `1 response.completed output: ` + want})
+	// The top-level tool still is the patch tool.
+	text := fmt.Sprintf("%q", patchText)
+	got, err = replyStream(t, body, sseOf(created(0), added(1, 0, callItem("in_progress", "")), argsDone(2, 0, "fc_1", patchArgs), itemDone(3, 0, callItem("completed", patchArgs)), completed(4, callItem("completed", patchArgs))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 5 || !strings.HasSuffix(got[4], "custom_tool_call apply_patch input="+text) {
+		t.Errorf("events:\n%s", strings.Join(got, "\n"))
+	}
+}

@@ -36,9 +36,8 @@ type nsRef struct {
 
 // namespaceTools is how one request's namespace tools were sent.
 type namespaceTools struct {
-	fold  bool
-	refs  map[string]*nsRef
-	names map[string]bool // names of the functions sent
+	fold bool
+	refs map[string]*nsRef
 }
 
 // qualifyName is the name a namespace's child is sent under.
@@ -116,7 +115,16 @@ func rewriteNamespaces(tools []any) ([]any, *namespaceTools) {
 	if !has {
 		return tools, nil
 	}
-	st := &namespaceTools{fold: flattenedCount(tools) > maxTools, refs: map[string]*nsRef{}, names: map[string]bool{}}
+	st := &namespaceTools{fold: flattenedCount(tools) > maxTools, refs: map[string]*nsRef{}}
+	// A namespace declared more than once is one namespace with the children of every declaration.
+	decls := map[string][]map[string]any{}
+	for _, t := range tools {
+		if m, ok := t.(map[string]any); ok && m["type"] == namespaceType {
+			if name := strings.TrimSpace(str(m, "name")); name != "" {
+				decls[name] = append(decls[name], m)
+			}
+		}
+	}
 	claimed := map[string]bool{}
 	type entry struct {
 		tool       any
@@ -146,18 +154,17 @@ func rewriteNamespaces(tools []any) ([]any, *namespaceTools) {
 				name = strings.TrimSpace(str(m, "name"))
 				claimed[name] = name != ""
 			}
-			if add(t, name, false) && name != "" {
-				st.names[name] = true
-			}
+			add(t, name, false)
 			continue
 		}
 		ns := strings.TrimSpace(str(m, "name"))
 		if st.fold {
-			if d := dispatcherTool(m); d != nil && add(d, ns, true) {
-				st.names[ns] = true
+			if d := dispatcherTool(decls[ns]); d != nil && add(d, ns, true) {
 				children := map[string]struct{}{}
-				for _, c := range childTools(m) {
-					children[strings.TrimSpace(str(c, "name"))] = struct{}{}
+				for _, decl := range decls[ns] {
+					for _, c := range childTools(decl) {
+						children[strings.TrimSpace(str(c, "name"))] = struct{}{}
+					}
 				}
 				st.refs[ns] = &nsRef{namespace: ns, dispatcher: true, children: children}
 			}
@@ -173,7 +180,6 @@ func rewriteNamespaces(tools []any) ([]any, *namespaceTools) {
 			if !add(c, q, false) || !isTool(c) {
 				continue
 			}
-			st.names[q] = true
 			if !claimed[q] && st.refs[q] == nil {
 				st.refs[q] = &nsRef{namespace: ns, name: child}
 			}
@@ -208,16 +214,27 @@ func childTools(ns map[string]any) []map[string]any {
 	return out
 }
 
-// dispatcherTool is the one function that stands for a folded namespace.
-func dispatcherTool(ns map[string]any) map[string]any {
-	name := strings.TrimSpace(str(ns, "name"))
+// dispatcherTool is the one function that stands for a folded namespace, from every declaration of
+// it: the first description there is, and each child as its first declaration has it.
+func dispatcherTool(decls []map[string]any) map[string]any {
+	if len(decls) == 0 {
+		return nil
+	}
+	name := strings.TrimSpace(str(decls[0], "name"))
 	if name == "" {
 		return nil
 	}
-	description := strings.TrimSpace(str(ns, "description"))
+	description := ""
+	var children []map[string]any
+	for _, d := range decls {
+		if description == "" {
+			description = strings.TrimSpace(str(d, "description"))
+		}
+		children = append(children, childTools(d)...)
+	}
 	var names, entries []string
 	seen := map[string]bool{}
-	for _, c := range childTools(ns) {
+	for _, c := range children {
 		child := strings.TrimSpace(str(c, "name"))
 		if child == "" || seen[child] {
 			continue
@@ -315,19 +332,14 @@ func (st *namespaceTools) rewriteChoice(v any) {
 	}
 }
 
-// sentName is the name a namespace's child is called by on xAI: the namespace's own when it was
-// folded, the qualified name when it was flattened.
+// sentName is the name a namespace's child is called by on xAI: the namespace's own when the
+// namespace was folded into a function (a function of that name that is not one does not count),
+// the qualified name otherwise.
 func (st *namespaceTools) sentName(namespace, child string) string {
-	q := qualifyName(namespace, child)
-	switch {
-	case st.names[strings.TrimSpace(namespace)]:
-		return strings.TrimSpace(namespace)
-	case st.names[q]:
-		return q
-	case st.fold:
+	if r := st.refs[strings.TrimSpace(namespace)]; r != nil && r.dispatcher {
 		return strings.TrimSpace(namespace)
 	}
-	return q
+	return qualifyName(namespace, child)
 }
 
 // rewriteHistory writes the function calls of the history that name a namespace the way the tools
@@ -343,8 +355,8 @@ func (st *namespaceTools) rewriteHistory(input []any) {
 			continue
 		}
 		child := strings.TrimSpace(str(item, "name"))
-		q := qualifyName(ns, child)
-		if st.names[ns] || (!st.names[q] && st.fold) {
+		sent := st.sentName(ns, child)
+		if r := st.refs[ns]; r != nil && r.dispatcher {
 			wrapper := map[string]any{"name": child}
 			if args := str(item, "arguments"); args != "" {
 				if json.Valid([]byte(args)) {
@@ -354,9 +366,9 @@ func (st *namespaceTools) rewriteHistory(input []any) {
 				}
 			}
 			b, _ := marshal(wrapper)
-			item["name"], item["arguments"] = ns, string(b)
-		} else if q != "" {
-			item["name"] = q
+			item["name"], item["arguments"] = sent, string(b)
+		} else if sent != "" {
+			item["name"] = sent
 		}
 		delete(item, "namespace")
 	}
@@ -367,6 +379,7 @@ func (st *namespaceTools) rewriteHistory(input []any) {
 // one for one.
 type nsRestorer struct {
 	refs       map[string]*nsRef
+	first      bool              // the stream's first event, on response.start, was a call's added event
 	open       map[int]bool      // model item indexes of calls to restore
 	dispatched map[string]string // item ID of a call to a folded namespace -> namespace
 }
@@ -377,10 +390,22 @@ func newNSRestorer(refs map[string]*nsRef) *nsRestorer {
 
 func (r *nsRestorer) Transform(ev llm.Event) (llm.Event, error) {
 	switch ev.Type {
+	case llm.EventResponseStart:
+		// A stream that does not open with response.created has its first event's raw here, and the
+		// item.start made of it has none.
+		if bytes.Contains(ev.Raw, []byte(`"response.output_item.added"`)) {
+			ev.Raw = r.rewrite(ev.Raw, func(m map[string]any) bool {
+				r.first = r.restoreItem(m["item"], true)
+				return r.first
+			})
+		}
 	case llm.EventItemStart:
-		if ev.Item != nil && ev.Item.Kind == llm.ItemToolCall && r.refs[strings.TrimSpace(ev.Item.Name)] != nil && len(ev.Raw) > 0 {
+		if ev.Item != nil && ev.Item.Kind == llm.ItemToolCall && r.refs[strings.TrimSpace(ev.Item.Name)] != nil && (len(ev.Raw) > 0 || r.first) {
 			r.open[ev.Index] = true
-			ev.Raw = r.rewrite(ev.Raw, func(m map[string]any) bool { return r.restoreItem(m["item"], true) })
+			if len(ev.Raw) > 0 {
+				ev.Raw = r.rewrite(ev.Raw, func(m map[string]any) bool { return r.restoreItem(m["item"], true) })
+			}
+			r.first = false
 		}
 	case llm.EventItemEnd:
 		if r.open[ev.Index] {

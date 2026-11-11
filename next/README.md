@@ -815,7 +815,11 @@ What changes in a request:
   does, are written the same way. xAI's call to such a function goes back to a Responses client as
   the call to the child in its namespace, in the added item, the done item and the final response;
   a folded namespace's call is unwrapped when its arguments name one of the namespace's children,
-  and stays a call to the namespace otherwise. Where a name repeats, the first tool stays.
+  and stays a call to the namespace otherwise. A namespace declared more than once is one
+  namespace with the children of every declaration, each as its first declaration has it. A call
+  or a tool choice in a namespace goes to the namespace's function only when the namespace really
+  was folded, not to a plain function that has its name. Where a name repeats, the first tool stays.
+  An `apply_patch` function in a namespace is an ordinary function, not the patch tool.
 - The Codex app's `automation_update` tool (in the `codex_app` or `codex_apps` namespace) is sent
   with parameters that accept any object, and `strict` false: with its own schema, a large `oneOf`
   with `$ref` references, xAI accepts the request and sends no events.

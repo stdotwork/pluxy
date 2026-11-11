@@ -325,6 +325,12 @@ func (b *patchBridge) synth(trigger map[string]any, adds []map[string]any, repla
 	return out
 }
 
+// isPatchCall reports whether a function call item is a call to the custom apply_patch tool, which
+// is a top-level tool: a function called apply_patch in a namespace is another tool.
+func isPatchCall(item map[string]any) bool {
+	return str(item, "type") == "function_call" && str(item, "name") == applyPatchName && str(item, "namespace") == ""
+}
+
 // toCustomItem rewrites a function call item as a custom tool call with the given input.
 func toCustomItem(item map[string]any, input string) {
 	item["type"] = "custom_tool_call"
@@ -340,7 +346,7 @@ func (b *patchBridge) begin(raw json.RawMessage) (json.RawMessage, *patchCall) {
 		return nil, nil
 	}
 	item, _ := m["item"].(map[string]any)
-	if item == nil || str(item, "type") != "function_call" || str(item, "name") != applyPatchName {
+	if item == nil || !isPatchCall(item) {
 		return nil, nil
 	}
 	index, _ := intOf(m, "output_index")
@@ -447,7 +453,7 @@ func (b *patchBridge) end(c *patchCall, ev llm.Event) ([]llm.Event, error) {
 	if c == nil {
 		index, hasIndex := intOf(m, "output_index")
 		if c = b.find(str(item, "id"), str(item, "call_id"), index, hasIndex); c == nil {
-			if str(item, "type") != "function_call" || str(item, "name") != applyPatchName {
+			if !isPatchCall(item) {
 				return b.pass(ev), nil
 			}
 			c = b.track(str(item, "id"), str(item, "call_id"), index)
@@ -533,7 +539,7 @@ func (b *patchBridge) finish(ev llm.Event) ([]llm.Event, error) {
 		}
 		c := b.find(str(item, "id"), str(item, "call_id"), 0, false)
 		if c == nil {
-			if str(item, "name") != applyPatchName {
+			if !isPatchCall(item) {
 				continue
 			}
 			c = b.track(str(item, "id"), str(item, "call_id"), i)
