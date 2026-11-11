@@ -103,6 +103,12 @@ pub fn socket_dirs() -> Vec<PathBuf> {
 /// this profile's own (made, readable by its user only). When the lock is held but the holder
 /// does not answer within `wait` (it may be starting, or closing), this is an error.
 pub fn start(dir: &Path, wait: Duration) -> Result<Start, String> {
+    start_by(dir, Instant::now() + wait)
+}
+
+/// [`start`], where the holder of a held lock must have answered by `deadline`. After it, the
+/// lock is still tried, but the holder is not asked again.
+fn start_by(dir: &Path, deadline: Instant) -> Result<Start, String> {
     let d = fsx::open_dir(dir)
         .map_err(|e| format!("cannot use the instance folder {}: {e}", dir.display()))?;
     let lock = fsx::open_lock(&d)
@@ -113,7 +119,6 @@ pub fn start(dir: &Path, wait: Duration) -> Result<Start, String> {
         let digest = Sha256::digest(canonical.as_os_str().as_encoded_bytes());
         digest[..16].iter().map(|b| format!("{b:02x}")).collect()
     };
-    let deadline = Instant::now() + wait;
     loop {
         match lock.try_lock() {
             Ok(()) => {
@@ -130,7 +135,8 @@ pub fn start(dir: &Path, wait: Duration) -> Result<Start, String> {
                 }));
             }
             Err(std::fs::TryLockError::WouldBlock) => {
-                // One deadline for the whole launch: reading the address, each try and each wait.
+                // One deadline for the whole launch: `activate` checks it after the address is
+                // read and before each step, and it is checked again before another try.
                 let tried = fsx::read_address(&d).and_then(|socket| match socket {
                     Some(socket) => ipc::activate(&socket, deadline),
                     None => Err(io::ErrorKind::Unsupported.into()),
@@ -812,9 +818,19 @@ mod ipc {
         Ok(UnixStream::from(fd))
     }
 
+    /// TimedOut once `deadline` has passed.
+    fn before(deadline: Instant) -> io::Result<()> {
+        if Instant::now() >= deadline {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        Ok(())
+    }
+
     /// Asks the app on the socket to raise its window; Ok once it has answered `ok`, all by
-    /// `deadline`: connecting, writing and reading.
+    /// `deadline`: nothing is started after it (connecting, each write and read), and an answer
+    /// read after it is not taken.
     pub fn activate(socket: &Path, deadline: Instant) -> io::Result<()> {
+        before(deadline)?;
         let mut s = connect(socket, deadline)?;
         // Only an app of this user's is told anything.
         if peer_uid(s.as_raw_fd())? != euid() {
@@ -825,6 +841,7 @@ mod ipc {
         }
         let mut sent = 0;
         while sent < MESSAGE.len() {
+            before(deadline)?;
             match s.write(&MESSAGE[sent..]) {
                 Ok(k) => sent += k,
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
@@ -837,6 +854,7 @@ mod ipc {
         let mut reply = [0u8; 3];
         let mut got = 0;
         while got < reply.len() {
+            before(deadline)?;
             match s.read(&mut reply[got..]) {
                 Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()),
                 Ok(k) => got += k,
@@ -848,7 +866,7 @@ mod ipc {
             }
         }
         if reply == OK {
-            Ok(())
+            before(deadline)
         } else {
             Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -1309,27 +1327,66 @@ mod tests {
         ));
     }
 
-    /// A launch whose holder takes connections and never answers fails at its deadline, not one
-    /// retry after it.
-    #[test]
-    fn a_launch_that_gets_no_answer_ends_at_its_deadline() {
-        let t = temp();
-        let dir = t.0.join("instance");
-        let _held = first(&dir);
+    /// A profile held by an app whose socket takes connections and never answers (its address
+    /// names a listener that never accepts), and that listener.
+    fn mute_holder(t: &Temp, dir: &Path) -> (Instance, std::os::unix::net::UnixListener) {
+        let held = first(dir);
         let sock = t.0.join("mute.sock");
-        let _mute = std::os::unix::net::UnixListener::bind(&sock).unwrap(); // never accepts
+        let mute = std::os::unix::net::UnixListener::bind(&sock).unwrap();
         fs::write(dir.join(ADDRESS), sock.as_os_str().as_encoded_bytes()).unwrap();
         fs::set_permissions(dir.join(ADDRESS), fs::Permissions::from_mode(0o600)).unwrap();
-        let wait = Duration::from_millis(300);
-        let t0 = Instant::now();
-        let e = start(&dir, wait).err().unwrap();
-        let took = t0.elapsed();
+        (held, mute)
+    }
+
+    /// The connections made to `l` so far: they wait in its queue, also once closed.
+    fn connections(l: &std::os::unix::net::UnixListener) -> usize {
+        l.set_nonblocking(true).unwrap();
+        let mut n = 0;
+        while l.accept().is_ok() {
+            n += 1;
+        }
+        n
+    }
+
+    /// Once its deadline has passed, a launch does not ask the holder again: it reads the
+    /// address, but connects to nothing.
+    #[test]
+    fn a_launch_past_its_deadline_asks_nothing() {
+        let t = temp();
+        let dir = t.0.join("instance");
+        let (_held, mute) = mute_holder(&t, &dir);
+        let e = start_by(&dir, Instant::now()).err().unwrap();
         assert!(e.contains("did not answer"), "{e}");
-        // A retry after the deadline sleeps 100 ms first; the margin is for a loaded machine.
-        assert!(
-            took >= wait && took < wait + Duration::from_millis(80),
-            "took {took:?} for a {wait:?} deadline"
+        assert_eq!(
+            connections(&mute),
+            0,
+            "a launch connected after its deadline"
         );
+        // The positive control on the same route: with time left, the launch does connect.
+        let e = start(&dir, Duration::from_millis(500)).err().unwrap();
+        assert!(e.contains("did not answer"), "{e}");
+        assert_eq!(connections(&mute), 1);
+    }
+
+    /// A launch whose holder never answers ends, and not before its deadline. Only a watchdog
+    /// bounds it from above; the deadline itself is the test above's.
+    #[test]
+    fn a_launch_that_gets_no_answer_ends() {
+        let t = temp();
+        let dir = t.0.join("instance");
+        let (_held, mute) = mute_holder(&t, &dir);
+        let wait = Duration::from_millis(300);
+        let d = dir.clone();
+        let (e, took) = within(Duration::from_secs(20), move || {
+            let t0 = Instant::now();
+            (start(&d, wait).err(), t0.elapsed())
+        })
+        .expect("a launch did not end");
+        let e = e.expect("a launch ran as a second instance");
+        assert!(e.contains("did not answer"), "{e}");
+        assert!(took >= wait, "it gave up after {took:?}, before {wait:?}");
+        // Its one try waits for the answer until the deadline; there is no try after it.
+        assert!(connections(&mute) <= 1);
     }
 
     /// A socket folder another user could swap for theirs is not used: one in a folder open to
