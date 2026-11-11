@@ -335,11 +335,14 @@ fn device_page_open(
     rect: Rect,
 ) -> Result<String, String> {
     trusted(&webview)?;
-    let (url, folder, title) = state.device.lock().unwrap().page(&id, &page)?;
-    let url = Url::parse(&url).map_err(|e| e.to_string())?;
-    open_page(
-        &webview,
-        Binding {
+    // Bound while the catalog is locked: a change to the package (`device_changed`, under the
+    // same lock) either finds this page bound and closes it, or comes before its address is
+    // read.
+    let (label, site) = {
+        let catalog = state.device.lock().unwrap();
+        let (url, folder, title) = catalog.page(&id, &page)?;
+        let url = Url::parse(&url).map_err(|e| e.to_string())?;
+        let binding = Binding {
             // Its own budget: a core package with the same ID is another package.
             extension: format!("device:{id}"),
             page,
@@ -347,15 +350,22 @@ fn device_page_open(
             url,
             pages_origin: device::asset_base(),
             device: Some(folder),
-        },
-        rect,
-    )
+        };
+        let site = binding.clone();
+        (state.pages.lock().unwrap().bind(binding)?, site)
+    };
+    add_page(&webview, label, site, rect)
 }
 
 fn open_page(webview: &Webview, binding: Binding, rect: Rect) -> Result<String, String> {
-    let state = webview.state::<App>();
     let site = binding.clone();
-    let label = state.pages.lock().unwrap().bind(binding)?;
+    let label = webview.state::<App>().pages.lock().unwrap().bind(binding)?;
+    add_page(webview, label, site, rect)
+}
+
+/// Makes the webview for page label, bound to site.
+fn add_page(webview: &Webview, label: String, site: Binding, rect: Rect) -> Result<String, String> {
+    let state = webview.state::<App>();
     let app_doc = page_scheme_url();
     let navigation_app = webview.app_handle().clone();
     let navigation_label = label.clone();
@@ -404,8 +414,18 @@ fn open_page(webview: &Webview, binding: Binding, rect: Rect) -> Result<String, 
         )
         .map_err(|e| e.to_string())
         .and_then(|_| place::adopt(&window, &label, b));
+    // Unbound while it was made (its package changed, or the window closed its pages): the
+    // webview must not stay.
+    let placed = placed.and_then(|_| {
+        if state.pages.lock().unwrap().get(&label).is_some() {
+            Ok(())
+        } else {
+            Err("the page was closed while it opened".to_string())
+        }
+    });
     if let Err(e) = placed {
         state.pages.lock().unwrap().unbind(&label);
+        place::forget(&label);
         if let Some(w) = webview.app_handle().get_webview(&label) {
             let _ = w.close();
         }
@@ -561,35 +581,48 @@ async fn device_registries(webview: Webview) -> Result<Vec<device::RegistryView>
         .map_err(|e| e.to_string())?
 }
 
-/// Closes the open pages of package id on this device and tells the window its catalog
-/// changed. A page of a release that is no longer active never stays open, even hidden.
-fn device_changed(app: &AppHandle, id: &str) {
-    let labels = {
-        let st = app.state::<App>();
+/// Makes a change f to package id on this device, then closes the package's open pages and
+/// tells the window its catalog changed: a page of a release that is no longer active never
+/// stays open, even hidden. The pages are unbound under the catalog's lock, with the change
+/// (see `device_page_open`). The change is made even when a page or a folder it left could not
+/// be closed or deleted; the answer then says which.
+fn device_changed(
+    app: &AppHandle,
+    id: &str,
+    f: impl FnOnce(&mut device::Catalog) -> Result<(), String>,
+) -> Result<device::View, String> {
+    let st = app.state::<App>();
+    let (labels, view, mut left) = {
+        let mut catalog = st.device.lock().unwrap();
+        f(&mut catalog)?;
         let mut pages = st.pages.lock().unwrap();
         let labels = pages.device_labels(id);
         for l in &labels {
             pages.unbind(l);
         }
-        labels
+        let left: Vec<String> = catalog.take_cleanup().into_iter().collect();
+        (labels, catalog.view(), left)
     };
     for l in labels {
         place::forget(&l);
         if let Some(w) = app.get_webview(&l) {
-            let _ = w.close();
+            if let Err(e) = w.close() {
+                left.push(format!("page webview {l} could not be closed: {e}"));
+            }
         }
     }
     let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-device", ());
+    if left.is_empty() {
+        Ok(view)
+    } else {
+        Err(format!("{id} was changed, but {}", left.join("; ")))
+    }
 }
 
 /// Commits a staged candidate and closes the package's open pages.
 fn device_commit(app: &AppHandle, c: device::Candidate) -> Result<device::View, String> {
     let id = c.id.clone();
-    let st = app.state::<App>();
-    st.device.lock().unwrap().commit(c)?;
-    device_changed(app, &id);
-    let view = st.device.lock().unwrap().view();
-    Ok(view)
+    device_changed(app, &id, |catalog| catalog.commit(c))
 }
 
 /// Installs or updates package id from a registry: version, or its newest release.
@@ -698,11 +731,7 @@ fn device_change(
     f: impl FnOnce(&mut device::Catalog) -> Result<(), String>,
 ) -> Result<device::View, String> {
     trusted(webview)?;
-    let app = webview.app_handle();
-    f(&mut app.state::<App>().device.lock().unwrap())?;
-    device_changed(app, id);
-    let view = app.state::<App>().device.lock().unwrap().view();
-    Ok(view)
+    device_changed(webview.app_handle(), id, f)
 }
 
 #[tauri::command]

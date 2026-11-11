@@ -39,6 +39,8 @@ const MAX_UI_FILES: usize = 1000;
 const MAX_UI_BYTES: u64 = 32 << 20;
 const MAX_PAGES: usize = 20;
 const MANIFEST: &str = "pluxy-extension.json";
+/// The start of the name a catalog that could not be read is moved aside to.
+const ASIDE: &str = "catalog.json.corrupt-";
 
 /// Where a release came from. A package keeps one source; a release from another is refused.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,6 +143,14 @@ pub struct Catalog {
     packages: BTreeMap<String, Package>,
     /// Why the saved catalog could not be read at start, if it could not.
     pub warning: Option<String>,
+    /// A saved catalog that could not be read is kept aside: until it is removed, no store
+    /// folder is deleted, so the releases it names can still be recovered.
+    keep_store: bool,
+    /// Why nothing can be changed, when a catalog that could not be read could not be moved
+    /// aside either: saving would replace it.
+    locked: Option<String>,
+    /// Folders that could not be deleted since the last `take_cleanup`.
+    cleanup: Vec<String>,
 }
 
 /// A page as the window lists it.
@@ -248,7 +258,7 @@ fn private_dir(p: &Path) -> Result<(), String> {
 }
 
 /// Removes a store or staging folder, whose files and folders are read-only.
-fn remove_tree(p: &Path) {
+fn remove_tree(p: &Path) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -266,7 +276,10 @@ fn remove_tree(p: &Path) {
         }
         writable(p);
     }
-    let _ = fs::remove_dir_all(p);
+    match fs::remove_dir_all(p) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("{}: {e}", p.display())),
+        _ => Ok(()),
+    }
 }
 
 /// Writes bytes to path through a temporary file, readable only by this user.
@@ -293,30 +306,79 @@ impl Catalog {
     /// Opens the catalog in dirs. Staging leftovers and store folders no release names go.
     pub fn open(dirs: Dirs, safe_mode: bool) -> Catalog {
         let mut warning = None;
-        let packages = match fs::read(dirs.catalog()) {
+        let mut locked = None;
+        let read = match fs::read(dirs.catalog()) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
+            Err(e) => Err(e.to_string()),
             Ok(b) => match serde_json::from_slice::<Saved>(&b) {
-                Ok(s) if s.version == 0 => s.packages,
-                _ => {
-                    let aside = dirs.root.join(format!("catalog.json.corrupt-{}", now()));
-                    let _ = fs::rename(dirs.catalog(), &aside);
-                    warning = Some(format!(
-                        "this device's extension catalog could not be read; it was moved to {}",
-                        aside.display()
-                    ));
-                    BTreeMap::new()
-                }
+                Ok(s) if s.version == 0 => Ok(s.packages),
+                Ok(s) => Err(format!("version {} is not supported", s.version)),
+                Err(e) => Err(e.to_string()),
             },
-            Err(_) => BTreeMap::new(),
         };
-        let c = Catalog {
+        let packages = read.unwrap_or_else(|why| {
+            let aside = dirs.root.join(format!("{ASIDE}{}", now()));
+            warning = Some(match fs::rename(dirs.catalog(), &aside) {
+                Ok(()) => format!(
+                    "this device's extension catalog could not be read ({why}); it was moved to {}",
+                    aside.display()
+                ),
+                Err(e) => {
+                    let w = format!(
+                        "this device's extension catalog could not be read ({why}) or moved aside ({e}); nothing on this device can be changed until {} is fixed or removed",
+                        dirs.catalog().display()
+                    );
+                    locked = Some(w.clone());
+                    w
+                }
+            });
+            BTreeMap::new()
+        });
+        // A catalog moved aside, now or before: its releases stay until it is removed.
+        let aside = fs::read_dir(&dirs.root).ok().and_then(|entries| {
+            entries.flatten().map(|e| e.path()).find(|p| {
+                p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with(ASIDE))
+            })
+        });
+        let keep_store = locked.is_some() || aside.is_some();
+        if let (None, Some(a)) = (&warning, &aside) {
+            warning = Some(format!(
+                "a damaged catalog of this device's extensions is kept at {}; the releases it may name are kept until it is removed",
+                a.display()
+            ));
+        }
+        let mut c = Catalog {
             dirs,
             safe_mode,
             packages,
             warning,
+            keep_store,
+            locked,
+            cleanup: vec![],
         };
-        remove_tree(&c.dirs.staging());
+        if let Err(e) = remove_tree(&c.dirs.staging()) {
+            c.cleanup.push(e);
+        }
         c.collect();
+        if let Some(left) = c.take_cleanup() {
+            c.warning = Some(match c.warning.take() {
+                Some(w) => format!("{w}; {left}"),
+                None => left,
+            });
+        }
         c
+    }
+
+    /// What could not be deleted since the last call, if anything: the change it came from
+    /// was made.
+    pub fn take_cleanup(&mut self) -> Option<String> {
+        (!self.cleanup.is_empty()).then(|| {
+            format!(
+                "these folders could not be deleted: {}",
+                std::mem::take(&mut self.cleanup).join("; ")
+            )
+        })
     }
 
     pub fn view(&self) -> View {
@@ -343,6 +405,9 @@ impl Catalog {
     }
 
     fn save(&self) -> Result<(), String> {
+        if let Some(why) = &self.locked {
+            return Err(why.clone());
+        }
         private_dir(&self.dirs.root)?;
         let saved = Saved {
             version: 0,
@@ -352,19 +417,25 @@ impl Catalog {
         write_private(&self.dirs.catalog(), &bytes)
     }
 
-    /// Removes store folders no active or last good release names.
-    fn collect(&self) {
-        let keep: BTreeSet<&str> = self
+    /// Removes store folders no active or last good release names, unless a catalog that could
+    /// not be read is kept aside.
+    fn collect(&mut self) {
+        if self.keep_store {
+            return;
+        }
+        let keep: BTreeSet<String> = self
             .packages
             .values()
             .flat_map(|p| std::iter::once(&p.active).chain(p.last_good.as_ref()))
-            .map(|r| r.sha256.as_str())
+            .map(|r| r.sha256.clone())
             .collect();
         if let Ok(entries) = fs::read_dir(self.dirs.store()) {
             for e in entries.flatten() {
                 let name = e.file_name();
                 if !keep.contains(name.to_string_lossy().as_ref()) {
-                    remove_tree(&e.path());
+                    if let Err(e) = remove_tree(&e.path()) {
+                        self.cleanup.push(e);
+                    }
                 }
             }
         }
@@ -375,7 +446,9 @@ impl Catalog {
     pub fn commit(&mut self, c: Candidate) -> Result<(), String> {
         let result = self.commit_inner(&c);
         // The staged folder is either in the store now or no longer needed.
-        remove_tree(&c.staged);
+        if let Err(e) = remove_tree(&c.staged) {
+            self.cleanup.push(e);
+        }
         if result.is_err() {
             self.collect();
         }
@@ -1051,7 +1124,8 @@ pub struct Candidate {
 
 impl Drop for Candidate {
     fn drop(&mut self) {
-        remove_tree(&self.staged);
+        // A staged folder left behind goes when the catalog next opens.
+        let _ = remove_tree(&self.staged);
     }
 }
 

@@ -502,6 +502,79 @@ fn go_platform_names() {
 }
 
 #[test]
+fn a_catalog_that_cannot_be_read_keeps_the_store() {
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false);
+    let v1 = package("example/notes", "1.0.0");
+    install(&mut c, &v1, local("n")).unwrap();
+    drop(c);
+    fs::write(d.catalog(), b"{not json").unwrap();
+    let c = Catalog::open(d.clone(), false);
+    assert!(
+        c.warning.as_deref().is_some_and(|w| w.contains("moved")),
+        "{:?}",
+        c.warning
+    );
+    assert!(c.view().packages.is_empty());
+    assert_eq!(store_names(&d), BTreeSet::from([digest(&v1)]));
+    // Still kept at the next start, while the damaged catalog is kept aside.
+    let mut c = Catalog::open(d.clone(), false);
+    assert!(
+        c.warning.as_deref().is_some_and(|w| w.contains("kept at")),
+        "{:?}",
+        c.warning
+    );
+    install(&mut c, &package("example/other", "1"), local("o")).unwrap();
+    c.remove("example/other").unwrap();
+    assert!(store_names(&d).contains(&digest(&v1)));
+    let _ = fs::remove_dir_all(root);
+
+    // A catalog that is not a file at all: kept the same way.
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false);
+    install(&mut c, &v1, local("n")).unwrap();
+    drop(c);
+    fs::remove_file(d.catalog()).unwrap();
+    fs::create_dir(d.catalog()).unwrap();
+    let c = Catalog::open(d.clone(), false);
+    assert!(c.warning.is_some());
+    assert_eq!(store_names(&d), BTreeSet::from([digest(&v1)]));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_catalog_that_cannot_be_moved_aside_is_not_replaced() {
+    use std::os::unix::fs::PermissionsExt;
+    // Folder permissions do not stop root.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let root = temp();
+    let d = dirs(&root);
+    fs::create_dir_all(&d.root).unwrap();
+    fs::write(d.catalog(), b"{not json").unwrap();
+    fs::set_permissions(&d.root, fs::Permissions::from_mode(0o500)).unwrap();
+    let mut c = Catalog::open(d.clone(), false);
+    assert!(
+        c.warning
+            .as_deref()
+            .is_some_and(|w| w.contains("can be changed")),
+        "{:?}",
+        c.warning
+    );
+    // Writable again, as a folder fixed by hand: the catalog this app opened still saves
+    // nothing over the one it could not read.
+    fs::set_permissions(&d.root, fs::Permissions::from_mode(0o700)).unwrap();
+    let e = install(&mut c, &package("example/notes", "1"), local("n")).unwrap_err();
+    assert!(e.contains("can be changed"), "{e}");
+    assert_eq!(fs::read(d.catalog()).unwrap(), b"{not json");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn a_local_package_updates_from_a_file_of_another_name() {
     let root = temp();
     let d = dirs(&root);
@@ -548,6 +621,31 @@ fn a_local_package_updates_from_a_file_of_another_name() {
         registry("r", "/a/index.json"),
     )
     .unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[test]
+fn folders_that_cannot_be_deleted_are_reported() {
+    use std::os::unix::fs::PermissionsExt;
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false);
+    let v1 = package("example/notes", "1.0.0");
+    install(&mut c, &v1, local("n")).unwrap();
+    assert!(c.take_cleanup().is_none());
+    fs::set_permissions(d.store(), fs::Permissions::from_mode(0o500)).unwrap();
+    // The package is removed; its folder, which the store's permissions keep, is reported.
+    c.remove("example/notes").unwrap();
+    assert!(c.get("example/notes").is_none());
+    let left = c.take_cleanup().unwrap();
+    assert!(left.contains(&digest(&v1)), "{left}");
+    assert!(c.take_cleanup().is_none());
+    fs::set_permissions(d.store(), fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(store_names(&d), BTreeSet::from([digest(&v1)]));
     let _ = fs::remove_dir_all(root);
 }
 
