@@ -1026,8 +1026,9 @@ is a Responses request: `native.format` is `openai.responses` and `native.body` 
 `response.create` message. The extension sends it upstream as one `response.create` text message,
 after applying the turn's [payload rules](#payload-rules) to it.
 
-- `previous_response_id` and `generate` pass through as the client sent them. A warmup
-  (`generate: false`) is answered like any turn.
+- `previous_response_id` and `generate` pass through as the client sent them, unless a payload
+  rule changes them; the response a turn continues is the `previous_response_id` of the message
+  as it goes out, after the rules. A warmup (`generate: false`) is answered like any turn.
 - Every upstream message the turn receives is one event with the message in `raw`, as for a
   streamed Responses reply ([Events](#events)); messages the model has no event for travel as
   `native` events.
