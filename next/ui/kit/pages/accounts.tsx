@@ -274,7 +274,11 @@ export function AccountsPage() {
           </label>
           <label class="field" data-part="field">
             <span class="label">{t("status")}</span>
-            <select value={filters.status ?? "all"} onChange={(e) => change("status", e.currentTarget.value)}>
+            <select
+              aria-label={t("status")}
+              value={filters.status ?? "all"}
+              onChange={(e) => change("status", e.currentTarget.value)}
+            >
               <option value="all">{t("all")}</option>
               <option value="enabled">{t("enabled")}</option>
               <option value="disabled">{t("disabled")}</option>
@@ -283,7 +287,11 @@ export function AccountsPage() {
           </label>
           <label class="field" data-part="field">
             <span class="label">{t("source")}</span>
-            <select value={filters.source ?? ""} onChange={(e) => change("source", e.currentTarget.value)}>
+            <select
+              aria-label={t("source")}
+              value={filters.source ?? ""}
+              onChange={(e) => change("source", e.currentTarget.value)}
+            >
               <option value="">{t("all")}</option>
               <option value="login">{t("fromLogin")}</option>
               <option value="config">{t("fromConfig")}</option>
@@ -291,7 +299,11 @@ export function AccountsPage() {
           </label>
           <label class="field" data-part="field">
             <span class="label">{t("sort")}</span>
-            <select value={filters.sort ?? "default"} onChange={(e) => change("sort", e.currentTarget.value)}>
+            <select
+              aria-label={t("sort")}
+              value={filters.sort ?? "default"}
+              onChange={(e) => change("sort", e.currentTarget.value)}
+            >
               <option value="default">{t("default")}</option>
               <option value="name">{t("name")}</option>
               <option value="priority">{t("priority")}</option>
@@ -428,6 +440,7 @@ export function AccountsPage() {
           <label class="field" data-part="field">
             <span class="label">{t("perPage")}</span>
             <select
+              aria-label={t("perPage")}
               value={perPage}
               onChange={(e) => {
                 setPerPage(Number(e.currentTarget.value));
