@@ -98,7 +98,11 @@ func (l *LoginCall) Next() protocol.Reply {
 		return protocol.Reply{Event: llm.Event{Type: protocol.TypeLoginPrompt}, Prompt: &p}
 	case r.Type == protocol.TypeLoginDone && validGrant(r.Grant):
 		l.ext.held.add(l.account, r.Grant.Credential)
-		if err := validIdentity(r.Grant.Identity); err != "" {
+		// What the user entered, the account's settings secrets and the grant's own credential
+		// are left out of a field name the error quotes.
+		grant := protocol.NewRedactor(r.Grant.Credential)
+		redact := func(s string) string { return l.redactor().String(grant.String(s)) }
+		if err := validIdentity(r.Grant.Identity, redact); err != "" {
 			l.fail(&llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s sent a grant whose identity %s", l.ext.manifest.ID, err)})
 			return *l.final
 		}
@@ -192,8 +196,9 @@ func (e *Extension) Refresh(ctx context.Context, account protocol.Account) (*pro
 	return nil, redacted(redact, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a refresh", e.manifest.ID, r.Type)})
 }
 
-// validIdentity says what is wrong with a grant's identity, or "" when nothing is.
-func validIdentity(id map[string]string) string {
+// validIdentity says what is wrong with a grant's identity, or "" when nothing is; a field name
+// it quotes goes through redact first.
+func validIdentity(id map[string]string, redact func(string) string) string {
 	if len(id) > protocol.MaxIdentityFields {
 		return fmt.Sprintf("has more than %d fields", protocol.MaxIdentityFields)
 	}
@@ -202,7 +207,7 @@ func validIdentity(id map[string]string) string {
 		case k == "" || len(k) > protocol.MaxIdentityKey:
 			return fmt.Sprintf("has a field name that is empty or longer than %d bytes", protocol.MaxIdentityKey)
 		case v == "" || len(v) > protocol.MaxIdentityValue:
-			return fmt.Sprintf("field %q is empty or longer than %d bytes", k, protocol.MaxIdentityValue)
+			return fmt.Sprintf("field %q is empty or longer than %d bytes", redact(k), protocol.MaxIdentityValue)
 		}
 	}
 	return ""

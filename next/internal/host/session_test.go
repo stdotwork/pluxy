@@ -249,6 +249,18 @@ func sessionBadFrame() {
 				}
 				_ = protocol.WriteFrame(conn, leak(turn.Account))
 				_, _ = io.Copy(io.Discard, conn)
+			case protocol.OpLogin:
+				// A login with method "identity" ends with a grant whose identity has a field named
+				// after what the user entered and the account's settings, with no value.
+				if call.Login != nil && call.Login.Method == "identity" && call.Account != nil {
+					_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: protocol.TypeLoginDone}, Grant: &protocol.Grant{
+						Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-gr-0123"},
+						Identity:   map[string]string{"id " + call.Login.Input["api_key"] + " " + string(call.Account.Settings) + " sk-gr-0123": ""}}})
+					_, _ = io.Copy(io.Discard, conn)
+					return
+				}
+				_ = protocol.WriteFrame(conn, leak(call.Account))
+				_, _ = io.Copy(io.Discard, conn)
 			default:
 				// An account with nothing to leak is hung up on.
 				if a := call.Account; a != nil && (a.Credential != nil || len(a.Settings) > 0) {
@@ -292,6 +304,29 @@ func TestProtocolErrorsAreRedacted(t *testing.T) {
 		case !strings.Contains(e.Message, protocol.Redacted):
 			t.Errorf("%s: the protocol error does not say what was removed: %q", op, e.Message)
 		}
+	}
+}
+
+// A grant whose identity is refused is reported without what the user entered, the account's
+// settings secrets or the grant's own credential, even when the identity names them.
+func TestLoginIdentityErrorIsRedacted(t *testing.T) {
+	ext, err := Start(filepath.Join(fakePackage(t, "session-bad-frame"), ManifestFile), Options{Log: io.Discard, SettingsSecrets: configdoc.SettingsSecrets})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ext.Stop()
+	const input, setting = "sk-in-0123", "sk-st-0123"
+	login := ext.Login(context.Background(), protocol.Account{ID: "a", Settings: json.RawMessage(`{"api_key":"` + setting + `"}`)},
+		protocol.Login{Method: "identity", Input: map[string]string{"api_key": input}})
+	defer login.Close()
+	e := login.Next().Error
+	switch {
+	case e == nil || e.Code != llm.CodeExtensionProtocol || !strings.Contains(e.Message, "identity"):
+		t.Fatalf("login: %+v; want the refused identity", e)
+	case strings.Contains(e.Message, input) || strings.Contains(e.Message, setting) || strings.Contains(e.Message, "sk-gr-0123"):
+		t.Errorf("the identity error holds a secret: %q", e.Message)
+	case !strings.Contains(e.Message, protocol.Redacted):
+		t.Errorf("the identity error does not say what was removed: %q", e.Message)
 	}
 }
 
