@@ -19,6 +19,12 @@ path = "src/main.rs"
 # reports on stderr. Never in a release build.
 native-test = []
 
+# The native test's probe of the desktop services (native/session.ts). Not part of any build
+# without the native-test feature.
+[[example]]
+name = "session_probe"
+required-features = ["native-test"]
+
 [build-dependencies]
 tauri-build = { version = "=2.7.3", features = [] }
 
@@ -33,9 +39,11 @@ getrandom = "0.3"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-# The same GTK Tauri uses, to lay page webviews over the window (src/place.rs).
+# The same GTK Tauri uses, to lay page webviews over the window (src/place.rs), and its D-Bus
+# layer, which examples/session_probe.rs uses for the native test.
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
+gio = "0.18"
 
 [profile.release]
 codegen-units = 1

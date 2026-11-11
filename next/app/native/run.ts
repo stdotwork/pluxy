@@ -12,14 +12,21 @@
 // - quitting stops the app's own core, and leaves a local or remote core running.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
-// own (dbus-run-session, xvfb-run), and random ports. Run from next/app: bun native/run.ts (needs
-// dbus-run-session, xvfb-run, Go and cargo).
+// own (dbus-run-session, xvfb-run), and random ports. Inside that session, before the app,
+// native/session.ts starts the desktop services later checks need (the portals and a tray
+// watcher), checks each of them for real, and runs a disposable AppImage with
+// APPIMAGE_EXTRACT_AND_RUN=1; a missing or broken service fails the run at setup (services.ts
+// names the packages). Run from next/app: bun native/run.ts (needs dbus-run-session, xvfb-run,
+// Go, cargo and those services).
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline";
+import { buildSmokeAppImage } from "./appimage";
+import { missingPrerequisites } from "./services";
 
 const app = join(import.meta.dir, "..");
 const next = join(app, "..");
@@ -34,6 +41,10 @@ const REFUSED = /not allowed( on window|\. Permissions associated| by ACL)/;
 const TIMEOUT = 240_000;
 
 type Mode = "managed" | "local" | "remote";
+/** The session's setup failed (session.ts exits with this code, after saying what is missing or
+ * broken): the app never ran, and the other modes would fail the same way. */
+const SETUP_FAILED = 78;
+class SetupError extends Error {}
 type Step = Record<string, unknown>;
 interface Call {
   ok: boolean;
@@ -75,8 +86,8 @@ async function startCore(
   return { proc, ...JSON.parse(line) };
 }
 
-/** The web processes among pid's descendants. */
-function webProcesses(pid: number): number {
+/** The processes among pid's descendants, with their names. */
+function descendants(pid: number): Map<number, string> {
   const parent = new Map<number, number>();
   const name = new Map<number, string>();
   for (const d of readdirSync("/proc")) {
@@ -90,17 +101,32 @@ function webProcesses(pid: number): number {
       // gone already
     }
   }
-  let n = 0;
+  const found = new Map<number, string>();
   for (const [p, comm] of name) {
-    if (!comm.startsWith("WebKitWebProces")) continue;
     for (let q = parent.get(p); q !== undefined && q > 1; q = parent.get(q)) {
       if (q === pid) {
-        n++;
+        found.set(p, comm);
         break;
       }
     }
   }
-  return n;
+  return found;
+}
+
+/** The web processes among pid's descendants. */
+function webProcesses(pid: number): number {
+  return [...descendants(pid).values()].filter((comm) => comm.startsWith("WebKitWebProces")).length;
+}
+
+/** Kills pid and everything it started: its session's bus, X server and services too. */
+function killTree(pid: number) {
+  for (const p of [...descendants(pid).keys(), pid]) {
+    try {
+      process.kill(p, "SIGKILL");
+    } catch {
+      // gone already
+    }
+  }
 }
 
 function alive(pid: number): boolean {
@@ -156,10 +182,21 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
       LIBGL_ALWAYS_SOFTWARE: "1",
       NO_AT_BRIDGE: "1",
       GTK_USE_PORTAL: "0",
+      // The FUSE-free way to run an AppImage, which the session's smoke AppImage uses.
+      APPIMAGE_EXTRACT_AND_RUN: "1",
       PLUXY_APP_TEST_PAGE: PAGE,
       PLUXY_APP_TEST_QUIT: quit,
     };
-    const xvfb = ["xvfb-run", "-a", "-s", "-screen 0 1280x800x24 -nolisten tcp", bin];
+    // The session script starts and checks the desktop services, then runs the app.
+    const session = [
+      process.execPath,
+      join(import.meta.dir, "session.ts"),
+      probe,
+      appImage,
+      randomUUID(),
+      bin,
+    ];
+    const xvfb = ["xvfb-run", "-a", "-s", "-screen 0 1280x800x24 -nolisten tcp", ...session];
     const proc = spawn("dbus-run-session", ["--", ...xvfb], {
       env,
       // Some xvfb-run versions send the program's stderr to stdout: read both.
@@ -172,7 +209,15 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
     const pid = proc.pid ?? 0;
     if (!proc.stderr || !proc.stdout) throw new Error("the app's output is not piped");
     const log: string[] = []; // the app's last lines, shown when the run fails
+    const setup: string[] = []; // session.ts's report of what failed at setup
     const onLine = (line: string) => {
+      // The session's service checks are always shown: they say what this run stood on.
+      if (line.startsWith("native-prereq: ")) {
+        console.log(`  ${mode} | ${line}`);
+        if (line.startsWith("native-prereq: FAILED "))
+          setup.push(line.slice("native-prereq: FAILED ".length));
+        return;
+      }
       const m = /^native-test: (\w+) (.*)$/.exec(line);
       if (!m) {
         if (process.env.PLUXY_APP_TEST_VERBOSE) console.error(`  ${mode} | ${line}`);
@@ -200,7 +245,7 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
     const code = await new Promise<number | null>((resolve) => {
       const timer = setTimeout(() => {
         problems.push(`the app did not finish within ${TIMEOUT / 1000}s`);
-        proc.kill("SIGKILL");
+        killTree(pid);
       }, TIMEOUT);
       proc.on("exit", (c) => {
         clearTimeout(timer);
@@ -208,6 +253,9 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
       });
     });
 
+    if (code === SETUP_FAILED || setup.length > 0) {
+      throw new SetupError(setup.length > 0 ? setup.join("\n") : "the session's setup failed");
+    }
     check(code === 0, `the app exited with ${code}`);
     check(!steps.has("failed"), `the app's test steps failed: ${JSON.stringify(steps.get("failed"))}`);
 
@@ -288,40 +336,74 @@ async function removeRun(root: string) {
       return;
     } catch (e) {
       if (i === 20) throw e;
-      if (i === 10) spawnSync("fusermount", ["-u", "-z", join(root, "runtime", "doc")]);
+      if (i === 10) {
+        for (const tool of ["fusermount3", "fusermount"])
+          spawnSync(tool, ["-u", "-z", join(root, "runtime", "doc")]);
+      }
       await Bun.sleep(500);
     }
   }
 }
 
+// The services and tools the session needs, before anything is built.
+const missing = missingPrerequisites();
+if (missing.length > 0) {
+  console.error(
+    `native test setup failed: services or tools it needs are not installed (Ubuntu 24.04 package names):\n- ${missing.join("\n- ")}`,
+  );
+  process.exit(1);
+}
+
 run("bun", ["run", "build"], app);
-run("cargo", ["build", "--locked", "--features", "native-test"], tauri);
-const bin = join(tauri, "target", "debug", "pluxy-app");
+// The app, and the probe the session uses to check the desktop services (examples/session_probe.rs).
+run(
+  "cargo",
+  ["build", "--locked", "--features", "native-test", "--bin", "pluxy-app", "--example", "session_probe"],
+  tauri,
+);
+const targetDir = resolvePath(tauri, process.env.CARGO_TARGET_DIR ?? "target");
+const bin = join(targetDir, "debug", "pluxy-app");
+const probe = join(targetDir, "debug", "examples", "session_probe");
+const appImageDir = mkdtempSync(join(tmpdir(), "pluxy-app-native-appimage-"));
 const problems: string[] = [];
+let appImage = ""; // the smoke AppImage the sessions run
+let setupFailure: string | undefined;
 
-const prepared = mkdtempSync(join(tmpdir(), "pluxy-app-native-core-"));
 try {
-  const { core } = JSON.parse(run("go", ["run", "./e2e/panelcore", "-probe", "-prepare", prepared], next));
-  const p = await runApp("managed", bin, { mode: "managed", core_path: core });
-  problems.push(...p.map((x) => `managed: ${x}`));
-} finally {
-  rmSync(prepared, { recursive: true, force: true });
-}
-
-for (const mode of ["local", "remote"] as const) {
-  const c = await startCore(mode === "remote");
+  appImage = await buildSmokeAppImage(appImageDir);
+  const prepared = mkdtempSync(join(tmpdir(), "pluxy-app-native-core-"));
   try {
-    const conn = { mode, url: c.base, key: c.key, ...(c.ca ? { ca_file: c.ca } : {}) };
-    const p = await runApp(mode, bin, conn, c.base);
-    // The app only connected: its quitting leaves this core running.
-    if ((await managementStatus(c.base, c.key, c.ca)) !== 200) p.push("the core stopped when the app quit");
-    problems.push(...p.map((x) => `${mode}: ${x}`));
+    const { core } = JSON.parse(run("go", ["run", "./e2e/panelcore", "-probe", "-prepare", prepared], next));
+    const p = await runApp("managed", bin, { mode: "managed", core_path: core });
+    problems.push(...p.map((x) => `managed: ${x}`));
   } finally {
-    c.proc.stdin?.end();
-    await new Promise((r) => c.proc.once("exit", r));
+    rmSync(prepared, { recursive: true, force: true });
   }
+
+  for (const mode of ["local", "remote"] as const) {
+    const c = await startCore(mode === "remote");
+    try {
+      const conn = { mode, url: c.base, key: c.key, ...(c.ca ? { ca_file: c.ca } : {}) };
+      const p = await runApp(mode, bin, conn, c.base);
+      // The app only connected: its quitting leaves this core running.
+      if ((await managementStatus(c.base, c.key, c.ca)) !== 200) p.push("the core stopped when the app quit");
+      problems.push(...p.map((x) => `${mode}: ${x}`));
+    } finally {
+      c.proc.stdin?.end();
+      await new Promise((r) => c.proc.once("exit", r));
+    }
+  }
+} catch (e) {
+  if (!(e instanceof SetupError)) throw e;
+  setupFailure = e.message;
+} finally {
+  rmSync(appImageDir, { recursive: true, force: true });
 }
 
+if (setupFailure !== undefined) {
+  console.error(`\nnative test setup failed:\n${setupFailure}`);
+  process.exit(1);
+}
 if (problems.length > 0) {
   console.error(`\n${problems.length} problems:\n- ${problems.join("\n- ")}`);
   process.exit(1);
