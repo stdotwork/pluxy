@@ -63,6 +63,12 @@ describe("the README and the code agree", () => {
     expect(documented).toEqual([...PARTS]);
   });
 
+  test("account list controls expose theme hooks", () => {
+    for (const part of ["toolbar", "tabs", "tab", "pager", "select", "batch", "account-meta"] as const) {
+      expect(PARTS).toContain(part);
+    }
+  });
+
   test("account sign-in hooks are part of the documented contract", () => {
     for (const part of ["method", "flow", "device-code"] as const) {
       expect(PARTS).toContain(part);
