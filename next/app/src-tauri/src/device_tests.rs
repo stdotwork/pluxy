@@ -219,7 +219,7 @@ fn install_swap_failed_candidate_rollback_and_remove() {
     c.remove("example/notes").unwrap();
     assert!(c.get("example/notes").is_none() && store_names(&d).is_empty());
     assert!(Catalog::open(d, false).view().packages.is_empty());
-    let _ = fs::remove_dir_all(root);
+    done(root);
 }
 
 #[test]
@@ -280,7 +280,7 @@ fn reserved_native_and_other_packages_are_refused_before_the_store() {
     assert!(install(&mut c, b"not gzip", local("z.tar.gz")).is_err());
     assert_eq!(store_names(&d).len(), 1);
     assert!(fs::read_dir(d.staging()).unwrap().next().is_none());
-    let _ = fs::remove_dir_all(root);
+    done(root);
 }
 
 #[test]
@@ -319,7 +319,7 @@ fn links_devices_and_duplicates_are_refused() {
         ("pages/index.html", b"b"),
     ]);
     assert!(stage(&d, &dup, local("d"), None).is_err());
-    let _ = fs::remove_dir_all(root);
+    done(root);
 }
 
 #[test]
@@ -361,7 +361,7 @@ fn changed_files_are_not_served_or_rolled_back_to() {
     assert!(c
         .asset("example/notes", &digest(&v1), "pluxy-extension.json")
         .is_none());
-    let _ = fs::remove_dir_all(root);
+    done(root);
 }
 
 #[test]
@@ -381,7 +381,7 @@ fn safe_mode_lists_but_never_serves() {
     assert!(safe
         .asset("example/notes", &digest(&v1), "index.html")
         .is_none());
-    let _ = fs::remove_dir_all(root);
+    done(root);
 }
 
 #[test]
@@ -394,7 +394,7 @@ fn a_damaged_catalog_is_moved_aside() {
     assert!(c.warning.as_deref().is_some_and(|w| w.contains("moved")));
     assert!(c.view().packages.is_empty());
     assert!(!d.catalog().exists());
-    let _ = fs::remove_dir_all(root);
+    done(root);
 }
 
 #[test]
@@ -444,7 +444,14 @@ fn registry_pins_reserved_ids_and_paths() {
     assert_eq!(cand.source.kind, "registry");
     c.commit(cand).unwrap();
     assert_eq!(c.get("example/notes").unwrap().active.sha256, digest(&v1));
-    let _ = fs::remove_dir_all(root);
+    done(root);
+}
+
+/// Removes a test's folder, the store's read-only releases in it too.
+fn done(root: PathBuf) {
+    #[cfg(unix)]
+    thaw(&root);
+    fs::remove_dir_all(&root).unwrap();
 }
 
 /// Sets every folder under dir, and dir, writable again, so a test can change or remove it.
@@ -504,7 +511,7 @@ fn names_with_a_drive_or_stream_never_reach_the_store() {
     assert!(e.contains("must be a folder inside the package"), "{e}");
     // The positive control on the same route.
     stage(&d, &package("example/w", "1"), local("w"), None).unwrap();
-    let _ = fs::remove_dir_all(root);
+    done(root);
 }
 
 #[test]
@@ -544,7 +551,7 @@ fn page_files_with_spaces_and_unicode_are_served_at_their_address() {
         );
     }
     assert!(asset_request(&folder, "/example/notes/other/index.html").is_none());
-    let _ = fs::remove_dir_all(root);
+    done(root);
 }
 
 #[test]
@@ -588,7 +595,7 @@ fn installed_releases_are_read_only_to_their_top_folder() {
     }
     // The release folder, pages/, and the two files.
     assert_eq!(seen, 4);
-    let _ = fs::remove_dir_all(root);
+    done(root);
 }
 
 #[test]
@@ -618,7 +625,7 @@ fn a_catalog_that_cannot_be_read_keeps_the_store() {
     install(&mut c, &package("example/other", "1"), local("o")).unwrap();
     c.remove("example/other").unwrap();
     assert!(store_names(&d).contains(&digest(&v1)));
-    let _ = fs::remove_dir_all(root);
+    done(root);
 
     // A catalog that is not a file at all: kept the same way.
     let root = temp();
@@ -631,7 +638,7 @@ fn a_catalog_that_cannot_be_read_keeps_the_store() {
     let c = Catalog::open(d.clone(), false);
     assert!(c.warning.is_some());
     assert_eq!(store_names(&d), BTreeSet::from([digest(&v1)]));
-    let _ = fs::remove_dir_all(root);
+    done(root);
 }
 
 #[cfg(unix)]
@@ -661,7 +668,7 @@ fn a_catalog_that_cannot_be_moved_aside_is_not_replaced() {
     let e = install(&mut c, &package("example/notes", "1"), local("n")).unwrap_err();
     assert!(e.contains("can be changed"), "{e}");
     assert_eq!(fs::read(d.catalog()).unwrap(), b"{not json");
-    let _ = fs::remove_dir_all(root);
+    done(root);
 }
 
 #[test]
@@ -690,7 +697,7 @@ fn a_damaged_release_folder_is_replaced_when_installed_again() {
             .0,
         b"<p>1.0.0"
     );
-    let _ = fs::remove_dir_all(root);
+    done(root);
 }
 
 #[test]
@@ -740,7 +747,7 @@ fn a_local_package_updates_from_a_file_of_another_name() {
         registry("r", "/a/index.json"),
     )
     .unwrap();
-    let _ = fs::remove_dir_all(root);
+    done(root);
 }
 
 #[cfg(unix)]
@@ -765,7 +772,7 @@ fn folders_that_cannot_be_deleted_are_reported() {
     assert!(c.take_cleanup().is_none());
     fs::set_permissions(d.store(), fs::Permissions::from_mode(0o700)).unwrap();
     assert_eq!(store_names(&d), BTreeSet::from([digest(&v1)]));
-    let _ = fs::remove_dir_all(root);
+    done(root);
 }
 
 #[cfg(unix)]
@@ -824,5 +831,5 @@ fn registry_files_must_be_regular_files_in_the_index_folder() {
     assert!(e.contains("not a file inside the index's folder"), "{e}");
     // The positive control on the same route.
     stage_from_registry(&d, "fixture", "example/notes", Some("1.0.0")).unwrap();
-    let _ = fs::remove_dir_all(root);
+    done(root);
 }
