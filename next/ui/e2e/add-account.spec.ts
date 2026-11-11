@@ -14,12 +14,13 @@ test("capture sign-in states in the built-in themes", async ({ page }) => {
   for (const theme of ["default", "terminal", "paper"]) {
     await openPanel(page, core);
     if (theme === "default") await signIn(page, core);
-    await goTo(page, "Themes");
+    await page.locator('nav a[href="#/themes"]').click();
     await page
       .getByRole("radiogroup", { name: "Theme" })
       .getByRole("radio", { name: theme, exact: false })
       .check();
-    await goTo(page, "Add Account");
+    await page.locator('nav a[href="#/add-account"]').click();
+    await expect(page.getByRole("heading", { level: 1, name: "Add Account" })).toBeVisible();
     const shot = (state: string) =>
       page.screenshot({ path: join(dir, theme.concat("-", state, ".png")), fullPage: true });
     const tile = (method: string) =>
