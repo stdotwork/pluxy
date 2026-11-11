@@ -8,6 +8,8 @@
 
 pub mod client;
 mod command_names;
+#[cfg(target_os = "linux")]
+pub mod confirmation;
 pub mod conn;
 pub mod managed;
 #[cfg(feature = "native-test")]
@@ -41,6 +43,8 @@ pub const MAIN: &str = "main";
 struct App {
     startup: Mutex<(startup::Store, startup::Preferences)>,
     conn: Mutex<Connection>,
+    #[cfg(target_os = "linux")]
+    confirmations: Mutex<confirmation::Confirmations>,
     /// The page webviews' own web context's folder: nothing shared with the window's.
     pages_dir: std::path::PathBuf,
     pages: Mutex<Pages>,
@@ -143,6 +147,8 @@ fn close_pages(app: &AppHandle) {
 fn quit(app: &AppHandle) {
     let st = app.state::<App>();
     st.quitting.store(true, Ordering::SeqCst);
+    #[cfg(target_os = "linux")]
+    st.confirmations.lock().unwrap().invalidate();
     st.conn.lock().unwrap().stop_core();
     app.exit(0);
 }
@@ -151,8 +157,15 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let status = MenuItem::with_id(app, "status", "Not connected", false, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open pluxy", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit pluxy", true, None::<&str>)?;
+    let access = MenuItem::with_id(
+        app,
+        "launch-settings",
+        "Remembered launches…",
+        cfg!(target_os = "linux"),
+        None::<&str>,
+    )?;
     let sep = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&status, &sep, &open, &quit_item])?;
+    let menu = Menu::with_items(app, &[&status, &sep, &open, &access, &quit_item])?;
     let mut tray = TrayIconBuilder::with_id("pluxy")
         .tooltip("pluxy")
         .menu(&menu)
@@ -161,6 +174,10 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 let _ = open_window(app);
             }
             "quit" => quit(app),
+            #[cfg(target_os = "linux")]
+            "launch-settings" => {
+                let _ = confirmation::settings(app);
+            }
             _ => {}
         })
         .on_tray_icon_event(|tray, e| {
@@ -377,6 +394,33 @@ fn page_send(webview: Webview, label: String, msg: Value) -> Result<(), String> 
         .map_err(|e| e.to_string())
 }
 
+/// Initiates review of a native-prepared action. No approval result, recipe or gesture input.
+#[tauri::command]
+fn confirmation_request(webview: Webview, action: String) -> Result<(), String> {
+    trusted(&webview)?;
+    #[cfg(target_os = "linux")]
+    {
+        confirmation::request(webview.app_handle(), action)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = action;
+        Err("native confirmations are supported on Linux only".into())
+    }
+}
+#[tauri::command]
+fn confirmation_settings(webview: Webview) -> Result<(), String> {
+    trusted(&webview)?;
+    #[cfg(target_os = "linux")]
+    {
+        confirmation::settings(webview.app_handle())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err("native confirmations are supported on Linux only".into())
+    }
+}
+
 /// The `pluxy-page:` scheme: the page webviews' app document and their way to the window.
 fn page_scheme(
     ctx: tauri::UriSchemeContext<'_, Wry>,
@@ -397,6 +441,10 @@ fn page_scheme(
         )
     };
     if let Some(m) = msg {
+        #[cfg(all(target_os = "linux", feature = "native-test"))]
+        if m.kind == "call" && m.data.get("id").and_then(Value::as_str) == Some("spoof-confirm") {
+            confirmation::native::PAGE_CLAIMS.fetch_add(1, Ordering::SeqCst);
+        }
         let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-page", m);
     }
     let resp = Response::builder()
@@ -426,6 +474,8 @@ pub fn run() {
             page_place,
             page_close,
             page_send,
+            confirmation_request,
+            confirmation_settings,
         ])
         .register_asynchronous_uri_scheme_protocol(pages::SCHEME, page_scheme)
         .setup(|app| {
@@ -437,6 +487,9 @@ pub fn run() {
                 std::env::current_exe()?,
             );
             let preferences = startup_store.load();
+            #[cfg(target_os = "linux")]
+            let confirmations =
+                confirmation::Confirmations::open(config.join("remembered-launches.json"))?;
             let core = app.path().app_data_dir()?.join("core");
             // When the app's core exits, the tray and the window show it. Off this thread: the
             // exit may come while a connection change holds the connection.
@@ -462,6 +515,8 @@ pub fn run() {
             app.manage(App {
                 startup: Mutex::new((startup_store, preferences)),
                 conn: Mutex::new(conn),
+                #[cfg(target_os = "linux")]
+                confirmations: Mutex::new(confirmations),
                 pages_dir,
                 pages: Mutex::new(Pages::default()),
                 status: Mutex::new(None),
@@ -469,6 +524,17 @@ pub fn run() {
                 quitting: AtomicBool::new(false),
             });
             let handle = app.handle().clone();
+            #[cfg(target_os = "linux")]
+            if let Some(message) = handle
+                .state::<App>()
+                .confirmations
+                .lock()
+                .unwrap()
+                .startup_warning
+                .take()
+            {
+                confirmation::ui_notice(&handle, message);
+            }
             match build_tray(&handle) {
                 Ok(()) => handle.state::<App>().has_tray.store(true, Ordering::SeqCst),
                 // No tray: closing the window quits the app.
@@ -501,6 +567,12 @@ pub fn run() {
                     quit(app);
                 }
                 WindowEvent::Destroyed => {
+                    #[cfg(target_os = "linux")]
+                    app.state::<App>()
+                        .confirmations
+                        .lock()
+                        .unwrap()
+                        .invalidate();
                     // Its webviews went with it.
                     app.state::<App>().pages.lock().unwrap().clear();
                     place::forget_all();

@@ -20,6 +20,8 @@
     "allow-page-open",
     "allow-page-place",
     "allow-page-close",
-    "allow-page-send"
+    "allow-page-send",
+    "allow-confirmation-request",
+    "allow-confirmation-settings"
   ]
 }

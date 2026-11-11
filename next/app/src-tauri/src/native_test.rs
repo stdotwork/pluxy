@@ -35,9 +35,9 @@ const PLUGINS: &[&str] = &[
 ];
 
 /// Commands the window's probe leaves out: they take no arguments and would act.
-const ACTING: &[&str] = &["sign_out", "core_restart"];
+const ACTING: &[&str] = &["sign_out", "core_restart", "confirmation_settings"];
 
-fn log(step: &str, v: Value) {
+pub(crate) fn log(step: &str, v: Value) {
     eprintln!("native-test: {step} {v}");
 }
 
@@ -63,7 +63,7 @@ fn probe_js(calls: &[&str]) -> String {
     )
 }
 
-fn wait_for<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> Result<T, String> {
+pub(crate) fn wait_for<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> Result<T, String> {
     let deadline = Instant::now() + WAIT;
     loop {
         if let Some(v) = f() {
@@ -77,7 +77,7 @@ fn wait_for<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> Result<T, String
 }
 
 /// The value of expr in w, as JSON.
-fn eval(w: &Webview, expr: &str) -> Option<Value> {
+pub(crate) fn eval(w: &Webview, expr: &str) -> Option<Value> {
     let (tx, rx) = mpsc::channel();
     w.eval_with_callback(format!("JSON.stringify({expr})"), move |raw| {
         let _ = tx.send(raw);
@@ -159,6 +159,8 @@ fn run(app: &AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
         r["placed"] = json!(rx.recv_timeout(Duration::from_secs(5)).ok().flatten());
         log("page", r);
+        #[cfg(target_os = "linux")]
+        crate::confirmation::native::run(app, &main, &wv)?;
 
         // The page's own report, written through the channel into its settings.
         let ext = page
