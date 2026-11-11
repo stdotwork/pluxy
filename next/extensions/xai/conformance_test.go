@@ -27,6 +27,15 @@ func prepareLogin(t *testing.T, s conformance.LoginScenario, method string) conf
 	t.Helper()
 	srv := xaitest.New(t)
 	account := protocol.Account{ID: "conformance", Settings: srv.Settings()}
+	if method == "api_key" {
+		var key string
+		key = srv.Key()
+		if s == conformance.LoginDenied {
+			key = "made-up-rejected-key"
+		}
+		return conformance.LoginSetup{Account: account, Input: map[string]string{"api_key": key}}
+	}
+
 	approve := func(t *testing.T, p protocol.Prompt) map[string]string {
 		if !srv.Approve(p.UserCode) {
 			t.Errorf("no device login shows code %q", p.UserCode)

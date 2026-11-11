@@ -49,6 +49,9 @@ var waitPoll = func(ctx context.Context, d time.Duration) bool {
 }
 
 var loginMethods = []protocol.LoginMethod{
+	{Method: "api_key", Kind: protocol.LoginAPIKey, Label: "xAI API key", Inputs: []protocol.LoginInput{
+		{Name: "api_key", Label: "API key", Secret: true},
+	}},
 	{Method: "device", Kind: protocol.LoginDevice, Label: "Grok account (device code)"},
 }
 
@@ -74,6 +77,9 @@ func login(ctx context.Context, call sdk.LoginCall, s *sdk.LoginSession) (*proto
 	set, err := readSettings(call.Account.Settings)
 	if err != nil {
 		return nil, err
+	}
+	if call.Method == "api_key" {
+		return apiKeyLogin(ctx, set, call.Input["api_key"])
 	}
 	if call.Method != "device" {
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: fmt.Sprintf("no login method %q", call.Method), Scope: llm.ScopeRequest}
@@ -421,4 +427,50 @@ func hideSecrets(err *llm.Error, secrets ...string) *llm.Error {
 
 func refused(msg string) *llm.Error {
 	return &llm.Error{Code: llm.CodeAuth, Message: msg, Scope: llm.ScopeCredential}
+}
+
+// apiKeyLogin lists models without generating, and retains only a key the API accepted.
+func apiKeyLogin(ctx context.Context, set settings, key string) (*protocol.Grant, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "enter an API key", Scope: llm.ScopeRequest}
+	}
+	credential := &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: key}
+	redact := protocol.NewRedactor(credential)
+	clean := func(e *llm.Error) error {
+		e = redact.Event(llm.Event{Type: llm.EventError, Error: e}).Error
+		e.Message = sdk.LoginText(e.Message)
+		e.ProviderCode = sdk.LoginCode(e.ProviderCode)
+		// A login needs the refusal reason, not a raw body that may echo credentials.
+		e.Raw = nil
+		return e
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, set.BaseURL+"/models", nil)
+	if err != nil {
+		return nil, clean(&llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url", Scope: llm.ScopeCredential})
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Accept", "application/json")
+	req, sent := sdk.TrackSend(req)
+	// Use the generation transport, but follow no redirects during sign-in.
+	loginClient := *client
+	loginClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := loginClient.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, clean(&llm.Error{Code: llm.CodeUnavailable, Message: "could not reach the model list: " + err.Error(), Retryable: !sent(), Scope: llm.ScopeEndpoint})
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
+		return &protocol.Grant{Credential: credential}, nil
+	}
+	e := upstreamError(resp, "")
+	if e.Status >= 500 || e.Code == llm.CodeAuth || e.Code == llm.CodePermission {
+		e.Retryable = false
+	}
+	return nil, clean(e)
 }
