@@ -242,7 +242,7 @@ var rules = map[string]rule{
 	"upstream.codex.orphan-delegation-compatibility":        {dropped, "off by default and no need found"},
 	"oauth.providers.codex.header-defaults":                 {dropped, "no need found"},
 	"upstream.claude":                                       {dropped, "making other clients look like Claude Code is out of scope"},
-	"upstream.claude.tool-search":                           {later, ""},
+	"upstream.claude.tool-search":                           {dropped, "Codex's tool search on Claude accounts: off by default, with no panel or app control"},
 	"upstream.claude.header-defaults":                       {dropped, "making other clients look like Claude Code is out of scope"},
 	"upstream.xai.inject-x-search":                          {supported, ""},
 
@@ -313,7 +313,7 @@ var rules = map[string]rule{
 	"api-keys.openai-compatibility[].excluded-models":          {dead, ""}, // today's core has no such key there
 	"api-keys.claude[].cloak":                                  {dropped, "making other clients look like Claude Code is out of scope"},
 	"api-keys.claude[].fingerprint-profile":                    {dropped, "making other clients look like Claude Code is out of scope"},
-	"api-keys.claude[].native-tool-search":                     {later, ""},
+	"api-keys.claude[].native-tool-search":                     {dropped, "Codex's tool search on Claude accounts: off by default, with no panel or app control"},
 	"api-keys.claude[].rebuild-mid-system-message":             {supported, ""},
 	"api-keys.claude[].experimental-cch-signing":               {dead, ""},
 	"api-keys.meta":                                            {later, ""},
