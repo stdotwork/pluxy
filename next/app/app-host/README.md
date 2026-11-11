@@ -94,6 +94,10 @@ This is the contract the later Rust host implements. It adds no provider operati
 change provider wire version 0.7. Start a verified absolute executable directly in its immutable
 package folder, with a cleared environment and only required platform values. Pass selected
 home/config/context explicitly; do not inherit shell credentials.
+The host supplies `PLUXY_APP_CONTRACT_VERSIONS` (comma-separated supported major versions,
+initially `0`), `PLUXY_EXTENSION_ID` (the manifest ID), and `PLUXY_APP_ARTIFACT_SHA256` (the
+verified archive digest) in that environment. The program echoes the ID and digest in hello;
+this checks that it is answering the expected host context, not an independent signature check.
 
 Use private anonymous stdin/stdout pipes, not core's socket or a browser/loopback API. Reuse
 provider [framing](../../protocol/README.md#framing): a four-byte big-endian unsigned length
