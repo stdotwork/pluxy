@@ -194,6 +194,42 @@ func TestCaptureUnusedReplay(t *testing.T) {
 	}
 }
 
+// A transport that reads a replay copy part way and then goes back to the original body leaves
+// the original, read last, in the capture.
+func TestCaptureInterleavedReplay(t *testing.T) {
+	const payload = `{"model":"example-model","input":"hello"}`
+	var read, early atomic.Int64
+	req := newBodyRequest(t, "http://upstream.invalid/v1", payload, &read, &early, nil)
+	interleaved := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		one := make([]byte, 1)
+		if _, err := io.ReadFull(r.Body, one); err != nil {
+			return nil, err
+		}
+		b, err := r.GetBody()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := io.ReadFull(b, make([]byte, 2)); err != nil {
+			return nil, err
+		}
+		b.Close()
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			return nil, err
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: http.NoBody, Request: r}, nil
+	})
+	c := &captureLog{}
+	resp, err := c.roundTrip(interleaved, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	d := c.take()
+	if d == nil || len(d.Upstream) != 1 || d.Upstream[0].Request.Body != payload || d.Upstream[0].Request.BodySize != int64(len(payload)) {
+		t.Errorf("captured request body: %+v, want %q", d, payload)
+	}
+}
+
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
