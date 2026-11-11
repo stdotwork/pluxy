@@ -3,7 +3,11 @@ import { goTo, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 
-test("logs show failures, trace lookup, continuous reading and clearing", async ({ page }) => {
+let trace: string;
+test.beforeEach(async () => {
+  expect(
+    (await core.mgmt("PATCH", "/settings", { observability: { logs: { "logging-to-file": true } } })).status,
+  ).toBe(200);
   const started = await core.mgmt<{ login: { id: string } }>("POST", "/accounts", {
     id: "logs-account",
     extension: "test/alpha",
@@ -26,9 +30,12 @@ test("logs show failures, trace lookup, continuous reading and clearing", async 
     }),
   });
   expect(failed.status).toBe(500);
-  const trace = failed.headers.get("X-CPA-TRACE-ID") as string;
+  trace = failed.headers.get("X-CPA-TRACE-ID") as string;
   expect(trace).toBeTruthy();
   await failed.text();
+});
+
+test("logs show failures, trace lookup, continuous reading and clearing", async ({ page }) => {
   await openPanel(page, core);
   await signIn(page, core);
   await goTo(page, "Logs Viewer");

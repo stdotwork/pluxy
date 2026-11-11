@@ -252,7 +252,7 @@ export function LogsPage() {
           </label>
           <label class="field" data-part="field">
             <span class="label">{t("level")}</span>
-            <select value={level} onChange={(e) => setLevel(e.currentTarget.value)}>
+            <select aria-label={t("level")} value={level} onChange={(e) => setLevel(e.currentTarget.value)}>
               <option value="">{t("allLevels")}</option>
               <option value="info">{t("info")}</option>
               <option value="warn">{t("warn")}</option>
