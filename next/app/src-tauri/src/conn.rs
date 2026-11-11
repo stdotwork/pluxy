@@ -66,13 +66,10 @@ impl Settings {
 
 /// What the person asks for on the Connection page.
 #[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Change {
     pub mode: Option<Mode>,
     pub url: Option<String>,
-    /// Empty or unset: keep the key the app has for this same core.
-    pub key: Option<String>,
-    #[serde(default)]
-    pub remember: bool,
     pub ca_file: Option<String>,
     pub core_path: Option<String>,
 }
@@ -179,6 +176,7 @@ impl Dirs {
 /// The app's connection to core.
 pub struct Connection {
     dirs: Dirs,
+    revision: u64,
     settings: Settings,
     client: Option<Client>,
     key: Option<String>,
@@ -214,6 +212,7 @@ impl Connection {
         };
         let mut c = Connection {
             dirs,
+            revision: 0,
             settings,
             client: None,
             key: None,
@@ -288,6 +287,7 @@ impl Connection {
 
     /// Starts the app's own core again, in managed mode.
     pub fn restart_core(&mut self) -> Result<(), String> {
+        self.revision += 1;
         if self.settings.mode != Some(Mode::Managed) {
             return Err("the app runs no core of its own in this mode".into());
         }
@@ -295,9 +295,30 @@ impl Connection {
         self.error.clone().map_or(Ok(()), Err)
     }
 
+    /// Native-only authenticated connection change. Cancel never calls this method.
+    pub(crate) fn enter_key(
+        &mut self,
+        ch: Option<Change>,
+        key: &str,
+        remember: bool,
+    ) -> Result<(), String> {
+        if let Some(ch) = ch {
+            if !matches!(ch.mode, Some(Mode::Local | Mode::Remote)) {
+                return Err("choose a local or remote core".into());
+            }
+            self.apply_change(ch, Some((key, remember)))
+        } else {
+            self.sign_in(key, remember)
+        }
+    }
+
     /// Applies what the person set, after checking it; saves it once it is accepted. On a refused
     /// change, the connection stays as it was.
     pub fn change(&mut self, ch: Change) -> Result<(), String> {
+        self.apply_change(ch, None)
+    }
+
+    fn apply_change(&mut self, ch: Change, entry: Option<(&str, bool)>) -> Result<(), String> {
         let mode = ch.mode.ok_or("choose a mode")?;
         let mut next = Settings {
             mode: Some(mode),
@@ -326,10 +347,11 @@ impl Connection {
                 let same = self.settings.mode == Some(mode)
                     && self.settings.url == next.url
                     && self.settings.ca_file == next.ca_file;
-                let key = ch.key.filter(|k| !k.is_empty());
-                // A new key is checked against that core before anything changes.
+                let key = entry.map(|(key, _)| key.to_string());
+                let client = Client::new(&base, certs);
+                // Reuse the validated client rather than rereading TLS files after committing.
                 if let Some(k) = &key {
-                    check_key(&Client::new(&base, certs), k)?;
+                    check_key(&client, k)?;
                 }
                 let session = match &key {
                     Some(k) => Some(k.clone()),
@@ -337,16 +359,21 @@ impl Connection {
                     None => None,
                 };
                 // The key the app will have, kept only when the person asks.
-                next.key = session.clone().filter(|_| ch.remember);
+                next.key = session.clone().filter(|_| {
+                    entry.map_or(same && self.settings.key.is_some(), |(_, keep)| keep)
+                });
                 next.save(&self.dirs.settings())?;
+                self.stop_core();
+                self.revision += 1;
                 self.settings = next;
-                self.connect();
-                // Without a key, the window asks for one.
+                self.client = Some(client);
                 self.key = session;
-                return self.error.clone().map_or(Ok(()), Err);
+                self.error = None;
+                return Ok(());
             }
         }
         next.save(&self.dirs.settings())?;
+        self.revision += 1;
         self.settings = next;
         self.connect();
         self.error.clone().map_or(Ok(()), Err)
@@ -363,17 +390,18 @@ impl Connection {
             return Err("the app signs in to its own core by itself".into());
         }
         check_key(&client, key)?;
+        let mut next = self.settings.clone();
+        next.key = remember.then(|| key.to_string());
+        next.save(&self.dirs.settings())?;
+        self.revision += 1;
+        self.settings = next;
         self.key = Some(key.to_string());
-        if remember {
-            self.settings.key = Some(key.to_string());
-        } else {
-            self.settings.key = None;
-        }
-        self.settings.save(&self.dirs.settings())
+        Ok(())
     }
 
     /// Forgets the key, also the kept one. Managed mode keeps its own.
     pub fn sign_out(&mut self) -> Result<(), String> {
+        self.revision += 1;
         if self.settings.mode == Some(Mode::Managed) {
             return Ok(());
         }
@@ -396,7 +424,13 @@ impl Connection {
     }
 
     #[cfg(feature = "native-test")]
-    pub(crate) fn test_settings_path(&self) -> PathBuf { self.dirs.settings() }
+    pub(crate) fn test_settings_path(&self) -> PathBuf {
+        self.dirs.settings()
+    }
+
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
 
     pub fn mode(&self) -> Option<Mode> {
         self.settings.mode
@@ -452,10 +486,7 @@ fn check_key(client: &Client, key: &str) -> Result<(), String> {
         200 => Ok(()),
         401 => Err("core refused this key".into()),
         404 => Err("core's management API is off: set management_key in its config".into()),
-        0 => Err(r
-            .error
-            .map(|e| e.message)
-            .unwrap_or_else(|| "core could not be reached".into())),
+        0 => Err("core could not be reached or its reply could not be read".into()),
         s => Err(format!("core answered {s}")),
     }
 }
@@ -465,10 +496,141 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_failed_sign_in_save_preserves_the_old_connection() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut head = Vec::new();
+            let mut byte = [0];
+            while !head.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).unwrap();
+                head.push(byte[0]);
+            }
+            assert!(head.starts_with(b"GET /v0/management/status HTTP/1.1\r\n"));
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .unwrap();
+        });
+        let dir =
+            std::env::temp_dir().join(format!("pluxy-entry-{}", crate::managed::random_key()));
+        let dirs = Dirs {
+            config: dir.join("config"),
+            core: dir.join("core"),
+        };
+        let old = crate::managed::random_key();
+        Settings {
+            mode: Some(Mode::Local),
+            url: Some(base),
+            key: Some(old.clone()),
+            ..Settings::default()
+        }
+        .save(&dirs.settings())
+        .unwrap();
+        let mut c = Connection::open(dirs.clone(), None);
+        let before = c.view();
+        std::fs::remove_file(dirs.settings()).unwrap();
+        std::fs::create_dir(dirs.settings()).unwrap();
+        assert!(c.sign_in(&crate::managed::random_key(), false).is_err());
+        assert_eq!(
+            c.view(),
+            before,
+            "failed persistence changed the connection"
+        );
+        assert_eq!(c.key.as_deref(), Some(old.as_str()));
+        server.join().unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn native_entry_authenticates_before_switching_and_only_keeps_on_request() {
+        use std::io::{Read, Write};
+        let key = crate::managed::random_key();
+        let refused = crate::managed::random_key();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let accepted = key.clone();
+        let server = std::thread::spawn(move || {
+            for status in [401, 200, 200] {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut head = Vec::new();
+                let mut byte = [0];
+                while !head.ends_with(b"\r\n\r\n") {
+                    stream.read_exact(&mut byte).unwrap();
+                    head.push(byte[0]);
+                }
+                let head = String::from_utf8(head).unwrap();
+                assert!(head.starts_with("GET /v0/management/status HTTP/1.1\r\n"));
+                assert_eq!(head.contains(&format!("Bearer {accepted}")), status == 200);
+                let response = format!("HTTP/1.1 {status} response\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}");
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        let dir =
+            std::env::temp_dir().join(format!("pluxy-entry-{}", crate::managed::random_key()));
+        let dirs = Dirs {
+            config: dir.join("config"),
+            core: dir.join("core"),
+        };
+        Settings {
+            mode: Some(Mode::Local),
+            url: Some("http://127.0.0.1:1".into()),
+            key: Some(crate::managed::random_key()),
+            ..Settings::default()
+        }
+        .save(&dirs.settings())
+        .unwrap();
+        let mut c = Connection::open(dirs.clone(), None);
+        let before = c.view();
+        let saved = std::fs::read(dirs.settings()).unwrap();
+        let change = || Change {
+            mode: Some(Mode::Local),
+            url: Some(base.clone()),
+            ..Change::default()
+        };
+        assert_eq!(
+            c.enter_key(Some(change()), &refused, true).unwrap_err(),
+            "core refused this key"
+        );
+        assert_eq!(c.view(), before);
+        assert_eq!(std::fs::read(dirs.settings()).unwrap(), saved);
+        c.enter_key(Some(change()), &key, false).unwrap();
+        assert!(c.view().signed_in && !c.view().remembered);
+        assert_eq!(Settings::load(&dirs.settings()).unwrap().key, None);
+        c.enter_key(None, &key, true).unwrap();
+        assert!(c.view().signed_in && c.view().remembered);
+        assert_eq!(
+            Settings::load(&dirs.settings()).unwrap().key.as_deref(),
+            Some(key.as_str())
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(dirs.settings())
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+        assert!(!serde_json::to_string(&c.view()).unwrap().contains(&key));
+        server.join().unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn window_changes_cannot_supply_a_key() {
         let change = serde_json::json!({"mode": "local", "key": crate::managed::random_key()});
-        assert!(serde_json::from_value::<Change>(change).is_err(),
-            "connection_set still accepts a key from a webview");
+        assert!(
+            serde_json::from_value::<Change>(change).is_err(),
+            "connection_set still accepts a key from a webview"
+        );
     }
 
     #[test]
@@ -536,44 +698,6 @@ mod tests {
         assert_eq!(Settings::load(&path).unwrap(), s);
         fs::write(&path, b"{not json").unwrap();
         assert!(Settings::load(&path).is_err());
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    /// With no new key, "keep the key" still decides whether the key the app has is kept.
-    #[test]
-    fn keeping_the_key_follows_remember_without_a_new_key() {
-        let dir =
-            std::env::temp_dir().join(format!("pluxy-app-keep-{}", crate::managed::random_key()));
-        let dirs = Dirs {
-            config: dir.join("config"),
-            core: dir.join("core"),
-        };
-        let url = "http://127.0.0.1:1";
-        Settings {
-            mode: Some(Mode::Local),
-            url: Some(url.into()),
-            key: Some("kept-key".into()),
-            ..Settings::default()
-        }
-        .save(&dirs.settings())
-        .unwrap();
-        let mut c = Connection::open(dirs.clone(), None);
-        let same = |remember| Change {
-            mode: Some(Mode::Local),
-            url: Some(url.into()),
-            remember,
-            ..Change::default()
-        };
-        c.change(same(false)).unwrap();
-        assert!(c.view().signed_in, "the session keeps the key");
-        assert!(!c.view().remembered);
-        assert_eq!(Settings::load(&dirs.settings()).unwrap().key, None);
-        c.change(same(true)).unwrap();
-        assert!(c.view().remembered);
-        assert_eq!(
-            Settings::load(&dirs.settings()).unwrap().key.as_deref(),
-            Some("kept-key")
-        );
         fs::remove_dir_all(dir).unwrap();
     }
 

@@ -176,7 +176,13 @@ async function managementStatus(base: string, key: string, ca?: string): Promise
 }
 
 /** Runs the app once with connection as its saved connection, and checks what it reports. */
-async function runApp(mode: Mode, bin: string, connection: object, base?: string, key?: string): Promise<string[]> {
+async function runApp(
+  mode: Mode,
+  bin: string,
+  connection: object,
+  base?: string,
+  key?: string,
+): Promise<string[]> {
   const root = mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
   const problems: string[] = [];
   const check = (ok: unknown, what: string) => {
@@ -198,7 +204,8 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
     });
     const quit = join(root, "quit");
     const keyFile = join(root, "key-input");
-    if (key) writeFileSync(keyFile, key, { mode: 0o600 });
+    const wrongKey = randomUUID();
+    if (key) writeFileSync(keyFile, JSON.stringify({ key, wrong: wrongKey }), { mode: 0o600 });
     // Only what the app needs: no display or session bus but the run's own.
     const env: Record<string, string> = {
       PATH: process.env.PATH ?? "/usr/bin:/bin",
@@ -247,7 +254,7 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
     const log: string[] = []; // the app's last lines, shown when the run fails
     const setup: string[] = []; // session.ts's report of what failed at setup
     const onLine = (line: string) => {
-      if (key && line.includes(key)) {
+      if (key && [key, wrongKey].some((canary) => line.includes(canary))) {
         problems.push("management key appeared on stdout/stderr");
         return;
       }
@@ -309,9 +316,17 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
 
     if (key) {
       const entry = steps.get("keyentry");
-      for (const field of ["good", "bad_preserved", "cancel_preserved", "session", "remember", "webviews_clean", "events_clean"])
-        check(entry?.[field] === true, 'native key entry did not prove ' + field);
-      console.log('  ' + mode + ' | native key entry: ' + JSON.stringify(entry ?? {}));
+      for (const field of [
+        "good",
+        "bad_preserved",
+        "cancel_preserved",
+        "session",
+        "remember",
+        "webviews_clean",
+        "events_clean",
+      ])
+        check(entry?.[field] === true, `native key entry did not prove ${field}`);
+      console.log(`  ${mode} | native key entry: ${JSON.stringify(entry ?? {})}`);
     }
 
     // The window: connected in this mode, every command reached, core's status through the app.

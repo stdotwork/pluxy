@@ -26,9 +26,11 @@ Addresses are origins only (scheme, host and port). A key you give is checked ag
 (`GET /v0/management/status`) before the app switches to it. It is kept in `connection.json` only
 when you tick "Keep the key on this device"; otherwise it lasts until the app quits.
 
-The native side holds the management key. A key you type on the Connection page passes through
-the window once, to the native side, and the window keeps no copy; the managed core's key never
-reaches any webview, and no extension page ever gets a key. The window calls core through the
+The native side holds the management key. On Linux, "Enter management key" on the Connection
+page opens a GTK dialog with a hidden entry, "Keep the key on this device", and OK/Cancel.
+The key goes directly from that dialog to native connection state; no webview receives it.
+Cancel, a refused key or a persistence failure preserves the old connection and saved settings.
+The window calls core through the
 `core_call` command, and the native side adds the key and sends the call to
 `<core>/v0/management/...` only, following no redirects and, for a core on this computer, no
 proxy from the environment. Path segments that are, or decode to, `.` or `..` are refused.
@@ -55,10 +57,11 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | Command | What it does |
 | --- | --- |
 | `connection_get` | The connection, without the key |
-| `connection_set` | Changes the mode, address, key, certificate file or core program |
+| `connection_set` | Changes connection settings without accepting a key |
+| `key_entry` | Opens native key entry, checks the key against core, and returns only signed-in, wrong-key, cancelled or error status plus the connection without its key |
 | `core_restart` | Starts the app's own core again (managed mode) |
 | `core_call` | One management API call to the connected core |
-| `sign_in`, `sign_out` | Checks and keeps a key, or forgets it (local and remote modes) |
+| `sign_out` | Forgets the key (local and remote modes) |
 | `page_open`, `page_place`, `page_close` | Opens an extension page's webview over part of the window, moves it, closes it |
 | `page_send` | Passes the window's channel messages to a page's webview |
 
@@ -116,6 +119,12 @@ closing the window leaves no webview and
 no web process, and that quitting stops only the app's own core. The `native-test` feature is
 for that test alone; release builds never have it.
 
+In local and remote modes, the test also drives the real GTK dialog with `xdotool`: good keys
+authenticate, bad keys and Cancel preserve the connection and saved settings, and the native
+keep choice controls persistence. Random keys are generated at runtime. The test inspects the
+main and page webviews' DOM, input values, storage and native callback/event payloads, and the
+app's stdout/stderr, for key canaries without passing those canaries to JavaScript.
+
 Before the app, each run's session starts desktop services (`native/session.ts`, with the
 packages and paths in `native/services.ts`) and checks them for real; a missing or broken one
 fails the run at setup, naming its package, and never skips:
@@ -146,8 +155,11 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
   show that it stopped and why, and the page offers to start it. A supervisor thread starts the
   core and stays until it exits, since on Linux the parent-death signal follows the thread that
   started it.
-- Keys are typed into the window, which holds them until it hands them to the native side; a
-  native entry dialog would keep them out of the webview entirely.
+- Native key entry is implemented on Linux only. Windows and macOS refuse key entry until
+  their native dialogs are implemented; there is no webview entry fallback.
+- Hidden native entry keeps keys out of the webview API. It does not isolate them from another
+  process with the same user's operating-system access, and transient native buffers are not
+  guaranteed to be erased from memory.
 - A kept key is stored in `connection.json`, not in the system keyring.
 - Whether a desktop shows the tray icon is not checked: on a desktop with no tray host, closing
   the window leaves the app running with no way back to it but quitting it. The native test's
