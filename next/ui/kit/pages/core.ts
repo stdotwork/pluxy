@@ -5,6 +5,7 @@
 import type { PageDef } from "../shell";
 import { accountsPage } from "./accounts";
 import { configPage } from "./config";
+import { addAccountPage } from "./addAccount";
 import { extensionsPage } from "./extensions";
 import { quotaPage } from "./quota";
 import { statusPage } from "./status";
@@ -13,6 +14,7 @@ import { themesPage } from "./themes";
 export const corePages = (): PageDef[] => [
   statusPage(),
   accountsPage(),
+  addAccountPage(),
   quotaPage(),
   configPage(),
   extensionsPage(),

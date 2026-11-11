@@ -63,6 +63,14 @@ describe("the README and the code agree", () => {
     expect(documented).toEqual([...PARTS]);
   });
 
+  test("account sign-in hooks are part of the documented contract", () => {
+    for (const part of ["method", "flow", "device-code"] as const) {
+      expect(PARTS).toContain(part);
+      expect(readme).toContain(`\`data-part="${part}"\``);
+    }
+    expect(readme).toContain("`add-account`");
+  });
+
   test("the version the README describes", () => {
     expect(readme).toContain(`# Theme contract, version ${THEME_VERSION}`);
   });
