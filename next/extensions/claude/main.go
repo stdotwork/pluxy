@@ -5,7 +5,10 @@
 //
 //	{"base_url": "https://api.anthropic.com"}
 //
-// base_url is where the Messages API lives; requests go to {base_url}/v1/messages. The OAuth
+// base_url is where the Messages API lives; requests go to {base_url}/v1/messages.
+// rebuild_mid_system_message (default false) moves the text of system messages in a Messages
+// client's conversation into the top-level system prompt, for a Claude-compatible upstream that
+// refuses them there; it is today's per-key setting of the same name. The OAuth
 // client can be changed with client_id; tests move the sign-in page and token endpoint to a fake
 // with authorize_url and token_url (sdk.TestLoginHost), which a normal run ignores; see oauth.go.
 //
@@ -98,6 +101,9 @@ type settings struct {
 	AuthorizeURL string `json:"authorize_url"`
 	TokenURL     string `json:"token_url"`
 	ClientID     string `json:"client_id"`
+	// RebuildMidSystemMessage moves system messages in the conversation into the top-level
+	// system prompt (midsystem.go).
+	RebuildMidSystemMessage bool `json:"rebuild_mid_system_message"`
 }
 
 // readSettings reads an account's settings and fills in the defaults.
@@ -205,6 +211,11 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	body, tr, err := buildBody(call.Request)
 	if err != nil {
 		return err
+	}
+	if s.RebuildMidSystemMessage {
+		if body, err = moveSystemMessages(body); err != nil {
+			return err
+		}
 	}
 	send := &reporting{Stream: out, tr: tr, names: replyNames(call.Request, tr)}
 	resp, err := post(ctx, call, s, "/v1/messages", body, tr.Passthrough, call.Request.Stream)
@@ -352,6 +363,11 @@ func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	body, tr, err := buildBody(call.Request)
 	if err != nil {
 		return err
+	}
+	if s.RebuildMidSystemMessage {
+		if body, err = moveSystemMessages(body); err != nil {
+			return err
+		}
 	}
 	count := anthropicmessages.CountRequest
 	if tr.Passthrough {

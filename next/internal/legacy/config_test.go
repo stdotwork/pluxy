@@ -194,6 +194,7 @@ codex-api-key:
 claude-api-key:
   - api-key: "claude-key"
     disable-codex-cloaking: true
+    rebuild-mid-system-message: true
 openai-compatibility:
   - name: "local model"
     base-url: "http://127.0.0.1:1234/v1"
@@ -222,7 +223,7 @@ openai-compatibility:
 				"credential": {"kind": "api_key", "api_key": "codex-key"}
 			}]},
 			"pluxy/claude": {"accounts": [{
-				"id": "claude-api-key-1",
+				"id": "claude-api-key-1", "settings": {"rebuild_mid_system_message": true},
 				"credential": {"kind": "api_key", "api_key": "claude-key"}
 			}]},
 			"pluxy/openai-compatible": {"accounts": [
@@ -396,6 +397,7 @@ func TestRefusedFiles(t *testing.T) {
 		"codex-api-key: [{api-key: k, base-url: [https://x]}]",
 		"codex-api-key: [{api-key: k, websockets: yes-please}]",
 		"codex-api-key: [{api-key: k, alpha-search: sometimes}]",
+		"claude-api-key: [{api-key: k, rebuild-mid-system-message: sometimes}]",
 		"routing: {session-affinity: sometimes}",
 		"disable-image-generation: sometimes",
 		"api-keys: {codex: [{name: c, keys: [{api-key: k, weight: -1}]}]}",
