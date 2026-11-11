@@ -1,4 +1,4 @@
-//! The native test's release feed check, in native-test builds only. It drives the Updates page
+//! The native test's release feed check, in native-test builds only. It drives Version Management
 //! as the person would (real DOM clicks, real GTK dialogs through X input) against the runner's
 //! fake https feed (`native/run.ts`), and reads what the window, the notes webview, the files the
 //! app keeps and the runner's stand-in browser show. Expected versions come from the feed fixture
@@ -103,6 +103,14 @@ fn ask_source(app: &AppHandle, main: &Webview, url: &str) -> Result<String, Stri
             "the native confirmation does not show {url}: {text}"
         ));
     }
+    // Until it is settled, the window shows the change waiting and the feed unchanged.
+    wait_attr(
+        main,
+        "the change shown waiting",
+        "[data-part=release-source]",
+        "changing",
+        "true",
+    )?;
     Ok(text)
 }
 
@@ -169,9 +177,9 @@ pub(crate) fn run(
         .join("release.json");
     let mut evidence = json!({});
 
-    main.eval("location.hash = '#/updates'")
+    main.eval("location.hash = '#/versions'")
         .map_err(|e| e.to_string())?;
-    wait_for("the Updates page", || {
+    wait_for("the Version Management page", || {
         eval(
             main,
             "document.querySelector('[data-part=release-check]') !== null",
@@ -259,7 +267,7 @@ pub(crate) fn run(
     evidence["preview"] =
         json!({"app": attr(main, app_card, "latest"), "core": attr(main, core_card, "latest")});
 
-    // The notes webview: hostile notes as text, no grants, no way out but a rendered link.
+    // The notes webview: hostile notes without their HTML, no grants, no way out but a rendered link.
     let notes_sel = "[data-part=release-notes][data-product=app]";
     wait_for("the app's notes webview", || {
         attr(main, notes_sel, "label")
@@ -281,7 +289,8 @@ pub(crate) fn run(
         "label": label, "href": dom["href"], "scripts": dom["scripts"], "images": dom["images"],
         "embedded": dom["embedded"], "handlers": dom["handlers"], "links": dom["links"],
         "heading": dom["heading"], "ran": dom["ran"], "internals": dom["internals"],
-        "script_as_text": dom["text"].as_str().is_some_and(|t| t.contains("<script>window.__hostileRan = 1</script>")),
+        "html_left_out": dom["text"].as_str().is_some_and(|t| t.contains("Bold")
+            && !t.contains("__hostileRan") && !t.contains("<script") && !t.contains("<iframe")),
     });
     // The same command from the window (control) and from the notes webview (refused).
     main.eval("window.__releaseControl = null; window.__TAURI_INTERNALS__.invoke('release_get').then(v => window.__releaseControl = {ok: true, source: v.source}, e => window.__releaseControl = {ok: false, error: String(e)})")
@@ -320,24 +329,29 @@ pub(crate) fn run(
         "stayed": eval(&notes, "location.href").unwrap_or(Value::Null),
     });
 
-    // Expand and Collapse: the notes area grows and shrinks, and the webview follows it.
-    let collapsed = area(main, "app");
-    click(main, "[data-part=release-notes-toggle][data-product=app]")?;
-    let expanded = wait_for("the notes to expand", || {
-        let a = area(main, "app");
-        (a["height"].as_f64()? > collapsed["height"].as_f64()? + 50.0).then_some(a)
+    // Expanded at first, the notes webview over the notes area; Collapse hides the notes and
+    // closes their webview, Expand shows them again in a new one, over the area again.
+    let toggle = "[data-part=release-notes-toggle][data-product=app]";
+    let first = area(main, "app");
+    let first_follows = near(&first, &placed(app, &label)?);
+    click(main, toggle)?;
+    wait_for("Collapse to close the notes webview", || {
+        (app.get_webview(&label).is_none() && attr(main, notes_sel, "label").is_null())
+            .then_some(())
     })?;
-    std::thread::sleep(Duration::from_millis(500));
-    let expanded_placed = placed(app, &label)?;
-    click(main, "[data-part=release-notes-toggle][data-product=app]")?;
-    wait_for("the notes to collapse", || {
-        let a = area(main, "app");
-        ((a["height"].as_f64()? - collapsed["height"].as_f64()?).abs() <= 2.0).then_some(())
+    click(main, toggle)?;
+    let again = wait_for("Expand to open a notes webview", || {
+        attr(main, notes_sel, "label")
+            .as_str()
+            .filter(|l| l.starts_with("notes-") && *l != label)
+            .and_then(|l| app.get_webview(l).map(|_| l.to_string()))
     })?;
     std::thread::sleep(Duration::from_millis(500));
     evidence["expand"] = json!({
-        "collapsed": collapsed, "expanded": expanded,
-        "follows": near(&expanded, &expanded_placed) && near(&collapsed, &placed(app, &label)?),
+        "first_follows": first_follows,
+        "collapse_closed": true,
+        "expand_follows": near(&area(main, "app"), &placed(app, &again)?),
+        "area": first,
     });
 
     // Offline: the runner stops the feed; the last good copy stays, with its time and an error.

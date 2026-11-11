@@ -13,4 +13,12 @@ pub const COMMANDS: &[&str] = &[
     "page_send",
     "confirmation_request",
     "confirmation_settings",
+    "release_get",
+    "release_check",
+    "release_channel_set",
+    "release_source_set",
+    "release_notes_open",
+    "release_notes_place",
+    "release_notes_close",
+    "release_notes_full",
 ];

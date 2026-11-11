@@ -21,13 +21,16 @@ pub mod conn;
 pub mod managed;
 #[cfg(feature = "native-test")]
 mod native_test;
-#[cfg(all(target_os = "linux", feature = "native-test"))]
-mod release_native;
+pub mod notes;
 pub mod pages;
 mod place;
+pub mod release;
 #[cfg(debug_assertions)]
 pub mod release_config;
+#[cfg(all(target_os = "linux", feature = "native-test"))]
+mod release_native;
 pub mod trust;
+mod updates;
 
 pub use command_names::COMMANDS;
 
@@ -58,6 +61,10 @@ struct App {
     /// The page webviews' own web context's folder: nothing shared with the window's.
     pages_dir: std::path::PathBuf,
     pages: Mutex<Pages>,
+    releases: Mutex<release::Releases>,
+    notes: Mutex<notes::Notes>,
+    /// The release notes webviews' own web context's folder, like pages_dir.
+    notes_dir: std::path::PathBuf,
     status: Mutex<Option<MenuItem<Wry>>>,
     has_tray: AtomicBool,
     quitting: AtomicBool,
@@ -141,8 +148,11 @@ fn close_pages(app: &AppHandle) {
     let labels = {
         let st = app.state::<App>();
         let mut pages = st.pages.lock().unwrap();
-        let l = pages.labels();
+        let mut l = pages.labels();
         pages.clear();
+        let mut notes = st.notes.lock().unwrap();
+        l.extend(notes.labels());
+        notes.clear();
         l
     };
     for l in labels {
@@ -582,13 +592,23 @@ pub fn run() {
             page_send,
             confirmation_request,
             confirmation_settings,
+            updates::release_get,
+            updates::release_check,
+            updates::release_channel_set,
+            updates::release_source_set,
+            updates::release_notes_open,
+            updates::release_notes_place,
+            updates::release_notes_close,
+            updates::release_notes_full,
         ])
         .register_asynchronous_uri_scheme_protocol(pages::SCHEME, page_scheme)
+        .register_uri_scheme_protocol(notes::SCHEME, updates::notes_scheme)
         .setup(|app| {
             let config = app.path().app_config_dir()?;
             #[cfg(target_os = "linux")]
             let confirmations =
                 confirmation::Confirmations::open(config.join("remembered-launches.json"))?;
+            let release_settings = release::settings_path(&config);
             let core = app.path().app_data_dir()?.join("core");
             // When the app's core exits, the tray and the window show it. Off this thread: the
             // exit may come while a connection change holds the connection.
@@ -607,12 +627,21 @@ pub fn run() {
             // The page webviews keep nothing from one run to the next.
             let pages_dir = app.path().app_cache_dir()?.join("pages");
             let _ = std::fs::remove_dir_all(&pages_dir);
+            let notes_dir = app.path().app_cache_dir()?.join("notes");
+            let _ = std::fs::remove_dir_all(&notes_dir);
+            let releases = release::Releases::open(
+                release_settings,
+                app.path().app_cache_dir()?.join("release-feed.json"),
+            );
             app.manage(App {
                 conn: Mutex::new(conn),
                 #[cfg(target_os = "linux")]
                 confirmations: Mutex::new(confirmations),
                 pages_dir,
                 pages: Mutex::new(Pages::default()),
+                releases: Mutex::new(releases),
+                notes: Mutex::new(notes::Notes::default()),
+                notes_dir,
                 status: Mutex::new(None),
                 has_tray: AtomicBool::new(false),
                 quitting: AtomicBool::new(false),
@@ -664,6 +693,7 @@ pub fn run() {
                         .invalidate();
                     // Its webviews went with it.
                     app.state::<App>().pages.lock().unwrap().clear();
+                    app.state::<App>().notes.lock().unwrap().clear();
                     place::forget_all();
                     eprintln!("pluxy-app: window closed");
                 }
@@ -744,7 +774,7 @@ mod tests {
         let end = start + src[start..].find(']').unwrap();
         let mut handled: Vec<&str> = src[start + "generate_handler![".len()..end]
             .split(',')
-            .map(str::trim)
+            .map(|s| s.trim().trim_start_matches("updates::"))
             .filter(|s| !s.is_empty())
             .collect();
         let mut listed = COMMANDS.to_vec();

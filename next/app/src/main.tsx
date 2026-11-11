@@ -14,6 +14,7 @@ import terminal from "../../ui/themes/terminal.json";
 import { ConnectionPage } from "./connection";
 import { appHost, type Connection, connectionGet } from "./host";
 import { NativeExtensionPage } from "./nativePage";
+import { UpdatesPage } from "./updates";
 
 function brand(c: Connection): string {
   return c.mode === "remote" && c.target ? `pluxy · ${new URL(c.target).host}` : "pluxy";
@@ -47,6 +48,14 @@ function App(props: { initial: Connection }) {
         short: "Conn",
         group: "control",
         render: () => <ConnectionPage connection={conn} onChange={changed} />,
+      },
+      {
+        id: "versions",
+        title: "Version Management",
+        short: "Vers",
+        group: "control",
+        tip: "App and core versions, and release notes",
+        render: () => <UpdatesPage />,
       },
     ],
     [conn],

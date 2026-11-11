@@ -467,7 +467,7 @@ function checkRelease(
     check(n[k] === 0, `the notes document has ${n[k]} ${k}`);
   check(n.ran === null, `a script in the notes ran: ${n.ran}`);
   check(n.heading === "What changed", `the notes' Markdown was not rendered: ${n.heading}`);
-  check(n.script_as_text === true, "raw HTML in the notes was not shown as text");
+  check(n.html_left_out === true, "raw HTML in the notes was not left out, or the text was lost");
   check(same(n.links, [good]), `the notes link to ${JSON.stringify(n.links)}, not only ${good}`);
   check(
     release.control?.ok === true && release.control.source === feed.url,
@@ -483,9 +483,10 @@ function checkRelease(
   check(same(nav.opened, [good]), `the notes link opened ${JSON.stringify(nav.opened)}`);
   check(same(nav.full, [good, full]), `View full release notes opened ${JSON.stringify(nav.full)}`);
   check(nav.stayed === "pluxy-notes://localhost/", `the notes webview navigated to ${nav.stayed}`);
+  const ex = release.expand ?? {};
   check(
-    release.expand?.follows === true && release.expand.expanded.height > release.expand.collapsed.height,
-    `Expand/Collapse: ${JSON.stringify(release.expand)}`,
+    ex.first_follows === true && ex.collapse_closed === true && ex.expand_follows === true,
+    `Expand/Collapse: ${JSON.stringify(ex)}`,
   );
   const off = release.offline ?? {};
   check(
