@@ -47,10 +47,22 @@ func TestRedactorEvent(t *testing.T) {
 		t.Error("a call without a credential changed text")
 	}
 	// An error's code and scope, and what a reply's translation report says, are text the
-	// extension chose too; core logs the translation.
+	// extension chose too; core logs the translation. A code or scope core does not define that
+	// holds the credential is replaced whole.
 	ev = r.Event(llm.Event{Type: llm.EventError, Error: &llm.Error{Code: "code-sk-secret-123", Scope: "scope-sk-secret-123", Message: "m"}})
-	if ev.Error.Code != "code-[redacted]" || ev.Error.Scope != "scope-[redacted]" {
+	if ev.Error.Code != Redacted || ev.Error.Scope != Redacted {
 		t.Errorf("error code %q, scope %q", ev.Error.Code, ev.Error.Scope)
+	}
+	// A defined code or scope is passed on as it is, even when a very short credential is part
+	// of it: routing acts on the exact value.
+	for _, key := range []string{"a", "it", "e"} {
+		short := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: key})
+		for _, code := range []string{llm.CodeRateLimit, llm.CodeAuth, llm.CodeQuota, llm.CodeUnavailable} {
+			e := short.Event(llm.Event{Type: llm.EventError, Error: &llm.Error{Code: code, Scope: llm.ScopeCredential, Message: "m"}}).Error
+			if e.Code != code || e.Scope != llm.ScopeCredential {
+				t.Errorf("credential %q: code %q became %q, scope %q", key, code, e.Code, e.Scope)
+			}
+		}
 	}
 	ev = r.Event(llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{Translation: &llm.Translation{
 		From: "from-sk-secret-123", To: "to-sk-secret-123",

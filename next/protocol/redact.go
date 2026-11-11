@@ -586,6 +586,34 @@ func encodeString(s string) []byte {
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 }
 
+// Values core acts on exactly, as routing does on an error's code and scope. A credential that
+// is part of one of these does not change it; any other value that holds a credential is
+// replaced whole (field), so a very short credential cannot turn a value core knows into one it
+// does not. A value added to llm later and missing here is still passed on unless it holds a
+// credential.
+var (
+	codes = set(llm.CodeInvalidRequest, llm.CodeAuth, llm.CodePermission, llm.CodeNotFound, llm.CodeRateLimit,
+		llm.CodeQuota, llm.CodeUnsupported, llm.CodeUpstream, llm.CodeUnavailable, llm.CodeCancelled, llm.CodeInternal,
+		llm.CodeExtensionCrashed, llm.CodeExtensionProtocol, llm.CodeExtensionUnavailable)
+	scopes = set(llm.ScopeRequest, llm.ScopeCredential, llm.ScopeModel, llm.ScopeEndpoint)
+)
+
+func set(values ...string) map[string]bool {
+	m := map[string]bool{"": true}
+	for _, v := range values {
+		m[v] = true
+	}
+	return m
+}
+
+// field returns s as it is when known holds it or it holds no credential, and Redacted otherwise.
+func (r *Redactor) field(s string, known map[string]bool) string {
+	if known[s] || r.String(s) == s {
+		return s
+	}
+	return Redacted
+}
+
 // Event returns ev with the credential removed from the text and upstream data it carries:
 // error messages, codes and scopes, every raw field, reasoning's opaque data, the translation
 // report, and the identifiers the upstream names the reply with (its id and model, tool call IDs,
@@ -630,7 +658,7 @@ func (r *Redactor) Event(ev llm.Event) llm.Event {
 	}
 	if ev.Error != nil {
 		e := *ev.Error
-		e.Code, e.Scope = r.String(e.Code), r.String(e.Scope)
+		e.Code, e.Scope = r.field(e.Code, codes), r.field(e.Scope, scopes)
 		e.Message = r.String(e.Message)
 		e.ProviderCode = r.String(e.ProviderCode)
 		e.Raw = r.raw(e.Raw)
