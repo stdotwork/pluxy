@@ -268,24 +268,27 @@ pub fn fetch(source: &str, roots: &Roots) -> Result<Vec<u8>, Problem> {
             message: format!("The release feed answered {status}."),
         });
     }
+    // ureq fails the read once the limit is used up, before the body's end, so any body over
+    // MAX_FEED is BodyExceedsLimit and a body of MAX_FEED bytes is read whole.
     resp.body_mut()
         .with_config()
         .limit(MAX_FEED + 1)
         .read_to_vec()
-        .map_err(|e| Problem {
+        .map_err(body_problem)
+}
+
+/// What a failed read of the feed's body means: too large, or the connection failed.
+fn body_problem(e: ureq::Error) -> Problem {
+    match e {
+        ureq::Error::BodyExceedsLimit(_) => Problem {
+            offline: false,
+            message: "The release feed is larger than 1 MiB.".into(),
+        },
+        e => Problem {
             offline: true,
             message: format!("Could not read the release feed: {e}"),
-        })
-        .and_then(|b| {
-            if b.len() as u64 > MAX_FEED {
-                Err(Problem {
-                    offline: false,
-                    message: "The release feed is larger than 1 MiB.".into(),
-                })
-            } else {
-                Ok(b)
-            }
-        })
+        },
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -688,6 +691,20 @@ mod tests {
         let ok = format!("https://example.com/{}", "é".repeat(300));
         let normal = https_url(&ok).unwrap();
         assert_eq!(https_url(&normal).unwrap(), normal);
+    }
+
+    #[test]
+    fn an_oversized_feed_is_not_called_offline() {
+        let p = body_problem(ureq::Error::BodyExceedsLimit(MAX_FEED + 1));
+        assert!(!p.offline, "{p:?}");
+        assert!(p.message.contains("larger than 1 MiB"), "{p:?}");
+        let cut = std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "Peer disconnected");
+        let p = body_problem(ureq::Error::Io(cut));
+        assert!(p.offline, "{p:?}");
+        assert!(
+            p.message.starts_with("Could not read the release feed"),
+            "{p:?}"
+        );
     }
 
     #[test]
