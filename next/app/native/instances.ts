@@ -84,14 +84,14 @@ export async function runInstances(o: InstancesRun): Promise<{ problems: string[
     };
     for (const stream of [proc.stdout, proc.stderr]) createInterface({ input: stream }).on("line", onLine);
     let stopping: Promise<void> | undefined;
-    const code = await new Promise<number | null>((resolve) => {
+    const end = await new Promise<string>((resolve) => {
       const timer = setTimeout(() => {
         problems.push(`the scenario did not finish within ${o.timeoutMs / 1000}s`);
         stopping = o.stopSession(pid);
       }, o.timeoutMs);
-      proc.on("close", (c) => {
+      proc.on("close", (c, signal) => {
         clearTimeout(timer);
-        resolve(c);
+        resolve(signal ?? String(c));
       });
     });
     await stopping;
@@ -99,10 +99,12 @@ export async function runInstances(o: InstancesRun): Promise<{ problems: string[
     if (!ready) {
       return {
         problems,
-        setup: setup.length > 0 ? setup.join("\n") : `the session ended (${code}) before it was ready`,
+        setup: setup.length > 0 ? setup.join("\n") : `the session ended (${end}) before it was ready`,
       };
     }
-    if (!done) problems.push(`the scenario ended (${code}) before it was done`);
+    // Done is not enough: whatever ended the session after that (a nonzero status, a signal) fails.
+    if (!done) problems.push(`the scenario ended (${end}) before it was done`);
+    else if (end !== "0") problems.push(`the scenario was done but the session ended with ${end}`);
     if (problems.length > 0) console.log(`instances: the session's last lines:\n  ${log.join("\n  ")}`);
     console.log(`instances: ${problems.length === 0 ? "ok" : "FAILED"}`);
     return { problems };

@@ -9,10 +9,12 @@
 // - a second launch with the same HOME and XDG folders exits 0 within a bound, starts no second
 //   app, window or core, and the first's window is shown again: after it was hidden, and after it
 //   was closed to the tray;
-// - a launch with other HOME and XDG folders is an instance of its own, with its own core;
+// - a launch with other HOME and XDG folders is an instance of its own, with its own core; its
+//   data folder is too long for a socket path there, and a second launch of it still raises it;
+// - the socket is in the runtime folder, where the app's `instance/address` says;
 // - after the owner is killed (SIGKILL) its lock and socket are left behind, and the next launch
 //   takes over: it starts normally, and a launch after that raises it;
-// - when the owner quits, its socket is gone.
+// - when the owner quits, its socket and address are gone.
 //
 // Output: `instances: ...` lines, and `instances-problem: ...` for each failed check.
 
@@ -27,7 +29,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { makeProfile } from "./profile";
 
@@ -240,8 +242,9 @@ async function main() {
   // Profile A is this session's own (the runner wrote its connection.json: managed mode).
   const home = env();
   const dataDir = join(process.env.XDG_DATA_HOME as string, identifier as string);
-  const socket = join(dataDir, "instance", "activate.sock");
+  const address = join(dataDir, "instance", "address");
   const lock = join(dataDir, "instance", "lock");
+  const runtime = join(process.env.XDG_RUNTIME_DIR as string, "pluxy-app");
 
   const first = await owner("first", home);
   const owners = [first.app.pid];
@@ -251,7 +254,12 @@ async function main() {
     `first: ${counts().coresOf(first.app.pid).length} cores, expected 1`,
   );
   check(existsSync(lock), "first: no lock file in the app's data folder");
-  check(existsSync(socket), "first: no activation socket in the app's data folder");
+  check(existsSync(address), "first: no address in the app's data folder");
+  const socket = existsSync(address) ? readFileSync(address, "utf8") : "";
+  check(
+    dirname(socket) === runtime && existsSync(socket),
+    `first: the address names ${JSON.stringify(socket)}, not a socket in ${runtime}`,
+  );
 
   // 1. The window is open: a second launch leaves one app, one core, one window.
   let now = await second("second", home, owners);
@@ -281,6 +289,10 @@ async function main() {
   const rootB = mkdtempSync(join(tmpdir(), "pluxy-inst-"));
   roots.push(rootB);
   const b = makeProfile(rootB);
+  // A data folder too long for a socket path in it: the socket goes in the runtime folder.
+  b.env.XDG_DATA_HOME = join(rootB, "d".repeat(100));
+  b.dirs.data = b.env.XDG_DATA_HOME;
+  mkdirSync(b.dirs.data, { mode: 0o700 });
   mkdirSync(join(b.dirs.config, identifier as string), { recursive: true });
   writeFileSync(
     join(b.dirs.config, identifier as string, "connection.json"),
@@ -297,9 +309,11 @@ async function main() {
   await second("second of other profile", other, [first.app.pid, control.app.pid]);
   control.app.send("quit");
   await control.app.exited;
+  const addressB = join(b.dirs.data, identifier as string, "instance", "address");
+  check(!existsSync(addressB), "other profile: its address stays after it quit");
   check(
-    !existsSync(join(b.dirs.data, identifier as string, "instance", "activate.sock")),
-    "other profile: its socket stays after it quit",
+    readdirSync(runtime).length === 1,
+    `other profile: sockets left in the runtime folder after it quit: ${readdirSync(runtime)}`,
   );
 
   // 5. The owner dies without any cleanup: its lock and socket stay on disk, and the next launch
@@ -308,6 +322,7 @@ async function main() {
   await first.app.exited;
   check(first.corePid && (await gone(first.corePid, 15_000)), "kill: the first's core still runs");
   check(existsSync(socket), "kill: no stale socket was left to recover from");
+  check(existsSync(address), "kill: no stale address was left to recover from");
   check(existsSync(lock), "kill: no stale lock file was left to recover from");
   const taken = await owner("after kill", home);
   check(taken.corePid && taken.corePid !== first.corePid, "after kill: the new owner has no core of its own");
@@ -324,6 +339,7 @@ async function main() {
   const code = await taken.app.exitWithin(15_000);
   check(code === 0, `quit: the owner exited with ${code}`);
   check(!existsSync(socket), "quit: the socket stays after the owner quit");
+  check(!existsSync(address), "quit: the address stays after the owner quit");
   check(taken.corePid && (await gone(taken.corePid, 10_000)), "quit: the owner's core still runs");
   say("done");
 }
