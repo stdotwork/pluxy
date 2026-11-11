@@ -42,6 +42,24 @@ Closing the window destroys it and its webviews, so they hold no memory while th
 the tray. The tray menu shows what the app is connected to, and has "Open pluxy" (a new window)
 and "Quit pluxy". If the app cannot make its tray icon, closing the window quits the app.
 
+## One app per profile
+
+The app runs once per profile: your user and the app's data folder (on Linux
+`~/.local/share/dev.pluxy.desktop/`), not the place the program is installed. Launching it again
+on that profile shows the first app's window (a new one if it was closed to the tray) and exits
+with status 0, starting no core, tray icon or webview. Another `HOME` or `XDG_*` folder is another
+profile, with its own app and core.
+
+Before anything else, the app takes an exclusive lock on `instance/lock` in the data folder
+(`flock`: the system releases it when the app ends, however it ends, so a killed app leaves nothing
+to recover) and listens on `instance/activate.sock` there. The folder, the lock and the socket are
+readable by your user only. A later launch sends the socket one fixed message; the first app
+accepts only a connection from the same user (peer credentials), reads at most 64 bytes for at
+most 2 seconds and ignores anything but that message. The launch exits once the first app has
+shown its window, or fails with a message on stderr if the first does not answer within 20
+seconds. A socket a killed app left behind is removed by the next app, which holds the lock.
+The lock is not inherited by the app's core.
+
 ## Commands
 
 The window's webview, labelled `main`, is the only webview any capability names
@@ -113,7 +131,14 @@ reaches every command, that at the top of an extension page's webview Tauri refu
 command and the plugin commands tried, that the app reaches no command from that webview, that
 nothing reaches the app from the page's frame, that the page webview covers the page area, that
 closing the window leaves no webview and
-no web process, and that quitting stops only the app's own core. The `native-test` feature is
+no web process, and that quitting stops only the app's own core. Then, in a session of its own
+(`native/instances-session.ts`), it launches the app again and again on one profile and checks
+that each later launch exits 0 within 10 seconds, starts no app or core of its own (it counts the
+app and core processes), and has the first show its window, also after the window was hidden and
+after it was closed to the tray; that a launch with other `HOME` and `XDG_*` folders is an app and
+core of its own; that after the first app is killed with SIGKILL (its lock file and socket stay)
+the next launch becomes the app, starts its core and is the one a later launch raises; and that
+the socket is gone when the app quits. The `native-test` feature is
 for that test alone; release builds never have it.
 
 Before the app, each run's session starts desktop services (`native/session.ts`, with the
@@ -153,6 +178,9 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
   the window leaves the app running with no way back to it but quitting it. The native test's
   session has a real tray watcher, but only a probe item is registered with it, not the app's own
   icon.
+- Raising the first app's window is Unix only (a Unix socket); where there is none, a second
+  launch exits with an error and the first's window stays as it was. The native test checks that
+  the raised window is shown, not that it has the keyboard focus: that is the desktop's to give.
 - The native test needs the desktop services above, and the pinned AppImage runtime from
   github.com (or a copy in its cache folder), so it does not run offline on a bare machine.
 - An extension page's frame can post messages to WebKit's message handler for the webview; Tauri
