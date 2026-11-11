@@ -118,3 +118,23 @@ func TestRestoreSettingsKeepsListItemsInTheirList(t *testing.T) {
 		t.Errorf("a placeholder moved to another inner list: err = %v, want ErrInvalid", err)
 	}
 }
+
+// The same text as a number and as a string is one placeholder, and each goes back with its own
+// type.
+func TestRestoreSettingsKeepsEachType(t *testing.T) {
+	r := NewRedactor()
+	for _, src := range []string{
+		`{"password":{"numeric":1234,"text":"1234"}}`,
+		`{"password":{"text":"1234","numeric":1234}}`,
+		`{"password":["1234",1234]}`,
+	} {
+		out, err := r.RedactSettings([]byte(src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		back, err := r.RestoreSettings(out, []byte(src))
+		if err != nil || string(back) != src {
+			t.Errorf("round trip of %s = %s, %v", src, back, err)
+		}
+	}
+}

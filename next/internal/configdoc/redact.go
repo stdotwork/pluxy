@@ -307,25 +307,31 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 		return edited, nil
 	}
 	// Each placeholder goes back as the secret's text in current, so it keeps its quotes, or
-	// in JSON its type. In settings, it goes back only where the secret is in current (paths).
+	// in JSON its type. In settings, it goes back only where the secret is in current (paths),
+	// as the secret is written there: the same value may be a number in one place and a string
+	// in another.
+	type found struct{ tag, text string }
 	type secret struct {
-		value, tag, text string
-		paths            map[string]bool
+		value string
+		found []found            // in the order current holds them
+		at    map[string][]found // by path, in the order current holds them
 	}
-	values := map[string]secret{}
+	values := map[string]*secret{}
 	if cur, err := Parse(current, isYAML); err == nil {
 		where := paths(cur.root)
 		for _, n := range secrets(cur.root, settings) {
 			p := r.Placeholder(n.Value)
-			s, seen := values[p]
-			if !seen {
-				s = secret{value: n.Value, tag: n.Tag, paths: map[string]bool{}}
-				if sp, ok := cur.span(n); ok {
-					s.text = string(cur.src[sp.start:sp.end])
-				}
+			s := values[p]
+			if s == nil {
+				s = &secret{value: n.Value, at: map[string][]found{}}
+				values[p] = s
 			}
-			s.paths[where[n]] = true
-			values[p] = s
+			f := found{tag: n.Tag}
+			if sp, ok := cur.span(n); ok {
+				f.text = string(cur.src[sp.start:sp.end])
+			}
+			s.found = append(s.found, f)
+			s.at[where[n]] = append(s.at[where[n]], f)
 		}
 	}
 	allowed := secrets(d.root, settings)
@@ -333,11 +339,13 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 	if settings {
 		where = paths(d.root)
 	}
-	repl := map[*yaml.Node]secret{}
+	type back struct{ value, tag, text string }
+	repl := map[*yaml.Node]back{}
+	taken := map[string]int{} // in settings, how many of a placeholder went back at a path
 	for _, n := range held {
 		s, ok := values[n.Value]
 		switch {
-		case settings && ok && !s.paths[where[n]]:
+		case settings && ok && len(s.at[where[n]]) == 0:
 			return nil, fmt.Errorf("%w: line %d: a redacted value is not where its secret is; write the value itself there", ErrInvalid, d.line(n))
 		case settings && !slices.Contains(allowed, n),
 			// A URL that is a secret is one wherever it is, so in a config file its placeholder
@@ -347,7 +355,14 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 		case !ok:
 			return nil, fmt.Errorf("line %d: %w", d.line(n), ErrStale)
 		}
-		repl[n] = s
+		f := s.found[0]
+		if settings {
+			// The k-th at a path is written as the k-th there in current, or as the last.
+			at, k := s.at[where[n]], n.Value+where[n]
+			f = at[min(taken[k], len(at)-1)]
+			taken[k]++
+		}
+		repl[n] = back{s.value, f.tag, f.text}
 	}
 	want := map[string]int{}
 	texts := map[*yaml.Node]string{}
