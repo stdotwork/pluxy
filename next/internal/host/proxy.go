@@ -38,30 +38,35 @@ func (e *Extension) outbound(account *protocol.Account) (*protocol.Credential, *
 			Message: fmt.Sprintf("extension %s implements protocol 0.%d, which cannot send an account's headers (0.%d adds headers); account %q has some, so it is not sent there",
 				e.manifest.ID, e.info.ProtocolMinor, headersMinor, account.ID)}
 	}
-	c := &protocol.Credential{Kind: "upstream"}
-	if secrets := proxyurl.Password(account.ProxyURL); len(secrets) > 0 {
-		c.APIKey = secrets[0]
-		if len(secrets) > 1 {
-			c.AccessToken = secrets[1]
-		}
-	}
-	if values := upheader.Secrets(account.Headers); len(values) > 0 {
-		c.Data, _ = json.Marshal(map[string][]string{"headers": values})
-	}
-	if c.APIKey == "" && c.Data == nil {
+	var d outboundForms
+	d.Proxy = proxyurl.Password(account.ProxyURL)
+	d.Headers = upheader.Secrets(account.Headers)
+	if len(d.Proxy) == 0 && len(d.Headers) == 0 {
 		return nil, nil
 	}
-	e.held.add(account.ID+" upstream", c)
+	data, _ := json.Marshal(d)
+	c := &protocol.Credential{Kind: "upstream", Data: data}
+	e.held.addOutbound(account.ID, c)
 	return c, nil
 }
 
-// outboundSecrets returns the strings of c, a credential outbound returned, by name.
+// outboundForms are the forms of an account's proxy secret and secret header values that are
+// removed from text, as proxyurl.Password and upheader.Forms return them.
+type outboundForms struct {
+	Proxy   []string `json:"proxy,omitempty"`
+	Headers []string `json:"headers,omitempty"`
+}
+
+// outboundSecrets returns the forms that c, a credential outbound returned, holds, by name.
 func outboundSecrets(c *protocol.Credential) map[string]string {
-	out := map[string]string{"proxy": c.APIKey, "proxy password": c.AccessToken}
-	var d struct{ Headers []string }
+	var d outboundForms
 	_ = json.Unmarshal(c.Data, &d)
-	for i, v := range d.Headers {
-		out[fmt.Sprintf("header %d", i)] = v
+	out := map[string]string{}
+	for i, f := range d.Proxy {
+		out[fmt.Sprintf("proxy %d", i)] = f
+	}
+	for i, f := range d.Headers {
+		out[fmt.Sprintf("header %d", i)] = f
 	}
 	return out
 }

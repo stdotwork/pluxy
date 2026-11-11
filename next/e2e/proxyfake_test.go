@@ -24,9 +24,9 @@ import (
 const proxiedHost = "upstream.test"
 
 // proxyUser and proxyPassword are the user name and password the fake proxies ask for when they
-// are made with auth. The password is distinctive, so a test can look for it anywhere.
+// are made with auth. Both are distinctive, so a test can look for either anywhere.
 const (
-	proxyUser     = "proxy-user"
+	proxyUser     = "pxu-Rk82vq"
 	proxyPassword = "pr0xy-Secret-9f3k"
 )
 

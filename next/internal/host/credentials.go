@@ -161,6 +161,7 @@ func (e *Extension) Refresh(ctx context.Context, account protocol.Account) (*pro
 		return nil, perr
 	}
 	e.held.add(account.ID, account.Credential)
+	redact := protocol.NewRedactor(account.Credential, proxy)
 	conn, lerr := e.dial(ctx)
 	if lerr != nil {
 		return nil, lerr
@@ -181,10 +182,9 @@ func (e *Extension) Refresh(ctx context.Context, account protocol.Account) (*pro
 		e.held.add(account.ID, r.Grant.Credential)
 		return r.Grant.Credential, nil
 	case r.Type == llm.EventError && r.Error != nil:
-		redact := protocol.NewRedactor(account.Credential, proxy)
 		return nil, redact.Event(r.Event).Error
 	}
-	return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a refresh", e.manifest.ID, r.Type)}
+	return nil, redacted(redact, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a refresh", e.manifest.ID, r.Type)})
 }
 
 // validIdentity says what is wrong with a grant's identity, or "" when nothing is.
