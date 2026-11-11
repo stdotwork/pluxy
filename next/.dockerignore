@@ -1,0 +1,17 @@
+# The Docker build context is next/. Keep out what the image is not built from.
+
+# The desktop app and the tests have their own tools and are not part of the image.
+app
+e2e
+corpus
+
+# Installed and built output, which the image builds for itself.
+**/node_modules
+internal/panel/dist/*
+!internal/panel/dist/.gitkeep
+pluxy
+extensions/openai-compatible/openai-compatible
+extensions/codex/codex
+extensions/claude/claude
+examples/scripted/scripted
+dist

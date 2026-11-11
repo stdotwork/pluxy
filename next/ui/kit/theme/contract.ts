@@ -97,6 +97,17 @@ export const PARTS = [
   "method",
   "flow",
   "device-code",
+  "account-tools",
+  "account-check",
+  "account-cooldowns",
+  "account-cooldown-confirm",
+  "account-tool-actions",
+  "account-config-link",
+  "account-test-hint",
+  "account-models",
+  "account-test-result",
+  "account-test-reply",
+  "account-sign-in",
 ] as const;
 
 export type Part = (typeof PARTS)[number];
