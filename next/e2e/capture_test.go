@@ -1,6 +1,8 @@
 package e2e
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // Upstream capture: with request-log on, a request's log also holds what the extension sent
@@ -32,6 +35,7 @@ const (
 type captureUpstream struct {
 	*httptest.Server
 	refuse bool
+	gate   chan struct{} // closed by a test to let a "gate-stream" reply go on after its first event
 	mu     sync.Mutex
 	bodies []string
 }
@@ -49,7 +53,7 @@ func captureChunk(i int) string {
 }
 
 func newCaptureUpstream(t *testing.T, refuse bool) *captureUpstream {
-	u := &captureUpstream{refuse: refuse}
+	u := &captureUpstream{refuse: refuse, gate: make(chan struct{})}
 	u.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" {
 			http.NotFound(w, r)
@@ -66,6 +70,21 @@ func newCaptureUpstream(t *testing.T, refuse bool) *captureUpstream {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusTooManyRequests)
 			io.WriteString(w, `{"error":{"message":`+string(msg)+`,"type":"rate_limit","code":"rate_limit_exceeded"}}`)
+		case strings.Contains(string(b), "gate-stream"):
+			// The first event, then nothing until the test has read it at the client.
+			w.Header().Set("Content-Type", "text/event-stream")
+			key := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			event := func(content, finish string) string {
+				return `data: {"id":"chatcmpl-gate","object":"chat.completion.chunk","created":1,"model":"gpt-cap",` +
+					`"choices":[{"index":0,"delta":{"content":"` + content + `"},"finish_reason":` + finish + `}]}` + "\n\n"
+			}
+			io.WriteString(w, event("first-event "+key+" visible", "null"))
+			w.(http.Flusher).Flush()
+			select {
+			case <-u.gate:
+			case <-time.After(10 * time.Second):
+			}
+			io.WriteString(w, event("second-event", "null")+event("", `"stop"`)+"data: [DONE]\n\n")
 		case strings.Contains(string(b), `"stream":true`):
 			w.Header().Set("Content-Type", "text/event-stream")
 			key := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -253,6 +272,20 @@ func TestUpstreamCapture(t *testing.T) {
 	if len(sentA) != 1 || len(sentB) != 1 {
 		t.Fatalf("the upstreams got %d and %d requests, want 1 and 1", len(sentA), len(sentB))
 	}
+	// What the upstreams got is the client's request, whatever the log holds of it.
+	for _, got := range []string{sentA[0], sentB[0]} {
+		var req struct {
+			Model    string `json:"model"`
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.Unmarshal([]byte(got), &req); err != nil || req.Model != "gpt-cap-3" ||
+			len(req.Messages) != 1 || req.Messages[0].Role != "user" || req.Messages[0].Content != "capture me" {
+			t.Errorf("an upstream got %q (%v), want model gpt-cap-3 and one user message \"capture me\"", got, err)
+		}
+	}
 	for i, want := range []struct {
 		account, url, body, status, reply string
 	}{
@@ -324,4 +357,66 @@ func TestUpstreamCapture(t *testing.T) {
 	}
 	// The key cut in two by the left-out middle is not kept in part either.
 	wantNoSecrets(t, "the streamed request's log", text, append(secrets, captureKeyB[:12])...)
+
+	// With capture on, a streamed reply still reaches the client as the upstream sends it, in
+	// order and to a clean end: the upstream sends its first event and holds the rest until the
+	// client has read that one, so a reply held back for recording could not get through.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/chat/completions",
+		strings.NewReader(`{"model":"gpt-cap","stream":true,"messages":[{"role":"user","content":"gate-stream"}]}`))
+	req.Header.Set("Authorization", "Bearer "+clientKey)
+	req.Header.Set("X-Pluxy-Account", "cap-b")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	trace = resp.Header.Get("X-CPA-TRACE-ID")
+	br := bufio.NewReader(resp.Body)
+	var got strings.Builder
+	firstRead := make(chan error, 1)
+	go func() {
+		for !strings.Contains(got.String(), "first-event") {
+			line, err := br.ReadString('\n')
+			got.WriteString(line)
+			if err != nil {
+				firstRead <- err
+				return
+			}
+		}
+		firstRead <- nil
+	}()
+	select {
+	case err := <-firstRead:
+		if err != nil {
+			t.Fatalf("reading the first event: %v; got %q", err, got.String())
+		}
+	case <-time.After(8 * time.Second):
+		close(serving.gate)
+		t.Fatal("the first event did not reach the client while the upstream held the rest back")
+	}
+	close(serving.gate)
+	rest, err := io.ReadAll(br)
+	if err != nil {
+		t.Fatalf("reading the rest of the stream: %v", err)
+	}
+	streamed := got.String() + string(rest)
+	last := -1
+	for _, want := range []string{"first-event", "second-event", `"finish_reason":"stop"`, "data: [DONE]"} {
+		i := strings.Index(streamed, want)
+		if i <= last {
+			t.Errorf("%q is missing or out of order (at %d, after %d) in the stream:\n%s", want, i, last, streamed)
+		}
+		last = max(last, i)
+	}
+	text = c.download(t, "/request-log-by-id/"+trace)
+	wantNoSecrets(t, "the gated stream's log", text, secrets...)
+	resps = sections(text, "UPSTREAM RESPONSE")
+	// The reply was short: all of it is logged, with the key replaced and what follows it kept.
+	if len(resps) != 1 || !strings.Contains(resps[0], "first-event [redacted] visible") ||
+		strings.Index(resps[0], "first-event") > strings.Index(resps[0], "second-event") ||
+		!strings.Contains(resps[0], "data: [DONE]") || strings.Contains(resps[0], "not logged") {
+		t.Errorf("the gated stream's upstream response is not logged whole:\n%v", resps)
+	}
 }
