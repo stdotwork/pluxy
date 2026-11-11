@@ -1,0 +1,46 @@
+@layer kit {
+  .quota-controls {
+    display: flex;
+    gap: calc(var(--s) * 4);
+    flex-wrap: wrap;
+    margin-bottom: calc(var(--s) * 4);
+  }
+  .quota-controls .field {
+    flex: 1;
+    min-width: min(100%, 12em);
+  }
+  .quota-identity {
+    display: block;
+    font-weight: normal;
+    overflow-wrap: anywhere;
+  }
+  .quota-body {
+    box-shadow: none;
+  }
+  .quota-limit {
+    box-shadow: none;
+    padding: calc(var(--s) * 3);
+  }
+  .quota-limit-head {
+    display: flex;
+    justify-content: space-between;
+    gap: calc(var(--s) * 2);
+  }
+  .meter {
+    height: calc(var(--s) * 2);
+    overflow: hidden;
+    border-radius: var(--px-shape-radius);
+    background: var(--px-color-meter-track);
+  }
+  .meter > span {
+    display: block;
+    height: 100%;
+    background: var(--px-color-meter-fill);
+  }
+  .meter[data-tone="warn"] {
+    --px-color-meter-fill: var(--px-color-warn);
+  }
+  .meter[data-tone="danger"] {
+    --px-color-meter-fill: var(--px-color-danger);
+  }
+}

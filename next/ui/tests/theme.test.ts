@@ -127,6 +127,19 @@ describe("reading a theme", () => {
 });
 
 describe("resolving", () => {
+  test("quota meter tokens follow a theme's colours and accept overrides", () => {
+    expect(PARTS).toContain("meter");
+    const custom = ok({
+      ...base,
+      tokens: { "color.meter-track": "#123456", "color.meter-fill": "#abcdef" },
+    }).theme;
+    const resolved = resolve(custom, DEFAULT_CHOICES, env);
+    expect(resolved.tokens["color.meter-track"]).toBe("#123456");
+    expect(resolved.tokens["color.meter-fill"]).toBe("#abcdef");
+    expect(resolve(ok(base).theme, DEFAULT_CHOICES, env).tokens["color.meter-fill"]).toBe(
+      "var(--px-color-accent)",
+    );
+  });
   const theme = ok({
     ...base,
     tokens: { "color.bg": "#111111", density: "0.75" },

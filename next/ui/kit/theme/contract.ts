@@ -28,6 +28,8 @@ export const TOKENS = {
   "color.warn": { light: "#9a5b00", dark: "#e6b450" },
   "color.danger": { light: "#b42318", dark: "#ff7b72" },
   "color.focus": { light: "#2f5fd0", dark: "#7aa2ff" },
+  "color.meter-track": { light: "var(--px-color-surface-raised)" },
+  "color.meter-fill": { light: "var(--px-color-accent)" },
   "font.body": { light: 'system-ui, -apple-system, "Segoe UI", sans-serif' },
   "font.mono": { light: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace' },
   "font.size": { light: "14px" },
@@ -74,6 +76,7 @@ export const PARTS = [
   "button",
   "badge",
   "field",
+  "meter",
 ] as const;
 
 export type Part = (typeof PARTS)[number];
