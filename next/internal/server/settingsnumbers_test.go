@@ -41,8 +41,13 @@ func TestInexactSettingsNumbers(t *testing.T) {
 	}
 }
 
-// A very long number costs time in proportion to its length, not more.
+// A very long number costs time in proportion to its length, not more: a 1 MB one well under
+// 50 ms, or ten times that with the race detector.
 func TestInexactSettingsNumbersIsFast(t *testing.T) {
+	bound := 50 * time.Millisecond
+	if raceDetector {
+		bound *= 10
+	}
 	for _, tok := range []string{
 		"1." + strings.Repeat("0", 1000000),
 		"1" + strings.Repeat("0", 1000000) + "e-1000000",
@@ -55,7 +60,7 @@ func TestInexactSettingsNumbersIsFast(t *testing.T) {
 			inexact(b)
 			best = min(best, time.Since(start))
 		}
-		if best > 50*time.Millisecond {
+		if best > bound {
 			t.Errorf("inexact of a %d-byte number took %v", len(tok), best)
 		}
 	}
