@@ -28,6 +28,8 @@ import { createInterface } from "node:readline";
 import { smokeProblem } from "./appimage";
 import { busNames, documentPortal, gtkBackend, portalFrontend, type Service, trayWatcher } from "./services";
 
+import { checkRecovery } from "./recovery";
+
 const [probe, appImage, nonce, app] = process.argv.slice(2);
 if (!probe || !appImage || !nonce || !app) {
   console.error("usage: bun native/session.ts <session_probe> <AppImage> <nonce> <app>");
@@ -248,7 +250,26 @@ let code = SETUP_FAILED;
 try {
   await setup();
   code = await new Promise<number>((resolve, reject) => {
-    appProc = spawn(app, [], { stdio: "inherit" });
+    appProc = spawn(app, [], { stdio: ["ignore", "pipe", "pipe"] });
+    for (const stream of [appProc.stdout, appProc.stderr]) {
+      if (!stream) continue;
+      createInterface({ input: stream }).on("line", (line) => {
+        console.log(line);
+        if (line.startsWith("native-test: closed ")) {
+          void (async () => {
+            await Bun.sleep(3000);
+            try {
+              await checkRecovery(probe, setting("PLUXY_APP_TEST_STATE"));
+              console.log('native-test: recovery {"ok":true}');
+            } catch (e) {
+              console.log("native-test: recovery " + JSON.stringify({ok: false, error: String(e)}));
+            } finally {
+              writeFileSync(setting("PLUXY_APP_TEST_QUIT"), "");
+            }
+          })();
+        }
+      });
+    }
     appProc.once("error", reject);
     appProc.once("exit", (c) => resolve(c ?? 1));
   });

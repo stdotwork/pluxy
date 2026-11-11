@@ -19,7 +19,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Webview};
 
-const WAIT: Duration = Duration::from_secs(60);
+const WAIT: Duration = Duration::from_secs(120);
 
 /// Tauri's own commands a page webview might try.
 const PLUGINS: &[&str] = &[
@@ -200,6 +200,13 @@ fn run(app: &AppHandle) -> Result<(), String> {
 
     if let Ok(f) = std::env::var("PLUXY_APP_TEST_QUIT") {
         wait_for("the quit file", || {
+            if let Ok(path) = std::env::var("PLUXY_APP_TEST_STATE") {
+                let view = app.state::<App>().conn.lock().unwrap().view();
+                let snapshot = json!({"app_pid": std::process::id(), "view": view,
+                    "webviews": app.webviews().len(), "window": app.get_window(WINDOW).is_some()});
+                crate::managed::write_private(std::path::Path::new(&path),
+                    &serde_json::to_vec(&snapshot).unwrap()).expect("write test state");
+            }
             std::path::Path::new(&f).exists().then_some(())
         })?;
     }
