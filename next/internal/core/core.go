@@ -132,6 +132,13 @@ type Core struct {
 // each extension's program to check it; the program then runs only while it is needed.
 func Start(opts Options) (*Core, error) {
 	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor(), checks: newChecks(), usage: usage.NewStore()}
+	// Every extension call carries the proxy of the config active when it is sent.
+	c.opts.Host.ProxyURL = func() string {
+		if s := c.cur.Load(); s != nil {
+			return s.Config.ProxyURL
+		}
+		return ""
+	}
 	cfg, err := server.LoadConfig(opts.ConfigPath)
 	if err != nil {
 		return nil, c.scrubbed(err)

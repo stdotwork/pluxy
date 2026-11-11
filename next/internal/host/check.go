@@ -18,6 +18,10 @@ func ChecksAccounts(info protocol.Info) bool {
 // Check runs a check call: whether account works. Every string of the account's credential is
 // removed from the reply, as from every other reply.
 func (e *Extension) Check(ctx context.Context, account protocol.Account) (*protocol.CheckResult, *llm.Error) {
+	proxy, perr := e.proxied(&account)
+	if perr != nil {
+		return nil, perr
+	}
 	e.held.add(account.ID, account.Credential)
 	conn, lerr := e.dial(ctx)
 	if lerr != nil {
@@ -34,7 +38,7 @@ func (e *Extension) Check(ctx context.Context, account protocol.Account) (*proto
 	if err := protocol.ReadFrame(conn, &r); err != nil {
 		return nil, callError(ctx, e, err)
 	}
-	redact := protocol.NewRedactor(account.Credential)
+	redact := protocol.NewRedactor(account.Credential, proxy)
 	switch {
 	case r.Type == protocol.TypeCheckResult && r.Check != nil:
 		return &protocol.CheckResult{Detail: redact.String(r.Check.Detail)}, nil

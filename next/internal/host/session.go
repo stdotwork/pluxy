@@ -57,6 +57,10 @@ func (e *Extension) OpenSession(ctx context.Context, account protocol.Account, i
 		return nil, &llm.Error{Code: llm.CodeExtensionUnavailable, Message: fmt.Sprintf("extension %s is not running", e.manifest.ID)}
 	default:
 	}
+	proxy, perr := e.proxied(&account)
+	if perr != nil {
+		return nil, perr
+	}
 	e.held.add(account.ID, account.Credential)
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", e.socket)
@@ -85,19 +89,21 @@ func (e *Extension) OpenSession(ctx context.Context, account protocol.Account, i
 		if reply.Error == nil {
 			return nil, e.protocolError("an error frame without an error")
 		}
-		ev := protocol.NewRedactor(account.Credential).Event(reply.Event)
+		ev := protocol.NewRedactor(account.Credential, proxy).Event(reply.Event)
 		return nil, ev.Error
 	default:
 		conn.Close()
-		return nil, redacted(protocol.NewRedactor(account.Credential), e.protocolError(fmt.Sprintf("a session call was answered with %q", reply.Type)))
+		return nil, redacted(protocol.NewRedactor(account.Credential, proxy), e.protocolError(fmt.Sprintf("a session call was answered with %q", reply.Type)))
 	}
 	if !stop() {
 		// ctx ended just as the session opened; its conn is closed.
 		return nil, &llm.Error{Code: llm.CodeCancelled, Message: "the request was cancelled"}
 	}
 	s := &Session{ext: e, conn: conn, accountID: account.ID, frames: make(chan sessionFrame), done: make(chan struct{}), closing: make(chan struct{})}
-	if account.Credential != nil {
-		s.creds = append(s.creds, account.Credential)
+	for _, c := range []*protocol.Credential{account.Credential, proxy} {
+		if c != nil {
+			s.creds = append(s.creds, c)
+		}
 	}
 	go s.read()
 	return s, nil
@@ -174,6 +180,10 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 	if account.ID != s.accountID {
 		return refuse(&llm.Error{Code: llm.CodeInternal, Message: fmt.Sprintf("session of account %q got a turn for account %q", s.accountID, account.ID)})
 	}
+	proxy, perr := s.ext.proxied(&account)
+	if perr != nil {
+		return refuse(perr)
+	}
 	s.mu.Lock()
 	switch {
 	case s.closed:
@@ -186,6 +196,9 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 	if c := account.Credential; c != nil && !slices.ContainsFunc(s.creds, func(o *protocol.Credential) bool { return sameCredential(o, c) }) {
 		s.creds = append(s.creds, c)
 		s.ext.held.add(account.ID, c)
+	}
+	if proxy != nil && !slices.ContainsFunc(s.creds, func(o *protocol.Credential) bool { return sameCredential(o, proxy) }) {
+		s.creds = append(s.creds, proxy)
 	}
 	s.running = true
 	t.redact = protocol.NewRedactor(s.creds...)

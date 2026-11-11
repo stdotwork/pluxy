@@ -43,6 +43,9 @@ type Options struct {
 	// Log receives the program's stderr and later stdout, one prefixed line at a time, with
 	// the credentials the extension holds removed (protocol.Redactor). Default os.Stderr.
 	Log io.Writer
+	// ProxyURL returns core's global proxy_url setting, read at each call: the proxy of every
+	// account without one of its own (proxyurl.Resolve). Nil: none.
+	ProxyURL func() string
 }
 
 // Extension is a running extension program.
@@ -71,6 +74,7 @@ type Extension struct {
 type held struct {
 	mu     sync.Mutex
 	by     map[string][]heldCredential
+	proxy  map[string][]heldCredential // the proxy secrets of each account, apart from by so no account ID can name them
 	redact *protocol.Redactor
 }
 
@@ -80,27 +84,35 @@ type heldCredential struct {
 }
 
 // add records that the extension holds c for owner (an account ID).
-func (h *held) add(owner string, c *protocol.Credential) {
+func (h *held) add(owner string, c *protocol.Credential) { h.record(&h.by, owner, c) }
+
+// addProxy records that the extension holds c, the proxy secrets of account, kept apart from the
+// credentials add records so that no account ID can name the same entry.
+func (h *held) addProxy(account string, c *protocol.Credential) { h.record(&h.proxy, account, c) }
+
+func (h *held) record(m *map[string][]heldCredential, owner string, c *protocol.Credential) {
 	if c == nil {
 		return
 	}
 	b, _ := json.Marshal(c)
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	list := h.by[owner]
+	list := (*m)[owner]
 	if len(list) > 0 && list[len(list)-1].key == string(b) {
 		return
 	}
-	if h.by == nil {
-		h.by = map[string][]heldCredential{}
+	if *m == nil {
+		*m = map[string][]heldCredential{}
 	}
 	cc := *c
 	list = append(list, heldCredential{string(b), &cc})
-	h.by[owner] = list[max(0, len(list)-2):]
+	(*m)[owner] = list[max(0, len(list)-2):]
 	var all []*protocol.Credential
-	for _, l := range h.by {
-		for _, hc := range l {
-			all = append(all, hc.c)
+	for _, by := range []map[string][]heldCredential{h.by, h.proxy} {
+		for _, l := range by {
+			for _, hc := range l {
+				all = append(all, hc.c)
+			}
 		}
 	}
 	h.redact = protocol.NewRedactor(all...)
@@ -406,6 +418,12 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 		return failed(llm.CodeExtensionUnavailable, fmt.Sprintf("extension %s is not running", e.manifest.ID))
 	default:
 	}
+	proxy, perr := e.proxied(&account)
+	if perr != nil {
+		s := &Stream{}
+		s.fail(perr)
+		return s
+	}
 	e.held.add(account.ID, account.Credential)
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", e.socket)
@@ -415,7 +433,7 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 		}
 		return failed(llm.CodeExtensionUnavailable, fmt.Sprintf("extension %s is not reachable: %v", e.manifest.ID, err))
 	}
-	s := &Stream{conn: conn, ctx: ctx, ext: e, redact: protocol.NewRedactor(account.Credential)}
+	s := &Stream{conn: conn, ctx: ctx, ext: e, redact: protocol.NewRedactor(account.Credential, proxy)}
 	s.stop = context.AfterFunc(ctx, func() { conn.Close() })
 	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: op, Account: &account, Request: &req}
 	if err := protocol.WriteFrame(conn, call); err != nil {
