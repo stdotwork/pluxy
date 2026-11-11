@@ -152,6 +152,8 @@ test("row actions are named by account, and a sole member cannot leave the edge 
   await openPanel(page, core);
   await signIn(page, core);
   await goTo(page, "Routing");
+  // The tiers load after the page opens; read the names once the seeded accounts are listed.
+  await expect(page.getByRole("button", { name: "Move up a tier: route-last", exact: true })).toBeVisible();
   const names = await page
     .locator('[data-part="tier"] [data-part="button"]')
     .evaluateAll((buttons) => buttons.map((b) => b.getAttribute("aria-label") ?? b.textContent));
