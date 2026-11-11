@@ -539,8 +539,19 @@ fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
+/// Reads a regular file of at most max bytes. Opened without blocking, so a FIFO or device in
+/// its place is refused rather than waited on.
 fn read_bounded(path: &Path, max: u64) -> Result<Vec<u8>, String> {
-    let f = fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut o = fs::OpenOptions::new();
+    o.read(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(&mut o, libc::O_NONBLOCK);
+    let f = o
+        .open(path)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    if !f.metadata().is_ok_and(|m| m.is_file()) {
+        return Err(format!("{} is not a regular file", path.display()));
+    }
     let mut b = Vec::new();
     f.take(max + 1)
         .read_to_end(&mut b)
@@ -1304,10 +1315,19 @@ fn fetch_artifact(base: &Base, a: &Artifact) -> Result<Vec<u8>, String> {
                 let u = url::Url::parse(&a.url).map_err(|e| format!("{}: {e}", a.url))?;
                 return https_get(&u, a.size);
             }
-            if !local_path(&a.url) {
-                return Err(format!("{}: not a path inside the index's folder", a.url));
-            }
-            read_bounded(&dir.join(&a.url), a.size)
+            // Inside the index's folder after links are followed, too.
+            let inside = store_path(&a.url)
+                .then(|| {
+                    Some((
+                        fs::canonicalize(dir).ok()?,
+                        fs::canonicalize(dir.join(&a.url)).ok()?,
+                    ))
+                })
+                .flatten()
+                .filter(|(d, p)| p.starts_with(d));
+            let (_, path) =
+                inside.ok_or_else(|| format!("{}: not a file inside the index's folder", a.url))?;
+            read_bounded(&path, a.size)
         }
     }
 }

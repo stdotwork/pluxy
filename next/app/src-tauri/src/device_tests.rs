@@ -481,3 +481,61 @@ fn names_with_a_drive_or_stream_never_reach_the_store() {
     let _ = fs::remove_dir_all(root);
 }
 
+#[cfg(unix)]
+#[test]
+fn registry_files_must_be_regular_files_in_the_index_folder() {
+    let root = temp();
+    let d = dirs(&root);
+    let reg = root.join("reg");
+    fs::create_dir_all(&reg).unwrap();
+    let v1 = package("example/notes", "1.0.0");
+    let mkfifo = |p: &Path| {
+        let c = std::ffi::CString::new(p.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+    };
+    mkfifo(&reg.join("fifo.tar.gz"));
+    fs::write(root.join("outside.tar.gz"), &v1).unwrap();
+    std::os::unix::fs::symlink(root.join("outside.tar.gz"), reg.join("link.tar.gz")).unwrap();
+    fs::write(reg.join("n1.tar.gz"), &v1).unwrap();
+    let p = platform();
+    let art = |url: &str| serde_json::json!({p.clone(): {"url": url, "sha256": digest(&v1), "size": v1.len()}});
+    let index = serde_json::json!({"registry_version": 0, "packages": {
+        "example/notes": {"releases": [
+            {"version": "3.0.0", "artifacts": art("fifo.tar.gz")},
+            {"version": "2.0.0", "artifacts": art("link.tar.gz")},
+            {"version": "1.0.0", "artifacts": art("n1.tar.gz")}
+        ]}
+    }});
+    fs::write(reg.join("index.json"), serde_json::to_vec(&index).unwrap()).unwrap();
+    mkfifo(&reg.join("fifo.json"));
+    fs::write(
+        &d.registries,
+        serde_json::to_vec(&serde_json::json!({"version": 0, "registries": [
+            {"name": "fixture", "url": reg.join("index.json")},
+            {"name": "fifo", "url": reg.join("fifo.json")}]}))
+        .unwrap(),
+    )
+    .unwrap();
+    // Each in a thread: a blocking open would never return.
+    let within = |f: Box<dyn FnOnce() -> String + Send>| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || tx.send(f()));
+        rx.recv_timeout(Duration::from_secs(10))
+            .expect("a FIFO was waited on")
+    };
+    let dd = d.clone();
+    let e = within(Box::new(move || {
+        stage_from_registry(&dd, "fixture", "example/notes", Some("3.0.0")).unwrap_err()
+    }));
+    assert!(e.contains("not a regular file"), "{e}");
+    let dd = d.clone();
+    let e = within(Box::new(move || {
+        offers(&dd).unwrap()[1].error.clone().unwrap_or_default()
+    }));
+    assert!(e.contains("not a regular file"), "{e}");
+    let e = stage_from_registry(&d, "fixture", "example/notes", Some("2.0.0")).unwrap_err();
+    assert!(e.contains("not a file inside the index's folder"), "{e}");
+    // The positive control on the same route.
+    stage_from_registry(&d, "fixture", "example/notes", Some("1.0.0")).unwrap();
+    let _ = fs::remove_dir_all(root);
+}
