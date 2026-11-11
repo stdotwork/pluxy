@@ -217,7 +217,7 @@ fn startup(app: &AppHandle, stage: &str) -> Result<(), String> {
         let main = wait_for("the startup settings window", || app.get_webview(MAIN))?;
         let enabled = stage == "enable";
         main.eval(format!(
-            "window.__TAURI_INTERNALS__.invoke('startup_set', {{ preferences: {{ autostart_enabled: {enabled}, silent_start_enabled: false, start_core_on_launch: true }} }})+             .then((v) => {{ window.__startupResult = {{ ok: true, value: v }}; }}, (e) => {{ window.__startupResult = {{ error: String(e) }}; }})"
+            "window.__TAURI_INTERNALS__.invoke('startup_set', {{ preferences: {{ autostart_enabled: {enabled}, silent_start_enabled: false, start_core_on_launch: true }} }}).then((v) => {{ window.__startupResult = {{ ok: true, value: v }}; }}, (e) => {{ window.__startupResult = {{ error: String(e) }}; }})"
         )).map_err(|e| e.to_string())?;
         let result = wait_for("saving startup settings", || {
             eval(&main, "window.__startupResult ?? null").filter(|v| !v.is_null())
