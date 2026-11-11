@@ -79,7 +79,9 @@ func (r *Redactor) placeholderOf(n *yaml.Node, settings bool) string {
 //
 // Below a key named like a secret, a list's items that are not mappings are secrets too, however
 // deep; a list of mappings (provider entries in a config file) is read by the rules above. Account
-// settings (RedactSettings) are stricter: everything below a key named like a secret is one.
+// settings are stricter: everything below a key named like a secret is one. That holds for
+// settings on their own (RedactSettings) and for the "settings" of each item of an "accounts"
+// list in a config file.
 var secretNames = map[string]bool{
 	"api-key": true, "api-keys": true, "apikey": true, "secret-key": true, "management-key": true,
 	"client-keys": true, "password": true, "secret": true, "token": true, "private-key": true,
@@ -117,7 +119,8 @@ func secretURL(s string) bool {
 }
 
 // secrets returns the scalar nodes of the tree under n that hold secrets. strict: everything
-// below a key named like a secret is one (account settings).
+// below a key named like a secret is one (account settings), as it is in the settings of a config
+// file's accounts.
 func secrets(n *yaml.Node, strict bool) []*yaml.Node {
 	var out []*yaml.Node
 	add := func(v *yaml.Node) {
@@ -148,8 +151,10 @@ func secrets(n *yaml.Node, strict bool) []*yaml.Node {
 			}
 		}
 	}
-	var walk func(v *yaml.Node)
-	walk = func(v *yaml.Node) {
+	// walk reads the tree under v by the rules above; account: v is an item of an accounts list,
+	// whose settings are read strictly.
+	var walk func(v *yaml.Node, strict, account bool)
+	walk = func(v *yaml.Node, strict, account bool) {
 		switch v.Kind {
 		case yaml.ScalarNode:
 			if secretURL(v.Value) {
@@ -157,7 +162,7 @@ func secrets(n *yaml.Node, strict bool) []*yaml.Node {
 			}
 		case yaml.SequenceNode:
 			for _, c := range v.Content {
-				walk(c)
+				walk(c, strict, false)
 			}
 		case yaml.MappingNode:
 			for i := 0; i+1 < len(v.Content); i += 2 {
@@ -170,8 +175,14 @@ func secrets(n *yaml.Node, strict bool) []*yaml.Node {
 						if secretHeader(val.Content[j].Value) {
 							all(val.Content[j+1], true)
 						} else {
-							walk(val.Content[j+1])
+							walk(val.Content[j+1], strict, false)
 						}
+					}
+				case account && strings.EqualFold(key, "settings"):
+					walk(val, true, false)
+				case strings.EqualFold(key, "accounts") && val.Kind == yaml.SequenceNode:
+					for _, c := range val.Content {
+						walk(c, strict, true)
 					}
 				case secretName(key) && (strict || val.Kind == yaml.ScalarNode || val.Kind == yaml.AliasNode):
 					all(val, true)
@@ -182,17 +193,17 @@ func secrets(n *yaml.Node, strict bool) []*yaml.Node {
 						if c.Kind != yaml.MappingNode {
 							all(c, true)
 						} else {
-							walk(c)
+							walk(c, strict, false)
 						}
 					}
 				default:
-					walk(val)
+					walk(val, strict, false)
 				}
 			}
 		}
 		// An alias's node is walked where its anchor is.
 	}
-	walk(n)
+	walk(n, strict, false)
 	return out
 }
 
@@ -200,6 +211,20 @@ func secrets(n *yaml.Node, strict bool) []*yaml.Node {
 func (d *Doc) Secrets() []string {
 	var out []string
 	for _, n := range secrets(d.root, false) {
+		out = append(out, n.Value)
+	}
+	return out
+}
+
+// SettingsSecrets returns the secret values an account's settings, a JSON object, hold by the
+// rules of RedactSettings. Settings that do not parse hold none it can find.
+func SettingsSecrets(b []byte) []string {
+	d, err := Parse(b, false)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, n := range secrets(d.root, true) {
 		out = append(out, n.Value)
 	}
 	return out

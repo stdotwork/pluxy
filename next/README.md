@@ -1313,7 +1313,11 @@ shows each account's last `check`:
 | `failed` | It does not; `error` is why (code `auth` for a refused key, `unavailable` for an upstream that cannot be reached). |
 | `not_checked` | The extension cannot check it without a generation, or has no check; `detail` says which. |
 
-Core also logs each result (`account "work": check passed: ...` or `check failed: ...`). Each
+Core also logs each result (`account "work": check passed: ...` or `check failed: ...`). The
+result and the log line, like everything else a call on an account sends back and the
+extension's own output, show `[redacted]` in place of the account's credential and of each
+secret in its settings (the values `GET /config` and `GET /accounts` show as placeholders), such
+as a `base_url` with a token in its query that an unreachable upstream's error quotes. Each
 extension checks with its upstream's model list, and only accounts with an API key:
 
 | Extension | Check |
@@ -1593,7 +1597,7 @@ its keys and its indent. `PUT /config` writes the document as sent.
 
 | Call | What it does |
 | --- | --- |
-| `GET /v0/management/config` | The config file: `format` (`json` or `yaml`), `hash` (as in status) and `content`, the file as written with each secret replaced by a placeholder such as `pluxy-redacted-4f1c...`. Secrets are found by key name, in both layouts of a `config.yaml` and in the JSON config: client keys, the management key, every `api-key` and `api_key`, everything in an account's `credential` except its `kind`, passwords, tokens and secrets, header values about authentication (`Authorization`, `X-Api-Key`, cookies), and any URL with a user name, password or query. Comments are shown as written. 422 when the file does not parse. Today's core returns its config, the management key's hash and provider keys included, as they are. |
+| `GET /v0/management/config` | The config file: `format` (`json` or `yaml`), `hash` (as in status) and `content`, the file as written with each secret replaced by a placeholder such as `pluxy-redacted-4f1c...`. Secrets are found by key name, in both layouts of a `config.yaml` and in the JSON config: client keys, the management key, every `api-key` and `api_key`, everything in an account's `credential` except its `kind`, passwords, tokens and secrets, header values about authentication (`Authorization`, `X-Api-Key`, cookies), and any URL with a user name, password or query. In an account's `settings`, everything below a key named like a secret is a secret, however deep, as `GET /accounts` shows a login account's settings. Comments are shown as written. 422 when the file does not parse. Today's core returns its config, the management key's hash and provider keys included, as they are. |
 | `POST /v0/management/config/validate` | `{"content": "..."}`: checks a document as a reload would, without starting extensions or writing anything. 200 with `valid: true` and the `notices` a `config.yaml` load logs, or `valid: false` and `error`. |
 | `PUT /v0/management/config` | `{"content": "...", "base_hash": "..."}`: replaces the file with the document and applies it. 200 with the file as `GET /config` shows it; 409 when `base_hash` is set and the file has changed since; 422 with `error` when core refuses the document. |
 | `GET /v0/management/client-keys` | The client keys: each one's `id` and `masked` form (first and last two characters, as today's panel shows them; a key shorter than 8 characters is hidden whole). |
@@ -1759,7 +1763,8 @@ hold `authorization`, `api-key`, `apikey`, `api_key`, `token`, `secret`, `cookie
 and `key` (an authorization header keeps its scheme, as in `Bearer [redacted]`), and, anywhere in
 the file, every client key, the management key and every config account's credential, in the
 forms the credential redaction finds (JSON escapes, percent-encoding and the rest). Replies come
-from the extension with the account's own credential already removed. Today's core writes the
+from the extension with the account's own credential and the secrets in its settings already
+removed. Today's core writes the
 reply's headers unmasked, logs requests that fail the client key check, and also writes what it
 sent to the upstream and what came back; here the upstream exchange happens in the provider
 extension, so request logs hold what the client sent and received.

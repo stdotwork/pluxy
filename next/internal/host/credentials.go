@@ -17,9 +17,9 @@ import (
 // The call is cancelled when ctx ends or the call is closed.
 func (e *Extension) Login(ctx context.Context, account protocol.Account, login protocol.Login) *LoginCall {
 	account.Credential = nil
-	// What the user entered (an API key, a pasted redirect URL with its code) counts as secret
-	// in everything the call sends back.
-	l := &LoginCall{ext: e, ctx: ctx, account: account.ID}
+	// What the user entered (an API key, a pasted redirect URL with its code) and the secrets in
+	// the account's settings count as secret in everything the call sends back.
+	l := &LoginCall{ext: e, ctx: ctx, account: account.ID, settings: e.holdSettings(account)}
 	l.addSecrets(login.Input)
 	proxy, perr := e.proxied(&account)
 	if perr != nil {
@@ -56,11 +56,12 @@ type LoginCall struct {
 	conn    net.Conn
 	stop    func() bool
 
-	wmu     sync.Mutex // guards writes, secrets and redact
-	secrets map[string]string
-	redact  *protocol.Redactor
-	final   *protocol.Reply
-	onClose func() // ends the call on its managed generation; safe to call more than once
+	wmu      sync.Mutex // guards writes, secrets and redact
+	secrets  map[string]string
+	settings *protocol.Credential // the secrets in the account's settings
+	redact   *protocol.Redactor
+	final    *protocol.Reply
+	onClose  func() // ends the call on its managed generation; safe to call more than once
 }
 
 // addSecrets adds what the user entered to what is removed from the frames the call returns.
@@ -71,7 +72,7 @@ func (l *LoginCall) addSecrets(input map[string]string) {
 		}
 		l.secrets[fmt.Sprintf("%s.%d", k, len(l.secrets))] = v
 	}
-	l.redact = inputRedactor(l.secrets)
+	l.redact = protocol.NewRedactor(inputCredential(l.secrets), l.settings)
 	l.ext.held.add(l.account+" login input", inputCredential(l.secrets))
 }
 
@@ -158,14 +159,14 @@ func (l *LoginCall) readError(err error) *llm.Error {
 }
 
 // Refresh runs a refresh call: the extension renews account's credential and returns the new
-// one. Errors have the sent credential removed from them.
+// one. Errors have the sent credential and the secrets in the account's settings removed from
+// them.
 func (e *Extension) Refresh(ctx context.Context, account protocol.Account) (*protocol.Credential, *llm.Error) {
 	proxy, perr := e.proxied(&account)
 	if perr != nil {
 		return nil, perr
 	}
-	e.held.add(account.ID, account.Credential)
-	redact := protocol.NewRedactor(account.Credential, proxy)
+	redact := protocol.NewRedactor(append(e.holdAccount(account), proxy)...)
 	conn, lerr := e.dial(ctx)
 	if lerr != nil {
 		return nil, lerr
@@ -242,14 +243,6 @@ func callError(ctx context.Context, e *Extension, err error) *llm.Error {
 	return &llm.Error{Code: llm.CodeExtensionCrashed, Message: fmt.Sprintf("extension %s ended the call without finishing it", e.manifest.ID)}
 }
 
-// inputRedactor returns the Redactor for what a user entered.
-func inputRedactor(input map[string]string) *protocol.Redactor {
-	if len(input) == 0 {
-		return nil
-	}
-	return protocol.NewRedactor(inputCredential(input))
-}
-
 // inputCredential holds what a user entered as a credential, so all of it counts as secret.
 func inputCredential(input map[string]string) *protocol.Credential {
 	if len(input) == 0 {
@@ -257,6 +250,16 @@ func inputCredential(input map[string]string) *protocol.Credential {
 	}
 	data, _ := json.Marshal(input)
 	return &protocol.Credential{Kind: "input", Data: data}
+}
+
+// secretsCredential holds secrets found in an account's settings as a credential, so all of them
+// count as secret.
+func secretsCredential(secrets []string) *protocol.Credential {
+	if len(secrets) == 0 {
+		return nil
+	}
+	data, _ := json.Marshal(secrets)
+	return &protocol.Credential{Kind: "settings", Data: data}
 }
 
 // redactPrompt removes what the user entered from every text a prompt shows, in case the

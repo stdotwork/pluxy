@@ -499,7 +499,12 @@ A credential has a `kind` and the fields that kind uses:
 
 Every string in a credential except `kind` counts as secret: core removes each of them, in their
 JSON, URL and base64 forms, from everything a call sends back. Keep values that are not secret,
-especially short ones, out of the credential.
+especially short ones, out of the credential. Core removes the secrets in the account's
+`settings` the same way: every value below a key named like a secret (such as `api_key`,
+`password` or `*_token`), header values about authentication in a `headers` object, and any URL
+with a user name, password or query (a `base_url` with a token in it), as its management API
+hides them. When the settings change, core also keeps removing the previous settings' secrets
+from the extension's stderr and stdout, for calls that still run with them.
 
 ### Proxy
 

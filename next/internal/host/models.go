@@ -19,13 +19,14 @@ func ListsModels(info protocol.Info) bool {
 const MaxListedModels = 10000
 
 // Models runs a models call: the models account serves. Every string of the account's
-// credential is removed from the reply, as from every other reply.
+// credential and every secret in its settings is removed from the reply, as from every other
+// reply.
 func (e *Extension) Models(ctx context.Context, account protocol.Account) (*protocol.ModelList, *llm.Error) {
 	proxy, perr := e.proxied(&account)
 	if perr != nil {
 		return nil, perr
 	}
-	e.held.add(account.ID, account.Credential)
+	redact := protocol.NewRedactor(append(e.holdAccount(account), proxy)...)
 	conn, lerr := e.dial(ctx)
 	if lerr != nil {
 		return nil, lerr
@@ -41,7 +42,6 @@ func (e *Extension) Models(ctx context.Context, account protocol.Account) (*prot
 	if err := protocol.ReadFrame(conn, &r); err != nil {
 		return nil, callError(ctx, e, err)
 	}
-	redact := protocol.NewRedactor(account.Credential, proxy)
 	switch {
 	case r.Type == protocol.TypeModelsResult && r.Models != nil:
 		if len(r.Models.Models) > MaxListedModels {

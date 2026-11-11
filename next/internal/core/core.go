@@ -131,6 +131,9 @@ type Core struct {
 // Start loads the config file and publishes it as revision 1. Unless in safe mode, it starts
 // each extension's program to check it; the program then runs only while it is needed.
 func Start(opts Options) (*Core, error) {
+	// What a call on an account sends back, and the extension's output, leave out the secrets in
+	// the account's settings: the values the management API shows as placeholders.
+	opts.Host.SettingsSecrets = configdoc.SettingsSecrets
 	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor(), checks: newChecks(), usage: usage.NewStore()}
 	// Every extension call carries the proxy of the config active when it is sent.
 	c.opts.Host.ProxyURL = func() string {

@@ -207,7 +207,7 @@ func TestDrainClosesSessions(t *testing.T) {
 }
 
 // sessionBadFrame is an extension that holds sessions without the SDK and answers every turn
-// with an event of an unknown type that holds the turn's API key.
+// with an event of an unknown type that holds the turn's API key and settings.
 func sessionBadFrame() {
 	socket := os.Getenv(protocol.EnvSocket)
 	ln, err := net.Listen("unix", socket)
@@ -237,19 +237,20 @@ func sessionBadFrame() {
 				if protocol.ReadFrame(conn, &turn) != nil || turn.Account == nil || turn.Account.Credential == nil {
 					return
 				}
-				_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: "leak-" + turn.Account.Credential.APIKey}})
+				_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: "leak-" + turn.Account.Credential.APIKey + string(turn.Account.Settings)}})
 				_, _ = io.Copy(io.Discard, conn)
 			}
 		}()
 	}
 }
 
-// An extension that breaks the protocol with a frame holding the account's credential gets a
-// protocol error without the credential in it.
+// An extension that breaks the protocol with a frame holding the account's credential and the
+// secret in its settings gets a protocol error without either in it.
 func TestSessionProtocolErrorIsRedacted(t *testing.T) {
 	g, _ := prepareFake(t, "session-bad-frame", 0)
-	const key = "sk-session-leak-test-0123456789"
-	account := protocol.Account{ID: "a", Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: key}}
+	const key, setting = "sk-session-leak-test-0123456789", "sk-session-setting-0123456789"
+	account := protocol.Account{ID: "a", Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: key},
+		Settings: json.RawMessage(`{"api_key":"` + setting + `"}`)}
 	s, e := g.OpenSession(context.Background(), account, responsesSession)
 	if e != nil {
 		t.Fatalf("OpenSession: %+v", e)
@@ -261,7 +262,7 @@ func TestSessionProtocolErrorIsRedacted(t *testing.T) {
 	if ev.Type != llm.EventError || ev.Error.Code != llm.CodeExtensionProtocol {
 		t.Fatalf("event %+v; want a protocol error", ev)
 	}
-	if strings.Contains(ev.Error.Message, key) {
-		t.Errorf("protocol error holds the credential: %q", ev.Error.Message)
+	if strings.Contains(ev.Error.Message, key) || strings.Contains(ev.Error.Message, setting) {
+		t.Errorf("protocol error holds the credential or the settings secret: %q", ev.Error.Message)
 	}
 }

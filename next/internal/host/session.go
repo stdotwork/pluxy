@@ -33,7 +33,7 @@ type Session struct {
 	writeMu sync.Mutex // turn and interrupt frames
 
 	mu         sync.Mutex
-	creds      []*protocol.Credential // every credential the session has carried, for redaction
+	creds      []*protocol.Credential // every credential and settings' secrets the session has carried, for redaction
 	running    bool                   // a turn has been sent and its terminal event not read
 	closeAfter bool                   // close once the running turn ends
 	closed     bool
@@ -61,7 +61,7 @@ func (e *Extension) OpenSession(ctx context.Context, account protocol.Account, i
 	if perr != nil {
 		return nil, perr
 	}
-	e.held.add(account.ID, account.Credential)
+	creds := append(e.holdAccount(account), proxy)
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", e.socket)
 	if err != nil {
@@ -89,18 +89,18 @@ func (e *Extension) OpenSession(ctx context.Context, account protocol.Account, i
 		if reply.Error == nil {
 			return nil, e.protocolError("an error frame without an error")
 		}
-		ev := protocol.NewRedactor(account.Credential, proxy).Event(reply.Event)
+		ev := protocol.NewRedactor(creds...).Event(reply.Event)
 		return nil, ev.Error
 	default:
 		conn.Close()
-		return nil, redacted(protocol.NewRedactor(account.Credential, proxy), e.protocolError(fmt.Sprintf("a session call was answered with %q", reply.Type)))
+		return nil, redacted(protocol.NewRedactor(creds...), e.protocolError(fmt.Sprintf("a session call was answered with %q", reply.Type)))
 	}
 	if !stop() {
 		// ctx ended just as the session opened; its conn is closed.
 		return nil, &llm.Error{Code: llm.CodeCancelled, Message: "the request was cancelled"}
 	}
 	s := &Session{ext: e, conn: conn, accountID: account.ID, frames: make(chan sessionFrame), done: make(chan struct{}), closing: make(chan struct{})}
-	for _, c := range []*protocol.Credential{account.Credential, proxy} {
+	for _, c := range creds {
 		if c != nil {
 			s.creds = append(s.creds, c)
 		}
@@ -193,9 +193,10 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 		s.mu.Unlock()
 		return refuse(&llm.Error{Code: llm.CodeInternal, Message: "a turn is already running on this session"})
 	}
-	if c := account.Credential; c != nil && !slices.ContainsFunc(s.creds, func(o *protocol.Credential) bool { return sameCredential(o, c) }) {
-		s.creds = append(s.creds, c)
-		s.ext.held.add(account.ID, c)
+	for _, c := range s.ext.holdAccount(account) {
+		if c != nil && !slices.ContainsFunc(s.creds, func(o *protocol.Credential) bool { return sameCredential(o, c) }) {
+			s.creds = append(s.creds, c)
+		}
 	}
 	if proxy != nil && !slices.ContainsFunc(s.creds, func(o *protocol.Credential) bool { return sameCredential(o, proxy) }) {
 		s.creds = append(s.creds, proxy)
