@@ -93,6 +93,8 @@ anything.
 | `color.warn` | Degraded states | `#9a5b00` / `#e6b450` |
 | `color.danger` | Errors, destructive actions | `#b42318` / `#ff7b72` |
 | `color.focus` | Keyboard focus ring | `#2f5fd0` / `#7aa2ff` |
+| `color.meter-track` | Unused part of a quota meter | `var(--px-color-surface-raised)` |
+| `color.meter-fill` | Used share of a quota meter | `var(--px-color-accent)` |
 
 ### Type
 
@@ -190,7 +192,7 @@ These stay stable within a theme contract version:
 | --- | --- |
 | `data-appearance="light"` or `"dark"` | Root element |
 | `data-nav`, `data-list`, `data-detail`, `data-width` | Root element, set to the active layout value |
-| `data-page="<page id>"` | Root element: `status`, `accounts`, `extensions`, `themes`, or an extension page's ID |
+| `data-page="<page id>"` | Root element: `status`, `accounts`, `quota`, `extensions`, `themes`, or an extension page's ID |
 | `data-part="shell"` | The whole UI below the root |
 | `data-part="nav"` | The navigation |
 | `data-part="nav-group"` | A group of navigation entries under its label; `data-group` is `operate`, `gateway`, `observe`, `control` or `extensions` (the extensions' pages) |
@@ -204,6 +206,7 @@ These stay stable within a theme contract version:
 | `data-part="button"` | A button; `data-variant` is `primary`, `quiet` or `danger` |
 | `data-part="badge"` | A state badge; `data-tone` is `ok`, `warn`, `danger` or `muted` |
 | `data-part="field"` | A labelled form control |
+| `data-part="meter"` | A quota usage meter; `data-tone` is `ok`, `warn` or `danger`. Its child is the fill; warning and danger use the matching state colour. |
 
 Every other class name, element and attribute can change in any release.
 

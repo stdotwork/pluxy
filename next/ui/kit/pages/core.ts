@@ -5,7 +5,14 @@
 import type { PageDef } from "../shell";
 import { accountsPage } from "./accounts";
 import { extensionsPage } from "./extensions";
+import { quotaPage } from "./quota";
 import { statusPage } from "./status";
 import { themesPage } from "./themes";
 
-export const corePages = (): PageDef[] => [statusPage(), accountsPage(), extensionsPage(), themesPage()];
+export const corePages = (): PageDef[] => [
+  statusPage(),
+  accountsPage(),
+  quotaPage(),
+  extensionsPage(),
+  themesPage(),
+];
