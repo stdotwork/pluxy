@@ -143,7 +143,9 @@ test.describe("review regressions", () => {
     await goTo(page, "config", "Config Panel");
   });
 
-  test("search preserves notices, filters cards without false empty results, and avoids unrelated key reads", async ({ page }) => {
+  test("search preserves notices, filters cards without false empty results, and avoids unrelated key reads", async ({
+    page,
+  }) => {
     const clients = page.getByRole("region", { name: "Client API Keys (access.api-keys)", exact: true });
     await clients.getByRole("button", { name: "Add", exact: true }).click();
     const notice = clients.locator('[data-part="key-notice"]');
@@ -168,7 +170,9 @@ test.describe("review regressions", () => {
     await notice.getByRole("button", { name: "Close", exact: true }).click();
     await page.getByRole("tab", { name: "Network", exact: true }).click();
     let reads = 0;
-    page.on("request", (request) => { if (request.method() === "GET" && request.url().endsWith("/client-keys")) reads++; });
+    page.on("request", (request) => {
+      if (request.method() === "GET" && request.url().endsWith("/client-keys")) reads++;
+    });
     await search.fill("retry");
     await expect(page.getByRole("spinbutton", { name: "Request Retry Count", exact: true })).toBeVisible();
     expect(reads).toBe(0);
@@ -187,12 +191,67 @@ test.describe("review regressions", () => {
     for (const key of keys.body.keys.slice(1)) await core.mgmt("DELETE", `/client-keys/${key.id}`);
   });
 
+  test("search alone preserves the Common notice", async ({ page }) => {
+    const clients = page.getByRole("region", { name: "Client API Keys (access.api-keys)", exact: true });
+    await clients.getByRole("button", { name: "Add", exact: true }).click();
+    const value = clients.locator('[data-part="key-value"]');
+    await expect(value).toBeVisible();
+    const secret = await value.textContent();
+    await page.getByRole("searchbox").fill("key");
+    await expect(value).toBeVisible();
+    expect((await value.textContent()) === secret).toBe(true);
+    const keys = await core.mgmt<{ keys: { id: string }[] }>("GET", "/client-keys");
+    for (const key of keys.body.keys.slice(1)) await core.mgmt("DELETE", `/client-keys/${key.id}`);
+  });
+
+  test("matching key searches do not show No results", async ({ page }) => {
+    for (const query of ["key", "api-keys", "management"]) {
+      await page.getByRole("searchbox").fill(query);
+      await expect(page.getByText("No results", { exact: true })).toHaveCount(0);
+    }
+  });
+
+  test("unrelated search makes no client-key request", async ({ page }) => {
+    await page.getByRole("tab", { name: "Network", exact: true }).click();
+    let reads = 0;
+    page.on("request", (request) => {
+      if (request.method() === "GET" && request.url().endsWith("/client-keys")) reads++;
+    });
+    await page.getByRole("searchbox").fill("retry");
+    await expect(page.getByRole("spinbutton", { name: "Request Retry Count", exact: true })).toBeVisible();
+    expect(reads).toBe(0);
+  });
+
+  test("Add keeps focus while its request is pending", async ({ page }) => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route("**/client-keys", async (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      await gate;
+      await route.continue();
+    });
+    const add = page.getByRole("button", { name: "Add", exact: true });
+    await add.click();
+    await expect(add).toBeFocused();
+    await expect(add).toHaveAttribute("aria-disabled", "true");
+    release();
+    await expect(page.locator('[data-part="key-notice"]')).toBeFocused();
+    const keys = await core.mgmt<{ keys: { id: string }[] }>("GET", "/client-keys");
+    for (const key of keys.body.keys.slice(1)) await core.mgmt("DELETE", `/client-keys/${key.id}`);
+  });
+
   test("a rotation reply arriving after leaving its tab remains available on return", async ({ page }) => {
     await page.getByRole("tab", { name: "Connectivity", exact: true }).click();
     let release!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     let received!: () => void;
-    const responseReady = new Promise<void>((resolve) => { received = resolve; });
+    const responseReady = new Promise<void>((resolve) => {
+      received = resolve;
+    });
     await page.route("**/management-key/rotate", async (route) => {
       const response = await route.fetch();
       core.key = (await response.json()).value;
@@ -205,7 +264,9 @@ test.describe("review regressions", () => {
     await page.getByRole("tab", { name: "Network", exact: true }).click();
     release();
     await page.getByRole("tab", { name: "Connectivity", exact: true }).click();
-    const notice = page.getByRole("region", { name: "Management Key", exact: true }).locator('[data-part="key-notice"]');
+    const notice = page
+      .getByRole("region", { name: "Management Key", exact: true })
+      .locator('[data-part="key-notice"]');
     await expect(notice).toBeVisible();
     expect((await notice.locator('[data-part="key-value"]').textContent()) === core.key).toBe(true);
     await expect(notice).toBeFocused();
@@ -219,15 +280,27 @@ test.describe("review regressions", () => {
       await route.abort("failed");
     });
     await page.getByRole("button", { name: "Rotate", exact: true }).click();
-    await expect(page.getByRole("alert")).toContainText("The management key may have changed. Find the current key in core's config file");
+    await expect(page.getByRole("alert")).toContainText(
+      "The management key may have changed. Find the current key in core's config file",
+    );
   });
 
   test("a failed Delete reloads stale IDs", async ({ page }) => {
     const clients = page.getByRole("region", { name: "Client API Keys (access.api-keys)", exact: true });
     await expect(clients.locator('[data-part="item"]')).toHaveCount(1);
     let reloads = 0;
-    page.on("request", (request) => { if (request.method() === "GET" && request.url().endsWith("/client-keys")) reloads++; });
-    await page.route("**/client-keys/*", (route) => route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { code: "not_found", message: "no client key in the config file has this ID" } }) }));
+    page.on("request", (request) => {
+      if (request.method() === "GET" && request.url().endsWith("/client-keys")) reloads++;
+    });
+    await page.route("**/client-keys/*", (route) =>
+      route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: { code: "not_found", message: "no client key in the config file has this ID" },
+        }),
+      }),
+    );
     await clients.getByRole("button", { name: "Delete", exact: true }).click();
     await clients.getByRole("button", { name: "Yes, delete", exact: true }).click();
     await expect(clients.getByRole("alert")).toBeVisible();
