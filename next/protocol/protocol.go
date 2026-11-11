@@ -263,6 +263,10 @@ const (
 	MaxIdentityValue  = 512
 )
 
+// MaxGrantSettings bounds a login grant's encoded settings object to 8 KiB, the same
+// budget as the maximum total identity value bytes (16 fields of 512 bytes).
+const MaxGrantSettings = MaxIdentityFields * MaxIdentityValue
+
 // ModelList is the result of a models call: the models an account serves.
 type ModelList struct {
 	// Models are the account's models, by the names its upstream knows them by. Empty when the

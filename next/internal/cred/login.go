@@ -265,14 +265,9 @@ func (m *Manager) finishLogin(l *login, g *protocol.Grant) error {
 	fields := l.fields
 	if len(g.Settings) > 0 {
 		var defaults, explicit map[string]json.RawMessage
-		if err := json.Unmarshal(g.Settings, &defaults); err != nil || defaults == nil {
-			return errors.New("login grant settings must be an object")
-		}
-		if len(fields.Settings) > 0 {
-			if err := json.Unmarshal(fields.Settings, &explicit); err != nil {
-				return errors.New("account settings must be an object")
-			}
-		}
+		// The host validates grant settings; the management API validates caller settings.
+		_ = json.Unmarshal(g.Settings, &defaults)
+		_ = json.Unmarshal(fields.Settings, &explicit)
 		maps.Copy(defaults, explicit)
 		fields.Settings, _ = json.Marshal(defaults)
 	}

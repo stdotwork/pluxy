@@ -67,3 +67,21 @@ func TestLoginGrantSettings(t *testing.T) {
 	finish("/accounts/defaults/login", map[string]any{"method": "settings", "input": map[string]string{"settings": string(raw)}})
 	check()
 }
+
+func TestLoginGrantInvalidCallerSettings(t *testing.T) {
+	pkg := testPackage(t, "0.1.0")
+	base := runCore(t, map[string]any{
+		"listen": "127.0.0.1:0", "client_keys": []string{clientKey}, "management_key": managementKey,
+		"credentials_dir": filepath.Join(t.TempDir(), "credentials"),
+		"extension":       map[string]any{"manifest": filepath.Join(pkg, "pluxy-extension.json"), "accounts": []any{}},
+	})
+	for _, value := range []any{[]any{}, "value", 42, true} {
+		var raw json.RawMessage
+		code := manage(t, base, "POST", "/accounts", map[string]any{"id": "invalid", "method": "settings", "settings": value, "input": map[string]string{"settings": "{}"}}, &raw)
+		var reply struct{ Error struct{ Code string } }
+		json.Unmarshal(raw, &reply)
+		if code != http.StatusBadRequest || reply.Error.Code != "invalid_request" {
+			t.Errorf("settings %v: status %d, %s", value, code, raw)
+		}
+	}
+}

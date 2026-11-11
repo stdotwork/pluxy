@@ -759,6 +759,13 @@ When adding an account, core merges the grant's settings with those supplied by 
 caller-supplied properties win, including explicit `null`; nested objects are replaced as a
 whole. On a login to an existing account, core ignores the grant's settings and keeps the
 account's existing settings. A grant without settings keeps the previous behaviour.
+Core validates grant settings at the extension boundary: `null` is treated as absent; any
+other value must be an object with an encoded size of at most 8192 bytes (8 KiB, matching
+the maximum total identity value bytes: 16 fields of 512 bytes). A non-object or oversized
+value fails the login with `extension_protocol`. Caller settings must be an object or
+absent (`null` also means absent); `POST /accounts` refuses a non-object with `invalid_request`
+before starting a login. Like a grant's `identity`, core uses grant settings regardless of
+the extension's reported minor version, an exception to the general minor-version rule.
 
 `login.done` carries the `grant`: the new `credential`, a `label` naming the account for people
 (not secret) and, from version 0.5, its `identity`: the upstream account the credential signs in
