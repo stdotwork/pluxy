@@ -228,6 +228,7 @@ These stay stable within a theme contract version:
 | `data-part="select"` | An item's batch selection checkbox |
 | `data-part="batch"` | Batch selection and account actions |
 | `data-part="account-meta"` | Account totals, active accounts and problems |
+| `data-part="upload-results"` | The result of each auth file uploaded on Accounts: the account it became, or why it was not imported |
 | `data-part="key-notice"` | A notice revealing a newly generated key until closed or its tab is left |
 | `data-part="key-value"` | The selectable value of a newly generated key inside its notice |
 | `data-part="method"` | A sign-in method tile with its label, kind caption and selected flow. |

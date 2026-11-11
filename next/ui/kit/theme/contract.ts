@@ -95,6 +95,7 @@ export const PARTS = [
   "select",
   "batch",
   "account-meta",
+  "upload-results",
   "key-notice",
   "key-value",
   "method",
