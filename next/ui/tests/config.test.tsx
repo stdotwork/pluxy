@@ -66,7 +66,7 @@ test("duration controls accept fractional readbacks; existing retry count is req
   }
   const retry = html.match(/<input[^>]*id="routing.retry.request-retry"[^>]*>/)?.[0];
   expect(retry).toContain("required");
-  expect(retry).toContain('placeholder="Automatic"');
+  expect(retry).not.toContain("placeholder");
   expect(html).not.toContain("Leave empty for core's default");
   expect(html).not.toMatch(/<fieldset[^>]*data-part="field"/);
 });
