@@ -45,11 +45,23 @@ const MANIFEST: &str = "pluxy-extension.json";
 pub struct Source {
     /// `local` (a file the person chose) or `registry`.
     pub kind: String,
-    /// The file's name, or the registry's name in `device-registries.json`.
+    /// The name of the file the active release came from, or the registry's name in
+    /// `device-registries.json`.
     pub name: String,
     /// The registry's index, local path or https URL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index: Option<String>,
+}
+
+impl Source {
+    /// Whether a release from other comes from the same source. Every local file is one
+    /// source, files the person chose on this device: the file name only labels the release,
+    /// so `notes-2.0.0.tar.gz` updates a package installed from `notes-1.0.0.tar.gz`. A
+    /// registry is the same source when its name and index are.
+    fn same(&self, other: &Source) -> bool {
+        self.kind == other.kind
+            && (self.kind == "local" || (self.name == other.name && self.index == other.index))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -374,7 +386,7 @@ impl Catalog {
         let id = &c.id;
         let previous = self.packages.get(id).cloned();
         if let Some(p) = &previous {
-            if p.source != c.source {
+            if !p.source.same(&c.source) {
                 return Err(format!(
                     "{id} is installed from {} {}; remove it first to install it from {} {}",
                     p.source.kind, p.source.name, c.source.kind, c.source.name
@@ -393,7 +405,8 @@ impl Catalog {
         let package = match previous.clone() {
             Some(p) => Package {
                 enabled: p.enabled,
-                source: p.source,
+                // The same source; a local release's file name labels the new release.
+                source: c.source.clone(),
                 last_good: Some(p.active),
                 active: c.release.clone(),
             },

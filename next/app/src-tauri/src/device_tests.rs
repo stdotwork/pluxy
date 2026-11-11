@@ -67,6 +67,14 @@ fn local(name: &str) -> Source {
     }
 }
 
+fn registry(name: &str, index: &str) -> Source {
+    Source {
+        kind: "registry".into(),
+        name: name.into(),
+        index: Some(index.into()),
+    }
+}
+
 fn install(c: &mut Catalog, bytes: &[u8], source: Source) -> Result<(), String> {
     let cand = stage(&c.dirs, bytes, source, None)?;
     c.commit(cand)
@@ -181,7 +189,12 @@ fn install_swap_failed_candidate_rollback_and_remove() {
     let e = install(&mut c, &bad_host, local("notes-1.tar.gz")).unwrap_err();
     assert!(e.contains("host contract"), "{e}");
     let other_source = package("example/notes", "4.0.0");
-    let e = install(&mut c, &other_source, local("elsewhere.tar.gz")).unwrap_err();
+    let e = install(
+        &mut c,
+        &other_source,
+        registry("r", "/elsewhere/index.json"),
+    )
+    .unwrap_err();
     assert!(e.contains("remove it first"), "{e}");
     let e = install(&mut c, &v2, local("notes-1.tar.gz")).unwrap_err();
     assert!(e.contains("already installed"), "{e}");
@@ -486,6 +499,56 @@ fn go_platform_names() {
     assert_eq!(go_platform("macos", "aarch64"), "darwin/arm64");
     assert_eq!(go_platform("linux", "x86_64"), "linux/amd64");
     assert_eq!(go_platform("windows", "x86"), "windows/386");
+}
+
+#[test]
+fn a_local_package_updates_from_a_file_of_another_name() {
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false);
+    install(
+        &mut c,
+        &package("example/notes", "1.0.0"),
+        local("notes-1.0.0.tar.gz"),
+    )
+    .unwrap();
+    install(
+        &mut c,
+        &package("example/notes", "2.0.0"),
+        local("notes-2.0.0.tar.gz"),
+    )
+    .unwrap();
+    let p = c.get("example/notes").unwrap();
+    assert_eq!(p.active.version, "2.0.0");
+    assert_eq!(p.source, local("notes-2.0.0.tar.gz"));
+    // Another source is still refused: a registry, or the same registry name at another index.
+    let e = install(
+        &mut c,
+        &package("example/notes", "3.0.0"),
+        registry("r", "/a/index.json"),
+    )
+    .unwrap_err();
+    assert!(e.contains("remove it first"), "{e}");
+    install(
+        &mut c,
+        &package("example/reg", "1"),
+        registry("r", "/a/index.json"),
+    )
+    .unwrap();
+    let e = install(
+        &mut c,
+        &package("example/reg", "2"),
+        registry("r", "/b/index.json"),
+    )
+    .unwrap_err();
+    assert!(e.contains("remove it first"), "{e}");
+    install(
+        &mut c,
+        &package("example/reg", "2"),
+        registry("r", "/a/index.json"),
+    )
+    .unwrap();
+    let _ = fs::remove_dir_all(root);
 }
 
 #[cfg(unix)]
