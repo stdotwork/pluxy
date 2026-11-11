@@ -340,7 +340,7 @@ test("pending login polls every two seconds only while visible, and stops after 
     .filter({ hasText: "Test browser" });
   await tile.getByRole("button", { name: "Test browser" }).click();
   await expect(page.getByRole("button", { name: "Open Link" })).toBeVisible();
-  await page.clock.pauseAt(new Date());
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 100));
   await page.clock.runFor(100); // Flush Preact's after-paint effects before checking the poll interval.
   expect(reads).toHaveLength(0);
   const initialPoll = page.waitForResponse(
