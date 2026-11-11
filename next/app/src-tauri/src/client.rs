@@ -270,7 +270,7 @@ mod tests {
         let r = Client::new(&format!("http://127.0.0.1:{port}"), None)
             .call("k", "GET", "/status", None);
         assert_eq!(r.status, 0);
-        assert_eq!(r.error.unwrap().code, "unavailable");
+        assert_eq!(r.error.unwrap().code, "io");
     }
 
     #[test]
