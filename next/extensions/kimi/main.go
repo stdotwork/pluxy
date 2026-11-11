@@ -11,6 +11,10 @@
 // Completions). Tests move the login host to a fake with auth_base_url (sdk.TestLoginHost); in a
 // normal run it is ignored.
 //
+// Token counts (core's count_tokens call) go to Kimi's own count endpoint,
+// {base_url}/v1/messages/count_tokens, for every client format, as today's core sends them
+// (count.go).
+//
 // The account's access token, or a Kimi Code API key, is sent as a bearer token with Kimi's device
 // headers (X-Msh-*), which name pluxy as the client and carry the device ID made at login. A
 // request in the upstream's format passes through with the changes Kimi needs (body.go).
@@ -59,6 +63,7 @@ func main() {
 		Refresh:      refresh,
 		Models:       models,
 		Quota:        quota,
+		CountTokens:  countTokens,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "kimi:", err)

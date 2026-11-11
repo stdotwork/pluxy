@@ -1,0 +1,123 @@
+{
+  "description": "Kimi's count endpoint refusing the request (400): the error reaches the client, with no estimate in its place.",
+  "source": [
+    "core/internal/runtime/executor/kimi_executor.go:814-834 (CountTokens)",
+    "core/internal/runtime/executor/claude_executor_tokens.go:143 (countTokensUpstream)"
+  ],
+  "client": {
+    "path": "/v1/messages/count_tokens",
+    "auth": "none",
+    "headers": {
+      "x-api-key": "corpus-client-key",
+      "anthropic-version": "2023-06-01",
+      "anthropic-beta": "interleaved-thinking-2025-05-14"
+    },
+    "body": {
+      "model": "kimi-k3",
+      "max_tokens": 512,
+      "system": "Be brief.",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Say hello"
+        }
+      ],
+      "tools": [
+        {
+          "name": "get_weather",
+          "description": "Weather",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "city": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "status": 400,
+      "body": {
+        "type": "error",
+        "error": {
+          "type": "invalid_request_error",
+          "message": "messages: at least one message is required"
+        }
+      }
+    }
+  ],
+  "volatile": [
+    "upstream[*].headers.X-Msh-Device-Name"
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[0].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "Go's HTTP client asks for gzip and decodes it; today's core also offers deflate, br and zstd."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {
+          "message": "messages: at least one message is required",
+          "type": "invalid_request_error"
+        },
+        "type": "error"
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 400
+    },
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 512,
+          "messages": [
+            {
+              "content": "Say hello",
+              "role": "user"
+            }
+          ],
+          "model": "k3",
+          "system": "Be brief.",
+          "tools": [
+            {
+              "description": "Weather",
+              "input_schema": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "name": "get_weather"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "application/json",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Anthropic-Beta": "interleaved-thinking-2025-05-14,token-counting-2024-11-01",
+          "Anthropic-Version": "2023-06-01",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/coding/v1/messages/count_tokens?beta=true"
+      }
+    ]
+  }
+}

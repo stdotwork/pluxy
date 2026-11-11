@@ -1,0 +1,156 @@
+{
+  "description": "A Gemini client's countTokens on a Kimi subscription: today's core translates the request to Messages and asks Kimi's count endpoint ({base_url}/v1/messages/count_tokens), answering in Gemini's shape.",
+  "source": [
+    "core/internal/runtime/executor/kimi_executor.go:814-834 (CountTokens)",
+    "core/internal/runtime/executor/claude_executor_tokens.go:143 (countTokensUpstream)"
+  ],
+  "client": {
+    "path": "/v1beta/models/kimi-k3:countTokens",
+    "body": {
+      "contents": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "Say hello"
+            }
+          ]
+        }
+      ],
+      "systemInstruction": {
+        "parts": [
+          {
+            "text": "Be brief."
+          }
+        ]
+      }
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "input_tokens": 17
+      }
+    }
+  ],
+  "volatile": [
+    "upstream[*].headers.X-Msh-Device-Name"
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[0].body.messages",
+      "kind": "intended",
+      "reason": "A count sent to Kimi carries only what a count takes, with the system instruction as Messages' system; today's core sends the Gemini request through its Gemini-to-Claude translator, which turns the system instruction into a user message and adds max_tokens 32000, stream true and a metadata.user_id hashed from the request.",
+      "want": [
+        {
+          "content": [
+            {
+              "text": "Say hello",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ]
+    },
+    {
+      "path": "upstream[0].body.system",
+      "kind": "intended",
+      "reason": "A count sent to Kimi carries only what a count takes, with the system instruction as Messages' system; today's core sends the Gemini request through its Gemini-to-Claude translator, which turns the system instruction into a user message and adds max_tokens 32000, stream true and a metadata.user_id hashed from the request.",
+      "want": [
+        {
+          "text": "Be brief.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "path": "upstream[0].body.max_tokens",
+      "kind": "intended",
+      "reason": "A count sent to Kimi carries only what a count takes, with the system instruction as Messages' system; today's core sends the Gemini request through its Gemini-to-Claude translator, which turns the system instruction into a user message and adds max_tokens 32000, stream true and a metadata.user_id hashed from the request.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.stream",
+      "kind": "intended",
+      "reason": "A count sent to Kimi carries only what a count takes, with the system instruction as Messages' system; today's core sends the Gemini request through its Gemini-to-Claude translator, which turns the system instruction into a user message and adds max_tokens 32000, stream true and a metadata.user_id hashed from the request.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.metadata",
+      "kind": "intended",
+      "reason": "A count sent to Kimi carries only what a count takes, with the system instruction as Messages' system; today's core sends the Gemini request through its Gemini-to-Claude translator, which turns the system instruction into a user message and adds max_tokens 32000, stream true and a metadata.user_id hashed from the request.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "Go's HTTP client asks for gzip and decodes it; today's core also offers deflate, br and zstd."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 17
+          }
+        ],
+        "totalTokens": 17
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 32000,
+          "messages": [
+            {
+              "content": [
+                {
+                  "text": "Be brief.",
+                  "type": "text"
+                }
+              ],
+              "role": "user"
+            },
+            {
+              "content": [
+                {
+                  "text": "Say hello",
+                  "type": "text"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "metadata": {
+            "user_id": "120226d8c5cb65e3acdd1f5e56fb3cf04f8bf909fe34ece9118dcc2d0e8b6c46"
+          },
+          "model": "k3",
+          "stream": true
+        },
+        "headers": {
+          "Accept": "application/json",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Anthropic-Beta": "token-counting-2024-11-01",
+          "Anthropic-Version": "2023-06-01",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/coding/v1/messages/count_tokens?beta=true"
+      }
+    ]
+  }
+}
