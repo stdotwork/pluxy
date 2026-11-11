@@ -197,8 +197,7 @@ These stay stable within a theme contract version:
 | --- | --- |
 | `data-appearance="light"` or `"dark"` | Root element |
 | `data-nav`, `data-list`, `data-detail`, `data-width`, `data-tabs` | Root element, set to the active layout value |
-| `data-page="<page id>"` | Root element: `status`, `accounts`, `quota`, `config`, `extensions`, `themes`, `logs`, or an extension page's ID |
-| `data-page="<page id>"` | Root element: `status`, `accounts`, `add-account`, `quota`, `config`, `extensions`, `themes`, or an extension page's ID |
+| `data-page="<page id>"` | Root element: `status`, `accounts`, `add-account`, `quota`, `logs`, `usage`, `config`, `extensions`, `themes`, or an extension page's ID |
 | `data-part="shell"` | The whole UI below the root |
 | `data-part="nav"` | The navigation |
 | `data-part="nav-group"` | A group of navigation entries under its label; `data-group` is `operate`, `gateway`, `observe`, `control` or `extensions` (the extensions' pages) |
@@ -232,6 +231,17 @@ These stay stable within a theme contract version:
 | `data-part="method"` | A sign-in method tile with its label, kind caption and selected flow. |
 | `data-part="flow"` | A reusable account sign-in flow: inputs, prompts, waiting and terminal states. |
 | `data-part="device-code"` | The user code to enter on a device sign-in page. |
+| `data-part="account-tools"` | Account detail health and tools. |
+| `data-part="account-check"` | Account check and recent request health. |
+| `data-part="account-cooldowns"` | Account routing cooldown list. |
+| `data-part="account-cooldown-confirm"` | Explanation of the local cooldown reset. |
+| `data-part="account-tool-actions"` | Account tool buttons. |
+| `data-part="account-config-link"` | Link to edit a config account. |
+| `data-part="account-test-hint"` | Account test cost and behavior. |
+| `data-part="account-models"` | Supported models and test model choice. |
+| `data-part="account-test-result"` | The last explicit account test result. |
+| `data-part="account-test-reply"` | The start of the test reply. |
+| `data-part="account-sign-in"` | Sign in to an existing account again. |
 
 Every other class name, element and attribute can change in any release.
 

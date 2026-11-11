@@ -120,13 +120,13 @@ func readData(c *protocol.Credential) credentialData {
 // cancellation comes from the call's context. It follows a redirect only to the same scheme and
 // host, since Go keeps the bearer token on a redirect to another host.
 var client = &http.Client{
-	Transport: &http.Transport{
+	Transport: sdk.Upstream(&http.Transport{
 		DialContext:         (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		TLSHandshakeTimeout: 30 * time.Second,
 		ForceAttemptHTTP2:   true,
 		MaxIdleConns:        100,
 		IdleConnTimeout:     90 * time.Second,
-	},
+	}),
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if req.URL.Scheme != via[0].URL.Scheme || req.URL.Host != via[0].URL.Host {
 			return http.ErrUseLastResponse
