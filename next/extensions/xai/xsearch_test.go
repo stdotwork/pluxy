@@ -191,6 +191,9 @@ func TestXSearchInjectionChoices(t *testing.T) {
 	for _, tc := range []struct{ name, body, choice string }{
 		{"cap keeps allowed choices valid", `{"model":"grok-4.6","input":[],"tools":[` + strings.Repeat(`{"type":"function","name":"f"},`, maxTools-1) + `{"type":"function","name":"last"}],"tool_choice":{"type":"allowed_tools","mode":"auto","tools":[{"type":"function","name":"f"}]}}`, `{"type":"allowed_tools","mode":"auto","tools":[{"type":"function","name":"f"}]}`},
 		{"required without tools stays optional", `{"model":"grok-4.6","input":[],"tool_choice":"required","parallel_tool_calls":true}`, `null`},
+		{"additional native search keeps choice", `{"model":"grok-4.6","input":[{"type":"additional_tools","tools":[{"type":"x_search"}]}],"tool_choice":"required"}`, `"required"`},
+		{"additional function keeps choice", `{"model":"grok-4.6","input":[{"type":"additional_tools","tools":[{"type":"function","name":"f"}]}],"tool_choice":"required"}`, `"required"`},
+		{"additional function keeps allowed choice", `{"model":"grok-4.6","input":[{"type":"additional_tools","tools":[{"type":"function","name":"f"}]}],"tool_choice":{"type":"allowed_tools","mode":"required","tools":[{"type":"function","name":"f"}]}}`, `{"type":"allowed_tools","mode":"required","tools":[{"type":"function","name":"f"},{"type":"x_search"}]}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req, err := openairesponses.ParseRequest([]byte(tc.body))

@@ -47,7 +47,16 @@ func requestHasSearch(m map[string]any) bool {
 func injectSearch(m map[string]any) {
 	tools, _ := m["tools"].([]any)
 	// A choice with no original tools must not force the optional injected search.
-	if len(tools) == 0 {
+	originalTools := len(tools)
+	input, _ := m["input"].([]any)
+	for _, v := range input {
+		if toolType(v) == "additional_tools" {
+			item, _ := v.(map[string]any)
+			additional, _ := item["tools"].([]any)
+			originalTools += len(additional)
+		}
+	}
+	if originalTools == 0 {
 		delete(m, "tool_choice")
 		delete(m, "parallel_tool_calls")
 	}
