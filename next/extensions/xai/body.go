@@ -17,6 +17,8 @@ import (
 //   - removed fields: stop, previous_response_id, prompt_cache_retention, safety_identifier and
 //     stream_options are taken out, as today's core takes them out;
 //   - store false unless the client set store, and reasoning.encrypted_content in include;
+//   - additional_tools: the tools of each such input item (Responses Lite) join the tools list and
+//     the item is removed, before the rules below;
 //   - tools: a custom tool is sent as a function tool; a function's local $ref references are
 //     inlined and its $defs and definitions removed; a function without parameters gets an empty
 //     object schema; more than 200 tools are cut to the first 200 (xaiMaxTools);
@@ -97,6 +99,7 @@ func buildRequest(req llm.Request, injectXSearch bool) ([]byte, *llm.Translation
 		m["store"] = false
 	}
 	m["include"] = withEncryptedReasoning(m["include"])
+	promoteAdditionalTools(m)
 	reply := &replyBridge{}
 	var namespaces *namespaceTools
 	if tools, ok := m["tools"].([]any); ok {
@@ -142,6 +145,58 @@ func buildRequest(req llm.Request, injectXSearch bool) ([]byte, *llm.Translation
 		reply = nil
 	}
 	return out, tr, reply, nil
+}
+
+// promoteAdditionalTools moves the tools of each additional_tools input item (how a Responses Lite
+// client, the Codex app, declares tools) to the end of the tools list and removes the item, because
+// xAI does not take that item (promoteXAIAdditionalToolsDoc in today's core). It runs before the
+// rules for tools, so a promoted tool is flattened, folded, counted and cut like a top-level one.
+// A function or custom tool whose name an earlier tool has is dropped: the top-level list wins
+// over the items, and the first item over the next. Namespaces are all kept; rewriteNamespaces
+// merges those of one name and keeps the first of each child. Hosted tools have no name and all
+// stay, as in today's core.
+func promoteAdditionalTools(m map[string]any) {
+	input, ok := m["input"].([]any)
+	if !ok {
+		return
+	}
+	var kept, promoted []any
+	for _, v := range input {
+		if item, ok := v.(map[string]any); ok && item["type"] == "additional_tools" {
+			list, _ := item["tools"].([]any)
+			promoted = append(promoted, list...)
+			continue
+		}
+		kept = append(kept, v)
+	}
+	if len(kept) == len(input) {
+		return
+	}
+	if kept == nil {
+		kept = []any{}
+	}
+	m["input"] = kept
+	tools, _ := m["tools"].([]any)
+	seen := map[string]bool{}
+	for _, t := range tools {
+		if tm, ok := t.(map[string]any); ok && isTool(tm) {
+			seen[strings.TrimSpace(str(tm, "name"))] = true
+		}
+	}
+	for _, t := range promoted {
+		if tm, ok := t.(map[string]any); ok && isTool(tm) {
+			if name := strings.TrimSpace(str(tm, "name")); name != "" {
+				if seen[name] {
+					continue
+				}
+				seen[name] = true
+			}
+		}
+		tools = append(tools, t)
+	}
+	if len(tools) > 0 {
+		m["tools"] = tools
+	}
 }
 
 // withEncryptedReasoning returns the client's include list with reasoning.encrypted_content added.
