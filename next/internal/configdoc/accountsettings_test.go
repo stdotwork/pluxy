@@ -1,6 +1,8 @@
 package configdoc
 
 import (
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -56,5 +58,59 @@ extensions:
 				}
 			}
 		})
+	}
+}
+
+// An account's settings, or the account, given through a YAML alias is read as strictly as when
+// written in place, while the anchor's own place is read by its own rules; a self-referencing
+// anchor does not stop the reading.
+func TestRedactConfigAccountSettingsThroughAliases(t *testing.T) {
+	for _, tc := range []struct {
+		name, src string
+		secrets   []string
+	}{
+		{"settings", `settings-template: &s
+  password:
+    nested: fake-alias-nested
+extensions:
+  pluxy/x:
+    accounts:
+      - id: a
+        settings: *s
+`, []string{"fake-alias-nested"}},
+		{"account", `account-template: &a
+  id: a
+  settings:
+    api_key:
+      - inner: fake-alias-account
+extension:
+  manifest: x.json
+  accounts: [*a]
+`, []string{"fake-alias-account"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, back := redactChecked(t, tc.src, true, tc.secrets); back != tc.src {
+				t.Errorf("round trip is not byte exact:\n%s", back)
+			}
+		})
+	}
+	d, err := Parse([]byte("loop: &l\n  next: *l\n  accounts: [*l]\n  settings: {password: {nested: fake-loop}}\n"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Secrets(); !slices.Equal(got, []string{"fake-loop"}) {
+		t.Errorf("Secrets() of a self-referencing anchor = %q", got)
+	}
+	// Anchors that each use the one before twice: following every use would read 2^40 nodes.
+	var b strings.Builder
+	b.WriteString("a0: &a0 {password: fake-deep}\n")
+	for i := 1; i <= 40; i++ {
+		fmt.Fprintf(&b, "a%d: &a%d {accounts: [{settings: *a%d}, {settings: *a%d}]}\n", i, i, i-1, i-1)
+	}
+	if d, err = Parse([]byte(b.String()), true); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Secrets(); !slices.Equal(got, []string{"fake-deep"}) {
+		t.Errorf("Secrets() of nested anchors = %q", got)
 	}
 }

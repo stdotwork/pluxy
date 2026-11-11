@@ -152,10 +152,23 @@ func secrets(n *yaml.Node, strict bool) []*yaml.Node {
 		}
 	}
 	// walk reads the tree under v by the rules above; account: v is an item of an accounts list,
-	// whose settings are read strictly.
+	// whose settings are read strictly. An alias is read where it is used, as the place it is
+	// used in reads it (an anchor in account settings is strict there, whatever its own place).
+	// Each anchor is read at most once in each way, so an alias back into its own anchor, or
+	// anchors that nest aliases many times over, cost no more than the document's size.
+	type reading struct {
+		n               *yaml.Node
+		strict, account bool
+	}
+	read := map[reading]bool{}
 	var walk func(v *yaml.Node, strict, account bool)
 	walk = func(v *yaml.Node, strict, account bool) {
 		switch v.Kind {
+		case yaml.AliasNode:
+			if k := (reading{v.Alias, strict, account}); v.Alias != nil && !read[k] {
+				read[k] = true
+				walk(v.Alias, strict, account)
+			}
 		case yaml.ScalarNode:
 			if secretURL(v.Value) {
 				add(v)
@@ -201,7 +214,6 @@ func secrets(n *yaml.Node, strict bool) []*yaml.Node {
 				}
 			}
 		}
-		// An alias's node is walked where its anchor is.
 	}
 	walk(n, strict, false)
 	return out
