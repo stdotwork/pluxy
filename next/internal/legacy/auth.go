@@ -282,7 +282,8 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 	case "", "gemini":
 		return f, nil, "today's core does not load it either"
 	default:
-		return f, nil, fmt.Sprintf("type %q is not known", typ)
+		// The type is not quoted: a file may hold a token there.
+		return f, nil, "its type is not one the import takes"
 	}
 	if c.Kind == protocol.CredentialOAuth && c.AccessToken == "" && c.RefreshToken == "" {
 		if typ != "codex" {

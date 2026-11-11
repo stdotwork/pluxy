@@ -123,7 +123,7 @@ func TestImportAuthFile(t *testing.T) {
 		{"kimi-config.json", string(file), http.StatusConflict, "conflict", `the config already has an account "kimi-config"`},
 		{"broken.json", `{"type": "kimi", "access_token": "` + access, http.StatusBadRequest, "invalid_request", "not a JSON object"},
 		{"gemini-old.json", `{"type": "gemini", "access_token": "fake-gemini-access"}`, http.StatusBadRequest, "invalid_request", "today's core does not load it either"},
-		{"qwen-old.json", `{"type": "qwen", "access_token": "fake-qwen-access"}`, http.StatusBadRequest, "invalid_request", `type "qwen" is not known`},
+		{"qwen-old.json", `{"type": "qwen", "access_token": "fake-qwen-access"}`, http.StatusBadRequest, "invalid_request", "its type is not one the import takes"},
 		{"kimi-empty.json", `{"type": "kimi"}`, http.StatusBadRequest, "invalid_request", "it holds no token"},
 		{"notes.txt", string(file), http.StatusBadRequest, "invalid_request", "a .json file name"},
 		{"../kimi-up.json", string(file), http.StatusBadRequest, "invalid_request", "a .json file name"},
