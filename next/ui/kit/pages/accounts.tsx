@@ -1,11 +1,11 @@
 // The Accounts list; accountDetail.tsx owns one account's details.
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { type Account, problem } from "../api";
 import { one } from "../api/path";
 import type { PageDef } from "../shell";
 import { strings } from "../strings";
 import { Tabs } from "../tabs";
-import { Button, Empty, List, MasterDetail, Notice, PageHead, useKit, useLoad } from "../ui";
+import { Button, Empty, List, MasterDetail, Notice, PageHead, type Tone, useKit, useLoad } from "../ui";
 import { AccountDetail, AccountState } from "./accountDetail";
 import { ConfigDialog } from "./configDialog";
 
@@ -85,7 +85,17 @@ const t = strings("accounts", {
   active: { one: "{count} active", other: "{count} active" },
   problems: { one: "{count} problem", other: "{count} problem" },
   meta: "{credentials} · {active} · {problem}",
+  upload: "Upload File",
+  uploadJson: "Only JSON files are allowed",
+  uploadSize: "File size cannot exceed {maxSize}",
+  maxSize: "1 MB",
+  uploaded: "File uploaded successfully",
+  uploadedAs: "{file}: {uploaded}: account {id} ({extension})",
+  ignored: "not supported yet, not imported: {names}",
 });
+
+/** The largest auth file core imports (legacy.MaxAuthFile in next/internal/legacy/auth.go). */
+const maxAuthFile = 1 << 20;
 
 export interface AccountFilters {
   search?: string;
@@ -171,6 +181,8 @@ export function AccountsPage() {
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [report, setReport] = useState<{ success: number; skipped: number; errors: string[] }>();
+  const [uploads, setUploads] = useState<{ tone: Tone; text: string }[]>();
+  const fileInput = useRef<HTMLInputElement>(null);
   const [now, setNow] = useState(Date.now());
   const list = accounts.data?.accounts ?? [];
   const chosen = list.find((a) => a.id === selected);
@@ -238,7 +250,53 @@ export function AccountsPage() {
     setBusy(false);
     accounts.reload();
   };
-  const toolbarActions = [{ id: "refresh", label: t("refresh"), run: accounts.reload }];
+  // Each file is imported on its own, in turn, and has its own result.
+  const upload = async (files: File[]) => {
+    setBusy(true);
+    setUploads(undefined);
+    const results: { tone: Tone; text: string }[] = [];
+    const failed = (file: File, error: string) =>
+      results.push({ tone: "danger", text: t("failure", { id: file.name, error }) });
+    for (const file of files) {
+      if (!file.name.toLowerCase().endsWith(".json")) {
+        failed(file, t("uploadJson"));
+        continue;
+      }
+      if (file.size > maxAuthFile) {
+        failed(file, t("uploadSize", { maxSize: t("maxSize") }));
+        continue;
+      }
+      try {
+        const reply = await api.importAuthFile(file.name, await file.text());
+        if (reply.status === 401) unauthorized();
+        const error = problem(reply);
+        if (error || !reply.body) {
+          failed(file, error ?? "");
+          continue;
+        }
+        for (const a of reply.body.imported) {
+          const text = t("uploadedAs", {
+            file: file.name,
+            uploaded: t("uploaded"),
+            id: a.id,
+            extension: a.extension,
+          });
+          const ignored = a.ignored?.length ? ` · ${t("ignored", { names: a.ignored.join(", ") })}` : "";
+          results.push({ tone: "ok", text: text + ignored });
+        }
+        for (const reason of reply.body.skipped) failed(file, reason);
+      } catch (error) {
+        failed(file, String(error));
+      }
+    }
+    setUploads(results);
+    setBusy(false);
+    accounts.reload();
+  };
+  const toolbarActions = [
+    { id: "refresh", label: t("refresh"), run: accounts.reload },
+    { id: "upload", label: t("upload"), run: () => fileInput.current?.click() },
+  ];
 
   return (
     <>
@@ -317,6 +375,18 @@ export function AccountsPage() {
               {action.label}
             </Button>
           ))}
+          <input
+            ref={fileInput}
+            type="file"
+            accept=".json,application/json"
+            multiple
+            hidden
+            onChange={(e) => {
+              const files = [...(e.currentTarget.files ?? [])];
+              e.currentTarget.value = "";
+              if (files.length) void upload(files);
+            }}
+          />
         </div>
         <fieldset class="accounts-batch" data-part="batch" aria-label={t("batch")}>
           <span>{t("selected", { count: selectedAccounts.length })}</span>
@@ -358,6 +428,15 @@ export function AccountsPage() {
               </Notice>
             ))}
           </>
+        )}
+        {uploads && (
+          <div class="accounts-upload" data-part="upload-results">
+            {uploads.map((u, i) => (
+              <Notice key={i} tone={u.tone}>
+                {u.text}
+              </Notice>
+            ))}
+          </div>
         )}
         <MasterDetail
           list={
