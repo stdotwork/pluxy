@@ -579,7 +579,7 @@ fn release_config_refuses_containers_inside_appimages() {
     let Some(t) = Images::new() else { return };
     let mut wrong = Vec::new();
     let payload = gzip(&elf(b"PLUXY_TEST_BUILD_DO_NOT_RELEASE"));
-    let mut nested = vec![0u8; 64];
+    let mut nested = [0u8; 64];
     nested[..4].copy_from_slice(b"\x7fELF");
     nested[8..11].copy_from_slice(b"AI\x02");
     for (name, file) in [
@@ -688,16 +688,28 @@ fn release_config_checks_json_inside_appimages() {
             None,
         );
     }
-    expect(
-        &mut wrong,
-        "an unnamed file that starts like JSON with no trust fields",
-        t.check(
-            &[("usr/share/notes.dat", Entry::File(b"{ not json"))],
-            b"runtime",
-            2,
+    // Round 3: any unnamed file that starts like a JSON object and does not parse is refused,
+    // since an escaped key can hide a trust field from a byte search.
+    for (name, file) in [
+        ("usr/share/notes.dat", &b"{ not json"[..]),
+        (
+            "usr/share/escaped.dat",
+            &br#"{"\u0072oots":[{"kind":"test""#[..],
         ),
-        None,
-    );
+    ] {
+        expect(
+            &mut wrong,
+            name,
+            t.check(&[(name, Entry::File(file))], b"runtime", 2),
+            Some("JSON that does not parse"),
+        );
+        expect(
+            &mut wrong,
+            "the clean AppImage",
+            t.check(&[], b"runtime", 2),
+            None,
+        );
+    }
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
@@ -778,6 +790,23 @@ fn release_config_refuses_escaping_or_missing_links() {
             2,
         ),
         Some("outside the package"),
+    );
+    expect(
+        &mut wrong,
+        "the clean AppImage",
+        t.check(&[], b"runtime", 2),
+        None,
+    );
+    // Round 3: a name followed by more of the path must be a folder, as the system requires.
+    expect(
+        &mut wrong,
+        "AppRun/../pluxy.desktop through a regular file",
+        t.check(
+            &[("through", Entry::Link("AppRun/../pluxy.desktop"))],
+            b"runtime",
+            2,
+        ),
+        Some("through a file"),
     );
     expect(
         &mut wrong,
@@ -881,6 +910,26 @@ fn release_config_needs_the_receipt_in_every_artifact() {
     expect(
         &mut wrong,
         "a stale app beside another ELF with the receipt",
+        t.validate(&[&t.image]),
+        Some("matching build receipt"),
+    );
+    expect(
+        &mut wrong,
+        "the clean AppImage",
+        t.check(&[], b"runtime", 2),
+        None,
+    );
+    // Round 3: the app executable must itself be a well-formed ELF file for its receipt to count.
+    let fabricated = fabricated_elf(env!("PLUXY_BUILD_RECEIPT").as_bytes());
+    appimage(
+        &t.image,
+        2,
+        b"runtime",
+        &[("usr/bin/pluxy-app", Entry::File(&fabricated))],
+    );
+    expect(
+        &mut wrong,
+        "a fabricated ELF header with the receipt as the app",
         t.validate(&[&t.image]),
         Some("matching build receipt"),
     );
