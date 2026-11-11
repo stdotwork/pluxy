@@ -91,6 +91,7 @@ export function settingsChange(base: CoreSettings, draft: CoreSettings): Setting
 export function ConfigSettings(props: {
   tab: SettingsTab;
   search: string;
+  hasOtherResults?: boolean;
   value: CoreSettings;
   onChange: (v: CoreSettings) => void;
   dirty: boolean;
@@ -119,7 +120,7 @@ export function ConfigSettings(props: {
       }}
     >
       <fieldset disabled={props.busy} class="config-fields">
-        {shown.length === 0 && <Empty>{t("noResults")}</Empty>}
+        {shown.length === 0 && !props.hasOtherResults && <Empty>{t("noResults")}</Empty>}
         {shown.map((field) => {
           const value = get(props.value, field.key);
           const set = (v: Value) => props.onChange(changeSetting(props.value, field.key, v));
