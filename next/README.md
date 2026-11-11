@@ -799,7 +799,10 @@ What changes in a request:
   the custom tool call it expects: an added item, input events carrying the patch text as it
   arrives, the end of the input, the done item and the final response's output all show a
   `custom_tool_call` with the text as its `input`. The events keep xAI's sequence numbers. Arguments
-  that are not one `input` string end the reply with an upstream error that does not repeat them.
+  that are not one `input` string end the reply with an upstream error that does not repeat them,
+  as do arguments of more than 16 MiB for one call or 32 MiB for the calls of one reply, white space
+  included (the extension keeps the patch text and not the arguments). A call that has its
+  arguments but no done event is finished when the reply ends, and is in the final output.
   Only a Responses client can declare a custom tool, so only its reply is turned back; today's core
   does not turn a Chat Completions client's `apply_patch` custom tool back either.
 - `store` is false unless the client set it: xAI keeps responses by default, and with

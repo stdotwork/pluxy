@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/llm"
@@ -144,6 +145,15 @@ func patchArgumentsError() *llm.Error {
 	return &llm.Error{Code: llm.CodeUpstream, Scope: llm.ScopeEndpoint, Message: "invalid apply_patch tool arguments received from upstream"}
 }
 
+// patchError is the error that ends a reply whose apply_patch arguments broke a rule. It says
+// which kind of rule and never repeats the arguments.
+func patchError(err error) *llm.Error {
+	if errors.Is(err, errPatchTooLarge) {
+		return &llm.Error{Code: llm.CodeUpstream, Scope: llm.ScopeEndpoint, Message: "apply_patch tool arguments received from upstream are too large"}
+	}
+	return patchArgumentsError()
+}
+
 // patchBridge turns the function calls to apply_patch in one xAI reply into custom tool calls. It
 // reads the events the Responses decoder made, each with the upstream event in Raw, and changes
 // what a Responses client is sent: the call's items, its input events, and the output of the
@@ -159,6 +169,11 @@ type patchBridge struct {
 	// stream is true when the reply came as stream events; a reply read as one response has no
 	// events to complete.
 	stream bool
+	// first is the call whose added event opened the stream, which the decoder reports on
+	// response.start; its item.start, which has no raw, is the next one to claim it.
+	first *patchCall
+	// budget is how many more argument bytes the reply's calls may have.
+	budget int
 }
 
 type patchCall struct {
@@ -172,7 +187,7 @@ type patchCall struct {
 }
 
 func newPatchBridge() *patchBridge {
-	return &patchBridge{byID: map[string]*patchCall{}, byIndex: map[int]*patchCall{}, open: map[int]*patchCall{}}
+	return &patchBridge{byID: map[string]*patchCall{}, byIndex: map[int]*patchCall{}, open: map[int]*patchCall{}, budget: maxReplyArguments}
 }
 
 func str(m map[string]any, k string) string {
@@ -191,6 +206,7 @@ func intOf(m map[string]any, k string) (int, bool) {
 
 func (b *patchBridge) track(id, callID string, index int) *patchCall {
 	c := &patchCall{id: id, callID: callID, index: index}
+	c.dec.shared = &b.budget
 	b.calls = append(b.calls, c)
 	if id != "" {
 		b.byID[id] = c
@@ -221,9 +237,23 @@ func (b *patchBridge) Transform(ev llm.Event) ([]llm.Event, error) {
 	switch ev.Type {
 	case llm.EventResponseStart:
 		b.stream = len(ev.Raw) > 0
+		// A stream that does not open with response.created has its first event's raw here.
+		if bytes.Contains(ev.Raw, []byte(`"response.output_item.added"`)) && bytes.Contains(ev.Raw, []byte(applyPatchName)) {
+			if raw, c := b.begin(ev.Raw); c != nil {
+				b.first = c
+				ev.Raw = raw
+				return []llm.Event{ev}, nil
+			}
+		}
 	case llm.EventItemStart:
-		if ev.Item != nil && ev.Item.Kind == llm.ItemToolCall && ev.Item.Name == applyPatchName && len(ev.Raw) > 0 {
-			return b.start(ev)
+		if ev.Item != nil && ev.Item.Kind == llm.ItemToolCall && ev.Item.Name == applyPatchName {
+			switch {
+			case len(ev.Raw) > 0:
+				return b.start(ev)
+			case b.first != nil:
+				b.open[ev.Index], b.first = b.first, nil
+				return []llm.Event{ev}, nil
+			}
 		}
 	case llm.EventToolInputDelta:
 		if c := b.open[ev.Index]; c != nil {
@@ -302,21 +332,31 @@ func toCustomItem(item map[string]any, input string) {
 	item["input"] = input
 }
 
-func (b *patchBridge) start(ev llm.Event) ([]llm.Event, error) {
-	m, err := decodeObject(ev.Raw)
-	if err != nil {
-		return b.pass(ev), nil
+// begin starts the call an added event opens and returns the event as the client is sent it, or
+// nil when the event is not the added event of a call to apply_patch.
+func (b *patchBridge) begin(raw json.RawMessage) (json.RawMessage, *patchCall) {
+	m, err := decodeObject(raw)
+	if err != nil || str(m, "type") != "response.output_item.added" {
+		return nil, nil
 	}
 	item, _ := m["item"].(map[string]any)
-	if item == nil {
-		return b.pass(ev), nil
+	if item == nil || str(item, "type") != "function_call" || str(item, "name") != applyPatchName {
+		return nil, nil
 	}
 	index, _ := intOf(m, "output_index")
 	c := b.track(str(item, "id"), str(item, "call_id"), index)
-	b.open[ev.Index] = c
 	c.added = true
 	toCustomItem(item, "")
-	ev.Raw = b.encode(m)
+	return b.encode(m), c
+}
+
+func (b *patchBridge) start(ev llm.Event) ([]llm.Event, error) {
+	raw, c := b.begin(ev.Raw)
+	if c == nil {
+		return b.pass(ev), nil
+	}
+	b.open[ev.Index] = c
+	ev.Raw = raw
 	return []llm.Event{ev}, nil
 }
 
@@ -327,7 +367,7 @@ func (b *patchBridge) delta(c *patchCall, ev llm.Event) ([]llm.Event, error) {
 	}
 	text, err := c.dec.Push(str(m, "delta"))
 	if err != nil {
-		return nil, patchArgumentsError()
+		return nil, patchError(err)
 	}
 	if text == "" {
 		ev.Raw = nil // the fragment holds no patch text yet; the client gets no event
@@ -372,12 +412,12 @@ func (b *patchBridge) argumentsDone(ev llm.Event) ([]llm.Event, error) {
 // not have yet: the last of the text, then the end of the input. arguments is empty and has is
 // false when the event has none, which leaves the fragments as they came.
 func (b *patchBridge) settleInput(c *patchCall, arguments string, has bool) ([]map[string]any, error) {
-	if !has {
-		arguments = c.dec.raw.String()
+	if c.inputDone && !has {
+		return nil, nil // the arguments were checked when they were reported whole
 	}
-	input, tail, err := c.dec.Finish(arguments)
+	input, tail, err := c.dec.Finish(arguments, has)
 	if err != nil {
-		return nil, patchArgumentsError()
+		return nil, patchError(err)
 	}
 	if c.inputDone {
 		if input != c.input {
@@ -466,6 +506,25 @@ func (b *patchBridge) finish(ev llm.Event) ([]llm.Event, error) {
 		resp = r
 	}
 	output, _ := resp["output"].([]any)
+	// A call the stream opened that the final output does not list is added to it, as the call it
+	// was, so the client gets it however the final response was written.
+	listed := map[*patchCall]bool{}
+	for _, raw := range output {
+		if item, ok := raw.(map[string]any); ok {
+			if c := b.find(str(item, "id"), str(item, "call_id"), 0, false); c != nil {
+				listed[c] = true
+			}
+		}
+	}
+	for _, c := range b.calls {
+		if listed[c] {
+			continue
+		}
+		stub := map[string]any{"type": "function_call", "status": "completed", "name": applyPatchName, "id": c.id, "call_id": c.callID}
+		at := min(max(c.index, 0), len(output))
+		output = append(output[:at], append([]any{stub}, output[at:]...)...)
+		resp["output"] = output
+	}
 	var adds []map[string]any
 	for i, raw := range output {
 		item, ok := raw.(map[string]any)

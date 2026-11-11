@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"errors"
+	"hash"
 	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
@@ -12,9 +15,17 @@ import (
 // object with one field named input whose value is a string, and nothing after the object. Text
 // is handed out as soon as a whole character of it has arrived, so a fragment may end inside an
 // escape or inside a character. One decoder reads one call.
+//
+// A decoder keeps the patch text and the bytes of a character that has not all arrived, nothing
+// else: of the fragments it keeps their number of bytes and a hash, to compare with the final
+// arguments. It refuses arguments of more than limit bytes (maxCallArguments when limit is 0), and,
+// with shared set, more than the bytes left there, which a reply's calls share.
 type inputDecoder struct {
-	raw     strings.Builder // every fragment, as it came
-	pending []byte          // received bytes not read yet
+	limit   int
+	shared  *int
+	n       int       // bytes of fragments received
+	sum     hash.Hash // their hash
+	pending []byte    // received bytes not read yet
 	state   int
 	head    int  // how many of headTokens are read
 	closed  bool // the closing brace is read
@@ -33,12 +44,36 @@ var headTokens = [...]string{"{", `"input"`, ":", `"`}
 
 var errPatchInput = errors.New("apply_patch arguments are not a JSON object with one input string")
 
+var errPatchTooLarge = errors.New("apply_patch arguments are too large")
+
+// The most argument bytes one apply_patch call may have, and the most all of a reply's calls may
+// have; a patch of several megabytes is the largest anyone writes.
+var (
+	maxCallArguments  = 16 << 20
+	maxReplyArguments = 32 << 20
+)
+
 // Push reads the next fragment and returns the patch text it completed, which may be empty.
 func (d *inputDecoder) Push(fragment string) (string, error) {
 	if d.err != nil {
 		return "", d.err
 	}
-	d.raw.WriteString(fragment)
+	limit := d.limit
+	if limit == 0 {
+		limit = maxCallArguments
+	}
+	d.n += len(fragment)
+	if d.shared != nil {
+		*d.shared -= len(fragment)
+	}
+	if d.n > limit || (d.shared != nil && *d.shared < 0) {
+		d.err = errPatchTooLarge
+		return "", d.err
+	}
+	if d.sum == nil {
+		d.sum = sha256.New()
+	}
+	d.sum.Write([]byte(fragment))
 	d.pending = append(d.pending, fragment...)
 	before := d.input.Len()
 	for len(d.pending) > 0 && d.err == nil {
@@ -221,14 +256,21 @@ func (d *inputDecoder) complete() bool { return d.err == nil && d.state == decTa
 func (d *inputDecoder) Input() string { return d.input.String() }
 
 // Finish checks the final arguments xAI reports for the call and returns the whole patch text and
-// the part of it the fragments did not carry. A call that came in no fragments has no such part:
-// its text is sent whole when the call ends. The final arguments must hold the text the
-// fragments carried, as a prefix.
-func (d *inputDecoder) Finish(final string) (input, tail string, err error) {
+// the part of it the fragments did not carry; has is false when xAI reports none, which leaves the
+// fragments as they came. A call that came in no fragments has no such part: its text is sent
+// whole when the call ends. The final arguments must hold the text the fragments carried, as a
+// prefix.
+func (d *inputDecoder) Finish(final string, has bool) (input, tail string, err error) {
 	if d.err != nil {
 		return "", "", d.err
 	}
-	if d.raw.Len() == 0 {
+	if !has {
+		if !d.complete() {
+			return "", "", errPatchInput
+		}
+		return d.Input(), "", nil
+	}
+	if d.n == 0 {
 		if _, err := d.Push(final); err != nil {
 			return "", "", err
 		}
@@ -237,13 +279,13 @@ func (d *inputDecoder) Finish(final string) (input, tail string, err error) {
 		}
 		return d.Input(), "", nil
 	}
-	if final == d.raw.String() {
+	if sum := sha256.Sum256([]byte(final)); len(final) == d.n && bytes.Equal(sum[:], d.sum.Sum(nil)) {
 		if !d.complete() {
 			return "", "", errPatchInput
 		}
 		return d.Input(), "", nil
 	}
-	var whole inputDecoder
+	whole := inputDecoder{limit: d.limit}
 	if _, err := whole.Push(final); err != nil {
 		return "", "", err
 	}

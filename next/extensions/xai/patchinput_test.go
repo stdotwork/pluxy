@@ -72,7 +72,7 @@ func TestInputDecoderFragments(t *testing.T) {
 					if got.String() != text || !d.complete() {
 						t.Fatalf("%q split at %d (%s): read %q (complete %v), want %q", whole, cut, name, got.String(), d.complete(), text)
 					}
-					input, tail, err := d.Finish(whole)
+					input, tail, err := d.Finish(whole, true)
 					if err != nil || input != text || tail != "" {
 						t.Fatalf("%q: Finish = %q, %q, %v", whole, input, tail, err)
 					}
@@ -120,7 +120,7 @@ func TestInputDecoderRefuses(t *testing.T) {
 		var d inputDecoder
 		_, err := d.Push(args)
 		if err == nil {
-			err = func() error { _, _, err := d.Finish(args); return err }()
+			err = func() error { _, _, err := d.Finish(args, true); return err }()
 		}
 		if err == nil {
 			t.Errorf("%s: %q was accepted", name, args)
@@ -131,7 +131,7 @@ func TestInputDecoderRefuses(t *testing.T) {
 	if _, err := d.Push(`{"input":"x`); err != nil || d.complete() {
 		t.Errorf("cut-off object: error %v, complete %v", err, d.complete())
 	}
-	if _, _, err := d.Finish(`{"input":"x`); err == nil {
+	if _, _, err := d.Finish(`{"input":"x`, true); err == nil {
 		t.Error("Finish accepted a cut-off object")
 	}
 }
@@ -142,17 +142,17 @@ func TestInputDecoderFinish(t *testing.T) {
 	if out, err := d.Push(`{"input":"ab`); err != nil || out != "ab" {
 		t.Fatalf("Push = %q, %v", out, err)
 	}
-	if input, tail, err := d.Finish(`{"input":"abcd"}`); err != nil || input != "abcd" || tail != "cd" {
+	if input, tail, err := d.Finish(`{"input":"abcd"}`, true); err != nil || input != "abcd" || tail != "cd" {
 		t.Errorf("Finish = %q, %q, %v; want abcd with the tail cd", input, tail, err)
 	}
 	var e inputDecoder
 	_, _ = e.Push(`{"input":"ab`)
-	if _, _, err := e.Finish(`{"input":"xy"}`); err == nil {
+	if _, _, err := e.Finish(`{"input":"xy"}`, true); err == nil {
 		t.Error("Finish accepted final arguments that do not start with the text sent")
 	}
 	// With no fragments, the whole text is the input and there is no tail to send.
 	var f inputDecoder
-	if input, tail, err := f.Finish(`{"input":"whole"}`); err != nil || input != "whole" || tail != "" {
+	if input, tail, err := f.Finish(`{"input":"whole"}`, true); err != nil || input != "whole" || tail != "" {
 		t.Errorf("Finish without fragments = %q, %q, %v", input, tail, err)
 	}
 }

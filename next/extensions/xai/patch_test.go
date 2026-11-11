@@ -457,3 +457,109 @@ func TestApplyPatchFunctionIsNotTurnedBack(t *testing.T) {
 		t.Errorf("bridge %v, error %v; want no bridge", patch, err)
 	}
 }
+
+// A call's arguments are bounded, white space included: a reply that sends more than the bound ends
+// with an error that does not repeat them, and the white space is not kept.
+func TestInputDecoderBoundsArguments(t *testing.T) {
+	var d inputDecoder
+	if _, err := d.Push(`{`); err != nil {
+		t.Fatal(err)
+	}
+	ws := strings.Repeat(" ", 1<<20)
+	var err error
+	sent := 0
+	for sent < 40 && err == nil {
+		_, err = d.Push(ws)
+		sent++
+	}
+	if err == nil {
+		t.Fatalf("%d MiB of white space in the arguments of one call was accepted", sent)
+	}
+}
+
+// The upstream may open with the call's added event, with no response.created before it. The call is
+// then turned back from its first event on, once.
+func TestApplyPatchReplyWithoutCreated(t *testing.T) {
+	text := fmt.Sprintf("%q", patchText)
+	got, err := replyStream(t, patchRequest, sseOf(added(0, 0, callItem("in_progress", "")), argsDelta(1, 0, "fc_1", patchArgs),
+		argsDone(2, 0, "fc_1", patchArgs), itemDone(3, 0, callItem("completed", patchArgs)), completed(4, callItem("completed", patchArgs))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect(t, got, []string{
+		`0 response.output_item.added [0] custom_tool_call apply_patch input=""`,
+		`1 response.custom_tool_call_input.delta [0] fc_1 call=call_1 delta=` + text,
+		`2 response.custom_tool_call_input.done [0] fc_1 call=call_1 input=` + text,
+		`3 response.output_item.done [0] custom_tool_call apply_patch input=` + text,
+		`4 response.completed output: custom_tool_call apply_patch input=` + text,
+	})
+}
+
+// A call that was opened and given its arguments but never got its done event is finished when the
+// reply ends, and is in the final output even when the final response lists none.
+func TestApplyPatchCallWithoutItsDoneEvent(t *testing.T) {
+	text := fmt.Sprintf("%q", patchText)
+	for name, output := range map[string][]string{"empty output": nil, "other items only": {`{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[]}`}} {
+		t.Run(name, func(t *testing.T) {
+			got, err := replyStream(t, patchRequest, sseOf(created(0), added(1, 0, callItem("in_progress", "")), argsDelta(2, 0, "fc_1", patchArgs),
+				argsDone(3, 0, "fc_1", patchArgs), completed(4, output...)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 6 || !strings.HasPrefix(got[3], `3 response.custom_tool_call_input.done`) || !strings.HasPrefix(got[4], `4 response.output_item.done [0] custom_tool_call apply_patch input=`+text) ||
+				!strings.Contains(got[5], "custom_tool_call apply_patch input="+text) || !strings.HasPrefix(got[5], "5 response.completed") {
+				t.Errorf("events:\n%s", strings.Join(got, "\n"))
+			}
+		})
+	}
+	// Arguments that never completed cannot be finished: the reply fails.
+	_, err := replyStream(t, patchRequest, sseOf(created(0), added(1, 0, callItem("in_progress", "")), argsDelta(2, 0, "fc_1", `{"input":"abc`), completed(3)))
+	if err == nil || !strings.Contains(err.Error(), "apply_patch") {
+		t.Errorf("error %v, want one about apply_patch arguments", err)
+	}
+}
+
+// The bounds apply to one call and to the calls of a reply together, and end the reply with an
+// error that says the arguments are too large and does not repeat them.
+func TestApplyPatchReplyBudget(t *testing.T) {
+	oldCall, oldReply := maxCallArguments, maxReplyArguments
+	t.Cleanup(func() { maxCallArguments, maxReplyArguments = oldCall, oldReply })
+	maxCallArguments, maxReplyArguments = 1000, 1500
+	secondCall := func(i int, n int) string {
+		return fmt.Sprintf(`{"id":"fc_%d","type":"function_call","status":"in_progress","call_id":"call_%d","name":"apply_patch","arguments":""}`, i, i) + "\x00" + strings.Repeat("x", n)
+	}
+	call := func(i, n int) (string, string) {
+		item := strings.SplitN(secondCall(i, n), "\x00", 2)[0]
+		return added(i*2+1, i, item), argsDelta(i*2+2, i, fmt.Sprintf("fc_%d", i), `{"input":"`+strings.Repeat("x", n))
+	}
+	for name, sizes := range map[string][]int{"one call": {1100}, "two calls": {800, 800}} {
+		t.Run(name, func(t *testing.T) {
+			events := []string{created(0)}
+			for i, n := range sizes {
+				a, d := call(i, n)
+				events = append(events, a, d)
+			}
+			_, err := replyStream(t, patchRequest, sseOf(events...))
+			if err == nil || !strings.Contains(err.Error(), "too large") || strings.Contains(err.Error(), "xxxx") {
+				t.Errorf("error %v, want one that says the arguments are too large", err)
+			}
+		})
+	}
+	// Within the bounds the reply goes through.
+	a, d := call(0, 800)
+	if _, err := replyStream(t, patchRequest, sseOf(created(0), a, d, argsDone(3, 0, "fc_0", `{"input":"`+strings.Repeat("x", 800)+`"}`),
+		itemDone(4, 0, callItem("completed", `{"input":"`+strings.Repeat("x", 800)+`"}`)), completed(5))); err != nil {
+		t.Errorf("a call within the bounds: %v", err)
+	}
+}
+
+// White space before the patch text is not kept.
+func TestInputDecoderKeepsNoWhiteSpace(t *testing.T) {
+	var d inputDecoder
+	if _, err := d.Push(`{` + strings.Repeat(" ", 5000)); err != nil {
+		t.Fatal(err)
+	}
+	if kept := len(d.pending) + d.input.Len(); kept != 0 {
+		t.Errorf("%d bytes kept after white space", kept)
+	}
+}
