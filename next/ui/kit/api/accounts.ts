@@ -33,10 +33,19 @@ export interface Account {
   check?: { state: string; detail?: string; error?: AccountError };
 }
 
+/** What POST /accounts/import added from one auth file, and why it skipped the rest. */
+export interface AuthImport {
+  imported: { id: string; extension: string; ignored?: string[] }[];
+  skipped: string[];
+}
+
 export const accountsApi = (host: Host) => ({
   accounts: () => host.call<{ accounts: Account[] }>("GET", "/accounts"),
   setDisabled: (id: string, disabled: boolean) =>
     host.call<{ account: Account }>("PATCH", `/accounts/${one(id)}`, { disabled }),
   refresh: (id: string) => host.call<{ account: Account }>("POST", `/accounts/${one(id)}/refresh`),
   removeAccount: (id: string) => host.call<void>("DELETE", `/accounts/${one(id)}`),
+  /** Imports one auth file of today's core: its name and its text. */
+  importAuthFile: (name: string, content: string) =>
+    host.call<AuthImport>("POST", "/accounts/import", { name, content }),
 });
