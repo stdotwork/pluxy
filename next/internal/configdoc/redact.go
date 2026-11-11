@@ -81,7 +81,8 @@ func (r *Redactor) placeholderOf(n *yaml.Node) string {
 // deep; a list of mappings (provider entries in a config file) is read by the rules above. Account
 // settings are stricter: everything below a key named like a secret is one. That holds for
 // settings on their own (RedactSettings) and for the "settings" of each item of an "accounts"
-// list in a config file.
+// list in a config file. Everywhere, true, false, null and the empty string are never secrets:
+// they carry none, and hiding them would hide what a setting is.
 var secretNames = map[string]bool{
 	"api-key": true, "api-keys": true, "apikey": true, "secret-key": true, "management-key": true,
 	"client-keys": true, "password": true, "secret": true, "token": true, "private-key": true,
@@ -123,6 +124,7 @@ func secretURL(s string) bool {
 // file's accounts.
 func secrets(n *yaml.Node, strict bool) []*yaml.Node {
 	var out []*yaml.Node
+	// add records v as a secret, unless it is true, false, null or empty (see the rules above).
 	add := func(v *yaml.Node) {
 		if v.Kind == yaml.ScalarNode && v.Tag != "!!null" && v.Tag != "!!bool" && v.Value != "" && !slices.Contains(out, v) {
 			out = append(out, v)
@@ -228,8 +230,14 @@ func (d *Doc) Secrets() []string {
 	return out
 }
 
+// MinTextSecret is the length, in bytes, below which SettingsSecrets leaves a secret out: removing
+// every occurrence of a string that short from a reply or a log would mangle unrelated text. A
+// placeholder in a settings document replaces the whole value, so it covers short ones too.
+const MinTextSecret = 8
+
 // SettingsSecrets returns the secret values an account's settings, a JSON object, hold by the
-// rules of RedactSettings. Settings that do not parse hold none it can find.
+// rules of RedactSettings, to be removed from text where they occur: those of MinTextSecret
+// bytes or more. Settings that do not parse hold none it can find.
 func SettingsSecrets(b []byte) []string {
 	d, err := Parse(b, false)
 	if err != nil {
@@ -237,7 +245,9 @@ func SettingsSecrets(b []byte) []string {
 	}
 	var out []string
 	for _, n := range secrets(d.root, true) {
-		out = append(out, n.Value)
+		if len(n.Value) >= MinTextSecret {
+			out = append(out, n.Value)
+		}
 	}
 	return out
 }

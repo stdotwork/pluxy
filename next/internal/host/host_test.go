@@ -362,6 +362,21 @@ func TestExtensionOutputIsRedacted(t *testing.T) {
 	}
 }
 
+// A settings secret shorter than 8 bytes is left in what a call sends back: removing every
+// occurrence of a short string would mangle unrelated text. One of 8 bytes or more is removed.
+func TestShortSettingsSecretIsLeftInText(t *testing.T) {
+	ext, err := Start(filepath.Join(fakePackage(t, "echo-credential"), ManifestFile), Options{Log: io.Discard, SettingsSecrets: configdoc.SettingsSecrets})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ext.Stop()
+	account := protocol.Account{ID: "short", Settings: json.RawMessage(`{"api_key":"a","password":"seven77","token":"eight888"}`)}
+	_, e := ext.Check(context.Background(), account)
+	if want := `unreachable: {"api_key":"a","password":"seven77","token":"[redacted]"}`; e == nil || e.Message != want {
+		t.Errorf("check error = %+v; want message %q", e, want)
+	}
+}
+
 // Every call's error has the secrets in the account's settings removed, as well as its
 // credential: here a URL with a query and a value under a key named like a secret.
 func TestCallErrorsHoldNoSettingsSecret(t *testing.T) {

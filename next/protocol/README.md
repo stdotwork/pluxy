@@ -503,9 +503,12 @@ especially short ones, out of the credential. Core removes the secrets in the ac
 `settings` the same way: every value below a key named like a secret (such as `api_key`,
 `password` or `*_token`), header values about authentication in a `headers` object, and any URL
 with a user name, password or query (a `base_url` with a token in it), as its management API
-hides them. When the settings change, core keeps removing the secrets of every earlier settings
-from the extension's stderr and stdout until the program exits, for calls that still run with
-them.
+hides them. Below a key named like a secret, `true`, `false`, `null` and the empty string are
+not secrets: they carry none. Unlike a credential's strings, a settings secret shorter than 8
+bytes is left in text, since removing every occurrence of so short a string would mangle
+unrelated text; the management API still shows it as a placeholder. When the settings change,
+core keeps removing the secrets of every earlier settings from the extension's stderr and stdout
+until the program exits, for calls that still run with them.
 
 ### Proxy
 
