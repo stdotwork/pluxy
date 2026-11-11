@@ -197,7 +197,7 @@ These stay stable within a theme contract version:
 | --- | --- |
 | `data-appearance="light"` or `"dark"` | Root element |
 | `data-nav`, `data-list`, `data-detail`, `data-width`, `data-tabs` | Root element, set to the active layout value |
-| `data-page="<page id>"` | Root element: `status`, `accounts`, `quota`, `config`, `extensions`, `themes`, or an extension page's ID |
+| `data-page="<page id>"` | Root element: `status`, `accounts`, `add-account`, `quota`, `config`, `extensions`, `themes`, or an extension page's ID |
 | `data-part="shell"` | The whole UI below the root |
 | `data-part="nav"` | The navigation |
 | `data-part="nav-group"` | A group of navigation entries under its label; `data-group` is `operate`, `gateway`, `observe`, `control` or `extensions` (the extensions' pages) |
@@ -219,6 +219,11 @@ These stay stable within a theme contract version:
 | `data-part="diff"` | A group of changed lines |
 | `data-part="diff-line"` | One diff line; context lines have no change attribute; `data-change` is `add` or `remove` |
 | `data-part="dialog"` | A dialog window |
+| `data-part="key-notice"` | A notice revealing a newly generated key until closed or its tab is left |
+| `data-part="key-value"` | The selectable value of a newly generated key inside its notice |
+| `data-part="method"` | A sign-in method tile with its label, kind caption and selected flow. |
+| `data-part="flow"` | A reusable account sign-in flow: inputs, prompts, waiting and terminal states. |
+| `data-part="device-code"` | The user code to enter on a device sign-in page. |
 
 Every other class name, element and attribute can change in any release.
 

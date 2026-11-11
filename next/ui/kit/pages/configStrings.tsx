@@ -5,6 +5,7 @@ export const configText = strings("config", {
   short: "Config",
   tip: "Gateway configuration",
   common: "Common",
+  connectivity: "Connectivity",
   network: "Network",
   logging: "Logging",
   advanced: "Advanced",

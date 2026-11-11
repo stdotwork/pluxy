@@ -242,7 +242,7 @@ var rules = map[string]rule{
 	"upstream.codex.orphan-delegation-compatibility":        {dropped, "off by default and no need found"},
 	"oauth.providers.codex.header-defaults":                 {dropped, "no need found"},
 	"upstream.claude":                                       {dropped, "making other clients look like Claude Code is out of scope"},
-	"upstream.claude.tool-search":                           {later, ""},
+	"upstream.claude.tool-search":                           {dropped, "Codex's tool search on Claude accounts: off by default, with no panel or app control"},
 	"upstream.claude.header-defaults":                       {dropped, "making other clients look like Claude Code is out of scope"},
 	"upstream.xai.inject-x-search":                          {supported, ""},
 
@@ -269,7 +269,8 @@ var rules = map[string]rule{
 	"observability.logs.error-logs-max-files":                 {supported, ""},
 	"observability.usage.usage-statistics-enabled":            {supported, ""},
 	"observability.usage.redis-usage-queue-retention-seconds": {dropped, "reading usage no longer removes it; the record keeps requests by usage.max_events and usage.max_age_ms"},
-	"observability.pprof":                                     {dropped, "a developer tool, off by default"},
+	"observability.pprof.enable":                              {supported, ""},
+	"observability.pprof.addr":                                {supported, ""},
 	"models":                                                  {later, ""},
 	"plugins":                                                 {dropped, "replaced by packages"},
 	"credentials":                                             {dropped, "only the Home control plane used them"},
@@ -313,7 +314,7 @@ var rules = map[string]rule{
 	"api-keys.openai-compatibility[].excluded-models":          {dead, ""}, // today's core has no such key there
 	"api-keys.claude[].cloak":                                  {dropped, "making other clients look like Claude Code is out of scope"},
 	"api-keys.claude[].fingerprint-profile":                    {dropped, "making other clients look like Claude Code is out of scope"},
-	"api-keys.claude[].native-tool-search":                     {later, ""},
+	"api-keys.claude[].native-tool-search":                     {dropped, "Codex's tool search on Claude accounts: off by default, with no panel or app control"},
 	"api-keys.claude[].rebuild-mid-system-message":             {supported, ""},
 	"api-keys.claude[].experimental-cch-signing":               {dead, ""},
 	"api-keys.meta":                                            {later, ""},
@@ -449,6 +450,7 @@ var readPaths = []string{
 	"multimedia.disable-image-generation", "oauth.auth-dir", "observability.usage.usage-statistics-enabled",
 	"observability.logs.logging-to-file", "observability.logs.logs-max-total-size-mb",
 	"observability.logs.request-log", "observability.logs.error-logs-max-files",
+	"observability.pprof.enable", "observability.pprof.addr",
 }
 
 // mappingsOn checks that every value on the way to path, below the root, is a mapping or
@@ -703,6 +705,21 @@ func (x *translator) observability() error {
 			return err
 		}
 		x.out["usage"] = tree{"enabled": on}
+	}
+	// The profiling pages' switch and address (today's pprof.enable and pprof.addr). Off, the
+	// address asks for nothing; the default address is core's own (server.defaultPprofAddr).
+	if on, err := flag(x.t, "observability.pprof.enable"); err != nil {
+		return err
+	} else if on {
+		pprof := tree{"enable": true}
+		addr, err := str(x.t, "observability.pprof.addr")
+		if err != nil {
+			return err
+		}
+		if addr != "" && addr != "127.0.0.1:8316" {
+			pprof["addr"] = addr
+		}
+		x.out["pprof"] = pprof
 	}
 	return nil
 }

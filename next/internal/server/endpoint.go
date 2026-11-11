@@ -194,6 +194,12 @@ func serveEndpoint(w http.ResponseWriter, r *http.Request, g *Generation, ep end
 		m.attempt(a, t.id)
 	}
 	stream := meterStream(g.Router.Generate(r.Context(), rr), m)
+	writeEndpointReply(w, r, stream, ep.format, f, m)
+}
+
+// writeEndpointReply checks and writes an endpoint's events. A nil meter records nothing.
+func writeEndpointReply(w http.ResponseWriter, r *http.Request, stream Stream, format string, f clientFormat, m *meter) {
+	r, t := requestTrace(r)
 	defer stream.Close()
 	fail := func(e *llm.Error) {
 		logFailure(r, e)
@@ -211,9 +217,9 @@ func serveEndpoint(w http.ResponseWriter, r *http.Request, g *Generation, ep end
 		fail(&llm.Error{Code: llm.CodeExtensionProtocol, Message: "the extension's endpoint reply does not start with its content type"})
 		return
 	}
-	if ev.Response.Format != ep.format {
+	if ev.Response.Format != format {
 		// A reply for another endpoint must not reach this one's client.
-		fail(&llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("the extension answered a %s request with a %s reply", ep.format, ev.Response.Format)})
+		fail(&llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("the extension answered a %s request with a %s reply", format, ev.Response.Format)})
 		return
 	}
 	sse := strings.HasPrefix(reply.ContentType, "text/event-stream")

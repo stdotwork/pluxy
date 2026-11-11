@@ -266,6 +266,7 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
         return;
       }
       steps.set(step, value);
+      if (step === "confirmations") console.log(`  ${mode} | native confirmations: ${JSON.stringify(value)}`);
       if (step === "frame") before = webProcesses(pid);
       if (step === "closed") {
         // Give the web processes a moment to exit, then let the app quit.
@@ -374,6 +375,8 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
     const ingress = steps.get("ingress");
     check(ingress?.control === true, "the native ingress check did not finish");
     if (ingress) console.log(`${mode} native ingress ${JSON.stringify(ingress)}`);
+
+    check(steps.get("confirmations")?.passed === true, "native confirmation checks did not complete");
 
     // Closing the window frees its webviews; the app stays in the tray.
     const closed = steps.get("closed") as
