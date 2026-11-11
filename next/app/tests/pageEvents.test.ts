@@ -1,7 +1,12 @@
 import { expect, test } from "bun:test";
 import { MAX_LABELS, MAX_WAITING, type PageMessage, PageRouter } from "../src/pageEvents";
 
-const hello = (label: string): PageMessage => ({ label, type: "hello", data: { pluxy: "page" } });
+const hello = (label: string): PageMessage => ({
+  label,
+  type: "hello",
+  generation: "1",
+  data: { pluxy: "page" },
+});
 
 test("a hello that comes before the window has the label still reaches its page", () => {
   const r = new PageRouter();
@@ -9,7 +14,7 @@ test("a hello that comes before the window has the label still reaches its page"
   const got: PageMessage[] = [];
   r.claim("page-1", (m) => got.push(m));
   expect(got).toEqual([hello("page-1")]);
-  r.deliver({ label: "page-1", type: "call", data: 1 });
+  r.deliver({ label: "page-1", type: "call", generation: "1", data: 1 });
   expect(got.length).toBe(2);
 });
 

@@ -19,6 +19,12 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Webview};
 
+#[path = "native_ingress.rs"]
+mod ingress;
+pub use ingress::{
+    count as ingress_count, forwarded as ingress_forwarded, operation as ingress_operation,
+};
+
 const WAIT: Duration = Duration::from_secs(120);
 
 /// Tauri's own commands a page webview might try.
@@ -177,7 +183,49 @@ fn run(app: &AppHandle) -> Result<(), String> {
             "frame",
             serde_json::from_str(&report).unwrap_or(json!(report)),
         );
+        wv.eval("window.addEventListener('message',e=>{if(e.data?.nativeHashChanged)window.__nativeHashChanged=true;});document.querySelector('iframe').contentWindow.postMessage({nativeHash:true},'*')")
+            .map_err(|e| e.to_string())?;
+        wait_for("frame location hash change", || {
+            eval(&wv, "window.__nativeHashChanged === true").filter(|v| v == true)
+        })?;
+        std::thread::sleep(Duration::from_millis(200));
+        if app
+            .state::<App>()
+            .pages
+            .lock()
+            .unwrap()
+            .document_closed(&label)
+        {
+            return Err("fragment navigation closed admission".into());
+        }
+        // The real HTTP pages-site frame navigates while wrapper closed is deliberately lost.
+        // The native navigation callback must invalidate admission before its new document loads.
+        wv.eval("{ const original=window.fetch; window.fetch=(u,o)=>o?.body && JSON.parse(o.body).type==='closed' ? Promise.resolve(new Response('',{status:204})) : original(u,o); const frame=document.querySelector('iframe');const next=new URL(frame.src);next.hash='';next.search='?native-second';frame.src=next.href; }").map_err(|e|e.to_string())?;
+        wait_for("native HTTP frame navigation closure", || {
+            app.state::<App>()
+                .pages
+                .lock()
+                .unwrap()
+                .document_closed(&label)
+                .then_some(())
+        })?;
+        wv.eval("fetch('/frame').then(r=>r.json()).then(info=>fetch('/send',{method:'POST',body:JSON.stringify({generation:info.generation,type:'call',data:{v:0,id:'after-http-navigation',method:'theme.get',params:null}})})).then(r=>window.__navStatus=r.status)").map_err(|e|e.to_string())?;
+        let status = wait_for("HTTP navigation refusal", || {
+            eval(&wv, "window.__navStatus ?? null").filter(|v| v.is_number())
+        })?;
+        if status != 409 {
+            return Err("HTTP frame navigation left native calls open".into());
+        }
+        wait_for("window closed state", || {
+            eval(&main,"document.querySelector('[data-part=extension-frame]')?.dataset.phase === 'closed' && document.body.innerText.includes('Load the page again')").filter(|v|v==true)
+        })?;
+        log(
+            "http_navigation",
+            json!({"native_closed":true,"status":status,"wrapper_closed_suppressed":true,"window_closed":true,"fragment_open":true}),
+        );
     }
+
+    ingress::run(app, &main)?;
 
     // For screenshots: keep the window open until this file exists.
     if let Ok(f) = std::env::var("PLUXY_APP_TEST_HOLD") {

@@ -58,6 +58,7 @@ var loginMethods = []protocol.LoginMethod{
 // authClient talks to xAI's login endpoints. Its timeout covers only signing in and renewing,
 // never a model request. It follows no redirect, which would send the form wherever it points.
 var authClient = &http.Client{
+	Transport:     sdk.Upstream(http.DefaultTransport.(*http.Transport).Clone()),
 	Timeout:       30 * time.Second,
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 }

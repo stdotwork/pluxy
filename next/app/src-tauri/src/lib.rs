@@ -307,6 +307,8 @@ async fn core_call(
     body: Option<Value>,
 ) -> Result<client::Reply, String> {
     trusted(&webview)?;
+    #[cfg(feature = "native-test")]
+    native_test::ingress_operation(&method, &path);
     let caller = state.conn.lock().unwrap().caller();
     tauri::async_runtime::spawn_blocking(move || caller.call(&method, &path, body.as_ref()))
         .await
@@ -356,14 +358,43 @@ fn page_open(
         pages_origin,
     })?;
     let app_doc = page_scheme_url();
+    let navigation_app = webview.app_handle().clone();
+    let navigation_label = label.clone();
     let builder = WebviewBuilder::new(&label, WebviewUrl::CustomProtocol(app_doc.clone()))
         // A web context of their own, apart from the window's storage and cookies. Not
         // `incognito`: on Linux, Tauri then gives the webview no custom schemes at all.
         .data_directory(state.pages_dir.clone())
         .devtools(false)
         // The app's document at the top, the page's site in its frame; nowhere else.
-        .on_navigation(move |u| *u == app_doc || u.origin() == origin)
-        .on_new_window(|_, _| NewWindowResponse::Deny);
+        .on_navigation(move |u| {
+            navigation_app
+                .state::<App>()
+                .pages
+                .lock()
+                .unwrap()
+                .frame_navigation(&navigation_label, u);
+            notify_page_closed(&navigation_app, &navigation_label);
+            #[cfg(feature = "native-test")]
+            if u.scheme() == pages::SCHEME
+                && u.host_str() == Some("localhost")
+                && u.path() == "/ingress-test"
+            {
+                return true;
+            }
+            *u == app_doc || u.origin() == origin
+        })
+        .on_new_window(|_, _| NewWindowResponse::Deny)
+        .on_page_load(|wv, p| {
+            if p.event() == PageLoadEvent::Started {
+                wv.app_handle()
+                    .state::<App>()
+                    .pages
+                    .lock()
+                    .unwrap()
+                    .begin_document(wv.label());
+                notify_page_closed(wv.app_handle(), wv.label());
+            }
+        });
     let window: Window = webview.window();
     let b = rect.bounds();
     let placed = window
@@ -417,12 +448,74 @@ fn page_close(webview: Webview, state: tauri::State<App>, label: String) -> Resu
 
 /// Delivers a message of the window's channel to a page webview's app document.
 #[tauri::command]
-fn page_send(webview: Webview, label: String, msg: Value) -> Result<(), String> {
+fn page_send(
+    webview: Webview,
+    label: String,
+    generation: String,
+    msg: Value,
+) -> Result<(), String> {
     trusted(&webview)?;
-    let js = pages::delivery(&msg)?;
-    page_webview(webview.app_handle(), &label)?
-        .eval(js)
-        .map_err(|e| e.to_string())
+    deliver_page(webview.app_handle(), &label, &generation, msg)
+}
+
+fn deliver_page(app: &AppHandle, label: &str, generation: &str, msg: Value) -> Result<(), String> {
+    let target = page_webview(app, label)?;
+    let prepared = app
+        .state::<App>()
+        .pages
+        .lock()
+        .unwrap()
+        .prepare_delivery(label, generation, &msg)?;
+    let Some((js, ticket)) = prepared else {
+        return Ok(());
+    };
+    let callback_app = app.clone();
+    let callback_label = label.to_string();
+    let callback_generation = generation.to_string();
+    let callback_msg = serde_json::json!({"type":msg["type"],"data":{"id":msg["data"]["id"],"event":msg["data"]["event"],"error":{"code":msg["data"]["error"]["code"]}}});
+    let result = target
+        .eval_with_callback(js, move |result| {
+            finish_page_delivery(
+                &callback_app,
+                &callback_label,
+                &callback_generation,
+                &callback_msg,
+                ticket,
+                result == "true",
+            );
+        })
+        .map_err(|e| e.to_string());
+    if result.is_err() {
+        finish_page_delivery(app, label, generation, &msg, ticket, false);
+    }
+    result
+}
+
+fn finish_page_delivery(
+    app: &AppHandle,
+    label: &str,
+    generation: &str,
+    msg: &Value,
+    ticket: u64,
+    delivered: bool,
+) {
+    let next = app
+        .state::<App>()
+        .pages
+        .lock()
+        .unwrap()
+        .finish_delivery(label, generation, msg, ticket, delivered);
+    notify_page_closed(app, label);
+    if let Some(next) = next {
+        let _ = deliver_page(app, label, generation, next);
+    }
+}
+
+fn notify_page_closed(app: &AppHandle, label: &str) {
+    let closed = app.state::<App>().pages.lock().unwrap().take_closed(label);
+    if let Some(closed) = closed {
+        let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-page", closed);
+    }
 }
 
 /// Initiates review of a native-prepared action. No approval result, recipe or gesture input.
@@ -462,21 +555,33 @@ fn page_scheme(
     let label = ctx.webview_label().to_string();
     let (served, msg) = {
         let st = app.state::<App>();
-        let pages = st.pages.lock().unwrap();
+        let mut pages = st.pages.lock().unwrap();
         pages::serve(
-            &pages,
+            &mut pages,
             &label,
             request.method().as_str(),
             request.uri().path(),
             request.body(),
         )
     };
+    #[cfg(feature = "native-test")]
+    native_test::ingress_count(
+        request.method().as_str(),
+        request.uri().path(),
+        served.status,
+        request.uri().query(),
+    );
     if let Some(m) = msg {
         #[cfg(all(target_os = "linux", feature = "native-test"))]
         if m.kind == "call" && m.data.get("id").and_then(Value::as_str) == Some("spoof-confirm") {
             confirmation::native::PAGE_CLAIMS.fetch_add(1, Ordering::SeqCst);
         }
-        let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-page", m);
+        let result = app.emit_to(EventTarget::webview(MAIN), "pluxy-page", m);
+        #[cfg(feature = "native-test")]
+        if result.is_ok() {
+            native_test::ingress_forwarded();
+        }
+        let _ = result;
     }
     let resp = Response::builder()
         .status(served.status)
@@ -487,6 +592,15 @@ fn page_scheme(
         .header("Referrer-Policy", "no-referrer")
         .body(served.body)
         .expect("a response");
+    #[cfg(feature = "native-test")]
+    let resp = {
+        let mut resp = resp;
+        resp.headers_mut().insert(
+            "Access-Control-Allow-Origin",
+            tauri::http::HeaderValue::from_static("*"),
+        );
+        resp
+    };
     responder.respond(resp);
 }
 
