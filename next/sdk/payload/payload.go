@@ -149,7 +149,7 @@ func (e *engine) run(r *Rules) {
 			continue
 		}
 		for _, p := range sortedKeys(rule.Params) {
-			for _, comps := range e.resolve(e.fullPath(p)) {
+			for _, comps := range e.resolveParam(p) {
 				e.override(comps, rule.Params[p])
 			}
 		}
@@ -164,7 +164,7 @@ func (e *engine) run(r *Rules) {
 			if !ok {
 				continue
 			}
-			for _, comps := range e.resolve(e.fullPath(p)) {
+			for _, comps := range e.resolveParam(p) {
 				e.overrideRaw(comps, raw)
 			}
 		}
@@ -175,7 +175,7 @@ func (e *engine) run(r *Rules) {
 			continue
 		}
 		for _, p := range rule.Params {
-			resolved := e.resolve(e.fullPath(p))
+			resolved := e.resolveParam(p)
 			// Last first, so removing an array element leaves the earlier indexes valid.
 			for k := len(resolved) - 1; k >= 0; k-- {
 				if out, ok := deleteValue(e.body, resolved[k]); ok {
@@ -197,13 +197,19 @@ func sortedKeys(m map[string]any) []string {
 
 func (e *engine) fullPath(path string) string {
 	root, path := strings.TrimSpace(e.in.Root), strings.TrimSpace(path)
-	switch {
-	case root == "":
+	if root == "" {
 		return path
-	case path == "":
-		return root
 	}
 	return root + "." + strings.TrimPrefix(path, ".")
+}
+
+// resolveParam resolves a rule's param path. A blank one names nothing: it must not name the
+// root, which would replace or delete the whole wrapped request.
+func (e *engine) resolveParam(path string) [][]string {
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	return e.resolve(e.fullPath(path))
 }
 
 func (e *engine) write(comps []string, raw []byte) bool {
@@ -220,7 +226,7 @@ func pathKey(comps []string) string { return strings.Join(comps, "\x00") }
 // writeDefault sets the field of each path the param resolves to when the source has no such
 // field and no earlier default wrote it.
 func (e *engine) writeDefault(path string, v any, raw bool) {
-	for _, comps := range e.resolve(e.fullPath(path)) {
+	for _, comps := range e.resolveParam(path) {
 		if e.sourceHas(comps) {
 			continue
 		}
@@ -590,7 +596,7 @@ func Validate(r *Rules) error {
 			where := fmt.Sprintf("payload.%s[%d]", s.name, i)
 			errs = append(errs, validateModels(where, rule.Models)...)
 			for _, p := range sortedKeys(rule.Params) {
-				errs = append(errs, validatePath(where+".params", p)...)
+				errs = append(errs, validateParamPath(where+".params", p)...)
 				if !s.raw {
 					continue
 				}
@@ -604,7 +610,7 @@ func Validate(r *Rules) error {
 		where := fmt.Sprintf("payload.filter[%d]", i)
 		errs = append(errs, validateModels(where, rule.Models)...)
 		for _, p := range rule.Params {
-			errs = append(errs, validatePath(where+".params", p)...)
+			errs = append(errs, validateParamPath(where+".params", p)...)
 		}
 	}
 	return errors.Join(errs...)
@@ -630,7 +636,16 @@ func validateModels(where string, models []Model) []error {
 	return errs
 }
 
-// validatePath checks one rule path. A blank path is skipped, as Apply skips it.
+// validateParamPath checks the path of a rule's param, which may not be blank.
+func validateParamPath(where, path string) []error {
+	if strings.TrimSpace(path) == "" {
+		return []error{fmt.Errorf("%s: path %q: the path is blank", where, path)}
+	}
+	return validatePath(where, path)
+}
+
+// validatePath checks one rule path of a model's conditions. A blank path is skipped, as Apply
+// skips it.
 func validatePath(where, path string) []error {
 	path = strings.TrimSpace(path)
 	if path == "" {

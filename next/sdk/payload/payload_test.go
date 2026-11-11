@@ -45,10 +45,42 @@ func loadCases(t *testing.T) []oldCase {
 	return cases
 }
 
-// Apply returns, byte for byte, what the old engine returned for the same rules and inputs.
+// deliberateDifferences lists the cases where Apply is meant to differ from the old engine, keyed
+// by case name. testdata/cases.json keeps the old engine's output for them; the test holds Apply
+// to the body given here instead.
+var deliberateDifferences = map[string]struct{ want, reason string }{
+	"filter blank path under a root removes the root": {
+		`{"request":{"a":1},"b":2}`,
+		"blank param paths are refused by Validate and skipped by Apply; the old engine mapped them to the root",
+	},
+	"override blank path under a root replaces the root": {
+		`{"request":{"a":1},"b":2}`,
+		"blank param paths are refused by Validate and skipped by Apply; the old engine mapped them to the root",
+	},
+}
+
+// Apply returns, byte for byte, what the old engine returned for the same rules and inputs,
+// except for the cases in deliberateDifferences.
 func TestApplyMatchesOldEngine(t *testing.T) {
-	for _, c := range loadCases(t) {
+	cases := loadCases(t)
+	known := map[string]bool{}
+	for _, c := range cases {
+		known[c.Name] = true
+	}
+	for name := range deliberateDifferences {
+		if !known[name] {
+			t.Errorf("deliberateDifferences lists %q, which is not a case in testdata/cases.json", name)
+		}
+	}
+	for _, c := range cases {
 		t.Run(c.Name, func(t *testing.T) {
+			want, why := c.Old, ""
+			if d, ok := deliberateDifferences[c.Name]; ok {
+				if d.want == c.Old {
+					t.Errorf("%q is listed as a deliberate difference but equals the old engine's output", c.Name)
+				}
+				want, why = d.want, " (deliberate difference: "+d.reason+")"
+			}
 			in := Input{
 				Model: c.Input.Model, RequestedModel: c.Input.RequestedModel, Protocol: c.Input.Protocol,
 				FromProtocol: c.Input.FromProtocol, Root: c.Input.Root, Headers: http.Header{},
@@ -63,11 +95,11 @@ func TestApplyMatchesOldEngine(t *testing.T) {
 			}
 			body := []byte(c.Body)
 			got, changed := Apply(&c.Rules, body, in)
-			if string(got) != c.Old {
-				t.Errorf("body\n got: %s\nwant: %s", got, c.Old)
+			if string(got) != want {
+				t.Errorf("body\n got: %s\nwant: %s%s", got, want, why)
 			}
-			if want := c.Old != c.Body; changed != want {
-				t.Errorf("changed = %v, want %v", changed, want)
+			if wantChanged := want != c.Body; changed != wantChanged {
+				t.Errorf("changed = %v, want %v", changed, wantChanged)
 			}
 			if string(body) != c.Body {
 				t.Errorf("Apply modified the body it was given")
@@ -105,7 +137,6 @@ func TestValidateRefuses(t *testing.T) {
 		{"query", params(`tools.#(name=="x")`), ""},
 		{"all matches query with a tail", params(`a.#(k=="v"&&n!=2||t==true)#.b`), ""},
 		{"escaped dot", params(`a\.b`), ""},
-		{"blank path is skipped", params("  "), ""},
 		{"wildcard", params("a.*.b"), `path "a.*.b": '*' is not supported`},
 		{"question mark", params("a?"), `'?' is not supported`},
 		{"pipe", params("a|b"), `'|' is not supported`},
@@ -144,6 +175,13 @@ func TestValidateRefuses(t *testing.T) {
 		{"raw text that is not JSON", &Rules{OverrideRaw: []Rule{{Models: model, Params: map[string]any{"a": `{"x":`}}}}, `payload.override-raw[0].params["a"]: the raw value is not valid JSON`},
 		{"raw bare word", &Rules{DefaultRaw: []Rule{{Models: model, Params: map[string]any{"a": "hello"}}}}, `payload.default-raw[0].params["a"]: the raw value is not valid JSON`},
 		{"raw empty text", &Rules{DefaultRaw: []Rule{{Models: model, Params: map[string]any{"a": "  "}}}}, "the raw value is not valid JSON"},
+		{"blank param path in default", &Rules{Default: []Rule{{Models: model, Params: map[string]any{"": 1}}}}, `payload.default[0].params: path "": the path is blank`},
+		{"whitespace param path in default-raw", &Rules{DefaultRaw: []Rule{{Models: model, Params: map[string]any{"  ": "1"}}}}, `payload.default-raw[0].params: path "  ": the path is blank`},
+		{"blank param path in override", &Rules{Override: []Rule{{Models: model, Params: map[string]any{"": 1}}}}, `payload.override[0].params: path "": the path is blank`},
+		{"whitespace param path in override-raw", &Rules{OverrideRaw: []Rule{{Models: model, Params: map[string]any{" \t": "1"}}}}, `payload.override-raw[0].params: path " \t": the path is blank`},
+		{"blank filter path", &Rules{Filter: []FilterRule{{Models: model, Params: []string{"ok", ""}}}}, `payload.filter[0].params: path "": the path is blank`},
+		{"whitespace filter path", &Rules{Filter: []FilterRule{{Models: model, Params: []string{"  "}}}}, `payload.filter[0].params: path "  ": the path is blank`},
+		{"blank condition paths are skipped", &Rules{Default: []Rule{{Models: []Model{{Name: "x", Exist: []string{" "}, NotExist: []string{""}, Match: []map[string]any{{"": 1}}, NotMatch: []map[string]any{{" ": 1}}}}}}}, ""},
 		{"raw null", &Rules{OverrideRaw: []Rule{{Models: model, Params: map[string]any{"a": nil}}}}, "the raw value is not valid JSON"},
 		{"raw null text is valid JSON, as in the old engine", &Rules{OverrideRaw: []Rule{{Models: model, Params: map[string]any{"a": "null", "b": " null "}}}}, ""},
 		{"plain value is not checked as JSON text", &Rules{Override: []Rule{{Models: model, Params: map[string]any{"a": "hello"}}}}, ""},
@@ -215,6 +253,49 @@ func TestApplyEdges(t *testing.T) {
 	}
 	if got, changed := Apply(r, []byte(`{"a":0}`), Input{}); changed || string(got) != `{"a":0}` {
 		t.Errorf("no model: got %q, changed %v", got, changed)
+	}
+}
+
+// A blank param path is refused by Validate and skipped by Apply: with a Root it must not name
+// the root itself, which would replace or delete the whole wrapped request.
+func TestApplySkipsBlankParamPaths(t *testing.T) {
+	models := []Model{{Name: "*"}}
+	for _, blank := range []string{"", "  ", "\t"} {
+		r := &Rules{
+			Default:     []Rule{{Models: models, Params: map[string]any{blank: 1}}},
+			DefaultRaw:  []Rule{{Models: models, Params: map[string]any{blank: "1"}}},
+			Override:    []Rule{{Models: models, Params: map[string]any{blank: false}}},
+			OverrideRaw: []Rule{{Models: models, Params: map[string]any{blank: "false"}}},
+			Filter:      []FilterRule{{Models: models, Params: []string{blank}}},
+		}
+		for _, root := range []string{"request", "", " request "} {
+			body := []byte(`{"request":{"model":"m"},"other":1}`)
+			in := Input{Model: "m", Root: root}
+			got, changed := Apply(r, body, in)
+			if changed || !bytes.Equal(got, body) {
+				t.Errorf("param path %q, root %q: Apply changed the body: %s", blank, root, got)
+			}
+		}
+	}
+	// Each list on its own, so a skipped blank in one list cannot hide a write from another.
+	lists := map[string]*Rules{
+		"default":      {Default: []Rule{{Models: models, Params: map[string]any{"": 1}}}},
+		"default-raw":  {DefaultRaw: []Rule{{Models: models, Params: map[string]any{"": "1"}}}},
+		"override":     {Override: []Rule{{Models: models, Params: map[string]any{"": 1}}}},
+		"override-raw": {OverrideRaw: []Rule{{Models: models, Params: map[string]any{"": "1"}}}},
+		"filter":       {Filter: []FilterRule{{Models: models, Params: []string{""}}}},
+	}
+	for name, r := range lists {
+		body := []byte(`{"request":{"model":"m"}}`)
+		if got, changed := Apply(r, body, Input{Model: "m", Root: "request"}); changed || !bytes.Equal(got, body) {
+			t.Errorf("%s: Apply changed the body: %s", name, got)
+		}
+	}
+	// A path that is not blank keeps working under the same root.
+	r := &Rules{Override: []Rule{{Models: models, Params: map[string]any{"": 1, "x": 2}}}}
+	got, _ := Apply(r, []byte(`{"request":{"model":"m"}}`), Input{Model: "m", Root: "request"})
+	if want := `{"request":{"model":"m","x":2}}`; string(got) != want {
+		t.Errorf("got %s, want %s", got, want)
 	}
 }
 
