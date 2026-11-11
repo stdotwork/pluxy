@@ -24,8 +24,9 @@ const Version = 0
 // reports it. Minor 1 adds sessions; minor 2 adds token counting and the request's thinking
 // suffix; minor 3 adds model listing; minor 4 adds account checks; minor 5 adds quota and the
 // identity of a login's grant; minor 6 adds an error's quota window; minor 7 adds endpoint calls;
-// minor 8 adds the request's caller; minor 9 adds a login grant's account settings.
-const Minor = 9
+// minor 8 adds the request's caller; minor 9 adds a login grant's account settings;
+// minor 10 adds the subscription's end time to quota.
+const Minor = 10
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
@@ -318,6 +319,8 @@ type CheckResult struct {
 type Quota struct {
 	// Plan names the account's plan for people, as the provider names it.
 	Plan string `json:"plan,omitempty"`
+	// PlanEndsAt is when the subscription ends, in Unix seconds; zero means unknown (0.10).
+	PlanEndsAt int64 `json:"plan_ends_at,omitempty"`
 	// Limits are the plan's limits: usage windows, allowances and balances.
 	Limits []QuotaLimit `json:"limits"`
 	// Raw holds the provider's replies the quota was read from, as one JSON object, for what

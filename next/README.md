@@ -15,6 +15,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | Path | What it is |
 | --- | --- |
 | `cmd/pluxy` | The core program. |
+| `cmd/pluxy-pack` | Builds each extension's release archives and the bundled registry index. |
 | `protocol/` | The extension protocol: [README](protocol/README.md), [tutorial](protocol/TUTORIAL.md), wire types and framing. |
 | `llm/` | The internal model of a request and its streamed reply, shared by core and extensions. |
 | `sdk/` | Go SDK for writing extensions. |
@@ -273,6 +274,35 @@ Today's core has no setting for this: it always estimates for those accounts.
 A config written for today's core, with its key names, works too: see
 [config.yaml with today's key names](#configyaml-with-todays-key-names).
 
+### Pack the extensions
+
+`pluxy-pack` builds every extension under `extensions/` as a release archive and writes the
+bundled registry index a fresh install starts from:
+
+```bash
+go run ./cmd/pluxy-pack -out dist -platforms linux/amd64,darwin/arm64
+```
+
+It writes one `dist/bundled/<publisher>-<name>-<version>-<goos>-<goarch>.tar.gz` per extension
+and platform, and `dist/bundled/index.json`, which pins each archive's SHA-256 and size. Packing
+the same sources twice gives byte-identical archives and index. `-platforms` defaults to the host
+platform; `-extensions codex,claude` packs only those extension folders, by folder name or
+package ID. `go run ./cmd/pluxy-pack -h` lists the flags.
+
+Core installs and enables every package the bundled index lists on its first start with an
+empty packages folder:
+
+```bash
+go build -trimpath -ldflags "-s -w" -o pluxy ./cmd/pluxy
+./pluxy -config config.json -bundled dist/bundled/index.json
+```
+
+`pluxy` itself is a plain `go build` of `./cmd/pluxy`, as above; the `-ldflags` only make it
+smaller. Without `-bundled`, core looks for `bundled/index.json` beside the `pluxy` program, so
+an install is the program with the packed `bundled` folder next to it. The same `index.json`,
+uploaded beside the archives to an `https://` location, is a registry like any other: its
+relative archive URLs resolve against the index.
+
 ## Codex
 
 The Codex provider extension (`extensions/codex`) serves OpenAI's Codex models from an OpenAI API
@@ -421,7 +451,7 @@ plan's models without the image models and has no quota to report. Binding SIWC 
 subscription, as today's core does through its management API (`/v8/management/oauth/siwc/*`)
 and its `-siwc-bind` flag, is not built: the login method replaces it.
 
-**Quota.** For a ChatGPT sign-in account, `GET /v0/management/accounts/{id}/quota` reads `GET {backend}/wham/usage`, where `{backend}` is the account's `base_url` without a trailing `/codex` (default `https://chatgpt.com/backend-api`), with the access token, the `Chatgpt-Account-Id` header and the same `User-Agent` and `Originator` the account's requests carry (so `codex_identity` applies). It reports the plan (`plan_type`), the 5-hour and weekly or monthly windows (`five_hour`, `weekly`, `monthly`), code review's windows (`code_review_*`), each extra limit such as one model's (`<name>_five_hour` and so on) and the credit balance (`credits`), with the share used, reset time and window length. An API key or a SIWC account answers unsupported. A sign-in's grant carries `identity` `{"email", "account_id"}`: members of one ChatGPT workspace share its account ID, so the e-mail address tells them apart.
+**Quota.** For a ChatGPT sign-in account, `GET /v0/management/accounts/{id}/quota` reads `GET {backend}/wham/usage`, where `{backend}` is the account's `base_url` without a trailing `/codex` (default `https://chatgpt.com/backend-api`), with the access token, the `Chatgpt-Account-Id` header and the same `User-Agent` and `Originator` the account's requests carry (so `codex_identity` applies). It also reads `GET {backend}/subscriptions?account_id=...` for `active_until` (reported as optional `plan_ends_at` in Unix seconds), and `GET {backend}/wham/rate-limit-reset-credits` for `available_count` (the `reset_credits` limit, labelled "Manual resets", with `remaining` in `resets`). Both extra reads use the same identity; a failed extra read leaves its field out without failing the usage read. Nothing spends a reset. It reports the plan (`plan_type`), the 5-hour and weekly or monthly windows (`five_hour`, `weekly`, `monthly`), code review's windows (`code_review_*`), each extra limit such as one model's (`<name>_five_hour` and so on) and the credit balance (`credits`), with the share used, reset time and window length. An API key or a SIWC account answers unsupported. A sign-in's grant carries `identity` `{"email", "account_id"}`: members of one ChatGPT workspace share its account ID, so the e-mail address tells them apart.
 
 ## Claude
 
@@ -1223,7 +1253,7 @@ send it as a bearer token. With a management key set, the config may set no acco
 | `POST /accounts/{id}/cooldown/reset` | Clears the account's cooldowns, on its credential, its models and its endpoint (which accounts naming the same endpoint share), with their backoff steps and its last error, so it serves again at once. Works for config accounts too. Replies with `cleared`, the number of live blocks it cleared, and the account. |
 | `GET /accounts/{id}/models` | The models the account serves: its config's `models` when it lists them, else the ones its extension lists for it (the protocol's [`models`](protocol/README.md#models)). Each has its upstream `id`, what the extension says about it, `names` (the names clients use for it after the account's exclusions, aliases and prefix, and its extension's defaults for logins) and `excluded` when `excluded_models` leaves it out. |
 | `POST /accounts/{id}/test` | Sends the account one small request (`Hi`, at most 16 tokens of reply), straight to its extension: its cooldowns are ignored and its routing state is left as it is. `{"model": ...}` names the model by its upstream name; without it, the first the account serves. Replies 200 with `result`: `ok`, `model`, `served_model`, `latency_ms`, the start of the `reply`, `finish_reason` and `usage`, or `error`. The request spends what a request that size costs. |
-| `GET /accounts/{id}/quota` | The account's plan and usage, read from its provider when asked (the protocol's [`quota`](protocol/README.md#quota)): `quota` with `plan`, `limits` (each with `id`, `label`, and what the provider gives of `used_percent`, `used`, `limit`, `remaining`, `unit`, `unlimited`, `resets_at`, `window_seconds`, `models`) and `raw`, the provider's replies; and `fetched_at`. 422 with code `unsupported` for an account with no plan to report, such as an API key, or whose extension reads no quota; 502 with the provider's error code when the provider refused or failed. Each provider's section says what it reports. |
+| `GET /accounts/{id}/quota` | The account's plan and usage, read from its provider when asked (the protocol's [`quota`](protocol/README.md#quota)): `quota` with `plan`, optional `plan_ends_at` (the subscription end in Unix seconds), `limits` (each with `id`, `label`, and what the provider gives of `used_percent`, `used`, `limit`, `remaining`, `unit`, `unlimited`, `resets_at`, `window_seconds`, `models`) and `raw`, the provider's replies; and `fetched_at`. 422 with code `unsupported` for an account with no plan to report, such as an API key, or whose extension reads no quota; 502 with the provider's error code when the provider refused or failed. Each provider's section says what it reports. |
 | `GET /login-methods` | For each running extension that signs in, its `extension` ID and `methods`: each `method`, `kind` (`browser`, `device`, `api_key`), `label` and the `inputs` it asks for (`name`, `label`, `secret`, `optional`), as its describe reports them; what a panel needs to offer "add account". |
 | `DELETE /accounts/{id}` | Removes the account and its credential. |
 
