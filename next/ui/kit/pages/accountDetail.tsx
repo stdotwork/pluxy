@@ -15,6 +15,7 @@ import {
   useKit,
   when,
 } from "../ui";
+import { AccountTools } from "./accountTools";
 
 const t = strings("accountDetail", {
   disabled: "disabled",
@@ -33,7 +34,6 @@ const t = strings("accountDetail", {
   setInConfig: "This account is set in core's config; change it there.",
   enable: "Enable",
   disable: "Disable",
-  renew: "Renew now",
   remove: "Remove",
 });
 
@@ -86,11 +86,6 @@ export function AccountDetail(props: AccountDetailProps) {
           <Button disabled={act.busy} onClick={() => act.run(() => api.setDisabled(a.id, !a.disabled))}>
             {a.disabled ? t("enable") : t("disable")}
           </Button>
-          {a.refreshable && (
-            <Button disabled={act.busy} onClick={() => act.run(() => api.refresh(a.id))}>
-              {t("renew")}
-            </Button>
-          )}
           <ConfirmButton
             disabled={act.busy || remove.busy}
             onConfirm={() => remove.run(() => api.removeAccount(a.id))}
@@ -99,6 +94,7 @@ export function AccountDetail(props: AccountDetailProps) {
           </ConfirmButton>
         </div>
       )}
+      <AccountTools key={a.id} account={a} onChanged={props.onChanged} />
     </Detail>
   );
 }
