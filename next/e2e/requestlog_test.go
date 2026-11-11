@@ -289,3 +289,73 @@ func TestRequestLogWebSocketTurn(t *testing.T) {
 	}
 	wantNoSecrets(t, "the turn log", text, clientKey, "sk-ws-secret", managementKey)
 }
+
+// Both JSON-only UI hosts can read the same content as a plain download, with a bounded read.
+func TestRequestLogJSON(t *testing.T) {
+	c := startManaged(t, false)
+	code, trace := requestWithSecrets(t, c.base, "nobody")
+	if code != http.StatusNotFound {
+		t.Fatalf("failed request: %d %q", code, trace)
+	}
+	files := c.errorLogs(t).Files
+	if len(files) != 1 {
+		t.Fatalf("error logs: %+v", files)
+	}
+	name := files[0].Name
+	trace = strings.TrimSuffix(name[len(name)-35:], ".log")
+	plain := c.download(t, "/request-error-logs/"+name)
+	for _, path := range []string{"/request-error-logs/" + name, "/request-log-by-id/" + trace} {
+		var got struct {
+			Name    string
+			Size    int64
+			Content string
+		}
+		body := c.expect(t, http.StatusOK, http.MethodGet, path+"?format=json", nil)
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatalf("GET %s?format=json is not JSON: %v; body: %.100s", path, err, body)
+		}
+		if got.Name != name || got.Size != int64(len(plain)) || got.Content != plain {
+			t.Fatalf("GET %s: %+v", path, got)
+		}
+	}
+	// Exactly 2 MiB is accepted. One byte more is refused without a partial reply.
+	path := filepath.Join(c.logsDir(), name)
+	big := strings.Repeat("x", 2<<20)
+	if err := os.WriteFile(path, []byte(big), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var exact struct {
+		Size    int64
+		Content string
+	}
+	if err := json.Unmarshal(c.expect(t, http.StatusOK, http.MethodGet, "/request-error-logs/"+name+"?format=json", nil), &exact); err != nil {
+		t.Fatal(err)
+	}
+	if exact.Size != 2<<20 || exact.Content != big {
+		t.Fatal("2 MiB content changed")
+	}
+	if err := os.WriteFile(path, []byte(big+"x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, route := range []string{"/request-error-logs/" + name, "/request-log-by-id/" + trace} {
+		body := c.expect(t, http.StatusRequestEntityTooLarge, http.MethodGet, route+"?format=json", nil)
+		var failure struct {
+			Error   struct{ Code string }
+			Content *string
+		}
+		if err := json.Unmarshal(body, &failure); err != nil || failure.Error.Code != "log_too_large" || failure.Content != nil {
+			t.Fatalf("oversize response: %.100s", body)
+		}
+	}
+	if got := c.download(t, "/request-error-logs/"+name); got != big+"x" {
+		t.Fatal("plain download was truncated")
+	}
+	// JSON keeps the download's protection against links out of the log folder.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(c.path, path); err != nil {
+		t.Fatal(err)
+	}
+	c.expect(t, http.StatusNotFound, http.MethodGet, "/request-error-logs/"+name+"?format=json", nil)
+}
