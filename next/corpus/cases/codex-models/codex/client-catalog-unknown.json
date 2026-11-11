@@ -10,12 +10,6 @@
       "kind": "intended",
       "reason": "Only models with a Codex client catalog template are advertised; synthesizing unknown capabilities from a default model would mislead the client.",
       "want": []
-    },
-    {
-      "path": "client.headers.X-Cpa-Trace-Id",
-      "kind": "intended",
-      "reason": "Catalog replies use the same endpoint tracing as other provider endpoints; the old core serves this list without a trace header.",
-      "want": "(volatile)"
     }
   ],
   "recorded_old_core": {

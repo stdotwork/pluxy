@@ -336,4 +336,4 @@ cores with the same configured account models. The runner already preserves the 
 The recorded replies cover the current and legacy reasoning levels. An unknown model is omitted
 by the new catalog, while the old core synthesizes it from a default template; that intended
 exception pins an empty catalog to avoid claiming capabilities for an unknown model. Catalog
-replies also use endpoint tracing here, so their trace header is an intended exception.
+requests bypass routing and usage recording, so no account trace header is added.

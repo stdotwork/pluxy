@@ -34,16 +34,31 @@ var clientTemplates = sync.OnceValue(func() map[string]map[string]json.RawMessag
 })
 
 func clientModels(call sdk.Call, out *sdk.Stream) error {
+	body, err := buildClientModels(call.Request.Native.Body)
+	if err != nil {
+		return err
+	}
+	if err := out.StartBody("codex.models", "application/json; charset=utf-8"); err != nil {
+		return err
+	}
+	if err := out.Body(string(body)); err != nil {
+		return err
+	}
+	return out.Finish(llm.Finish{Reason: llm.FinishStop}, nil)
+}
+
+func buildClientModels(body []byte) ([]byte, error) {
 	var wire struct {
 		Version string `json:"client_version"`
 		Models  []struct {
 			Name        string `json:"name"`
 			Upstream    string `json:"upstream"`
 			DisplayName string `json:"display_name"`
+			NonCodex    bool   `json:"non_codex"`
 		} `json:"models"`
 	}
-	if err := json.Unmarshal(call.Request.Native.Body, &wire); err != nil {
-		return &llm.Error{Code: llm.CodeInvalidRequest, Scope: llm.ScopeRequest, Message: "invalid Codex catalog request"}
+	if err := json.Unmarshal(body, &wire); err != nil {
+		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Scope: llm.ScopeRequest, Message: "invalid Codex catalog request"}
 	}
 	entries := make([]map[string]json.RawMessage, 0, len(wire.Models))
 	templates := clientTemplates()
@@ -62,6 +77,18 @@ func clientModels(call sdk.Call, out *sdk.Stream) error {
 		}
 		delete(m, "cpa_capabilities")
 		filterClientReasoning(m, wire.Version)
+		if n.NonCodex {
+			for k, v := range map[string]json.RawMessage{
+				"prefer_websockets": raw(false), "service_tiers": raw([]any{}),
+				"apply_patch_tool_type": raw(nil), "tool_mode": raw("direct"), "use_responses_lite": raw(false),
+				"supports_reasoning_effort_updates": raw(false), "upgrade": raw(nil), "availability_nux": raw(nil), "supports_search_tool": raw(false),
+			} {
+				m[k] = v
+			}
+			if _, ok := m["supports_image_detail_original"]; ok {
+				m["supports_image_detail_original"] = raw(false)
+			}
+		}
 		entries = append(entries, m)
 	}
 	slices.SortStableFunc(entries, func(a, b map[string]json.RawMessage) int {
@@ -80,15 +107,9 @@ func clientModels(call sdk.Call, out *sdk.Stream) error {
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(map[string]any{"models": entries}); err != nil {
-		return err
+		return nil, err
 	}
-	if err := out.StartBody("codex.models", "application/json; charset=utf-8"); err != nil {
-		return err
-	}
-	if err := out.Body(strings.TrimSpace(buf.String())); err != nil {
-		return err
-	}
-	return out.Finish(llm.Finish{Reason: llm.FinishStop}, nil)
+	return bytes.TrimSpace(buf.Bytes()), nil
 }
 
 func filterClientReasoning(m map[string]json.RawMessage, version string) {

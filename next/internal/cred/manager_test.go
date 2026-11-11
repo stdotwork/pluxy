@@ -692,3 +692,20 @@ func TestReauthOfAnotherRegistrationIsRefused(t *testing.T) {
 		t.Fatalf("StartLogin = %v, want ErrConflict", err)
 	}
 }
+
+func TestStoredCredentialDoesNotRenew(t *testing.T) {
+	p := &fakeProvider{}
+	m, store := newManager(t, p, -time.Hour)
+	rec := store.List()[0]
+	c, e := m.StoredCredential(provID, rec.ID)
+	if e != nil || c == nil || c.AccessToken != "access-0" || p.refreshCalls() != 0 {
+		t.Fatalf("stored credential=%+v error=%v refreshes=%d", c, e, p.refreshCalls())
+	}
+	if c, e := m.StoredCredential("another-extension", rec.ID); e == nil || c != nil {
+		t.Fatal("stored credential crossed extension boundary")
+	}
+	c.AccessToken = "changed copy"
+	if rec, _ := store.Get(rec.ID); rec.Credential.AccessToken != "access-0" {
+		t.Fatal("stored credential was changed by caller")
+	}
+}

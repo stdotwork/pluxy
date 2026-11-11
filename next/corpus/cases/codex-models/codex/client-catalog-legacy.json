@@ -4,14 +4,6 @@
   "client": {"method":"GET","path":"/v1/models?client_version=0.143.0"},
   "account_models": ["gpt-6.1-sol"],
   "upstream": [],
-  "exceptions": [
-    {
-      "path": "client.headers.X-Cpa-Trace-Id",
-      "kind": "intended",
-      "reason": "Catalog replies use the same endpoint tracing as other provider endpoints; the old core serves this list without a trace header.",
-      "want": "(volatile)"
-    }
-  ],
   "recorded_old_core": {
     "client": {
       "body": {

@@ -316,7 +316,7 @@ func TestOldAccountsLeaveNoModelList(t *testing.T) {
 }
 
 // Catalog endpoint names retain upstream IDs and use the same cache and naming rules as
-// ordinary lists, while leaving other extensions out even when they share a public name.
+// ordinary lists, while flagging names that other extensions can also serve.
 func TestModelNames(t *testing.T) {
 	h := newHarness(t, Config{ForceModelPrefix: true},
 		Account{ID: "other", Extension: "other", Models: []ModelEntry{{Name: "wrong", Alias: "one"}}},
@@ -326,18 +326,15 @@ func TestModelNames(t *testing.T) {
 	reads := 0
 	h.r.UseCatalog(func(_ context.Context, a Account, _ *protocol.Credential) (*protocol.ModelList, *llm.Error) {
 		reads++
-		if a.ID == "other" {
-			t.Error("read another extension's catalog")
-		}
 		return &protocol.ModelList{Models: []protocol.Model{{ID: "up"}, {ID: "excluded"}}}, nil
 	})
-	want := []Name{{Public: "one", Upstream: "up", Base: "up", DisplayName: "up"}, {Public: "team/coding", Upstream: "up", Base: "up", DisplayName: "Coding"}}
+	want := []Name{{Public: "one", Upstream: "up", Base: "up", DisplayName: "up", NonCodex: true}, {Public: "team/coding", Upstream: "up", Base: "up", DisplayName: "Coding"}}
 	for range 2 {
 		if got := h.r.ModelNames(t.Context(), "codex"); !reflect.DeepEqual(got, want) {
 			t.Fatalf("names = %+v, want %+v", got, want)
 		}
 	}
-	if reads != 2 {
-		t.Fatalf("catalog reads = %d, want 2 cached accounts", reads)
+	if reads != 3 {
+		t.Fatalf("catalog reads = %d, want 3 cached accounts", reads)
 	}
 }

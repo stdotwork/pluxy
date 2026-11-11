@@ -1239,14 +1239,23 @@ parameter the lists above keep their usual shape.
 Core resolves the models served by accounts of `pluxy/codex` with the same exclusions, aliases
 and prefixes as the normal list. It sends one `codex.models` endpoint call containing the client
 version and each model's public and upstream names. The Codex extension loads its embedded
-catalog on the first such call, preserves its fields, selects templates by upstream name and
-sets each `slug` to the public name. The catalog keeps `minimal_client_version` from the template;
+catalog on the first such call and selects templates by upstream name. It removes
+`cpa_capabilities`, replaces `slug` with the public name and `display_name` when provided,
+and clears Codex-only options for names that a non-Codex account can also serve. The catalog
+keeps `minimal_client_version` from the template;
 clients below 0.144.0 receive reasoning levels only through `xhigh`, while empty or unparseable
 versions keep modern levels. Models without a template are omitted: a routing entry alone
 does not establish the capabilities the Codex client needs. The extension filters reasoning
 levels for older clients as today's core does. Catalog data stays in the extension program;
 core neither embeds it nor keeps a copy per account. No upstream request or remote refresh is
 made for this list.
+
+The call goes directly to the first enabled, usable Codex account in account order, with only
+its ID and no credential. It ignores cooldowns and concurrency limits, renews no credentials,
+records no routing result or usage event, and leaves account rotation alone. Model discovery
+uses saved credentials for plan metadata without renewing them. With no enabled, usable Codex
+account (including a configuration with only other extensions), the reply is 200
+`{"models":[]}`.
 
 To refresh the catalog by hand, from the repository root copy the reviewed catalog and rebuild
 the extension:

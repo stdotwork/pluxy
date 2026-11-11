@@ -1,15 +1,14 @@
 package server
 
 import (
-	"bytes"
 	"cmp"
 	"encoding/json"
-	"io"
 	"net/http"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
@@ -96,16 +95,38 @@ func serveModels(mux *http.ServeMux, src Source) {
 
 // serveCodexModels sends names and the client version to the extension that holds the catalog.
 func serveCodexModels(w http.ResponseWriter, r *http.Request, g *Generation) {
-	models := make([]map[string]string, 0)
+	// Router.Accounts contains only enabled, usable accounts, in their configured order.
+	var account *protocol.Account
+	for _, a := range g.Router.Accounts() {
+		if a.Extension == "pluxy/codex" {
+			account = &protocol.Account{ID: a.ID}
+			break
+		}
+	}
+	if account == nil {
+		writeList(w, http.StatusOK, map[string]any{"models": []any{}})
+		return
+	}
+	if g.Endpoint == nil {
+		chatFormat.writeError(w, &llm.Error{Code: llm.CodeNotFound, Status: http.StatusNotFound, Message: "this endpoint is not served"})
+		return
+	}
+	models := make([]map[string]any, 0)
 	for _, n := range g.Router.ModelNames(r.Context(), "pluxy/codex") {
-		models = append(models, map[string]string{"name": n.Public, "upstream": n.Upstream, "display_name": n.DisplayName})
+		model := map[string]any{"name": n.Public, "upstream": n.Upstream}
+		if n.DisplayName != "" {
+			model["display_name"] = n.DisplayName
+		}
+		if n.NonCodex {
+			model["non_codex"] = true
+		}
+		models = append(models, model)
 	}
 	body, _ := json.Marshal(map[string]any{"client_version": r.URL.Query().Get("client_version"), "models": models})
-	// This GET's endpoint body is made by core; preserve its context and headers.
-	req := r.Clone(r.Context())
-	req.Body = io.NopCloser(bytes.NewReader(body))
-	req.ContentLength = int64(len(body))
-	serveEndpoint(w, req, g, endpoint{format: "codex.models", modelOptional: true})
+	req := llm.Request{Native: &llm.Native{Format: "codex.models", Body: body}}
+	// The catalog uses no credential and bypasses routing, reservations, renewal and usage.
+	stream := g.Endpoint(r.Context(), "pluxy/codex", *account, req)
+	writeEndpointReply(w, r, stream, "codex.models", chatFormat, nil)
 }
 
 // anthropicClient reports whether a model list request comes from an Anthropic client: it sends
