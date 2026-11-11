@@ -125,7 +125,7 @@ export function ConfigSettings(props: {
                 <label class="field" data-part="field" for={field.key}>
                   <span class="label">{field.label}</span>
                   {field.kind === "strategy" ? (
-                    <select value={String(value)} onChange={(e) => set(e.currentTarget.value)}>
+                    <select id={field.key} value={String(value)} onChange={(e) => set(e.currentTarget.value)}>
                       <option value="round-robin">{t("roundRobin")}</option>
                       <option value="weighted-round-robin">{t("weighted")}</option>
                       <option value="fill-first">{t("fillFirst")}</option>
