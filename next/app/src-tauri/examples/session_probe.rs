@@ -29,6 +29,8 @@ fn main() {
         ["watcher"] => linux::watcher(),
         ["portal"] => linux::portal(),
         ["owner", name] => linux::owner(name),
+        // The same gate as trust::write_test_marker.
+        #[cfg(debug_assertions)]
         ["trust-marker", home] => pluxy_app::trust::write_test_marker(std::path::Path::new(home))
             .map(|nonce| vec![format!("nonce={nonce}")]),
         _ => Err(
