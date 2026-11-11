@@ -313,25 +313,8 @@ fn format(path: &Path) -> Result<Format, String> {
     };
     // The AppImage specification's magic: "AI" and the type at offset 8.
     if header[8..10] != *b"AI" {
-        // An executable or shared object for a machine, with its own header size and program
-        // headers that lie inside the file: not just the first bytes of one.
         let len = file.metadata().map_err(|e| format!("{what}: {e}"))?.len();
-        let (ehsize, phentsize, phoff, sizes) = match header[4] {
-            1 => (52, 32, field(0x1c, 4)?, 0x28),
-            2 => (64, 56, field(0x20, 8)?, 0x34),
-            _ => return Err(unsupported()),
-        };
-        let phnum = field(sizes + 4, 2)?;
-        let well_formed = matches!(field(0x10, 2)?, 2 | 3)
-            && field(0x12, 2)? != 0
-            && field(sizes, 2)? == ehsize
-            && field(sizes + 2, 2)? == phentsize
-            && phnum >= 1
-            && phoff >= ehsize
-            && phoff
-                .checked_add(phentsize * phnum)
-                .is_some_and(|end| end <= len);
-        return if well_formed {
+        return if well_formed_elf(&header, len) {
             Ok(Format::Executable)
         } else {
             Err(unsupported())
@@ -381,6 +364,44 @@ fn format(path: &Path) -> Result<Format, String> {
         ));
     }
     Ok(Format::AppImage(offset))
+}
+
+/// An ELF executable or shared object for a machine, with its own header size and program
+/// headers that lie inside the file (len bytes): not just the first bytes of one. header is the
+/// file's first bytes, at least its ELF header.
+fn well_formed_elf(header: &[u8], len: u64) -> bool {
+    if header.len() < 20 || header[..4] != *b"\x7fELF" || !matches!(header[5], 1 | 2) {
+        return false;
+    }
+    let field = |at: usize, size: usize| -> Option<u64> {
+        let bytes = header.get(at..at + size)?;
+        let mut value = 0u64;
+        for (i, b) in bytes.iter().enumerate() {
+            let shift = if header[5] == 1 { i } else { size - 1 - i };
+            value |= u64::from(*b) << (8 * shift);
+        }
+        Some(value)
+    };
+    let (ehsize, phentsize, phoff, sizes) = match header[4] {
+        1 => (52, 32, field(0x1c, 4), 0x28),
+        2 => (64, 56, field(0x20, 8), 0x34),
+        _ => return false,
+    };
+    let check = || -> Option<bool> {
+        let (phoff, phnum) = (phoff?, field(sizes + 4, 2)?);
+        Some(
+            matches!(field(0x10, 2)?, 2 | 3)
+                && field(0x12, 2)? != 0
+                && field(sizes, 2)? == ehsize
+                && field(sizes + 2, 2)? == phentsize
+                && phnum >= 1
+                && phoff >= ehsize
+                && phoff
+                    .checked_add(phentsize * phnum)
+                    .is_some_and(|end| end <= len),
+        )
+    };
+    check() == Some(true)
 }
 
 /// Streams reader with overlap, so markers split across reads are still found; no
@@ -709,7 +730,7 @@ fn scan_tree(
                 .map_err(|e| format!("{what}: {e}"))?;
             let has = scan_stream(file, &what)?;
             if path.strip_prefix(root).is_ok_and(|p| p == app) {
-                *receipt = has && head.starts_with(b"\x7fELF");
+                *receipt = has && well_formed_elf(&head, meta.len());
             }
             check_json(&path, name.ends_with(".json"), first, meta.len(), &what)?;
         } else {
@@ -789,6 +810,9 @@ fn check_link(root: &Path, link: &Path, what: &str) -> Result<(), String> {
             for part in parts(&read(&next)?, what)?.into_iter().rev() {
                 todo.push_front(part);
             }
+        } else if !meta.is_dir() && !todo.is_empty() {
+            // As the system requires: only a folder can have more of the path after it.
+            return Err(format!("{what}: link goes through a file"));
         } else {
             here.push(name);
         }
@@ -841,8 +865,8 @@ fn container(head: &[u8]) -> Option<&'static str> {
 
 /// JSON inside a package: a file named .json, or one whose first byte past whitespace is `{`. It is
 /// decoded before it is checked, so escapes cannot hide a name or field; trust-shaped JSON,
-/// whatever its name, must be empty trust; JSON that cannot be checked is refused, and so is an
-/// unnamed file that starts like JSON, does not parse and names trust fields.
+/// whatever its name, must be empty trust; JSON that cannot be checked is refused, and so is any
+/// unnamed file that starts like a JSON object and does not parse.
 fn check_json(
     path: &Path,
     named: bool,
@@ -860,10 +884,12 @@ fn check_json(
     let value: Value = match serde_json::from_slice(&bytes) {
         Ok(value) => value,
         Err(_) if named => return Err(format!("{what}: invalid JSON")),
-        Err(_) if first_of(&bytes, &[b"\"roots\"", b"\"updater\""]).is_some() => {
-            return Err(format!("{what}: malformed JSON with trust fields"));
+        // Escapes can hide a trust field from any byte search, so none is tried.
+        Err(_) => {
+            return Err(format!(
+                "{what}: JSON that does not parse, so its trust fields cannot be checked"
+            ))
         }
-        Err(_) => return Ok(()),
     };
     if value.get("roots").is_some() || value.get("updater").is_some() {
         empty_trust(&bytes).map_err(|e| format!("{what}: {e}"))?;

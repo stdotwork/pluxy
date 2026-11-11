@@ -381,12 +381,13 @@ but zero padding under 4 KiB. `unsquashfs` (package `squashfs-tools`) first list
 (only folders, regular files and links; at most 100,000 entries, 32 folders deep and 2 GiB
 unpacked), then unpacks it into a private temporary folder, each within 10 minutes and with its
 output capped (64 MiB of listing, 1 MiB otherwise). Every name, link and file inside is checked:
-links are resolved one name at a time as the system would and must lead to an entry inside the
-package; compressed and archive files with a known signature are refused; JSON (named `.json`,
+links are resolved one name at a time as the system would (only a folder can have more of the
+path after it) and must lead to an entry inside the package; compressed and archive files with a known signature are refused; JSON (named `.json`,
 or whose first byte past whitespace is `{`) is decoded before it is checked, trust-shaped JSON
-must be empty trust whatever its name, JSON over 1 MiB or invalid is refused, and so is an
-unnamed file that starts like JSON, does not parse and names trust fields; the receipt must be
-in the package's app executable, `usr/bin/<mainBinaryName>` (`usr/bin/pluxy-app` by default).
+must be empty trust whatever its name, JSON over 1 MiB or invalid is refused, and so is any
+unnamed file that starts like JSON and does not parse; the receipt must be in the package's app
+executable, `usr/bin/<mainBinaryName>` (`usr/bin/pluxy-app` by default), which must be a
+well-formed ELF executable as above.
 The gate checks our own build for test material; it does not stand against a hostile builder.
 A compressed file whose encoding has no known signature (raw deflate, brotli) is scanned as it
 is, so test material inside one would pass. Then every byte of the AppImage is
