@@ -142,7 +142,8 @@ export async function checkRecovery(
     });
     return { acted, refused };
   };
-  const refused = async (label: (typeof LABELS)[number], mode: string, reason: string) => {
+  /** mode null: the handler refused without reading the connection, as it does while busy. */
+  const refused = async (label: (typeof LABELS)[number], mode: string | null, reason: string) => {
     const r = await click(label);
     soft(
       r.refused?.mode === mode && r.refused?.reason === reason && !r.acted,
@@ -201,7 +202,9 @@ export async function checkRecovery(
   if (held) {
     await flags("busy", OFF);
     soft(menu().has("Core working…"), "the tray does not say the core is working");
-    await refused("Stop core", "managed", "busy");
+    // The busy refusal comes before the handler reads the connection, which the held action
+    // may be about to lock, so it carries no mode.
+    await refused("Stop core", null, "busy");
   }
   rmSync(hold, { force: true });
   let s = await wait("tray Start", running);

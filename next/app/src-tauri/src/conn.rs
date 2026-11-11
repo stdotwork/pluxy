@@ -711,4 +711,63 @@ mod tests {
             .contains("secret-key-123"));
         fs::remove_dir_all(dir).unwrap();
     }
+
+    /// A core can exit while the app is still starting, before anything can act on its exit
+    /// callback. Asking the connection afterwards, as the app's setup does, schedules recovery.
+    #[cfg(unix)]
+    #[test]
+    fn a_core_that_exits_before_anyone_watches_is_recovered() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::Duration;
+        let dir =
+            std::env::temp_dir().join(format!("pluxy-app-early-{}", crate::managed::random_key()));
+        fs::create_dir_all(&dir).unwrap();
+        let dirs = Dirs {
+            config: dir.join("config"),
+            core: dir.join("core"),
+        };
+        // Says where it listens, then exits at once.
+        let program = dir.join("core.sh");
+        fs::write(
+            &program,
+            "#!/bin/sh\necho 'pluxy: listening on http://127.0.0.1:1' >&2\nexit 7\n",
+        )
+        .unwrap();
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        Settings {
+            mode: Some(Mode::Managed),
+            core_path: Some(program.display().to_string()),
+            ..Settings::default()
+        }
+        .save(&dirs.settings())
+        .unwrap();
+        // Like the app's callback before its state exists: it reaches no connection.
+        let (exited, exit) = std::sync::mpsc::channel();
+        let on_exit: OnExit = std::sync::Arc::new(move || {
+            let _ = exited.send(());
+        });
+        let mut c = Connection::open(dirs, Some(on_exit));
+        assert_eq!(c.view().error, None, "the fixture core started");
+        exit.recv_timeout(Duration::from_secs(10))
+            .expect("the fixture core exited");
+
+        let asked = Instant::now();
+        let (_, due) = c.core_exited().expect("the early exit is recovered");
+        let core = c.view().core.expect("a managed core view");
+        assert_eq!(core.state, "recovering");
+        assert!(
+            core.detail
+                .as_deref()
+                .is_some_and(|d| d.contains("exit status: 7")),
+            "{:?}",
+            core.detail
+        );
+        // The first of the 2, 5 and 15 second delays.
+        let delay = due.duration_since(asked);
+        assert!(
+            delay >= Duration::from_millis(1900) && delay <= Duration::from_secs(3),
+            "{delay:?}"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
 }

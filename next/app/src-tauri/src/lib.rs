@@ -196,6 +196,8 @@ fn tray_action(app: &AppHandle, action: &str) {
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
     {
+        // Refused without reading the connection: this runs on the main thread, and the running
+        // action may hold the connection for seconds.
         tray_refused(action, None, "busy");
         return;
     }
