@@ -6,8 +6,9 @@
 // the page the desktop app's native test shows (fixtures/probe).
 //
 // Once core listens and test/beta is disabled, it prints one line of JSON on stdout,
-// {"base":"http://127.0.0.1:port","key":"<management key>"}, and nothing else on stdout. It runs
-// until stdin reaches EOF or it gets SIGINT or SIGTERM, then stops core and removes its files.
+// {"base":"http://127.0.0.1:port","key":"<management key>","client_key":"<client key>"}, and
+// nothing else on stdout. Core writes its log to files (logs.to_file). It runs until stdin reaches
+// EOF or it gets SIGINT or SIGTERM, then stops core and removes its files.
 //
 // With -tls, core's API is reached through an https proxy whose certificate comes from a new
 // authority: base is https://127.0.0.1:port, and "ca" names the authority's PEM file.
@@ -159,7 +160,7 @@ func serve(withTLS bool) error {
 	if err := disablePackage(base, mgmtKey, "test/beta"); err != nil {
 		return err
 	}
-	ready := map[string]string{"base": base, "key": mgmtKey}
+	ready := map[string]string{"base": base, "key": mgmtKey, "client_key": clientKey}
 	if withTLS {
 		tlsBase, caFile, closeTLS, err := serveTLS(dir, base)
 		if err != nil {
@@ -448,6 +449,7 @@ func writeConfig(dir, clientKey, mgmtKey string, remote bool) (string, error) {
 		"client_keys":     []string{clientKey},
 		"management_key":  mgmtKey,
 		"credentials_dir": filepath.Join(dir, "credentials"),
+		"logs":            map[string]any{"to_file": true},
 		"packages":        map[string]any{"dir": filepath.Join(dir, "packages")},
 		"extension": map[string]any{
 			"manifest": filepath.Join(dir, "local", "pluxy-extension.json"),
