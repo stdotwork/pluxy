@@ -13,6 +13,7 @@ import { packagesApi } from "./packages";
 import { quotaApi } from "./quota";
 import { settingsApi } from "./settings";
 import { statusApi } from "./status";
+import { usageApi } from "./usage";
 import { usageEventsApi } from "./usageEvents";
 
 export * from "./accounts";
@@ -24,6 +25,7 @@ export * from "./packages";
 export * from "./quota";
 export * from "./settings";
 export * from "./status";
+export * from "./usage";
 export * from "./usageEvents";
 
 export const api = (host: Host) => ({
@@ -36,6 +38,7 @@ export const api = (host: Host) => ({
   ...extensionsApi(host),
   ...loginsApi(host),
   ...settingsApi(host),
+  ...usageApi(host),
   ...usageEventsApi(host),
 });
 
