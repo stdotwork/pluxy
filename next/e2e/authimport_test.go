@@ -3,6 +3,7 @@ package e2e
 import (
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"path/filepath"
 	"slices"
@@ -166,4 +167,75 @@ func countStatus(codes []int, want int) int {
 		}
 	}
 	return n
+}
+
+// An auth file whose routing fields core cannot route with is refused and adds nothing, so later
+// accounts still route; a file's type is never sent back, as a misplaced token may be in it; an
+// ID a sign-in still running will take, whatever its case, is refused while it runs.
+func TestImportAuthFileRefusals(t *testing.T) {
+	kimi := kimitest.New(t)
+	access, refresh := kimi.Grant()
+	base := runCore(t, map[string]any{
+		"listen": "127.0.0.1:0", "client_keys": []string{clientKey}, "management_key": managementKey,
+		"credentials_dir": filepath.Join(t.TempDir(), "credentials"),
+		"extension":       map[string]any{"manifest": filepath.Join(binDir, "kimi", "pluxy-extension.json"), "accounts": []any{}},
+	})
+	kimiFile := func(extra map[string]any) string {
+		m := map[string]any{"type": "kimi", "access_token": access, "refresh_token": refresh,
+			"device_id": "device-refusals-e2e", "base_url": kimi.URL + "/coding"}
+		maps.Copy(m, extra)
+		b, _ := json.Marshal(m)
+		return string(b)
+	}
+
+	// A prefix with spaces around it: core's routing refuses it.
+	code, raw, reply := importAuthFile(t, base, managementKey, "kimi-bad-prefix.json", kimiFile(map[string]any{"prefix": "/ bad /"}))
+	if code != http.StatusBadRequest || reply.Error == nil || reply.Error.Code != "invalid_request" || !strings.Contains(reply.Error.Message, "prefix") {
+		t.Errorf("bad prefix: %d %s, want 400 invalid_request about the prefix", code, raw)
+	}
+	// A valid file imported next routes.
+	if code, raw, _ := importAuthFile(t, base, managementKey, "kimi-after.json", kimiFile(nil)); code != http.StatusOK {
+		t.Fatalf("import after the refused one: %d %s, want 200", code, raw)
+	}
+	req, _ := http.NewRequest(http.MethodPost, base+"/v1/chat/completions",
+		strings.NewReader(`{"model":"kimi-k2.8","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer "+clientKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Pluxy-Account", "kimi-after")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "Hello") {
+		t.Errorf("chat through the account imported after the refused one: %d %s", resp.StatusCode, body)
+	}
+
+	// A token where the type should be.
+	const typ = "sk-fake-type-0123456789abcdef"
+	code, raw, reply = importAuthFile(t, base, managementKey, "kimi-type.json", `{"type": "`+typ+`", "access_token": "x"}`)
+	if code != http.StatusBadRequest || reply.Error == nil || reply.Error.Code != "invalid_request" {
+		t.Errorf("unknown type: %d %s, want 400 invalid_request", code, raw)
+	}
+	if strings.Contains(strings.ToLower(raw), typ) {
+		t.Errorf("the reply for an unknown type holds the type: %s", raw)
+	}
+
+	// A sign-in running for kimi-pending reserves its ID.
+	var l loginReply
+	if code := manage(t, base, "POST", "/accounts", map[string]any{"id": "kimi-pending", "method": "device", "settings": kimi.Settings()}, &l); code != http.StatusAccepted || l.Login.State != "pending" {
+		t.Fatalf("starting the sign-in: %d %+v", code, l.Login)
+	}
+	code, raw, reply = importAuthFile(t, base, managementKey, "KIMI-Pending.json", kimiFile(nil))
+	if code != http.StatusConflict || reply.Error == nil || reply.Error.Code != "conflict" {
+		t.Errorf("import of an ID a sign-in will take: %d %s, want 409 conflict", code, raw)
+	}
+	if code := manage(t, base, "DELETE", "/logins/"+l.Login.ID, nil, nil); code != http.StatusNoContent {
+		t.Errorf("cancelling the sign-in: %d", code)
+	}
+
+	if ids := listedIDs(t, base); !slices.Equal(ids, []string{"kimi-after"}) {
+		t.Errorf("accounts %v, want only kimi-after", ids)
+	}
 }
