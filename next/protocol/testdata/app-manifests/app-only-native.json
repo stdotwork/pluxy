@@ -1,0 +1,33 @@
+{
+  "manifest_version": 1,
+  "id": "pluxy/codex",
+  "version": "0.1.0",
+  "app": {
+    "version": 0,
+    "tier": "native",
+    "host_versions": [
+      0
+    ],
+    "programs": {
+      "linux/amd64": "bin/app-canary"
+    },
+    "operations": [
+      {
+        "id": "inspect",
+        "description": "Inspect selected state",
+        "input_schema": {
+          "type": "object"
+        },
+        "output_schema": {
+          "type": "object"
+        }
+      }
+    ],
+    "state": {
+      "version": 0,
+      "readable_versions": [
+        0
+      ]
+    }
+  }
+}
