@@ -231,13 +231,15 @@ func killFromFile(path string) {
 // echoCredential is an extension that writes the credentials it gets to stderr and stdout, as a
 // careless provider's debug output would. A generate call without a credential writes the access
 // token its last refresh returned. A call on an account with settings also writes them with the
-// settings its previous call had, as a call still running with them would; and every call on
+// settings the account's first and previous calls had, as calls still running with them would;
+// and every call on
 // such an account fails with an error that quotes its settings, as an unreachable upstream's
 // error quotes a URL from them.
 func echoCredential() {
 	var mu sync.Mutex
 	var refreshed string
 	before := map[string]string{} // the settings of each account's previous generate call
+	first := map[string]string{}  // and of its first
 	quote := func(a protocol.Account) error {
 		if len(a.Settings) == 0 {
 			return nil
@@ -250,14 +252,17 @@ func echoCredential() {
 		Generate: func(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 			mu.Lock()
 			secret := refreshed
-			was := before[call.Account.ID]
+			was, firstWas := before[call.Account.ID], first[call.Account.ID]
 			before[call.Account.ID] = string(call.Account.Settings)
+			if firstWas == "" {
+				first[call.Account.ID] = string(call.Account.Settings)
+			}
 			mu.Unlock()
 			if c := call.Account.Credential; c != nil {
 				secret = c.APIKey + c.AccessToken
 			}
 			if len(call.Account.Settings) > 0 {
-				fmt.Fprintf(os.Stderr, "settings before %s now %s\n", was, call.Account.Settings)
+				fmt.Fprintf(os.Stderr, "settings first %s before %s now %s\n", firstWas, was, call.Account.Settings)
 			}
 			if call.Request.Model == "fail" {
 				return quote(call.Account)
@@ -301,7 +306,7 @@ func echoCredential() {
 
 // What an extension writes to stderr and stdout is logged without the credentials core gave it
 // or got back from it, including one a refresh replaced, and without the secrets in the
-// accounts' settings, including those of settings since changed.
+// accounts' settings, including those of every settings since changed.
 func TestExtensionOutputIsRedacted(t *testing.T) {
 	const (
 		apiKey     = "sk-log-secret-1234"
@@ -309,6 +314,7 @@ func TestExtensionOutputIsRedacted(t *testing.T) {
 		newAccess  = "new-access-token-5678"
 		urlToken   = "sk-settings-url-1234"
 		settingKey = "sk-settings-key-5678"
+		password   = "sk-settings-pass-9012"
 	)
 	log := &syncBuffer{}
 	ext, err := Start(filepath.Join(fakePackage(t, "echo-credential"), ManifestFile), Options{Log: log, SettingsSecrets: configdoc.SettingsSecrets})
@@ -325,30 +331,34 @@ func TestExtensionOutputIsRedacted(t *testing.T) {
 		log.waitFor(t, "stderr done "+a.ID, "stdout done "+a.ID)
 	}
 	generate(protocol.Account{ID: "key", Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: apiKey}})
-	// The second call's output quotes the settings the first had.
+	// Each later call's output quotes the settings earlier calls had: the third, the first's,
+	// two changes back.
 	generate(protocol.Account{ID: "set", Settings: json.RawMessage(`{"base_url":"https://up.example/v1?token=` + urlToken + `"}`)})
 	generate(protocol.Account{ID: "set", Settings: json.RawMessage(`{"base_url":"https://up.example/v1","api_key":"` + settingKey + `"}`)})
+	generate(protocol.Account{ID: "set", Settings: json.RawMessage(`{"password":"` + password + `"}`)})
 	if _, e := ext.Refresh(ctx, protocol.Account{ID: "oauth", Credential: &protocol.Credential{
 		Kind: protocol.CredentialOAuth, AccessToken: "old-access-token-1234", RefreshToken: oldRefresh}}); e != nil {
 		t.Fatal(e)
 	}
 	generate(protocol.Account{ID: "oauth"})
 	out := log.String()
-	for _, secret := range []string{apiKey, oldRefresh, newAccess, urlToken, settingKey} {
+	for _, secret := range []string{apiKey, oldRefresh, newAccess, urlToken, settingKey, password} {
 		if strings.Contains(out, secret) {
 			t.Errorf("the log holds %q:\n%s", secret, out)
 		}
 	}
+	const r1, r2, r3 = `{"base_url":"[redacted]"}`, `{"base_url":"https://up.example/v1","api_key":"[redacted]"}`, `{"password":"[redacted]"}`
 	for _, line := range []string{
-		`settings before  now {"base_url":"[redacted]"}`,
-		`settings before {"base_url":"[redacted]"} now {"base_url":"https://up.example/v1","api_key":"[redacted]"}`,
+		"settings first  before  now " + r1,
+		"settings first " + r1 + " before " + r1 + " now " + r2,
+		"settings first " + r1 + " before " + r2 + " now " + r3,
 	} {
 		if !strings.Contains(out, line) {
 			t.Errorf("the log lacks %q:\n%s", line, out)
 		}
 	}
-	if n := strings.Count(out, protocol.Redacted); n != 8 {
-		t.Errorf("want 8 redacted secrets in the log (5 credentials, 3 settings), got %d:\n%s", n, out)
+	if n := strings.Count(out, protocol.Redacted); n != 12 {
+		t.Errorf("want 12 redacted secrets in the log (5 credentials, 7 settings), got %d:\n%s", n, out)
 	}
 }
 

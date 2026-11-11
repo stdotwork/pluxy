@@ -209,8 +209,8 @@ func TestDrainClosesSessions(t *testing.T) {
 }
 
 // sessionBadFrame is an extension that holds sessions without the SDK and answers every turn,
-// and every other call on an account, with an event of an unknown type that holds the account's
-// API key and settings.
+// and every other call on an account with a credential or settings, with an event of an unknown
+// type that holds the account's API key and settings; it hangs up on any other call.
 func sessionBadFrame() {
 	socket := os.Getenv(protocol.EnvSocket)
 	ln, err := net.Listen("unix", socket)
@@ -250,7 +250,8 @@ func sessionBadFrame() {
 				_ = protocol.WriteFrame(conn, leak(turn.Account))
 				_, _ = io.Copy(io.Discard, conn)
 			default:
-				if call.Account != nil {
+				// An account with nothing to leak is hung up on.
+				if a := call.Account; a != nil && (a.Credential != nil || len(a.Settings) > 0) {
 					_ = protocol.WriteFrame(conn, leak(call.Account))
 					_, _ = io.Copy(io.Discard, conn)
 				}

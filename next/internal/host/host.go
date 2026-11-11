@@ -70,9 +70,10 @@ type Extension struct {
 
 // held are the credentials core has given the extension or got back from it, so that its output
 // is logged without them: for each account the latest two (after a refresh the extension may
-// still write the one it replaced), the secrets in the latest two of its settings (a call still
-// running after a change has the old ones), and what a user entered during a login. Accounts are
-// not forgotten while the extension runs, so this grows only with the accounts it has served.
+// still write the one it replaced), the secrets of every settings it has had (a call still
+// running after changes has old ones), and what a user entered during a login. Nothing is
+// forgotten while the extension's program runs, so this grows only with the accounts it has
+// served and their settings changes, and goes with the program.
 //
 // shortcut: a credential the extension creates (a refresh or login result) and writes out before
 // core has it is logged as written; the redaction catches it only once the result arrives.
@@ -89,18 +90,21 @@ type heldCredential struct {
 	c   *protocol.Credential
 }
 
-// add records that the extension holds c for owner (an account ID).
-func (h *held) add(owner string, c *protocol.Credential) { h.record(&h.by, owner, c) }
+// add records that the extension holds c for owner (an account ID), with the one before it.
+func (h *held) add(owner string, c *protocol.Credential) { h.record(&h.by, owner, c, 2) }
 
 // addProxy records that the extension holds c, the proxy secrets of account, kept apart from the
 // credentials add records so that no account ID can name the same entry.
-func (h *held) addProxy(account string, c *protocol.Credential) { h.record(&h.proxy, account, c) }
+func (h *held) addProxy(account string, c *protocol.Credential) { h.record(&h.proxy, account, c, 2) }
 
 // addSettings records that the extension holds c, the secrets in account's settings, kept apart
-// in the same way.
-func (h *held) addSettings(account string, c *protocol.Credential) { h.record(&h.settings, account, c) }
+// in the same way, for as long as its program runs.
+func (h *held) addSettings(account string, c *protocol.Credential) {
+	h.record(&h.settings, account, c, 0)
+}
 
-func (h *held) record(m *map[string][]heldCredential, owner string, c *protocol.Credential) {
+// record records c for owner in m, keeping the latest n for owner, or all when n is 0.
+func (h *held) record(m *map[string][]heldCredential, owner string, c *protocol.Credential, n int) {
 	if c == nil {
 		return
 	}
@@ -108,7 +112,8 @@ func (h *held) record(m *map[string][]heldCredential, owner string, c *protocol.
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	list := (*m)[owner]
-	if len(list) > 0 && list[len(list)-1].key == string(b) {
+	if n == 0 && slices.ContainsFunc(list, func(hc heldCredential) bool { return hc.key == string(b) }) ||
+		len(list) > 0 && list[len(list)-1].key == string(b) {
 		return
 	}
 	if *m == nil {
@@ -116,7 +121,10 @@ func (h *held) record(m *map[string][]heldCredential, owner string, c *protocol.
 	}
 	cc := *c
 	list = append(list, heldCredential{string(b), &cc})
-	(*m)[owner] = list[max(0, len(list)-2):]
+	if n > 0 {
+		list = list[max(0, len(list)-n):]
+	}
+	(*m)[owner] = list
 	var all []*protocol.Credential
 	for _, by := range []map[string][]heldCredential{h.by, h.proxy, h.settings} {
 		for _, l := range by {
