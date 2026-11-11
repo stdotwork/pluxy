@@ -46,6 +46,20 @@ func TestRedactorEvent(t *testing.T) {
 	if NewRedactor(nil).String("sk-secret-123") != "sk-secret-123" {
 		t.Error("a call without a credential changed text")
 	}
+	// An error's code and scope, and what a reply's translation report says, are text the
+	// extension chose too; core logs the translation.
+	ev = r.Event(llm.Event{Type: llm.EventError, Error: &llm.Error{Code: "code-sk-secret-123", Scope: "scope-sk-secret-123", Message: "m"}})
+	if ev.Error.Code != "code-[redacted]" || ev.Error.Scope != "scope-[redacted]" {
+		t.Errorf("error code %q, scope %q", ev.Error.Code, ev.Error.Scope)
+	}
+	ev = r.Event(llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{Translation: &llm.Translation{
+		From: "from-sk-secret-123", To: "to-sk-secret-123",
+		Losses: []llm.Loss{{Kind: "kind-sk-secret-123", Path: "messages[0].sk-secret-123", Detail: "dropped sk-secret-123"}}}}})
+	tr := ev.Response.Translation
+	if tr.From != "from-[redacted]" || tr.To != "to-[redacted]" || len(tr.Losses) != 1 ||
+		tr.Losses[0] != (llm.Loss{Kind: "kind-[redacted]", Path: "messages[0].[redacted]", Detail: "dropped [redacted]"}) {
+		t.Errorf("translation = %+v", tr)
+	}
 }
 
 // A reasoning item's opaque data reaches clients (a Responses client gets it as

@@ -587,8 +587,9 @@ func encodeString(s string) []byte {
 }
 
 // Event returns ev with the credential removed from the text and upstream data it carries:
-// error messages and codes, every raw field, reasoning's opaque data, and the identifiers the
-// upstream names the reply with (its id and model, tool call IDs, the raw finish reason).
+// error messages, codes and scopes, every raw field, reasoning's opaque data, the translation
+// report, and the identifiers the upstream names the reply with (its id and model, tool call IDs,
+// the raw finish reason).
 // Generated content (deltas, tool names) is the reply itself and is left alone.
 func (r *Redactor) Event(ev llm.Event) llm.Event {
 	if r == nil || r.r == nil {
@@ -600,6 +601,15 @@ func (r *Redactor) Event(ev llm.Event) llm.Event {
 		resp.ID = r.String(resp.ID)
 		resp.Model = r.String(resp.Model)
 		resp.Raw = r.raw(resp.Raw)
+		if t := resp.Translation; t != nil {
+			tr := *t
+			tr.From, tr.To = r.String(tr.From), r.String(tr.To)
+			tr.Losses = slices.Clone(tr.Losses)
+			for i, l := range tr.Losses {
+				tr.Losses[i] = llm.Loss{Kind: r.String(l.Kind), Path: r.String(l.Path), Detail: r.String(l.Detail)}
+			}
+			resp.Translation = &tr
+		}
 		ev.Response = &resp
 	}
 	if ev.Item != nil {
@@ -620,6 +630,7 @@ func (r *Redactor) Event(ev llm.Event) llm.Event {
 	}
 	if ev.Error != nil {
 		e := *ev.Error
+		e.Code, e.Scope = r.String(e.Code), r.String(e.Scope)
 		e.Message = r.String(e.Message)
 		e.ProviderCode = r.String(e.ProviderCode)
 		e.Raw = r.raw(e.Raw)
