@@ -1600,8 +1600,8 @@ extension, so request logs hold what the client sent and received.
 | Call | What it does |
 | --- | --- |
 | `GET /v0/management/request-error-logs` | The error logs, newest first: `files`, each with `name`, `size` and `modified` (Unix seconds). |
-| `GET /v0/management/request-error-logs/{name}` | One error log, as a download. 400 for a name that is not an error log's as core writes them, 404 when there is none or the name is a link. |
-| `GET /v0/management/request-log-by-id/{id}` | The newest request log, plain or error, of the request with that trace ID (the `X-CPA-TRACE-ID` of its reply), as a download; 404 when there is none. |
+| `GET /v0/management/request-error-logs/{name}` | One error log, as a download, or with `?format=json` as `{"name", "size", "content"}` (`size` is bytes). JSON reads accept at most 8 MiB; larger files answer 413 with code `log_too_large`, without partial content. Plain downloads keep their existing size behavior. 400 for a name that is not an error log's as core writes them, 404 when there is none or the name is a link. |
+| `GET /v0/management/request-log-by-id/{id}` | The newest request log, plain or error, of the request with that trace ID (the `X-CPA-TRACE-ID` of its reply), as a download, or with `?format=json` as `{"name", "size", "content"}` under the same 8 MiB limit (413 above it); 404 when there is none. |
 
 ## Profiling pages
 
