@@ -46,6 +46,11 @@ func requestHasSearch(m map[string]any) bool {
 // allowed_tools must also allow the injected tool, without losing the client's entries.
 func injectSearch(m map[string]any) {
 	tools, _ := m["tools"].([]any)
+	// A choice with no original tools must not force the optional injected search.
+	if len(tools) == 0 {
+		delete(m, "tool_choice")
+		delete(m, "parallel_tool_calls")
+	}
 	choice, _ := m["tool_choice"].(map[string]any)
 	for _, hosted := range []string{"web_search", "image_generation"} {
 		if choice != nil {
@@ -112,9 +117,18 @@ func injectSearch(m map[string]any) {
 		}
 	}
 	if !requestHasSearch(m) {
+		// Injection appends before the final cap, so it cannot survive a full list.
+		// Do not add an allowed_tools choice for a tool the cap will remove.
+		if len(tools) >= maxTools {
+			return
+		}
 		m["tools"] = append(tools, map[string]any{"type": "x_search"})
 	}
 	if choice != nil && textField(choice, "type") == "allowed_tools" {
+		sentTools, _ := m["tools"].([]any)
+		if !hasSearch(sentTools[:min(len(sentTools), maxTools)]) && !requestHasSearch(map[string]any{"input": m["input"]}) {
+			return
+		}
 		allowed, _ := choice["tools"].([]any)
 		if !hasSearch(allowed) {
 			choice["tools"] = append(allowed, map[string]any{"type": "x_search"})

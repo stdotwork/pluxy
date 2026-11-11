@@ -186,3 +186,34 @@ func TestXSearchToolLimit(t *testing.T) {
 		t.Errorf("tool limit not kept: %s", raw)
 	}
 }
+
+func TestXSearchInjectionChoices(t *testing.T) {
+	for _, tc := range []struct{ name, body, choice string }{
+		{"cap keeps allowed choices valid", `{"model":"grok-4.6","input":[],"tools":[` + strings.Repeat(`{"type":"function","name":"f"},`, maxTools-1) + `{"type":"function","name":"last"}],"tool_choice":{"type":"allowed_tools","mode":"auto","tools":[{"type":"function","name":"f"}]}}`, `{"type":"allowed_tools","mode":"auto","tools":[{"type":"function","name":"f"}]}`},
+		{"required without tools stays optional", `{"model":"grok-4.6","input":[],"tool_choice":"required","parallel_tool_calls":true}`, `null`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := openairesponses.ParseRequest([]byte(tc.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, _, err := buildSearchBody(req, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var m map[string]json.RawMessage
+			_ = json.Unmarshal(raw, &m)
+			choice := m["tool_choice"]
+			if len(choice) == 0 {
+				choice = []byte("null")
+			}
+			sameJSON(t, "choice", choice, tc.choice)
+			if tc.choice == "null" {
+				if _, ok := m["parallel_tool_calls"]; ok {
+					t.Error("parallel_tool_calls kept without original tools")
+				}
+				sameJSON(t, "injected tools", m["tools"], `[{"type":"x_search"}]`)
+			}
+		})
+	}
+}
