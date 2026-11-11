@@ -143,7 +143,11 @@ pub fn serve(
         b.pages_origin
     );
     #[cfg(feature = "native-test")]
-    let csp = if pages.ingress_fixture { csp.replace("frame-src ", "frame-src pluxy-page: ") } else { csp };
+    let csp = if pages.ingress_fixture {
+        csp.replace("frame-src ", "frame-src pluxy-page: ")
+    } else {
+        csp
+    };
     match (method, path) {
         ("GET", "/") => (served(200, "text/html; charset=utf-8", INDEX, csp), None),
         ("GET", "/frame.js") => (
@@ -154,7 +158,11 @@ pub fn serve(
         ("GET", "/frame") => {
             let info = serde_json::json!({"url": b.url.as_str(), "title": b.title});
             #[cfg(feature = "native-test")]
-            let info = if pages.ingress_fixture { serde_json::json!({"url":"pluxy-page://localhost/ingress-test", "title":b.title}) } else { info };
+            let info = if pages.ingress_fixture {
+                serde_json::json!({"url":"pluxy-page://localhost/ingress-test", "title":b.title})
+            } else {
+                info
+            };
             (served(200, "application/json", info.to_string(), csp), None)
         }
         #[cfg(feature = "native-test")]
