@@ -366,6 +366,11 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
     {
         return Err("sign-out exposed a webview key field".into());
     }
+    // Later checks (page ingress) need the signed-in window: sign in again natively.
+    let again = button(app, main, key, false)?;
+    if again["status"] != "signed_in" || !app.state::<App>().conn.lock().unwrap().view().signed_in {
+        return Err("native sign-in after window sign-out failed".into());
+    }
 
     clean_webview(main, &[key, wrong])?;
 
