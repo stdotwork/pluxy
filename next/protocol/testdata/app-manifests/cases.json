@@ -1,0 +1,46 @@
+[
+  {
+    "file": "provider-v0.json",
+    "core_error": ""
+  },
+  {
+    "file": "app-only-web.json",
+    "core_error": "app-only package: install it in the desktop app"
+  },
+  {
+    "file": "mixed-web.json",
+    "core_error": ""
+  },
+  {
+    "file": "app-only-native.json",
+    "core_error": "app-only package: install it in the desktop app"
+  },
+  {
+    "file": "mixed-native.json",
+    "core_error": ""
+  },
+  {
+    "file": "invalid-tier.json",
+    "core_error": "app.tier"
+  },
+  {
+    "file": "web-with-program.json",
+    "core_error": "web app cannot declare"
+  },
+  {
+    "file": "native-with-resources.json",
+    "core_error": "native app cannot declare resources"
+  },
+  {
+    "file": "escaping-app-program.json",
+    "core_error": "app program"
+  },
+  {
+    "file": "partial-provider.json",
+    "core_error": "provider programs"
+  },
+  {
+    "file": "app-in-v0.json",
+    "core_error": "app requires manifest_version 1"
+  }
+]

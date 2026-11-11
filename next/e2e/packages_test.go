@@ -20,18 +20,123 @@ import (
 
 const platform = runtime.GOOS + "/" + runtime.GOARCH
 
+// Shared fixtures exercise the actual management install route.
+func TestCommonAppManifestInstall(t *testing.T) {
+	fixtureDir := filepath.Join("..", "protocol", "testdata", "app-manifests")
+	b, err := os.ReadFile(filepath.Join(fixtureDir, "cases.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []struct {
+		File      string
+		CoreError string `json:"core_error"`
+	}
+	if err := json.Unmarshal(b, &cases); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range cases {
+		t.Run(tc.File, func(t *testing.T) {
+			m, err := os.ReadFile(filepath.Join(fixtureDir, tc.File))
+			if err != nil {
+				t.Fatal(err)
+			}
+			m = bytes.ReplaceAll(m, []byte("linux/amd64"), []byte(platform))
+			marker := filepath.Join(t.TempDir(), "app-was-run")
+			canary := []byte("#!/bin/sh\nprintf ran > '" + marker + "'\nexit 99\n")
+			u := answeringUpstream(t)
+			srv := codextest.New(t)
+			index := writeRegistry(t, manifestArchive(t, m, canary), "")
+			// App-only releases omit provider protocol metadata in the index too.
+			if strings.HasPrefix(tc.File, "app-only-") {
+				b, err := os.ReadFile(index)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var ix map[string]any
+				if err := json.Unmarshal(b, &ix); err != nil {
+					t.Fatal(err)
+				}
+				releases := ix["packages"].(map[string]any)["pluxy/codex"].(map[string]any)["releases"].([]any)
+				delete(releases[0].(map[string]any), "protocol")
+				b, err = json.Marshal(ix)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(index, b, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			base, pkgDir := packagesCore(t, u, srv, index)
+			var reply struct {
+				Error struct{ Code, Message string } `json:"error"`
+			}
+			code := manage(t, base, "POST", "/packages", map[string]any{"id": "pluxy/codex", "enable": true}, &reply)
+			if tc.CoreError != "" {
+				if code != http.StatusUnprocessableEntity || !strings.Contains(reply.Error.Message, tc.CoreError) {
+					t.Errorf("install: status %d, error %q; want 422 containing %q", code, reply.Error.Message, tc.CoreError)
+				}
+				if ps := listPackages(t, base); len(ps) != 0 {
+					t.Errorf("refused package installed: %+v", ps)
+				}
+				if _, err := os.Stat(filepath.Join(pkgDir, "pluxy")); !os.IsNotExist(err) {
+					t.Errorf("refused package files: %v", err)
+				}
+				if codexRunning(status(t, base)) {
+					t.Error("refused provider running")
+				}
+			} else {
+				if code != http.StatusOK {
+					t.Fatalf("install: status %d, error %q", code, reply.Error.Message)
+				}
+				if code, body := askCodex(t, base); code != http.StatusOK || !strings.Contains(body, "Hello from the conformance kit.") {
+					t.Fatalf("installed provider: status %d: %s", code, body)
+				}
+				var ui struct {
+					Extensions []struct {
+						ID    string
+						Pages []any
+					}
+				}
+				if code := manage(t, base, "GET", "/ui", nil, &ui); code != http.StatusOK {
+					t.Fatalf("ui: %d", code)
+				}
+				for _, e := range ui.Extensions {
+					if e.ID == "pluxy/codex" && len(e.Pages) > 0 {
+						t.Errorf("app pages exposed by core: %+v", e)
+					}
+				}
+			}
+			if _, err := os.Stat(marker); !os.IsNotExist(err) {
+				t.Errorf("app executable ran: %v", err)
+			}
+			if code, body := ask(t, base, "gpt-4o"); code != http.StatusOK {
+				t.Errorf("existing provider: %d: %s", code, body)
+			}
+		})
+	}
+}
+
 // codexArchive packs the built Codex extension as a release archive of version and returns
 // the archive.
 func codexArchive(t *testing.T, version string) []byte {
+	t.Helper()
+	m, _ := json.Marshal(map[string]any{
+		"manifest_version": 0, "id": "pluxy/codex", "version": version, "protocol": []int{0},
+		"programs": map[string]string{platform: "bin/codex"},
+	})
+	return manifestArchive(t, m)
+}
+
+func manifestArchive(t *testing.T, m []byte, canary ...[]byte) []byte {
 	t.Helper()
 	prog, err := os.ReadFile(filepath.Join(binDir, "codex", "codex"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, _ := json.Marshal(map[string]any{
-		"manifest_version": 0, "id": "pluxy/codex", "version": version, "protocol": []int{0},
-		"programs": map[string]string{platform: "bin/codex"},
-	})
+	app := []byte("#!/bin/sh\nexit 99\n")
+	if len(canary) > 0 {
+		app = canary[0]
+	}
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
@@ -39,7 +144,7 @@ func codexArchive(t *testing.T, version string) []byte {
 		name string
 		mode int64
 		body []byte
-	}{{"pluxy-extension.json", 0o644, m}, {"bin/", 0o755, nil}, {"bin/codex", 0o755, prog}} {
+	}{{"pluxy-extension.json", 0o644, m}, {"bin/", 0o755, nil}, {"bin/codex", 0o755, prog}, {"bin/app-canary", 0o755, app}} {
 		h := &tar.Header{Name: f.name, Mode: f.mode, Size: int64(len(f.body)), Typeflag: tar.TypeReg}
 		if strings.HasSuffix(f.name, "/") {
 			h.Typeflag = tar.TypeDir
