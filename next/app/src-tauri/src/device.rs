@@ -674,6 +674,13 @@ fn local_path(p: &str) -> bool {
         && p.split('/').all(|s| !s.is_empty() && s != "." && s != "..")
 }
 
+/// A local path that also stays inside its folder on Windows: no `:`, which names a drive or an
+/// alternate data stream there. Archive entries, the ui folder and local registry artifacts
+/// must be one.
+fn store_path(p: &str) -> bool {
+    local_path(p) && !p.contains(':')
+}
+
 impl Ui {
     fn validate(&self) -> Result<(), String> {
         if self.version != 0 {
@@ -919,10 +926,10 @@ fn unpack(archive: &[u8], dest: &Path) -> Result<(), String> {
         if kind.is_dir() && (rel.is_empty() || rel == ".") {
             continue;
         }
-        if !local_path(rel) {
+        let path = dest.join(rel);
+        if !store_path(rel) || !path.starts_with(dest) {
             return Err(format!("archive: {name:?} leaves the package folder"));
         }
-        let path = dest.join(rel);
         if kind.is_dir() {
             private_dir(&path)?;
             dirs.push(path);
@@ -937,9 +944,6 @@ fn unpack(archive: &[u8], dest: &Path) -> Result<(), String> {
             return Err(format!("archive unpacks to more than {MAX_UNPACKED} bytes"));
         }
         if let Some(parent) = path.parent() {
-            if !parent.starts_with(dest) {
-                return Err(format!("archive: {name:?} leaves the package folder"));
-            }
             private_dir(parent)?;
         }
         let exec = e.header().mode().map(|m| m & 0o111 != 0).unwrap_or(false);
@@ -1116,6 +1120,12 @@ pub fn stage(
         .collect();
     r.settings = app.config.is_some();
     if let Some(ui) = &app.ui {
+        if !store_path(&ui.dir) {
+            return Err(format!(
+                "ui.dir {:?} must be a folder inside the package",
+                ui.dir
+            ));
+        }
         let dir = staged.join(&ui.dir);
         if !fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir()) {
             return Err(format!("ui.dir {} is not a folder in the archive", ui.dir));

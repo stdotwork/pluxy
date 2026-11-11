@@ -433,3 +433,51 @@ fn registry_pins_reserved_ids_and_paths() {
     assert_eq!(c.get("example/notes").unwrap().active.sha256, digest(&v1));
     let _ = fs::remove_dir_all(root);
 }
+#[test]
+fn names_with_a_drive_or_stream_never_reach_the_store() {
+    let root = temp();
+    let d = dirs(&root);
+    let m = manifest("example/w", "1", Value::Null);
+    // Each would name a drive or an alternate data stream on Windows.
+    for name in ["C:/x", "C:x", "pages/index.html:stream"] {
+        let a = archive(&[
+            ("pluxy-extension.json", &m),
+            ("pages/index.html", b"x"),
+            (name, b"x"),
+        ]);
+        let e = stage(&d, &a, local("w"), None).unwrap_err();
+        assert!(e.contains("leaves the package folder"), "{name}: {e}");
+    }
+    // A folder entry too, not only files.
+    let mut b = tar::Builder::new(Vec::new());
+    let mut h = tar::Header::new_gnu();
+    h.set_size(m.len() as u64);
+    h.set_mode(0o644);
+    h.set_path("pluxy-extension.json").unwrap();
+    h.set_cksum();
+    b.append(&h, m.as_slice()).unwrap();
+    let mut h = tar::Header::new_gnu();
+    h.set_entry_type(tar::EntryType::Directory);
+    h.set_size(0);
+    h.set_mode(0o755);
+    h.set_path("D:").unwrap();
+    h.set_cksum();
+    b.append(&h, std::io::empty()).unwrap();
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    gz.write_all(&b.into_inner().unwrap()).unwrap();
+    let e = stage(&d, &gz.finish().unwrap(), local("w"), None).unwrap_err();
+    assert!(e.contains("leaves the package folder"), "{e}");
+    // The ui folder is checked before it is joined to the staged folder.
+    let ui = serde_json::json!({"ui": {"version": 0, "dir": "C:/pages",
+        "pages": [{"id": "p", "title": "P", "short": "P", "path": "index.html"}]}});
+    let a = archive(&[
+        ("pluxy-extension.json", &manifest("example/w", "1", ui)),
+        ("pages/index.html", b"x"),
+    ]);
+    let e = stage(&d, &a, local("w"), None).unwrap_err();
+    assert!(e.contains("must be a folder inside the package"), "{e}");
+    // The positive control on the same route.
+    stage(&d, &package("example/w", "1"), local("w"), None).unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
