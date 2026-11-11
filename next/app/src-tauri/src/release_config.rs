@@ -120,8 +120,16 @@ pub fn validate(inputs: &ReleaseInputs) -> Result<(), String> {
     {
         return Err("cargo feature snapshot mismatch".into());
     }
+    // The app executable inside a package: Tauri bundles it as usr/bin/<mainBinaryName>, or
+    // under the Cargo binary's name (Cargo.toml [[bin]]) when the config sets none.
+    let app = Path::new("usr/bin").join(
+        config
+            .get("mainBinaryName")
+            .and_then(Value::as_str)
+            .unwrap_or("pluxy-app"),
+    );
     for artifact in &inputs.artifacts {
-        scan_artifact(artifact)?;
+        scan_artifact(artifact, &app)?;
     }
     Ok(())
 }
@@ -240,9 +248,9 @@ const FORBIDDEN: [(&[u8], &str); 4] = [
     ),
 ];
 
-/// Checks one artifact. Each must be the app executable or a type-2 AppImage holding it, and
-/// carry this build's receipt itself.
-fn scan_artifact(path: &Path) -> Result<(), String> {
+/// Checks one artifact. Each must be the app executable or a type-2 AppImage holding it at app,
+/// and carry this build's receipt itself.
+fn scan_artifact(path: &Path, app: &Path) -> Result<(), String> {
     let meta =
         fs::symlink_metadata(path).map_err(|e| format!("artifact missing/unreadable: {e}"))?;
     if !meta.is_file() {
@@ -254,7 +262,7 @@ fn scan_artifact(path: &Path) -> Result<(), String> {
         Format::Executable => scan_stream(open()?, &what)?,
         Format::AppImage(offset) => {
             // The files inside first, then every byte of the AppImage itself.
-            let inside = scan_appimage(path, offset)?;
+            let inside = scan_appimage(path, offset, app)?;
             scan_stream(open()?, &what)?;
             inside
         }
@@ -305,9 +313,28 @@ fn format(path: &Path) -> Result<Format, String> {
     };
     // The AppImage specification's magic: "AI" and the type at offset 8.
     if header[8..10] != *b"AI" {
-        return match field(0x10, 2)? {
-            2 | 3 => Ok(Format::Executable),
-            _ => Err(unsupported()),
+        // An executable or shared object for a machine, with its own header size and program
+        // headers that lie inside the file: not just the first bytes of one.
+        let len = file.metadata().map_err(|e| format!("{what}: {e}"))?.len();
+        let (ehsize, phentsize, phoff, sizes) = match header[4] {
+            1 => (52, 32, field(0x1c, 4)?, 0x28),
+            2 => (64, 56, field(0x20, 8)?, 0x34),
+            _ => return Err(unsupported()),
+        };
+        let phnum = field(sizes + 4, 2)?;
+        let well_formed = matches!(field(0x10, 2)?, 2 | 3)
+            && field(0x12, 2)? != 0
+            && field(sizes, 2)? == ehsize
+            && field(sizes + 2, 2)? == phentsize
+            && phnum >= 1
+            && phoff >= ehsize
+            && phoff
+                .checked_add(phentsize * phnum)
+                .is_some_and(|end| end <= len);
+        return if well_formed {
+            Ok(Format::Executable)
+        } else {
+            Err(unsupported())
         };
     }
     if header[10] != 2 {
@@ -414,11 +441,14 @@ const UNPACKED_DEPTH_MAX: usize = 32;
 const UNPACK_SECONDS: u64 = 600;
 /// JSON inside an AppImage larger than this is refused rather than parsed.
 const JSON_MAX: u64 = 1 << 20;
+/// unsquashfs's listing, and its other output and errors.
+const LISTING_MAX: u64 = 64 << 20;
+const OUTPUT_MAX: u64 = 1 << 20;
 
 /// Unpacks an AppImage's squashfs image into a private temporary folder and checks every file in
-/// it. Says whether an app executable inside carries the build's receipt. The folder is removed
-/// after, and a failure to remove it is an error.
-fn scan_appimage(path: &Path, offset: u64) -> Result<bool, String> {
+/// it. Says whether its app executable (app, inside it) carries the build's receipt. The folder is
+/// removed after, and a failure to remove it is an error.
+fn scan_appimage(path: &Path, offset: u64, app: &Path) -> Result<bool, String> {
     let what = path.display().to_string();
     let mut random = [0; 12];
     getrandom::fill(&mut random).map_err(|e| e.to_string())?;
@@ -432,7 +462,7 @@ fn scan_appimage(path: &Path, offset: u64) -> Result<bool, String> {
     builder
         .create(&dir)
         .map_err(|e| format!("{}: {e}", dir.display()))?;
-    let result = unpack_and_scan(path, offset, &dir, &what);
+    let result = unpack_and_scan(path, offset, app, &dir, &what);
     let removed = remove_unpacked(&dir)
         .map_err(|e| format!("{what}: could not remove {}: {e}", dir.display()));
     match (result, removed) {
@@ -459,7 +489,13 @@ fn remove_unpacked(dir: &Path) -> std::io::Result<()> {
     fs::remove_dir_all(dir)
 }
 
-fn unpack_and_scan(path: &Path, offset: u64, dir: &Path, what: &str) -> Result<bool, String> {
+fn unpack_and_scan(
+    path: &Path,
+    offset: u64,
+    app: &Path,
+    dir: &Path,
+    what: &str,
+) -> Result<bool, String> {
     let offset = offset.to_string();
     let errors = dir.join("errors");
     // The listing first, before anything is unpacked: entry kinds, count, depth and size.
@@ -468,11 +504,20 @@ fn unpack_and_scan(path: &Path, offset: u64, dir: &Path, what: &str) -> Result<b
         std::process::Command::new("unsquashfs")
             .args(["-lls", "-offset", &offset])
             .arg(path),
-        &listing,
+        (&listing, LISTING_MAX),
         &errors,
         what,
     )?;
-    let listing = fs::read(&listing).map_err(|e| format!("{what}: {e}"))?;
+    let mut bytes = Vec::new();
+    fs::File::open(&listing)
+        .and_then(|f| f.take(LISTING_MAX + 1).read_to_end(&mut bytes))
+        .map_err(|e| format!("{what}: {e}"))?;
+    if bytes.len() as u64 > LISTING_MAX {
+        return Err(format!(
+            "{what}: unsquashfs listed more than {LISTING_MAX} bytes"
+        ));
+    }
+    let listing = bytes;
     check_listing(&String::from_utf8_lossy(&listing), what)?;
     let root = dir.join("root");
     run_bounded(
@@ -480,21 +525,36 @@ fn unpack_and_scan(path: &Path, offset: u64, dir: &Path, what: &str) -> Result<b
             .args(["-no-progress", "-no-xattrs", "-offset", &offset, "-dest"])
             .arg(&root)
             .arg(path),
-        &dir.join("output"),
+        (&dir.join("output"), OUTPUT_MAX),
         &errors,
         what,
     )?;
     let mut budget = Budget::default();
-    scan_tree(&root, &root, what, 0, &mut budget)
+    let mut receipt = false;
+    scan_tree(&root, &root, app, what, 0, &mut budget, &mut receipt)?;
+    Ok(receipt)
 }
 
-/// Runs unsquashfs with no input, its output in files, for at most UNPACK_SECONDS.
+/// Runs unsquashfs with no input, for at most UNPACK_SECONDS, its output in files: out up to its
+/// cap, errors up to OUTPUT_MAX. It is stopped when a file grows past its cap (checked as it runs,
+/// so a file can overshoot by what it writes between checks).
 fn run_bounded(
     command: &mut std::process::Command,
-    out: &Path,
+    (out, out_max): (&Path, u64),
     errors: &Path,
     what: &str,
 ) -> Result<(), String> {
+    let over = || {
+        [(out, out_max), (errors, OUTPUT_MAX)]
+            .into_iter()
+            .find(|(p, max)| fs::metadata(p).is_ok_and(|m| m.len() > *max))
+            .map(|(p, max)| {
+                format!(
+                    "{what}: unsquashfs wrote more than {max} bytes to {}",
+                    p.display()
+                )
+            })
+    };
     let file = |p: &Path| fs::File::create(p).map_err(|e| format!("{}: {e}", p.display()));
     let mut child = command
         .stdin(std::process::Stdio::null())
@@ -514,8 +574,16 @@ fn run_bounded(
             let _ = child.wait();
             return Err(format!("{what}: unsquashfs took over {UNPACK_SECONDS}s"));
         }
+        if let Some(problem) = over() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(problem);
+        }
         std::thread::sleep(std::time::Duration::from_millis(20));
     };
+    if let Some(problem) = over() {
+        return Err(problem);
+    }
     if !status.success() {
         let mut said = Vec::new();
         let _ = fs::File::open(errors).and_then(|f| f.take(4096).read_to_end(&mut said));
@@ -577,18 +645,19 @@ struct Budget {
 }
 
 /// Checks a folder unpacked from an AppImage: names, links, contents, nested containers and JSON.
-/// Says whether an ELF file in it carries the build's receipt.
+/// Sets receipt when its app executable (app, under root) is an ELF file with the build's receipt.
 fn scan_tree(
     root: &Path,
     dir: &Path,
+    app: &Path,
     appimage: &str,
     depth: usize,
     budget: &mut Budget,
-) -> Result<bool, String> {
+    receipt: &mut bool,
+) -> Result<(), String> {
     if depth > UNPACKED_DEPTH_MAX {
         return Err(format!("{appimage}!{}: too deep", dir.display()));
     }
-    let mut found = false;
     for entry in fs::read_dir(dir).map_err(|e| format!("{appimage}: {e}"))? {
         let path = entry.map_err(|e| format!("{appimage}: {e}"))?.path();
         let what = format!(
@@ -610,7 +679,7 @@ fn scan_tree(
         }
         let meta = fs::symlink_metadata(&path).map_err(|e| format!("{what}: {e}"))?;
         if meta.is_dir() {
-            found |= scan_tree(root, &path, appimage, depth + 1, budget)?;
+            scan_tree(root, &path, app, appimage, depth + 1, budget, receipt)?;
         } else if meta.is_symlink() {
             let target = fs::read_link(&path).map_err(|e| format!("{what}: {e}"))?;
             let target = target.to_string_lossy().to_ascii_lowercase();
@@ -634,60 +703,106 @@ fn scan_tree(
                     "{what}: compressed or archive file ({kind}) cannot be checked"
                 ));
             }
+            // Past any amount of leading whitespace (the file is within the size budget).
+            let first = first_byte(&head, &mut file).map_err(|e| format!("{what}: {e}"))?;
             file.seek(SeekFrom::Start(0))
                 .map_err(|e| format!("{what}: {e}"))?;
-            let receipt = scan_stream(file, &what)?;
-            found |= receipt && head.starts_with(b"\x7fELF");
-            check_json(&path, &name, &head, meta.len(), &what)?;
+            let has = scan_stream(file, &what)?;
+            if path.strip_prefix(root).is_ok_and(|p| p == app) {
+                *receipt = has && head.starts_with(b"\x7fELF");
+            }
+            check_json(&path, name.ends_with(".json"), first, meta.len(), &what)?;
         } else {
             return Err(format!("{what}: not a regular file, folder or link"));
         }
     }
-    Ok(found)
+    Ok(())
 }
 
-/// A link must lead, inside the package, to something that exists there. Targets are resolved
-/// by their text, never by following a link out of the folder.
+/// The first byte that is not ASCII whitespace: in head, else read from rest.
+fn first_byte(head: &[u8], rest: &mut impl Read) -> std::io::Result<Option<u8>> {
+    if let Some(b) = head.iter().find(|b| !b.is_ascii_whitespace()) {
+        return Ok(Some(*b));
+    }
+    let mut buffer = vec![0; 64 * 1024];
+    loop {
+        let n = rest.read(&mut buffer)?;
+        if n == 0 {
+            return Ok(None);
+        }
+        if let Some(b) = buffer[..n].iter().find(|b| !b.is_ascii_whitespace()) {
+            return Ok(Some(*b));
+        }
+    }
+}
+
+/// A link must lead, inside the package, to something that exists there. It is resolved as the
+/// system would, one name at a time: a link met on the way is expanded in place (at most 40), and
+/// a `..` may never leave the package's top folder. Nothing is followed out of the folder.
 fn check_link(root: &Path, link: &Path, what: &str) -> Result<(), String> {
+    use std::collections::VecDeque;
+    use std::ffi::OsString;
     use std::path::Component;
-    let mut current = link.to_path_buf();
-    for _ in 0..40 {
-        let target = fs::read_link(&current).map_err(|e| format!("{what}: {e}"))?;
-        let mut inside: Vec<std::ffi::OsString> = current
-            .parent()
-            .and_then(|p| p.strip_prefix(root).ok())
-            .ok_or_else(|| format!("{what}: link outside the package"))?
-            .iter()
-            .map(|c| c.to_os_string())
-            .collect();
+    /// A link's target, as names to walk; None stands for `..`.
+    fn parts(target: &Path, what: &str) -> Result<Vec<Option<OsString>>, String> {
+        let mut out = Vec::new();
         for part in target.components() {
             match part {
-                Component::Normal(p) => inside.push(p.to_os_string()),
+                Component::Normal(p) => out.push(Some(p.to_os_string())),
                 Component::CurDir => {}
-                Component::ParentDir => {
-                    if inside.pop().is_none() {
-                        return Err(format!("{what}: link leads outside the package"));
-                    }
-                }
+                Component::ParentDir => out.push(None),
                 Component::RootDir | Component::Prefix(_) => {
                     return Err(format!("{what}: link to an absolute path"));
                 }
             }
         }
-        let next = inside.iter().fold(root.to_path_buf(), |p, c| p.join(c));
+        Ok(out)
+    }
+    let mut here: Vec<OsString> = link
+        .parent()
+        .and_then(|p| p.strip_prefix(root).ok())
+        .ok_or_else(|| format!("{what}: link outside the package"))?
+        .iter()
+        .map(|c| c.to_os_string())
+        .collect();
+    let read = |path: &Path| fs::read_link(path).map_err(|e| format!("{what}: {e}"));
+    let mut todo: VecDeque<_> = parts(&read(link)?, what)?.into();
+    let mut expanded = 1;
+    while let Some(part) = todo.pop_front() {
+        let Some(name) = part else {
+            if here.pop().is_none() {
+                return Err(format!("{what}: link leads outside the package"));
+            }
+            continue;
+        };
+        let next = here
+            .iter()
+            .chain([&name])
+            .fold(root.to_path_buf(), |p, c| p.join(c));
         let meta =
             fs::symlink_metadata(&next).map_err(|_| format!("{what}: link to a missing file"))?;
-        if !meta.is_symlink() {
-            return Ok(());
+        if meta.is_symlink() {
+            expanded += 1;
+            if expanded > 40 {
+                return Err(format!("{what}: too many links in a row"));
+            }
+            for part in parts(&read(&next)?, what)?.into_iter().rev() {
+                todo.push_front(part);
+            }
+        } else {
+            here.push(name);
         }
-        current = next;
     }
-    Err(format!("{what}: too many links in a row"))
+    Ok(())
 }
 
 /// The kind of a compressed or archive file, from its first bytes: none can be looked inside.
+/// shortcut: only these common signatures are known; an encoding without one (raw deflate,
+/// brotli, a custom format) is byte-scanned as it is, so test material inside it would pass. The
+/// gate guards against our own build carrying test material, not a hostile builder; add a
+/// signature here when a package format needs one.
 fn container(head: &[u8]) -> Option<&'static str> {
-    const MAGIC: [(&[u8], &str); 14] = [
+    const MAGIC: [(&[u8], &str); 22] = [
         (b"\x1f\x8b", "gzip"),
         (b"BZh", "bzip2"),
         (b"\xfd7zXZ\x00", "xz"),
@@ -702,6 +817,15 @@ fn container(head: &[u8]) -> Option<&'static str> {
         (b"070702", "cpio"),
         (b"070707", "cpio"),
         (b"!<arch>\n", "ar"),
+        // zlib (RFC 1950) with its four usual compression-level flags.
+        (b"\x78\x01", "zlib"),
+        (b"\x78\x5e", "zlib"),
+        (b"\x78\x9c", "zlib"),
+        (b"\x78\xda", "zlib"),
+        (b"\x5d\x00\x00", "lzma"),
+        (b"LZIP", "lzip"),
+        (b"\x89LZO\x00", "lzop"),
+        (b"\x1f\x9d", "compress"),
     ];
     if let Some((_, kind)) = MAGIC.iter().find(|(m, _)| head.starts_with(m)) {
         return Some(kind);
@@ -715,12 +839,18 @@ fn container(head: &[u8]) -> Option<&'static str> {
     None
 }
 
-/// JSON inside a package: a file named .json, or one that starts with `{`. It is decoded before
-/// it is checked, so escapes cannot hide a name or field; trust-shaped JSON, whatever its name,
-/// must be empty trust; JSON that cannot be checked is refused.
-fn check_json(path: &Path, name: &str, head: &[u8], len: u64, what: &str) -> Result<(), String> {
-    let named = name.ends_with(".json");
-    if !named && head.iter().find(|b| !b.is_ascii_whitespace()) != Some(&b'{') {
+/// JSON inside a package: a file named .json, or one whose first byte past whitespace is `{`. It is
+/// decoded before it is checked, so escapes cannot hide a name or field; trust-shaped JSON,
+/// whatever its name, must be empty trust; JSON that cannot be checked is refused, and so is an
+/// unnamed file that starts like JSON, does not parse and names trust fields.
+fn check_json(
+    path: &Path,
+    named: bool,
+    first: Option<u8>,
+    len: u64,
+    what: &str,
+) -> Result<(), String> {
+    if !named && first != Some(b'{') {
         return Ok(());
     }
     if len > JSON_MAX {
@@ -730,6 +860,9 @@ fn check_json(path: &Path, name: &str, head: &[u8], len: u64, what: &str) -> Res
     let value: Value = match serde_json::from_slice(&bytes) {
         Ok(value) => value,
         Err(_) if named => return Err(format!("{what}: invalid JSON")),
+        Err(_) if first_of(&bytes, &[b"\"roots\"", b"\"updater\""]).is_some() => {
+            return Err(format!("{what}: malformed JSON with trust fields"));
+        }
         Err(_) => return Ok(()),
     };
     if value.get("roots").is_some() || value.get("updater").is_some() {
