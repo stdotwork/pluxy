@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/stdotwork/pluxy/next/internal/proxyurl"
+	"github.com/stdotwork/pluxy/next/internal/upheader"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
@@ -47,6 +48,10 @@ type Account struct {
 	// http, https, socks5 or socks5h URL, or direct or none for no proxy. Empty: the config's
 	// proxy_url. Its user name and password are secret (package proxyurl).
 	ProxyURL string `json:"proxy_url,omitempty"`
+	// Headers are extra HTTP headers sent on every upstream request of the account (today's
+	// headers), over the extension's own of the same names. Values of headers about
+	// authentication are secret (package upheader).
+	Headers map[string]string `json:"headers,omitempty"`
 	// Credential is the secret the account presents.
 	Credential *protocol.Credential `json:"credential,omitempty"`
 	// Managed marks an account whose credential core's credential store keeps: each attempt
@@ -74,6 +79,9 @@ func (a *Account) Check() error {
 	if err := proxyurl.Check("proxy_url", a.ProxyURL); err != nil {
 		return err
 	}
+	if err := upheader.Check("headers", a.Headers); err != nil {
+		return err
+	}
 	return a.checkNames()
 }
 
@@ -93,5 +101,5 @@ func (a *Account) endpoint() string {
 
 // call returns the account as an extension call carries it.
 func (a *Account) call() protocol.Account {
-	return protocol.Account{ID: a.ID, Settings: a.Settings, Credential: a.Credential, ProxyURL: a.ProxyURL}
+	return protocol.Account{ID: a.ID, Settings: a.Settings, Credential: a.Credential, ProxyURL: a.ProxyURL, Headers: a.Headers}
 }

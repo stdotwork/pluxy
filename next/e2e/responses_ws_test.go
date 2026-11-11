@@ -32,6 +32,7 @@ type wsUpstream struct {
 
 type wsUpstreamConn struct {
 	key      string
+	header   http.Header // the handshake's headers
 	messages []map[string]any
 	closed   chan struct{} // closed when the core's side of the socket ended
 }
@@ -93,7 +94,7 @@ func (u *wsUpstream) serveWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer c.CloseNow()
-	conn := &wsUpstreamConn{key: keyOf(r), closed: make(chan struct{})}
+	conn := &wsUpstreamConn{key: keyOf(r), header: r.Header.Clone(), closed: make(chan struct{})}
 	defer close(conn.closed)
 	u.mu.Lock()
 	u.conns = append(u.conns, conn)
@@ -137,7 +138,7 @@ func (u *wsUpstream) connections() []wsUpstreamConn {
 	defer u.mu.Unlock()
 	var out []wsUpstreamConn
 	for _, c := range u.conns {
-		out = append(out, wsUpstreamConn{key: c.key, messages: append([]map[string]any(nil), c.messages...), closed: c.closed})
+		out = append(out, wsUpstreamConn{key: c.key, header: c.header, messages: append([]map[string]any(nil), c.messages...), closed: c.closed})
 	}
 	return out
 }

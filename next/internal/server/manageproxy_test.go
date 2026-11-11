@@ -19,7 +19,7 @@ func TestPatchProxyURLRoundTrip(t *testing.T) {
 		t.Run(stored, func(t *testing.T) {
 			account := route.Account{ID: "a", ProxyURL: stored}
 			var view AccountView
-			view.fields(account, nil)
+			view.fields(account, nil, nil)
 			if view.ProxyURL == stored {
 				t.Fatalf("the view shows the proxy with its user name: %q", view.ProxyURL)
 			}
@@ -40,7 +40,7 @@ func TestPatchProxyURLWithoutSecretRoundTrip(t *testing.T) {
 	const stored = "http://@proxy:8080"
 	account := route.Account{ID: "a", ProxyURL: stored}
 	var view AccountView
-	view.fields(account, nil)
+	view.fields(account, nil, nil)
 	if view.ProxyURL != stored {
 		t.Fatalf("the view shows %q, want the stored %q", view.ProxyURL, stored)
 	}

@@ -21,17 +21,13 @@ func (e *Extension) Login(ctx context.Context, account protocol.Account, login p
 	// the account's settings count as secret in everything the call sends back.
 	l := &LoginCall{ext: e, ctx: ctx, account: account.ID, settings: e.holdSettings(account)}
 	l.addSecrets(login.Input)
-	proxy, perr := e.proxied(&account)
+	proxy, perr := e.outbound(&account)
 	if perr != nil {
 		l.fail(perr)
 		return l
 	}
 	if proxy != nil {
-		secrets := map[string]string{}
-		for i, f := range proxyForms(proxy) {
-			secrets[fmt.Sprintf("proxy %d", i)] = f
-		}
-		l.addSecrets(secrets)
+		l.addSecrets(outboundSecrets(proxy))
 	}
 	conn, lerr := e.dial(ctx)
 	if lerr != nil {
@@ -166,7 +162,7 @@ func (l *LoginCall) readError(err error) *llm.Error {
 // one. Errors have the sent credential and the secrets in the account's settings removed from
 // them.
 func (e *Extension) Refresh(ctx context.Context, account protocol.Account) (*protocol.Credential, *llm.Error) {
-	proxy, perr := e.proxied(&account)
+	proxy, perr := e.outbound(&account)
 	if perr != nil {
 		return nil, perr
 	}

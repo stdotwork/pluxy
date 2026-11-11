@@ -80,7 +80,7 @@ type Extension struct {
 type held struct {
 	mu       sync.Mutex
 	by       map[string][]heldCredential
-	proxy    map[string][]heldCredential // the proxy secrets of each account, apart from by so no account ID can name them
+	out      map[string][]heldCredential // the proxy and header secrets of each account, apart from by so no account ID can name them
 	settings map[string][]heldCredential // the secrets in each account's settings, apart in the same way
 	redact   *protocol.Redactor
 }
@@ -93,9 +93,9 @@ type heldCredential struct {
 // add records that the extension holds c for owner (an account ID), with the one before it.
 func (h *held) add(owner string, c *protocol.Credential) { h.record(&h.by, owner, c, 2) }
 
-// addProxy records that the extension holds c, the proxy secrets of account, kept apart from the
-// credentials add records so that no account ID can name the same entry.
-func (h *held) addProxy(account string, c *protocol.Credential) { h.record(&h.proxy, account, c, 2) }
+// addOutbound records that the extension holds c, the proxy and header secrets of account, kept
+// apart from the credentials add records so that no account ID can name the same entry.
+func (h *held) addOutbound(account string, c *protocol.Credential) { h.record(&h.out, account, c, 2) }
 
 // addSettings records that the extension holds c, the secrets in account's settings, kept apart
 // in the same way, for as long as its program runs. This keeps one entry for each settings an
@@ -128,7 +128,7 @@ func (h *held) record(m *map[string][]heldCredential, owner string, c *protocol.
 	}
 	(*m)[owner] = list
 	var all []*protocol.Credential
-	for _, by := range []map[string][]heldCredential{h.by, h.proxy, h.settings} {
+	for _, by := range []map[string][]heldCredential{h.by, h.out, h.settings} {
 		for _, l := range by {
 			for _, hc := range l {
 				all = append(all, hc.c)
@@ -457,7 +457,7 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 		return failed(llm.CodeExtensionUnavailable, fmt.Sprintf("extension %s is not running", e.manifest.ID))
 	default:
 	}
-	proxy, perr := e.proxied(&account)
+	proxy, perr := e.outbound(&account)
 	if perr != nil {
 		s := &Stream{}
 		s.fail(perr)

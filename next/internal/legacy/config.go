@@ -19,6 +19,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/stdotwork/pluxy/next/internal/proxyurl"
+	"github.com/stdotwork/pluxy/next/internal/upheader"
 )
 
 // Result is a config.yaml turned into this core's config.
@@ -309,7 +310,7 @@ var rules = map[string]rule{
 	"api-keys.*[].models[].openapi":                            {later, ""},
 	"api-keys.*[].prefix":                                      {supported, ""},
 	"api-keys.*[].excluded-models":                             {supported, ""},
-	"api-keys.*[].headers":                                     {later, ""},
+	"api-keys.*[].headers":                                     {supported, ""},
 	"api-keys.*[].proxy-url":                                   {supported, ""},
 	"api-keys.*[].connection-pool":                             {later, ""},
 	"api-keys.*[].request-scoped-errors":                       {later, ""},
@@ -1002,6 +1003,25 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 		}
 		a["proxy_url"] = p
 	}
+	// A key's headers replace its group's; an openai-compatibility group's are its keys', which
+	// have none of their own there.
+	hv := field(g, k, "headers")
+	if f.v8 == "openai-compatibility" {
+		hv = g["headers"]
+	}
+	if h, dynamic, err := headers(hv, path+".headers"); err != nil {
+		return nil, err
+	} else if len(h) > 0 || len(dynamic) > 0 {
+		if err := upheader.Check(display(path)+" key "+id+" headers", h); err != nil {
+			return nil, err
+		}
+		if len(h) > 0 {
+			a["headers"] = h
+		}
+		for _, name := range dynamic {
+			x.notes = append(x.notes, fmt.Sprintf("config.yaml: %s key %s header %s takes its value from the client's request, which this core does not do: not imported", display(path), id, name))
+		}
+	}
 	if f.v8 != "openai-compatibility" {
 		if v := field(g, k, "excluded-models"); v != nil {
 			list, err := stringList(v, path+".excluded-models")
@@ -1589,6 +1609,35 @@ func scalar(v any, path string) (string, error) {
 		return strconv.FormatFloat(v, 'f', -1, 64), nil
 	}
 	return "", fmt.Errorf("%s must be text", path)
+}
+
+// headers reads a headers mapping as today's core does (upheader.Import): each value is text,
+// a number or true or false, written as text.
+func headers(v any, path string) (map[string]string, []string, error) {
+	if v == nil {
+		return nil, nil, nil
+	}
+	m, ok := v.(tree)
+	if !ok {
+		return nil, nil, fmt.Errorf("%s must be a mapping", path)
+	}
+	text := map[string]string{}
+	for k, val := range m {
+		if b, isBool := val.(bool); isBool {
+			text[k] = strconv.FormatBool(b)
+			continue
+		}
+		s, err := scalar(val, path+"."+k)
+		if err != nil {
+			return nil, nil, err
+		}
+		text[k] = s
+	}
+	h, dynamic, err := upheader.Import(text)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return h, dynamic, nil
 }
 
 // boolean_ reads a true or false setting; absent is false.
