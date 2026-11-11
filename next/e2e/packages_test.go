@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -44,6 +45,20 @@ func TestCommonAppManifestInstall(t *testing.T) {
 			m = bytes.ReplaceAll(m, []byte("linux/amd64"), []byte(platform))
 			marker := filepath.Join(t.TempDir(), "app-was-run")
 			canary := []byte("#!/bin/sh\nprintf ran > '" + marker + "'\nexit 99\n")
+			// Positive control: the executable really writes the marker if started.
+			control := filepath.Join(t.TempDir(), "app-canary")
+			if err := os.WriteFile(control, canary, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := exec.Command(control).Run(); err == nil {
+				t.Fatal("canary should exit 99")
+			}
+			if b, err := os.ReadFile(marker); err != nil || string(b) != "ran" {
+				t.Fatalf("canary control: %q, %v", b, err)
+			}
+			if err := os.Remove(marker); err != nil {
+				t.Fatal(err)
+			}
 			u := answeringUpstream(t)
 			srv := codextest.New(t)
 			index := writeRegistry(t, manifestArchive(t, m, canary), "")
