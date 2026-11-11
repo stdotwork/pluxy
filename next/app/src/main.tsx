@@ -6,15 +6,17 @@
 import { listen } from "@tauri-apps/api/event";
 import { render } from "preact";
 import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
+import { api } from "../../ui/kit/api";
 import { corePages } from "../../ui/kit/pages/core";
 import { type PageDef, Shell } from "../../ui/kit/shell";
 import { ThemeState } from "../../ui/kit/theme/state";
+import { KitContext } from "../../ui/kit/ui";
 import defaultTheme from "../../ui/themes/default.json";
 import paper from "../../ui/themes/paper.json";
 import terminal from "../../ui/themes/terminal.json";
 import { ConnectionPage } from "./connection";
 import { type DeviceCatalog, device, newest } from "./device";
-import { devicePage } from "./devicePage";
+import { DevicePage, devicePage } from "./devicePage";
 import { appHost, type Connection, connectionGet } from "./host";
 import { NativeExtensionPage } from "./nativePage";
 
@@ -106,17 +108,22 @@ function App(props: { initial: Connection }) {
     [conn, catalog, loadDevice],
   );
 
-  // Not connected or not signed in (or the app's own core did not start): only the Connection
-  // page, where the person can fix the address or give the key.
+  // Not connected or not signed in (or the app's own core did not start): the Connection page,
+  // where the person can fix the address or give the key, and this device's extensions, which
+  // need no core (in safe mode, to disable or remove a package).
   if (!conn.target || !conn.signed_in) {
+    const kit = { host, api: api(host), themes, unauthorized: () => {}, extensionsChanged: () => {} };
     return (
-      <div class="shell" data-part="shell">
-        <main class="main" data-part="main">
-          <div class="content">
-            <ConnectionPage connection={conn} onChange={changed} />
-          </div>
-        </main>
-      </div>
+      <KitContext.Provider value={kit}>
+        <div class="shell" data-part="shell">
+          <main class="main" data-part="main">
+            <div class="content">
+              <ConnectionPage connection={conn} onChange={changed} />
+              <DevicePage onChanged={loadDevice} />
+            </div>
+          </main>
+        </div>
+      </KitContext.Provider>
     );
   }
   return (
