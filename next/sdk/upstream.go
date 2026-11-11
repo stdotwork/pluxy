@@ -39,32 +39,39 @@ func Upstream(base *http.Transport) http.RoundTripper {
 }
 
 // upstreamUsed is set when the process creates a transport with Upstream. An extension that never
-// does has no client that honours an account's proxy or headers, so the SDK refuses a call that
-// carries either (refuseUpstream) instead of letting the extension send it without them.
+// does has no client that honours an account's proxy or headers or a call's payload rules, so the
+// SDK refuses a call that carries any of them (refuseUpstream) instead of letting the extension
+// send it without them.
 var upstreamUsed atomic.Bool
 
 // defaultIdleConnTimeout is the idle connection timeout of a per-proxy transport whose base has
 // none, as http.DefaultTransport has.
 const defaultIdleConnTimeout = 90 * time.Second
 
-// refuseUpstream returns the error for a call that carries a proxy or headers when no client of
-// the process is wrapped in Upstream; nil otherwise. The message holds no part of the proxy URL
-// and no header value.
+// refuseUpstream returns the error for a call that carries a proxy, headers or payload rules
+// when no client of the process is wrapped in Upstream; nil otherwise. The message holds no part
+// of the proxy URL, no header value and no rule.
 func refuseUpstream(call protocol.Call) *llm.Error {
-	if call.Account == nil || upstreamUsed.Load() {
+	if upstreamUsed.Load() {
 		return nil
+	}
+	a := call.Account
+	if a == nil {
+		a = &protocol.Account{}
 	}
 	what := ""
 	switch {
-	case call.Account.ProxyURL != "":
-		what = "the proxy"
-	case len(call.Account.Headers) > 0:
-		what = "the headers"
+	case a.ProxyURL != "":
+		what = "the proxy of"
+	case len(a.Headers) > 0:
+		what = "the headers of"
+	case call.Payload != nil:
+		what = "the payload rules for"
 	default:
 		return nil
 	}
 	return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
-		Message: fmt.Sprintf("this extension sends no request through sdk.Upstream, so it cannot use %s of account %q; the call was not sent", what, call.Account.ID)}
+		Message: fmt.Sprintf("this extension sends no request through sdk.Upstream, so it cannot use %s account %q; the call was not sent", what, a.ID)}
 }
 
 type upstreamTransport struct {

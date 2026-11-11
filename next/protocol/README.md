@@ -1101,7 +1101,9 @@ no `payload` in this version.
 
 In Go, `sdk.Upstream` applies them to each request made with the handler's context, with the
 engine in `github.com/stdotwork/pluxy/next/sdk/payload`; `sdk.WithPayloadRoot` on a request's
-context names the object that holds the request.
+context names the object that holds the request. As with a proxy, the SDK answers a call that
+carries rules with `unsupported` (scope `credential`, retryable) and never runs the handler when
+the extension process has not created any `sdk.Upstream` transport.
 
 ## Upstream capture
 
