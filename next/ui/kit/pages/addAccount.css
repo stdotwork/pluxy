@@ -1,0 +1,25 @@
+@layer kit {
+  .add-account > .field {
+    max-width: var(--px-size-detail);
+  }
+
+  .account-method {
+    min-width: 0;
+  }
+
+  .login-flow {
+    font-weight: normal;
+    overflow-wrap: anywhere;
+    text-align: start;
+  }
+
+  .login-flow p {
+    margin: 0;
+  }
+
+  .login-flow [data-part="device-code"] {
+    font-size: var(--px-font-size-title);
+    font-weight: var(--px-font-weight-strong);
+    letter-spacing: 0.08em;
+  }
+}

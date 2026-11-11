@@ -791,6 +791,39 @@ What changes in a request:
   parameters gets an empty object schema. A request with more than 200 tools keeps the first 200,
   the most xAI accepts in one request.
 - A custom tool call and its output are sent as a function call and a function call output.
+- Codex's `apply_patch` custom tool is sent as a function whose one argument, `input`, holds the
+  patch text: its description tells the model so and keeps the client's grammar, its history calls
+  carry the text in `input` (a call whose input is not a string is an invalid request), and a
+  `tool_choice` that names it names a function. A request that declares `apply_patch` more than
+  once keeps the first declaration. xAI's function call to it goes back to a Responses client as
+  the custom tool call it expects: an added item, input events carrying the patch text as it
+  arrives, the end of the input, the done item and the final response's output all show a
+  `custom_tool_call` with the text as its `input`. The events keep xAI's sequence numbers. Arguments
+  that are not one `input` string end the reply with an upstream error that does not repeat them,
+  as do arguments of more than 16 MiB for one call or 32 MiB for the calls of one reply, white space
+  included (the extension keeps the patch text and not the arguments). A call that has its
+  arguments but no done event is finished when the reply ends, and is in the final output.
+  Only a Responses client can declare a custom tool, so only its reply is turned back; today's core
+  does not turn a Chat Completions client's `apply_patch` custom tool back either.
+- Namespace tools (from the Codex app, `{"type":"namespace","name":N,"tools":[...]}`) are sent as
+  functions, because xAI has no such tool. When the tools flattened are no more than 200, each
+  child is a function named `N__child` (a name that has the prefix, or starts with `mcp__`, keeps
+  its name), and `tool_search` children are left out. The count includes the `x_search` tool that
+  `inject_x_search` adds, as today's core counts it. With more than 200, each namespace is one
+  function named `N` whose arguments are `{"name": child, "arguments": {...}}` and whose
+  description lists the children with their schemas; folded namespaces come first when the tools
+  are cut to 200. A function call in the history that names a namespace, and a `tool_choice` that
+  does, are written the same way. xAI's call to such a function goes back to a Responses client as
+  the call to the child in its namespace, in the added item, the done item and the final response;
+  a folded namespace's call is unwrapped when its arguments name one of the namespace's children,
+  and stays a call to the namespace otherwise. A namespace declared more than once is one
+  namespace with the children of every declaration, each as its first declaration has it. A call
+  or a tool choice in a namespace goes to the namespace's function only when the namespace really
+  was folded, not to a plain function that has its name. Where a name repeats, the first tool stays.
+  An `apply_patch` function in a namespace is an ordinary function, not the patch tool.
+- The Codex app's `automation_update` tool (in the `codex_app` or `codex_apps` namespace) is sent
+  with parameters that accept any object, and `strict` false: with its own schema, a large `oneOf`
+  with `$ref` references, xAI accepts the request and sends no events.
 - `store` is false unless the client set it: xAI keeps responses by default, and with
   `previous_response_id` removed a kept response is never used again. `include` asks for
   `reasoning.encrypted_content`, which carries a reasoning model's thinking to the next turn
@@ -825,12 +858,14 @@ and creates no account or model cooldown; a 404 naming a missing model is scoped
 
 Not built, and why:
 
-- Namespace tools (from the Codex app) are sent as the client wrote them. Today's core folds them
-  into functions and restores the names in the reply. That needs the reply side, which this
-  extension does not have yet.
-- An `apply_patch` custom tool is not wrapped in an `input` field, and its call is not restored
-  on the way back. Today's core does both, so a Codex `apply_patch` tool does not work through this
-  extension yet.
+- Namespace tools in an `additional_tools` input item (Responses Lite) are sent as the client wrote
+  them, and so is an `apply_patch` declared inside a namespace. Today's core moves the first to
+  the tools list and handles the second.
+- The root-union schema rule of today's core (a function whose schema is a `oneOf` or `anyOf` with
+  `$ref` or non-object branches gets the permissive schema, and a union branch without a type gets
+  `object`) is built only for the Codex app's `automation_update`, which is what hangs xAI.
+- A custom tool other than `apply_patch` is sent as a function with no input field, and its call
+  comes back as a function call, as today's core does it; a client cannot run it from that call.
 - Today's core sends an empty `instructions`, a string input as a list, and tool defaults
   (`tool_choice`, `parallel_tool_calls`, `strict`, `additionalProperties`) on every Responses
   request, through its Codex translator. These are not rules about xAI, so this extension does not
@@ -1493,6 +1528,23 @@ renamed `main-<time>.log` and a new one begins. `logs.max_total_size_mb` (today'
 first, `main.log` never; 0 (the default) is no cap. The cap is applied when a file is rotated, when a
 request log is written and when the setting changes. A change of either setting takes effect at the reload that makes it.
 
+Core also writes one access line when each client API request ends: after a streamed reply ends,
+and when a Responses WebSocket closes. It writes none for `/healthz`, the management API, the
+panel and its assets, or a path no route serves (a 404).
+
+```text
+200 | 1.234s | 127.0.0.1 | POST /v1/chat/completions | 20261109120000-3f9a0c2e5b7d4e18 | openai-main
+```
+
+The line is `<status> | <latency> | <client ip> | <METHOD> <path> | <trace id> | <account>`: the
+reply's status; the time the request took, to the millisecond (to the second above a minute); the
+client's address (the connection's peer, or the client a trusted proxy names, as in request logs);
+the method and the path only, never the query string (Gemini clients send their key in `?key=`),
+and no header or body; the reply's `X-CPA-TRACE-ID` and the account its last attempt went to, or
+`-` in either place when there is none, as for a request refused before routing. A reply of 400 or
+more is a warning: the line starts with `warning: `, like the other warnings, so `main.log` marks
+it `[warn ]`; every other line is `[info ]`.
+
 ```json
 {"logs": {"to_file": true, "max_total_size_mb": 100}}
 ```
@@ -1550,6 +1602,41 @@ extension, so request logs hold what the client sent and received.
 | `GET /v0/management/request-error-logs` | The error logs, newest first: `files`, each with `name`, `size` and `modified` (Unix seconds). |
 | `GET /v0/management/request-error-logs/{name}` | One error log, as a download. 400 for a name that is not an error log's as core writes them, 404 when there is none or the name is a link. |
 | `GET /v0/management/request-log-by-id/{id}` | The newest request log, plain or error, of the request with that trace ID (the `X-CPA-TRACE-ID` of its reply), as a download; 404 when there is none. |
+
+## Profiling pages
+
+Core can serve Go's profiling pages under `/debug/pprof/`: heap, goroutine and CPU profiles of
+the running core. They are off by default, and only a build made with the `pprof` build tag
+has them:
+
+```bash
+go build -tags pprof -o pluxy ./cmd/pluxy
+```
+
+Turn them on in `config.json`. `addr` defaults to `127.0.0.1:8316`:
+
+```json
+{"pprof": {"enable": true, "addr": "127.0.0.1:8316"}}
+```
+
+The pages are served on a listener of their own, at `addr`, and nowhere else: not on the
+client or management address. `addr` must be a loopback address: `127.0.0.0/8`, `::1` or
+`localhost`. Any other address fails the config load, and a reload that sets one is refused
+while the old config keeps running. Core logs the address it listens on when the listener
+starts. A reload that changes `enable` or `addr` starts, moves or stops the listener, without a
+restart.
+
+To read a heap profile from a running core:
+
+```bash
+go tool pprof http://127.0.0.1:8316/debug/pprof/heap
+```
+
+The index at `/debug/pprof/` lists every profile. A CPU profile of 30 seconds is
+`/debug/pprof/profile?seconds=30`.
+
+A default build with the setting on logs one line saying it has no profiling pages, and
+serves nothing on any address.
 
 ## Packages
 
@@ -1757,7 +1844,7 @@ are accepted silently.
 | `observability.logs.request-log` (`request-log`), `observability.logs.error-logs-max-files` (`error-logs-max-files`) | `logs.request_log` and `logs.error_logs_max_files`: [request logs](#request-logs). A negative count is the default, 10, as in today's core. | Supported |
 | `observability.usage.usage-statistics-enabled` (`usage-statistics-enabled`) | `usage.enabled`: the [usage record](#usage-statistics). Today's example config sets it to `false`, which turns the record off here too. | Supported |
 | `observability.usage.redis-usage-queue-retention-seconds` (`redis-usage-queue-retention-seconds`) | The record keeps requests by `usage.max_events` and `usage.max_age_ms`. | Dropped: it was how long a queued usage record waited for a reader that removed it; reading the record here removes nothing, and its default of 60 seconds would leave little to read |
-| `observability.pprof.*` (`pprof`) | | Dropped: a developer tool, off by default |
+| `observability.pprof.enable` (`pprof.enable`), `observability.pprof.addr` (`pprof.addr`) | `pprof.enable` and `pprof.addr`: the [profiling pages](#profiling-pages). Only a build with `-tags pprof` serves them; the default build logs that the setting does nothing. An address that is not loopback is refused. | Supported (in the `pprof` build) |
 | `models.catalog`, `models.codex-catalog`, `models.devin-catalog` | | Later |
 | `plugins.*` | Extensions are separate programs (packages), not libraries loaded into core. | Dropped: replaced by packages |
 | `credentials.*` (`credential-concurrency`, `credential-in-flight`) | | Dropped: only the Home control plane used them |
