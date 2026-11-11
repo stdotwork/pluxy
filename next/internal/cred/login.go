@@ -2,6 +2,7 @@ package cred
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -261,8 +262,17 @@ func (m *Manager) finishLogin(l *login, g *protocol.Grant) error {
 	if label == "" {
 		label = l.label
 	}
+	fields := l.fields
+	if len(g.Settings) > 0 {
+		var defaults, explicit map[string]json.RawMessage
+		// The host validates grant settings; the management API validates caller settings.
+		_ = json.Unmarshal(g.Settings, &defaults)
+		_ = json.Unmarshal(fields.Settings, &explicit)
+		maps.Copy(defaults, explicit)
+		fields.Settings, _ = json.Marshal(defaults)
+	}
 	_, err := m.store.Create(Record{ID: l.account, Extension: l.extension, State: StateActive, Label: label, Identity: g.Identity,
-		Account: l.fields, Credential: *g.Credential})
+		Account: fields, Credential: *g.Credential})
 	if err != nil {
 		return err
 	}

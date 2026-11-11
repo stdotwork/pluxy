@@ -92,6 +92,19 @@ exclude and prefix models, and clients list the models on `GET /v1/models`: see
 extension the config names and every [installed package](#packages) that is enabled, and spreads
 requests over all their accounts: see [Accounts and routing](#accounts-and-routing).
 
+The OpenAI-compatible extension also adds accounts through the management API with method
+`api_key`. Its inputs are `api_key` (secret), `base_url` (required unless the account already has
+one), and optional `wire_api` (`chat`, `responses`, `messages` or `gemini`; default `chat`).
+`base_url` includes the API path, such as `https://api.openai.com/v1` or a Gemini host's `/v1beta`.
+The extension trims its trailing slash, checks the key with `GET {base_url}/models` using the
+selected API's authentication header, and returns the URL and wire API as non-secret account
+settings. Each key is a separate account; several keys for one upstream use the same URL.
+The key is kept only in core's credential store, never written to `config.yaml` or shown in
+management replies. A re-login needs only `api_key` and uses the account's existing settings.
+A refused key keeps the upstream's reason with secrets removed. The check accepts any 2xx
+reply from the model-list URL, so a wrong URL that answers 2xx is accepted too, as with Claude
+and Gemini key checks. Configured accounts continue to work as before.
+
 An account's `settings` may set `"wire_api": "responses"` for an upstream that speaks OpenAI
 Responses (`POST {base_url}/responses`), or `"wire_api": "messages"` for one that speaks Anthropic
 Messages (`POST {base_url}/messages`, with the key in `x-api-key` and the client's
@@ -619,7 +632,10 @@ through the management API (below) with method `device`: the reply's prompt carr
 Kimi's page to enter it on, and the login finishes once it is approved there. The sign-in is the
 OAuth device authorization grant (RFC 8628) at Kimi's login host, with the public client of Kimi's
 own CLI, since Kimi registers no other clients. Core renews the token five minutes before it
-expires. A Kimi Code API key works too, as an account in the config; it has no login method yet:
+expires. A Kimi Code API key can be added with method `api_key` and secret input `api_key`:
+the extension checks it with `GET {base_url}/v1/models` before storing it in core's credential
+store. Refused keys report Kimi's reason with secrets removed. A key also works as an account
+in the config:
 
 ```json
 {"id": "kimi", "credential": {"kind": "api_key", "api_key": "sk-kimi-..."}}
@@ -673,8 +689,10 @@ place.
 ## xAI
 
 The xAI extension (`extensions/xai`) serves xAI's Grok models with an xAI API key or a Grok
-account. Point `extension.manifest` at `extensions/xai/pluxy-extension.json`. An API key comes from
-the config, with the key as the credential:
+account. Point `extension.manifest` at `extensions/xai/pluxy-extension.json`. An API key can be
+added with method `api_key` and secret input `api_key`, or from the config with the key as the
+credential. The login checks `GET {base_url}/models` and keeps an accepted key only in core's
+credential store; a refusal reports xAI's reason with secrets removed:
 
 ```json
 {"id": "xai", "credential": {"kind": "api_key", "api_key": "xai-..."}}
@@ -1160,6 +1178,12 @@ its owner (`credentials_dir`, default `credentials` beside the config file), and
 credential through the extension shortly before it expires. Only the extension that created an
 account ever receives its credential. The protocol side is in the
 [protocol README](protocol/README.md#login-and-refresh).
+
+An extension may return non-secret account settings with a login grant. When adding an
+account, core uses those as defaults: properties explicitly supplied in `POST /accounts.settings`
+win (including `null`; nested objects are replaced as a whole). The extension validates and
+normalises its defaults. Settings must never hold secrets. A login to an existing account
+ignores grant settings and keeps the account's existing settings.
 
 The management API is served under `/v0/management` when the config sets `management_key`;
 send it as a bearer token. With a management key set, the config may set no accounts.

@@ -136,6 +136,16 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			"verification_uri_complete": s.URL + "/device?user_code=" + uc, "expires_in": life, "interval": 1})
 	case r.URL.Path == "/api/oauth/token" && r.Method == http.MethodPost:
 		s.token(w, r)
+	case r.URL.Path == "/coding/v1/models" && r.Method == http.MethodGet:
+		tok, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		s.mu.Lock()
+		ok := s.access[tok]
+		s.mu.Unlock()
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]string{"message": "Invalid Authentication: " + tok, "type": "invalid_authentication_error"}})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": []map[string]string{{"id": "kimi-for-coding", "object": "model"}}})
 	case (r.URL.Path == "/coding/v1/usages" || r.URL.Path == "/coding/v1/me") && r.Method == http.MethodGet:
 		s.account(w, r)
 	case strings.HasPrefix(r.URL.Path, "/coding/v1/") && r.Method == http.MethodPost:
