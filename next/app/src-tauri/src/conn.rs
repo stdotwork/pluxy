@@ -326,7 +326,7 @@ impl Connection {
         };
         let mut summary = format!("Key for {base}");
         if let Some(ca) = &ca_file {
-            summary.push_str(&format!("\nCertificate authority: {ca}"));
+            summary.push_str(&format!("\nCertificate authority: {}", shown_path(ca)));
         }
         let previous = self.client.as_ref().map(|c| c.base());
         if previous != Some(base.as_str()) {
@@ -866,5 +866,31 @@ mod tests {
             .unwrap()
             .contains("secret-key-123"));
         fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+/// A path as the key dialog shows it: control characters escaped, so a file name cannot add
+/// lines to the dialog.
+fn shown_path(path: &str) -> String {
+    path.chars()
+        .map(|c| {
+            if c.is_control() {
+                c.escape_unicode().to_string()
+            } else {
+                c.to_string()
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod shown_path_tests {
+    #[test]
+    fn control_characters_cannot_add_dialog_lines() {
+        assert_eq!(super::shown_path("/etc/ca.pem"), "/etc/ca.pem");
+        assert_eq!(
+            super::shown_path("/tmp/a\nKey for https://x"),
+            "/tmp/a\\u{a}Key for https://x"
+        );
     }
 }

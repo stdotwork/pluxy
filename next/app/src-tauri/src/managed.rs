@@ -71,8 +71,10 @@ fn write_private_with_nonce(
         f.sync_all()?;
         drop(f);
         fs::rename(&tmp, path)?;
+        // The file is in place once renamed; syncing the folder only makes the rename durable
+        // sooner, and some filesystems refuse it, so a failure here does not fail the write.
         #[cfg(unix)]
-        folder.sync_all()?;
+        let _ = folder.sync_all();
         Ok(())
     })();
     if result.is_err() {

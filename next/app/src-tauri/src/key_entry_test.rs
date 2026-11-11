@@ -1,6 +1,12 @@
 //! Real GTK entry input through XTEST; test keys never enter JavaScript.
 use super::*;
 use std::process::Command;
+use std::sync::Mutex;
+
+/// When the test last saw a key dialog on screen, and last pressed Escape in one. Escape is
+/// sent before the app handles it, so the gap between them is never longer than the app's wait.
+static DIALOG_SHOWN: Mutex<Option<Instant>> = Mutex::new(None);
+static CANCEL_SENT: Mutex<Option<Instant>> = Mutex::new(None);
 
 fn xdotool(args: &[&str]) -> Result<String, String> {
     let out = Command::new("xdotool")
@@ -30,6 +36,7 @@ fn answer(
             .ok()
             .filter(|s| !s.is_empty())
         })?;
+        *DIALOG_SHOWN.lock().unwrap() = Some(Instant::now());
         // Read real GTK labels and entry properties on the GTK thread; expected origin comes
         // from the running connection, independently of the dialog's preparation code.
         let view = app.state::<App>().conn.lock().unwrap().view();
@@ -105,6 +112,9 @@ fn answer(
             "--clearmodifiers",
             if cancel { "Escape" } else { "alt+o" },
         ])?;
+        if cancel {
+            *CANCEL_SENT.lock().unwrap() = Some(Instant::now());
+        }
         Ok(())
     })
 }
@@ -232,7 +242,7 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
     if std::fs::read(&settings).ok().as_ref() != Some(&disk) {
         return Err("cancel changed saved settings".into());
     }
-    let cancelled_at = Instant::now();
+    let cancelled_at = CANCEL_SENT.lock().unwrap().ok_or("no cancel sent")?;
     // Remove the preloaded key through the real IPC command before the positive control.
     // Success must establish authentication, not merely retain the initial key.
     main.eval("window.__keySignedOut = false; window.__TAURI_INTERNALS__.invoke('sign_out').then(v => window.__keySignedOut = !v.signed_in)")
@@ -244,7 +254,9 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
         return Err("positive control did not start signed out".into());
     }
     let good = enter(app, main, key, false, false)?;
-    if cancelled_at.elapsed() < Duration::from_millis(900) {
+    // Measured to when the next dialog appeared, not to the end of typing into it.
+    let shown = DIALOG_SHOWN.lock().unwrap().ok_or("no key dialog seen")?;
+    if shown.saturating_duration_since(cancelled_at) < Duration::from_millis(900) {
         return Err("native key entry reopened without cancellation backoff".into());
     }
     let view = app.state::<App>().conn.lock().unwrap().view();
