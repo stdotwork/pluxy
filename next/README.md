@@ -1139,6 +1139,12 @@ credential through the extension shortly before it expires. Only the extension t
 account ever receives its credential. The protocol side is in the
 [protocol README](protocol/README.md#login-and-refresh).
 
+An extension may return non-secret account settings with a login grant. When adding an
+account, core uses those as defaults: properties explicitly supplied in `POST /accounts.settings`
+win (including `null`; nested objects are replaced as a whole). The extension validates and
+normalises its defaults. Settings must never hold secrets. A login to an existing account
+ignores grant settings and keeps the account's existing settings.
+
 The management API is served under `/v0/management` when the config sets `management_key`;
 send it as a bearer token. With a management key set, the config may set no accounts.
 

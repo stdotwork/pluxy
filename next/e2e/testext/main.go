@@ -48,8 +48,15 @@ func main() {
 	}
 	reply := fmt.Sprintf("v=%s pid=%d", m.Version, os.Getpid())
 	err = sdk.Serve(sdk.Extension{
-		ID:      os.Getenv(protocol.EnvExtensionID),
-		Version: m.Version,
+		ID:           os.Getenv(protocol.EnvExtensionID),
+		Version:      m.Version,
+		LoginMethods: []protocol.LoginMethod{{Method: "settings", Kind: protocol.LoginAPIKey}},
+		Login: func(_ context.Context, call sdk.LoginCall, _ *sdk.LoginSession) (*protocol.Grant, error) {
+			var g protocol.Grant
+			raw, _ := json.Marshal(map[string]any{"credential": map[string]string{"kind": "api_key", "api_key": "testext-made-up-key"}, "settings": json.RawMessage(call.Input["settings"])})
+			err := json.Unmarshal(raw, &g)
+			return &g, err
+		},
 		Generate: func(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 			return generate(ctx, call, out, reply)
 		},
@@ -61,6 +68,9 @@ func main() {
 }
 
 func generate(ctx context.Context, call sdk.Call, out *sdk.Stream, reply string) error {
+	if call.Request.Model == "account-settings" {
+		reply = string(call.Account.Settings)
+	}
 	var s settings
 	_ = json.Unmarshal(call.Account.Settings, &s)
 	if err := out.Start(llm.ResponseInfo{ID: "testext-" + strconv.Itoa(os.Getpid()), Model: call.Request.Model}); err != nil {

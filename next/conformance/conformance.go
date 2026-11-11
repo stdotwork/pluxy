@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -91,6 +92,8 @@ type LoginSetup struct {
 	Account protocol.Account
 	// Input is what the user entered when starting the login.
 	Input map[string]string
+	// GrantSettings, when set, is the non-secret settings object an approved login must return.
+	GrantSettings json.RawMessage
 	// Act plays the user for each prompt of an approved or denied login. It returns the input
 	// to send back (login.input), or nil when it acted another way, for example by approving
 	// a device code at the fake provider. Nil Act answers nothing.
@@ -546,6 +549,20 @@ func (k *kit) loginOutcome(t *testing.T, m protocol.LoginMethod, s LoginScenario
 			}
 			if c := r.Grant.Credential; c.Kind == "" {
 				t.Error("login.done credential has no kind")
+			}
+			if len(r.Grant.Settings) > 0 {
+				var settings map[string]json.RawMessage
+				if err := json.Unmarshal(r.Grant.Settings, &settings); err != nil || settings == nil {
+					t.Error("login.done settings must be an object")
+				}
+			}
+			if setup.GrantSettings != nil {
+				var want, got any
+				_ = json.Unmarshal(setup.GrantSettings, &want)
+				_ = json.Unmarshal(r.Grant.Settings, &got)
+				if !reflect.DeepEqual(got, want) {
+					t.Errorf("login.done settings = %s, want %s", r.Grant.Settings, setup.GrantSettings)
+				}
 			}
 		case llm.EventError:
 			if s == LoginApproved {
