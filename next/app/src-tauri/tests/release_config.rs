@@ -223,10 +223,29 @@ enum Entry<'a> {
     Locked,
 }
 
-/// A 64-byte ELF64 little-endian header of a shared object (e_type 3), then body: what the
-/// validator takes for an app executable.
+/// A minimal well-formed ELF64 little-endian shared object for x86-64: its 64-byte header, one
+/// program header right after it, then body. What the validator takes for an app executable.
 fn elf(body: &[u8]) -> Vec<u8> {
-    let mut bytes = vec![0u8; 64];
+    let mut bytes = vec![0u8; 64 + 56];
+    bytes[..4].copy_from_slice(b"\x7fELF");
+    bytes[4] = 2; // ELF64
+    bytes[5] = 1; // little-endian
+    bytes[6] = 1;
+    bytes[0x10] = 3; // e_type: shared object
+    bytes[0x12] = 62; // e_machine: x86-64
+    bytes[0x14] = 1; // e_version
+    bytes[0x20] = 64; // e_phoff
+    bytes[0x34] = 64; // e_ehsize
+    bytes[0x36] = 56; // e_phentsize
+    bytes[0x38] = 1; // e_phnum
+    bytes.extend_from_slice(body);
+    bytes
+}
+
+/// Just an ELF header's first 20 bytes (magic, ELF64, little-endian, e_type 3), then body: no
+/// machine and no program headers, so not a real executable.
+fn fabricated_elf(body: &[u8]) -> Vec<u8> {
+    let mut bytes = vec![0u8; 20];
     bytes[..4].copy_from_slice(b"\x7fELF");
     bytes[4] = 2;
     bytes[5] = 1;
@@ -234,6 +253,21 @@ fn elf(body: &[u8]) -> Vec<u8> {
     bytes[0x10] = 3;
     bytes.extend_from_slice(body);
     bytes
+}
+
+/// bytes in a zlib stream (RFC 1950): the raw deflate data from gzip, between a zlib header and
+/// its Adler-32.
+fn zlib(bytes: &[u8]) -> Vec<u8> {
+    let gz = gzip(bytes);
+    let (mut a, mut b) = (1u32, 0u32);
+    for byte in bytes {
+        a = (a + u32::from(*byte)) % 65521;
+        b = (b + a) % 65521;
+    }
+    let mut out = vec![0x78, 0x9c];
+    out.extend_from_slice(&gz[10..gz.len() - 8]);
+    out.extend_from_slice(&((b << 16) | a).to_be_bytes());
+    out
 }
 
 /// bytes compressed by the gzip program.
@@ -517,6 +551,25 @@ fn release_config_refuses_unsupported_artifact_formats() {
         t.validate(&[&exe]),
         None,
     );
+    // Round 2: an ELF header alone is not an executable.
+    let fabricated = t.f.dir.join("pluxy-app-fabricated");
+    fs::write(
+        &fabricated,
+        fabricated_elf(env!("PLUXY_BUILD_RECEIPT").as_bytes()),
+    )
+    .unwrap();
+    expect(
+        &mut wrong,
+        "a fabricated ELF header with the receipt",
+        t.validate(&[&fabricated]),
+        Some("cannot be checked"),
+    );
+    expect(
+        &mut wrong,
+        "the app executable once more",
+        t.validate(&[&exe]),
+        None,
+    );
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
@@ -547,6 +600,24 @@ fn release_config_refuses_containers_inside_appimages() {
             None,
         );
     }
+    // Round 2: zlib streams are refused too.
+    let deflated = zlib(&elf(b"PLUXY_TEST_BUILD_DO_NOT_RELEASE"));
+    expect(
+        &mut wrong,
+        "a zlib stream",
+        t.check(
+            &[("usr/share/payload.z", Entry::File(&deflated))],
+            b"runtime",
+            2,
+        ),
+        Some("compressed or archive file"),
+    );
+    expect(
+        &mut wrong,
+        "the clean AppImage",
+        t.check(&[], b"runtime", 2),
+        None,
+    );
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
@@ -595,6 +666,38 @@ fn release_config_checks_json_inside_appimages() {
             None,
         );
     }
+    // Round 2: leading whitespace past the first 512 bytes does not hide JSON, and JSON that does
+    // not parse but names trust fields is refused.
+    let mut spaced = vec![b' '; 600];
+    spaced.extend_from_slice(&root);
+    let truncated = &root[..root.len() - 3];
+    for (name, file, reason) in [
+        ("usr/share/spaced.dat", &spaced[..], "test root"),
+        ("usr/share/truncated.dat", truncated, "trust"),
+    ] {
+        expect(
+            &mut wrong,
+            name,
+            t.check(&[(name, Entry::File(file))], b"runtime", 2),
+            Some(reason),
+        );
+        expect(
+            &mut wrong,
+            "the clean AppImage",
+            t.check(&[], b"runtime", 2),
+            None,
+        );
+    }
+    expect(
+        &mut wrong,
+        "an unnamed file that starts like JSON with no trust fields",
+        t.check(
+            &[("usr/share/notes.dat", Entry::File(b"{ not json"))],
+            b"runtime",
+            2,
+        ),
+        None,
+    );
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
@@ -658,6 +761,28 @@ fn release_config_refuses_escaping_or_missing_links() {
             b"runtime",
             2,
         ),
+        None,
+    );
+    // Round 2: links inside a target are followed as the system would, so a link to "." and a
+    // ".." after it lead out of the package even though the text alone would stay inside.
+    expect(
+        &mut wrong,
+        "a/../errors through a link to .",
+        t.check(
+            &[
+                ("a", Entry::Link(".")),
+                ("errors", Entry::File(b"x")),
+                ("leak", Entry::Link("a/../errors")),
+            ],
+            b"runtime",
+            2,
+        ),
+        Some("outside the package"),
+    );
+    expect(
+        &mut wrong,
+        "the clean AppImage",
+        t.check(&[], b"runtime", 2),
         None,
     );
     assert!(wrong.is_empty(), "{wrong:#?}");
@@ -741,6 +866,28 @@ fn release_config_needs_the_receipt_in_every_artifact() {
         &mut wrong,
         "the clean AppImage beside the app executable",
         t.validate(&[&exe, &t.image]),
+        None,
+    );
+    // Round 2: the receipt counts only in the package's app executable, usr/bin/pluxy-app.
+    appimage(
+        &t.image,
+        2,
+        b"runtime",
+        &[
+            ("usr/bin/pluxy-app", Entry::File(&stale)),
+            ("usr/lib/libother.so", Entry::File(&t.app)),
+        ],
+    );
+    expect(
+        &mut wrong,
+        "a stale app beside another ELF with the receipt",
+        t.validate(&[&t.image]),
+        Some("matching build receipt"),
+    );
+    expect(
+        &mut wrong,
+        "the clean AppImage",
+        t.check(&[], b"runtime", 2),
         None,
     );
     assert!(wrong.is_empty(), "{wrong:#?}");
