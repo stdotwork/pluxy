@@ -72,8 +72,12 @@ test("Edit sets priority and an excluded model, and asks before discarding", asy
   await expect(settings).toContainText("rate-*");
   await detail.getByRole("button", { name: "Models", exact: true }).click();
   const models = detail.locator('[data-part="account-models"]');
-  await expect(models.locator('[data-part="item"]').filter({ hasText: "rate-limited" })).toContainText("Excluded");
-  await expect(models.locator('[data-part="item"]').filter({ hasText: "fake-model" })).toContainText("Included");
+  await expect(models.locator('[data-part="item"]').filter({ hasText: "rate-limited" })).toContainText(
+    "Excluded",
+  );
+  await expect(models.locator('[data-part="item"]').filter({ hasText: "fake-model" })).toContainText(
+    "Included",
+  );
 
   // Discarding drops the edit.
   await detail.getByRole("button", { name: "Edit", exact: true }).click();
@@ -114,7 +118,7 @@ test("settings show a placeholder for a secret, and saving keeps the secret", as
   });
   expect(r.status).toBe(200);
   const reply = (await r.json()) as { choices: { message: { content: string } }[] };
-  expect(JSON.parse(reply.choices[0].message.content.replace(/ done$/, ""))).toEqual({
+  expect(JSON.parse((reply.choices[0]?.message.content ?? "").replace(/ done$/, ""))).toEqual({
     base_url: "https://two.example/v1",
     api_key: secret,
   });
