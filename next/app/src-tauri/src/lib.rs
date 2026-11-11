@@ -187,7 +187,9 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let restart = MenuItem::with_id(app, "core-restart", "Restart core", false, None::<&str>)?;
     let menu = Menu::with_items(
         app,
-        &[&status, &start, &stop, &restart, &sep, &open, &access, &quit_item],
+        &[
+            &status, &start, &stop, &restart, &sep, &open, &access, &quit_item,
+        ],
     )?;
     let mut tray = TrayIconBuilder::with_id("pluxy")
         .tooltip("pluxy")

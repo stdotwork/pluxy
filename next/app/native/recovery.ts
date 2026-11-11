@@ -114,6 +114,8 @@ export async function checkRecovery(probe: string, stateFile: string) {
   s = await wait("crash-loop cutoff", (v) => v.view.core?.state === "paused");
   assert(s.view.core?.detail, "paused state has no reason");
   assert(tray("inspect").includes("Core recovery paused"), "tray hides paused state");
+  await Bun.sleep(16_000);
+  assert(read().view.core?.state === "paused", "crash loop resumed after its retry cutoff");
   console.log(
     "native-recovery: crash loop paused after three retries; reason visible in tray and connection",
   );
