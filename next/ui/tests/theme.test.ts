@@ -57,6 +57,9 @@ describe("the README and the code agree", () => {
   });
 
   test("every data-part hook", () => {
+    expect(PARTS).toContain("log");
+    expect(PARTS).toContain("log-line");
+    expect(readme).toContain("`data-level` is `info`, `warn`");
     const documented = rows("### Hooks you can rely on")
       .map(([hook]) => hook?.match(/^`data-part="([^"]+)"`/)?.[1])
       .filter((h) => h !== undefined);

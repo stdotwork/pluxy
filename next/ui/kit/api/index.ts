@@ -7,6 +7,7 @@ import { strings } from "../strings";
 import { accountsApi } from "./accounts";
 import { configApi } from "./config";
 import { extensionsApi } from "./extensions";
+import { logsApi } from "./logs";
 import { packagesApi } from "./packages";
 import { quotaApi } from "./quota";
 import { settingsApi } from "./settings";
@@ -15,12 +16,14 @@ import { statusApi } from "./status";
 export * from "./accounts";
 export * from "./config";
 export * from "./extensions";
+export * from "./logs";
 export * from "./packages";
 export * from "./quota";
 export * from "./settings";
 export * from "./status";
 
 export const api = (host: Host) => ({
+  ...logsApi(host),
   ...configApi(host),
   ...statusApi(host),
   ...accountsApi(host),

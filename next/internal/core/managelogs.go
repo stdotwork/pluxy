@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"mime"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 const (
 	defaultLogLines = 1000
 	maxLogLines     = 10000
+	maxJSONLogBytes = 8 << 20
 )
 
 // handleLogs adds the log file calls, which answer 400 while logging to file is off.
@@ -91,7 +93,7 @@ func (c *Core) handleLogs(m *server.Management) {
 	})
 }
 
-// serveLogFile sends the file name in the logs folder as a download.
+// serveLogFile sends a download, or bounded JSON for hosts that only carry JSON replies.
 func (c *Core) serveLogFile(w http.ResponseWriter, r *http.Request, name string) {
 	path := filepath.Join(c.logs.Dir(), name)
 	// Only a regular file in the folder: a link there could point anywhere. The file opened must
@@ -110,6 +112,24 @@ func (c *Core) serveLogFile(w http.ResponseWriter, r *http.Request, name string)
 	info, err := f.Stat()
 	if err != nil || !info.Mode().IsRegular() || !os.SameFile(linfo, info) {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]string{"code": "not_found", "message": "no log file of that name"}})
+		return
+	}
+	if r.URL.Query().Get("format") == "json" {
+		// Check the size before allocating, and bound the read in case the file grows.
+		if info.Size() > maxJSONLogBytes {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": map[string]string{"code": "log_too_large", "message": "JSON log content exceeds 8 MiB; use the plain download"}})
+			return
+		}
+		content, err := io.ReadAll(io.LimitReader(f, maxJSONLogBytes+1))
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]string{"code": "internal", "message": "could not read log content"}})
+			return
+		}
+		if len(content) > maxJSONLogBytes {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": map[string]string{"code": "log_too_large", "message": "JSON log content exceeds 8 MiB; use the plain download"}})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"name": name, "size": len(content), "content": string(content)})
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")

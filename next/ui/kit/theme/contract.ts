@@ -86,6 +86,8 @@ export const PARTS = [
   "diff",
   "diff-line",
   "dialog",
+  "log",
+  "log-line",
 ] as const;
 
 export type Part = (typeof PARTS)[number];
