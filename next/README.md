@@ -883,6 +883,15 @@ What changes in a request:
   or a tool choice in a namespace goes to the namespace's function only when the namespace really
   was folded, not to a plain function that has its name. Where a name repeats, the first tool stays.
   An `apply_patch` function in a namespace is an ordinary function, not the patch tool.
+- The tools of an `additional_tools` input item (how a Responses Lite client, the Codex app,
+  declares tools) are moved to the end of the tools list and the item is removed, because xAI does
+  not take that item. This happens before the rules above, so a namespace in an item is flattened
+  or folded, counted toward the 200 tools and restored in the reply like one declared at the top
+  level, and a `tool_choice` that names a tool of an item is written the same way. The first
+  declaration of a function or custom tool name stays: a top-level tool beats one of an item, and
+  an earlier item beats a later one. A namespace of an item with the name of a top-level namespace
+  is one namespace with the children of both, each as its first declaration has it, as in today's
+  core. Items that carry no tools are removed too.
 - The Codex app's `automation_update` tool (in the `codex_app` or `codex_apps` namespace) is sent
   with parameters that accept any object, and `strict` false: with its own schema, a large `oneOf`
   with `$ref` references, xAI accepts the request and sends no events.
@@ -920,9 +929,8 @@ and creates no account or model cooldown; a 404 naming a missing model is scoped
 
 Not built, and why:
 
-- Namespace tools in an `additional_tools` input item (Responses Lite) are sent as the client wrote
-  them, and so is an `apply_patch` declared inside a namespace. Today's core moves the first to
-  the tools list and handles the second.
+- An `apply_patch` custom tool declared inside a namespace is sent as the client wrote it. Today's
+  core sends it as the patch function and turns xAI's call back.
 - The root-union schema rule of today's core (a function whose schema is a `oneOf` or `anyOf` with
   `$ref` or non-object branches gets the permissive schema, and a union branch without a type gets
   `object`) is built only for the Codex app's `automation_update`, which is what hangs xAI.
@@ -941,6 +949,17 @@ Not built, and why:
 - For a Grok login: reading the Grok CLI's latest version from npm every 3 hours (set
   `client_version` when xAI asks for a newer CLI), the file name and legacy-file adoption today's
   core uses for its auth files, and opening the browser at sign-in.
+- Today's core answers `GET /v1/models` from the Grok CLI (a `grok-shell` User-Agent) with its own
+  entry shape (`api_backend`, context window, reasoning efforts). The Grok CLI reads a proxy's model
+  list only when its models endpoint is set to the proxy; today's desktop app instead writes each
+  model into the Grok CLI's config with its own base URL, so the list is not read there. pluxy's
+  model data has no reasoning efforts to fill that shape. The Grok CLI gets the ordinary OpenAI
+  model list.
+- Today's core turns an upstream Codex `keepalive` stream event into an SSE comment for the Grok
+  CLI, which ends the turn on an event type it does not know. pluxy's Responses stream passes on
+  only `response.*` and `error` events from the upstream, so no `keepalive` event reaches any client
+  (a test in `format/openairesponses` pins this). pluxy sends no comment in its place: a long
+  upstream silence reaches the client as silence.
 
 **Quota.** A Grok login's quota is what the Grok CLI shows: `GET {cli}/billing?format=credits` and `GET {cli}/billing` on the CLI's chat endpoint (the host the account's requests go to), and `GET {cli}/user?include=subscription` and `GET {cli}/settings` for the plan's name, with the login's token and the Grok CLI identity headers the requests carry. It reports the weekly credit window (`weekly`), the monthly credits (`monthly_credits`), the pay-as-you-go cap and use (`pay_as_you_go`) and the prepaid balance (`prepaid`), in `usd`. Nothing that spends from the account is sent (today's panel sent a one-token chat for paid accounts; that is not rebuilt). An API key answers unsupported. A Grok login's grant carries `identity` `{"sub", "email"}` from its ID token.
 
@@ -1600,6 +1619,7 @@ its keys and its indent. `PUT /config` writes the document as sent.
 | `POST /v0/management/client-keys` | Adds a new random client key (`sk-` and 26 random characters). 201 with the key's `id` and `masked` form and its `value`, which no later call shows. |
 | `DELETE /v0/management/client-keys/{id}` | Removes the client key. 204; 404 when no key has the ID; 409 for the last key, since core refuses a config without client keys. |
 | `POST /v0/management/management-key/rotate` | Replaces the management key with a new random one and returns it as `value`. The old key stops working as the reply is sent. |
+| `GET /v0/management/models` | The models `GET /v1/models` lists, as one list in the same order: `models`, each with `id` (the name clients use), what the extension says about the model (`owned_by`, `display_name`, limits, ...), `upstream` (its name upstream), `extension` (the extension of the account whose entry the list shows) and `accounts` (the IDs of every account that serves the name, in routing order). An account that serves any model because its list is not known lists none. Never a credential. |
 | `GET /v0/management/settings` | The basic and routing settings, by today's core's names, and `token_count_estimate`, this core's own, under its own name (below). |
 | `PATCH /v0/management/settings` | Changes the settings the body names (`{"routing": {"strategy": "fill-first"}}`) and replies with them all. 400 for a name or value it does not take. |
 
