@@ -212,7 +212,6 @@ fn run(app: &AppHandle) -> Result<(), String> {
 }
 
 fn startup(app: &AppHandle, stage: &str) -> Result<(), String> {
-    let mut connection = app.state::<App>().conn.lock().unwrap().view();
     let silent = stage == "silent";
     if !silent {
         let main = wait_for("the startup settings window", || app.get_webview(MAIN))?;
@@ -227,13 +226,16 @@ fn startup(app: &AppHandle, stage: &str) -> Result<(), String> {
             return Err(format!("startup settings command failed: {result}"));
         }
     }
-    connection = app.state::<App>().conn.lock().unwrap().view();
-    log("startup", json!({
-        "windows": app.windows().len(),
-        "webviews": app.webviews().len(),
-        "tray": app.state::<App>().has_tray.load(std::sync::atomic::Ordering::SeqCst),
-        "core_pid": connection.core.and_then(|c| c.pid),
-    }));
+    let connection = app.state::<App>().conn.lock().unwrap().view();
+    log(
+        "startup",
+        json!({
+            "windows": app.windows().len(),
+            "webviews": app.webviews().len(),
+            "tray": app.state::<App>().has_tray.load(std::sync::atomic::Ordering::SeqCst),
+            "core_pid": connection.core.and_then(|c| c.pid),
+        }),
+    );
     crate::quit(app);
     Ok(())
 }
