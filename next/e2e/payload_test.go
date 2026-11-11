@@ -612,7 +612,9 @@ func TestPayloadRefusedAndManaged(t *testing.T) {
 		t.Fatalf("PATCH /settings payload null: status %d", code)
 	}
 	var shown, file map[string]json.RawMessage
-	manage(t, base, "GET", "/settings", nil, &shown)
+	if code := manage(t, base, "GET", "/settings", nil, &shown); code != http.StatusOK {
+		t.Fatalf("GET /settings after payload null: status %d", code)
+	}
 	b, _ := os.ReadFile(path)
 	if err := json.Unmarshal(b, &file); err != nil {
 		t.Fatal(err)
@@ -622,5 +624,16 @@ func TestPayloadRefusedAndManaged(t *testing.T) {
 	}
 	if _, ok := file["payload"]; ok {
 		t.Errorf("payload null: the config file still has payload %s", file["payload"])
+	}
+	// The next request goes out without the removed rules.
+	pinned(t, base, "a", "m-payload")
+	posts = up.under("/a")
+	if len(posts) != 2 {
+		t.Fatalf("%d POSTs, want 2", len(posts))
+	}
+	for _, k := range []string{"pluxy_e2e", "n"} {
+		if v, ok := at(posts[1].body, k); ok {
+			t.Errorf("after payload null: %s = %v, want none; body %s", k, v, posts[1].raw)
+		}
 	}
 }
