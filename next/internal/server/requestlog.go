@@ -391,19 +391,22 @@ func logged(w http.ResponseWriter, r *http.Request, g *Generation, h func(w http
 		return
 	}
 	at := time.Now()
-	t := newTrace()
-	r = withTrace(r, t)
+	r, t := requestTrace(r)
 	rec := &recorder{ResponseWriter: w, body: g.RequestLog.newCapture()}
 	h(rec, r)
 	g.RequestLog.write(&requestEntry{at: at, method: r.Method, url: r.URL, client: ClientIP(r), headers: r.Header, body: t.body, trace: t,
 		status: rec.status, rHeaders: rec.header, reply: rec.body.bytes(), replyTitle: "RESPONSE"})
 }
 
-// requestTrace returns r's trace, adding a new one when it has none.
+// requestTrace returns r's trace, adding a new one when it has none. The request's access line
+// reads the trace from its access state.
 func requestTrace(r *http.Request) (*http.Request, *trace) {
 	if t := traceOf(r); t != nil {
 		return r, t
 	}
 	t := newTrace()
+	if s := accessStateOf(r); s != nil {
+		s.trace = t
+	}
 	return withTrace(r, t), t
 }
