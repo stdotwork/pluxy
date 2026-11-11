@@ -17,7 +17,8 @@
 //   registered with it shows in RegisteredStatusNotifierItems (session_probe);
 // - the disposable AppImage runs with APPIMAGE_EXTRACT_AND_RUN=1, in this cleared environment.
 //
-// Exit code 78 means the setup failed; any other is the app's.
+// Exit code 78 means the setup failed; any other is the app's. run.ts goes by the "ready" line,
+// not by the code, since the app could exit with 78 too.
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";

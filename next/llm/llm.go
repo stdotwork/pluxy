@@ -25,6 +25,12 @@ type Request struct {
 	// of this request: DropReport (the default) sends it and reports the losses, DropReject
 	// refuses it with an unsupported error.
 	DropPolicy string `json:"drop_policy,omitempty"`
+	// Caller stands for the client key the request came with (protocol minor version 8): the
+	// same for every request with that key to one extension, different for another key or
+	// another extension, and not derivable from the key. Empty when the client sent no key. An
+	// extension that keeps state from replies across requests keys it by Caller, so one client
+	// never gets another's.
+	Caller string `json:"caller,omitempty"`
 }
 
 // Drop policies.

@@ -62,7 +62,7 @@ const cliChatBaseURL = "https://cli-chat-proxy.grok.com/v1"
 const cliVersion = "1.0.46"
 
 func main() {
-	err := sdk.Serve(sdk.Extension{ID: id, Version: version, Generate: generate,
+	err := sdk.Serve(sdk.Extension{ID: id, Version: version, Generate: generate, Endpoint: endpoint,
 		LoginMethods: loginMethods, Login: login, Refresh: refresh, Models: models, Check: check, Quota: quota})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "xai:", err)
@@ -71,6 +71,7 @@ func main() {
 }
 
 type settings struct {
+	InjectXSearch bool   `json:"inject_x_search"`
 	BaseURL       string `json:"base_url"`
 	ClientVersion string `json:"client_version"`
 	AuthIssuer    string `json:"auth_issuer"`
@@ -207,11 +208,15 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return err
 	}
 
-	body, tr, err := buildBody(call.Request)
+	body, tr, bridge, err := buildRequest(call.Request, s.InjectXSearch)
 	if err != nil {
 		return err
 	}
-	send := &reporting{Stream: out, tr: tr}
+	rep := &reporting{Stream: out, tr: tr}
+	var send eventSender = rep
+	if bridge != nil {
+		send = bridgeSender{b: bridge, next: rep}
+	}
 	url := tg.base + "/responses"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
@@ -250,7 +255,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return upstreamError(resp, call.Request.Model)
 	}
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
-		return relayStream(ctx, resp.Body, send, openairesponses.NewStreamDecoder())
+		return relayStream(ctx, resp.Body, send, &searchDecoder{streamDecoder: openairesponses.NewStreamDecoder(), filter: newSearchFilter(body)})
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxFrame))
 	if err != nil {
@@ -259,9 +264,17 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		}
 		return &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream response: " + err.Error(), Scope: llm.ScopeEndpoint}
 	}
+	raw = newSearchFilter(body).response(raw)
 	events, err := openairesponses.DecodeResponse(raw)
 	if err != nil {
 		return err
+	}
+	if bridge != nil {
+		// The reply is checked before any of it is sent.
+		if events, err = convert(bridge, events); err != nil {
+			return err
+		}
+		send = rep
 	}
 	for _, ev := range events {
 		if err := send.Send(ev); err != nil {
@@ -269,6 +282,21 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		}
 	}
 	return nil
+}
+
+type eventSender interface{ Send(llm.Event) error }
+
+// convert runs a bridge over a whole reply.
+func convert(b transformer, events []llm.Event) ([]llm.Event, error) {
+	var out []llm.Event
+	for _, ev := range events {
+		more, err := b.Transform(ev)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, more...)
+	}
+	return out, nil
 }
 
 // promptCacheKey returns the body's prompt_cache_key, trimmed, or "".

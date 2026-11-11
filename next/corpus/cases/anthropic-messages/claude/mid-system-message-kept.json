@@ -1,0 +1,210 @@
+{
+  "description": "By default (rebuild-mid-system-message off) a system message in a Messages conversation stays where the client put it.",
+  "source": [
+    "core/internal/runtime/executor/claude_executor_request.go (rebuildMidSystemMessagesToTopLevelDoc)",
+    "core/internal/runtime/executor/claude_executor_test.go (TestClaudeExecutor_RebuildMidSystemMessageDisabledByDefault, TestClaudeExecutor_RebuildMidSystemMessageOptInMovesSystemMessages)"
+  ],
+  "client": {
+    "path": "/v1/messages",
+    "auth": "none",
+    "headers": {
+      "x-api-key": "corpus-client-key",
+      "anthropic-version": "2023-06-01"
+    },
+    "body": {
+      "model": "claude-test",
+      "max_tokens": 256,
+      "system": "Be brief.",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hello."
+        },
+        {
+          "role": "assistant",
+          "content": "Hi."
+        },
+        {
+          "role": "system",
+          "content": [
+            {
+              "type": "text",
+              "text": "From now on answer in French."
+            },
+            {
+              "type": "image",
+              "source": {
+                "type": "url",
+                "url": "https://example.com/a.png"
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "How are you?"
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "id": "msg_corpus",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-test-upstream",
+        "content": [
+          {
+            "type": "text",
+            "text": "Bonjour."
+          }
+        ],
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 30,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens": 3
+        }
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "content": [
+          {
+            "text": "Bonjour.",
+            "type": "text"
+          }
+        ],
+        "id": "msg_corpus",
+        "model": "claude-test-upstream",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "type": "message",
+        "usage": {
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "input_tokens": 30,
+          "output_tokens": 3
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 256,
+          "messages": [
+            {
+              "content": "Hello.",
+              "role": "user"
+            },
+            {
+              "content": "Hi.",
+              "role": "assistant"
+            },
+            {
+              "content": [
+                {
+                  "text": "From now on answer in French.",
+                  "type": "text"
+                },
+                {
+                  "source": {
+                    "type": "url",
+                    "url": "https://example.com/a.png"
+                  },
+                  "type": "image"
+                }
+              ],
+              "role": "system"
+            },
+            {
+              "content": [
+                {
+                  "cache_control": {
+                    "type": "ephemeral"
+                  },
+                  "text": "How are you?",
+                  "type": "text"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "model": "claude-test",
+          "stream": false,
+          "system": [
+            {
+              "cache_control": {
+                "type": "ephemeral"
+              },
+              "text": "Be brief.",
+              "type": "text"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "application/json",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Anthropic-Version": "2023-06-01",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/messages?beta=true"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "upstream[0].body.messages[3].content",
+      "kind": "intended",
+      "reason": "A Messages request goes to Claude unchanged (passthrough): today's Claude API-key provider rewrites it: it adds cache_control breakpoints when the body has none, removes the thinking setting and thinking blocks for models missing from its catalog, sets stream false on a non-streamed request and drops a 1h cache TTL that follows a 5m one. The new core keeps the client's body, thinking blocks, signatures and cache markers as sent; a Claude Code client places its own breakpoints.",
+      "want": "How are you?"
+    },
+    {
+      "path": "upstream[0].body.system",
+      "kind": "intended",
+      "reason": "A Messages request goes to Claude unchanged (passthrough): today's Claude API-key provider rewrites it: it adds cache_control breakpoints when the body has none, removes the thinking setting and thinking blocks for models missing from its catalog, sets stream false on a non-streamed request and drops a 1h cache TTL that follows a 5m one. The new core keeps the client's body, thinking blocks, signatures and cache markers as sent; a Claude Code client places its own breakpoints.",
+      "want": "Be brief."
+    },
+    {
+      "path": "upstream[0].body.stream",
+      "kind": "intended",
+      "reason": "A Messages request goes to Claude unchanged (passthrough): today's Claude API-key provider rewrites it: it adds cache_control breakpoints when the body has none, removes the thinking setting and thinking blocks for models missing from its catalog, sets stream false on a non-streamed request and drops a 1h cache TTL that follows a 5m one. The new core keeps the client's body, thinking blocks, signatures and cache markers as sent; a Claude Code client places its own breakpoints.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "Go's HTTP client asks for gzip and decodes it; today's core also offers deflate, br and zstd."
+    },
+    {
+      "path": "upstream[0].headers.Authorization",
+      "kind": "intended",
+      "reason": "The Claude extension sends an API key in x-api-key, as Anthropic's API defines it; today's core sends it as a bearer token whenever the base URL is not api.anthropic.com (it uses x-api-key only there).",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.X-Api-Key",
+      "kind": "intended",
+      "reason": "The Claude extension sends an API key in x-api-key, as Anthropic's API defines it; today's core sends it as a bearer token whenever the base URL is not api.anthropic.com (it uses x-api-key only there).",
+      "want": "sk-corpus-upstream"
+    }
+  ]
+}

@@ -1,0 +1,227 @@
+{
+  "description": "A Responses-lite WebSocket turn that goes to the account over HTTP, whose upstream response.completed has an empty output: the client gets the event as it came, with the empty output. Today's core keeps a native Responses-lite turn's output as the upstream sent it, whichever way it reaches the upstream.",
+  "source": [
+    "core/internal/util/codex.go (IsCodexResponsesLiteRequest)",
+    "core/sdk/api/handlers/openai/openai_responses_websocket.go (preserveNativeOutput)",
+    "core/sdk/api/handlers/openai/openai_responses_websocket_forward.go (restoreResponsesWebsocketCompletionOutput)"
+  ],
+  "client": {
+    "method": "GET",
+    "path": "/v1/responses",
+    "websocket": [
+      {
+        "send": {
+          "type": "response.create",
+          "model": "gpt-test",
+          "store": false,
+          "prompt_cache_key": "corpus-ws",
+          "input": [
+            {
+              "type": "message",
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Say hello"
+                }
+              ]
+            }
+          ],
+          "client_metadata": {
+            "ws_request_header_x_openai_internal_codex_responses_lite": "true"
+          }
+        }
+      },
+      {
+        "read": "turn"
+      }
+    ]
+  },
+  "upstream": [
+    {
+      "sse": [
+        {
+          "event": "response.created",
+          "data": {
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": {
+              "id": "resp_1",
+              "object": "response",
+              "status": "in_progress",
+              "model": "gpt-test",
+              "output": []
+            }
+          }
+        },
+        {
+          "event": "response.output_text.delta",
+          "data": {
+            "type": "response.output_text.delta",
+            "sequence_number": 1,
+            "output_index": 0,
+            "item_id": "msg_1",
+            "content_index": 0,
+            "delta": "Hello"
+          }
+        },
+        {
+          "event": "response.output_item.done",
+          "data": {
+            "type": "response.output_item.done",
+            "sequence_number": 2,
+            "output_index": 0,
+            "item": {
+              "id": "msg_1",
+              "type": "message",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Hello",
+                  "annotations": []
+                }
+              ]
+            }
+          }
+        },
+        {
+          "event": "response.completed",
+          "data": {
+            "type": "response.completed",
+            "sequence_number": 3,
+            "response": {
+              "id": "resp_1",
+              "object": "response",
+              "status": "completed",
+              "model": "gpt-test",
+              "output": [],
+              "usage": {
+                "input_tokens": 5,
+                "output_tokens": 1,
+                "total_tokens": 6
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "headers": {
+        "Upgrade": "websocket"
+      },
+      "messages": [
+        {
+          "response": {
+            "id": "resp_1",
+            "model": "gpt-test",
+            "object": "response",
+            "output": [],
+            "status": "in_progress"
+          },
+          "sequence_number": 0,
+          "type": "response.created"
+        },
+        {
+          "content_index": 0,
+          "delta": "Hello",
+          "item_id": "msg_1",
+          "output_index": 0,
+          "sequence_number": 1,
+          "type": "response.output_text.delta"
+        },
+        {
+          "item": {
+            "content": [
+              {
+                "annotations": [],
+                "text": "Hello",
+                "type": "output_text"
+              }
+            ],
+            "id": "msg_1",
+            "role": "assistant",
+            "status": "completed",
+            "type": "message"
+          },
+          "output_index": 0,
+          "sequence_number": 2,
+          "type": "response.output_item.done"
+        },
+        {
+          "response": {
+            "id": "resp_1",
+            "model": "gpt-test",
+            "object": "response",
+            "output": [],
+            "status": "completed",
+            "usage": {
+              "input_tokens": 5,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens": 1,
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              },
+              "total_tokens": 6
+            }
+          },
+          "sequence_number": 3,
+          "type": "response.completed"
+        }
+      ],
+      "status": 101
+    },
+    "upstream": [
+      {
+        "body": {
+          "client_metadata": {
+            "ws_request_header_x_openai_internal_codex_responses_lite": "true"
+          },
+          "include": [
+            "reasoning.encrypted_content"
+          ],
+          "input": [
+            {
+              "content": [
+                {
+                  "text": "Say hello",
+                  "type": "input_text"
+                }
+              ],
+              "role": "user",
+              "type": "message"
+            }
+          ],
+          "model": "gpt-test",
+          "parallel_tool_calls": false,
+          "prompt_cache_key": "corpus-ws",
+          "store": false,
+          "stream": true
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "Originator": "codex-tui",
+          "Session-Id": "corpus-ws",
+          "User-Agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "upstream[*].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."
+    }
+  ]
+}

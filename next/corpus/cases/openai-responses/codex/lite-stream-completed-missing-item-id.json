@@ -1,0 +1,84 @@
+{
+  "description": "A streamed Responses-lite request whose upstream response.completed has an output item without an id: the client gets the event as it came, without the id. Today's core skips the output repair, which includes restoring ids, for a native Responses-lite stream.",
+  "source": [
+    "core/internal/runtime/executor/helps/codex_native.go (IsNativeCodexRequest)",
+    "core/internal/runtime/executor/codex_executor_stream.go (preserveNativeOutput)",
+    "core/internal/runtime/executor/codex_executor_terminal.go (patchCodexCompletedOutput)"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "headers": {"X-Openai-Internal-Codex-Responses-Lite":"true"},
+    "body": {
+      "model": "gpt-test",
+      "prompt_cache_key": "pck-corpus",
+      "input": [
+        {"type":"message","role":"user","content":[{"type":"input_text","text":"Say hello"}]}
+      ],
+      "stream": true
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"event":"response.created","data":{"type":"response.created","sequence_number":0,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"in_progress","model":"gpt-test-upstream","output":[],"usage":null}}},
+        {"event":"response.output_item.added","data":{"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"msg_corpus","type":"message","status":"in_progress","role":"assistant","content":[]}}},
+        {"event":"response.output_item.done","data":{"type":"response.output_item.done","sequence_number":2,"output_index":0,"item":{"id":"msg_corpus","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hello","annotations":[]}]}}},
+        {"event":"response.completed","data":{"type":"response.completed","sequence_number":3,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"completed","model":"gpt-test-upstream","output":[{"type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hello","annotations":[]}]}],"usage":{"input_tokens":5,"output_tokens":1,"total_tokens":6,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}}
+      ]
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[*].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"response":{"created_at":1700000000,"id":"resp_corpus","model":"gpt-test-upstream","object":"response","output":[],"status":"in_progress","usage":null},"sequence_number":0,"type":"response.created"},"event":"response.created"},
+        {"data":{"item":{"content":[],"id":"msg_corpus","role":"assistant","status":"in_progress","type":"message"},"output_index":0,"sequence_number":1,"type":"response.output_item.added"},"event":"response.output_item.added"},
+        {"data":{"item":{"content":[{"annotations":[],"text":"Hello","type":"output_text"}],"id":"msg_corpus","role":"assistant","status":"completed","type":"message"},"output_index":0,"sequence_number":2,"type":"response.output_item.done"},"event":"response.output_item.done"},
+        {"data":{"response":{"created_at":1700000000,"id":"resp_corpus","model":"gpt-test-upstream","object":"response","output":[{"content":[{"annotations":[],"text":"Hello","type":"output_text"}],"role":"assistant","status":"completed","type":"message"}],"status":"completed","usage":{"input_tokens":5,"input_tokens_details":{"cached_tokens":0},"output_tokens":1,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":6}},"sequence_number":3,"type":"response.completed"},"event":"response.completed"}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": ["reasoning.encrypted_content"],
+          "input": [
+            {"content":[{"text":"Say hello","type":"input_text"}],"role":"user","type":"message"}
+          ],
+          "model": "gpt-test",
+          "parallel_tool_calls": false,
+          "prompt_cache_key": "pck-corpus",
+          "store": false,
+          "stream": true
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "Originator": "codex-tui",
+          "Session-Id": "pck-corpus",
+          "User-Agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)",
+          "X-Openai-Internal-Codex-Responses-Lite": "true"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      }
+    ]
+  }
+}

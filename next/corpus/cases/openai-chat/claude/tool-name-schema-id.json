@@ -1,0 +1,350 @@
+{
+  "description": "A Chat request whose function name has dots, whose parameter schema is a root anyOf, and whose replayed tool call ID has characters Anthropic refuses: the tool goes upstream as mcp_fs_read with an object schema holding both branches' properties and the call ID is replaced; the upstream's call to mcp_fs_read comes back as a tool call.",
+  "source": [
+    "core/internal/translator/claude/openai/chat-completions/claude_openai_request.go",
+    "core/internal/util/claude_schema.go (NormalizeClaudeToolInputSchema)",
+    "core/internal/util/claude_tool_id.go"
+  ],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {
+      "model": "claude-test",
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "mcp.fs.read",
+            "description": "Read a file.",
+            "parameters": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "uri": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": "Read /a again."
+        },
+        {
+          "role": "assistant",
+          "content": null,
+          "tool_calls": [
+            {
+              "id": "fc:1|a",
+              "type": "function",
+              "function": {
+                "name": "mcp.fs.read",
+                "arguments": "{\"path\":\"/a\"}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "fc:1|a",
+          "content": "old"
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {
+          "event": "message_start",
+          "data": {
+            "type": "message_start",
+            "message": {
+              "id": "msg_corpus",
+              "type": "message",
+              "role": "assistant",
+              "content": [],
+              "model": "claude-test-upstream",
+              "stop_reason": null,
+              "stop_sequence": null,
+              "usage": {
+                "input_tokens": 40,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "output_tokens": 1
+              }
+            }
+          }
+        },
+        {
+          "event": "content_block_start",
+          "data": {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+              "type": "tool_use",
+              "id": "toolu_corpus",
+              "name": "mcp_fs_read",
+              "input": {}
+            }
+          }
+        },
+        {
+          "event": "content_block_delta",
+          "data": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "input_json_delta",
+              "partial_json": "{\"path\":\"/a\"}"
+            }
+          }
+        },
+        {
+          "event": "content_block_stop",
+          "data": {
+            "type": "content_block_stop",
+            "index": 0
+          }
+        },
+        {
+          "event": "message_delta",
+          "data": {
+            "type": "message_delta",
+            "delta": {
+              "stop_reason": "tool_use",
+              "stop_sequence": null
+            },
+            "usage": {
+              "output_tokens": 9
+            }
+          }
+        },
+        {
+          "event": "message_stop",
+          "data": {
+            "type": "message_stop"
+          }
+        }
+      ]
+    }
+  ],
+  "volatile": [
+    "client.body.created"
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "choices": [
+          {
+            "finish_reason": "tool_calls",
+            "index": 0,
+            "message": {
+              "content": "",
+              "role": "assistant",
+              "tool_calls": [
+                {
+                  "function": {
+                    "arguments": "{\"path\":\"/a\"}",
+                    "name": "mcp_fs_read"
+                  },
+                  "id": "toolu_corpus",
+                  "type": "function"
+                }
+              ]
+            }
+          }
+        ],
+        "created": "(volatile)",
+        "id": "msg_corpus",
+        "model": "claude-test-upstream",
+        "object": "chat.completion",
+        "usage": {
+          "completion_tokens": 9,
+          "prompt_tokens": 40,
+          "prompt_tokens_details": {
+            "cache_write_tokens": 0,
+            "cached_creation_tokens": 0,
+            "cached_tokens": 0
+          },
+          "total_tokens": 49
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 32000,
+          "messages": [
+            {
+              "content": [
+                {
+                  "text": "Read /a again.",
+                  "type": "text"
+                }
+              ],
+              "role": "user"
+            },
+            {
+              "content": [
+                {
+                  "id": "fc_1_a",
+                  "input": {
+                    "path": "/a"
+                  },
+                  "name": "mcp_fs_read",
+                  "type": "tool_use"
+                }
+              ],
+              "role": "assistant"
+            },
+            {
+              "content": [
+                {
+                  "cache_control": {
+                    "type": "ephemeral"
+                  },
+                  "content": "old",
+                  "tool_use_id": "fc_1_a",
+                  "type": "tool_result"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "metadata": {
+            "user_id": "fe0edc7b9cafca43fa54a3e7da67ef838b8a6daa31df1740ebb288cb607f28a1"
+          },
+          "model": "claude-test",
+          "stream": true,
+          "tools": [
+            {
+              "cache_control": {
+                "type": "ephemeral"
+              },
+              "description": "Read a file.",
+              "input_schema": {
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "uri": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "name": "mcp_fs_read"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "identity",
+          "Anthropic-Version": "2023-06-01",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/messages?beta=true"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "client.body.choices[0].message.content",
+      "kind": "intended",
+      "reason": "A reply that holds only tool calls: the new core writes content null, as OpenAI's API does; today's core writes an empty string.",
+      "want": null
+    },
+    {
+      "path": "client.body.choices[0].message.tool_calls[0].function.name",
+      "kind": "intended",
+      "reason": "The new core gives a tool call back under the client's own tool name, the one it declared and can run; today's Chat path returns the name it sent to Claude (mcp_fs_read), which the client never declared. Today's Responses path maps the name back, as the new core does for every client format.",
+      "want": "mcp.fs.read"
+    },
+    {
+      "path": "client.body.usage.prompt_tokens_details.cache_write_tokens",
+      "kind": "intended",
+      "reason": "The new core reports Chat usage as OpenAI's API has it, with cached_tokens; today's core adds cache_write_tokens and cached_creation_tokens (zero here).",
+      "absent": true
+    },
+    {
+      "path": "client.body.usage.prompt_tokens_details.cached_creation_tokens",
+      "kind": "intended",
+      "reason": "The new core reports Chat usage as OpenAI's API has it, with cached_tokens; today's core adds cache_write_tokens and cached_creation_tokens (zero here).",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.messages[1].content[0].id",
+      "kind": "intended",
+      "reason": "One repair for every request to Claude: a tool call ID with characters Anthropic refuses becomes a prefix and the ID in base64, as today's core repairs the IDs in a Messages client's body; today's Chat and Responses translators replace each such character with an underscore, which can turn two different IDs into one. The ID only goes upstream: the client never sees it.",
+      "want": "cpa_tid_v1_ZmM6MXxh"
+    },
+    {
+      "path": "upstream[0].body.messages[2].content[0].tool_use_id",
+      "kind": "intended",
+      "reason": "One repair for every request to Claude: a tool call ID with characters Anthropic refuses becomes a prefix and the ID in base64, as today's core repairs the IDs in a Messages client's body; today's Chat and Responses translators replace each such character with an underscore, which can turn two different IDs into one. The ID only goes upstream: the client never sees it.",
+      "want": "cpa_tid_v1_ZmM6MXxh"
+    },
+    {
+      "path": "upstream[0].body.metadata",
+      "kind": "intended",
+      "reason": "Today's core adds metadata.user_id, a hash it derives from the request, to every request it translates to Claude; the new core does not make up a user identifier for the client.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.stream",
+      "kind": "intended",
+      "reason": "Today's core streams every translated request to Claude and assembles the reply; the new core asks Claude for a non-streamed reply when the client asked for one (stream false, Accept application/json, Accept-Encoding gzip, which Go's HTTP client decodes)."
+    },
+    {
+      "path": "upstream[0].headers.Accept",
+      "kind": "intended",
+      "reason": "Today's core streams every translated request to Claude and assembles the reply; the new core asks Claude for a non-streamed reply when the client asked for one (stream false, Accept application/json, Accept-Encoding gzip, which Go's HTTP client decodes)."
+    },
+    {
+      "path": "upstream[0].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "Today's core streams every translated request to Claude and assembles the reply; the new core asks Claude for a non-streamed reply when the client asked for one (stream false, Accept application/json, Accept-Encoding gzip, which Go's HTTP client decodes)."
+    },
+    {
+      "path": "upstream[0].headers.Authorization",
+      "kind": "intended",
+      "reason": "The Claude extension sends an API key in x-api-key, as Anthropic's API defines it; today's core sends it as a bearer token whenever the base URL is not api.anthropic.com (it uses x-api-key only there).",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.X-Api-Key",
+      "kind": "intended",
+      "reason": "The Claude extension sends an API key in x-api-key, as Anthropic's API defines it; today's core sends it as a bearer token whenever the base URL is not api.anthropic.com (it uses x-api-key only there).",
+      "want": "sk-corpus-upstream"
+    }
+  ]
+}

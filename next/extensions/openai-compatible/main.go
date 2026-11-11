@@ -56,7 +56,7 @@ const (
 )
 
 func main() {
-	if err := sdk.Serve(sdk.Extension{ID: id, Version: version, Generate: generate, CountTokens: countTokens, Check: check}); err != nil {
+	if err := sdk.Serve(sdk.Extension{ID: id, Version: version, Login: login, LoginMethods: loginMethods, Generate: generate, CountTokens: countTokens, Check: check}); err != nil {
 		fmt.Fprintln(os.Stderr, "openai-compatible:", err)
 		os.Exit(1)
 	}

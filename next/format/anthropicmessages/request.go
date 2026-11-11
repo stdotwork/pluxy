@@ -331,7 +331,12 @@ func parseMessage(raw json.RawMessage, path string) ([]llm.Item, error) {
 	if err := json.Unmarshal(raw, &head); err != nil {
 		return nil, err
 	}
-	if head.Role != llm.RoleUser && head.Role != llm.RoleAssistant {
+	// A system message in the conversation is a system item where it stands; today's core passes
+	// such messages on too, and matches the role whatever its case and spacing.
+	if strings.EqualFold(strings.TrimSpace(head.Role), llm.RoleSystem) {
+		head.Role = llm.RoleSystem
+	}
+	if head.Role != llm.RoleUser && head.Role != llm.RoleAssistant && head.Role != llm.RoleSystem {
 		return nil, fmt.Errorf("unsupported role %q", head.Role)
 	}
 	origin := rawjson.Origin(format, path, m, []string{"role", "content"}, nil)

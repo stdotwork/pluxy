@@ -11,9 +11,13 @@
 // Completions). Tests move the login host to a fake with auth_base_url (sdk.TestLoginHost); in a
 // normal run it is ignored.
 //
+// Token counts (core's count_tokens call) go to Kimi's own count endpoint,
+// {base_url}/v1/messages/count_tokens, for every client format, as today's core sends them
+// (count.go).
+//
 // The account's access token, or a Kimi Code API key, is sent as a bearer token with Kimi's device
-// headers (X-Msh-*), which name pluxy as the client and carry the device ID made at login. A request in the upstream's
-// format passes through with the changes Kimi needs (body.go).
+// headers (X-Msh-*), which name pluxy as the client and carry the device ID made at login. A
+// request in the upstream's format passes through with the changes Kimi needs (body.go).
 package main
 
 import (
@@ -59,6 +63,7 @@ func main() {
 		Refresh:      refresh,
 		Models:       models,
 		Quota:        quota,
+		CountTokens:  countTokens,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "kimi:", err)
@@ -195,7 +200,11 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	}
 
 	up := upstreamFor(call.Request)
-	body, tr, err := buildBody(call.Request, up)
+	var turn *replayTurn
+	if up == upMessages {
+		turn = newReplayTurn(replays, call.Request)
+	}
+	body, tr, err := buildBody(call.Request, up, turn)
 	if err != nil {
 		return err
 	}
@@ -242,11 +251,20 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		turn.rejected(resp.StatusCode)
 		return upstreamError(resp, call.Request.Model)
 	}
 	dec := decoders[up.format]
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
-		return relayStream(ctx, resp.Body, send, dec.stream())
+		if turn == nil {
+			return relayStream(ctx, resp.Body, send, dec.stream())
+		}
+		capture := newReplayCapture()
+		err := relayStream(ctx, resp.Body, send, replayDecoder{dec.stream(), capture, turn})
+		if capture.failed {
+			turn.forget()
+		}
+		return err
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxFrame))
 	if err != nil {
@@ -264,6 +282,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 			return err
 		}
 	}
+	turn.keepResponse(raw)
 	return nil
 }
 

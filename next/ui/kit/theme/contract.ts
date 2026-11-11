@@ -28,6 +28,10 @@ export const TOKENS = {
   "color.warn": { light: "#9a5b00", dark: "#e6b450" },
   "color.danger": { light: "#b42318", dark: "#ff7b72" },
   "color.focus": { light: "#2f5fd0", dark: "#7aa2ff" },
+  "color.meter-track": { light: "var(--px-color-surface-raised)" },
+  "color.meter-fill": { light: "var(--px-color-accent)" },
+  "color.diff-add": { light: "#1f7a3d", dark: "#5cc98a" },
+  "color.diff-remove": { light: "#b42318", dark: "#ff7b72" },
   "font.body": { light: 'system-ui, -apple-system, "Segoe UI", sans-serif' },
   "font.mono": { light: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace' },
   "font.size": { light: "14px" },
@@ -59,12 +63,45 @@ export function tokenProperty(name: string): string {
   return `--px-${name.replaceAll(".", "-")}`;
 }
 
+/** Every data-part hook a theme's CSS can rely on, in the order the README lists them. */
+export const PARTS = [
+  "shell",
+  "nav",
+  "nav-group",
+  "nav-item",
+  "main",
+  "page-title",
+  "list",
+  "item",
+  "detail",
+  "card",
+  "button",
+  "badge",
+  "field",
+  "meter",
+  "tabs",
+  "tab",
+  "tab-panel",
+  "code",
+  "diff",
+  "diff-line",
+  "dialog",
+  "key-notice",
+  "key-value",
+  "method",
+  "flow",
+  "device-code",
+] as const;
+
+export type Part = (typeof PARTS)[number];
+
 /** Each layout option's values; the first is the default. */
 export const LAYOUT = {
   nav: ["sidebar", "rail", "top"],
   list: ["table", "cards"],
   detail: ["side", "below"],
   width: ["wide", "full", "narrow"],
+  tabs: ["top", "side"],
 } as const;
 
 export type LayoutOption = keyof typeof LAYOUT;
@@ -72,7 +109,13 @@ export type Layout = { [K in LayoutOption]: (typeof LAYOUT)[K][number] };
 
 export const LAYOUT_OPTIONS = Object.keys(LAYOUT) as LayoutOption[];
 
-export const DEFAULT_LAYOUT: Layout = { nav: "sidebar", list: "table", detail: "side", width: "wide" };
+export const DEFAULT_LAYOUT: Layout = {
+  nav: "sidebar",
+  list: "table",
+  detail: "side",
+  width: "wide",
+  tabs: "top",
+};
 
 export function isLayoutValue<K extends LayoutOption>(option: K, value: unknown): value is Layout[K] {
   return (LAYOUT[option] as readonly unknown[]).includes(value);

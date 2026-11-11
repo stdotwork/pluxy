@@ -279,6 +279,13 @@ func (m *Management) add(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
+	if len(req.Settings) > 0 {
+		var settings map[string]json.RawMessage
+		if json.Unmarshal(req.Settings, &settings) != nil {
+			writeManagementError(w, http.StatusBadRequest, "invalid_request", "account settings must be an object")
+			return
+		}
+	}
 	if req.Credential != nil {
 		writeManagementError(w, http.StatusBadRequest, "invalid_request", "an added account's credential comes from its login; send method and input instead")
 		return

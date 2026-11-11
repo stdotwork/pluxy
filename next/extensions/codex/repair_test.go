@@ -170,13 +170,43 @@ func TestOutputItemIDsAreRestored(t *testing.T) {
 	}
 }
 
+// A Responses-lite client's reply keeps the terminal event as the upstream sent it where the
+// request says so (keepOutput): an output item's missing id stays missing and an empty output
+// stays empty.
+func TestLiteRepairsAreSkipped(t *testing.T) {
+	done := `{"type":"response.output_item.done","output_index":0,"item":{"id":"msg_1","type":"message"}}`
+	withIDs := `{"type":"response.completed","response":{"id":"r","status":"completed","output":[{"type":"message"}]}}`
+	empty := `{"type":"response.completed","response":{"id":"r","status":"completed","output":[]}}`
+	for _, c := range []struct {
+		name       string
+		keepOutput bool
+		terminal   string
+		want       string
+	}{
+		{"ids restored", false, withIDs, `"id":"msg_1"`},
+		{"ids kept", true, withIDs, `"output":[{"type":"message"}]`},
+		{"empty rebuilt", false, empty, `"output":[{"id":"msg_1","type":"message"}]`},
+		{"empty kept", true, empty, `"output":[]`},
+	} {
+		p := newRepairs()
+		p.keepOutput = c.keepOutput
+		if _, err := p.apply([]byte(done)); err != nil {
+			t.Fatal(err)
+		}
+		out, err := p.apply([]byte(c.terminal))
+		if err != nil || !strings.Contains(string(out), c.want) {
+			t.Errorf("%s: got %s (%v), want it to contain %s", c.name, out, err, c.want)
+		}
+	}
+}
+
 // relay fails an empty incomplete reply with the error and sends no terminal event.
 func TestRelayEmptyIncomplete(t *testing.T) {
 	body := "data: " + `{"type":"response.created","response":{"id":"r","status":"in_progress","model":"gpt-test","output":[]}}` + "\n\n" +
 		"data: " + incompleteZero + "\n\n"
 	resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}
 	out := &collected{}
-	err := relay(context.Background(), resp, out)
+	err := relay(context.Background(), resp, out, newRepairs())
 	var e *llm.Error
 	if !errors.As(err, &e) || e.Code != llm.CodeUpstream || e.Scope != llm.ScopeRequest || e.Retryable {
 		t.Fatalf("relay: %v; want the empty incomplete error", err)
@@ -199,7 +229,7 @@ func TestRelayFailedFirstEvent(t *testing.T) {
 	resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}},
 		Body: io.NopCloser(strings.NewReader("event: response.failed\ndata: " + usageLimitFailedFirst + "\n\n"))}
 	out := &collected{}
-	err := relay(context.Background(), resp, out)
+	err := relay(context.Background(), resp, out, newRepairs())
 	var e *llm.Error
 	if !errors.As(err, &e) || e.Code != llm.CodeQuota || e.Status != http.StatusTooManyRequests || e.Scope != llm.ScopeCredential || e.RetryAfterMS != 7_200_000 {
 		t.Fatalf("relay: %+v; want the usage limit's 429 quota error on the credential, retry after 7200000 ms", err)

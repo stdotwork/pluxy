@@ -21,13 +21,14 @@ import (
 //     inlined and its $defs and definitions removed; a function without parameters gets an empty
 //     object schema; more than 200 tools are cut to the first 200 (xaiMaxTools);
 //   - input: a custom tool call and its output are sent as a function call and its output
-//     (normalizeXAIInputCustomToolCallsDoc).
+//     (normalizeXAIInputCustomToolCallsDoc);
+//   - apply_patch: Codex's patch tool is sent as a function with an input argument, and xAI's call
+//     to it is turned back into a custom tool call (patch.go);
+//   - namespace tools: the Codex app's namespaces are sent as functions, flattened or folded, and
+//     xAI's calls to them are turned back into calls in their namespaces (namespace.go); the
+//     Codex app's automation_update tool gets parameters that accept any object.
 //
-// Not done here, and why it is left out: namespace tools are not folded into functions with
-// qualified names, and their responses are not restored (the Codex app's tools; the extension
-// sends them as the client wrote them); an apply_patch custom tool is not wrapped in an input
-// field and its call is not restored on the way back, which needs the response side (today's
-// core does both); image references and encrypted reasoning content are not rewritten
+// Not done here, and why it is left out: image references and encrypted reasoning content are not rewritten
 // (sanitizeXAIInputEncryptedContent and normalizeXAIImageRefsDoc); the reasoning effort is not
 // checked against each model's levels, which needs today's model catalog. Today's core also
 // sets instructions and a list input, and the Codex translator's tool defaults (tool_choice,
@@ -44,6 +45,21 @@ var removedFields = []string{"stop", "previous_response_id", "prompt_cache_reten
 
 // buildBody returns the request body for xAI's Responses API and how it was built.
 func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
+	body, tr, _, err := buildRequest(req, false)
+	return body, tr, err
+}
+
+// buildSearchBody is buildBody with the x_search tool injected when injectXSearch is set.
+func buildSearchBody(req llm.Request, injectXSearch bool) ([]byte, *llm.Translation, error) {
+	body, tr, _, err := buildRequest(req, injectXSearch)
+	return body, tr, err
+}
+
+// buildRequest is buildSearchBody that also returns what turns xAI's reply back for the client:
+// calls to the custom apply_patch tool become custom tool calls (patch.go) and calls to the
+// functions that stand for namespace tools become calls in their namespaces (namespace.go). It is
+// nil when the request has neither.
+func buildRequest(req llm.Request, injectXSearch bool) ([]byte, *llm.Translation, *replyBridge, error) {
 	tr := &llm.Translation{To: llm.FormatOpenAIResponses}
 	var body []byte
 	if n := req.Native; n != nil {
@@ -56,17 +72,17 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 	if body == nil {
 		b, losses, err := openairesponses.EncodeRequest(req)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		body, tr.Losses = b, losses
 		if req.DropPolicy == llm.DropReject && tr.Dropped() {
-			return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
+			return nil, nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
 				Message: "Responses cannot carry parts of this request"}
 		}
 	}
 	m, err := decodeObject(body)
 	if err != nil {
-		return nil, nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "request body is not a JSON object", Scope: llm.ScopeRequest}
+		return nil, nil, nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "request body is not a JSON object", Scope: llm.ScopeRequest}
 	}
 	m["model"] = req.Model
 	m["stream"] = req.Stream
@@ -81,17 +97,51 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 		m["store"] = false
 	}
 	m["include"] = withEncryptedReasoning(m["include"])
+	reply := &replyBridge{}
+	var namespaces *namespaceTools
 	if tools, ok := m["tools"].([]any); ok {
+		tools, active := rewriteApplyPatchTools(tools)
+		if active {
+			reply.patch = newPatchBridge()
+			rewriteApplyPatchChoice(m["tool_choice"])
+		}
+		// Today's core counts the x_search tool it will inject when it decides to fold. Its other
+		// condition, a forced hosted tool that is the only tool, cannot hold with a namespace there.
+		injected := 0
+		if injectXSearch && !requestHasSearch(m) {
+			injected = 1
+		}
+		tools, namespaces = rewriteNamespaces(tools, injected)
+		if namespaces != nil {
+			reply.ns = newNSRestorer(namespaces.refs)
+			namespaces.rewriteChoice(m["tool_choice"])
+		}
 		m["tools"] = rewriteTools(tools)
 	}
+	if injectXSearch {
+		injectSearch(m)
+	}
+	if tools, ok := m["tools"].([]any); ok && len(tools) > maxTools {
+		m["tools"] = tools[:maxTools]
+	}
 	if input, ok := m["input"].([]any); ok {
-		m["input"] = rewriteCustomToolItems(input)
+		items, err := rewriteCustomToolItems(input)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if namespaces != nil {
+			namespaces.rewriteHistory(items)
+		}
+		m["input"] = items
 	}
 	out, err := marshal(m)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return out, tr, nil
+	if reply.patch == nil && reply.ns == nil {
+		reply = nil
+	}
+	return out, tr, reply, nil
 }
 
 // withEncryptedReasoning returns the client's include list with reasoning.encrypted_content added.
@@ -106,11 +156,8 @@ func withEncryptedReasoning(v any) []any {
 }
 
 // rewriteTools sends custom tools as function tools, gives each function a parameters schema
-// xAI accepts, and keeps the first maxTools.
+// xAI accepts. The caller caps the list after optional search injection.
 func rewriteTools(tools []any) []any {
-	if len(tools) > maxTools {
-		tools = tools[:maxTools]
-	}
 	for _, t := range tools {
 		tm, ok := t.(map[string]any)
 		if !ok {
@@ -125,6 +172,7 @@ func rewriteTools(tools []any) []any {
 		if tm["type"] != "function" {
 			continue
 		}
+		simplifyAutomation(tm, "", str(tm, "name"))
 		if _, ok := tm["parameters"].(map[string]any); ok {
 			normalizeSchema(tm, "parameters")
 		} else {
@@ -136,8 +184,9 @@ func rewriteTools(tools []any) []any {
 
 // rewriteCustomToolItems turns each custom tool call into a function call and each custom tool
 // output into a function call output, the form xAI takes. An item without its call ID or name
-// is dropped, as today's core drops it.
-func rewriteCustomToolItems(input []any) []any {
+// is dropped, as today's core drops it. A call to apply_patch carries its patch text in the
+// input argument (patch.go), whatever the text looks like, and must have text for its input.
+func rewriteCustomToolItems(input []any) ([]any, error) {
 	out := make([]any, 0, len(input))
 	for _, raw := range input {
 		item, ok := raw.(map[string]any)
@@ -154,8 +203,18 @@ func rewriteCustomToolItems(input []any) []any {
 			if callID == "" || name == "" {
 				continue
 			}
+			arguments := ""
+			if name == applyPatchName {
+				text, ok := item["input"].(string)
+				if !ok {
+					return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "apply_patch history input must be a string", Scope: llm.ScopeRequest}
+				}
+				arguments = wrapPatchInput(text)
+			} else {
+				arguments = customCallArguments(item["input"])
+			}
 			out = append(out, map[string]any{"type": "function_call", "call_id": callID, "name": name,
-				"arguments": customCallArguments(item["input"])})
+				"arguments": arguments})
 		case "custom_tool_call_output":
 			if callID == "" {
 				continue
@@ -166,7 +225,7 @@ func rewriteCustomToolItems(input []any) []any {
 			out = append(out, raw)
 		}
 	}
-	return out
+	return out, nil
 }
 
 // customCallArguments turns a custom tool's input into the arguments of a function call. An

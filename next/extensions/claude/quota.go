@@ -83,7 +83,7 @@ func getJSON(ctx context.Context, cred *protocol.Credential, url string) (json.R
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		e := upstreamError(resp, "")
+		e := upstreamError(resp, "", false)
 		if e.Code == llm.CodeNotFound {
 			// The endpoint is missing; no model is involved.
 			e.Scope = llm.ScopeEndpoint

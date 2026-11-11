@@ -1,7 +1,7 @@
 // What a host gives the kit. The browser panel (panel/browserHost.ts) and the desktop app each
 // implement it; the kit's pages and shell use nothing else to reach core or keep settings.
 
-export type Method = "GET" | "POST" | "PATCH" | "DELETE";
+export type Method = "GET" | "POST" | "PATCH" | "DELETE" | "PUT";
 
 /** A management API reply. status 0 means core could not be reached. */
 export interface Reply<T> {
@@ -11,13 +11,14 @@ export interface Reply<T> {
 }
 
 /** Things a host may or may not offer; pages hide what the host lacks. */
-export type Feature = "signOut";
+export type Feature = "signOut" | "rotateManagementKey";
 
 export interface Host {
   /**
    * Calls core's management API, version 0. path is under /v0/management, such as "/accounts".
-   * The host adds the management key; the kit never sees it, and no request carrying it goes
-   * anywhere but core's management API.
+   * The host adds the management key; no request carrying it goes anywhere but core's
+   * management API. Hosts offering rotateManagementKey adopt a successful rotation's value
+   * before returning its reply, so the kit can reveal it once and later calls keep working.
    */
   call<T>(method: Method, path: string, body?: unknown): Promise<Reply<T>>;
   /** Whether the host holds a management key to call with. */

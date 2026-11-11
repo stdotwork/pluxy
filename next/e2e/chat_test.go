@@ -54,6 +54,7 @@ func build(dir string) error {
 		{filepath.Join("codex", "codex"), "../extensions/codex"},
 		{filepath.Join("claude", "claude"), "../extensions/claude"},
 		{filepath.Join("kimi", "kimi"), "../extensions/kimi"},
+		{filepath.Join("xai", "xai"), "../extensions/xai"},
 		{filepath.Join("gemini", "gemini"), "../extensions/gemini"},
 		{"testext", "./testext"},
 	} {
@@ -74,7 +75,7 @@ func build(dir string) error {
 	if err := os.WriteFile(filepath.Join(dir, "pluxy-extension.json"), b, 0o644); err != nil {
 		return err
 	}
-	for id, name := range map[string]string{"example/oauth": "oauth", "pluxy/codex": "codex", "pluxy/claude": "claude", "pluxy/gemini": "gemini"} {
+	for id, name := range map[string]string{"example/oauth": "oauth", "pluxy/codex": "codex", "pluxy/claude": "claude", "pluxy/gemini": "gemini", "pluxy/kimi": "kimi", "pluxy/xai": "xai"} {
 		manifest["id"] = id
 		manifest["programs"] = map[string]string{runtime.GOOS + "/" + runtime.GOARCH: name}
 		b, _ = json.Marshal(manifest)
@@ -237,9 +238,15 @@ func runCoreArgs(t *testing.T, cfg map[string]any, args ...string) (string, stri
 // arguments, and returns its base URL and its log.
 func runCoreFile(t *testing.T, path string, args ...string) (string, *coreLog) {
 	t.Helper()
+	return runCoreBin(t, filepath.Join(binDir, "pluxy"), path, args...)
+}
+
+// runCoreBin is runCoreFile for the program at bin, which may be built with other tags.
+func runCoreBin(t *testing.T, bin, path string, args ...string) (string, *coreLog) {
+	t.Helper()
 	logs := &coreLog{}
 	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, filepath.Join(binDir, "pluxy"), append([]string{"-config", path}, args...)...)
+	cmd := exec.CommandContext(ctx, bin, append([]string{"-config", path}, args...)...)
 	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
 	cmd.WaitDelay = 10 * time.Second
 	stderr, err := cmd.StderrPipe()

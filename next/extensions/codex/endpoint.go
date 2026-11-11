@@ -25,6 +25,9 @@ func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if call.Request.Native != nil {
 		format = call.Request.Native.Format
 	}
+	if format == "codex.models" {
+		return clientModels(call, out)
+	}
 	if isSIWC(call.Account.Credential) {
 		// A SIWC account serves compaction only: today's core makes its images through
 		// Responses instead, which this extension does not, and sends its Alpha Search with the

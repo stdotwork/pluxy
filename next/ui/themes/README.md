@@ -28,6 +28,7 @@ working as the UI changes. Custom CSS can only rely on the hooks listed under
   "tokens": {
     "color.bg": "#f6f1e7",
     "color.accent": "#9a3412",
+    "color.diff-add": "#1f7a3d",
     "font.body": "Georgia, serif"
   },
   "dark": {
@@ -37,7 +38,8 @@ working as the UI changes. Custom CSS can only rely on the hooks listed under
     "nav": "top",
     "list": "cards",
     "detail": "below",
-    "width": "narrow"
+    "width": "narrow",
+    "tabs": "side"
   },
   "css": "[data-part=\"nav\"] { letter-spacing: 0.02em; }"
 }
@@ -93,6 +95,10 @@ anything.
 | `color.warn` | Degraded states | `#9a5b00` / `#e6b450` |
 | `color.danger` | Errors, destructive actions | `#b42318` / `#ff7b72` |
 | `color.focus` | Keyboard focus ring | `#2f5fd0` / `#7aa2ff` |
+| `color.meter-track` | Unused part of a quota meter | `var(--px-color-surface-raised)` |
+| `color.meter-fill` | Used share of a quota meter | `var(--px-color-accent)` |
+| `color.diff-add` | Added lines in a diff | `#1f7a3d` / `#5cc98a` |
+| `color.diff-remove` | Removed lines in a diff | `#b42318` / `#ff7b72` |
 
 ### Type
 
@@ -146,6 +152,7 @@ reader announces stay the same in every layout.
 | `list` | `table`, `cards` | Lists of accounts and extensions as table rows or as cards |
 | `detail` | `side`, `below` | Where the details of a selected item open: in a pane beside the list, or under it |
 | `width` | `wide`, `full`, `narrow` | Content width: `size.width-wide`, the whole window, or `size.width-narrow` |
+| `tabs` | `top`, `side` | Where a page's tabs appear: across the top or in a side column |
 
 On a window narrower than 720 pixels, `sidebar` shows as `top` and `side` shows as `below`.
 
@@ -189,10 +196,11 @@ These stay stable within a theme contract version:
 | Hook | Where |
 | --- | --- |
 | `data-appearance="light"` or `"dark"` | Root element |
-| `data-nav`, `data-list`, `data-detail`, `data-width` | Root element, set to the active layout value |
-| `data-page="<page id>"` | Root element: `status`, `accounts`, `extensions`, `themes`, or an extension page's ID |
+| `data-nav`, `data-list`, `data-detail`, `data-width`, `data-tabs` | Root element, set to the active layout value |
+| `data-page="<page id>"` | Root element: `status`, `accounts`, `add-account`, `quota`, `config`, `extensions`, `themes`, or an extension page's ID |
 | `data-part="shell"` | The whole UI below the root |
 | `data-part="nav"` | The navigation |
+| `data-part="nav-group"` | A group of navigation entries under its label; `data-group` is `operate`, `gateway`, `observe`, `control` or `extensions` (the extensions' pages) |
 | `data-part="nav-item"` | One navigation entry; the current one has `aria-current="page"` |
 | `data-part="main"` | The page area |
 | `data-part="page-title"` | A page's title |
@@ -203,6 +211,19 @@ These stay stable within a theme contract version:
 | `data-part="button"` | A button; `data-variant` is `primary`, `quiet` or `danger` |
 | `data-part="badge"` | A state badge; `data-tone` is `ok`, `warn`, `danger` or `muted` |
 | `data-part="field"` | A labelled form control |
+| `data-part="meter"` | A quota usage meter; `data-tone` is `ok`, `warn` or `danger`. Its child is the fill; warning and danger use the matching state colour. |
+| `data-part="tabs"` | A group of tabs |
+| `data-part="tab"` | One tab |
+| `data-part="tab-panel"` | The panel shown by the selected tab |
+| `data-part="code"` | The configuration source editor |
+| `data-part="diff"` | A group of changed lines |
+| `data-part="diff-line"` | One diff line; context lines have no change attribute; `data-change` is `add` or `remove` |
+| `data-part="dialog"` | A dialog window |
+| `data-part="key-notice"` | A notice revealing a newly generated key until closed or its tab is left |
+| `data-part="key-value"` | The selectable value of a newly generated key inside its notice |
+| `data-part="method"` | A sign-in method tile with its label, kind caption and selected flow. |
+| `data-part="flow"` | A reusable account sign-in flow: inputs, prompts, waiting and terminal states. |
+| `data-part="device-code"` | The user code to enter on a device sign-in page. |
 
 Every other class name, element and attribute can change in any release.
 

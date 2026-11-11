@@ -1,6 +1,7 @@
 package host
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -87,6 +88,13 @@ func (l *LoginCall) Next() protocol.Reply {
 		if err := validIdentity(r.Grant.Identity); err != "" {
 			l.fail(&llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s sent a grant whose identity %s", l.ext.manifest.ID, err)})
 			return *l.final
+		}
+		if err := validGrantSettings(r.Grant.Settings); err != "" {
+			l.fail(&llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s sent a grant whose settings %s", l.ext.manifest.ID, err)})
+			return *l.final
+		}
+		if bytes.Equal(bytes.TrimSpace(r.Grant.Settings), []byte("null")) {
+			r.Grant.Settings = nil
 		}
 		// Identity is kept as it is, even a value the credential also holds (an account ID in
 		// its data): core stores it beside the credential and compares it, and never shows it.
@@ -250,4 +258,22 @@ func redactPrompt(r *protocol.Redactor, p protocol.Prompt) protocol.Prompt {
 		p.Inputs = inputs
 	}
 	return p
+}
+
+// validGrantSettings checks the non-secret object at the extension's trust boundary.
+func validGrantSettings(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	if len(raw) > protocol.MaxGrantSettings {
+		return "exceed the 8192-byte limit"
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return ""
+	}
+	var settings map[string]json.RawMessage
+	if json.Unmarshal(raw, &settings) != nil || settings == nil {
+		return "must be an object"
+	}
+	return ""
 }

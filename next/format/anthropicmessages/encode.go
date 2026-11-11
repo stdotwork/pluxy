@@ -72,7 +72,9 @@ type outMessage struct {
 // EncodeRequest builds a Messages request body from req's items, tools and options, and returns
 // what it could not carry over. System and developer messages become the system prompt; the
 // items of one source turn (a message split into text, tool calls and results) become one
-// message, in order; tool results go in a user message. Reasoning from another provider cannot be
+// message, in order; tool results go in a user message. Function names Messages does not take
+// are sent under the names ToolNames gives them, and each tool's parameter schema is made one
+// Messages takes (an object schema without a root union). Reasoning from another provider cannot be
 // replayed to a Messages upstream (its signatures do not verify), so it is dropped and reported,
 // as is the reasoning effort (thinking budgets are model-specific; the Claude provider sets
 // them). A user turn left with nothing to send after its unsupported parts are dropped is an
@@ -103,22 +105,22 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 		e.lose(llm.LossDropped, "response_format", "Messages has no response format")
 	}
 
+	names := ToolNames(req)
 	var tools []json.RawMessage
 	for i, t := range req.Tools {
 		if t.Type == llm.ToolNative {
 			if t.Origin != nil && t.Origin.Format == format {
 				tools = append(tools, t.Origin.Raw)
+			} else if ws, skip, ok := webSearchTool(t); ok {
+				if !skip {
+					tools = append(tools, ws)
+				}
 			} else {
 				e.lose(llm.LossDropped, pathOf(t.Origin, fmt.Sprintf("tools[%d]", i)), "Messages has no such tool")
 			}
 			continue
 		}
-		schema := t.Parameters
-		if len(schema) == 0 {
-			// Messages requires an input schema.
-			schema = json.RawMessage(`{"type":"object","properties":{}}`)
-		}
-		ft := map[string]any{"name": t.Name, "input_schema": schema}
+		ft := map[string]any{"name": toolName(names, t.Name), "input_schema": inputSchema(t.Parameters)}
 		if t.Description != "" {
 			ft["description"] = t.Description
 		}
@@ -129,11 +131,12 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 	}
 	if len(tools) > 0 {
 		out["tools"] = tools
-		if tc := encodeToolChoice(o.ToolChoice, o.ParallelToolCalls); tc != nil {
+		if tc := encodeToolChoice(o.ToolChoice, o.ParallelToolCalls, names); tc != nil {
 			out["tool_choice"] = tc
 		}
 	}
 
+	searches := scanWebSearches(req.Items)
 	var system []json.RawMessage
 	var msgs []*outMessage
 	add := func(role, turn string, block json.RawMessage) {
@@ -181,7 +184,7 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 				}
 				input = json.RawMessage("{}")
 			}
-			add(llm.RoleAssistant, turn, marshal(map[string]any{"type": "tool_use", "id": it.CallID, "name": it.Name, "input": input}, e.kept(it.Origin)))
+			add(llm.RoleAssistant, turn, marshal(map[string]any{"type": "tool_use", "id": it.CallID, "name": toolName(names, it.Name), "input": input}, e.kept(it.Origin)))
 		case llm.ItemTypeToolResult:
 			add(llm.RoleUser, turn, marshal(map[string]any{"type": "tool_result", "tool_use_id": it.CallID, "content": it.Output}, e.kept(it.Origin)))
 		case llm.ItemTypeReasoning:
@@ -198,6 +201,21 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 		case llm.ItemTypeNative:
 			if it.Origin != nil && it.Origin.Format == format {
 				add(llm.RoleAssistant, turn, it.Origin.Raw)
+				break
+			}
+			if c, ok := asWebSearchCall(it); ok {
+				// A search goes in the assistant message around it, with the text and calls
+				// before and after it, as Claude wrote that turn.
+				blocks := searches.blocks(i, c)
+				if n := len(msgs); n > 0 && msgs[n-1].role == llm.RoleAssistant && len(blocks) > 0 {
+					msgs[n-1].joinNext = true
+				}
+				for _, b := range blocks {
+					add(llm.RoleAssistant, turn, b)
+				}
+				if len(blocks) > 0 {
+					msgs[len(msgs)-1].joinNext = true
+				}
 				break
 			}
 			e.lose(llm.LossDropped, p, "Messages has no such item")
@@ -220,7 +238,7 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 	return rawjson.Merge(b, e.kept(req.Origin)), e.losses, nil
 }
 
-func encodeToolChoice(tc *llm.ToolChoice, parallel *bool) map[string]any {
+func encodeToolChoice(tc *llm.ToolChoice, parallel *bool, names map[string]string) map[string]any {
 	var out map[string]any
 	if tc != nil {
 		switch tc.Mode {
@@ -231,7 +249,7 @@ func encodeToolChoice(tc *llm.ToolChoice, parallel *bool) map[string]any {
 		case llm.ToolChoiceRequired:
 			out = map[string]any{"type": "any"}
 		case llm.ToolChoiceTool:
-			out = map[string]any{"type": "tool", "name": tc.Name}
+			out = map[string]any{"type": "tool", "name": toolName(names, tc.Name)}
 		}
 	}
 	if parallel != nil && !*parallel {

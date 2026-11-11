@@ -36,6 +36,93 @@ func usageRequests(srv *codextest.Server) []codextest.Request {
 
 func pct(v float64) *float64 { return &v }
 
+func TestQuotaOptionalReadsFailIndependently(t *testing.T) {
+	for _, c := range []struct {
+		name, subscriptions, credits string
+		end                          int64
+		reset                        bool
+	}{
+		{"subscription unavailable", "", `{"available_count":2}`, 0, true},
+		{"credits unavailable", `{"active_until":"2031-01-01T00:00:00Z"}`, "", 1924992000, false},
+		{"malformed", "<html>", "<html>", 0, false},
+		{"invalid fields", `{"active_until":"invalid"}`, `{"available_count":-1}`, 0, false},
+		{"absent fields", `{}`, `{}`, 0, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			srv := codextest.New(t)
+			srv.Subscriptions, srv.ResetCredits = c.subscriptions, c.credits
+			q, e := readQuota(t, testAccount(srv, subscription(srv.IssueToken("text"), "")))
+			if e != nil {
+				t.Fatalf("quota failed: %+v", e)
+			}
+			b, _ := json.Marshal(q)
+			var result struct {
+				PlanEndsAt int64 `json:"plan_ends_at"`
+			}
+			_ = json.Unmarshal(b, &result)
+			if result.PlanEndsAt != c.end {
+				t.Errorf("plan_ends_at = %d, want %d", result.PlanEndsAt, c.end)
+			}
+			found := false
+			for _, l := range q.Limits {
+				if l.ID == "reset_credits" {
+					found = true
+					if l.Remaining == nil || *l.Remaining != 2 {
+						t.Errorf("reset credits = %+v, want 2", l)
+					}
+				}
+			}
+			if found != c.reset {
+				t.Errorf("reset credits present = %v, want %v", found, c.reset)
+			}
+		})
+	}
+}
+
+func TestQuotaRenewalAndManualResets(t *testing.T) {
+	srv := codextest.New(t)
+	srv.Subscriptions = `{"active_until":"2031-01-01T00:00:00Z"}`
+	srv.ResetCredits = `{"available_count":0,"credits":[]}`
+	token := srv.IssueToken("text")
+	q, e := readQuota(t, testAccount(srv, subscription(token, "")))
+	if e != nil {
+		t.Fatalf("quota failed: %+v", e)
+	}
+	requests := srv.Requests()
+	if len(requests) != 3 {
+		t.Fatalf("quota requests = %d, want usage, subscriptions and reset credits", len(requests))
+	}
+	for i, path := range []string{"/backend-api/wham/usage", "/backend-api/subscriptions?account_id=" + codextest.AccountID, "/backend-api/wham/rate-limit-reset-credits"} {
+		if requests[i].Path != path {
+			t.Errorf("request %d path = %q, want %q", i, requests[i].Path, path)
+		}
+		for name, want := range map[string]string{"Authorization": "Bearer " + token, "Chatgpt-Account-Id": codextest.AccountID, "User-Agent": codexUserAgent, "Originator": codexOriginator, "OpenAI-Beta": ""} {
+			if got := requests[i].Header.Get(name); got != want {
+				t.Errorf("request %d %s = %q, want %q", i, name, got, want)
+			}
+		}
+	}
+	b, _ := json.Marshal(q)
+	var result struct {
+		PlanEndsAt int64 `json:"plan_ends_at"`
+	}
+	if err := json.Unmarshal(b, &result); err != nil || result.PlanEndsAt != 1924992000 {
+		t.Errorf("quota = %s, want plan_ends_at 1924992000", b)
+	}
+	found := false
+	for _, l := range q.Limits {
+		if l.ID == "reset_credits" {
+			found = true
+			if l.Label != "Manual resets" || l.Remaining == nil || *l.Remaining != 0 || l.Unit != "resets" {
+				t.Errorf("manual resets = %+v", l)
+			}
+		}
+	}
+	if !found {
+		t.Error("quota has no reset_credits limit")
+	}
+}
+
 // A subscription's quota is read from the ChatGPT backend's usage endpoint, with the Codex client's
 // identity and the account's ChatGPT ID, and mapped to the labels of the old panel.
 func TestQuotaReadsUsage(t *testing.T) {
@@ -64,8 +151,8 @@ func TestQuotaReadsUsage(t *testing.T) {
 			t.Errorf("%s = %q, want %q", name, got, want)
 		}
 	}
-	if n := len(srv.Requests()); n != 1 {
-		t.Errorf("the fake saw %d requests, want only the usage read (a quota read must not generate)", n)
+	if n := len(srv.Requests()); n != 3 {
+		t.Errorf("the fake saw %d requests, want three quota reads (a quota read must not generate)", n)
 	}
 
 	if q.Plan != "plus" {

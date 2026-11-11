@@ -306,6 +306,29 @@ func TestAggregatorSizeCountsOpaque(t *testing.T) {
 	}
 }
 
+// A Claude web search's query, which comes in input deltas, counts toward the aggregator's size.
+func TestAggregatorSizeCountsSearchInput(t *testing.T) {
+	req, err := ParseRequest([]byte(`{"model":"m","input":"hi","tools":[{"type":"web_search"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := NewAggregator(req)
+	a.Add(llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "r", Format: llm.FormatAnthropicMessages}})
+	native := func(s string) { a.Add(llm.Event{Type: llm.EventNative, Raw: json.RawMessage(s)}) }
+	native(`{"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search","input":{}}}`)
+	before := a.Size()
+	native(`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"query\":\""}}`)
+	chunk := strings.Repeat("q", 1<<17)
+	for range 8 {
+		native(`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"` + chunk + `"}}`)
+	}
+	native(`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"}"}}`)
+	native(`{"type":"content_block_stop","index":0}`)
+	if got := a.Size() - before; got < 1<<20 {
+		t.Errorf("size grew by %d for a 1 MiB search query", got)
+	}
+}
+
 // A reply with more distinct losses than llm.MaxLosses lists the first MaxLosses, then one entry
 // that says more were left out, and nothing after it.
 func TestStreamWriterBoundsLosses(t *testing.T) {

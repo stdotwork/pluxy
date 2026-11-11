@@ -199,7 +199,7 @@ func TestReplyGivesBackClientNames(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			out := &collectedEvents{}
-			if err := relay(context.Background(), resp, renamer{out, names}); err != nil {
+			if err := relay(context.Background(), resp, renamer{out, names}, newRepairs()); err != nil {
 				t.Fatal(err)
 			}
 			var got []string

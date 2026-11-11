@@ -3,9 +3,14 @@
 //
 // Account settings (all optional):
 //
-//	{"base_url": "https://api.anthropic.com"}
+//	{"base_url": "https://api.anthropic.com", "model_level_cooling": false}
 //
-// base_url is where the Messages API lives; requests go to {base_url}/v1/messages. The OAuth
+// base_url is where the Messages API lives; requests go to {base_url}/v1/messages.
+// rebuild_mid_system_message (default false) moves the text of system messages in a Messages
+// client's conversation into the top-level system prompt, for a Claude-compatible upstream that
+// refuses them there; it is today's per-key setting of the same name.
+// model_level_cooling keeps a used-up shared subscription window on the model that hit it rather
+// than on the whole account (today's claude.model-level-cooling; see ratelimit.go). The OAuth
 // client can be changed with client_id; tests move the sign-in page and token endpoint to a fake
 // with authorize_url and token_url (sdk.TestLoginHost), which a normal run ignores; see oauth.go.
 //
@@ -13,11 +18,14 @@
 // credential (a subscription login) is sent as a bearer token, with the OAuth beta added to
 // anthropic-beta. A setup token (the long-lived OAuth token `claude setup-token` prints) is kept
 // as an api_key credential, since it is static and cannot be renewed, and is sent as a bearer
-// token with the OAuth beta: any key containing sk-ant-oat is, as in today's core. A Messages request is sent unchanged, with the client's own Messages headers
-// (API version, betas and its identification headers such as User-Agent and X-App), so thinking
-// blocks, their signatures and cache_control markers reach Anthropic as the client wrote them.
+// token with the OAuth beta: any key containing sk-ant-oat is, as in today's core. A Messages
+// request is sent unchanged, with the client's own Messages headers (API version, betas and its
+// identification headers such as User-Agent and X-App), so thinking blocks, their signatures and
+// cache_control markers reach Anthropic as the client wrote them.
 // Requests in other formats (Chat Completions, Responses, Gemini) are translated to Messages,
-// with the client's reasoning effort turned into Claude's thinking settings (thinking.go).
+// with the client's reasoning effort turned into Claude's thinking settings (thinking.go). Every
+// body, the client's own Messages body included, has two parts Anthropic refuses repaired: empty
+// web search domain lists and tool call IDs with characters it does not take (tools.go).
 //
 // Token counts (core's count_tokens call) go to Anthropic's count_tokens endpoint only when
 // base_url is Anthropic's own origin (https://api.anthropic.com). For any other base_url the
@@ -95,6 +103,11 @@ type settings struct {
 	AuthorizeURL string `json:"authorize_url"`
 	TokenURL     string `json:"token_url"`
 	ClientID     string `json:"client_id"`
+	// RebuildMidSystemMessage moves system messages in the conversation into the top-level
+	// system prompt (midsystem.go).
+	RebuildMidSystemMessage bool `json:"rebuild_mid_system_message"`
+	// ModelLevelCooling keeps a refused shared usage window on the model, not the account.
+	ModelLevelCooling bool `json:"model_level_cooling"`
 }
 
 // readSettings reads an account's settings and fills in the defaults.
@@ -203,7 +216,12 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err != nil {
 		return err
 	}
-	send := &reporting{Stream: out, tr: tr}
+	if s.RebuildMidSystemMessage {
+		if body, err = moveSystemMessages(body); err != nil {
+			return err
+		}
+	}
+	send := &reporting{Stream: out, tr: tr, names: replyNames(call.Request, tr)}
 	resp, err := post(ctx, call, s, "/v1/messages", body, tr.Passthrough, call.Request.Stream)
 	if err != nil {
 		return err
@@ -234,7 +252,8 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 // post sends body to the Messages API at path (under base_url) and returns the upstream's
 // successful reply; a failure is returned as the error to report. passthrough sends the client's
 // own Messages headers with its body; stream asks for a stream. The betas the body needs are
-// added (betas.go).
+// added (betas.go). A fast-mode body ("speed": "fast") gets the fast-mode beta, and on
+// Anthropic's own API its failure is the request's (fast.go).
 func post(ctx context.Context, call sdk.Call, s settings, path string, body []byte, passthrough, stream bool) (*http.Response, error) {
 	body, betas := bodyBetas(body, path == "/v1/messages/count_tokens")
 	// ?beta=true is how Anthropic's SDKs, Claude Code among them, call the API with betas.
@@ -264,11 +283,24 @@ func post(ctx context.Context, call sdk.Call, s settings, path string, body []by
 			}
 		}
 	}
+	// Anthropic refuses "speed": "fast" without the fast-mode beta, so the beta follows the body.
+	// A client may name the beta in the body's betas list too, which bodyBetas has already taken
+	// out of the body (betas holds it).
+	fast := isFast(body, req.Header.Get("Anthropic-Beta")) || slices.Contains(betas, fastBeta)
+	if fast {
+		req.Header.Set("Anthropic-Beta", withBeta(req.Header.Get("Anthropic-Beta"), fastBeta))
+	}
 	if err := authorize(req.Header, call.Account.Credential); err != nil {
 		return nil, err
 	}
 	if list := addBetas(req.Header.Get("Anthropic-Beta"), betas); list != "" {
 		req.Header.Set("Anthropic-Beta", list)
+	}
+	fail := func(e *llm.Error) *llm.Error {
+		if fast && isAnthropicBase(s.BaseURL) {
+			return fastFailure(e)
+		}
+		return e
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -278,11 +310,11 @@ func post(ctx context.Context, call sdk.Call, s settings, path string, body []by
 		var op *net.OpError
 		dial := errors.As(err, &op) && op.Op == "dial"
 		// A failed dial never reached the upstream, so trying again is safe.
-		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint, Retryable: dial}
+		return nil, fail(&llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint, Retryable: dial})
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		defer resp.Body.Close()
-		return nil, upstreamError(resp, call.Request.Model)
+		return nil, fail(upstreamError(resp, call.Request.Model, s.ModelLevelCooling))
 	}
 	return resp, nil
 }
@@ -321,7 +353,7 @@ func check(ctx context.Context, call sdk.CheckCall) (*protocol.CheckResult, erro
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: "the upstream has no model list to check the key with", Scope: llm.ScopeCredential}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, upstreamError(resp, "")
+		return nil, upstreamError(resp, "", s.ModelLevelCooling)
 	}
 	var list struct {
 		Data []json.RawMessage `json:"data"`
@@ -349,6 +381,11 @@ func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	body, tr, err := buildBody(call.Request)
 	if err != nil {
 		return err
+	}
+	if s.RebuildMidSystemMessage {
+		if body, err = moveSystemMessages(body); err != nil {
+			return err
+		}
 	}
 	count := anthropicmessages.CountRequest
 	if tr.Passthrough {
@@ -392,10 +429,10 @@ func isAnthropicBase(baseURL string) bool {
 }
 
 // buildBody returns the Messages request body for req and how it was built. A Messages request
-// is sent unchanged; any other is rebuilt from the model, with its reasoning effort as thinking
-// settings. A thinking suffix on the model name sets the thinking settings either way, in place
-// of the request's own. Under the reject drop policy a translation that drops anything is
-// refused.
+// is sent unchanged but for the repairs every body gets (fixBody); any other is rebuilt from the
+// model, with its reasoning effort as thinking settings. A thinking suffix on the model name sets
+// the thinking settings either way, in place of the request's own. Under the reject drop policy a
+// translation that drops anything is refused.
 func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 	tr := &llm.Translation{To: llm.FormatAnthropicMessages}
 	if n := req.Native; n != nil {
@@ -409,6 +446,10 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 					return nil, nil, err
 				}
 			}
+			body, err := fixBody(body)
+			if err != nil {
+				return nil, nil, err
+			}
 			return body, tr, nil
 		}
 	}
@@ -418,6 +459,14 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 	}
 	if body, err = addCacheBreakpoints(body); err != nil {
 		return nil, nil, err
+	}
+	if body, err = fixBody(body); err != nil {
+		return nil, nil, err
+	}
+	if priorityTier(req.Native) {
+		if body, err = withFastSpeed(body); err != nil {
+			return nil, nil, err
+		}
 	}
 	effort := req.Options.ReasoningEffort
 	if s := req.Options.ThinkingSuffix; s != "" {
@@ -448,10 +497,12 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 	return body, tr, nil
 }
 
-// reporting adds the translation report to the reply's response.start event.
+// reporting adds the translation report to the reply's response.start event, and gives each tool
+// call the client's own name for the tool when the request was sent under another (names).
 type reporting struct {
 	*sdk.Stream
-	tr *llm.Translation
+	tr    *llm.Translation
+	names map[string]string
 }
 
 func (r *reporting) Send(ev llm.Event) error {
@@ -460,7 +511,27 @@ func (r *reporting) Send(ev llm.Event) error {
 		info.Translation = r.tr
 		ev.Response = &info
 	}
+	if ev.Type == llm.EventItemStart && ev.Item != nil && ev.Item.Kind == llm.ItemToolCall {
+		if name, ok := r.names[ev.Item.Name]; ok {
+			item := *ev.Item
+			item.Name = name
+			ev.Item = &item
+		}
+	}
 	return r.Stream.Send(ev)
+}
+
+// replyNames maps each tool name a translated request was sent under back to the client's
+// (anthropicmessages.ToolNames). A Messages body passed through keeps the client's names.
+func replyNames(req llm.Request, tr *llm.Translation) map[string]string {
+	if tr.Passthrough {
+		return nil
+	}
+	back := map[string]string{}
+	for from, to := range anthropicmessages.ToolNames(req) {
+		back[to] = from
+	}
+	return back
 }
 
 // relayStream decodes the upstream Messages stream and sends each event as soon as it is
@@ -504,8 +575,8 @@ func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Ev
 }
 
 // upstreamError turns a non-2xx Messages response into a structured error. model is the model the
-// request asked for.
-func upstreamError(resp *http.Response, model string) *llm.Error {
+// request asked for; modelLevelCooling is the account's model_level_cooling (see rateLimit).
+func upstreamError(resp *http.Response, model string, modelLevelCooling bool) *llm.Error {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	var parsed struct {
 		Error struct {
@@ -536,18 +607,19 @@ func upstreamError(resp *http.Response, model string) *llm.Error {
 		// and another account may serve the model.
 		e.Retryable = model != "" && strings.Contains(e.Message, model)
 	case s == http.StatusTooManyRequests:
-		// Only the model waits on this account, as today's core cools only the model that answered.
-		e.Code, e.Scope, e.Retryable = llm.CodeRateLimit, llm.ScopeModel, true
-		if model == "" {
-			// A call for no model (the usage endpoint): the account is the one limited.
+		var wait time.Duration
+		e.Code, e.Scope, wait, e.QuotaWindowMinutes = rateLimit(resp.Header, raw, modelLevelCooling, time.Now())
+		e.Retryable = true
+		if model == "" && e.Scope == llm.ScopeModel {
+			// A call that names no model (an account check, quota, a login) has no model to keep
+			// out: its 429 is the account's.
 			e.Scope = llm.ScopeCredential
 		}
-		if strings.EqualFold(resp.Header.Get("Anthropic-Ratelimit-Unified-Status"), "rejected") {
-			// A subscription's usage window is used up for every model; it opens again at the
-			// unified reset.
-			e.Code, e.Scope = llm.CodeQuota, llm.ScopeCredential
+		if !(e.Code == llm.CodeQuota && e.Scope == llm.ScopeCredential) && fastCredits(raw) {
+			// Fast mode refused for want of usage credits: the request's, as in today's core.
+			e.Scope = llm.ScopeRequest
 		}
-		e.RetryAfterMS = rateLimitWait(resp.Header, time.Now())
+		e.RetryAfterMS = int64((wait + time.Millisecond - 1) / time.Millisecond)
 	case s == http.StatusServiceUnavailable || s == 529:
 		// 529 is Anthropic's overloaded_error: the request was refused, not run.
 		e.Code, e.Scope, e.Retryable = llm.CodeUnavailable, llm.ScopeEndpoint, true
@@ -559,20 +631,6 @@ func upstreamError(resp *http.Response, model string) *llm.Error {
 		e.Code, e.Scope = llm.CodeInvalidRequest, llm.ScopeRequest
 	}
 	return e
-}
-
-// rateLimitWait is how long to wait after a 429: Retry-After when given, otherwise the reset of a
-// subscription's usage window that was refused (anthropic-ratelimit-unified-reset, Unix seconds).
-func rateLimitWait(h http.Header, now time.Time) int64 {
-	if ms := retryAfter(h.Get("Retry-After"), now); ms > 0 {
-		return ms
-	}
-	if secs, err := strconv.ParseInt(strings.TrimSpace(h.Get("Anthropic-Ratelimit-Unified-Reset")), 10, 64); err == nil {
-		if d := time.Unix(secs, 0).Sub(now); d > 0 {
-			return d.Milliseconds()
-		}
-	}
-	return 0
 }
 
 // retryAfter reads a Retry-After header: delay seconds or an HTTP date.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"sync"
@@ -279,8 +280,9 @@ func TestRequestErrorLeavesAccountAlone(t *testing.T) {
 }
 
 // An account that cannot serve the request (unsupported, about the account) passes it on
-// without being blocked; when no account can serve it, the request fails with the refusal
-// after one try each instead of looping.
+// without being blocked; when no account can serve it, the request fails after one try each
+// instead of looping: an endpoint call as today's core does when it finds no usable auth (503
+// auth_not_found), any other request with the last refusal.
 func TestUnsupportedAccountPassesRequestOn(t *testing.T) {
 	refuse := fail(llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Message: "other format"})
 	h := newHarness(t, Config{Strategy: StrategyFillFirst}, accts("a", "b", "c")...)
@@ -294,8 +296,20 @@ func TestUnsupportedAccountPassesRequestOn(t *testing.T) {
 	h.on("a", refuse)
 	h.on("b", refuse)
 	evs := h.run(h.req("m"))
-	if e := evs[0].Error; e == nil || e.Code != llm.CodeUnsupported {
+	if e := evs[0].Error; e == nil || e.Code != llm.CodeUnsupported || e.Message != "other format" {
 		t.Errorf("got %+v, want the refusal", evs[0])
+	}
+	h.wantAttempts("a", "b")
+
+	h = newHarness(t, Config{}, accts("a", "b")...)
+	h.on("a", refuse)
+	h.on("b", refuse)
+	req := h.req("m")
+	req.Endpoint = true
+	evs = h.run(req)
+	if e := evs[0].Error; e == nil || e.Code != llm.CodeUnavailable || e.Status != http.StatusServiceUnavailable ||
+		e.ProviderCode != "auth_not_found" || e.Message != "no auth available" {
+		t.Errorf("got %+v, want 503 auth_not_found: no auth available", evs[0])
 	}
 	h.wantAttempts("a", "b")
 }

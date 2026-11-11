@@ -35,6 +35,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/internal/buildinfo"
 	"github.com/stdotwork/pluxy/next/internal/configdoc"
 	"github.com/stdotwork/pluxy/next/internal/cred"
 	"github.com/stdotwork/pluxy/next/internal/extconfig"
@@ -88,6 +89,8 @@ type snapshot struct {
 	pkgs packages.State
 	// failed holds the enabled packages that could not start, by ID: why.
 	failed map[string]string
+	// pprof is the profiling listener, nil when the config asks for none (see openPprof).
+	pprof *pprofListener
 }
 
 // Core is core's live state.
@@ -537,6 +540,12 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 		c.creds = cred.NewManager(store, providers{c}, cred.Options{Reserved: c.reserved})
 	}
 	router.UseCredentials(c.creds)
+	pp, err := openPprof(cfg, prev)
+	if err != nil {
+		c.discard(next, prev)
+		return nil, err
+	}
+	next.pprof = pp
 	return next, nil
 }
 
@@ -581,6 +590,9 @@ func (c *Core) discard(next, prev *snapshot) {
 			g.Stop()
 		}
 	}
+	if next.pprof != nil && (prev == nil || prev.pprof != next.pprof) {
+		next.pprof.close()
+	}
 }
 
 // publish makes next the snapshot new requests get, carries routing state over, and drains the
@@ -617,6 +629,7 @@ func (c *Core) publish(next, prev *snapshot, hash string) {
 	}
 	c.draining = append(c.draining, old...)
 	c.mu.Unlock()
+	swapPprof(next, prev)
 	c.checkAccounts(next, accounts)
 	for _, g := range old {
 		g.Drain(func() {
@@ -764,6 +777,9 @@ func (c *Core) Stop() {
 		wg.Go(g.Stop)
 	}
 	wg.Wait()
+	if s := c.cur.Load(); s != nil && s.pprof != nil {
+		s.pprof.close()
+	}
 	c.creds.Close()
 }
 
@@ -781,12 +797,18 @@ type Status struct {
 	Desired    Revision          `json:"desired"`
 	Active     Revision          `json:"active"`
 	Extensions []ExtensionStatus `json:"extensions"`
+	// Version, Commit and Built say which build of core runs (see buildinfo).
+	Version string `json:"version"`
+	Commit  string `json:"commit"`
+	Built   string `json:"built"`
 }
 
 // Status returns core's live state.
 func (c *Core) Status() Status {
+	version, commit, built := buildinfo.Get()
 	c.mu.Lock() // publish switches the snapshot and the revisions under it
-	s := Status{SafeMode: c.opts.SafeMode, Desired: c.desired, Active: c.active, Extensions: []ExtensionStatus{}}
+	s := Status{SafeMode: c.opts.SafeMode, Desired: c.desired, Active: c.active, Extensions: []ExtensionStatus{},
+		Version: version, Commit: commit, Built: built}
 	draining := append([]*host.Managed(nil), c.draining...)
 	cur := c.cur.Load()
 	c.mu.Unlock()

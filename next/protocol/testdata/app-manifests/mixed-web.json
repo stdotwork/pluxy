@@ -1,0 +1,50 @@
+{
+  "manifest_version": 1,
+  "id": "pluxy/codex",
+  "version": "0.1.0",
+  "protocol": [
+    0
+  ],
+  "programs": {
+    "linux/amd64": "bin/codex"
+  },
+  "app": {
+    "version": 0,
+    "tier": "web",
+    "host_versions": [
+      0
+    ],
+    "ui": {
+      "version": 0,
+      "dir": "app-pages",
+      "pages": [
+        {
+          "id": "app",
+          "title": "App only",
+          "short": "App",
+          "path": "index.html"
+        }
+      ]
+    },
+    "config": {
+      "version": 0,
+      "schema": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "resources": [
+      {
+        "id": "notes",
+        "kind": "file",
+        "operations": [
+          "read"
+        ]
+      }
+    ]
+  }
+}

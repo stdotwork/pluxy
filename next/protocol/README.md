@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.7
+# pluxy extension protocol, version 0.10
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -14,9 +14,13 @@ the identity of a login's grant, so core can check that a new login to an accoun
 the same upstream account. Version 0.6 adds an error's `quota_window_minutes`: how long the
 usage window that ran out is. Version 0.7 adds [endpoint calls](#endpoint): client requests to a
 provider's endpoints beyond generation, such as Responses compaction, whose reply the extension
-writes. It is deliberately small; later versions add capabilities and more operations without changing
+writes. Version 0.8 adds the request's [`caller`](#the-request): a value that stands for the
+client key a request came with, so an extension can keep what it learns from replies per client.
+Version 0.9 adds optional non-secret account settings to a login grant. Version 0.10 adds the
+optional quota `plan_ends_at`, the end of the subscription in Unix seconds.
+It is deliberately small; later versions add capabilities and more operations without changing
 what is described here. An extension written for version 0 works unchanged with a core that
-speaks 0.7 (see [Versioning](#versioning)).
+speaks 0.10 (see [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
 the details. A Go SDK (`github.com/stdotwork/pluxy/next/sdk`) implements the extension side of
@@ -70,6 +74,10 @@ An extension ships as a folder with a manifest named `pluxy-extension.json`:
 The package version, manifest version, protocol version and the versions of `ui` and `config`
 are separate on purpose: each can change without the others. Later versions add more optional
 parts (themes) with their own version fields.
+
+App contributions use manifest version 1. See the [app package contract](../app/app-host/README.md)
+and its [tutorial](../app/app-host/TUTORIAL.md). Core refuses app-only packages; mixed packages
+use only their provider part in core. Provider operations and wire version 0.7 are unchanged.
 
 ### Release archives
 
@@ -382,6 +390,7 @@ event as for `generate`.
 | Field | Meaning |
 | --- | --- |
 | `plan` | The account's plan, as the provider names it, for people. |
+| `plan_ends_at` | Optional, since 0.10: when the subscription ends, in Unix seconds. Omitted when unknown. |
 | `limits` | The plan's limits: usage windows, allowances and balances. At most 1000. |
 | limit `id` | Names the limit within the extension, the same on every call (`five_hour`, `weekly`). Required, unique in the list. |
 | limit `label` | For people, in English (`5-hour limit`, `Weekly limit`). |
@@ -404,24 +413,34 @@ removes the account's credential from every string and from `raw`, as from every
 ### `endpoint`
 
 Version 0.7. A client request to one of the provider's endpoints beyond generation, which core
-passes to an account's extension whole: core reads nothing of it but the model, and the extension
-writes the reply's body. Core sends it only to an extension whose describe reports
+passes to an account's extension. Except for core-built bodies below, core reads nothing of it
+but the model, and the extension writes the reply's body. Core sends it only to an extension whose describe reports
 `protocol_minor` 7 or more and lists `endpoint` in `operations`; for any other, core treats the
 account as one that does not serve the endpoint.
 
 The call carries `account` and `request` as `generate` does. The request has no items: `model`
 is the body's `model` (renamed for the account and without its thinking suffix, which is in
 `options.thinking_suffix`, as for `generate`; empty for an endpoint that takes no model, when the
-body names none), and `native` holds the client's body and headers,
+body names none), and `native` holds the body (the client's, or core-built as below) and headers,
 with `native.format` naming the endpoint:
 
 | `native.format` | Client route | Body |
 | --- | --- | --- |
 | `openai.responses.compact` | `POST /v1/responses/compact` (and `/backend-api/codex/responses/compact`) | A Responses request; the reply is one JSON object. Core refuses `"stream": true` itself. |
+| `codex.models` | `GET /v1/models?client_version=<version>` | Core builds `{"client_version":"<version>","models":[{"name":"team/coding","upstream":"gpt-6.1-sol","display_name":"Coding","non_codex":true}]}`. Presence of the query key selects this endpoint, even with an empty value. Core lists accounts of `pluxy/codex` under their normal aliases, exclusions and prefixes, keeps the first mapping of a repeated public name, and sorts by public name. `display_name` is omitted when empty. `non_codex` is true when any other extension's account can also serve that public name, including an account with an unknown model list; the extension then clears the Codex-only options as described below. The GET body is ignored. One direct call goes to the first enabled, usable `pluxy/codex` account in account order, carrying only its `account.id` (no settings or credential), with `request.model` empty. No routing reservation, cooldown, concurrency limit, credential renewal, result, rotation or usage event is involved; there are no retries. Without such an account core returns 200 `{"models":[]}` itself. The extension returns one JSON object in the Codex catalog shape, omitting unknown templates and replacing each slug with `name`. No upstream request or remote refresh is made. |
 | `codex.alpha_search` | `POST /v1/alpha/search` (and `/backend-api/codex/alpha/search`) | Codex's search request, in Codex's own shape; the reply is one JSON object. Its `model` is optional: a request without one is sent to any account, with `request.model` empty. |
 | `openai.images.generations` | `POST /v1/images/generations` | An Images API request; the reply is one JSON object, or server-sent events when it asks for `"stream": true`. Core refuses a request without a `prompt` and names `gpt-image-2` as the model when it names none. |
 | `openai.images.edits` | `POST /v1/images/edits` | As for generations. A `multipart/form-data` edit arrives in its JSON form: each field a member (`n`, `output_compression` and `partial_images` as numbers, `stream` as a boolean, `mask[file_id]` and `mask[image_url]` inside `mask`), the image files (`image[]`, else `image`) added to `images` as `{"image_url": "data:..."}` and the mask file as `mask.image_url`. Core refuses a form without an image file. |
 | `gemini.interactions` | `POST /v1beta/interactions` | Gemini's Interactions API request, in Google's own shape; the reply is one JSON object, or server-sent events when it asks for `"stream": true`, which the extension sends with each event's name. The request names a model or an agent: core refuses one that names both or neither, a `stream` that is not a boolean, and a body that is not JSON, removes a `models/` prefix from the model, and sends a request with an agent and no model to any account, with `request.model` empty. The client's `Api-Revision` header is in `native.headers` (`api-revision`). Google's clients may send the client key in `x-goog-api-key` or `?key=`. |
+
+For `codex.models`, `non_codex` clears `prefer_websockets`, `use_responses_lite`,
+`supports_reasoning_effort_updates`, `supports_search_tool` and an existing
+`supports_image_detail_original` to false, sets `service_tiers` to an empty array and `tool_mode`
+to `"direct"`, and sets `apply_patch_tool_type`, `upgrade` and `availability_nux` to null.
+Catalog errors are returned without updating routing state, and are never retried.
+
+Adding an endpoint format uses the existing version 0.7 operation and frames; it does not
+require a new protocol minor version (as with `codex.alpha_search` and `gemini.interactions`).
 
 The reply is a stream of events as for `generate`, without items: `response.start`, whose
 `response.format` is the endpoint's format and whose `response.raw` says how to send the body,
@@ -438,7 +457,8 @@ order, then `finish`, with `usage` when the upstream reported it.
 | --- | --- |
 | `content_type` | The body's media type, which core sends as the reply's `Content-Type`. Required. With `text/event-stream`, core sends each piece to the client as soon as it arrives. |
 
-The body is text: send it as it should reach the client. An `error` before `response.start` is
+The body is text: send it as it should reach the client. Except for the direct `codex.models`
+call above, an `error` before `response.start` is
 routed as for `generate`: core tries another account when it is retryable, and otherwise answers
 the client with an error in OpenAI's shape. An `error` after `response.start` ends the body where
 it is; a `text/event-stream` body then gets a last `error` event. An account that does not serve
@@ -513,6 +533,7 @@ version 0.
 | `native` | The client's original request body and its format, when core received one; `headers` holds the client's request headers that belong to that format, by lower-case name (for `anthropic.messages`: `anthropic-version` and `anthropic-beta`, and the headers the client names itself with: `user-agent`, `x-app`, `anthropic-dangerous-direct-browser-access`, `x-claude-code-session-id`, `x-client-request-id`, the `x-stainless-*` headers of Anthropic's SDKs, `x-client-app` and `x-anthropic-additional-protection`; and Claude Code's subagent, request and remote-session headers (`x-claude-code-agent-id`, `x-claude-code-parent-agent-id`, `x-claude-code-agent-type`, `x-claude-code-request-class`, `x-claude-code-prev-tool-durations`, `x-claude-code-compaction`, `x-claude-code-context-compacted`, `x-claude-remote-container-id`, `x-claude-remote-session-id`), which an extension should send upstream only for a request that names itself as Claude Code (`anthropicmessages.IsClaudeCode`: `x-app: cli`, a `claude-cli/` User-Agent and the `claude-code-20250219` beta); for `openai.responses`: the headers the Codex CLI sends, such as `session-id`, `x-codex-window-id`, `x-codex-turn-metadata`, `version`, `originator` and `user-agent`). |
 | `origin` | The request's top-level fields that have no place in the model (see Origin below). |
 | `drop_policy` | What to do when building the upstream request would drop part of this one: `report` (default: send it and report the losses) or `reject` (refuse with `unsupported`, naming what could not be carried). |
+| `caller` | Version 0.8. A value that stands for the client key the request came with: the same for every request with that key to this extension, different for another key or another extension, and not derivable from the key (core derives it with a secret it makes each time it starts, so it changes when core restarts). Absent when the client sent no key. Core sends it with `generate`, `count_tokens` and `endpoint` calls, to every extension. An extension that keeps state from replies across requests, such as reasoning to put back into a later turn, keys that state by `caller`, so one client never gets another's. |
 
 Item types:
 
@@ -748,6 +769,21 @@ entered for the last prompt; nothing else follows the call frame:
 {"type": "login.input", "input": {"redirect_url": "http://localhost:1455/callback?code=...&state=..."}}
 ```
 
+From version 0.9, a login grant may also carry a `settings` object of non-secret,
+extension-specific account settings. It must never hold a secret: secrets belong in
+`credential`. The extension validates and normalises these settings before returning them.
+When adding an account, core merges the grant's settings with those supplied by the caller:
+caller-supplied properties win, including explicit `null`; nested objects are replaced as a
+whole. On a login to an existing account, core ignores the grant's settings and keeps the
+account's existing settings. A grant without settings keeps the previous behaviour.
+Core validates grant settings at the extension boundary: `null` is treated as absent; any
+other value must be an object with an encoded size of at most 8192 bytes (8 KiB, matching
+the maximum total identity value bytes: 16 fields of 512 bytes). A non-object or oversized
+value fails the login with `extension_protocol`. Caller settings must be an object or
+absent (`null` also means absent); `POST /accounts` refuses a non-object with `invalid_request`
+before starting a login. Like a grant's `identity`, core uses grant settings regardless of
+the extension's reported minor version, an exception to the general minor-version rule.
+
 `login.done` carries the `grant`: the new `credential`, a `label` naming the account for people
 (not secret) and, from version 0.5, its `identity`: the upstream account the credential signs in
 to, as an object of the fields the provider knows it by, such as
@@ -937,7 +973,7 @@ removes `previous_response_id`.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.7. An extension reports the minor version it
+raise the minor version: this document is version 0.10. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -952,8 +988,11 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.5 | [Quota](#quota): the `quota` operation and its `quota.result` frame. A login grant's `identity`. |
 | 0.6 | An error's `quota_window_minutes`. |
 | 0.7 | [Endpoint calls](#endpoint): the `endpoint` operation. |
+| 0.8 | The request's `caller`. |
+| 0.9 | A login grant's optional `settings` object. |
+| 0.10 | Quota's optional `plan_ends_at`. |
 
-## What version 0.7 leaves out
+## What version 0.10 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

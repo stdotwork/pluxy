@@ -22,6 +22,18 @@ func TestConformance(t *testing.T) {
 	up := newScenarioUpstream(t)
 	conformance.Run(t, conformance.Target{
 		Manifest: manifest,
+		PrepareLogin: func(t *testing.T, s conformance.LoginScenario, method string) conformance.LoginSetup {
+			key := "sk-conformance"
+			if s == conformance.LoginDenied {
+				key = "sk-revoked"
+			}
+			defaults, _ := json.Marshal(map[string]string{"base_url": up.URL + "/text/v1", "wire_api": "chat"})
+			return conformance.LoginSetup{
+				Account:       protocol.Account{ID: "conformance"},
+				Input:         map[string]string{"base_url": up.URL + "/text/v1/", "api_key": key},
+				GrantSettings: defaults,
+			}
+		},
 		Prepare: func(t *testing.T, s conformance.Scenario) conformance.Setup {
 			settings, _ := json.Marshal(map[string]string{"base_url": up.URL + "/" + string(s) + "/v1"})
 			key := "sk-conformance"

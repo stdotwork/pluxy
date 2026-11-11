@@ -166,7 +166,7 @@ type Source interface {
 func NewHandler(src Source) http.Handler {
 	mux := http.NewServeMux()
 	handle := func(path string, f clientFormat, h func(w http.ResponseWriter, r *http.Request, g *Generation)) {
-		mux.HandleFunc("POST "+path, func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc("POST "+path, accessLog(func(w http.ResponseWriter, r *http.Request) {
 			g, release := src.Acquire()
 			defer release()
 			if e := refused(g.Config, r, f.googleKeys); e != nil {
@@ -174,7 +174,7 @@ func NewHandler(src Source) http.Handler {
 				return
 			}
 			logged(w, r, g, func(w http.ResponseWriter, r *http.Request) { h(w, r, g) })
-		})
+		}))
 	}
 	// The Codex CLI sends its requests to /backend-api/codex/responses when its chatgpt_base_url
 	// points at core; as in today's core, that path is an alias of /v1/responses.
@@ -191,10 +191,21 @@ func NewHandler(src Source) http.Handler {
 	}
 	// The WebSocket, on /v1/responses and on the Codex CLI's alias of it (see above).
 	for _, path := range []string{"/v1/responses", "/backend-api/codex/responses"} {
-		mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) { serveResponsesWebSocket(w, r, src) })
+		mux.HandleFunc("GET "+path, accessLog(func(w http.ResponseWriter, r *http.Request) { serveResponsesWebSocket(w, r, src) }))
 	}
 	serveModels(mux, src)
+	// The health probe a container or load balancer sends. It takes no key and reads no config,
+	// so it is not refused, counted or logged as a client request.
+	mux.HandleFunc("GET /healthz", serveHealthz)
 	return withCORS(src, mux)
+}
+
+// serveHealthz answers 200 with the text "ok". A GET pattern also matches HEAD; net/http sends
+// HEAD's headers and no body.
+func serveHealthz(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, "ok")
 }
 
 // refused returns the error that answers a request that may not use the client API, or nil when
