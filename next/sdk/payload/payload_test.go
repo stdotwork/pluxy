@@ -269,26 +269,36 @@ func TestApplySkipsBlankParamPaths(t *testing.T) {
 			Filter:      []FilterRule{{Models: models, Params: []string{blank}}},
 		}
 		for _, root := range []string{"request", "", " request "} {
-			body := []byte(`{"request":{"model":"m"},"other":1}`)
-			in := Input{Model: "m", Root: root}
-			got, changed := Apply(r, body, in)
-			if changed || !bytes.Equal(got, body) {
-				t.Errorf("param path %q, root %q: Apply changed the body: %s", blank, root, got)
+			for _, b := range []string{`{"request":{"model":"m"},"other":1}`, `{"other":1}`} {
+				body := []byte(b)
+				got, changed := Apply(r, body, Input{Model: "m", Root: root})
+				if changed || !bytes.Equal(got, body) {
+					t.Errorf("param path %q, root %q, body %s: changed = %v, got %s", blank, root, b, changed, got)
+				}
 			}
 		}
 	}
-	// Each list on its own, so a skipped blank in one list cannot hide a write from another.
-	lists := map[string]*Rules{
-		"default":      {Default: []Rule{{Models: models, Params: map[string]any{"": 1}}}},
-		"default-raw":  {DefaultRaw: []Rule{{Models: models, Params: map[string]any{"": "1"}}}},
-		"override":     {Override: []Rule{{Models: models, Params: map[string]any{"": 1}}}},
-		"override-raw": {OverrideRaw: []Rule{{Models: models, Params: map[string]any{"": "1"}}}},
-		"filter":       {Filter: []FilterRule{{Models: models, Params: []string{""}}}},
-	}
-	for name, r := range lists {
-		body := []byte(`{"request":{"model":"m"}}`)
-		if got, changed := Apply(r, body, Input{Model: "m", Root: "request"}); changed || !bytes.Equal(got, body) {
-			t.Errorf("%s: Apply changed the body: %s", name, got)
+	// Each list on its own, for each blank spelling, with the root present and absent: a default
+	// that still named the root would skip its write when the root exists, and an override or a
+	// default that still named the root would create it when it does not.
+	bodies := []string{`{"request":{"model":"m"},"other":1}`, `{"other":1}`}
+	for _, blank := range []string{"", "  ", "\t"} {
+		lists := map[string]*Rules{
+			"default":      {Default: []Rule{{Models: models, Params: map[string]any{blank: 1}}}},
+			"default-raw":  {DefaultRaw: []Rule{{Models: models, Params: map[string]any{blank: "1"}}}},
+			"override":     {Override: []Rule{{Models: models, Params: map[string]any{blank: 1}}}},
+			"override-raw": {OverrideRaw: []Rule{{Models: models, Params: map[string]any{blank: "1"}}}},
+			"filter":       {Filter: []FilterRule{{Models: models, Params: []string{blank}}}},
+		}
+		for name, r := range lists {
+			for _, root := range []string{"request", " request "} {
+				for _, b := range bodies {
+					body := []byte(b)
+					if got, changed := Apply(r, body, Input{Model: "m", Root: root}); changed || !bytes.Equal(got, body) {
+						t.Errorf("%s, param path %q, root %q, body %s: changed = %v, got %s", name, blank, root, b, changed, got)
+					}
+				}
+			}
 		}
 	}
 	// A path that is not blank keeps working under the same root.
