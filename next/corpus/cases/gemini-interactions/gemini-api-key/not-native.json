@@ -21,26 +21,26 @@
     {
       "path": "client.status",
       "kind": "intended",
-      "want": 400,
-      "reason": "Interactions clients are served only by native Interactions accounts (a Gemini key or Vertex account with interactions: true). Today's core translates them onto every other account (here a plain Gemini key, through generateContent); the new core does not carry those translators (about 10k lines in today's core), and the Interactions API's server-side state (previous_interaction_id, agents) cannot be carried to other providers. A request no account serves gets the core's usual error: the last account's unsupported answer, 400."
+      "want": 503,
+      "reason": "Interactions clients are served only by native Interactions accounts (a Gemini key or Vertex account with interactions: true). Today's core translates them onto every other account (here a plain Gemini key, through generateContent); the new core does not carry those translators (about 10k lines in today's core), and the Interactions API's server-side state (previous_interaction_id, agents) cannot be carried to other providers. A request no account serves gets today's no-usable-account answer, 503 auth_not_found."
     },
     {
       "path": "client.body",
       "kind": "intended",
       "want": {
         "error": {
-          "code": "unsupported",
-          "message": "this account does not serve the Interactions API (its interactions setting is off)",
-          "type": "invalid_request_error"
+          "code": "auth_not_found",
+          "message": "no auth available",
+          "type": "server_error"
         }
       },
-      "reason": "Interactions clients are served only by native Interactions accounts (a Gemini key or Vertex account with interactions: true). Today's core translates them onto every other account (here a plain Gemini key, through generateContent); the new core does not carry those translators (about 10k lines in today's core), and the Interactions API's server-side state (previous_interaction_id, agents) cannot be carried to other providers. A request no account serves gets the core's usual error: the last account's unsupported answer, 400."
+      "reason": "Interactions clients are served only by native Interactions accounts (a Gemini key or Vertex account with interactions: true). Today's core translates them onto every other account (here a plain Gemini key, through generateContent); the new core does not carry those translators (about 10k lines in today's core), and the Interactions API's server-side state (previous_interaction_id, agents) cannot be carried to other providers. A request no account serves gets today's no-usable-account answer, 503 auth_not_found."
     },
     {
       "path": "upstream[0]",
       "kind": "intended",
       "absent": true,
-      "reason": "Interactions clients are served only by native Interactions accounts (a Gemini key or Vertex account with interactions: true). Today's core translates them onto every other account (here a plain Gemini key, through generateContent); the new core does not carry those translators (about 10k lines in today's core), and the Interactions API's server-side state (previous_interaction_id, agents) cannot be carried to other providers. A request no account serves gets the core's usual error: the last account's unsupported answer, 400."
+      "reason": "Interactions clients are served only by native Interactions accounts (a Gemini key or Vertex account with interactions: true). Today's core translates them onto every other account (here a plain Gemini key, through generateContent); the new core does not carry those translators (about 10k lines in today's core), and the Interactions API's server-side state (previous_interaction_id, agents) cannot be carried to other providers. A request no account serves gets today's no-usable-account answer, 503 auth_not_found."
     }
   ],
   "recorded_old_core": {

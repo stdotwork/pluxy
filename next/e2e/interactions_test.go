@@ -344,7 +344,8 @@ func TestInteractionsAgent(t *testing.T) {
 }
 
 // An account without "interactions": true does not serve the Interactions API: core tries the next
-// account, and fails the request when there is none.
+// account, and fails the request when there is none, with today's no-usable-auth reply (503
+// auth_not_found).
 func TestInteractionsAccountWithoutTheSettingIsRefused(t *testing.T) {
 	const reply = `{"id":"v1_ok","status":"completed"}`
 	bodies := []struct{ name, body string }{
@@ -359,11 +360,8 @@ func TestInteractionsAccountWithoutTheSettingIsRefused(t *testing.T) {
 			resp := postInteractions(t, context.Background(), base, bearer, c.body)
 			defer resp.Body.Close()
 			raw, _ := io.ReadAll(resp.Body)
-			if resp.StatusCode < 400 || resp.StatusCode >= 500 {
-				t.Errorf("status %d: %s; want a 4xx error", resp.StatusCode, raw)
-			}
-			if !strings.Contains(string(raw), `"error"`) {
-				t.Errorf("body %s, want an error", raw)
+			if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(raw), `"code":"auth_not_found"`) {
+				t.Errorf("status %d: %s; want 503 with the error auth_not_found", resp.StatusCode, raw)
 			}
 			if got := up.interactions(); len(got) != 0 {
 				t.Errorf("upstream got %d Interactions requests, want none", len(got))

@@ -24,20 +24,14 @@
   "upstream": [],
   "exceptions": [
     {
-      "path": "client.status",
-      "kind": "gap",
-      "want": 400,
-      "reason": "No account is eligible: an API key without base_url answers the search unsupported, and the new core answers that with 400 as for any endpoint no account serves; today's core answers 503. Whether a request no account can serve should answer 503 is not decided."
-    },
-    {
       "path": "client.body.error",
       "kind": "intended",
       "want": {
-        "code": "unsupported",
-        "message": "this API key does not serve Alpha Search (the account has no base_url)",
-        "type": "invalid_request_error"
+        "code": "auth_not_found",
+        "message": "no auth available",
+        "type": "server_error"
       },
-      "reason": "Today's core answers {\"error\": \"<text>\"} (auth_not_found: no auth available); the new core answers with an OpenAI-style error object that names why the key does not serve search."
+      "reason": "Today's core answers {\"error\": \"<text>\"} (auth_not_found: no auth available); the new core answers with an OpenAI-style error object carrying the same status and code."
     },
     {
       "path": "client.headers.Content-Type",
