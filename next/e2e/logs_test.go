@@ -95,8 +95,9 @@ func TestLogFiles(t *testing.T) {
 			if slices.ContainsFunc(newer.Lines, func(s string) bool { return strings.Contains(s, `"nobody"`) }) {
 				t.Fatalf("after returned an older line: %v", newer.Lines)
 			}
-			if one := c.logs(t, "?limit=1"); one.Count != 1 || !strings.Contains(one.Lines[0], "nobody-else") {
-				t.Fatalf("limit 1: %+v", one)
+			// limit keeps the newest, now the request's access line.
+			if all, one := c.logs(t, "?limit=10000"), c.logs(t, "?limit=1"); one.Count != 1 || one.Lines[0] != all.Lines[all.Count-1] {
+				t.Fatalf("limit 1: %+v (newest of %d lines: %q)", one, all.Count, all.Lines[all.Count-1])
 			}
 			for _, bad := range []string{"?after=-1", "?after=x", "?limit=0", "?limit=10001"} {
 				if code, b := c.call(t, http.MethodGet, "/logs"+bad, nil); code != http.StatusBadRequest {
