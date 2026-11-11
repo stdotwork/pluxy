@@ -1,9 +1,6 @@
 import type { CoreSettings, SettingsChange } from "../api/settings";
-import { strings } from "../strings";
 import { Switch } from "../ui";
 import { configText as t } from "./configStrings";
-
-const sharedText = strings("settingsFields", { automatic: "Automatic" });
 
 export type SettingsTab = "common" | "network" | "logging" | "advanced";
 export type Value = string | number | boolean | null;
@@ -12,7 +9,6 @@ export interface Field {
   label: string;
   kind: "switch" | "number" | "text" | "strategy" | "quota";
   hint?: string;
-  placeholder?: string;
   min?: number;
   step?: "any";
 }
@@ -22,13 +18,7 @@ export const fields = (): Record<SettingsTab, Field[]> => {
     common: [log],
     network: [
       { key: "routing.strategy", label: t("strategy"), kind: "strategy" },
-      {
-        key: "routing.retry.request-retry",
-        label: t("retry"),
-        kind: "number",
-        min: 0,
-        placeholder: sharedText("automatic"),
-      },
+      { key: "routing.retry.request-retry", label: t("retry"), kind: "number", min: 0 },
       { key: "routing.retry.max-retry-credentials", label: t("maxCredentials"), kind: "number", min: 0 },
       {
         key: "routing.retry.max-retry-interval",
@@ -104,14 +94,24 @@ export function SettingControl({
   set,
   immediate = false,
   strategies,
+  invalid,
 }: {
   field: Field;
   settings: CoreSettings;
   set: (value: Value) => void;
   immediate?: boolean;
   strategies?: Record<CoreSettings["routing"]["strategy"], string>;
+  /** With `immediate`: called with the reason when an entered value is refused; the saved value comes back. */
+  invalid?: (reason: string) => void;
 }) {
   const value = get(settings, field.key);
+  const refuse = (input: HTMLInputElement, saved: string) => {
+    if (input.validity.valid) return false;
+    const reason = input.validationMessage;
+    input.value = saved;
+    invalid?.(reason);
+    return true;
+  };
   return (
     <>
       {field.kind === "switch" || field.kind === "quota" ? (
@@ -137,7 +137,6 @@ export function SettingControl({
             <input
               id={field.key}
               type="number"
-              placeholder={field.placeholder}
               min={field.min}
               step={field.step ?? 1}
               required={field.key !== "routing.retry.request-retry" || value !== null}
@@ -146,8 +145,10 @@ export function SettingControl({
                 if (!immediate) set(e.currentTarget.value === "" ? "" : Number(e.currentTarget.value));
               }}
               onChange={(e) => {
-                if (immediate && e.currentTarget.validity.valid)
-                  set(e.currentTarget.value === "" ? "" : Number(e.currentTarget.value));
+                if (!immediate) return;
+                const input = e.currentTarget;
+                if (refuse(input, value === null ? "" : String(value))) return;
+                set(input.value === "" ? "" : Number(input.value));
               }}
             />
           ) : (
@@ -161,7 +162,10 @@ export function SettingControl({
                 if (!immediate) set(e.currentTarget.value);
               }}
               onChange={(e) => {
-                if (immediate && e.currentTarget.validity.valid) set(e.currentTarget.value);
+                if (!immediate) return;
+                const input = e.currentTarget;
+                if (refuse(input, String(value))) return;
+                set(input.value);
               }}
             />
           )}

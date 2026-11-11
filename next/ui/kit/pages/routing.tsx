@@ -37,6 +37,10 @@ const t = strings("routing", {
   up: "Move up a tier",
   down: "Move down a tier",
   setWeight: "Set weight…",
+  upFor: "Move up a tier: {id}",
+  downFor: "Move down a tier: {id}",
+  setWeightFor: "Set weight…: {id}",
+  invalid: "{label}: {reason}",
   weightHint: "Only used by weighted round-robin. Empty counts as 1; 0 takes no share.",
   policy: "Gateway policy",
   policyHint: "Applies to every tier.",
@@ -88,6 +92,33 @@ export function movePriority(tiers: Tier[], priority: number, direction: "up" | 
   const index = tiers.findIndex((tier) => tier.priority === priority);
   return tiers[index + (direction === "up" ? -1 : 1)]?.priority ?? priority + (direction === "up" ? 1 : -1);
 }
+/** Whether a move changes anything: a sole member of the first or last tier would only renumber it. */
+export function canMove(tiers: Tier[], priority: number, direction: "up" | "down"): boolean {
+  const index = tiers.findIndex((tier) => tier.priority === priority);
+  const tier = tiers[index];
+  if (!tier) return false;
+  const edge = direction === "up" ? index === 0 : index === tiers.length - 1;
+  return !(edge && tier.accounts.length === 1);
+}
+/** What identifies a focused control across a re-render that replaces its element. */
+const focusKey = (element: Element | null) =>
+  element instanceof HTMLElement && element !== document.body
+    ? element.id
+      ? `#${element.id}`
+      : (element.getAttribute("aria-label") ?? (element.tagName === "BUTTON" ? element.textContent : "") ?? "")
+    : "";
+/** Puts focus back on the control with this key, or on the row's other button when it is disabled. */
+function focusByKey(key: string) {
+  if (!key) return;
+  const found = [...document.querySelectorAll<HTMLElement>("button, input, select")].find(
+    (element) => focusKey(element) === key,
+  );
+  const target =
+    found && !(found as HTMLButtonElement).disabled
+      ? found
+      : found?.closest(".routing-actions")?.querySelector<HTMLElement>("button:not(:disabled)");
+  target?.focus();
+}
 function coolingTime(account: Account): string | undefined {
   const until = Math.max(
     0,
@@ -103,19 +134,21 @@ function coolingTime(account: Account): string | undefined {
       ? t("minutes", { count: Math.ceil(seconds / 60) })
       : t("seconds", { count: seconds });
 }
-function WeightEditor({
-  account,
-  busy,
-  save,
-}: {
-  account: Account;
-  busy: boolean;
-  save: (weight: number | null) => void;
-}) {
+function WeightEditor({ account, save }: { account: Account; save: (weight: number | null) => void }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState("");
+  // Set once the editor is done with its value, so the blur that follows removing the input cannot save again.
+  const closed = useRef(true);
+  const refocus = useRef("");
+  const name = t("setWeightFor", { id: account.id });
+  useEffect(() => {
+    if (editing || !refocus.current) return;
+    focusByKey(refocus.current);
+    refocus.current = "";
+  }, [editing]);
   const commit = (input: HTMLInputElement) => {
-    if (busy || !input.reportValidity()) return;
+    if (closed.current || !input.reportValidity()) return;
+    closed.current = true;
     const weight = value === "" ? null : Number(value);
     setEditing(false);
     if (weight !== (account.weight ?? null)) save(weight);
@@ -123,9 +156,11 @@ function WeightEditor({
   return (
     <>
       <Button
-        disabled={busy || account.source === "config"}
+        disabled={account.source === "config"}
+        label={name}
         onClick={() => {
           setValue(account.weight === undefined ? "" : String(account.weight));
+          closed.current = false;
           setEditing(true);
         }}
       >
@@ -136,11 +171,10 @@ function WeightEditor({
           <span class="label">{t("setWeight")}</span>
           <input
             type="number"
-            aria-label={t("setWeight")}
+            aria-label={name}
             min="0"
             step="1"
             value={value}
-            disabled={busy}
             onInput={(e) => setValue(e.currentTarget.value)}
             onBlur={(e) => commit(e.currentTarget)}
             onKeyDown={(e) => {
@@ -148,7 +182,11 @@ function WeightEditor({
                 e.preventDefault();
                 commit(e.currentTarget);
               }
-              if (e.key === "Escape") setEditing(false);
+              if (e.key === "Escape") {
+                closed.current = true;
+                refocus.current = focusKey(e.currentTarget);
+                setEditing(false);
+              }
             }}
           />
           <small class="hint">{t("weightHint")}</small>
@@ -163,49 +201,69 @@ export function RoutingPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string>();
-  const saving = useRef(false);
   const mounted = useRef(true);
+  const latest = useRef<CoreSettings>();
+  const turns = useRef(0);
+  const chain = useRef<Promise<void>>(Promise.resolve());
+  const refocus = useRef("");
   const load = async () => {
     const [s, a] = await Promise.all([api.coreSettings(), api.accounts()]);
     if (!mounted.current) return;
     if (s.status === 401 || a.status === 401) return unauthorized();
-    if (s.body) setSettings(s.body);
+    if (s.body) {
+      latest.current = s.body;
+      setSettings(s.body);
+    }
     if (a.body) setAccounts(a.body.accounts);
     const why = problem(s) ?? problem(a);
     if (why) setError(why);
   };
-  const run = async (call?: () => Promise<Reply<unknown>>) => {
-    if (saving.current) return;
-    saving.current = true;
+  /** Runs a change, then reloads. A change made while another is saving waits for its turn. */
+  const run = (call?: () => Promise<Reply<unknown>>) => {
+    turns.current++;
     setBusy(true);
-    setError(undefined);
-    try {
-      if (call) {
-        const reply = await call();
+    chain.current = chain.current.then(async () => {
+      try {
         if (!mounted.current) return;
-        if (reply.status === 401) return unauthorized();
-        setError(problem(reply));
+        refocus.current = focusKey(document.activeElement);
+        setError(undefined);
+        if (call) {
+          const reply = await call();
+          if (!mounted.current) return;
+          if (reply.status === 401) return unauthorized();
+          setError(problem(reply));
+        }
+        await load();
+      } catch (e) {
+        if (mounted.current) setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        turns.current--;
+        if (mounted.current && turns.current === 0) setBusy(false);
       }
-      if (mounted.current) await load();
-    } finally {
-      saving.current = false;
-      if (mounted.current) setBusy(false);
-    }
+    });
   };
   useEffect(() => {
     mounted.current = true;
-    void run();
+    run();
     return () => {
       mounted.current = false;
     };
   }, []);
+  // Saving re-renders rows into other tiers, and a removed control drops focus to the page; give it back.
+  useEffect(() => {
+    if (busy || !refocus.current) return;
+    const key = refocus.current;
+    refocus.current = "";
+    if (!document.activeElement || document.activeElement === document.body) focusByKey(key);
+  }, [busy]);
   const tiers = groupTiers(accounts);
-  const change = (field: Field, value: Value) => {
-    if (!settings) return;
-    void run(() =>
-      api.changeCoreSettings(settingsChange(settings, changeSetting(settings, field.key, value))),
-    );
-  };
+  const weighted = settings?.routing.strategy === "weighted-round-robin";
+  const change = (field: Field, value: Value) =>
+    run(() => {
+      const base = latest.current;
+      if (!base) throw new Error(t("loading"));
+      return api.changeCoreSettings(settingsChange(base, changeSetting(base, field.key, value)));
+    });
   const labels: Record<string, { label: string; hint?: string }> = {
     "routing.strategy": { label: t("strategy") },
     "routing.retry.request-retry": { label: t("retry"), hint: t("retryHint") },
@@ -244,6 +302,7 @@ export function RoutingPage() {
               immediate
               strategies={strategies}
               set={(value) => change(field, value)}
+              invalid={(reason) => setError(t("invalid", { label: field.label, reason }))}
             />
           ),
       );
@@ -252,7 +311,7 @@ export function RoutingPage() {
       <PageHead
         title={t("title")}
         actions={
-          <Button disabled={busy} onClick={() => void run()}>
+          <Button disabled={busy} onClick={() => run()}>
             {t("refresh")}
           </Button>
         }
@@ -296,13 +355,15 @@ export function RoutingPage() {
                           const cooling = coolingTime(a);
                           return (
                             <>
-                              <Badge tone="muted">{t("weight", { weight: a.weight ?? 1 })}</Badge>
+                              {weighted && (
+                                <Badge tone="muted">{t("weight", { weight: a.weight ?? 1 })}</Badge>
+                              )}
                               {cooling && (
                                 <span class="routing-state">
                                   <Badge tone="warn">{t("cooling", { time: cooling })}</Badge>
                                 </span>
                               )}
-                              {(a.disabled || a.state !== "active" || a.weight === 0) && (
+                              {(a.disabled || a.state !== "active" || (weighted && a.weight === 0)) && (
                                 <span class="routing-state">
                                   <Badge tone="muted">{t("unavailable")}</Badge>
                                 </span>
@@ -315,34 +376,22 @@ export function RoutingPage() {
                         label: t("actions"),
                         value: (a) => (
                           <div class="routing-actions">
-                            <Button
-                              disabled={busy || a.source === "config"}
-                              onClick={() =>
-                                void run(() =>
-                                  api.changeAccountRouting(a.id, {
-                                    priority: movePriority(tiers, tier.priority, "up"),
-                                  }),
-                                )
-                              }
-                            >
-                              {t("up")}
-                            </Button>
-                            <Button
-                              disabled={busy || a.source === "config"}
-                              onClick={() =>
-                                void run(() =>
-                                  api.changeAccountRouting(a.id, {
-                                    priority: movePriority(tiers, tier.priority, "down"),
-                                  }),
-                                )
-                              }
-                            >
-                              {t("down")}
-                            </Button>
+                            {(["up", "down"] as const).map((direction) => (
+                              <Button
+                                key={direction}
+                                disabled={a.source === "config" || !canMove(tiers, tier.priority, direction)}
+                                label={t(direction === "up" ? "upFor" : "downFor", { id: a.id })}
+                                onClick={() => {
+                                  const priority = movePriority(tiers, tier.priority, direction);
+                                  run(() => api.changeAccountRouting(a.id, { priority }));
+                                }}
+                              >
+                                {t(direction)}
+                              </Button>
+                            ))}
                             <WeightEditor
                               account={a}
-                              busy={busy}
-                              save={(weight) => void run(() => api.changeAccountRouting(a.id, { weight }))}
+                              save={(weight) => run(() => api.changeAccountRouting(a.id, { weight }))}
                             />
                           </div>
                         ),
@@ -353,11 +402,11 @@ export function RoutingPage() {
               );
             })}
           </div>
-          <aside class="routing-policy" data-part="card" aria-label={t("policy")}>
+          <aside class="routing-policy" aria-label={t("policy")}>
             <Card>
               <h2>{t("policy")}</h2>
               <p class="muted">{t("policyHint")}</p>
-              <fieldset disabled={busy}>
+              <fieldset>
                 {controls((f) => f.kind === "strategy")}
                 <small class="hint">{strategyHints[settings.routing.strategy]}</small>
                 {controls((f) => f.key.startsWith("routing.session-affinity"))}
@@ -365,14 +414,14 @@ export function RoutingPage() {
             </Card>
             <Card>
               <h3>{t("failover")}</h3>
-              <fieldset disabled={busy}>{controls((f) => f.key.startsWith("routing.retry."))}</fieldset>
+              <fieldset>{controls((f) => f.key.startsWith("routing.retry."))}</fieldset>
             </Card>
             <Card>
               <h3>{t("coolingTitle")}</h3>
-              <fieldset disabled={busy}>{controls((f) => f.key.startsWith("routing.cooldown."))}</fieldset>
+              <fieldset>{controls((f) => f.key.startsWith("routing.cooldown."))}</fieldset>
             </Card>
             <Card>
-              <fieldset disabled={busy}>{controls((f) => f.key === "routing.force-model-prefix")}</fieldset>
+              <fieldset>{controls((f) => f.key === "routing.force-model-prefix")}</fieldset>
             </Card>
           </aside>
         </div>
