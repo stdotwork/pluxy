@@ -285,7 +285,11 @@ func (d *inputDecoder) Finish(final string, has bool) (input, tail string, err e
 		}
 		return d.Input(), "", nil
 	}
-	whole := inputDecoder{limit: d.limit}
+	// The final arguments take the place of the fragments, in the reply's budget too.
+	if d.shared != nil {
+		*d.shared += d.n
+	}
+	whole := inputDecoder{limit: d.limit, shared: d.shared}
 	if _, err := whole.Push(final); err != nil {
 		return "", "", err
 	}

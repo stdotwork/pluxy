@@ -551,6 +551,20 @@ func TestApplyPatchReplyBudget(t *testing.T) {
 		itemDone(4, 0, callItem("completed", `{"input":"`+strings.Repeat("x", 800)+`"}`)), completed(5))); err != nil {
 		t.Errorf("a call within the bounds: %v", err)
 	}
+	// Final arguments longer than the fragments that came before count in full.
+	t.Run("final arguments", func(t *testing.T) {
+		events := []string{created(0)}
+		for i := range 2 {
+			item := strings.SplitN(secondCall(i, 0), "\x00", 2)[0]
+			id := fmt.Sprintf("fc_%d", i)
+			events = append(events, added(i*3+1, i, item), argsDelta(i*3+2, i, id, `{`),
+				argsDone(i*3+3, i, id, `{"input":"`+strings.Repeat("x", 900)+`"}`))
+		}
+		_, err := replyStream(t, patchRequest, sseOf(events...))
+		if err == nil || !strings.Contains(err.Error(), "too large") || strings.Contains(err.Error(), "xxxx") {
+			t.Errorf("error %v, want one that says the arguments are too large", err)
+		}
+	})
 }
 
 // White space before the patch text is not kept.
