@@ -238,6 +238,71 @@ func (r *Router) Models(ctx context.Context) []protocol.Model {
 	return out
 }
 
+// ModelNames returns public and upstream names served by extension's accounts, using
+// Models' cached catalogs and naming rules without renewing credentials. Repeated names
+// keep the first mapping; NonCodex marks names also served by another extension.
+func (r *Router) ModelNames(ctx context.Context, extension string) []Name {
+	accounts, creds := r.snapshot()
+	creds = storedCredentials{creds}
+	r.mu.RLock()
+	catalog := r.catalog
+	r.mu.RUnlock()
+	var out []Name
+	seen := map[string]bool{}
+	for _, a := range accounts {
+		if a.Extension != extension {
+			continue
+		}
+		list := r.listOf(ctx, a, creds, catalog, r.now())
+		var ids []string
+		if list != nil {
+			ids = modelIDs(list)
+		}
+		for _, n := range a.names(ids, r.cfg.ForceModelPrefix) {
+			if n.DisplayName == "" && len(a.Models) > 0 {
+				n.DisplayName = n.Upstream
+			}
+			if !seen[n.Public] {
+				seen[n.Public] = true
+				out = append(out, n)
+			}
+		}
+	}
+	// Check all other routes, including accounts whose unknown catalog lets them serve any
+	// model. Resolve applies exclusions, aliases and forced prefixes in the same order.
+	for _, a := range accounts {
+		if a.Extension == extension {
+			continue
+		}
+		list := r.listOf(ctx, a, creds, catalog, r.now())
+		var ids []string
+		if list != nil {
+			ids = modelIDs(list)
+		}
+		for i := range out {
+			if _, ok := a.resolve(out[i].Public, r.cfg.ForceModelPrefix, ids); ok {
+				out[i].NonCodex = true
+			}
+		}
+	}
+	slices.SortFunc(out, func(a, b Name) int { return strings.Compare(a.Public, b.Public) })
+	return out
+}
+
+// storedCredentials reads a managed credential without invoking its renewal path. It is
+// used only for catalog discovery, where expired tokens still carry local plan metadata.
+type storedCredentials struct{ Credentials }
+
+func (s storedCredentials) Credential(_ context.Context, extension, id string) (*protocol.Credential, uint64, *llm.Error) {
+	if c, ok := s.Credentials.(interface {
+		StoredCredential(string, string) (*protocol.Credential, *llm.Error)
+	}); ok {
+		credential, e := c.StoredCredential(extension, id)
+		return credential, 0, e
+	}
+	return nil, 0, &llm.Error{Code: llm.CodeUnavailable, Message: "stored credential is unavailable"}
+}
+
 // renameResource renames a model's resource name (Gemini's "models/<id>") from the model's old
 // name to its new one, as today's core does for an alias or a prefix.
 func renameResource(name, old, cur string) string {

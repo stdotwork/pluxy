@@ -1229,6 +1229,49 @@ later. Core asks an
 extension once per account and keeps the answer until the accounts change: a reload, or an
 account added, removed or signed in again.
 
+### Codex client catalog
+
+`GET /v1/models?client_version=0.153.0` returns the Codex client's catalog,
+`{"models": [...]}`, instead of the normal model list. The presence of `client_version`, even
+with an empty value, selects this reply before the Anthropic client check. Without that query
+parameter the lists above keep their usual shape.
+
+Core resolves the models served by accounts of `pluxy/codex` with the same exclusions, aliases
+and prefixes as the normal list. It sends one `codex.models` endpoint call containing the client
+version and each model's public and upstream names. The Codex extension loads its embedded
+catalog on the first such call and selects templates by upstream name. It removes
+`cpa_capabilities`, replaces `slug` with the public name and `display_name` when provided,
+and clears Codex-only options for names that a non-Codex account can also serve. The catalog
+keeps `minimal_client_version` from the template;
+clients below 0.144.0 receive reasoning levels only through `xhigh`, while empty or unparseable
+versions keep modern levels. Models without a template are omitted: a routing entry alone
+does not establish the capabilities the Codex client needs. The extension filters reasoning
+levels for older clients as today's core does. Catalog data stays in the extension program;
+core neither embeds it nor keeps a copy per account. No upstream request or remote refresh is
+made for this list.
+
+The call goes directly to the first enabled, usable Codex account in account order, with only
+its ID and no credential. It ignores cooldowns and concurrency limits, renews no credentials,
+records no routing result or usage event, and leaves account rotation alone. Model discovery
+uses saved credentials for plan metadata without renewing them. With no enabled, usable Codex
+account (including a configuration with only other extensions), the reply is 200
+`{"models":[]}`.
+
+To refresh the catalog by hand, from the repository root copy the reviewed catalog and rebuild
+the extension:
+
+```bash
+cp core/internal/registry/models/codex_client_models.json next/extensions/codex/client_models.json
+cd next
+go build -o extensions/codex/codex ./extensions/codex
+```
+
+Review the source and its changes before copying it, run the Codex catalog corpus and e2e tests,
+and reload core after replacing the extension program. The routing list in
+`extensions/codex/models.json` remains separate from this client metadata.
+
+### Account model names
+
 An account names its models with these fields, applied in this order:
 
 ```json

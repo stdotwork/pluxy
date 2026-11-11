@@ -171,6 +171,16 @@ func (m *Manager) Accounts() []route.Account {
 // Records returns every stored account, including unusable ones.
 func (m *Manager) Records() []Record { return m.store.List() }
 
+// StoredCredential returns the saved credential of a usable account owned by extension,
+// without renewing it. Local model catalogs can read plan metadata from an expired token.
+func (m *Manager) StoredCredential(extension, id string) (*protocol.Credential, *llm.Error) {
+	rec, ok := m.store.Get(id)
+	if !ok || rec.Extension != extension || !rec.Usable() {
+		return nil, credentialError(llm.CodeUnavailable, fmt.Sprintf("account %q of extension %s is unavailable", id, extension))
+	}
+	return &rec.Credential, nil
+}
+
 // LastRenewalError returns why the last automatic renewal of r's credential failed, while
 // automatic renewal is waiting because of it.
 func (m *Manager) LastRenewalError(r Record) *llm.Error {
