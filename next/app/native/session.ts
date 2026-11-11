@@ -250,21 +250,31 @@ try {
   await setup();
   code = await new Promise<number>((resolve, reject) => {
     appProc = spawn(app, [], { stdio: ["ignore", "pipe", "pipe"] });
+    const lines: string[] = []; // the app's output so far, which the tray checks read
     for (const stream of [appProc.stdout, appProc.stderr]) {
       if (!stream) continue;
       createInterface({ input: stream }).on("line", (line) => {
         console.log(line);
+        lines.push(line);
         if (line.startsWith("native-test: closed ")) {
           void (async () => {
             await Bun.sleep(3000);
+            const problems: string[] = [];
+            let result: Record<string, unknown>;
             try {
-              await checkRecovery(probe, setting("PLUXY_APP_TEST_STATE"));
-              console.log('native-test: recovery {"ok":true}');
+              const r = await checkRecovery(
+                probe,
+                setting("PLUXY_APP_TEST_STATE"),
+                lines,
+                setting("PLUXY_APP_TEST_TRAY_HOLD"),
+                problems,
+              );
+              result = { ok: problems.length === 0, problems, ...r };
             } catch (e) {
-              console.log(`native-test: recovery ${JSON.stringify({ ok: false, error: String(e) })}`);
-            } finally {
-              writeFileSync(setting("PLUXY_APP_TEST_QUIT"), "");
+              result = { ok: false, error: String(e), problems };
             }
+            console.log(`native-test: recovery ${JSON.stringify(result)}`);
+            writeFileSync(setting("PLUXY_APP_TEST_QUIT"), "");
           })();
         }
       });

@@ -216,6 +216,7 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
       PLUXY_APP_TEST_PAGE: PAGE,
       PLUXY_APP_TEST_QUIT: quit,
       PLUXY_APP_TEST_STATE: join(root, "state.json"),
+      PLUXY_APP_TEST_TRAY_HOLD: join(root, "tray-hold"),
     };
     // The session script starts and checks the desktop services, then runs the app.
     const session = [
@@ -396,8 +397,11 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
     check(after === 0, `${after} web processes left after closing the window`);
     if (mode === "managed") {
       check(closed?.core_pid, "the app ran no core");
+      // The tray checks killed that core; quitting must stop the one they left running.
+      const last = (steps.get("recovery") as { core_pid?: number } | undefined)?.core_pid;
+      check(last, "the tray checks left no owned core running before quit");
       await Bun.sleep(1000);
-      check(closed?.core_pid && !alive(closed.core_pid), "the app's core still runs after it quit");
+      check(last && !alive(last), `the app's core ${last} still runs after it quit`);
     }
     if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
     console.log(

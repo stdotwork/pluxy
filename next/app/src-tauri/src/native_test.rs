@@ -249,7 +249,9 @@ fn run(app: &AppHandle) -> Result<(), String> {
     );
 
     if let Ok(f) = std::env::var("PLUXY_APP_TEST_QUIT") {
-        wait_for("the quit file", || {
+        // The session's tray and recovery checks run now, through crash-loop delays.
+        let deadline = Instant::now() + Duration::from_secs(300);
+        loop {
             if let Ok(path) = std::env::var("PLUXY_APP_TEST_STATE") {
                 let view = app.state::<App>().conn.lock().unwrap().view();
                 let snapshot = json!({"app_pid": std::process::id(), "view": view,
@@ -260,8 +262,14 @@ fn run(app: &AppHandle) -> Result<(), String> {
                 )
                 .expect("write test state");
             }
-            std::path::Path::new(&f).exists().then_some(())
-        })?;
+            if std::path::Path::new(&f).exists() {
+                break;
+            }
+            if Instant::now() > deadline {
+                return Err("timed out waiting for the quit file".into());
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
     }
     log("quit", json!({}));
     crate::quit(app);
