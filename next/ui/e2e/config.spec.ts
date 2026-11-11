@@ -98,7 +98,8 @@ for (const theme of ["default", "terminal", "paper"]) {
       await page.getByRole("tab", { name: tab, exact: true }).click();
       await expect(page.getByRole("tabpanel")).toBeVisible();
       if (tab === "Common") await expect(page.getByRole("switch")).toHaveCount(1);
-      if (tab === "Network") await expect(page.getByLabel("Routing Strategy", { exact: true })).toBeVisible();
+      if (tab === "Network")
+        await expect(page.getByRole("combobox", { name: "Routing Strategy", exact: true })).toBeVisible();
       if (process.env.P7_SHOTS)
         await page.screenshot({
           path: `${process.env.P7_SHOTS}/${theme}-${tab.toLowerCase()}.png`,
