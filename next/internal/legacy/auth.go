@@ -17,6 +17,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/cred"
 	"github.com/stdotwork/pluxy/next/internal/proxyurl"
 	"github.com/stdotwork/pluxy/next/internal/route"
+	"github.com/stdotwork/pluxy/next/internal/upheader"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
@@ -326,8 +327,23 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 			break
 		}
 	}
-	if v, ok := m["headers"]; ok && !isZero(v) {
-		f.Ignored = append(f.Ignored, "headers")
+	// headers, as today's core reads them: text values only, trimmed, empty ones dropped. A
+	// header this core refuses skips the file rather than sending its traffic without it.
+	if raw, ok := m["headers"].(map[string]any); ok {
+		text := map[string]string{}
+		for k, v := range raw {
+			if s, isText := v.(string); isText {
+				text[k] = s
+			}
+		}
+		h, dynamic := upheader.Import(text)
+		if err := upheader.Check("headers", h); err != nil {
+			return f, nil, err.Error()
+		}
+		r.Account.Headers = h
+		for _, k := range dynamic {
+			f.Ignored = append(f.Ignored, "headers."+k+" (a value taken from the client's request)")
+		}
 	}
 	f.Record = r
 	if typ == "codex" {

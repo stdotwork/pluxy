@@ -57,6 +57,7 @@ const maxManagementBody = 1 << 20
 func (c *Core) Management() http.Handler {
 	m := server.NewManagement(c.Config, c.creds, c.state)
 	m.Check = c.checks.result
+	m.Redactor = c.redactor
 	m.Handle("GET /status", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, c.Status())
 	})

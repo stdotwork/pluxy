@@ -22,6 +22,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/packages"
 	"github.com/stdotwork/pluxy/next/internal/proxyurl"
 	"github.com/stdotwork/pluxy/next/internal/route"
+	"github.com/stdotwork/pluxy/next/internal/upheader"
 	"github.com/stdotwork/pluxy/next/internal/usage"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -354,6 +355,9 @@ func (x ExtensionConfig) validate(name string, seen map[string]bool) error {
 			return fmt.Errorf("config: %s.accounts[%d].request_retry must not be negative", name, i)
 		}
 		if err := proxyurl.Check(fmt.Sprintf("%s.accounts[%d].proxy_url", name, i), a.ProxyURL); err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
+		if err := upheader.Check(fmt.Sprintf("%s.accounts[%d].headers", name, i), a.Headers); err != nil {
 			return fmt.Errorf("config: %w", err)
 		}
 	}

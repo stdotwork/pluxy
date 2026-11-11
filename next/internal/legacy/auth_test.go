@@ -137,8 +137,9 @@ func TestReadAuthDir(t *testing.T) {
 		t.Errorf("codex credential: %+v", cc)
 	}
 	equalJSON(t, cc.Data, `{"id_token": "`+FakeIDToken("acct-1", "user@example.com")+`", "account_id": "acct-1"}`)
-	if want := []string{"headers"}; !reflect.DeepEqual(c.Ignored, want) {
-		t.Errorf("codex ignored = %v, want %v", c.Ignored, want)
+	// The file's headers are the account's (they were named as not imported before).
+	if len(c.Ignored) != 0 || !reflect.DeepEqual(c.Record.Account.Headers, map[string]string{"X-A": "b"}) {
+		t.Errorf("codex ignored = %v, headers = %v; want none ignored and headers X-A: b", c.Ignored, c.Record.Account.Headers)
 	}
 	// The file's own naming settings, read as today's core reads them.
 	if a := c.Record.Account; a.Prefix != "team" || !reflect.DeepEqual(a.ExcludedModels, []string{"gpt-image-*", "gpt-x"}) ||
@@ -545,7 +546,8 @@ func TestSIWCAccount(t *testing.T) {
 	a, b := s.Record.Account, outer.Record.Account
 	if a.Priority != 4 || a.Weight == nil || *a.Weight != 2 || a.Prefix != b.Prefix || a.Prefix == "" || a.DisableCooling == nil || !*a.DisableCooling ||
 		a.RequestRetry == nil || *a.RequestRetry != 3 || !reflect.DeepEqual(a.ExcludedModels, b.ExcludedModels) || len(a.ExcludedModels) != 1 ||
-		!reflect.DeepEqual(a.ModelAlias, b.ModelAlias) || len(a.ModelAlias) != 1 || !reflect.DeepEqual(s.Ignored, []string{"headers"}) {
+		!reflect.DeepEqual(a.ModelAlias, b.ModelAlias) || len(a.ModelAlias) != 1 || len(s.Ignored) != 0 ||
+		!reflect.DeepEqual(a.Headers, map[string]string{"X-A": "b"}) || !reflect.DeepEqual(a.Headers, b.Headers) {
 		t.Errorf("siwc account settings: %+v, ignored %v", a, s.Ignored)
 	}
 	// Without the identifier option, or the websockets switch, the settings are left out.

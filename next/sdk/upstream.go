@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -13,9 +14,11 @@ import (
 // Upstream wraps an extension's upstream transport. Without a proxy it delegates to base
 // unchanged, preserving its connection pool, HTTP versions and timeout settings. A call whose
 // account has a proxy (Info.ProxyURL) goes through a copy of base that sends every request
-// through that proxy, one copy per proxy, kept for reuse. Use the handler's context on requests
-// so the transport can access UpstreamInfo and core's cancellation: a request without it uses
-// no proxy. base must be non-nil and must not be changed after use.
+// through that proxy, one copy per proxy, kept for reuse. A call whose account has headers
+// (Info.Headers) sends each of them on every request, in place of any value the extension set
+// for the same name. Use the handler's context on requests so the transport can access
+// UpstreamInfo and core's cancellation: a request without it uses no proxy and no headers.
+// base must be non-nil and must not be changed after use.
 func Upstream(base *http.Transport) http.RoundTripper {
 	return upstreamTransport{base: base, proxies: &proxyPool{}}
 }
@@ -34,7 +37,25 @@ func (t upstreamTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		}
 		return nil, err
 	}
+	if len(info.Headers) > 0 {
+		req = withHeaders(req, info.Headers)
+	}
 	return rt.RoundTrip(req)
+}
+
+// withHeaders returns a copy of req (a RoundTripper must not change the request it is given)
+// with each of headers set over every value req has for that name, in any letter case.
+func withHeaders(req *http.Request, headers map[string]string) *http.Request {
+	r := req.Clone(req.Context())
+	for name, value := range headers {
+		for k := range r.Header {
+			if strings.EqualFold(k, name) {
+				delete(r.Header, k)
+			}
+		}
+		r.Header.Set(name, value)
+	}
+	return r
 }
 
 // transport returns the transport for requests through proxy ("" for none).
@@ -100,7 +121,8 @@ func (p *proxyPool) closeIdle() {
 }
 
 // Info describes the call making an upstream request. It contains only the account's ID,
-// settings and proxy, never its credential or the request body. Settings are read-only.
+// settings, proxy and headers, never its credential or the request body. Settings are
+// read-only.
 type Info struct {
 	AccountID string
 	Settings  json.RawMessage
@@ -111,6 +133,9 @@ type Info struct {
 	// ProxyURL is the proxy the call's upstream requests go through; empty for none. Its user
 	// name and password are secret: never log or show it.
 	ProxyURL string
+	// Headers are the account's extra headers, which Upstream sets on each request; read-only.
+	// Values of headers about authentication are secret: never log or show them.
+	Headers map[string]string
 }
 
 type upstreamInfoKey struct{}
@@ -129,6 +154,7 @@ func withUpstreamInfo(ctx context.Context, call protocol.Call) context.Context {
 	}
 	if call.Account != nil {
 		info.AccountID, info.Settings, info.ProxyURL = call.Account.ID, call.Account.Settings, call.Account.ProxyURL
+		info.Headers = call.Account.Headers
 	}
 	if call.Request != nil {
 		info.Model = call.Request.Model

@@ -205,3 +205,32 @@ func TestUpstreamInfoHandlers(t *testing.T) {
 	conn.Close()
 	waitCancelled(t, opening)
 }
+
+// A call's headers replace every value the extension set for the same name, whatever its letter
+// case in the header map, keep its other headers, and leave the extension's request as it was.
+func TestUpstreamSetsCallHeaders(t *testing.T) {
+	base := &http.Transport{}
+	recorder := &recordUpstream{}
+	base.RegisterProtocol("record", recorder)
+	call := protocol.Call{Op: protocol.OpGenerate, Account: &protocol.Account{ID: "a",
+		Headers: map[string]string{"anthropic-version": "configured", "X-Gateway-Key": "fake-gw"}}}
+	ctx := withUpstreamInfo(context.Background(), call)
+	req, err := http.NewRequestWithContext(ctx, "POST", "record://upstream.test/v1/messages", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header = http.Header{"anthropic-version": {"own"}, "Anthropic-Version": {"own-too"}, "X-Own": {"kept"}}
+	header := req.Header.Clone()
+	resp, err := Upstream(base).RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	want := http.Header{"Anthropic-Version": {"configured"}, "X-Gateway-Key": {"fake-gw"}, "X-Own": {"kept"}}
+	if got := recorder.request.Header; !reflect.DeepEqual(got, want) {
+		t.Errorf("upstream got headers %v, want %v", got, want)
+	}
+	if !reflect.DeepEqual(req.Header, header) {
+		t.Errorf("the extension's request changed: %v", req.Header)
+	}
+}
