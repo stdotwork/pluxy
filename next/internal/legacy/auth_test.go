@@ -451,6 +451,47 @@ func TestAuthFileRequestRetry(t *testing.T) {
 	}
 }
 
+// A file's proxy_url (or proxy-url), as today's core writes it, is the account's proxy_url. A
+// value this core cannot use skips the file, with a reason that leaves out the password, rather
+// than import an account that would go without its proxy.
+func TestAuthFileProxyURL(t *testing.T) {
+	file := func(fields map[string]any) map[string]any {
+		f := map[string]any{"type": "codex", "access_token": "fake-codex-access", "email": "user@example.com"}
+		for k, v := range fields {
+			f[k] = v
+		}
+		return f
+	}
+	dir := writeFiles(t, map[string]any{
+		"codex-a.json": file(map[string]any{"proxy_url": "socks5://user:fake-proxy-pass@proxy.example:1080"}),
+		"codex-b.json": file(map[string]any{"proxy-url": " direct "}),
+		"codex-c.json": file(map[string]any{"proxy_url": "", "proxy-url": "http://proxy.example:3128"}),
+		"codex-d.json": file(nil),
+		"codex-e.json": file(map[string]any{"proxy_url": "ftp://user:fake-proxy-pass@proxy.example"}),
+		"codex-f.json": file(map[string]any{"proxy_url": 8080}),
+	})
+	files, skipped, err := ReadAuthDir(dir, ImportOptions{}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, f := range files {
+		got[f.Record.ID] = f.Record.Account.ProxyURL
+		if len(f.Ignored) != 0 {
+			t.Errorf("%s: ignored %v", f.File, f.Ignored)
+		}
+	}
+	want := map[string]string{"codex-a": "socks5://user:fake-proxy-pass@proxy.example:1080", "codex-b": "direct",
+		"codex-c": "http://proxy.example:3128", "codex-d": ""}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("proxy_url by file = %v, want %v", got, want)
+	}
+	if len(skipped) != 2 || skipped[0].File != "codex-e.json" || skipped[1].File != "codex-f.json" ||
+		!strings.Contains(skipped[0].Reason, "proxy_url") || strings.Contains(skipped[0].Reason, "fake-proxy-pass") {
+		t.Errorf("skipped = %+v, want codex-e and codex-f with a reason naming proxy_url and not the password", skipped)
+	}
+}
+
 // An imported xAI login gets "inject_x_search": true when the config turns on
 // upstream.xai.inject-x-search (or its older spelling), and no such setting by default, as an
 // imported Codex login gets its own options.
