@@ -13,5 +13,6 @@ pluxy
 extensions/openai-compatible/openai-compatible
 extensions/codex/codex
 extensions/claude/claude
+extensions/antigravity/antigravity
 examples/scripted/scripted
 dist
