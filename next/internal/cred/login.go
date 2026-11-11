@@ -160,7 +160,7 @@ func (m *Manager) StartLogin(ctx context.Context, req LoginRequest) (LoginView, 
 	m.wg.Add(1)
 	m.mu.Unlock()
 
-	call := prov.Login(lctx, protocol.Account{ID: id, Settings: l.fields.Settings}, protocol.Login{Method: req.Method, Input: req.Input})
+	call := prov.Login(lctx, protocol.Account{ID: id, Settings: l.fields.Settings, ProxyURL: l.fields.ProxyURL}, protocol.Login{Method: req.Method, Input: req.Input})
 	m.mu.Lock()
 	l.call = call
 	m.mu.Unlock()

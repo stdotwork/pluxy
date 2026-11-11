@@ -26,9 +26,16 @@ Addresses are origins only (scheme, host and port). A key you give is checked ag
 (`GET /v0/management/status`) before the app switches to it. It is kept in `connection.json` only
 when you tick "Keep the key on this device"; otherwise it lasts until the app quits.
 
-The native side holds the management key. A key you type on the Connection page passes through
-the window once, to the native side, and the window keeps no copy; the managed core's key never
-reaches any webview, and no extension page ever gets a key. The window calls core through the
+The native side holds the management key. On Linux, "Enter management key" on the Connection
+page opens a GTK dialog with a hidden entry, "Keep the key on this device", and OK/Cancel.
+Before opening it, native code validates the mode, origin and certificate authority file. The
+dialog identifies the target origin, any custom certificate authority, and an origin switch.
+Reopening after Cancel waits one second.
+The key goes directly from that dialog to native connection state; no webview receives it.
+Cancel, a refused key or a failed settings write preserves the old connection. Settings use a
+unique exclusive temporary file at mode 0600, followed by file sync, rename and directory sync
+on Unix. Validation and transport failures report specific reasons without request or key text.
+The window calls core through the
 `core_call` command, and the native side adds the key and sends the call to
 `<core>/v0/management/...` only, following no redirects and, for a core on this computer, no
 proxy from the environment. Path segments that are, or decode to, `.` or `..` are refused.
@@ -54,6 +61,36 @@ Connection page shows the reason. An explicit Start, Stop or Restart, from the t
 window, or a mode change, cancels any scheduled recovery and clears the budget. A core you
 stopped stays stopped. If the app cannot make its tray icon, closing the window quits the app.
 
+## Startup preferences
+
+The Connection page has three startup choices:
+
+- **Launch at startup** registers pluxy for your Linux login. Saving it writes
+  `$XDG_CONFIG_HOME/autostart/dev.pluxy.desktop.desktop` (or
+  `~/.config/autostart/dev.pluxy.desktop.desktop`). Its Exec command names the app by absolute
+  path with `--autostart`. Silent Launch controls whether a login launch shows a window.
+  Turning Launch at startup off and saving removes pluxy's entry. Merely opening the app does
+  not register it. The displayed choice is read from that entry, including desktop disable flags.
+  A file without pluxy's ownership marker is shown as a conflict and left alone.
+- **Silent Launch** suppresses the window only for an autostart launch in managed mode when
+  the session has a StatusNotifier watcher and a registered tray host. Local and remote modes
+  host no core, so they open normally. In that case no window or webview is
+  created. Without a host the app logs why and opens a window. Opening the app from its menu
+  or shortcut always shows the window.
+- **Start Core on Launch** starts the app's own core in managed mode. Turning it off leaves
+  the saved managed connection stopped until you press Start core. Local and remote modes
+  only connect; their core processes are never started or stopped by these choices.
+
+The defaults are login registration off, Silent Launch off, and Start Core on Launch on.
+Preferences live in `startup.json` beside `connection.json`, readable only by your user.
+A malformed file is moved to `startup.damaged-<random>.json` and defaults are used; failure to
+read or keep it aside is logged and still does not prevent startup. Saving preferences does
+not restart or change the current connection. No system service or second core supervisor is
+created. Login registration is implemented on Linux only. Registration resolves the executable
+when you enable it: the AppImage path if present, otherwise the running executable. It must be
+an existing regular file; paths containing percent or backslash are refused. Saving unrelated
+choices leaves the entry unchanged.
+
 ## Commands
 
 The window's webview, labelled `main`, is the only webview any capability names
@@ -66,11 +103,14 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 
 | Command | What it does |
 | --- | --- |
+| `startup_get` | Reads the native startup preferences |
+| `startup_set` | Saves the startup choices and explicitly writes/removes Linux login registration |
 | `connection_get` | The connection, without the key |
-| `connection_set` | Changes the mode, address, key, certificate file or core program |
+| `connection_set` | Changes connection settings without accepting a key |
+| `key_entry` | Opens native key entry, checks the key against core, and returns only signed-in, wrong-key, cancelled or error status plus the connection without its key |
 | `core_restart` | Starts the app's own core again (managed mode) |
 | `core_call` | One management API call to the connected core |
-| `sign_in`, `sign_out` | Checks and keeps a key, or forgets it (local and remote modes) |
+| `sign_out` | Forgets the key (local and remote modes) |
 | `page_open`, `page_place`, `page_close` | Opens an extension page's webview over part of the window, moves it, closes it |
 | `page_send` | Passes the window's channel messages to a page's webview |
 | `confirmation_request` | Opens native review for an opaque action ID already prepared by native code; returns no approval or token |
@@ -219,7 +259,21 @@ A second managed run starts a stand-in core that says where it listens and exits
 holds the app's setup until that core's exit callback has run, before the app state exists. It
 checks that the app still starts the real core again, with one recovery attempt, and that
 quitting stops it.
-The `native-test` feature is for that test alone; release builds never have it.
+In separate runs, the startup sequence enables login registration through the main webview command,
+checks the entry in its temporary XDG config folder, launches it with the real Desktop Entry consumer (gio launch), checks
+zero windows/webviews and no web process, and verifies that the app's real tray item belongs to
+its PID in the tray watcher's registered item list. It checks login with Silent Launch on and
+off, an app-menu launch with Silent Launch on, managed-core startup, core startup off, foreign
+core ownership, and removal. A separate session with no watcher verifies that a silent login
+opens exactly one window and webview. Visible launches are positive controls for the same
+renderer-process count used by silent launches. The
+`native-test` feature is for that test alone; release builds never have it.
+
+In local and remote modes, the test also drives the real GTK dialog with `xdotool`: good keys
+authenticate, bad keys and Cancel preserve the connection and saved settings, and the native
+keep choice controls persistence. Random keys are generated at runtime. The test inspects the
+main and page webviews' DOM, input values, storage and native callback/event payloads, and the
+app's stdout/stderr, for key canaries without passing those canaries to JavaScript.
 
 The same native run uses fixture actions (compiled only with `native-test`) and real X input
 from `xdotool` to confirm, cancel, opt into remembering, click a native Start button and revoke
@@ -263,13 +317,17 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
 - Recovery history lasts for the current app process; quitting the app ends its recovery window.
   A supervisor thread starts the core and stays until it exits, since on Linux the parent-death
   signal follows the thread that started it.
-- Keys are typed into the window, which holds them until it hands them to the native side; a
-  native entry dialog would keep them out of the webview entirely.
+- Native key entry is implemented on Linux only. Windows and macOS refuse key entry until
+  their native dialogs are implemented; there is no webview entry fallback.
+- Hidden native entry keeps keys out of the webview API. It does not isolate them from another
+  process with the same user's operating-system access, and transient native buffers are not
+  guaranteed to be erased from memory.
 - A kept key is stored in `connection.json`, not in the system keyring.
-- The Linux native test drives the app's own tray item through a real tray watcher and its D-Bus
-  menu. How other desktops' tray hosts place and show the icon has not been checked.
-- Whether a desktop shows the tray icon is not checked when the window closes: on a desktop with
-  no tray host, closing the window leaves the app running with no way back to it but quitting it.
+- The Linux native suite checks the app's own tray item in the watcher's registration list,
+  drives its Start, Stop and Restart through the item's D-Bus menu, and checks startup without a
+  watcher. It does not check every desktop's tray UI or later loss of its host.
+- Only a silent launch checks for a tray host: on a desktop with no tray host, closing the window
+  leaves the app running with no way back to it but quitting it.
 - The native test needs the desktop services above, and the pinned AppImage runtime from
   github.com (or a copy in its cache folder), so it does not run offline on a bare machine.
 - Native admission bounds work after a scheme request reaches the handler. They do not bound

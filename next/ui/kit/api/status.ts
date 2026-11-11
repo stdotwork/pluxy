@@ -27,6 +27,10 @@ export interface Status {
   desired: Revision;
   active: Revision;
   extensions: ExtensionStatus[];
+  /** The build core runs: its version, commit and build date ("dev" and "unknown" when not known). */
+  version: string;
+  commit: string;
+  built: string;
 }
 
 export const statusApi = (host: Host) => ({

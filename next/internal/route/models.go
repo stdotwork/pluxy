@@ -185,12 +185,35 @@ func modelIDs(list *protocol.ModelList) []string {
 // the extension's list shows what the extension says about it. An account whose list cannot be
 // read lists only its config's models.
 func (r *Router) Models(ctx context.Context) []protocol.Model {
+	served := r.ServedModels(ctx)
+	out := make([]protocol.Model, len(served))
+	for i, m := range served {
+		out[i] = m.Model
+	}
+	return out
+}
+
+// ServedModel is a model of Models' list (its ID is the name clients use) with who serves it, as
+// the management API shows it. Never a credential.
+type ServedModel struct {
+	protocol.Model
+	// Upstream is the model's name upstream, as the account whose entry the list shows sends it.
+	Upstream string `json:"upstream"`
+	// Extension is the extension of that account.
+	Extension string `json:"extension"`
+	// Accounts are the IDs of every account that serves the name, in the router's order.
+	Accounts []string `json:"accounts"`
+}
+
+// ServedModels is Models with each model's extension, upstream name and serving accounts. An
+// account that serves any model because its list is not known lists none, as Models lists none.
+func (r *Router) ServedModels(ctx context.Context) []ServedModel {
 	accounts, creds := r.snapshot()
 	r.mu.RLock()
 	catalog := r.catalog
 	r.mu.RUnlock()
-	var out []protocol.Model
-	seen := map[string]bool{}
+	out := []ServedModel{}
+	index := map[string]int{}
 	for _, a := range accounts {
 		// For an account whose config lists its models, only the list's owner is used.
 		list := r.listOf(ctx, a, creds, catalog, r.now())
@@ -208,10 +231,11 @@ func (r *Router) Models(ctx context.Context) []protocol.Model {
 			}
 		}
 		for _, n := range a.names(modelIDs(list), r.cfg.ForceModelPrefix) {
-			if seen[n.Public] {
+			if i, ok := index[n.Public]; ok {
+				out[i].Accounts = append(out[i].Accounts, a.ID)
 				continue
 			}
-			seen[n.Public] = true
+			index[n.Public] = len(out)
 			var m protocol.Model
 			if len(a.Models) > 0 {
 				m = protocol.Model{DisplayName: n.Upstream, Created: r.created.Unix()}
@@ -231,10 +255,10 @@ func (r *Router) Models(ctx context.Context) []protocol.Model {
 			if m.OwnedBy == "" {
 				m.OwnedBy = owner
 			}
-			out = append(out, m)
+			out = append(out, ServedModel{Model: m, Extension: a.Extension, Upstream: n.Upstream, Accounts: []string{a.ID}})
 		}
 	}
-	slices.SortFunc(out, func(a, b protocol.Model) int { return strings.Compare(a.ID, b.ID) })
+	slices.SortFunc(out, func(a, b ServedModel) int { return strings.Compare(a.ID, b.ID) })
 	return out
 }
 

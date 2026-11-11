@@ -1,0 +1,44 @@
+@layer kit {
+  .logs-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: calc(var(--s) * 4);
+  }
+  .logs-search {
+    flex: 1;
+    min-width: min(100%, 16em);
+  }
+  .logs-text {
+    font-family: var(--px-font-mono);
+    font-size: var(--px-font-size-small);
+    white-space: pre;
+    overflow: auto;
+    max-height: 32em;
+    min-width: 0;
+    padding: calc(var(--s) * 3);
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--px-shape-radius);
+    background: var(--px-color-surface-raised);
+    margin: calc(var(--s) * 3) 0;
+  }
+  .logs-text[data-wrap] {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .logs-core {
+    min-height: 12em;
+  }
+  .logs-core [data-level="warn"] {
+    color: var(--px-color-warn);
+  }
+  .logs-confirm {
+    margin-top: calc(var(--s) * 3);
+  }
+  [data-page="logs"] .item-name {
+    overflow-wrap: anywhere;
+  }
+  [data-page="logs"] .detail {
+    min-width: 0;
+  }
+}

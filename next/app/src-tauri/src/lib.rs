@@ -18,6 +18,7 @@ mod command_names;
 #[cfg(target_os = "linux")]
 pub mod confirmation;
 pub mod conn;
+mod key_entry;
 pub mod managed;
 #[cfg(feature = "native-test")]
 mod native_test;
@@ -26,6 +27,7 @@ mod place;
 pub mod recovery;
 #[cfg(debug_assertions)]
 pub mod release_config;
+mod startup;
 pub mod trust;
 
 pub use command_names::COMMANDS;
@@ -51,6 +53,7 @@ pub const WINDOW: &str = "main-window";
 pub const MAIN: &str = "main";
 
 struct App {
+    startup: Mutex<(startup::Store, startup::Preferences)>,
     conn: Mutex<Connection>,
     #[cfg(target_os = "linux")]
     confirmations: Mutex<confirmation::Confirmations>,
@@ -66,6 +69,8 @@ struct App {
     busy: AtomicBool,
     has_tray: AtomicBool,
     quitting: AtomicBool,
+    key_entry_open: AtomicBool,
+    key_entry_after: Mutex<Option<std::time::Instant>>,
 }
 
 /// Every command checks its caller too: the capability already allows only the window.
@@ -375,6 +380,33 @@ fn connection_get(webview: Webview, state: tauri::State<App>) -> Result<View, St
     Ok(state.conn.lock().unwrap().view())
 }
 
+#[tauri::command]
+fn startup_get(webview: Webview, state: tauri::State<App>) -> Result<startup::View, String> {
+    trusted(&webview)?;
+    let startup = state.startup.lock().unwrap();
+    startup.0.view(startup.1)
+}
+
+#[tauri::command]
+fn startup_set(
+    webview: Webview,
+    state: tauri::State<App>,
+    preferences: startup::Input,
+) -> Result<startup::View, String> {
+    trusted(&webview)?;
+    let mut startup = state.startup.lock().unwrap();
+    let preferences = preferences.into();
+    let view = startup.0.save(preferences, || {
+        #[cfg(target_os = "linux")]
+        let appimage = webview.app_handle().env().appimage;
+        #[cfg(not(target_os = "linux"))]
+        let appimage = None;
+        startup::executable(appimage, std::env::current_exe)
+    })?;
+    startup.1 = view.preferences;
+    Ok(view)
+}
+
 /// Runs f on the connection away from the window's thread, which starting a core would block,
 /// and answers with the view, holding f's error if it failed.
 async fn with_conn(
@@ -401,6 +433,11 @@ async fn with_conn(
 
 #[tauri::command]
 async fn connection_set(webview: Webview, change: Change) -> Result<View, String> {
+    trusted(&webview)?;
+    let app = webview.app_handle();
+    if app.state::<App>().key_entry_open.load(Ordering::SeqCst) {
+        return Err("finish native key entry first".into());
+    }
     with_conn(&webview, move |c| c.change(change)).await
 }
 
@@ -409,9 +446,87 @@ async fn core_restart(webview: Webview) -> Result<View, String> {
     with_conn(&webview, |c| c.restart_core()).await
 }
 
+/// This command accepts connection metadata only; GTK supplies the secret on the native side.
+#[derive(serde::Serialize)]
+struct KeyEntryResult {
+    status: &'static str,
+    connection: View,
+}
+
 #[tauri::command]
-async fn sign_in(webview: Webview, key: String, remember: bool) -> Result<View, String> {
-    with_conn(&webview, move |c| c.sign_in(&key, remember)).await
+async fn key_entry(webview: Webview, change: Option<Change>) -> Result<KeyEntryResult, String> {
+    trusted(&webview)?;
+    let app = webview.app_handle().clone();
+    if app
+        .state::<App>()
+        .key_entry_open
+        .swap(true, Ordering::SeqCst)
+    {
+        return Err("native key entry is already open".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        struct Pending(AppHandle);
+        impl Drop for Pending {
+            fn drop(&mut self) {
+                self.0
+                    .state::<App>()
+                    .key_entry_open
+                    .store(false, Ordering::SeqCst);
+            }
+        }
+        let _pending = Pending(app.clone());
+        let st = app.state::<App>();
+        let prepared = st.conn.lock().unwrap().prepare_key(change);
+        let target = match prepared {
+            Ok(target) => target,
+            Err(reason) => {
+                let mut connection = st.conn.lock().unwrap().view();
+                connection.error = Some(reason);
+                return KeyEntryResult {
+                    status: "error",
+                    connection,
+                };
+            }
+        };
+        if let Some(after) = *st.key_entry_after.lock().unwrap() {
+            std::thread::sleep(after.saturating_duration_since(std::time::Instant::now()));
+        }
+        // GTK must remain free to handle IPC/window close while the dialog is open.
+        let input = key_entry::request(&app, target.summary.clone());
+        let mut c = st.conn.lock().unwrap();
+        let mut error = None;
+        let status = match input {
+            Ok(None) => {
+                *st.key_entry_after.lock().unwrap() =
+                    Some(std::time::Instant::now() + std::time::Duration::from_secs(1));
+                "cancelled"
+            }
+            Ok(Some(input)) => match c.finish_key(target, &input.key, input.remember) {
+                Ok(()) => "signed_in",
+                Err(e) if e == "core refused this key" => {
+                    error = Some(e);
+                    "wrong_key"
+                }
+                Err(reason) => {
+                    error = Some(reason);
+                    "error"
+                }
+            },
+            Err(e) => {
+                error = Some(e.into());
+                "error"
+            }
+        };
+        let mut connection = c.view();
+        if error.is_some() {
+            connection.error = error;
+        }
+        drop(c);
+        show_status(&app, &connection);
+        KeyEntryResult { status, connection }
+    })
+    .await
+    .map_err(|_| "native key entry failed".into())
 }
 
 #[tauri::command]
@@ -731,11 +846,13 @@ pub fn run() {
     std::hint::black_box(&PLUXY_TEST_BUILD);
     let app = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
+            startup_get,
+            startup_set,
             connection_get,
             connection_set,
             core_restart,
             core_call,
-            sign_in,
+            key_entry,
             sign_out,
             page_open,
             page_place,
@@ -747,6 +864,12 @@ pub fn run() {
         .register_asynchronous_uri_scheme_protocol(pages::SCHEME, page_scheme)
         .setup(|app| {
             let config = app.path().app_config_dir()?;
+            let startup_store = startup::Store::new(
+                config.clone(),
+                app.path().config_dir()?,
+                app.config().identifier.clone(),
+            );
+            let preferences = startup_store.load();
             #[cfg(target_os = "linux")]
             let confirmations =
                 confirmation::Confirmations::open(config.join("remembered-launches.json"))?;
@@ -770,13 +893,18 @@ pub fn run() {
                     let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-connection", ());
                 });
             });
-            let conn = Connection::open(Dirs { config, core }, Some(on_exit));
+            let conn = Connection::open_at_startup(
+                Dirs { config, core },
+                Some(on_exit),
+                preferences.start_core_on_launch,
+            );
             #[cfg(feature = "native-test")]
             native_test::hold_for_early_exit();
             // The page webviews keep nothing from one run to the next.
             let pages_dir = app.path().app_cache_dir()?.join("pages");
             let _ = std::fs::remove_dir_all(&pages_dir);
             app.manage(App {
+                startup: Mutex::new((startup_store, preferences)),
                 conn: Mutex::new(conn),
                 #[cfg(target_os = "linux")]
                 confirmations: Mutex::new(confirmations),
@@ -788,6 +916,8 @@ pub fn run() {
                 busy: AtomicBool::new(false),
                 has_tray: AtomicBool::new(false),
                 quitting: AtomicBool::new(false),
+                key_entry_open: AtomicBool::new(false),
+                key_entry_after: Mutex::new(None),
             });
             let handle = app.handle().clone();
             #[cfg(target_os = "linux")]
@@ -817,7 +947,24 @@ pub fn run() {
             if let Some(pid) = handle.state::<App>().conn.lock().unwrap().core_pid() {
                 eprintln!("pluxy-app: core started, pid {pid}");
             }
-            open_window(&handle)?;
+            let managed = handle.state::<App>().conn.lock().unwrap().mode() == Some(Mode::Managed);
+            let silent = startup::wants_silent(
+                preferences,
+                std::env::args_os().any(|a| a == "--autostart"),
+                managed,
+            );
+            let usable_tray = silent
+                && handle.state::<App>().has_tray.load(Ordering::SeqCst)
+                && match startup::tray_host() {
+                    Ok(()) => true,
+                    Err(e) => {
+                        eprintln!("pluxy-app: opening startup window: {e}");
+                        false
+                    }
+                };
+            if !silent || !usable_tray {
+                open_window(&handle)?;
+            }
             #[cfg(feature = "native-test")]
             native_test::start(handle);
             Ok(())
