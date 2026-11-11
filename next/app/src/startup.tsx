@@ -1,9 +1,9 @@
 import { useEffect, useState } from "preact/hooks";
 import { Button, Card, Notice, Switch } from "../../ui/kit/ui";
-import { type StartupPreferences, startupGet, startupSet } from "./host";
+import { type StartupPreferences, type StartupView, startupGet, startupSet } from "./host";
 
 export function StartupSettings() {
-  const [preferences, setPreferences] = useState<StartupPreferences>();
+  const [preferences, setPreferences] = useState<StartupView>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [saved, setSaved] = useState(false);
@@ -51,13 +51,13 @@ export function StartupSettings() {
         <fieldset disabled={busy || !preferences}>
           <Switch
             label="Launch at startup"
-            hint="Start pluxy when you sign in to Linux. Login launches always use the tray."
+            hint="Start pluxy when you sign in to Linux. Silent Launch controls whether login launches show a window."
             checked={preferences?.autostart_enabled ?? false}
             onChange={(v) => change("autostart_enabled", v)}
           />
           <Switch
             label="Silent Launch"
-            hint="Start without a window and run in the system tray."
+            hint="At login, use the system tray if a tray host is available. Opening the app yourself shows its window."
             checked={preferences?.silent_start_enabled ?? false}
             onChange={(v) => change("silent_start_enabled", v)}
           />
@@ -71,6 +71,11 @@ export function StartupSettings() {
             {busy ? "Saving…" : "Save startup preferences"}
           </Button>
         </fieldset>
+        {preferences?.registration_conflict && (
+          <Notice tone="warn">
+            The autostart file belongs to you or another application. pluxy will leave it alone.
+          </Notice>
+        )}
         {error && <Notice tone="danger">{error}</Notice>}
         {saved && (
           <Notice tone="ok">

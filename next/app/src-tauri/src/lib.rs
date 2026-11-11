@@ -205,22 +205,30 @@ fn connection_get(webview: Webview, state: tauri::State<App>) -> Result<View, St
 }
 
 #[tauri::command]
-fn startup_get(webview: Webview, state: tauri::State<App>) -> Result<startup::Preferences, String> {
+fn startup_get(webview: Webview, state: tauri::State<App>) -> Result<startup::View, String> {
     trusted(&webview)?;
-    Ok(state.startup.lock().unwrap().1)
+    let startup = state.startup.lock().unwrap();
+    startup.0.view(startup.1)
 }
 
 #[tauri::command]
 fn startup_set(
     webview: Webview,
     state: tauri::State<App>,
-    preferences: startup::Preferences,
-) -> Result<startup::Preferences, String> {
+    preferences: startup::Input,
+) -> Result<startup::View, String> {
     trusted(&webview)?;
     let mut startup = state.startup.lock().unwrap();
-    startup.0.save(preferences)?;
-    startup.1 = preferences;
-    Ok(preferences)
+    let preferences = preferences.into();
+    let view = startup.0.save(preferences, || {
+        #[cfg(target_os = "linux")]
+        let appimage = webview.app_handle().env().appimage;
+        #[cfg(not(target_os = "linux"))]
+        let appimage = None;
+        startup::executable(appimage, std::env::current_exe)
+    })?;
+    startup.1 = view.preferences;
+    Ok(view)
 }
 
 /// Runs f on the connection away from the window's thread, which starting a core would block,
@@ -484,7 +492,6 @@ pub fn run() {
                 config.clone(),
                 app.path().config_dir()?,
                 app.config().identifier.clone(),
-                std::env::current_exe()?,
             );
             let preferences = startup_store.load();
             #[cfg(target_os = "linux")]
@@ -545,10 +552,19 @@ pub fn run() {
             if let Some(pid) = handle.state::<App>().conn.lock().unwrap().core_pid() {
                 eprintln!("pluxy-app: core started, pid {pid}");
             }
-            let silent = preferences.silent_start_enabled
-                || std::env::args_os().any(|a| a == "--silent-start");
-            // If tray creation fails, show the window so the app remains reachable.
-            if !silent || !handle.state::<App>().has_tray.load(Ordering::SeqCst) {
+            let silent =
+                startup::wants_silent(preferences, std::env::args_os().any(|a| a == "--autostart"));
+            let usable_tray = handle.state::<App>().has_tray.load(Ordering::SeqCst)
+                && match startup::tray_host() {
+                    Ok(()) => true,
+                    Err(e) => {
+                        if silent {
+                            eprintln!("pluxy-app: opening startup window: {e}");
+                        }
+                        false
+                    }
+                };
+            if !silent || !usable_tray {
                 open_window(&handle)?;
             }
             #[cfg(feature = "native-test")]

@@ -102,6 +102,10 @@ export interface StartupPreferences {
   silent_start_enabled: boolean;
   start_core_on_launch: boolean;
 }
-export const startupGet = () => invoke<StartupPreferences>("startup_get");
+export interface StartupView extends StartupPreferences {
+  registration_owned: boolean;
+  registration_conflict: boolean;
+}
+export const startupGet = () => invoke<StartupView>("startup_get");
 export const startupSet = (preferences: StartupPreferences) =>
-  invoke<StartupPreferences>("startup_set", { preferences });
+  invoke<StartupView>("startup_set", { preferences });
