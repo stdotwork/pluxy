@@ -780,6 +780,13 @@ func (x *translator) providers(v8 tree) error {
 				if err != nil {
 					return err
 				}
+				// Today's core keeps no Codex API key without a base-url (SanitizeCodexKeys); the
+				// key is dropped and named in the log. A key added by a login, which asks for no
+				// base_url, still gets the extension's default.
+				if st, _ := a["settings"].(map[string]any); f.v8 == "codex" && st["base_url"] == nil {
+					x.notes = append(x.notes, fmt.Sprintf("config.yaml: %s key %s has no base-url: dropped, as today's core drops a Codex API key without one", display(path), id))
+					continue
+				}
 				accounts[f.extension] = append(accounts[f.extension], a)
 			}
 			// The key list is read; classify the rest of the group and each key's own fields.
