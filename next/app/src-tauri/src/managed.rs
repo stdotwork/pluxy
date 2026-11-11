@@ -4,7 +4,7 @@
 
 use serde_json::{json, Value};
 use std::collections::VecDeque;
-use std::fs;
+use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -120,17 +120,39 @@ pub struct ManagedCore {
 }
 
 impl ManagedCore {
-    /// Starts program with the config in dir (made if missing) and waits until core says where it
-    /// listens. Core's log goes to the app's stderr, each line prefixed `core: `. on_exit runs
-    /// once core has exited.
+    /// Starts the open program (named name in messages) with the config in dir (made if missing)
+    /// and waits until core says where it listens. The program runs from that open file, the one
+    /// its caller checked, not from its path again. Core's log goes to the app's stderr, each line
+    /// prefixed `core: `. on_exit runs once core has exited.
     pub fn start(
-        program: &Path,
+        program: File,
+        name: &Path,
         dir: &Path,
         on_exit: Option<OnExit>,
     ) -> Result<ManagedCore, String> {
         let cfg = ensure_config(dir)?;
         let key = management_key(&cfg)?;
-        let mut cmd = Command::new(program);
+        #[cfg(unix)]
+        let fd = {
+            use std::os::fd::AsRawFd;
+            program.as_raw_fd()
+        };
+        let mut cmd = Command::new(format!("/proc/self/fd/{fd}"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.arg0(name);
+            // The child keeps the open program across exec, which a #! script's interpreter
+            // then reads (as /dev/fd/N); the app's own copy closes on exec as usual.
+            unsafe {
+                cmd.pre_exec(move || {
+                    if libc::fcntl(fd, libc::F_SETFD, 0) != 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
         cmd.arg("-config")
             .arg(&cfg)
             .current_dir(dir)
@@ -153,9 +175,11 @@ impl ManagedCore {
         let status: Arc<Mutex<Option<ExitStatus>>> = Arc::new(Mutex::new(None));
         let (started_tx, started_rx) = mpsc::channel();
         let st = Arc::clone(&status);
-        let name = program.display().to_string();
+        let name = name.display().to_string();
         std::thread::spawn(move || {
-            let mut child = match cmd.spawn() {
+            let spawned = cmd.spawn();
+            drop(program);
+            let mut child = match spawned {
                 Ok(c) => c,
                 Err(e) => {
                     let _ = started_tx.send(Err(format!("starting {name}: {e}")));
@@ -406,9 +430,11 @@ mod tests {
             "echo 'pluxy: listening on http://127.0.0.1:1' >&2\nexec sleep 30",
         );
         let d = dir.clone();
-        let mut core = std::thread::spawn(move || ManagedCore::start(&program, &d, None).unwrap())
-            .join()
-            .unwrap();
+        let mut core = std::thread::spawn(move || {
+            ManagedCore::start(File::open(&program).unwrap(), &program, &d, None).unwrap()
+        })
+        .join()
+        .unwrap();
         std::thread::sleep(Duration::from_millis(500));
         assert_eq!(
             core.exited(),
@@ -434,7 +460,9 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
         }
-        let err = ManagedCore::start(&script, &dir, None).err().unwrap();
+        let err = ManagedCore::start(File::open(&script).unwrap(), &script, &dir, None)
+            .err()
+            .unwrap();
         assert!(err.contains("listen is required"), "{err}");
         fs::remove_dir_all(dir).unwrap();
     }

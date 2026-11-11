@@ -18,6 +18,8 @@ mod command_names;
 #[cfg(target_os = "linux")]
 pub mod confirmation;
 pub mod conn;
+mod core_updates;
+pub mod cores;
 pub mod managed;
 #[cfg(feature = "native-test")]
 mod native_test;
@@ -30,6 +32,7 @@ pub mod trust;
 pub use command_names::COMMANDS;
 
 use conn::{Change, Connection, Dirs, Mode, View};
+use core_updates::{core_adopt, core_install, core_rollback, core_versions};
 use pages::{Binding, Pages};
 use serde::Deserialize;
 use serde_json::Value;
@@ -51,6 +54,8 @@ pub const MAIN: &str = "main";
 
 struct App {
     conn: Mutex<Connection>,
+    /// A change of the app's own core waiting for its native confirmation (`core_updates.rs`).
+    core_change: Mutex<Option<core_updates::Pending>>,
     #[cfg(target_os = "linux")]
     confirmations: Mutex<confirmation::Confirmations>,
     /// The page webviews' own web context's folder: nothing shared with the window's.
@@ -81,6 +86,7 @@ fn status_text(v: &View) -> String {
         (Some(Mode::Managed), Some(t), Some(c)) if c.state == "running" => {
             format!("Core running at {t}")
         }
+        (Some(Mode::Managed), _, Some(c)) if c.state == "missing" => "No core installed".into(),
         (Some(Mode::Managed), _, _) => "Core stopped".into(),
         (Some(Mode::Local), Some(t), _) => format!("Connected to {t}"),
         (Some(Mode::Remote), Some(t), _) => format!("Remote core {t}"),
@@ -572,6 +578,10 @@ pub fn run() {
             connection_set,
             core_restart,
             core_call,
+            core_versions,
+            core_install,
+            core_rollback,
+            core_adopt,
             sign_in,
             sign_out,
             page_open,
@@ -587,7 +597,9 @@ pub fn run() {
             #[cfg(target_os = "linux")]
             let confirmations =
                 confirmation::Confirmations::open(config.join("remembered-launches.json"))?;
-            let core = app.path().app_data_dir()?.join("core");
+            let data = app.path().app_data_dir()?;
+            let core = data.join("core");
+            let cores = data.join("cores");
             // When the app's core exits, the tray and the window show it. Off this thread: the
             // exit may come while a connection change holds the connection.
             let handle = app.handle().clone();
@@ -601,12 +613,20 @@ pub fn run() {
                     let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-connection", ());
                 });
             });
-            let conn = Connection::open(Dirs { config, core }, Some(on_exit));
+            let conn = Connection::open(
+                Dirs {
+                    config,
+                    core,
+                    cores,
+                },
+                Some(on_exit),
+            );
             // The page webviews keep nothing from one run to the next.
             let pages_dir = app.path().app_cache_dir()?.join("pages");
             let _ = std::fs::remove_dir_all(&pages_dir);
             app.manage(App {
                 conn: Mutex::new(conn),
+                core_change: Mutex::new(None),
                 #[cfg(target_os = "linux")]
                 confirmations: Mutex::new(confirmations),
                 pages_dir,

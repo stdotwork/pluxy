@@ -18,7 +18,7 @@ its config folder (on Linux `~/.config/dev.pluxy.desktop/`), readable only by yo
 
 | Mode | What the app does | When the app quits |
 | --- | --- | --- |
-| Run core here (`managed`) | Starts the core program (`pluxy` beside the app, or one you name by full path) with a config of its own, `core/config.json` in the app's data folder. The first start writes that config with a free loopback port, which then stays the core's, new random keys, and folders for credentials and packages beside it. After that the file is yours to edit; the app only reads its `management_key`. | Stops that core (SIGTERM, then a kill after 10 seconds). On Linux the core also gets SIGTERM if the app dies without stopping it. |
+| Run core here (`managed`) | Runs one of its own core versions ([below](#the-apps-own-core)) with a config of its own, `core/config.json` in the app's data folder. The first start writes that config with a free loopback port, which then stays the core's, new random keys, and folders for credentials and packages beside it. After that the file is yours to edit; the app only reads its `management_key`. | Stops that core (SIGTERM, then a kill after 10 seconds). On Linux the core also gets SIGTERM if the app dies without stopping it. |
 | Core on this computer (`local`) | Connects to a core that already runs on a loopback address (`127.0.0.0/8`, `::1` or `localhost`), such as a system service. You give its address and management key. | Leaves it running. The app never starts or stops it. |
 | Remote core (`remote`) | Connects over https only, so the key is never sent in the clear. You can name a PEM file of certificate authorities to trust for that core, for a certificate you made yourself; without one, the usual public roots are used. The core's address is shown next to the app's name. | Leaves it running. |
 
@@ -35,6 +35,72 @@ proxy from the environment. Path segments that are, or decode to, `.` or `..` ar
 
 Until the app is connected and signed in, the window shows only the Connection page, so a wrong
 address or key can always be fixed there.
+
+## The app's own core
+
+In managed mode the app runs only core versions it installed itself, each in a folder of its own
+under `cores/versions/` in the app's data folder. Until one is installed, the app runs no core
+and the window shows only the Connection page, with **Core versions**. There, the app lists
+what is installed, which version runs and which ran before it, and what the core source offers.
+
+The **core source** is the full path of an index file. The app has no built-in source and reads
+nothing until you set one. The index has the release feed's format (format 1, `releases`); the
+app reads only releases with `product` `core`, their `version`, and their `artifacts`:
+
+```json
+{"product":"core","version":"2.0.0","channel":"stable","published":"2026-11-01T00:00:00Z",
+ "artifacts":[{"platform":"linux/amd64","url":"pluxy-core-2.0.0-linux-amd64.tar.gz",
+   "descriptor":"{\"id\":\"pluxy/core\",\"version\":\"2.0.0\",\"tier\":\"native\",\"platform\":\"linux/amd64\",\"size\":1234,\"sha256\":\"…\"}",
+   "signature":"<128 lower-case hex digits>","key_id":"…"}]}
+```
+
+| Field | Rule |
+| --- | --- |
+| `platform` | `<os>/<arch>` as Go names them, such as `linux/amd64` |
+| `url` | For now a file name beside the index |
+| `descriptor` | The exact signed descriptor bytes ([signed descriptor contract](app-host/README.md#signed-descriptor-bytes)), as a JSON string: `id` `pluxy/core`, `tier` `native`, the release's `version` and this platform |
+| `signature` | The detached Ed25519 signature of those bytes |
+| `key_id` | The publisher key that signed it |
+
+The archive is a gzip tar file of the core's folder, as provider releases are packed: `pluxy` at
+the top, and anything beside it, such as `bundled/`. It may hold only regular files and folders,
+no links, devices or names that leave the folder, at most 10,000 entries and 512 MiB.
+
+**Install** (or **Update to** a newer version): the app copies the archive into its own folder and
+checks it with the shared verifier (`src-tauri/src/artifact.rs`) and the app's trust
+(`src-tauri/src/trust.rs`): the signature over the exact descriptor bytes with a publisher key
+trusted for this exact source (publisher `pluxy`), then the archive's size and SHA-256. Only then
+does the native confirmation open, showing the version, source, key and digest, and that a core
+has full access to your user account. A release that fails a check is refused before any
+dialog, and nothing is installed. Release builds have no publisher keys yet, so they refuse
+every release; test builds trust only a test runner's temporary roots (below).
+
+Once confirmed, the app unpacks the archive into a new version folder, records each file's
+SHA-256, and makes the files read-only. Before every start it checks every file against those
+digests and runs the core from the program file it just checked, not from its path again. A
+changed version does not start: install it again.
+
+**Switching** to a version (an install, **Roll back to** an installed version, or an adoption)
+keeps a copy of `core/config.json`, stops the running core and starts the new one. It counts as
+started once it says where it listens, on this computer, and answers `GET /v0/management/status`
+with the app's management key and, for a release, reports the version it was signed as. If it
+does not, the app puts the config back as it was, removes a version it installed for this
+switch, and runs the version that worked before; the page says why the new one did not start.
+If the app stops while a version starts, it does the same at its next start. The app keeps the
+running version and the one before it, and removes older ones after a switch. Rolling back
+reaches only an installed version.
+
+A **core program** you name on the Connection page (or `pluxy` beside the app) is never run in
+place. **Adopt this core program** shows its path, size and SHA-256 in the native confirmation;
+once confirmed, the app copies it into a version of its own, `custom-<first 12 digits of its
+SHA-256>`, if it still has that digest, and runs the copy. An adopted program has no signature.
+
+The app only ever stops the core process it started. A core it did not start, such as a system
+service or another core of yours on this computer, is never stopped or signalled.
+
+Each change works once: while one waits for its confirmation, another is refused. The window
+hears `pluxy-connection` when it has ended, and `core_versions` says whether it was done,
+cancelled or failed.
 
 ## The window and the tray
 
@@ -57,6 +123,8 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `connection_get` | The connection, without the key |
 | `connection_set` | Changes the mode, address, key, certificate file or core program |
 | `core_restart` | Starts the app's own core again (managed mode) |
+| `core_versions` | The app's own core versions, what the core source offers, and how the last change ended |
+| `core_install`, `core_rollback`, `core_adopt` | Asks to install a release from the core source, to run an installed version again, or to adopt the chosen core program; each opens a native confirmation (Linux) and applies nothing itself |
 | `core_call` | One management API call to the connected core |
 | `sign_in`, `sign_out` | Checks and keeps a key, or forgets it (local and remote modes) |
 | `page_open`, `page_place`, `page_close` | Opens an extension page's webview over part of the window, moves it, closes it |
@@ -195,6 +263,24 @@ closing the window leaves no webview and
 no web process, and that quitting stops only the app's own core. The `native-test` feature is
 for that test alone; release builds never have it.
 
+The managed run starts with no core installed and with signed test releases the runner makes
+in a temporary folder: cores 1.0.0 and 2.0.0 (built with Go, the version set at link time, with
+the bundled test packages), a 3.0.0 that breaks its config and exits, and a 2.1.0 whose signature
+does not verify, signed by an Ed25519 key generated for the run that never leaves the runner's
+memory. Its trust profile starts with no roots. Through the window's commands and the real
+dialog (`src-tauri/src/native_core.rs`), it checks that the app is not connected with no core;
+that an install is refused without roots, before any dialog and with nothing installed; that the
+same install with the run's root, confirmed, runs 1.0.0 from the app's folder and connects; that
+the bad signature is refused before any dialog; that 2.0.0 replaces 1.0.0 (whose process is gone)
+with the config unchanged; that after 3.0.0 the config is restored and 2.0.0 runs again; that an
+unknown rollback target is refused, a cancelled rollback changes nothing and a confirmed one runs
+1.0.0; and that a core program does not run until it is adopted, after which the app's copy runs
+and the program itself does not. A sentinel core the runner started before the app must still
+answer, with its config and program unchanged, after the app has quit. The native build has the
+`artifact-test-trust` feature for this; `cargo test` covers a crash while a version starts,
+changed installed files, hostile archives and a version that is not what it was signed as
+(`tests/core_updates.rs`).
+
 The same native run uses fixture actions (compiled only with `native-test`) and real X input
 from `xdotool` to confirm, cancel, opt into remembering, click a native Start button and revoke
 in native settings. It checks one-use token consumption and open handles, page command/message
@@ -234,6 +320,9 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
 - Tested on Linux only. On Windows the page document's address is
   `http://pluxy-page.localhost/`; neither Windows nor macOS has been run.
 - No installer or bundled core yet (`bundle.active` is off).
+- The app's own core comes only from a local index file for now; an https source joins with the
+  release feed. Installing, rolling back and adopting need the native confirmation, so they work
+  on Linux only, and the core store builds on Unix only.
 - In managed mode the app does not restart a core that stops; the tray and the Connection page
   show that it stopped and why, and the page offers to start it. A supervisor thread starts the
   core and stays until it exits, since on Linux the parent-death signal follows the thread that

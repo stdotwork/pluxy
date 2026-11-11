@@ -492,6 +492,11 @@ impl Confirmations {
     pub fn prepare_import(&mut self, action: Action) -> Result<Prepared, String> {
         self.prepare(action, Origin::Import)
     }
+    /// For the native handler of a window command: the window is the app's own UI, and the
+    /// person reviews the action in the native dialog that follows.
+    pub(crate) fn prepare_main(&mut self, action: Action) -> Result<Prepared, String> {
+        self.prepare(action, Origin::Main)
+    }
     // Trusted preparations are created only by native main/tray/UI handlers in this module.
     fn prepare(&mut self, action: Action, origin: Origin) -> Result<Prepared, String> {
         if action.chain.is_empty() {

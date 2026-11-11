@@ -2,7 +2,10 @@
 //! (next/e2e/panelcore, which needs Go). No window: these drive the same connection code the
 //! window's commands use. Every core runs in a temporary folder on a random loopback port.
 
-use pluxy_app::conn::{Change, Connection, Dirs, Mode};
+#[path = "support/releases.rs"]
+mod releases;
+
+use pluxy_app::conn::{Change, Connection, CoreChange, Dirs, Mode};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -41,6 +44,7 @@ fn dirs(root: &Path) -> Dirs {
     Dirs {
         config: root.join("config"),
         core: root.join("core"),
+        cores: root.join("cores"),
     }
 }
 
@@ -122,17 +126,26 @@ fn managed_runs_its_own_core_and_stops_it() {
         .output()
         .unwrap();
     assert!(out.status.success());
-    let program: Value = serde_json::from_slice(&out.stdout).unwrap();
-    let program = program["core"].as_str().unwrap().to_string();
+    // The prepared core and its bundled test packages, as a signed release 1.0.0.
+    let program = root.join("program");
+    releases::build_core(&program, "1.0.0");
+    let source = root.join("source");
+    std::fs::create_dir_all(&source).unwrap();
+    let index = source.join("index.json");
+    let keys = releases::Keys::new(&index);
+    let release = releases::release(&source, &keys, "1.0.0", &releases::pack(&program), true);
+    releases::write_index(&index, &[release]);
 
     let mut c = Connection::open(dirs(&root), None);
     assert_eq!(c.view().mode, None);
     c.change(Change {
         mode: Some(Mode::Managed),
-        core_path: Some(program.clone()),
+        core_source: Some(index.display().to_string()),
         ..Change::default()
     })
     .unwrap();
+    let staged = c.prepare_install(&keys, "1.0.0").unwrap();
+    c.apply(CoreChange::Install(staged)).unwrap();
     let v = c.view();
     assert!(v.signed_in, "{v:?}");
     let target = v.target.clone().unwrap();
