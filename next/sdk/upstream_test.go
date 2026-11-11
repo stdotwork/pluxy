@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -204,4 +207,234 @@ func TestUpstreamInfoHandlers(t *testing.T) {
 	}
 	conn.Close()
 	waitCancelled(t, opening)
+}
+
+// An extension that has not wrapped any client in Upstream cannot send through a proxy, so a call
+// that carries one is answered with an error and never reaches its handler or the upstream; a
+// call without a proxy still does, and once the process wraps a client the proxied call goes
+// through too.
+func TestProxiedCallRefusedWithoutUpstream(t *testing.T) {
+	was := upstreamUsed.Swap(false)
+	t.Cleanup(func() { upstreamUsed.Store(was) })
+	var hits atomic.Int32
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits.Add(1) }))
+	defer provider.Close()
+	var ran atomic.Int32
+	send := func(ctx context.Context) error { // what an extension does with a client it never wrapped
+		ran.Add(1)
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, provider.URL, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			resp.Body.Close()
+		}
+		return err
+	}
+	finish := func(out *Stream) error {
+		if err := out.Start(llm.ResponseInfo{ID: "r"}); err != nil {
+			return err
+		}
+		return out.Finish(llm.Finish{Reason: llm.FinishStop}, nil)
+	}
+	ext := Extension{ID: "test/sdk", Version: "0.0.0",
+		Generate: func(ctx context.Context, _ Call, out *Stream) error {
+			if err := send(ctx); err != nil {
+				return err
+			}
+			return finish(out)
+		},
+		Check: func(ctx context.Context, _ CheckCall) (*protocol.CheckResult, error) {
+			return nil, send(ctx)
+		},
+		Session: func(context.Context, SessionCall) (Session, error) {
+			return testSession{turn: func(ctx context.Context, _ Call, out *Stream) error {
+				if err := send(ctx); err != nil {
+					return err
+				}
+				return finish(out)
+			}}, nil
+		},
+	}
+	socket, _, _ := startServe(t, ext)
+	const proxy = "http://alice:Fake-Proxy-Secret-1@127.0.0.1:1"
+	request := &llm.Request{Model: "m"}
+	// reply returns the first terminal frame the call gets.
+	reply := func(t *testing.T, conn net.Conn) protocol.Reply {
+		t.Helper()
+		for {
+			var r protocol.Reply
+			if err := protocol.ReadFrame(conn, &r); err != nil {
+				t.Fatal(err)
+			}
+			if r.Event.Terminal() {
+				return r
+			}
+		}
+	}
+	refused := func(t *testing.T, r protocol.Reply) {
+		t.Helper()
+		if r.Type != llm.EventError || r.Error == nil || r.Error.Code != llm.CodeUnsupported || r.Error.Scope != llm.ScopeCredential || !r.Error.Retryable {
+			t.Fatalf("reply %+v, want a retryable unsupported error for the account", r)
+		}
+		if strings.Contains(r.Error.Message, "Fake-Proxy-Secret") || strings.Contains(r.Error.Message, "alice") {
+			t.Fatalf("the error shows the proxy: %q", r.Error.Message)
+		}
+	}
+	generate := func(t *testing.T, proxy string) protocol.Reply {
+		conn := dial(t, socket)
+		defer conn.Close()
+		call := protocol.Call{Type: protocol.TypeCall, ID: "g", Op: protocol.OpGenerate, Account: &protocol.Account{ID: "a", ProxyURL: proxy}, Request: request}
+		if err := protocol.WriteFrame(conn, call); err != nil {
+			t.Fatal(err)
+		}
+		return reply(t, conn)
+	}
+
+	refused(t, generate(t, proxy))
+	conn := dial(t, socket)
+	if err := protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeCall, ID: "c", Op: protocol.OpCheck, Account: &protocol.Account{ID: "a", ProxyURL: proxy}}); err != nil {
+		t.Fatal(err)
+	}
+	refused(t, reply(t, conn))
+	conn.Close()
+	if ran.Load() != 0 || hits.Load() != 0 {
+		t.Fatalf("a refused call ran %d handlers and made %d upstream requests", ran.Load(), hits.Load())
+	}
+
+	// A session opened without a proxy refuses a turn that has one; a turn without one runs.
+	conn = dial(t, socket)
+	defer conn.Close()
+	account := &protocol.Account{ID: "a"}
+	if err := protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeCall, ID: "s", Op: protocol.OpSession, Account: account, Session: &protocol.SessionInfo{Format: protocol.SessionOpenAIResponses}}); err != nil {
+		t.Fatal(err)
+	}
+	var ready protocol.Reply
+	if err := protocol.ReadFrame(conn, &ready); err != nil || ready.Type != protocol.TypeSessionReady {
+		t.Fatalf("session open: %+v, %v", ready, err)
+	}
+	if err := protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeSessionTurn, Account: &protocol.Account{ID: "a", ProxyURL: proxy}, Request: request}); err != nil {
+		t.Fatal(err)
+	}
+	refused(t, reply(t, conn))
+	if ran.Load() != 0 || hits.Load() != 0 {
+		t.Fatalf("a refused turn ran %d handlers and made %d upstream requests", ran.Load(), hits.Load())
+	}
+	if err := protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeSessionTurn, Account: account, Request: request}); err != nil {
+		t.Fatal(err)
+	}
+	if r := reply(t, conn); r.Type != llm.EventFinish || ran.Load() != 1 || hits.Load() != 1 {
+		t.Fatalf("a turn without a proxy: %+v, %d handlers, %d upstream requests", r, ran.Load(), hits.Load())
+	}
+
+	// A direct call reaches the handler; so does a proxied one once a client is wrapped.
+	if r := generate(t, ""); r.Type != llm.EventFinish || ran.Load() != 2 {
+		t.Fatalf("a direct call: %+v, %d handlers", r, ran.Load())
+	}
+	_ = Upstream(&http.Transport{})
+	if r := generate(t, proxy); r.Type != llm.EventFinish || ran.Load() != 3 {
+		t.Fatalf("a proxied call after Upstream: %+v, %d handlers", r, ran.Load())
+	}
+}
+
+// A session turn refused for its proxy does not leave that proxy for the next turn of the session:
+// the next turn, with no account, runs with no account and no proxy, both in its call and in the
+// UpstreamInfo of its context.
+func TestRefusedTurnLeavesNoProxyForNextTurn(t *testing.T) {
+	was := upstreamUsed.Swap(false)
+	t.Cleanup(func() { upstreamUsed.Store(was) })
+	type turn struct {
+		call Call
+		info Info
+		ok   bool
+	}
+	var ran atomic.Int32
+	seen := make(chan turn, 2)
+	ext := Extension{ID: "test/sdk", Version: "0.0.0",
+		Session: func(context.Context, SessionCall) (Session, error) {
+			return testSession{turn: func(ctx context.Context, call Call, out *Stream) error {
+				ran.Add(1)
+				info, ok := UpstreamInfo(ctx)
+				seen <- turn{call: call, info: info, ok: ok}
+				if err := out.Start(llm.ResponseInfo{ID: "r"}); err != nil {
+					return err
+				}
+				return out.Finish(llm.Finish{Reason: llm.FinishStop}, nil)
+			}}, nil
+		},
+	}
+	socket, _, _ := startServe(t, ext)
+	conn := dial(t, socket)
+	defer conn.Close()
+	// The session opens without a proxy and with no sdk.Upstream client in the process.
+	if err := protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeCall, ID: "s", Op: protocol.OpSession,
+		Account: &protocol.Account{ID: "a"}, Session: &protocol.SessionInfo{Format: protocol.SessionOpenAIResponses}}); err != nil {
+		t.Fatal(err)
+	}
+	var ready protocol.Reply
+	if err := protocol.ReadFrame(conn, &ready); err != nil || ready.Type != protocol.TypeSessionReady {
+		t.Fatalf("session open: %+v, %v", ready, err)
+	}
+	// terminal returns the first terminal frame the session sends.
+	terminal := func(t *testing.T) protocol.Reply {
+		t.Helper()
+		for {
+			var r protocol.Reply
+			if err := protocol.ReadFrame(conn, &r); err != nil {
+				t.Fatal(err)
+			}
+			if r.Event.Terminal() {
+				return r
+			}
+		}
+	}
+	request := &llm.Request{Model: "m"}
+	if err := protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeSessionTurn,
+		Account: &protocol.Account{ID: "a", ProxyURL: "http://alice:Fake-Proxy-Secret-2@127.0.0.1:1"}, Request: request}); err != nil {
+		t.Fatal(err)
+	}
+	if r := terminal(t); r.Type != llm.EventError || r.Error == nil || r.Error.Code != llm.CodeUnsupported {
+		t.Fatalf("the turn with a proxy: %+v, want a refusal", r)
+	}
+	if ran.Load() != 0 {
+		t.Fatalf("a refused turn ran its handler %d times", ran.Load())
+	}
+	// The next turn carries no account at all.
+	if err := protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeSessionTurn, Request: request}); err != nil {
+		t.Fatal(err)
+	}
+	if r := terminal(t); r.Type != llm.EventFinish || ran.Load() != 1 {
+		t.Fatalf("the turn without an account: %+v, %d handlers", r, ran.Load())
+	}
+	got := <-seen
+	if got.call.Account.ProxyURL != "" || got.call.Account.ID != "" {
+		t.Fatalf("the turn's call carries the account of the refused turn (account %q)", got.call.Account.ID)
+	}
+	if !got.ok || got.info.ProxyURL != "" || got.info.AccountID != "" {
+		t.Fatalf("UpstreamInfo of the turn: present %v, account %q", got.ok, got.info.AccountID)
+	}
+}
+
+// Every transport made for a proxy closes its own idle connections after a finite time, so one the
+// pool drops while a request still uses it does not keep them open for good.
+func TestProxyTransportClosesIdleConnections(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		base, want time.Duration
+	}{
+		{"base without a timeout", 0, 90 * time.Second},
+		{"base with a timeout", 20 * time.Second, 20 * time.Second},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			base := &http.Transport{IdleConnTimeout: c.base}
+			rt, err := (&proxyPool{}).get(base, "http://127.0.0.1:3128")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rt.IdleConnTimeout != c.want {
+				t.Errorf("IdleConnTimeout = %v, want %v", rt.IdleConnTimeout, c.want)
+			}
+			if base.IdleConnTimeout != c.base {
+				t.Errorf("the base transport changed: IdleConnTimeout %v", base.IdleConnTimeout)
+			}
+		})
+	}
 }

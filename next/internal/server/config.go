@@ -20,6 +20,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/internal/legacy"
 	"github.com/stdotwork/pluxy/next/internal/packages"
+	"github.com/stdotwork/pluxy/next/internal/proxyurl"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/internal/usage"
 	"github.com/stdotwork/pluxy/next/llm"
@@ -73,6 +74,11 @@ type Config struct {
 	// Default: none; a request comes from its connection's peer.
 	TrustedProxies []string `json:"trusted_proxies,omitempty"`
 	trusted        []netip.Prefix
+	// ProxyURL is the proxy every upstream request of an extension goes through, for each
+	// account without a proxy_url of its own (today's proxy-url): an http, https, socks5 or
+	// socks5h URL, or direct or none for no proxy. Default: none. Its user name and password are
+	// secret (package proxyurl).
+	ProxyURL string `json:"proxy_url,omitempty"`
 	// keyDigests are the SHA-256 digests of ClientKeys, made when the config is loaded so that a
 	// request's check does not hash a key (prepareClientKeys).
 	keyDigests [][sha256.Size]byte
@@ -347,6 +353,9 @@ func (x ExtensionConfig) validate(name string, seen map[string]bool) error {
 		if a.RequestRetry != nil && *a.RequestRetry < 0 {
 			return fmt.Errorf("config: %s.accounts[%d].request_retry must not be negative", name, i)
 		}
+		if err := proxyurl.Check(fmt.Sprintf("%s.accounts[%d].proxy_url", name, i), a.ProxyURL); err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
 	}
 	for _, ms := range []*int64{x.IdleStopMS, x.DrainTimeoutMS, &x.Restart.BackoffMS, &x.Restart.MaxBackoffMS, &x.Restart.StableMS} {
 		if ms != nil && (*ms < 0 || *ms > maxTimingMS) {
@@ -507,6 +516,9 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 	}
 	if err := c.CORS.prepare(); err != nil {
 		return nil, err
+	}
+	if err := proxyurl.Check("proxy_url", c.ProxyURL); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
 	}
 	trusted, err := parseTrustedProxies(c.TrustedProxies)
 	if err != nil {
