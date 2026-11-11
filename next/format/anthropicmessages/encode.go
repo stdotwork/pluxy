@@ -111,6 +111,10 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 		if t.Type == llm.ToolNative {
 			if t.Origin != nil && t.Origin.Format == format {
 				tools = append(tools, t.Origin.Raw)
+			} else if ws, skip, ok := webSearchTool(t); ok {
+				if !skip {
+					tools = append(tools, ws)
+				}
 			} else {
 				e.lose(llm.LossDropped, pathOf(t.Origin, fmt.Sprintf("tools[%d]", i)), "Messages has no such tool")
 			}
@@ -132,6 +136,7 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 		}
 	}
 
+	searches := scanWebSearches(req.Items)
 	var system []json.RawMessage
 	var msgs []*outMessage
 	add := func(role, turn string, block json.RawMessage) {
@@ -196,6 +201,21 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 		case llm.ItemTypeNative:
 			if it.Origin != nil && it.Origin.Format == format {
 				add(llm.RoleAssistant, turn, it.Origin.Raw)
+				break
+			}
+			if c, ok := asWebSearchCall(it); ok {
+				// A search goes in the assistant message around it, with the text and calls
+				// before and after it, as Claude wrote that turn.
+				blocks := searches.blocks(i, c)
+				if n := len(msgs); n > 0 && msgs[n-1].role == llm.RoleAssistant && len(blocks) > 0 {
+					msgs[n-1].joinNext = true
+				}
+				for _, b := range blocks {
+					add(llm.RoleAssistant, turn, b)
+				}
+				if len(blocks) > 0 {
+					msgs[len(msgs)-1].joinNext = true
+				}
 				break
 			}
 			e.lose(llm.LossDropped, p, "Messages has no such item")

@@ -208,11 +208,15 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return err
 	}
 
-	body, tr, err := buildSearchBody(call.Request, s.InjectXSearch)
+	body, tr, bridge, err := buildRequest(call.Request, s.InjectXSearch)
 	if err != nil {
 		return err
 	}
-	send := &reporting{Stream: out, tr: tr}
+	rep := &reporting{Stream: out, tr: tr}
+	var send eventSender = rep
+	if bridge != nil {
+		send = bridgeSender{b: bridge, next: rep}
+	}
 	url := tg.base + "/responses"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
@@ -265,12 +269,34 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err != nil {
 		return err
 	}
+	if bridge != nil {
+		// The reply is checked before any of it is sent.
+		if events, err = convert(bridge, events); err != nil {
+			return err
+		}
+		send = rep
+	}
 	for _, ev := range events {
 		if err := send.Send(ev); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+type eventSender interface{ Send(llm.Event) error }
+
+// convert runs a bridge over a whole reply.
+func convert(b transformer, events []llm.Event) ([]llm.Event, error) {
+	var out []llm.Event
+	for _, ev := range events {
+		more, err := b.Transform(ev)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, more...)
+	}
+	return out, nil
 }
 
 // promptCacheKey returns the body's prompt_cache_key, trimmed, or "".

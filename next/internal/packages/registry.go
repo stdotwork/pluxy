@@ -125,6 +125,9 @@ func (ix *Index) pick(id, version string, protocols []int, platform string) (Rel
 		return Release{}, Artifact{}, fmt.Errorf("%w: no package %s", ErrNotFound, id)
 	}
 	fits := func(r Release) error {
+		if len(r.Protocol) == 0 {
+			return fmt.Errorf("%w: app-only package: install it in the desktop app (release has no provider protocol)", ErrRefused)
+		}
 		if !slices.ContainsFunc(r.Protocol, func(v int) bool { return slices.Contains(protocols, v) }) {
 			return fmt.Errorf("%w: %s %s speaks protocol %v; this core speaks %v", ErrRefused, id, r.Version, r.Protocol, protocols)
 		}

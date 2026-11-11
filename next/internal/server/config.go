@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/internal/host"
@@ -84,6 +85,9 @@ type Config struct {
 	// Logs says whether core also writes its log to files in its logs folder, the folder logs
 	// beside the config file.
 	Logs LogsConfig `json:"logs"`
+	// Pprof is the profiling pages' section: they are served on a listener of their own, on
+	// loopback only (today's observability.pprof). Off by default.
+	Pprof PprofConfig `json:"pprof"`
 
 	// From a config.yaml with today's core's key names (package legacy):
 	// Notices name the settings it uses that core does not support or know; core logs them
@@ -206,6 +210,42 @@ func (l LogsConfig) ErrorLogs() int {
 		return 10
 	}
 	return *l.ErrorLogsMaxFiles
+}
+
+// PprofConfig is the pprof section of the config.
+type PprofConfig struct {
+	// Enable serves Go's profiling pages (/debug/pprof/) on Addr. Only a build with the pprof
+	// build tag has them; the default build says so in the log and serves nothing.
+	Enable bool `json:"enable,omitempty"`
+	// Addr is the profiling listener's address, on loopback only: 127.0.0.0/8, ::1 or localhost.
+	// Default: 127.0.0.1:8316.
+	Addr string `json:"addr,omitempty"`
+}
+
+// defaultPprofAddr is the profiling listener's address when the config names none.
+const defaultPprofAddr = "127.0.0.1:8316"
+
+// prepare sets the default address and checks it, also while Enable is off, so a bad address is
+// refused before it is needed. The pages show the program's memory and goroutines, so they are
+// reachable from this machine only.
+func (p *PprofConfig) prepare() error {
+	if p.Addr == "" {
+		p.Addr = defaultPprofAddr
+	}
+	host, port, err := net.SplitHostPort(p.Addr)
+	if err != nil {
+		return fmt.Errorf("config: pprof.addr %q: %w", p.Addr, err)
+	}
+	if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+		return fmt.Errorf("config: pprof.addr %q: the port must be a number from 0 to 65535", p.Addr)
+	}
+	if strings.EqualFold(host, "localhost") {
+		return nil
+	}
+	if ip, err := netip.ParseAddr(host); err != nil || !ip.IsLoopback() {
+		return fmt.Errorf("config: pprof.addr %q must be a loopback address (127.0.0.0/8, ::1 or localhost): the profiling pages show the program's memory and goroutines, so they are served on this machine only", p.Addr)
+	}
+	return nil
 }
 
 // PackagesConfig is the packages section of the config.
@@ -481,6 +521,9 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 		c.TLS.Cert, c.TLS.Key = rel(c.TLS.Cert), rel(c.TLS.Key)
 	}
 	if err := c.Usage.validate(); err != nil {
+		return nil, err
+	}
+	if err := c.Pprof.prepare(); err != nil {
 		return nil, err
 	}
 	if c.Logs.MaxTotalSizeMB < 0 || c.Logs.MaxTotalSizeMB > 1<<20 {

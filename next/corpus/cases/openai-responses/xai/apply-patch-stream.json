@@ -1,0 +1,177 @@
+{
+  "description": "A Codex apply_patch custom tool is sent to xAI as a function whose argument is the patch in an input field, its history call goes as a function call, and xAI's streamed function call comes back to the client as a custom tool call with the patch as its input.",
+  "source": [
+    "core/internal/runtime/executor/helps/apply_patch_responses.go",
+    "core/internal/translator/common/apply_patch_responses.go",
+    "core/internal/client/codex/apply-patch/tool.go",
+    "core/internal/runtime/executor/xai_executor_test.go"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "body": {
+      "model": "grok-4.6",
+      "stream": true,
+      "input": [
+        {"role":"user","content":"Patch the files."},
+        {
+          "type": "custom_tool_call",
+          "call_id": "call_old",
+          "name": "apply_patch",
+          "input": "*** Begin Patch\n*** Delete File: old.txt\n*** End Patch\n"
+        },
+        {"type":"custom_tool_call_output","call_id":"call_old","output":"Done!"},
+        {"role":"user","content":"Now add hello.txt."}
+      ],
+      "tools": [
+        {
+          "type": "custom",
+          "name": "apply_patch",
+          "description": "Use the `apply_patch` tool to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.",
+          "format": {
+            "type": "grammar",
+            "syntax": "lark",
+            "definition": "start: begin_patch hunk+ end_patch\nbegin_patch: \"*** Begin Patch\" LF\nend_patch: \"*** End Patch\" LF?\nhunk: /[^\\n]+/ LF"
+          }
+        }
+      ],
+      "tool_choice": {"type":"custom","name":"apply_patch"}
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"event":"response.created","data":{"type":"response.created","sequence_number":0,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"in_progress","model":"grok-test-upstream","output":[],"usage":null}}},
+        {"event":"response.output_item.added","data":{"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"fc_patch","type":"function_call","status":"in_progress","call_id":"call_patch","name":"apply_patch","arguments":""}}},
+        {"event":"response.function_call_arguments.delta","data":{"type":"response.function_call_arguments.delta","sequence_number":2,"item_id":"fc_patch","output_index":0,"delta":"{\"input\": \"*** Begin"}},
+        {"event":"response.function_call_arguments.delta","data":{"type":"response.function_call_arguments.delta","sequence_number":3,"item_id":"fc_patch","output_index":0,"delta":" Patch\\n*** Add File: hello.txt\\n+hi \\\"there\\\" \\u4e2d\\ud"}},
+        {"event":"response.function_call_arguments.delta","data":{"type":"response.function_call_arguments.delta","sequence_number":4,"item_id":"fc_patch","output_index":0,"delta":"83d\\ude00\\n*** End Patch\\n\"}"}},
+        {"event":"response.function_call_arguments.done","data":{"type":"response.function_call_arguments.done","sequence_number":5,"item_id":"fc_patch","output_index":0,"arguments":"{\"input\": \"*** Begin Patch\\n*** Add File: hello.txt\\n+hi \\\"there\\\" \\u4e2d\\ud83d\\ude00\\n*** End Patch\\n\"}"}},
+        {"event":"response.output_item.done","data":{"type":"response.output_item.done","sequence_number":6,"output_index":0,"item":{"id":"fc_patch","type":"function_call","status":"completed","call_id":"call_patch","name":"apply_patch","arguments":"{\"input\": \"*** Begin Patch\\n*** Add File: hello.txt\\n+hi \\\"there\\\" \\u4e2d\\ud83d\\ude00\\n*** End Patch\\n\"}"}}},
+        {"event":"response.completed","data":{"type":"response.completed","sequence_number":7,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"completed","model":"grok-test-upstream","output":[{"id":"fc_patch","type":"function_call","status":"completed","call_id":"call_patch","name":"apply_patch","arguments":"{\"input\": \"*** Begin Patch\\n*** Add File: hello.txt\\n+hi \\\"there\\\" \\u4e2d\\ud83d\\ude00\\n*** End Patch\\n\"}"}],"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}}}
+      ]
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "client.events[*].data.sequence_number",
+      "kind": "intended",
+      "reason": "Today's core numbers the events of a converted call itself, which puts every event from the call's first one a number above xAI's. The extension keeps xAI's own sequence numbers, which stay in order and without gaps because each event of the call replaces one event of xAI's."
+    },
+    {
+      "path": "upstream[0].body.instructions",
+      "kind": "intended",
+      "reason": "Today's core's Codex translator sends empty instructions on every Responses request; the extension sends the request's instructions as the client wrote them.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.parallel_tool_calls",
+      "kind": "intended",
+      "reason": "Today's core's Codex translator adds this default to every Responses request with tools (tool_choice, parallel_tool_calls, strict false, additionalProperties false); the extension sends the client's tools and choices as the client wrote them.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.prompt_cache_key",
+      "kind": "gap",
+      "reason": "Today's core derives a session ID per conversation and sends it as prompt_cache_key; the extension has no session identity to derive from, so it sends only the client's own prompt_cache_key.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.X-Grok-Conv-Id",
+      "kind": "gap",
+      "reason": "Today's core sends its session ID as the x-grok-conv-id header; the extension sends the header only when the client's body carries a prompt_cache_key, since it has no session identity of its own.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.User-Agent",
+      "kind": "intended",
+      "reason": "The xAI extension names itself in its User-Agent (pluxy-xai and its version) and does not copy the Grok CLI's identity; today's core sends the Grok workspace's User-Agent unless the client sent one.",
+      "want": "pluxy-xai/0.1.0"
+    },
+    {
+      "path": "client.events[*].data.response.usage.input_tokens_details",
+      "kind": "gap",
+      "reason": "Today's core fills in zero cached and reasoning token counts when the upstream reports usage without them (EnsureResponsesUsageDetails); the new core reports xAI's usage as it comes. Whether to keep it is open.",
+      "absent": true
+    },
+    {
+      "path": "client.events[*].data.response.usage.output_tokens_details",
+      "kind": "gap",
+      "reason": "Today's core fills in zero cached and reasoning token counts when the upstream reports usage without them (EnsureResponsesUsageDetails); the new core reports xAI's usage as it comes. Whether to keep it is open.",
+      "absent": true
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"response":{"created_at":1700000000,"id":"resp_corpus","model":"grok-test-upstream","object":"response","output":[],"status":"in_progress","usage":null},"sequence_number":0,"type":"response.created"},"event":"response.created"},
+        {"data":{"item":{"call_id":"call_patch","id":"fc_patch","input":"","name":"apply_patch","status":"in_progress","type":"custom_tool_call"},"output_index":0,"sequence_number":2,"type":"response.output_item.added"},"event":"response.output_item.added"},
+        {"data":{"call_id":"call_patch","delta":"*** Begin","item_id":"fc_patch","output_index":0,"sequence_number":3,"type":"response.custom_tool_call_input.delta"},"event":"response.custom_tool_call_input.delta"},
+        {"data":{"call_id":"call_patch","delta":" Patch\n*** Add File: hello.txt\n+hi \"there\" 中","item_id":"fc_patch","output_index":0,"sequence_number":4,"type":"response.custom_tool_call_input.delta"},"event":"response.custom_tool_call_input.delta"},
+        {"data":{"call_id":"call_patch","delta":"😀\n*** End Patch\n","item_id":"fc_patch","output_index":0,"sequence_number":5,"type":"response.custom_tool_call_input.delta"},"event":"response.custom_tool_call_input.delta"},
+        {"data":{"call_id":"call_patch","input":"*** Begin Patch\n*** Add File: hello.txt\n+hi \"there\" 中😀\n*** End Patch\n","item_id":"fc_patch","output_index":0,"sequence_number":6,"type":"response.custom_tool_call_input.done"},"event":"response.custom_tool_call_input.done"},
+        {"data":{"item":{"call_id":"call_patch","id":"fc_patch","input":"*** Begin Patch\n*** Add File: hello.txt\n+hi \"there\" 中😀\n*** End Patch\n","name":"apply_patch","status":"completed","type":"custom_tool_call"},"output_index":0,"sequence_number":7,"type":"response.output_item.done"},"event":"response.output_item.done"},
+        {"data":{"response":{"created_at":1700000000,"id":"resp_corpus","model":"grok-test-upstream","object":"response","output":[{"call_id":"call_patch","id":"fc_patch","input":"*** Begin Patch\n*** Add File: hello.txt\n+hi \"there\" 中😀\n*** End Patch\n","name":"apply_patch","status":"completed","type":"custom_tool_call"}],"status":"completed","usage":{"input_tokens":11,"input_tokens_details":{"cached_tokens":0},"output_tokens":7,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":18}},"sequence_number":8,"type":"response.completed"},"event":"response.completed"}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": ["reasoning.encrypted_content"],
+          "input": [
+            {"content":"Patch the files.","role":"user"},
+            {
+              "arguments": "{\"input\":\"*** Begin Patch\\n*** Delete File: old.txt\\n*** End Patch\\n\"}",
+              "call_id": "call_old",
+              "name": "apply_patch",
+              "type": "function_call"
+            },
+            {"call_id":"call_old","output":"Done!","type":"function_call_output"},
+            {"content":"Now add hello.txt.","role":"user"}
+          ],
+          "instructions": "",
+          "model": "grok-4.6",
+          "parallel_tool_calls": true,
+          "prompt_cache_key": "e9edbe49-cb24-59e1-98d4-313aa39a0e31",
+          "store": false,
+          "stream": true,
+          "tool_choice": {"name":"apply_patch","type":"function"},
+          "tools": [
+            {
+              "description": "Use the `apply_patch` tool to edit files. \n\nCall this function with a JSON object whose input field contains the complete patch text.\nUse the Codex apply_patch format, not a conventional git unified diff.\nStart with *** Begin Patch and end with *** End Patch.\nUse *** Add File: path, *** Delete File: path, or *** Update File: path.\nEvery added-file content line starts with +.\nFor updates, use @@; context lines start with one space, removed lines with -, and added lines with +.\nUse *** Move to: path for a rename and *** End of File when required by the patch grammar.\nExample input:\n*** Begin Patch\n*** Update File: src/main.go\n@@\n-old\n+new\n*** End Patch\n\nOriginal patch grammar:\nstart: begin_patch hunk+ end_patch\nbegin_patch: \"*** Begin Patch\" LF\nend_patch: \"*** End Patch\" LF?\nhunk: /[^\\n]+/ LF",
+              "name": "apply_patch",
+              "parameters": {
+                "additionalProperties": false,
+                "properties": {
+                  "input": {"description":"The complete apply_patch patch text.","type":"string"}
+                },
+                "required": ["input"],
+                "type": "object"
+              },
+              "type": "function"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0",
+          "X-Grok-Conv-Id": "e9edbe49-cb24-59e1-98d4-313aa39a0e31"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      }
+    ]
+  }
+}

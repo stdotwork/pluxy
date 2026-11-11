@@ -1,0 +1,496 @@
+{
+  "description": "Claude's server_tool_use and web_search_tool_result blocks come back to a streaming Responses client as one web_search_call item (added when the search starts, done with its query and results when the next block starts), before the message that follows.",
+  "client": {
+    "path": "/v1/responses",
+    "body": {
+      "model": "claude-test",
+      "stream": true,
+      "tools": [
+        {
+          "type": "web_search"
+        }
+      ],
+      "input": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Weather in Oslo?"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {
+          "event": "message_start",
+          "data": {
+            "type": "message_start",
+            "message": {
+              "id": "msg_corpus",
+              "type": "message",
+              "role": "assistant",
+              "content": [],
+              "model": "claude-test-upstream",
+              "stop_reason": null,
+              "stop_sequence": null,
+              "usage": {
+                "input_tokens": 50,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "output_tokens": 1
+              }
+            }
+          }
+        },
+        {
+          "event": "content_block_start",
+          "data": {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+              "type": "server_tool_use",
+              "id": "srvtoolu_01A",
+              "name": "web_search",
+              "input": {}
+            }
+          }
+        },
+        {
+          "event": "content_block_delta",
+          "data": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "input_json_delta",
+              "partial_json": "{\"query\": \"oslo "
+            }
+          }
+        },
+        {
+          "event": "content_block_delta",
+          "data": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "input_json_delta",
+              "partial_json": "weather\"}"
+            }
+          }
+        },
+        {
+          "event": "content_block_stop",
+          "data": {
+            "type": "content_block_stop",
+            "index": 0
+          }
+        },
+        {
+          "event": "content_block_start",
+          "data": {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+              "type": "web_search_tool_result",
+              "tool_use_id": "srvtoolu_01A",
+              "content": [
+                {
+                  "type": "web_search_result",
+                  "title": "Oslo weather",
+                  "url": "https://example.com/oslo",
+                  "encrypted_content": "ENC_A",
+                  "page_age": "1 day"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "event": "content_block_stop",
+          "data": {
+            "type": "content_block_stop",
+            "index": 1
+          }
+        },
+        {
+          "event": "content_block_start",
+          "data": {
+            "type": "content_block_start",
+            "index": 2,
+            "content_block": {
+              "type": "text",
+              "text": ""
+            }
+          }
+        },
+        {
+          "event": "content_block_delta",
+          "data": {
+            "type": "content_block_delta",
+            "index": 2,
+            "delta": {
+              "type": "text_delta",
+              "text": "It is 4C in Oslo."
+            }
+          }
+        },
+        {
+          "event": "content_block_stop",
+          "data": {
+            "type": "content_block_stop",
+            "index": 2
+          }
+        },
+        {
+          "event": "message_delta",
+          "data": {
+            "type": "message_delta",
+            "delta": {
+              "stop_reason": "end_turn",
+              "stop_sequence": null
+            },
+            "usage": {
+              "output_tokens": 20,
+              "server_tool_use": {
+                "web_search_requests": 1
+              }
+            }
+          }
+        },
+        {
+          "event": "message_stop",
+          "data": {
+            "type": "message_stop"
+          }
+        }
+      ]
+    }
+  ],
+  "volatile": [
+    "client.events[*].data.response.created_at"
+  ],
+  "source": [
+    "core/internal/translator/claude/openai/responses/claude_openai-responses_response.go",
+    "core/internal/translator/claude/openai/responses/claude_openai-responses_server_tool_test.go (TestClaudeWebSearchBlocksBecomeWebSearchCallItem, TestClaudeWebSearchBlocksBecomeWebSearchCallItemNonStream, TestClaudeWebSearchWithoutResultBlockStillEmitsItem)"
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {
+          "data": {
+            "response": {
+              "background": false,
+              "created_at": "(volatile)",
+              "error": null,
+              "id": "msg_corpus",
+              "model": "claude-test",
+              "object": "response",
+              "output": [],
+              "status": "in_progress"
+            },
+            "sequence_number": 1,
+            "type": "response.created"
+          },
+          "event": "response.created"
+        },
+        {
+          "data": {
+            "response": {
+              "created_at": "(volatile)",
+              "id": "msg_corpus",
+              "model": "claude-test",
+              "object": "response",
+              "output": [],
+              "status": "in_progress"
+            },
+            "sequence_number": 2,
+            "type": "response.in_progress"
+          },
+          "event": "response.in_progress"
+        },
+        {
+          "data": {
+            "item": {
+              "action": {
+                "query": "",
+                "type": "search"
+              },
+              "id": "ws_srvtoolu_01A",
+              "status": "in_progress",
+              "type": "web_search_call"
+            },
+            "output_index": 0,
+            "sequence_number": 3,
+            "type": "response.output_item.added"
+          },
+          "event": "response.output_item.added"
+        },
+        {
+          "data": {
+            "item": {
+              "action": {
+                "query": "oslo weather",
+                "type": "search"
+              },
+              "id": "ws_srvtoolu_01A",
+              "results": [
+                {
+                  "encrypted_content": "ENC_A",
+                  "page_age": "1 day",
+                  "title": "Oslo weather",
+                  "type": "web_search_result",
+                  "url": "https://example.com/oslo"
+                }
+              ],
+              "status": "completed",
+              "type": "web_search_call"
+            },
+            "output_index": 0,
+            "sequence_number": 4,
+            "type": "response.output_item.done"
+          },
+          "event": "response.output_item.done"
+        },
+        {
+          "data": {
+            "item": {
+              "content": [],
+              "id": "msg_msg_corpus_0",
+              "role": "assistant",
+              "status": "in_progress",
+              "type": "message"
+            },
+            "output_index": 1,
+            "sequence_number": 5,
+            "type": "response.output_item.added"
+          },
+          "event": "response.output_item.added"
+        },
+        {
+          "data": {
+            "content_index": 0,
+            "item_id": "msg_msg_corpus_0",
+            "output_index": 1,
+            "part": {
+              "annotations": [],
+              "logprobs": [],
+              "text": "",
+              "type": "output_text"
+            },
+            "sequence_number": 6,
+            "type": "response.content_part.added"
+          },
+          "event": "response.content_part.added"
+        },
+        {
+          "data": {
+            "content_index": 0,
+            "delta": "It is 4C in Oslo.",
+            "item_id": "msg_msg_corpus_0",
+            "logprobs": [],
+            "output_index": 1,
+            "sequence_number": 7,
+            "type": "response.output_text.delta"
+          },
+          "event": "response.output_text.delta"
+        },
+        {
+          "data": {
+            "content_index": 0,
+            "item_id": "msg_msg_corpus_0",
+            "logprobs": [],
+            "output_index": 1,
+            "sequence_number": 8,
+            "text": "It is 4C in Oslo.",
+            "type": "response.output_text.done"
+          },
+          "event": "response.output_text.done"
+        },
+        {
+          "data": {
+            "content_index": 0,
+            "item_id": "msg_msg_corpus_0",
+            "output_index": 1,
+            "part": {
+              "annotations": [],
+              "logprobs": [],
+              "text": "It is 4C in Oslo.",
+              "type": "output_text"
+            },
+            "sequence_number": 9,
+            "type": "response.content_part.done"
+          },
+          "event": "response.content_part.done"
+        },
+        {
+          "data": {
+            "item": {
+              "content": [
+                {
+                  "annotations": [],
+                  "logprobs": [],
+                  "text": "It is 4C in Oslo.",
+                  "type": "output_text"
+                }
+              ],
+              "id": "msg_msg_corpus_0",
+              "role": "assistant",
+              "status": "completed",
+              "type": "message"
+            },
+            "output_index": 1,
+            "sequence_number": 10,
+            "type": "response.output_item.done"
+          },
+          "event": "response.output_item.done"
+        },
+        {
+          "data": {
+            "response": {
+              "background": false,
+              "created_at": "(volatile)",
+              "error": null,
+              "id": "msg_corpus",
+              "model": "claude-test",
+              "object": "response",
+              "output": [
+                {
+                  "action": {
+                    "query": "oslo weather",
+                    "type": "search"
+                  },
+                  "id": "ws_srvtoolu_01A",
+                  "results": [
+                    {
+                      "encrypted_content": "ENC_A",
+                      "page_age": "1 day",
+                      "title": "Oslo weather",
+                      "type": "web_search_result",
+                      "url": "https://example.com/oslo"
+                    }
+                  ],
+                  "status": "completed",
+                  "type": "web_search_call"
+                },
+                {
+                  "content": [
+                    {
+                      "annotations": [],
+                      "logprobs": [],
+                      "text": "It is 4C in Oslo.",
+                      "type": "output_text"
+                    }
+                  ],
+                  "id": "msg_msg_corpus_0",
+                  "role": "assistant",
+                  "status": "completed",
+                  "type": "message"
+                }
+              ],
+              "status": "completed",
+              "tools": [
+                {
+                  "type": "web_search"
+                }
+              ],
+              "usage": {
+                "input_tokens": 50,
+                "input_tokens_details": {
+                  "cached_tokens": 0
+                },
+                "output_tokens": 20,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 70
+              }
+            },
+            "sequence_number": 11,
+            "type": "response.completed"
+          },
+          "event": "response.completed"
+        }
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 32000,
+          "messages": [
+            {
+              "content": [
+                {
+                  "cache_control": {
+                    "type": "ephemeral"
+                  },
+                  "text": "Weather in Oslo?",
+                  "type": "text"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "metadata": {
+            "user_id": "334eb1dd64b8c7c589f70de41dbd30f61bd8fb3f2195b41903223dc5aea37099"
+          },
+          "model": "claude-test",
+          "stream": true,
+          "tools": [
+            {
+              "cache_control": {
+                "type": "ephemeral"
+              },
+              "name": "web_search",
+              "type": "web_search_20250305"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "identity",
+          "Anthropic-Version": "2023-06-01",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/messages?beta=true"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "upstream[0].body.metadata",
+      "kind": "intended",
+      "reason": "Today's core adds metadata.user_id, a hash it derives from the request, to every request it translates to Claude; the new core does not make up a user identifier for the client.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.Authorization",
+      "kind": "intended",
+      "reason": "The Claude extension sends an API key in x-api-key, as Anthropic's API defines it; today's core sends it as a bearer token whenever the base URL is not api.anthropic.com (it uses x-api-key only there).",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.X-Api-Key",
+      "kind": "intended",
+      "reason": "The Claude extension sends an API key in x-api-key, as Anthropic's API defines it; today's core sends it as a bearer token whenever the base URL is not api.anthropic.com (it uses x-api-key only there).",
+      "want": "sk-corpus-upstream"
+    }
+  ]
+}
