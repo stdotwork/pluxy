@@ -93,11 +93,32 @@ func TestImportRefusesSameHeaderTwice(t *testing.T) {
 }
 
 // A secret header's value alone is removed from text only from 8 bytes, as a proxy's password is: a
-// shorter one ("1") would also scrub unrelated text. Its whole "Name: value" pair is always removed.
+// shorter one ("1") would also scrub unrelated text. Next to its name, as text shows a header, it
+// is always removed.
 func TestForms(t *testing.T) {
-	got := Forms(map[string]string{"X-Api-Key": "1", "Authorization": "Bearer abcdefgh", "X-Title": "plain-title", "Cookie": "sid=12345", "X-Token": "12345678"})
-	want := []string{"Authorization: Bearer abcdefgh", "Bearer abcdefgh", "Cookie: sid=12345", "sid=12345", "X-Api-Key: 1", "X-Token: 12345678", "12345678"}
+	got := Forms(map[string]string{"x-api-key": "1", "Authorization": "Bearer abcdefgh", "X-Title": "plain-title", "Cookie": "sid=12345", "X-Token": "12345678"})
+	want := []string{
+		"Authorization: Bearer abcdefgh", "Authorization=Bearer abcdefgh", `"Authorization":"Bearer abcdefgh"`, `"Authorization": "Bearer abcdefgh"`,
+		"authorization: Bearer abcdefgh", "authorization=Bearer abcdefgh", `"authorization":"Bearer abcdefgh"`, `"authorization": "Bearer abcdefgh"`,
+		"Bearer abcdefgh",
+		"Cookie: sid=12345", "Cookie=sid=12345", `"Cookie":"sid=12345"`, `"Cookie": "sid=12345"`,
+		"cookie: sid=12345", "cookie=sid=12345", `"cookie":"sid=12345"`, `"cookie": "sid=12345"`,
+		"sid=12345",
+		"X-Token: 12345678", "X-Token=12345678", `"X-Token":"12345678"`, `"X-Token": "12345678"`,
+		"x-token: 12345678", "x-token=12345678", `"x-token":"12345678"`, `"x-token": "12345678"`,
+		"12345678",
+		"x-api-key: 1", "x-api-key=1", `"x-api-key":"1"`, `"x-api-key": "1"`,
+		"X-Api-Key: 1", "X-Api-Key=1", `"X-Api-Key":"1"`, `"X-Api-Key": "1"`,
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Forms = %q, want %q", got, want)
+	}
+	// The forms remove each way an error or a log shows the short value, and leave other 1s.
+	text := `model-1 failed: x-api-key=1, {"X-Api-Key": "1"}, X-Api-Key: 1, retry 1`
+	for _, f := range got {
+		text = strings.ReplaceAll(text, f, "[redacted]")
+	}
+	if want := `model-1 failed: [redacted], {[redacted]}, [redacted], retry 1`; text != want {
+		t.Errorf("redacted text %q, want %q", text, want)
 	}
 }

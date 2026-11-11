@@ -265,17 +265,17 @@ func TestCallCarriesHeadersWithoutLeakingSecrets(t *testing.T) {
 	ev := s.Next()
 	s.Close()
 	log.waitFor(t, "proxy done h")
-	if want := "cannot reach  X-Gateway-Key=" + protocol.Redacted + " X-Title=plain-title"; ev.Type != llm.EventError || ev.Error.Message != want {
+	if want := "cannot reach  " + protocol.Redacted + " X-Title=plain-title"; ev.Type != llm.EventError || ev.Error.Message != want {
 		t.Errorf("event %+v, want the error %q", ev, want)
 	}
-	if out := log.String(); strings.Contains(out, testHeaderSecret) || !strings.Contains(out, "X-Gateway-Key="+protocol.Redacted+" X-Title=plain-title") {
+	if out := log.String(); strings.Contains(out, testHeaderSecret) || !strings.Contains(out, protocol.Redacted+" X-Title=plain-title") {
 		t.Errorf("the log holds the secret header value, or not the headers:\n%s", out)
 	}
 }
 
-// A secret header whose value is short ("1") is removed from a reply only inside its whole
-// "Name: value" pair: its value alone would also scrub every other 1 in the reply.
-func TestShortSecretHeaderValueLeavesReplyUnchanged(t *testing.T) {
+// A secret header whose value is short ("1") is removed from a reply only next to its name
+// (here "Name=value"): its value alone would also scrub every other 1 in the reply.
+func TestShortSecretHeaderValueRemovedNextToItsName(t *testing.T) {
 	ext, err := Start(filepath.Join(fakePackage(t, "echo-proxy"), ManifestFile), Options{Log: &syncBuffer{}})
 	if err != nil {
 		t.Fatal(err)
@@ -284,8 +284,8 @@ func TestShortSecretHeaderValueLeavesReplyUnchanged(t *testing.T) {
 	for _, c := range []struct {
 		name, value, want string
 	}{
-		{"short value", "1", "cannot reach  X-Gateway-Key=1"},
-		{"long value", testHeaderSecret, "cannot reach  X-Gateway-Key=" + protocol.Redacted},
+		{"short value", "1", "cannot reach  " + protocol.Redacted},
+		{"long value", testHeaderSecret, "cannot reach  " + protocol.Redacted},
 	} {
 		s := ext.Generate(context.Background(), protocol.Account{ID: "s", Headers: map[string]string{"X-Gateway-Key": c.value}}, llm.Request{Model: "m"})
 		ev := s.Next()

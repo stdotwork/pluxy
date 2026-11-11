@@ -550,8 +550,10 @@ or a value with a line break or another control character: its config load refus
 The value of a header whose name is about authentication (its name holds `auth`, `key`,
 `token`, `secret`, `cookie`, `session`, `password` or `signature`, letter case aside) is a
 secret: an extension never logs or shows it, and core removes it from everything a call sends
-back, as it does a credential's strings; a value shorter than 8 bytes is removed only as part
-of its `Name: value` pair, so it does not scrub unrelated text. Other values are not removed.
+back, as it does a credential's strings; a value shorter than 8 bytes is removed only next to
+its name, as text shows a header (`Name: value`, `Name=value`, JSON's `"Name":"value"`, with the
+name as configured, in canonical form or in lower case), so it does not scrub unrelated text.
+Other values are not removed.
 
 Core sends a call that has headers only to an extension whose describe reports
 `protocol_minor` 12 or more; for any other it fails the call itself with `unsupported` (scope
@@ -559,7 +561,8 @@ Core sends a call that has headers only to an extension whose describe reports
 adds a new account carries the `headers` the request to add it named.
 
 In Go, `sdk.Upstream` sets them on each request made with the handler's context. On a redirect
-to another host than the first request's it leaves out the headers whose names are secret, as
+to another host or scheme (`https` to `http`) than the first request's it removes the headers
+whose names are secret, including a value the extension set itself under such a name, as
 `net/http` leaves out `Authorization` and `Cookie` there, so the redirect target never gets
 them; the other headers stay. As with a proxy, the SDK answers a call that carries headers with
 `unsupported` (scope `credential`, retryable) and never runs the handler when the extension
