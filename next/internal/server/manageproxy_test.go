@@ -33,3 +33,19 @@ func TestPatchProxyURLRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+// A proxy_url with empty user info ("http://@proxy:8080") holds no user name or password, so the
+// view shows it as stored, and a PATCH of that value leaves the stored value as it was.
+func TestPatchProxyURLWithoutSecretRoundTrip(t *testing.T) {
+	const stored = "http://@proxy:8080"
+	account := route.Account{ID: "a", ProxyURL: stored}
+	var view AccountView
+	view.fields(account, nil)
+	raw, _ := json.Marshal(view.ProxyURL)
+	if err := patchFields["proxy_url"](&account, raw); err != nil {
+		t.Fatal(err)
+	}
+	if account.ProxyURL != stored {
+		t.Errorf("GET showed %q, and PATCH of it changed the stored proxy to %q, want %q", view.ProxyURL, account.ProxyURL, stored)
+	}
+}

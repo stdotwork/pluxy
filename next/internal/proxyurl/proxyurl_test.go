@@ -1,6 +1,7 @@
 package proxyurl
 
 import (
+	"encoding/base64"
 	"slices"
 	"strings"
 	"testing"
@@ -60,6 +61,8 @@ func TestRedact(t *testing.T) {
 		"http://alice:s3cret@proxy:3128":      "http://redacted@proxy:3128",
 		"socks5h://alice@proxy.example:1080/": "socks5h://redacted@proxy.example:1080",
 		"https://alice:@[::1]:8443":           "https://redacted@[::1]:8443",
+		"http://@proxy:8080":                  "http://@proxy:8080",
+		"http://:@proxy:8080":                 "http://:@proxy:8080",
 	} {
 		if got := Redact(in); got != want {
 			t.Errorf("Redact(%q) = %q, want %q", in, got, want)
@@ -85,8 +88,10 @@ func TestResolve(t *testing.T) {
 }
 
 // Password returns the whole user info as written and decoded and the Basic login's text always,
-// and the password and user name alone only from 8 bytes.
+// and the password and user name alone only from 8 bytes. A user name shorter than 8 bytes with no
+// password is not removed as text, only the Basic login's base64 is.
 func TestPassword(t *testing.T) {
+	basic := func(user string) string { return base64.StdEncoding.EncodeToString([]byte(user + ":")) }
 	for _, c := range []struct {
 		in      string
 		want    []string // forms that must be returned
@@ -95,6 +100,7 @@ func TestPassword(t *testing.T) {
 	}{
 		{in: "http://proxy:3128", nothing: true},
 		{in: "http://@proxy:3128", nothing: true},
+		{in: "http://:@proxy:3128", nothing: true},
 		{in: "direct", nothing: true},
 		{in: "http://alice:pass@proxy:3128", want: []string{"alice:pass"}, absent: []string{"pass", "alice"}},
 		{in: "http://u:1@proxy:3128", want: []string{"u:1"}, absent: []string{"1", "u"}},
@@ -102,8 +108,10 @@ func TestPassword(t *testing.T) {
 		{in: "http://alice:Long-Secret-1@proxy:3128", want: []string{"alice:Long-Secret-1", "Long-Secret-1"}, absent: []string{"alice"}},
 		{in: "http://alice:p%40ss-Long-Secret@proxy:3128", want: []string{"alice:p%40ss-Long-Secret", "alice:p@ss-Long-Secret", "p%40ss-Long-Secret", "p@ss-Long-Secret"}},
 		{in: "http://operator-account:x@proxy:3128", want: []string{"operator-account:x", "operator-account"}, absent: []string{"x"}},
-		{in: "http://alice@proxy:3128", want: []string{"alice", "alice:"}},
-		{in: "http://alice:@proxy:3128", want: []string{"alice:"}},
+		{in: "http://alice@proxy:3128", want: []string{basic("alice")}, absent: []string{"alice", "alice:"}},
+		{in: "http://alice:@proxy:3128", want: []string{basic("alice")}, absent: []string{"alice", "alice:"}},
+		{in: "http://proxy@proxy:3128", want: []string{basic("proxy")}, absent: []string{"proxy", "proxy:"}},
+		{in: "http://tok_0123456789abcdef@proxy:3128", want: []string{"tok_0123456789abcdef", "tok_0123456789abcdef:"}},
 		{in: "http://:pw@proxy:3128", want: []string{":pw"}},
 	} {
 		got := Password(c.in)

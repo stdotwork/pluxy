@@ -5,6 +5,7 @@
 package proxyurl
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net/url"
 	"slices"
@@ -46,8 +47,9 @@ func Resolve(own, global string) string {
 }
 
 // Redact returns setting s fit to show: its scheme, host and port, with "redacted" in place of
-// a user name and password. A setting protocol.ParseProxyURL refuses shows as a fixed text, so
-// no part of a malformed value's user name or password is quoted.
+// a user name and password. A setting with empty user info ("http://@host") holds neither, so it
+// shows as written and sent back unchanged. A setting protocol.ParseProxyURL refuses shows as a
+// fixed text, so no part of a malformed value's user name or password is quoted.
 func Redact(s string) string {
 	s = strings.TrimSpace(s)
 	if s == "" || direct(s) {
@@ -57,11 +59,26 @@ func Redact(s string) string {
 	if err != nil {
 		return "(not a valid proxy URL)"
 	}
+	_, _, has := login(u)
+	if u.User != nil && !has {
+		return s
+	}
 	r := url.URL{Scheme: u.Scheme, Host: u.Host}
 	if u.User != nil {
 		r.User = url.User("redacted")
 	}
 	return r.String()
+}
+
+// login returns u's user name and password, and whether either is set: empty user info holds
+// neither.
+func login(u *url.URL) (user, pass string, ok bool) {
+	if u.User == nil {
+		return "", "", false
+	}
+	pass, _ = u.User.Password()
+	user = u.User.Username()
+	return user, pass, user != "" || pass != ""
 }
 
 // minBare is the shortest password or user name that is removed from text on its own. A shorter
@@ -73,15 +90,18 @@ const minBare = 8
 // when it has no user name or password: its user info as it is written in the URL and decoded
 // ("alice:p%40ss", "alice:p@ss"), the "user:password" the proxy login sends (its Basic
 // Proxy-Authorization value is the base64 of it), and the password and the user name alone when
-// each is at least minBare bytes long.
+// each is at least minBare bytes long. A user name alone, or with an empty password, shorter than
+// minBare is not removed from text, so only the base64 of its "user:" login is returned.
 func Password(s string) []string {
 	s = strings.TrimSpace(s)
 	u, err := url.Parse(s)
-	if err != nil || u.User == nil {
+	if err != nil {
 		return nil
 	}
-	user := u.User.Username()
-	pass, hasPass := u.User.Password()
+	user, pass, ok := login(u)
+	if !ok {
+		return nil
+	}
 	var out []string
 	add := func(forms ...string) {
 		for _, f := range forms {
@@ -90,13 +110,14 @@ func Password(s string) []string {
 			}
 		}
 	}
+	if pass == "" && len(user) < minBare {
+		add(base64.StdEncoding.EncodeToString([]byte(user + ":")))
+		return out
+	}
 	written := writtenUserinfo(s)
 	decoded := user
-	if hasPass {
+	if pass != "" {
 		decoded += ":" + pass
-	}
-	if written == "" && decoded == "" {
-		return nil
 	}
 	add(written, decoded, user+":"+pass)
 	if before, after, ok := strings.Cut(written, ":"); ok {

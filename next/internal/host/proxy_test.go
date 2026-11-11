@@ -105,7 +105,7 @@ func echoSecrets() {
 			written, _, _ := strings.Cut(strings.SplitN(call.Account.ProxyURL, "://", 2)[1], "@")
 			_, writtenPass, _ := strings.Cut(written, ":")
 			msg := strings.Join([]string{
-				`keep: password bypass {"n": 1}`,
+				`keep: password bypass reverse proxy {"n": 1}`,
 				"written " + written,
 				"decoded " + u.User.Username() + ":" + pass,
 				"basic " + base64.StdEncoding.EncodeToString([]byte(u.User.Username()+":"+pass)),
@@ -124,9 +124,11 @@ func echoSecrets() {
 
 // A proxy's user name and password are removed from a call's replies and the extension's log as a
 // whole and in every form the extension may write them in, but a short password or user name is
-// not removed on its own: it would also scrub "password", "bypass" and the number 1.
+// not removed on its own: it would also scrub "password", "bypass", "reverse proxy" and the number
+// 1. A user name with no password is removed on its own only from 8 bytes; its Basic login is
+// always removed.
 func TestProxySecretRedaction(t *testing.T) {
-	const keep = `keep: password bypass {"n": 1}`
+	const keep = `keep: password bypass reverse proxy {"n": 1}`
 	for _, c := range []struct{ name, proxy, want string }{
 		{"short password", "http://user:pass@127.0.0.1:3128",
 			keep + " | written [redacted] | decoded [redacted] | basic [redacted] | pass pass | written-pass pass | user user"},
@@ -138,7 +140,11 @@ func TestProxySecretRedaction(t *testing.T) {
 			keep + " | written [redacted] | decoded [redacted] | basic [redacted] | pass [redacted] | written-pass [redacted] | user alice"},
 		{"long user name", "http://operator-account:x@127.0.0.1:3128",
 			keep + " | written [redacted] | decoded [redacted] | basic [redacted] | pass x | written-pass x | user [redacted]"},
-		{"user name only", "http://alice@127.0.0.1:3128",
+		{"short user name only", "http://alice@127.0.0.1:3128",
+			keep + " | written alice | decoded alice: | basic [redacted] | pass  | written-pass  | user alice"},
+		{"short user name only, a word of the reply", "http://proxy@127.0.0.1:3128",
+			keep + " | written proxy | decoded proxy: | basic [redacted] | pass  | written-pass  | user proxy"},
+		{"long user name only", "http://tok_0123456789abcdef@127.0.0.1:3128",
 			keep + " | written [redacted] | decoded [redacted] | basic [redacted] | pass  | written-pass  | user [redacted]"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
