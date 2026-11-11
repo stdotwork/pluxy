@@ -19,13 +19,16 @@ import (
 //   - store false unless the client set store, and reasoning.encrypted_content in include;
 //   - additional_tools: the tools of each such input item (Responses Lite) join the tools list and
 //     the item is removed, before the rules below;
-//   - tools: a custom tool is sent as a function tool; a function's local $ref references are
-//     inlined and its $defs and definitions removed; a function without parameters gets an empty
-//     object schema; more than 200 tools are cut to the first 200 (xaiMaxTools);
+//   - tools: a function's local $ref references are inlined and its $defs and definitions removed;
+//     a function without parameters gets an empty object schema; more than 200 tools are cut to the
+//     first 200 (xaiMaxTools);
+//   - custom tools: each custom tool the client declares, Codex's apply_patch included, is sent as a
+//     function with one input argument, and xAI's call to it is turned back into a custom tool
+//     call (patch.go). Today's core does this for apply_patch only and sends another custom tool
+//     as a function without an input field; that differs on purpose;
 //   - input: a custom tool call and its output are sent as a function call and its output
-//     (normalizeXAIInputCustomToolCallsDoc);
-//   - apply_patch: Codex's patch tool is sent as a function with an input argument, and xAI's call
-//     to it is turned back into a custom tool call (patch.go);
+//     (normalizeXAIInputCustomToolCallsDoc); a call to a custom tool of the request carries its
+//     text in the input argument;
 //   - namespace tools: the Codex app's namespaces are sent as functions, flattened or folded, and
 //     xAI's calls to them are turned back into calls in their namespaces (namespace.go); the
 //     Codex app's automation_update tool gets parameters that accept any object.
@@ -58,7 +61,7 @@ func buildSearchBody(req llm.Request, injectXSearch bool) ([]byte, *llm.Translat
 }
 
 // buildRequest is buildSearchBody that also returns what turns xAI's reply back for the client:
-// calls to the custom apply_patch tool become custom tool calls (patch.go) and calls to the
+// calls to the custom tools of the request become custom tool calls (patch.go) and calls to the
 // functions that stand for namespace tools become calls in their namespaces (namespace.go). It is
 // nil when the request has neither.
 func buildRequest(req llm.Request, injectXSearch bool) ([]byte, *llm.Translation, *replyBridge, error) {
@@ -105,9 +108,11 @@ func buildRequest(req llm.Request, injectXSearch bool) ([]byte, *llm.Translation
 	}
 	promoteAdditionalTools(m)
 	reply := &replyBridge{}
+	var customs customTools
 	var namespaces *namespaceTools
 	if tools, ok := m["tools"].([]any); ok {
-		tools, patch := rewriteApplyPatchTools(tools, topLevel)
+		tools, patch := rewriteCustomTools(tools, topLevel)
+		customs = patch
 		if patch.active() {
 			reply.patch = newPatchBridge(patch)
 			patch.rewriteChoice(m["tool_choice"])
@@ -122,7 +127,7 @@ func buildRequest(req llm.Request, injectXSearch bool) ([]byte, *llm.Translation
 		if namespaces != nil {
 			reply.ns = newNSRestorer(namespaces.refs)
 			namespaces.rewriteChoice(m["tool_choice"])
-			// A folded namespace with a custom apply_patch may be called for it.
+			// A folded namespace with a custom tool may be called for it.
 			dispatchers := map[string]bool{}
 			for ns := range patch.namespaces {
 				if ref := namespaces.refs[ns]; ref != nil && ref.dispatcher {
@@ -142,7 +147,7 @@ func buildRequest(req llm.Request, injectXSearch bool) ([]byte, *llm.Translation
 		m["tools"] = tools[:maxTools]
 	}
 	if input, ok := m["input"].([]any); ok {
-		items, err := rewriteCustomToolItems(input, namespaces != nil)
+		items, err := rewriteCustomToolItems(input, namespaces != nil, customs)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -224,8 +229,10 @@ func withEncryptedReasoning(v any) []any {
 	return append(list, "reasoning.encrypted_content")
 }
 
-// rewriteTools sends custom tools as function tools, gives each function a parameters schema
-// xAI accepts. The caller caps the list after optional search injection.
+// rewriteTools sends the custom tools that are left as function tools, gives each function a
+// parameters schema xAI accepts. The caller caps the list after optional search injection. The
+// custom tools of the client have been made functions with an input argument by then
+// (rewriteCustomTools); one that is left is a custom tool without a name.
 func rewriteTools(tools []any) []any {
 	for _, t := range tools {
 		tm, ok := t.(map[string]any)
@@ -233,9 +240,9 @@ func rewriteTools(tools []any) []any {
 			continue
 		}
 		if tm["type"] == "custom" {
-			// Today's core sends a custom tool as a function and keeps its other fields, its format
-			// grammar included (normalizeXAITool). A custom tool without parameters takes the empty
-			// object schema below, like any function without one.
+			// Today's core sends a custom tool as a function and keeps its other fields (normalizeXAITool).
+			// A custom tool without parameters takes the empty object schema below, like any
+			// function without one.
 			tm["type"] = "function"
 		}
 		if tm["type"] != "function" {
@@ -253,11 +260,12 @@ func rewriteTools(tools []any) []any {
 
 // rewriteCustomToolItems turns each custom tool call into a function call and each custom tool
 // output into a function call output, the form xAI takes. An item without its call ID or name
-// is dropped, as today's core drops it. A call to apply_patch carries its patch text in the
-// input argument (patch.go), whatever the text looks like, and must have text for its input; one
-// in a namespace keeps its namespace when the request has namespace tools (namespaceTools is
-// true), which the rules for namespaces then write the way the tools were sent.
-func rewriteCustomToolItems(input []any, namespaceTools bool) ([]any, error) {
+// is dropped, as today's core drops it. A call to apply_patch, or to a custom tool the request
+// declares (customs), carries its text in the input argument (patch.go), whatever the text looks
+// like, and must have text for its input; one in a namespace keeps its namespace when the request
+// has namespace tools (namespaceTools is true), which the rules for namespaces then write the way
+// the tools were sent. A call to any other tool keeps the rule it had.
+func rewriteCustomToolItems(input []any, namespaceTools bool, customs customTools) ([]any, error) {
 	out := make([]any, 0, len(input))
 	for _, raw := range input {
 		item, ok := raw.(map[string]any)
@@ -275,13 +283,13 @@ func rewriteCustomToolItems(input []any, namespaceTools bool) ([]any, error) {
 				continue
 			}
 			arguments, namespace := "", ""
-			if name == applyPatchName {
+			if name == applyPatchName || customs.names(str(item, "namespace"), name) {
 				if namespaceTools {
 					namespace = strings.TrimSpace(str(item, "namespace"))
 				}
 				text, ok := item["input"].(string)
 				if !ok {
-					return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "apply_patch history input must be a string", Scope: llm.ScopeRequest}
+					return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: name + " history input must be a string", Scope: llm.ScopeRequest}
 				}
 				arguments = wrapPatchInput(text)
 			} else {
