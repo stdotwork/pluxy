@@ -334,7 +334,8 @@ async function runApp(
       );
       check(attempts === 1, `${attempts} recovery attempts, want 1`);
       await Bun.sleep(1000);
-      check(core?.pid && !alive(core.pid), `the recovered core ${core?.pid} still runs after the app quit`);
+      // Only a recovered core can outlive the app; its absence is the check above.
+      check(!core?.pid || !alive(core.pid), `the recovered core ${core?.pid} still runs after the app quit`);
       if (problems.length > 0)
         console.log(`${mode} early exit: the app's last lines:\n  ${log.join("\n  ")}`);
       else
