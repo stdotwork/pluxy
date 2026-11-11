@@ -11,8 +11,6 @@ import (
 	"io"
 	"log"
 	"maps"
-	"math"
-	"math/big"
 	"net/http"
 	"slices"
 	"strconv"
@@ -257,6 +255,7 @@ func (m *Management) view(r cred.Record) AccountView {
 // inexact reports whether a JSON text holds a number that a client reading it as a float64 and
 // writing it back as the shortest decimal that reads as the same float64, as a browser does,
 // would change. Values are compared, not text: 1.0 and 2e3 come back as 1 and 2000, unchanged.
+// It takes time in proportion to the text's length, however long a number is.
 func inexact(b []byte) bool {
 	d := json.NewDecoder(bytes.NewReader(b))
 	d.UseNumber()
@@ -269,25 +268,62 @@ func inexact(b []byte) bool {
 		if !ok {
 			continue
 		}
-		f, err := strconv.ParseFloat(n.String(), 64)
-		if err != nil || math.IsInf(f, 0) {
+		sent := decimalOf(n.String())
+		if sent.digits == "" {
+			continue // zero, which a browser writes back as 0
+		}
+		// The order of magnitude: the value is 0.digits × 10^mag. Past these bounds a float64
+		// holds only infinity or zero, which changes the value.
+		mag := sent.exp + int64(len(sent.digits))
+		if mag > 400 || mag < -400 {
 			return true
 		}
-		if f == 0 {
-			// Zero, or a value too small for a float64; checked here so that big.Rat is never
-			// given a huge exponent.
-			mantissa, _, _ := strings.Cut(strings.ToLower(n.String()), "e")
-			if strings.Trim(mantissa, "-0.") != "" {
-				return true
-			}
-			continue
+		sign := ""
+		if sent.neg {
+			sign = "-"
 		}
-		sent, ok := new(big.Rat).SetString(n.String())
-		back, _ := new(big.Rat).SetString(strconv.FormatFloat(f, 'g', -1, 64))
-		if !ok || sent.Cmp(back) != 0 {
+		f, err := strconv.ParseFloat(sign+"0."+sent.digits+"e"+strconv.FormatInt(mag, 10), 64)
+		if err != nil || decimalOf(strconv.FormatFloat(f, 'g', -1, 64)) != sent {
 			return true
 		}
 	}
+}
+
+// decimal is a number's value as its sign, its significant digits (no leading or trailing
+// zeros; empty for zero, whose sign is dropped) and an exponent: digits × 10^exp.
+type decimal struct {
+	neg    bool
+	digits string
+	exp    int64
+}
+
+// decimalOf returns a JSON number's value as a decimal, in time in proportion to its length. An
+// exponent too large to matter is cut to ±2^40, so its value still reads as out of range.
+func decimalOf(s string) decimal {
+	var d decimal
+	s, d.neg = strings.CutPrefix(s, "-")
+	mantissa, e, _ := strings.Cut(strings.ToLower(s), "e")
+	whole, frac, _ := strings.Cut(mantissa, ".")
+	if e != "" {
+		eneg := false
+		if e[0] == '+' || e[0] == '-' {
+			eneg, e = e[0] == '-', e[1:]
+		}
+		for i := 0; i < len(e); i++ {
+			d.exp = min(d.exp*10+int64(e[i]-'0'), 1<<40)
+		}
+		if eneg {
+			d.exp = -d.exp
+		}
+	}
+	digits := strings.TrimLeft(whole+frac, "0")
+	trimmed := strings.TrimRight(digits, "0")
+	d.exp += int64(len(digits)-len(trimmed)) - int64(len(frac))
+	d.digits = trimmed
+	if d.digits == "" {
+		return decimal{}
+	}
+	return d
 }
 
 // check returns the result of core's check of account id, or nil.
