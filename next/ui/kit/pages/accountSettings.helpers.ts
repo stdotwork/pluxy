@@ -26,7 +26,8 @@ export type InvalidField =
   | "retryCount"
   | "models"
   | "aliases"
-  | "settings";
+  | "settings"
+  | "settingsNumber";
 
 /** A model entry as a row: core writes one without an alias as its name alone. */
 export function modelRow(m: string | AccountModelEntry): { name: string; alias: string } {
@@ -113,6 +114,47 @@ export function settingsObject(text: string): Record<string, unknown> | null | u
   }
 }
 
+/** A decimal number's value as digits and an exponent, so two spellings can be compared. */
+function decimal(text: string): string | undefined {
+  const m = /^-?([0-9]+)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?$/.exec(text);
+  if (!m) return undefined;
+  const frac = m[2] ?? "";
+  let digits = (m[1] + frac).replace(/^0+/, "");
+  let exp = Number(m[3] ?? 0) - frac.length;
+  if (digits === "") return "0";
+  while (digits.endsWith("0")) {
+    digits = digits.slice(0, -1);
+    exp++;
+  }
+  return `${text.startsWith("-") ? "-" : ""}${digits}e${exp}`;
+}
+
+/** Whether every number in a JSON text keeps its exact value when the browser reads it. */
+export function exactNumbers(text: string): boolean {
+  const number = /-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/y;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charAt(i);
+    if (c === '"') {
+      for (i++; i < text.length && text[i] !== '"'; i++) if (text[i] === "\\") i++;
+    } else if (c === "-" || (c >= "0" && c <= "9")) {
+      number.lastIndex = i;
+      const tok = number.exec(text)?.[0];
+      if (!tok) return false;
+      const read = Number(tok);
+      if (!Number.isFinite(read) || decimal(tok) !== decimal(String(read).replace("e+", "e"))) return false;
+      i += tok.length - 1;
+    }
+  }
+  return true;
+}
+
+/** Whether a value as the browser read it holds a number it may not have kept exactly. */
+function lossy(v: unknown): boolean {
+  if (typeof v === "number") return !Number.isFinite(v) || (Number.isInteger(v) && !Number.isSafeInteger(v));
+  if (v !== null && typeof v === "object") return Object.values(v).some(lossy);
+  return false;
+}
+
 /**
  * The PATCH that turns account a into the draft: only the fields that changed, null for one set
  * back to its default. Settings are sent only for an account added by login.
@@ -165,9 +207,13 @@ export function accountChange(
   if (aliases === undefined) return { invalid: "aliases" };
   if (differs(aliases, aliasRules(a.model_alias ?? []))) change.model_alias = aliases;
 
-  if (a.source === "login") {
+  // Settings go only when their text changed, and never with a number the browser does not
+  // keep exactly. shortcut: a stored number the browser rounded without making it unsafe (a
+  // long fraction, a tiny exponent) is not noticed; reading the reply's text would be needed.
+  if (a.source === "login" && d.settings !== draftOf(a).settings) {
     const settings = settingsObject(d.settings);
     if (settings === undefined) return { invalid: "settings" };
+    if (!exactNumbers(d.settings) || lossy(a.settings)) return { invalid: "settingsNumber" };
     if (differs(settings, a.settings)) change.settings = settings;
   }
   return { change };

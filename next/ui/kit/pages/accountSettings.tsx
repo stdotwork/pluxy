@@ -75,6 +75,8 @@ const t = strings("accountSettings", {
   invalid_models: "Enter a model name for each model with an alias.",
   invalid_aliases: "Enter a non-empty model name and alias for each new or edited row.",
   invalid_settings: "Settings must be a JSON object.",
+  invalid_settingsNumber:
+    "The settings hold a number the browser cannot keep exactly, so they cannot be changed here; change them through the management API.",
 });
 
 const pairs = (rows: { name: string; alias?: string }[] | undefined) =>
