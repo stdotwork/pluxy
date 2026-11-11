@@ -307,6 +307,28 @@ func TestProtocolErrorsAreRedacted(t *testing.T) {
 	}
 }
 
+// A secret with a control byte in it is removed from a protocol error that quotes it, whether
+// core quotes it (a check's reply type) or the event sequence check does (a generate's).
+func TestProtocolErrorsQuoteNoControlByteSecret(t *testing.T) {
+	ext, err := Start(filepath.Join(fakePackage(t, "session-bad-frame"), ManifestFile), Options{Log: io.Discard, SettingsSecrets: configdoc.SettingsSecrets})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ext.Stop()
+	ctx := context.Background()
+	const key = "sk-bell\x07-0123456789"
+	account := protocol.Account{ID: "a", Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: key}}
+	_, check := ext.Check(ctx, account)
+	s := ext.Generate(ctx, account, llm.Request{Model: "m"})
+	generate := s.Next().Error
+	s.Close()
+	for op, e := range map[string]*llm.Error{"check": check, "generate": generate} {
+		if e == nil || strings.Contains(e.Message, "0123456789") || !strings.Contains(e.Message, protocol.Redacted) {
+			t.Errorf("%s: %+v; want a protocol error without the key", op, e)
+		}
+	}
+}
+
 // A grant whose identity is refused is reported without what the user entered, the account's
 // settings secrets or the grant's own credential, even when the identity names them.
 func TestLoginIdentityErrorIsRedacted(t *testing.T) {

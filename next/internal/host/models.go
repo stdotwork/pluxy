@@ -58,7 +58,7 @@ func (e *Extension) Models(ctx context.Context, account protocol.Account) (*prot
 	case r.Type == llm.EventError && r.Error != nil:
 		return nil, redact.Event(r.Event).Error
 	}
-	return nil, redacted(redact, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a models call", e.manifest.ID, r.Type)})
+	return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a models call", e.manifest.ID, redact.String(r.Type))}
 }
 
 func redactModel(r *protocol.Redactor, m protocol.Model) protocol.Model {

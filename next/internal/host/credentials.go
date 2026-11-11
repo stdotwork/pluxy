@@ -125,7 +125,7 @@ func (l *LoginCall) Next() protocol.Reply {
 		l.Close()
 		return *l.final
 	}
-	l.fail(redacted(l.redactor(), &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s sent %q during a login", l.ext.manifest.ID, r.Type)}))
+	l.fail(&llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s sent %q during a login", l.ext.manifest.ID, l.redactor().String(r.Type))})
 	return *l.final
 }
 
@@ -193,7 +193,7 @@ func (e *Extension) Refresh(ctx context.Context, account protocol.Account) (*pro
 	case r.Type == llm.EventError && r.Error != nil:
 		return nil, redact.Event(r.Event).Error
 	}
-	return nil, redacted(redact, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a refresh", e.manifest.ID, r.Type)})
+	return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a refresh", e.manifest.ID, redact.String(r.Type))}
 }
 
 // validIdentity says what is wrong with a grant's identity, or "" when nothing is; a field name

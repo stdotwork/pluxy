@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf16"
@@ -113,9 +114,11 @@ func collectStrings(v any, out []string) []string {
 const minFragment = 8
 
 // encodings returns s and the forms it commonly takes in error text and logs: escaped in JSON,
-// escaped in a URL, and base64 (alone, or inside a longer value such as HTTP Basic "user:key").
+// quoted as Go's %q writes it (a message core builds, such as an event check's), escaped in a
+// URL, and base64 (alone, or inside a longer value such as HTTP Basic "user:key").
 func encodings(s string) []string {
-	out := []string{s, url.QueryEscape(s), url.PathEscape(s)}
+	q := strconv.Quote(s)
+	out := []string{s, q[1 : len(q)-1], url.QueryEscape(s), url.PathEscape(s)}
 	if j, err := json.Marshal(s); err == nil {
 		inner := string(j[1 : len(j)-1])
 		out = append(out, inner, strings.ReplaceAll(inner, "/", `\/`))

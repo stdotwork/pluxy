@@ -93,7 +93,7 @@ func (e *Extension) OpenSession(ctx context.Context, account protocol.Account, i
 		return nil, ev.Error
 	default:
 		conn.Close()
-		return nil, redacted(protocol.NewRedactor(creds...), e.protocolError(fmt.Sprintf("a session call was answered with %q", reply.Type)))
+		return nil, e.protocolError(fmt.Sprintf("a session call was answered with %q", protocol.NewRedactor(creds...).String(reply.Type)))
 	}
 	if !stop() {
 		// ctx ended just as the session opened; its conn is closed.
@@ -211,7 +211,7 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 	case f := <-s.frames:
 		s.Close()
 		t.end()
-		t.fail(redacted(t.redact, s.ext.protocolError(fmt.Sprintf("a %q frame between turns", f.reply.Type))))
+		t.fail(s.ext.protocolError(fmt.Sprintf("a %q frame between turns", t.redact.String(f.reply.Type))))
 		return t
 	default:
 	}

@@ -44,7 +44,7 @@ func (e *Extension) Check(ctx context.Context, account protocol.Account) (*proto
 	case r.Type == llm.EventError && r.Error != nil:
 		return nil, redact.Event(r.Event).Error
 	}
-	return nil, redacted(redact, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a check call", e.manifest.ID, r.Type)})
+	return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a check call", e.manifest.ID, redact.String(r.Type))}
 }
 
 // Check runs a check call, starting the program first if it is idle. The caller holds a lease

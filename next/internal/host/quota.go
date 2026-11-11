@@ -71,7 +71,7 @@ func (e *Extension) Quota(ctx context.Context, account protocol.Account) (*proto
 	case r.Type == llm.EventError && r.Error != nil:
 		return nil, redact.Event(r.Event).Error
 	}
-	return nil, redacted(redact, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a quota call", e.manifest.ID, r.Type)})
+	return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a quota call", e.manifest.ID, redact.String(r.Type))}
 }
 
 // Quota runs a quota call, starting the program first if it is idle. The caller holds a lease
