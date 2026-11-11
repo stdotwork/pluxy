@@ -10,6 +10,7 @@ interface Field {
   kind: "switch" | "number" | "text" | "strategy" | "quota";
   hint?: string;
   min?: number;
+  step?: "any";
 }
 const fields = (): Record<SettingsTab, Field[]> => {
   const log: Field = { key: "observability.logs.logging-to-file", label: t("logToFile"), kind: "switch" };
@@ -17,9 +18,15 @@ const fields = (): Record<SettingsTab, Field[]> => {
     common: [log],
     network: [
       { key: "routing.strategy", label: t("strategy"), kind: "strategy" },
-      { key: "routing.retry.request-retry", label: t("retry"), kind: "number", min: 0, hint: t("automatic") },
+      { key: "routing.retry.request-retry", label: t("retry"), kind: "number", min: 0 },
       { key: "routing.retry.max-retry-credentials", label: t("maxCredentials"), kind: "number", min: 0 },
-      { key: "routing.retry.max-retry-interval", label: t("maxInterval"), kind: "number", min: 0 },
+      {
+        key: "routing.retry.max-retry-interval",
+        label: t("maxInterval"),
+        kind: "number",
+        min: 0,
+        step: "any",
+      },
       { key: "routing.session-affinity", label: t("affinity"), kind: "switch" },
       { key: "routing.session-affinity-ttl", label: t("ttl"), kind: "text", hint: t("ttlHint") },
       { key: "routing.force-model-prefix", label: t("prefix"), kind: "switch" },
@@ -27,6 +34,7 @@ const fields = (): Record<SettingsTab, Field[]> => {
       {
         key: "routing.cooldown.transient-error-cooldown-seconds",
         label: t("transient"),
+        step: "any",
         kind: "number",
         min: -1,
       },
@@ -66,6 +74,9 @@ export function settingsChange(base: CoreSettings, draft: CoreSettings): Setting
   for (const field of Object.values(fields()).flat()) {
     const value = get(draft, field.key);
     if (value === get(base, field.key)) continue;
+    if (field.kind === "number" && (typeof value !== "number" || !Number.isFinite(value))) {
+      throw new Error(t("numberRequired", { label: field.label }));
+    }
     const path = field.key.split(".");
     const last = path.pop();
     let obj = change;
@@ -107,7 +118,7 @@ export function ConfigSettings(props: {
         props.save();
       }}
     >
-      <fieldset disabled={props.busy} class="config-fields" data-part="field">
+      <fieldset disabled={props.busy} class="config-fields">
         {shown.length === 0 && <Empty>{t("noResults")}</Empty>}
         {shown.map((field) => {
           const value = get(props.value, field.key);
@@ -136,12 +147,10 @@ export function ConfigSettings(props: {
                       id={field.key}
                       type="number"
                       min={field.min}
-                      step={1}
-                      required={field.key !== "routing.retry.request-retry"}
+                      step={field.step ?? 1}
+                      required={field.key !== "routing.retry.request-retry" || value !== null}
                       value={value === null ? "" : String(value)}
-                      onInput={(e) =>
-                        set(e.currentTarget.value === "" ? null : Number(e.currentTarget.value))
-                      }
+                      onInput={(e) => set(e.currentTarget.value === "" ? "" : Number(e.currentTarget.value))}
                     />
                   ) : (
                     <input

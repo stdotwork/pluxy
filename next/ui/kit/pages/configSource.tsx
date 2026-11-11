@@ -24,7 +24,7 @@ export function ConfigSource(props: ConfigSourceProps) {
   const [review, setReview] = useState(false);
   const [reloadConfirm, setReloadConfirm] = useState(false);
   const [query, setQuery] = useState("");
-  const [match, setMatch] = useState(0);
+  const [match, setMatch] = useState({ query: "", text: "", index: -1 });
   const editor = useRef<HTMLTextAreaElement>(null);
   const dirty = props.text !== props.base.content;
   const matches = useMemo(() => {
@@ -36,13 +36,12 @@ export function ConfigSource(props: ConfigSourceProps) {
       found.push(at);
     return found;
   }, [query, props.text]);
-  const index = matches.length ? match % matches.length : 0;
+  const index = matches.length && match.query === query && match.text === props.text ? match.index : -1;
   const selectMatch = (n: number) => {
     if (!matches.length) return;
     const selected = (n + matches.length) % matches.length;
-    setMatch(selected);
+    setMatch({ query, text: props.text, index: selected });
     const start = matches[selected] ?? 0;
-    editor.current?.focus();
     editor.current?.setSelectionRange(start, start + query.length);
     if (editor.current) {
       const row = props.text.slice(0, start).split("\n").length - 1;
@@ -83,7 +82,7 @@ export function ConfigSource(props: ConfigSourceProps) {
     <div class="stack">
       <Card>
         <p class="muted">{t("sourceHint")}</p>
-        <div class="config-source-search actions" data-part="field">
+        <div class="config-source-search actions">
           <input
             type="search"
             aria-label={t("searchConfig")}
@@ -91,16 +90,19 @@ export function ConfigSource(props: ConfigSourceProps) {
             value={query}
             onInput={(e) => {
               setQuery(e.currentTarget.value);
-              setMatch(0);
+              setMatch({ query: "", text: "", index: -1 });
             }}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
-                selectMatch(e.shiftKey ? index - 1 : index + 1);
+                selectMatch(e.shiftKey ? (index < 0 ? matches.length - 1 : index - 1) : index + 1);
               }
             }}
           />
-          <Button disabled={!matches.length} onClick={() => selectMatch(index - 1)}>
+          <Button
+            disabled={!matches.length}
+            onClick={() => selectMatch(index < 0 ? matches.length - 1 : index - 1)}
+          >
             {t("previous")}
           </Button>
           <Button disabled={!matches.length} onClick={() => selectMatch(index + 1)}>

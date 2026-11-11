@@ -27,6 +27,7 @@ export function ConfigPage() {
   const [doc, setDoc] = useState<ConfigDocument>();
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(true);
+  const [sourceError, setSourceError] = useState<string>();
   const [error, setError] = useState<string>();
   const [saved, setSaved] = useState(false);
   const [leave, setLeave] = useState<{ run: () => void }>();
@@ -42,7 +43,9 @@ export function ConfigPage() {
     const [s, c] = await Promise.all([api.coreSettings(), api.config()]);
     setBusy(false);
     if (s.status === 401 || c.status === 401) return unauthorized();
-    setError(problem(s) ?? problem(c));
+    setError(problem(s));
+    setSourceError(problem(c));
+    if (!c.body) setDoc(undefined);
     if (s.body) {
       setBaseSettings(s.body);
       setSettings(s.body);
@@ -114,10 +117,17 @@ export function ConfigPage() {
   };
   const saveSettings = async () => {
     if (!baseSettings || !settings) return;
-    setBusy(true);
     setError(undefined);
     setSaved(false);
-    const reply = await api.changeCoreSettings(settingsChange(baseSettings, settings));
+    let change: ReturnType<typeof settingsChange>;
+    try {
+      change = settingsChange(baseSettings, settings);
+    } catch (error) {
+      setError(String(error instanceof Error ? error.message : error));
+      return;
+    }
+    setBusy(true);
+    const reply = await api.changeCoreSettings(change);
     if (reply.status === 401) return unauthorized();
     const why = problem(reply);
     if (why) {
@@ -134,7 +144,10 @@ export function ConfigPage() {
     if (current.body) {
       setDoc(current.body);
       setText(current.body.content);
-    } else setError(problem(current));
+    } else {
+      setDoc(undefined);
+    }
+    setSourceError(problem(current));
     setSaved(true);
   };
   return (
@@ -142,30 +155,40 @@ export function ConfigPage() {
       <PageHead title={t("title")} />
       {error && <Notice tone="danger">{error}</Notice>}
       {saved && <Notice tone="ok">{t("saved")}</Notice>}
-      {!settings || !doc ? (
+      {!settings ? (
         <Notice tone="muted">{t("loading")}</Notice>
       ) : (
         <Tabs label={t("title")} tabs={configTabs()} active={tab} onChange={switchTab}>
           {tab === "source" ? (
-            <ConfigSource
-              loading={busy}
-              setBusy={setBusy}
-              base={doc}
-              text={text}
-              setText={setText}
-              reload={load}
-              saved={(current) => {
-                setDoc(current);
-                setText(current.content);
-                api.coreSettings().then((reply) => {
-                  if (reply.status === 401) return unauthorized();
-                  if (reply.body) {
-                    setSettings(reply.body);
-                    setBaseSettings(reply.body);
-                  } else setError(problem(reply));
-                });
-              }}
-            />
+            !doc ? (
+              <div class="stack">
+                {sourceError && <Notice tone="danger">{sourceError}</Notice>}
+                <Notice tone="muted">{busy ? t("loading") : t("sourceUnavailable")}</Notice>
+                <Button disabled={busy} onClick={load}>
+                  {t("reload")}
+                </Button>
+              </div>
+            ) : (
+              <ConfigSource
+                loading={busy}
+                setBusy={setBusy}
+                base={doc}
+                text={text}
+                setText={setText}
+                reload={load}
+                saved={(current) => {
+                  setDoc(current);
+                  setText(current.content);
+                  api.coreSettings().then((reply) => {
+                    if (reply.status === 401) return unauthorized();
+                    if (reply.body) {
+                      setSettings(reply.body);
+                      setBaseSettings(reply.body);
+                    } else setError(problem(reply));
+                  });
+                }}
+              />
+            )
           ) : (
             <div class="stack">
               <label class="field" data-part="field">

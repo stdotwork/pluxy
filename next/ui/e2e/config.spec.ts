@@ -147,3 +147,102 @@ for (const theme of ["default", "terminal", "paper"]) {
     await expect(page.getByRole("heading", { name: /Themes$/, level: 1 })).toBeVisible();
   });
 }
+
+test("review: fractional duration readbacks do not block unrelated saves or hide refusals", async ({
+  page,
+}) => {
+  const current = (await core.mgmt<{ hash: string; content: string }>("GET", "/config")).body;
+  const config = JSON.parse(current.content);
+  config.routing = {
+    ...config.routing,
+    max_wait_ms: 500,
+    transient_error_cooldown_ms: 500,
+    request_retry: 2,
+    force_model_prefix: false,
+  };
+  expect(
+    (await core.mgmt("PUT", "/config", { content: JSON.stringify(config, null, 2), base_hash: current.hash }))
+      .status,
+  ).toBe(200);
+  const readback = (await core.mgmt<CoreSettings>("GET", "/settings")).body;
+  expect(readback.routing.retry["max-retry-interval"]).toBe(0.5);
+  expect(readback.routing.cooldown["transient-error-cooldown-seconds"]).toBe(0.5);
+  await openPanel(page, core);
+  await signIn(page, core);
+  await goTo(page, "Config Panel");
+  await page.getByRole("tab", { name: "Network", exact: true }).click();
+  await page.getByRole("switch", { name: "Force Model Prefix", exact: true }).check();
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(page.getByText("Configuration saved successfully", { exact: true })).toBeVisible();
+  expect((await core.mgmt<CoreSettings>("GET", "/settings")).body.routing["force-model-prefix"]).toBe(true);
+  const retry = page.getByRole("spinbutton", { name: "Request Retry Count", exact: true });
+  await retry.fill("");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(retry).toHaveValue("");
+  await expect(page.getByText("Configuration saved successfully", { exact: true })).toHaveCount(0);
+  expect((await core.mgmt<CoreSettings>("GET", "/settings")).body.routing.retry["request-retry"]).toBe(2);
+  await retry.fill("2");
+  await page.getByRole("spinbutton", { name: "Max Retry Interval (seconds)", exact: true }).fill("0.75");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("cannot unmarshal number");
+  await expect(page.getByText("Configuration saved successfully", { exact: true })).toHaveCount(0);
+});
+
+test("review: Source search starts at the first occurrence and repeated Enter keeps the draft", async ({
+  page,
+}) => {
+  await openPanel(page, core);
+  await signIn(page, core);
+  await goTo(page, "Config Panel");
+  await page.getByRole("tab", { name: "Source", exact: true }).click();
+  const editor = page.getByRole("textbox", { name: "Configuration source", exact: true });
+  await expect(editor).not.toHaveValue("");
+  const draft = '{"first": "needle-one", "second": "needle-two"}';
+  await editor.fill(draft);
+  const search = page.getByPlaceholder("Search config...");
+  const selection = () => editor.evaluate((e: HTMLTextAreaElement) => e.selectionStart);
+  await search.fill("needle");
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await expect.poll(selection).toBe(draft.indexOf("needle"));
+  await search.fill("");
+  await search.fill("needle");
+  await search.press("Enter");
+  await expect.poll(selection).toBe(draft.indexOf("needle"));
+  await expect(search).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect.poll(selection).toBe(draft.lastIndexOf("needle"));
+  await expect(search).toBeFocused();
+  await expect(editor).toHaveValue(draft);
+  await page.keyboard.press("Shift+Enter");
+  await expect.poll(selection).toBe(draft.indexOf("needle"));
+  await expect(page.locator('.config-source-search[data-part="field"]')).toHaveCount(0);
+});
+
+test("review: unavailable config source leaves settings usable and shows its error only in Source", async ({
+  page,
+}) => {
+  // Core's real 422 shape: it cannot safely redact a file that does not parse, so carries no content.
+  await page.route("**/v0/management/config", (route) =>
+    route.fulfill({
+      status: 422,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: {
+          code: "invalid_config",
+          message: "the config file does not parse, so it cannot be shown with its secrets hidden",
+        },
+      }),
+    }),
+  );
+  await openPanel(page, core);
+  await signIn(page, core);
+  await goTo(page, "Config Panel");
+  await expect(page.getByRole("switch", { name: "Log to File", exact: true })).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await page.getByRole("tab", { name: "Network", exact: true }).click();
+  await expect(page.getByRole("combobox", { name: "Routing Strategy", exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "Source", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("cannot be shown with its secrets hidden");
+  await expect(page.getByText("Loading configuration...", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "Configuration source", exact: true })).toHaveCount(0);
+});

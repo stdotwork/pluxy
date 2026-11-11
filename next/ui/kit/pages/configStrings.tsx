@@ -32,7 +32,7 @@ export const configText = strings("config", {
   requestLog: "Enable request logging",
   requestWarning: "Keep this off unless you need detailed troubleshooting.",
   estimate: "Estimate token counts",
-  automatic: "Leave empty for core's default",
+  numberRequired: "{label} requires a number.",
   ttlHint: "A duration such as 1h or 30m; enable session affinity before changing its TTL.",
   saveChanges: "Save changes",
   discard: "Discard changes",
@@ -57,9 +57,10 @@ export const configText = strings("config", {
   save: "Save",
   before: "Before",
   after: "After",
-  noChanges: "No changes detected",
   conflict:
     "The server configuration changed since it was read. Saving was blocked to avoid overwriting those changes. Your draft is retained; note your edits, then reload the configuration and reconcile them.",
+  sourceUnavailable:
+    "Core did not return configuration text. Correct the file outside the panel, then reload.",
   sourceHint: "Secrets appear as placeholders. Keep a placeholder to preserve its secret.",
   noNewline: "No newline at end of file",
 });

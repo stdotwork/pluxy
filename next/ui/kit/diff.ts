@@ -6,14 +6,42 @@ export interface DiffLine {
 
 const lines = (text: string): string[] => text.match(/[^\n]*\n|[^\n]+$/g) ?? [];
 
-/** A line diff using Myers' shortest edit path; unchanged runs take no matrix of config size. */
+/** Preserve common ends, then find a shortest edit path for the remaining middle. */
 export function lineDiff(before: string, after: string): DiffLine[] {
-  const a = lines(before);
-  const b = lines(after);
+  const old = lines(before);
+  const next = lines(after);
+  let start = 0;
+  while (start < old.length && start < next.length && old[start] === next[start]) start++;
+  let end = 0;
+  while (
+    end < old.length - start &&
+    end < next.length - start &&
+    old[old.length - end - 1] === next[next.length - end - 1]
+  )
+    end++;
+  const context = (items: string[]): DiffLine[] => items.map((text) => ({ change: "same", text }));
+  return [
+    ...context(old.slice(0, start)),
+    ...middleDiff(old.slice(start, old.length - end), next.slice(start, next.length - end)),
+    ...context(old.slice(old.length - end)),
+  ];
+}
+
+function middleDiff(a: string[], b: string[]): DiffLine[] {
+  const replacement = (): DiffLine[] => [
+    ...a.map((text) => ({ change: "remove" as const, text })),
+    ...b.map((text) => ({ change: "add" as const, text })),
+  ];
+  if (!a.length || !b.length) return replacement();
+  // Bound the trace to 128 edits. Larger replacements remain exact, but need not be minimal.
+  // This caps quadratic search storage independently of a pasted config's line count.
+  const maxEdits = 128;
+  if (Math.abs(a.length - b.length) > maxEdits) return replacement();
   let frontier = new Map<number, number>([[1, 0]]);
   const trace: Map<number, number>[] = [];
-  for (let d = 0; d <= a.length + b.length; d++) {
-    trace.push(new Map(frontier));
+  for (let d = 0; d <= Math.min(a.length + b.length, maxEdits); d++) {
+    trace.push(frontier);
+    const next = new Map<number, number>();
     for (let k = -d; k <= d; k += 2) {
       const down = k === -d || (k !== d && (frontier.get(k - 1) ?? -1) < (frontier.get(k + 1) ?? -1));
       let x = down ? (frontier.get(k + 1) ?? 0) : (frontier.get(k - 1) ?? 0) + 1;
@@ -22,7 +50,7 @@ export function lineDiff(before: string, after: string): DiffLine[] {
         x++;
         y++;
       }
-      frontier.set(k, x);
+      next.set(k, x);
       if (x < a.length || y < b.length) continue;
       const result: DiffLine[] = [];
       for (let step = d; step >= 0; step--) {
@@ -46,7 +74,7 @@ export function lineDiff(before: string, after: string): DiffLine[] {
       }
       return result.reverse();
     }
-    frontier = new Map(frontier);
+    frontier = next;
   }
-  return [];
+  return replacement();
 }
