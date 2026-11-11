@@ -1610,7 +1610,9 @@ its keys and its indent. `PUT /config` writes the document as sent.
 
 In the document, a placeholder stands for the secret it replaced, so a document read with `GET
 /config`, edited and sent back keeps its secrets: core puts each one back from the file as it is
-now. To change a secret, write the new value in its place. A placeholder is accepted only where a
+now. A secret that is not a string has its type in its placeholder, so the number `1234` and the
+string `"1234"` have different placeholders and each goes back as it was written, wherever it is
+moved. To change a secret, write the new value in its place. A placeholder is accepted only where a
 secret goes, and only while the file still holds that secret and core has not restarted (the
 placeholders are keyed hashes with a key core picks at start); otherwise the call answers 409
 (read the config again) or refuses the document. Messages in replies never show a secret either.

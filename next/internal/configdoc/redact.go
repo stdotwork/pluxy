@@ -53,12 +53,12 @@ func (r *Redactor) ID(secret string) string {
 // Placeholder returns what a redacted document holds in place of secret.
 func (r *Redactor) Placeholder(secret string) string { return PlaceholderPrefix + r.ID(secret) }
 
-// placeholderOf returns the placeholder of a secret's node. In settings, a secret that is not a
-// string has its type in its placeholder too, so the number 1234 and the string "1234" have
-// different ones and each goes back with its own type. Its hash uses a key of its own, derived
-// from the Redactor's, so no string's placeholder is ever a typed value's.
-func (r *Redactor) placeholderOf(n *yaml.Node, settings bool) string {
-	if !settings || n.Tag == "!!str" {
+// placeholderOf returns the placeholder of a secret's node. A secret that is not a string has its
+// type in its placeholder too, so the number 1234 and the string "1234" have different ones and
+// each goes back with its own type, wherever its placeholder is moved. Its hash uses a key of its
+// own, derived from the Redactor's, so no string's placeholder is ever a typed value's.
+func (r *Redactor) placeholderOf(n *yaml.Node) string {
+	if n.Tag == "!!str" {
 		return r.Placeholder(n.Value)
 	}
 	derive := hmac.New(sha256.New, r.key)
@@ -254,7 +254,7 @@ func (r *Redactor) redact(b []byte, isYAML, strict bool) ([]byte, error) {
 	}
 	repl := map[*yaml.Node]string{}
 	for _, n := range found {
-		p := r.placeholderOf(n, strict)
+		p := r.placeholderOf(n)
 		if !isYAML {
 			p = `"` + p + `"`
 		}
@@ -268,7 +268,7 @@ func (r *Redactor) redact(b []byte, isYAML, strict bool) ([]byte, error) {
 		return out, nil
 	}
 	for _, n := range found {
-		setScalar(n, "!!str", r.placeholderOf(n, strict), 0)
+		setScalar(n, "!!str", r.placeholderOf(n), 0)
 	}
 	out, err := d.encode()
 	if err != nil {
@@ -356,7 +356,7 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 	if cur, err := Parse(current, isYAML); err == nil {
 		where := paths(cur.root)
 		for _, n := range secrets(cur.root, settings) {
-			p := r.placeholderOf(n, settings)
+			p := r.placeholderOf(n)
 			s := values[p]
 			if s == nil {
 				s = &secret{value: n.Value, tag: n.Tag, paths: map[string]bool{}}
