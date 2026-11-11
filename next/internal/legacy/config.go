@@ -269,7 +269,8 @@ var rules = map[string]rule{
 	"observability.logs.error-logs-max-files":                 {supported, ""},
 	"observability.usage.usage-statistics-enabled":            {supported, ""},
 	"observability.usage.redis-usage-queue-retention-seconds": {dropped, "reading usage no longer removes it; the record keeps requests by usage.max_events and usage.max_age_ms"},
-	"observability.pprof":                                     {dropped, "a developer tool, off by default"},
+	"observability.pprof.enable":                              {supported, ""},
+	"observability.pprof.addr":                                {supported, ""},
 	"models":                                                  {later, ""},
 	"plugins":                                                 {dropped, "replaced by packages"},
 	"credentials":                                             {dropped, "only the Home control plane used them"},
@@ -449,6 +450,7 @@ var readPaths = []string{
 	"multimedia.disable-image-generation", "oauth.auth-dir", "observability.usage.usage-statistics-enabled",
 	"observability.logs.logging-to-file", "observability.logs.logs-max-total-size-mb",
 	"observability.logs.request-log", "observability.logs.error-logs-max-files",
+	"observability.pprof.enable", "observability.pprof.addr",
 }
 
 // mappingsOn checks that every value on the way to path, below the root, is a mapping or
@@ -703,6 +705,21 @@ func (x *translator) observability() error {
 			return err
 		}
 		x.out["usage"] = tree{"enabled": on}
+	}
+	// The profiling pages' switch and address (today's pprof.enable and pprof.addr). Off, the
+	// address asks for nothing; the default address is core's own (server.defaultPprofAddr).
+	if on, err := flag(x.t, "observability.pprof.enable"); err != nil {
+		return err
+	} else if on {
+		pprof := tree{"enable": true}
+		addr, err := str(x.t, "observability.pprof.addr")
+		if err != nil {
+			return err
+		}
+		if addr != "" && addr != "127.0.0.1:8316" {
+			pprof["addr"] = addr
+		}
+		x.out["pprof"] = pprof
 	}
 	return nil
 }
