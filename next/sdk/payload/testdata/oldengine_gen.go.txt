@@ -1,0 +1,101 @@
+// This is the throwaway program that made testdata/cases.json: it runs the old core's payload
+// engine on every case and stores what it returned in the case's "old" field. Kept as text so it
+// is not compiled here. To regenerate (after changing or adding a case in cases.json):
+//
+//   1. copy this file to core/internal/runtime/executor/helps/zz_oldengine_gen_test.go
+//   2. from core/, with CGO_ENABLED=1:
+//        PLUXY_GEN_IN=<abs>/next/sdk/payload/testdata/cases.json PLUXY_GEN_OUT=/tmp/cases_out.json \
+//          go test -p 2 -count=1 -run TestZZOldEngineGen ./internal/runtime/executor/helps/
+//   3. replace testdata/cases.json with /tmp/cases_out.json, and delete the copied file from core/
+//
+// A case whose result depends on the order of a rule's params (a Go map in the old engine) fails
+// the run as not deterministic: change such a case so one rule never creates two new keys at once.
+// Keep User-Agent out of case headers: the old engine rewrites Codex tool integers for a Codex
+// client, which is not a payload rule.
+
+package helps
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"os"
+	"testing"
+
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+)
+
+// Throwaway generator: runs the old payload engine on the cases in PLUXY_GEN_IN and writes the
+// outputs to PLUXY_GEN_OUT. See next/sdk/payload/testdata/oldengine_gen.go.txt.
+
+type zzInput struct {
+	Model          string              `json:"model"`
+	RequestedModel string              `json:"requested-model"`
+	Protocol       string              `json:"protocol"`
+	FromProtocol   string              `json:"from-protocol"`
+	Root           string              `json:"root"`
+	Headers        map[string][]string `json:"headers"`
+	Original       *string             `json:"original"`
+}
+
+type zzCase struct {
+	Name     string               `json:"name"`
+	Rules    config.PayloadConfig `json:"rules"`
+	Input    zzInput              `json:"input"`
+	Body     string               `json:"body"`
+	Semantic bool                 `json:"semantic,omitempty"`
+	Note     string               `json:"note,omitempty"`
+	Old      string               `json:"old"`
+}
+
+func TestZZOldEngineGen(t *testing.T) {
+	inPath, outPath := os.Getenv("PLUXY_GEN_IN"), os.Getenv("PLUXY_GEN_OUT")
+	if inPath == "" || outPath == "" {
+		t.Skip("PLUXY_GEN_IN and PLUXY_GEN_OUT not set")
+	}
+	raw, err := os.ReadFile(inPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []zzCase
+	if err := json.Unmarshal(raw, &cases); err != nil {
+		t.Fatal(err)
+	}
+	run := func(c *zzCase) string {
+		cfg := &config.Config{Payload: c.Rules}
+		var original []byte
+		if c.Input.Original != nil {
+			original = []byte(*c.Input.Original)
+		}
+		h := http.Header{}
+		for k, vs := range c.Input.Headers {
+			for _, v := range vs {
+				h.Add(k, v)
+			}
+		}
+		out := ApplyPayloadConfigWithRequest(cfg, c.Input.Model, c.Input.Protocol, c.Input.FromProtocol, c.Input.Root, []byte(c.Body), original, c.Input.RequestedModel, "", h)
+		return string(out)
+	}
+	for i := range cases {
+		c := &cases[i]
+		c.Old = run(c)
+		// Params is a Go map, so the old engine's order inside one rule is random: a case whose
+		// result depends on it is a bad case.
+		for n := 0; n < 40; n++ {
+			if again := run(c); again != c.Old {
+				t.Errorf("case %q is not deterministic: %q then %q", c.Name, c.Old, again)
+				break
+			}
+		}
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(cases); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outPath, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
