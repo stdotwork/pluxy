@@ -176,7 +176,10 @@ const sessions = new Set<number>();
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     // Bounded: TERM, a grace period, then KILL for each session, before the runner exits.
-    void Promise.all([...sessions].map(stopSession)).finally(() => process.exit(130));
+    void Promise.all([...sessions].map(stopSession)).finally(() => {
+      removeTemporary();
+      process.exit(130);
+    });
   });
 }
 
@@ -526,168 +529,190 @@ if (missing.length > 0) {
   process.exit(1);
 }
 
-run("bun", ["run", "build"], app);
 const targetDir = resolvePath(tauri, process.env.CARGO_TARGET_DIR ?? "target");
-const problems: string[] = [];
-
-// The test package first: its Tauri build renames the binary it makes in target/debug, and the
-// dev build below puts the dev binary back.
-const packageDir = mkdtempSync(join(tmpdir(), "pluxy-app-native-package-"));
-let testPackage: TestPackage | undefined;
-try {
-  runShown("bun", ["run", "package:test", packageDir], app);
-  const made: TestPackage = JSON.parse(readFileSync(join(packageDir, "test-package.json"), "utf8"));
-  const name = basename(made.appimage);
-  const header = appImageHeader(made.appimage);
-  console.log(
-    `package: ${name}: first bytes ${header.hex}; ELF ${header.elf}, AppImage type ${header.type ?? "none"}`,
-  );
-  if (!/-test_[^/]*\.AppImage$/.test(name))
-    problems.push(`the test package's file name ${name} has no -test`);
-  if (!header.elf || header.type !== 2) problems.push(`the test package ${name} is not a type-2 AppImage`);
-  if (!made.updater_pubkey) problems.push("the test package names no updater public key");
-  testPackage = made;
-} catch (e) {
-  problems.push(`the test package was not built: ${(e as Error).message}`);
-}
-
-// The dev app, and the probe the session uses to check the desktop services
-// (examples/session_probe.rs). Its features are the test package's, so the two differ only in
-// the identifier and product name the test package's config gives it.
-run(
-  "cargo",
-  [
-    "build",
-    "--locked",
-    "--features",
-    "native-test,artifact-test-trust",
-    "--bin",
-    "pluxy-app",
-    "--example",
-    "session_probe",
-  ],
-  tauri,
-);
+/** The dev app, and the probe the session uses to check the desktop services. */
 const bin = join(targetDir, "debug", "pluxy-app");
 const probe = join(targetDir, "debug", "examples", "session_probe");
-const appImageDir = mkdtempSync(join(tmpdir(), "pluxy-app-native-appimage-"));
-// The same test trust profile in every run; without a test package, a key no build carries.
-const updaterKey = testPackage?.updater_pubkey ?? "no-test-package";
 let appImage = ""; // the smoke AppImage the sessions run
-let setupFailure: string | undefined;
-const dev = (mode: Mode): Artifact => ({ label: mode, bin, identifier, gate: "refuses" });
+const problems: string[] = [];
 
+/** This run's own temporary folders (each app run removes its own), removed when it ends,
+ * however it ends. */
+const temporary: string[] = [];
+function tempDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  temporary.push(dir);
+  return dir;
+}
+function removeTemporary() {
+  for (const dir of temporary.splice(0)) rmSync(dir, { recursive: true, force: true });
+}
+
+let exitCode = 1;
 try {
-  appImage = await buildSmokeAppImage(appImageDir);
-  const prepared = mkdtempSync(join(tmpdir(), "pluxy-app-native-core-"));
-  try {
-    const { core } = JSON.parse(run("go", ["run", "./e2e/panelcore", "-probe", "-prepare", prepared], next));
-    const p = await runApp("managed", dev("managed"), updaterKey, { mode: "managed", core_path: core });
-    problems.push(...p.map((x) => `managed: ${x}`));
-  } finally {
-    rmSync(prepared, { recursive: true, force: true });
-  }
-
-  for (const mode of ["local", "remote"] as const) {
-    const c = await startCore(mode === "remote");
-    try {
-      const conn = { mode, url: c.base, key: c.key, ...(c.ca ? { ca_file: c.ca } : {}) };
-      const p = await runApp(mode, dev(mode), updaterKey, conn, c.base);
-      // The app only connected: its quitting leaves this core running.
-      if ((await managementStatus(c.base, c.key, c.ca)) !== 200) p.push("the core stopped when the app quit");
-      problems.push(...p.map((x) => `${mode}: ${x}`));
-    } finally {
-      c.proc.stdin?.end();
-      await new Promise((r) => c.proc.once("exit", r));
-    }
-  }
-
-  // The packaged app: the AppImage itself, against a test core of the runner's.
-  if (testPackage) {
-    const packaged: Artifact = {
-      label: "packaged",
-      bin: testPackage.appimage,
-      identifier: TEST_ID,
-      gate: "passes",
-    };
-    const c = await startCore(false);
-    try {
-      const conn = { mode: "local", url: c.base, key: c.key };
-      const p = await runApp("local", packaged, updaterKey, conn, c.base);
-      if ((await managementStatus(c.base, c.key)) !== 200) p.push("the core stopped when the app quit");
-      problems.push(...p.map((x) => `packaged: ${x}`));
-    } finally {
-      c.proc.stdin?.end();
-      await new Promise((r) => c.proc.once("exit", r));
-    }
-  } else {
-    problems.push("packaged: there is no test package to run");
-  }
-} catch (e) {
-  if (!(e instanceof SetupError)) throw e;
-  setupFailure = e.message;
+  exitCode = await main();
 } finally {
-  rmSync(appImageDir, { recursive: true, force: true });
+  removeTemporary();
 }
+process.exit(exitCode);
 
-if (setupFailure !== undefined) {
-  rmSync(packageDir, { recursive: true, force: true });
-  console.error(`\nnative test setup failed:\n${setupFailure}`);
-  process.exit(1);
-}
+async function main(): Promise<number> {
+  run("bun", ["run", "build"], app);
 
-// The release gate (package.ts release): it builds the release app and checks it with every
-// AppImage given, unpacking each, never running it. Each refusal has a passing case on the same
-// route: an AppImage packed the same way around a clean binary.
-const releaseDir = mkdtempSync(join(tmpdir(), "pluxy-app-native-release-"));
-try {
-  const releaseGate = (what: string, images: string[], want: "valid" | RegExp) => {
-    const r = spawnSync("bun", ["run", "package:release", ...images], {
-      cwd: app,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "inherit"],
-    });
-    const verdict = /^release-package: .*$/m.exec(r.stdout ?? "")?.[0] ?? "no verdict";
-    console.log(`release gate, ${what}: exit ${r.status}: ${verdict}`);
-    const ok =
-      want === "valid"
-        ? r.status === 0 && verdict.startsWith("release-package: valid")
-        : r.status === 1 && verdict.startsWith("release-package: refused") && want.test(verdict);
-    if (!ok) problems.push(`release gate, ${what}: exit ${r.status}: ${verdict}`);
-  };
-  releaseGate("a clean release build", [], "valid");
-  const releaseBin = join(targetDir, "release", "pluxy-app");
+  // The test package first: its Tauri build renames the binary it makes in target/debug, and the
+  // dev build below puts the dev binary back.
+  const packageDir = tempDir("pluxy-app-native-package-");
+  let testPackage: TestPackage | undefined;
   try {
-    const clean = await packAppImage(join(releaseDir, "clean"), "pluxy.AppImage", {
-      "usr/bin/pluxy-app": releaseBin,
-    });
-    releaseGate("a clean AppImage", [clean], "valid");
+    runShown("bun", ["run", "package:test", packageDir], app);
+    const made: TestPackage = JSON.parse(readFileSync(join(packageDir, "test-package.json"), "utf8"));
+    const name = basename(made.appimage);
+    const header = appImageHeader(made.appimage);
+    console.log(
+      `package: ${name}: first bytes ${header.hex}; ELF ${header.elf}, AppImage type ${header.type ?? "none"}`,
+    );
+    if (!/-test_[^/]*\.AppImage$/.test(name))
+      problems.push(`the test package's file name ${name} has no -test`);
+    if (!header.elf || header.type !== 2) problems.push(`the test package ${name} is not a type-2 AppImage`);
+    if (!made.updater_pubkey) problems.push("the test package names no updater public key");
+    testPackage = made;
   } catch (e) {
-    problems.push(`release gate: no clean AppImage: ${(e as Error).message}`);
+    problems.push(`the test package was not built: ${(e as Error).message}`);
   }
-  const marked = await packAppImage(join(releaseDir, "marked"), "pluxy.AppImage", {
-    "usr/bin/pluxy-app": bin,
-  });
-  releaseGate(
-    "an AppImage holding the test-feature dev binary",
-    [marked],
-    /pluxy\.AppImage!usr\/bin\/pluxy-app: test build marker\/identity in artifact/,
-  );
-  if (testPackage) {
-    const renamed = join(releaseDir, "candidate.AppImage");
-    copyFileSync(testPackage.appimage, renamed);
-    releaseGate("the test package, renamed", [renamed], /candidate\.AppImage!/);
-    releaseGate("the test package", [testPackage.appimage], /test\/private release input or artifact path/);
-  } else {
-    problems.push("release gate: there is no test package to refuse");
-  }
-} finally {
-  rmSync(releaseDir, { recursive: true, force: true });
-  rmSync(packageDir, { recursive: true, force: true });
-}
 
-if (problems.length > 0) {
-  console.error(`\n${problems.length} problems:\n- ${problems.join("\n- ")}`);
-  process.exit(1);
+  // The dev app, and the probe the session uses to check the desktop services
+  // (examples/session_probe.rs). Its features are the test package's, so the two differ only in
+  // the identifier and product name the test package's config gives it.
+  run(
+    "cargo",
+    [
+      "build",
+      "--locked",
+      "--features",
+      "native-test,artifact-test-trust",
+      "--bin",
+      "pluxy-app",
+      "--example",
+      "session_probe",
+    ],
+    tauri,
+  );
+  const appImageDir = tempDir("pluxy-app-native-appimage-");
+  // The same test trust profile in every run; without a test package, a key no build carries.
+  const updaterKey = testPackage?.updater_pubkey ?? "no-test-package";
+  let setupFailure: string | undefined;
+  const dev = (mode: Mode): Artifact => ({ label: mode, bin, identifier, gate: "refuses" });
+
+  try {
+    appImage = await buildSmokeAppImage(appImageDir);
+    const prepared = mkdtempSync(join(tmpdir(), "pluxy-app-native-core-"));
+    try {
+      const { core } = JSON.parse(
+        run("go", ["run", "./e2e/panelcore", "-probe", "-prepare", prepared], next),
+      );
+      const p = await runApp("managed", dev("managed"), updaterKey, { mode: "managed", core_path: core });
+      problems.push(...p.map((x) => `managed: ${x}`));
+    } finally {
+      rmSync(prepared, { recursive: true, force: true });
+    }
+
+    for (const mode of ["local", "remote"] as const) {
+      const c = await startCore(mode === "remote");
+      try {
+        const conn = { mode, url: c.base, key: c.key, ...(c.ca ? { ca_file: c.ca } : {}) };
+        const p = await runApp(mode, dev(mode), updaterKey, conn, c.base);
+        // The app only connected: its quitting leaves this core running.
+        if ((await managementStatus(c.base, c.key, c.ca)) !== 200)
+          p.push("the core stopped when the app quit");
+        problems.push(...p.map((x) => `${mode}: ${x}`));
+      } finally {
+        c.proc.stdin?.end();
+        await new Promise((r) => c.proc.once("exit", r));
+      }
+    }
+
+    // The packaged app: the AppImage itself, against a test core of the runner's.
+    if (testPackage) {
+      const packaged: Artifact = {
+        label: "packaged",
+        bin: testPackage.appimage,
+        identifier: TEST_ID,
+        gate: "passes",
+      };
+      const c = await startCore(false);
+      try {
+        const conn = { mode: "local", url: c.base, key: c.key };
+        const p = await runApp("local", packaged, updaterKey, conn, c.base);
+        if ((await managementStatus(c.base, c.key)) !== 200) p.push("the core stopped when the app quit");
+        problems.push(...p.map((x) => `packaged: ${x}`));
+      } finally {
+        c.proc.stdin?.end();
+        await new Promise((r) => c.proc.once("exit", r));
+      }
+    } else {
+      problems.push("packaged: there is no test package to run");
+    }
+  } catch (e) {
+    if (!(e instanceof SetupError)) throw e;
+    setupFailure = e.message;
+  }
+
+  if (setupFailure !== undefined) {
+    console.error(`\nnative test setup failed:\n${setupFailure}`);
+    return 1;
+  }
+
+  // The release gate (package.ts release): it builds the release app and checks it with every
+  // AppImage given, unpacking each, never running it. Each refusal has a passing case on the same
+  // route: an AppImage packed the same way around a clean binary.
+  const releaseDir = tempDir("pluxy-app-native-release-");
+  {
+    const releaseGate = (what: string, images: string[], want: "valid" | RegExp) => {
+      const r = spawnSync("bun", ["run", "package:release", ...images], {
+        cwd: app,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "inherit"],
+      });
+      const verdict = /^release-package: .*$/m.exec(r.stdout ?? "")?.[0] ?? "no verdict";
+      console.log(`release gate, ${what}: exit ${r.status}: ${verdict}`);
+      const ok =
+        want === "valid"
+          ? r.status === 0 && verdict.startsWith("release-package: valid")
+          : r.status === 1 && verdict.startsWith("release-package: refused") && want.test(verdict);
+      if (!ok) problems.push(`release gate, ${what}: exit ${r.status}: ${verdict}`);
+    };
+    releaseGate("a clean release build", [], "valid");
+    const releaseBin = join(targetDir, "release", "pluxy-app");
+    try {
+      const clean = await packAppImage(join(releaseDir, "clean"), "pluxy.AppImage", {
+        "usr/bin/pluxy-app": releaseBin,
+      });
+      releaseGate("a clean AppImage", [clean], "valid");
+    } catch (e) {
+      problems.push(`release gate: no clean AppImage: ${(e as Error).message}`);
+    }
+    const marked = await packAppImage(join(releaseDir, "marked"), "pluxy.AppImage", {
+      "usr/bin/pluxy-app": bin,
+    });
+    releaseGate(
+      "an AppImage holding the test-feature dev binary",
+      [marked],
+      /pluxy\.AppImage!usr\/bin\/pluxy-app: test build marker\/identity in artifact/,
+    );
+    if (testPackage) {
+      const renamed = join(releaseDir, "candidate.AppImage");
+      copyFileSync(testPackage.appimage, renamed);
+      releaseGate("the test package, renamed", [renamed], /candidate\.AppImage!/);
+      releaseGate("the test package", [testPackage.appimage], /test\/private release input or artifact path/);
+    } else {
+      problems.push("release gate: there is no test package to refuse");
+    }
+  }
+
+  if (problems.length > 0) {
+    console.error(`\n${problems.length} problems:\n- ${problems.join("\n- ")}`);
+    return 1;
+  }
+  console.log("native test passed in all three modes, as the packaged app, and at the release gate");
+  return 0;
 }
-console.log("native test passed in all three modes, as the packaged app, and at the release gate");
