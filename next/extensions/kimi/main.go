@@ -260,17 +260,11 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 			return relayStream(ctx, resp.Body, send, dec.stream())
 		}
 		capture := newReplayCapture()
-		err := relayStream(ctx, resp.Body, send, replayDecoder{dec.stream(), capture})
+		err := relayStream(ctx, resp.Body, send, replayDecoder{dec.stream(), capture, turn})
 		if capture.failed {
 			turn.forget()
 		}
-		if err != nil {
-			return err
-		}
-		if content, ok := capture.content(); ok {
-			turn.keep(content)
-		}
-		return nil
+		return err
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxFrame))
 	if err != nil {

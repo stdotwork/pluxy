@@ -311,6 +311,31 @@ func TestReplayCacheBounds(t *testing.T) {
 
 // A stream the capture cannot rebuild exactly is not kept: an unknown delta, an error event, or
 // one that never completes.
+// A streamed turn is kept before its finish leaves the decoder, so a client that sends its next
+// turn the moment it has the reply finds it.
+func TestStreamedTurnKeptBeforeFinish(t *testing.T) {
+	cache := newReplayCache()
+	d := replayDecoder{decoders[llm.FormatAnthropicMessages].stream(), newReplayCapture(), &replayTurn{cache: cache, scope: "c\x00kimi\x00s"}}
+	finished := false
+	for _, e := range toolTurnSSE {
+		evs, err := d.Decode([]byte(e))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ev := range evs {
+			if ev.Type == llm.EventFinish {
+				finished = true
+				if len(cache.entries) != 1 {
+					t.Fatalf("the finish left the decoder with %d kept turns, want 1", len(cache.entries))
+				}
+			}
+		}
+	}
+	if !finished {
+		t.Fatal("the stream gave no finish")
+	}
+}
+
 func TestReplayCaptureGivesUp(t *testing.T) {
 	run := func(events []string) bool {
 		c := newReplayCapture()
