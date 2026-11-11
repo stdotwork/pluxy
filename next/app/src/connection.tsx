@@ -57,10 +57,10 @@ function describe(c: Connection): [string, string][] {
     const process = {
       running: `running, pid ${c.core.pid}`,
       stopped: "stopped",
-      missing: "no core installed",
+      missing: "not installed",
     };
     rows.push(["Process", process[c.core.state]]);
-    if (c.core.version) rows.push(["Version", c.core.version]);
+    if (c.core.version) rows.push(["Current version", c.core.version]);
     if (c.core.detail) rows.push(["Last words", c.core.detail]);
   }
   if (c.mode === "local" || c.mode === "remote")
