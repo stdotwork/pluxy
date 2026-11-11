@@ -1551,6 +1551,41 @@ extension, so request logs hold what the client sent and received.
 | `GET /v0/management/request-error-logs/{name}` | One error log, as a download. 400 for a name that is not an error log's as core writes them, 404 when there is none or the name is a link. |
 | `GET /v0/management/request-log-by-id/{id}` | The newest request log, plain or error, of the request with that trace ID (the `X-CPA-TRACE-ID` of its reply), as a download; 404 when there is none. |
 
+## Profiling pages
+
+Core can serve Go's profiling pages under `/debug/pprof/`: heap, goroutine and CPU profiles of
+the running core. They are off by default, and only a build made with the `pprof` build tag
+has them:
+
+```bash
+go build -tags pprof -o pluxy ./cmd/pluxy
+```
+
+Turn them on in `config.json`. `addr` defaults to `127.0.0.1:8316`:
+
+```json
+{"pprof": {"enable": true, "addr": "127.0.0.1:8316"}}
+```
+
+The pages are served on a listener of their own, at `addr`, and nowhere else: not on the
+client or management address. `addr` must be a loopback address: `127.0.0.0/8`, `::1` or
+`localhost`. Any other address fails the config load, and a reload that sets one is refused
+while the old config keeps running. Core logs the address it listens on when the listener
+starts. A reload that changes `enable` or `addr` starts, moves or stops the listener, without a
+restart.
+
+To read a heap profile from a running core:
+
+```bash
+go tool pprof http://127.0.0.1:8316/debug/pprof/heap
+```
+
+The index at `/debug/pprof/` lists every profile. A CPU profile of 30 seconds is
+`/debug/pprof/profile?seconds=30`.
+
+A default build with the setting on logs one line saying it has no profiling pages, and
+serves nothing on any address.
+
 ## Packages
 
 Extensions are installed as packages: a release archive from a registry, checked against the
@@ -1757,7 +1792,7 @@ are accepted silently.
 | `observability.logs.request-log` (`request-log`), `observability.logs.error-logs-max-files` (`error-logs-max-files`) | `logs.request_log` and `logs.error_logs_max_files`: [request logs](#request-logs). A negative count is the default, 10, as in today's core. | Supported |
 | `observability.usage.usage-statistics-enabled` (`usage-statistics-enabled`) | `usage.enabled`: the [usage record](#usage-statistics). Today's example config sets it to `false`, which turns the record off here too. | Supported |
 | `observability.usage.redis-usage-queue-retention-seconds` (`redis-usage-queue-retention-seconds`) | The record keeps requests by `usage.max_events` and `usage.max_age_ms`. | Dropped: it was how long a queued usage record waited for a reader that removed it; reading the record here removes nothing, and its default of 60 seconds would leave little to read |
-| `observability.pprof.*` (`pprof`) | | Dropped: a developer tool, off by default |
+| `observability.pprof.enable` (`pprof.enable`), `observability.pprof.addr` (`pprof.addr`) | `pprof.enable` and `pprof.addr`: the [profiling pages](#profiling-pages). Only a build with `-tags pprof` serves them; the default build logs that the setting does nothing. An address that is not loopback is refused. | Supported (in the `pprof` build) |
 | `models.catalog`, `models.codex-catalog`, `models.devin-catalog` | | Later |
 | `plugins.*` | Extensions are separate programs (packages), not libraries loaded into core. | Dropped: replaced by packages |
 | `credentials.*` (`credential-concurrency`, `credential-in-flight`) | | Dropped: only the Home control plane used them |
