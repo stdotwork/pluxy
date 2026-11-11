@@ -158,6 +158,6 @@ test("filters, downloads and logging-off guidance follow the selected theme", as
       await page.screenshot({ path: `${process.env.LOGS_SHOTS}/${theme}-off.png`, fullPage: true });
     await page.getByRole("link", { name: "Config Panel — Logging", exact: true }).click();
     await page.getByRole("tab", { name: "Logging", exact: true }).click();
-    await expect(page.getByRole("switch", { name: "Enable logging to file", exact: true })).not.toBeChecked();
+    await expect(page.getByRole("switch", { name: "Log to File", exact: true })).not.toBeChecked();
   }
 });
