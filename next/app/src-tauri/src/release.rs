@@ -88,7 +88,8 @@ pub fn https_url(s: &str) -> Result<String, String> {
     Ok(u.to_string())
 }
 
-/// RFC 3339 in UTC, such as `2026-11-01T12:00:00Z` (fractions of a second allowed).
+/// RFC 3339 in UTC, such as `2026-11-01T12:00:00Z` (fractions of a second allowed), on a day
+/// its month has. Leap seconds (second 60) are refused.
 fn utc_time(s: &str) -> bool {
     let b = s.as_bytes();
     let digits =
@@ -114,11 +115,16 @@ fn utc_time(s: &str) -> bool {
         return false;
     }
     let n = |r: std::ops::Range<usize>| s[r].parse::<u32>().unwrap_or(99);
-    (1..=12).contains(&n(5..7))
-        && (1..=31).contains(&n(8..10))
-        && n(11..13) < 24
-        && n(14..16) < 60
-        && n(17..19) < 61
+    let (year, month) = (n(0..4), n(5..7));
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=days).contains(&n(8..10)) && n(11..13) < 24 && n(14..16) < 60 && n(17..19) < 60
 }
 
 pub fn parse_feed(bytes: &[u8]) -> Result<Feed, String> {
@@ -645,10 +651,23 @@ mod tests {
 
     #[test]
     fn utc_times() {
-        for ok in ["2026-11-01T12:00:00Z", "2026-02-28T23:59:59.123Z"] {
+        for ok in [
+            "2026-11-01T12:00:00Z",
+            "2026-02-28T23:59:59.123Z",
+            "2024-02-29T00:00:00Z",
+            "2000-02-29T00:00:00Z",
+            "2026-04-30T00:00:00Z",
+        ] {
             assert!(utc_time(ok), "{ok}");
         }
         for bad in [
+            // Days a month does not have: February outside leap years (1900 is not one).
+            "2026-02-29T00:00:00Z",
+            "1900-02-29T00:00:00Z",
+            "2026-04-31T00:00:00Z",
+            "2026-02-31T00:00:00Z",
+            // Leap seconds are refused.
+            "2026-12-31T23:59:60Z",
             "2026-11-01T12:00:00+01:00",
             "2026-13-01T12:00:00Z",
             "2026-11-01 12:00:00Z",

@@ -187,7 +187,7 @@ takes a new format number, which this app refuses.
 | `product` | `app` or `core` |
 | `version` | A semantic version (2.0.0) without a leading `v`, at most 64 characters; one release per product and version precedence |
 | `channel` | `stable` or `preview`; a stable release has no pre-release part |
-| `published` | RFC 3339 in UTC, ending in `Z` |
+| `published` | RFC 3339 in UTC, ending in `Z`, on a day its month has; second 60 (a leap second) is refused |
 | `notes` | Optional Markdown, at most 64 KiB |
 | `notes_url` | Optional `https://` address with a host and no user name or password, at most 2048 characters |
 
