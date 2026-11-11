@@ -36,4 +36,9 @@ export interface Host {
     set(name: string, value: string | null): void;
   };
   features: ReadonlySet<Feature>;
+  /**
+   * The address clients reach core at (scheme, host and port, no trailing slash), when the host
+   * knows it: the browser panel's is the origin that served it. A host that cannot say leaves it out.
+   */
+  address?: string;
 }

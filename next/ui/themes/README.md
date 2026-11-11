@@ -199,7 +199,7 @@ These stay stable within a theme contract version:
 | --- | --- |
 | `data-appearance="light"` or `"dark"` | Root element |
 | `data-nav`, `data-list`, `data-detail`, `data-width`, `data-tabs` | Root element, set to the active layout value |
-| `data-page="<page id>"` | Root element: `status`, `accounts`, `add-account`, `quota`, `logs`, `usage`, `config`, `extensions`, `themes`, or an extension page's ID |
+| `data-page="<page id>"` | Root element: `status`, `accounts`, `add-account`, `quota`, `logs`, `usage`, `config`, `system`, `extensions`, `themes`, or an extension page's ID |
 | `data-part="shell"` | The whole UI below the root |
 | `data-part="nav"` | The navigation |
 | `data-part="nav-group"` | A group of navigation entries under its label; `data-group` is `operate`, `gateway`, `observe`, `control` or `extensions` (the extensions' pages) |
@@ -234,6 +234,8 @@ These stay stable within a theme contract version:
 | `data-part="method"` | A sign-in method tile with its label, kind caption and selected flow. |
 | `data-part="flow"` | A reusable account sign-in flow: inputs, prompts, waiting and terminal states. |
 | `data-part="device-code"` | The user code to enter on a device sign-in page. |
+| `data-part="tile"` | One fact on the System page's about card: a label, its value and a note. |
+| `data-part="model-group"` | The models of one extension on the System page, under the extension's name and their count. |
 | `data-part="stat"` | A figure with its label and hint on the Dashboard (requests handled, success rate, credentials); `data-tone` is `ok`, `warn` or `danger` when the figure has a verdict. |
 | `data-part="chart"` | The Dashboard's traffic chart (an SVG). Each bar carries `data-outcome`, `success` or `failure`. |
 | `data-part="account-tools"` | Account detail health and tools. |
