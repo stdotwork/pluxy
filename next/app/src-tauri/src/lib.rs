@@ -6,6 +6,7 @@
 //! the window's webview, labelled `main` (`capabilities/main.json`). Extension pages run in
 //! webviews of their own (`pages.rs`), which no capability names.
 
+pub mod artifact;
 pub mod client;
 mod command_names;
 pub mod conn;
@@ -14,6 +15,8 @@ pub mod managed;
 mod native_test;
 pub mod pages;
 mod place;
+pub mod release_config;
+pub mod trust;
 
 pub use command_names::COMMANDS;
 

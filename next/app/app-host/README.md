@@ -1,7 +1,8 @@
 # App package contract
 
 This reference defines the app contribution to a pluxy package and app program contract v0.
-The desktop installer, signature verifier and Rust program host are later implementation work.
+The signature verifier is shared Rust code in `src-tauri/src/artifact.rs`. The desktop installer
+and Rust program host are later implementation work.
 Core recognizes app contributions to refuse app-only packages and use only the provider part of
 a mixed package. Start with the [tutorial](TUTORIAL.md).
 
@@ -79,8 +80,12 @@ signature over those exact bytes against the trusted publisher key, then verify 
 and SHA-256 **before extraction**. Check the extracted manifest ID, version and tier against the
 descriptor, and platform against the selected artifact. Store the exact descriptor bytes and
 signature; never verify a receiver's reserialized JSON. Whitespace and key order are signed too.
-The index pins size, digest, key identity and signature. Signature transport encoding and the
-verifier library belong to the later signature implementation.
+The index pins size, digest, key identity and signature. Detached signature files contain exactly
+64 raw Ed25519 bytes; JSON/index transport encodes them as 128 lower-case hexadecimal digits.
+Public keys are 32 bytes, encoded as 64 lower-case hexadecimal digits. Verification uses pinned
+`ed25519-dalek` 2.2.0 with `VerifyingKey::verify_strict` and default features disabled. This is
+separate from Tauri updater signatures. Trust binds the publisher, key identity and exact source
+trust domain; a changed source needs fresh trust.
 
 Schema-0 provider packages retain digest-only trust. This contract adds no signature claim to
 them. Production keys and feeds are release configuration. Generate test keys at runtime in
