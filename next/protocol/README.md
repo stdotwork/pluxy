@@ -555,8 +555,9 @@ The value of a header whose name is about authentication (its name holds `auth`,
 `token`, `secret`, `cookie`, `session`, `password` or `signature`, letter case aside) is a
 secret: an extension never logs or shows it, and core removes it from everything a call sends
 back, as it does a credential's strings; a value shorter than 8 bytes is removed only next to
-its name, as text shows a header (`Name: value`, `Name=value`, JSON's `"Name":"value"`, with the
-name as configured, in canonical form or in lower case), so it does not scrub unrelated text.
+its name, as text shows a header (`Name: value`, `Name:value`, `Name=value`, JSON's
+`"Name":"value"`, with the name as configured, in canonical form, in lower case or in upper case),
+so it does not scrub unrelated text; in another spelling a value that short stays.
 Other values are not removed.
 
 Core sends a call that has headers only to an extension whose describe reports

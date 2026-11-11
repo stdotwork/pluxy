@@ -87,9 +87,11 @@ func Secrets(h map[string]string) []string {
 const minBare = 8
 
 // Forms returns the strings to remove from text so that no secret value of h shows: for each
-// secret header the value next to its name as text shows a header ("Name: value", "Name=value"
-// and JSON's "Name":"value" and "Name": "value", with the name as written, in Go's canonical form and in lower case),
-// and the value alone when it is at least minBare bytes long. In name order.
+// secret header the value next to its name as text shows a header ("Name: value", "Name:value",
+// "Name=value" and JSON's "Name":"value" and "Name": "value", with the name as written, in Go's
+// canonical form, in lower case and in upper case), and the value alone when it is at least
+// minBare bytes long. In name order. A value shorter than minBare next to its name in another
+// spelling stays.
 func Forms(h map[string]string) []string {
 	var out []string
 	for _, k := range slices.Sorted(maps.Keys(h)) {
@@ -99,14 +101,14 @@ func Forms(h map[string]string) []string {
 		}
 		quoted, _ := json.Marshal(v)
 		names := []string{k}
-		for _, n := range []string{http.CanonicalHeaderKey(k), strings.ToLower(k)} {
+		for _, n := range []string{http.CanonicalHeaderKey(k), strings.ToLower(k), strings.ToUpper(k)} {
 			if !slices.Contains(names, n) {
 				names = append(names, n)
 			}
 		}
 		for _, n := range names {
 			qn, _ := json.Marshal(n)
-			out = append(out, n+": "+v, n+"="+v, string(qn)+":"+string(quoted), string(qn)+": "+string(quoted))
+			out = append(out, n+": "+v, n+":"+v, n+"="+v, string(qn)+":"+string(quoted), string(qn)+": "+string(quoted))
 		}
 		if len(v) >= minBare {
 			out = append(out, v)
