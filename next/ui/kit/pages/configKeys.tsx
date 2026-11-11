@@ -24,14 +24,105 @@ const t = strings("configKeys", {
   rotationHint:
     "Rotating replaces the management key immediately. Other management clients must sign in with the new key.",
   rotationUnavailable: "Management key rotation is unavailable in this host.",
+  rotationUnknown:
+    "The management key may have changed. Find the current key in core's config file and sign in with it before rotating again.",
   copyFailed: "Could not copy. Select the key and copy it manually.",
 });
 
-function KeyNotice(props: { title: string; value: string; close: () => void }) {
+export function keyCards(tab: string, search: string) {
+  const query = search.trim().toLowerCase();
+  return {
+    clients: query ? t("clients").toLowerCase().includes(query) : tab === "common" || tab === "connectivity",
+    management: query ? t("management").toLowerCase().includes(query) : tab === "connectivity",
+  };
+}
+interface NewKey {
+  id: number;
+  value: string;
+  tab: string;
+  seen: boolean;
+}
+/** Owned by ConfigPage, so a reply survives leaving a tab before it arrives. */
+export function useConfigKeys(tab: string, onChanged: () => void) {
+  const { api, unauthorized } = useKit();
+  const [clients, setClients] = useState<NewKey[]>([]);
+  const [management, setManagement] = useState<NewKey>();
+  const [adding, setAdding] = useState(false);
+  const [rotating, setRotating] = useState(false);
+  const [clientError, setClientError] = useState<string>();
+  const [rotationError, setRotationError] = useState<string>();
+  const nextId = useRef(0);
+  const currentTab = useRef(tab);
+  currentTab.current = tab;
+  // A seen notice is cleared on leaving its tab. An unseen late reply waits for a visit.
+  useEffect(() => {
+    setClients((keys) => keys.filter((key) => !key.seen || key.tab === tab));
+    setManagement((key) => (key?.seen && key.tab !== tab ? undefined : key));
+  }, [tab]);
+  const add = async () => {
+    if (adding) return;
+    const origin = currentTab.current;
+    setAdding(true);
+    setClientError(undefined);
+    const reply = await api.addClientKey();
+    setAdding(false);
+    if (reply.status === 401) return unauthorized();
+    setClientError(problem(reply));
+    if (reply.body) {
+      const key = { id: ++nextId.current, value: reply.body.value, tab: origin, seen: false };
+      setClients((keys) => [...keys, key]);
+      onChanged();
+    }
+    return reply;
+  };
+  const rotate = async () => {
+    if (rotating || management) return;
+    const origin = currentTab.current;
+    setRotating(true);
+    setRotationError(undefined);
+    const reply = await api.rotateManagementKey();
+    setRotating(false);
+    if (reply.status === 401) return unauthorized();
+    setRotationError(reply.status === 0 ? t("rotationUnknown") : problem(reply));
+    if (reply.body) {
+      setManagement({ id: ++nextId.current, value: reply.body.value, tab: origin, seen: false });
+      onChanged();
+    }
+  };
+  return {
+    clients,
+    management,
+    adding,
+    rotating,
+    clientError,
+    rotationError,
+    add,
+    rotate,
+    seenClient: (id: number) =>
+      setClients((keys) => keys.map((key) => (key.id === id ? { ...key, seen: true } : key))),
+    closeClient: (id: number) => setClients((keys) => keys.filter((key) => key.id !== id)),
+    seenManagement: () => setManagement((key) => (key ? { ...key, seen: true } : key)),
+    closeManagement: () => setManagement(undefined),
+  };
+}
+type KeysState = ReturnType<typeof useConfigKeys>;
+
+function KeyNotice(props: { title: string; value: string; close: () => void; seen: () => void }) {
   const [copied, setCopied] = useState(false);
   const [failed, setFailed] = useState(false);
+  const ref = useRef<HTMLElement>(null);
+  useEffect(() => {
+    ref.current?.focus();
+    props.seen();
+  }, []);
   return (
-    <div class="stack config-key-notice" data-part="key-notice" role="status" aria-label={props.title}>
+    <section
+      ref={ref}
+      tabIndex={-1}
+      class="stack config-key-notice"
+      data-part="key-notice"
+      aria-label={props.title}
+    >
       <strong>{props.title}</strong>
       <span>{t("once")}</span>
       <code data-part="key-value">{props.value}</code>
@@ -50,69 +141,68 @@ function KeyNotice(props: { title: string; value: string; close: () => void }) {
           {t("copy")}
         </Button>
         <Button onClick={props.close}>{t("close")}</Button>
-        {copied && <span>{t("copied")}</span>}
+        {copied && <span role="status">{t("copied")}</span>}
       </div>
       {failed && <Notice tone="danger">{t("copyFailed")}</Notice>}
-    </div>
+    </section>
   );
 }
-
-export function ClientKeys(props: { onChanged: () => void; search?: string }) {
+function ClientKeys(props: { state: KeysState; tab: string; onChanged: () => void }) {
   const { api, unauthorized } = useKit();
   const keys = useLoad(api.clientKeys);
-  const [value, setValue] = useState<string>();
-  const [busy, setBusy] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string>();
-  const live = useRef(true);
-  useEffect(
-    () => () => {
-      live.current = false;
-    },
-    [],
-  );
+  const actions = useRef<HTMLDivElement>(null);
+  const state = props.state;
   const add = async () => {
-    setBusy(true);
-    setError(undefined);
-    setValue(undefined);
-    const reply = await api.addClientKey();
-    if (!live.current) return;
-    setBusy(false);
-    if (reply.status === 401) return unauthorized();
-    setError(problem(reply));
-    if (reply.body) {
-      setValue(reply.body.value);
-      keys.reload();
-      props.onChanged();
-    }
+    if (state.adding || keys.loading || deleting) return;
+    const reply = await state.add();
+    if (reply && !problem(reply)) keys.reload();
   };
   const remove = async (id: string) => {
-    setBusy(true);
+    setDeleting(true);
     setError(undefined);
-    setValue(undefined);
     const reply = await api.deleteClientKey(id);
-    if (!live.current) return;
-    setBusy(false);
+    setDeleting(false);
     if (reply.status === 401) return unauthorized();
     const why = problem(reply);
     setError(why);
-    if (!why) {
-      keys.reload();
-      props.onChanged();
-    }
+    keys.reload();
+    actions.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    if (!why) props.onChanged();
   };
-  if (props.search?.trim() && !t("clients").toLowerCase().includes(props.search.trim().toLowerCase()))
-    return null;
   return (
     <Card
       title={t("clients")}
       actions={
-        <Button disabled={busy || keys.loading} onClick={add}>
-          {t("add")}
-        </Button>
+        <div ref={actions}>
+          <button
+            type="button"
+            class="btn"
+            data-part="button"
+            data-variant="quiet"
+            aria-disabled={state.adding || keys.loading || deleting}
+            onClick={add}
+          >
+            {t("add")}
+          </button>
+        </div>
       }
     >
-      {(error || keys.error) && <Notice tone="danger">{error ?? keys.error}</Notice>}
-      {value && <KeyNotice title={t("newClient")} value={value} close={() => setValue(undefined)} />}
+      {(error || state.clientError || keys.error) && (
+        <Notice tone="danger">{error ?? state.clientError ?? keys.error}</Notice>
+      )}
+      {state.clients
+        .filter((key) => key.tab === props.tab)
+        .map((key) => (
+          <KeyNotice
+            key={key.id}
+            title={t("newClient")}
+            value={key.value}
+            close={() => state.closeClient(key.id)}
+            seen={() => state.seenClient(key.id)}
+          />
+        ))}
       {keys.loading && !keys.data && <Notice tone="muted">{t("loading")}</Notice>}
       {keys.data &&
         (keys.data.keys.length === 0 ? (
@@ -128,7 +218,7 @@ export function ClientKeys(props: { onChanged: () => void; search?: string }) {
               {
                 label: t("actions"),
                 value: (key) => (
-                  <ConfirmButton disabled={busy} onConfirm={() => remove(key.id)}>
+                  <ConfirmButton disabled={state.adding || deleting} onConfirm={() => remove(key.id)}>
                     {t("remove")}
                   </ConfirmButton>
                 ),
@@ -139,53 +229,42 @@ export function ClientKeys(props: { onChanged: () => void; search?: string }) {
     </Card>
   );
 }
-
-export function ConfigConnectivity(props: { onChanged: () => void; search?: string }) {
-  const { host, api, unauthorized } = useKit();
-  const [value, setValue] = useState<string>();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-  const live = useRef(true);
-  useEffect(
-    () => () => {
-      live.current = false;
-    },
-    [],
-  );
+export function ConfigConnectivity(props: {
+  state: KeysState;
+  tab: string;
+  search: string;
+  onChanged: () => void;
+}) {
+  const { host } = useKit();
   const canRotate = host.features.has("rotateManagementKey");
-  const rotate = async () => {
-    if (!canRotate) return;
-    setBusy(true);
-    setError(undefined);
-    setValue(undefined);
-    const reply = await api.rotateManagementKey();
-    if (!live.current) return;
-    setBusy(false);
-    if (reply.status === 401) return unauthorized();
-    setError(problem(reply));
-    if (reply.body) {
-      setValue(reply.body.value);
-      props.onChanged();
-    }
-  };
+  const shown = keyCards(props.tab, props.search);
+  const state = props.state;
+  const value = state.management?.tab === props.tab ? state.management : undefined;
   return (
     <div class="stack">
-      <ClientKeys onChanged={props.onChanged} search={props.search} />
-      {(!props.search?.trim() ||
-        t("management").toLowerCase().includes(props.search.trim().toLowerCase())) && (
+      {shown.clients && <ClientKeys state={state} tab={props.tab} onChanged={props.onChanged} />}
+      {shown.management && (
         <Card
           title={t("management")}
           actions={
             canRotate && (
-              <Button disabled={busy} onClick={rotate}>
+              <Button disabled={state.rotating || !!state.management} onClick={state.rotate}>
                 {t("rotate")}
               </Button>
             )
           }
         >
           <p class="muted">{canRotate ? t("rotationHint") : t("rotationUnavailable")}</p>
-          {error && <Notice tone="danger">{error}</Notice>}
-          {value && <KeyNotice title={t("newManagement")} value={value} close={() => setValue(undefined)} />}
+          {state.rotationError && <Notice tone="danger">{state.rotationError}</Notice>}
+          {value && (
+            <KeyNotice
+              key={value.id}
+              title={t("newManagement")}
+              value={value.value}
+              close={state.closeManagement}
+              seen={state.seenManagement}
+            />
+          )}
         </Card>
       )}
     </div>

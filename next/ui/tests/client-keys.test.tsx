@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import render from "preact-render-to-string";
 import { api } from "../kit/api";
 import type { Feature, Host } from "../kit/host";
-import { ConfigConnectivity } from "../kit/pages/configKeys";
+import { ConfigConnectivity, useConfigKeys } from "../kit/pages/configKeys";
 import { type Kit, KitContext } from "../kit/ui";
 
 test("Connectivity offers Rotate only when its host supports management-key rotation", () => {
@@ -15,10 +15,14 @@ test("Connectivity offers Rotate only when its host supports management-key rota
     features: new Set<Feature>(),
   };
   const kit = { host, api: api(host), unauthorized: () => {} } as Kit;
+  function Connectivity() {
+    const state = useConfigKeys("connectivity", () => {});
+    return <ConfigConnectivity state={state} tab="connectivity" search="" onChanged={() => {}} />;
+  }
   const html = () =>
     render(
       <KitContext.Provider value={kit}>
-        <ConfigConnectivity onChanged={() => {}} />
+        <Connectivity />
       </KitContext.Provider>,
     );
   expect(html()).toContain("Management Key");
