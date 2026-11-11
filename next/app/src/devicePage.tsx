@@ -206,7 +206,7 @@ function Available(props: { installed: DevicePackage[]; onInstalled: () => void 
                 ) : (
                   <Button
                     disabled={install.busy}
-                    onClick={() => install.run(() => device.install(o.registry, o.id))}
+                    onClick={() => install.run(() => device.install(o.registry, o.id, o.version))}
                   >
                     {o.installed ? t("update", { version: o.version }) : t("install")}
                   </Button>
