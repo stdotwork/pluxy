@@ -148,13 +148,6 @@ export function exactNumbers(text: string): boolean {
   return true;
 }
 
-/** Whether a value as the browser read it holds a number it may not have kept exactly. */
-function lossy(v: unknown): boolean {
-  if (typeof v === "number") return !Number.isFinite(v) || (Number.isInteger(v) && !Number.isSafeInteger(v));
-  if (v !== null && typeof v === "object") return Object.values(v).some(lossy);
-  return false;
-}
-
 /**
  * The PATCH that turns account a into the draft: only the fields that changed, null for one set
  * back to its default. Settings are sent only for an account added by login.
@@ -208,12 +201,11 @@ export function accountChange(
   if (differs(aliases, aliasRules(a.model_alias ?? []))) change.model_alias = aliases;
 
   // Settings go only when their text changed, and never with a number the browser does not
-  // keep exactly. shortcut: a stored number the browser rounded without making it unsafe (a
-  // long fraction, a tiny exponent) is not noticed; reading the reply's text would be needed.
+  // keep exactly: in the text, or in the stored settings as core marks them.
   if (a.source === "login" && d.settings !== draftOf(a).settings) {
     const settings = settingsObject(d.settings);
     if (settings === undefined) return { invalid: "settings" };
-    if (!exactNumbers(d.settings) || lossy(a.settings)) return { invalid: "settingsNumber" };
+    if (!exactNumbers(d.settings) || a.settings_inexact) return { invalid: "settingsNumber" };
     if (differs(settings, a.settings)) change.settings = settings;
   }
   return { change };

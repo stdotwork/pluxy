@@ -37,6 +37,7 @@ type accountView struct {
 	LastError         *struct{ Code, Message string } `json:"last_error"`
 	LastErrorAt       *time.Time                      `json:"last_error_at"`
 	Settings          json.RawMessage
+	SettingsInexact   bool `json:"settings_inexact"`
 }
 
 // startAccountsCore runs core with the example OAuth provider and two accounts in its config
@@ -351,6 +352,23 @@ func TestManageAccountSettings(t *testing.T) {
 	}
 	if n := cooldowns(); n != 0 {
 		t.Fatalf("%d cooldowns after the settings changed, want none", n)
+	}
+
+	// Settings holding a number that reading it as a float64 changes are marked, so a panel that
+	// reads numbers that way does not write them back changed. A secret's number is never shown.
+	for _, c := range []struct {
+		n       string
+		inexact bool
+	}{
+		{"0.10000000000000001", true}, {"1e-400", true}, {"1e400", true}, {"9007199254740993", true},
+		{"0.5", false}, {"0.1", false}, {"1.0", false}, {"-0", false}, {"2e3", false}, {"9007199254740994", false}, {"1e300", false},
+	} {
+		if code, reply := patch(map[string]any{"api_key": key, "n": json.RawMessage(c.n), "password": json.RawMessage("2e-400")}); code != http.StatusOK {
+			t.Fatalf("PATCH with n %s: %d %s", c.n, code, reply)
+		}
+		if a := getAccount(t, base, "keyed"); len(a.Settings) == 0 || a.SettingsInexact != c.inexact {
+			t.Errorf("n %s: settings_inexact = %v, want %v; settings %s", c.n, a.SettingsInexact, c.inexact, a.Settings)
+		}
 	}
 
 	// A new secret replaces the old one; null removes the settings.

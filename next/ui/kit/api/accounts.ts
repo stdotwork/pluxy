@@ -38,6 +38,11 @@ export interface Account {
   endpoint?: string;
   /** An account added by login's settings, each secret replaced by a placeholder. */
   settings?: Record<string, unknown>;
+  /**
+   * The settings hold a number the browser does not read exactly (it would write it back
+   * changed), so they cannot be edited here.
+   */
+  settings_inexact?: boolean;
   check?: { state: string; detail?: string; error?: AccountError; at?: string };
   cooldown_until?: string;
   cooldowns?: AccountCooldown[];

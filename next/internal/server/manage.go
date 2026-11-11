@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -10,6 +11,8 @@ import (
 	"io"
 	"log"
 	"maps"
+	"math"
+	"math/big"
 	"net/http"
 	"slices"
 	"strconv"
@@ -62,6 +65,10 @@ type AccountView struct {
 	// Settings are an account added by login's settings, with a placeholder in place of each
 	// secret (Management.Secrets), as GET /config shows the config file.
 	Settings json.RawMessage `json:"settings,omitempty"`
+	// SettingsInexact marks settings that hold a number a float64 does not hold exactly (a long
+	// fraction, a very large or very small exponent, an integer past 2^53), which a client that
+	// reads JSON numbers as float64, as a browser does, would write back changed.
+	SettingsInexact bool `json:"settings_inexact,omitempty"`
 
 	// What routing knows about the account now (route.Runtime). An account that receives no
 	// requests (disabled, or waiting for a new login) has none of it.
@@ -239,11 +246,47 @@ func (m *Management) view(r cred.Record) AccountView {
 			// Never shown unredacted; the settings are then left out of the view.
 			log.Printf("management: account %q: its settings cannot be shown with their secrets hidden", r.ID)
 		} else {
-			v.Settings = s
+			v.Settings, v.SettingsInexact = s, inexact(s)
 		}
 	}
 	v.Check = m.check(r.ID)
 	return v
+}
+
+// inexact reports whether a JSON text holds a number that a client reading it as a float64 and
+// writing it back as the shortest decimal that reads as the same float64, as a browser does,
+// would change. Values are compared, not text: 1.0 and 2e3 come back as 1 and 2000, unchanged.
+func inexact(b []byte) bool {
+	d := json.NewDecoder(bytes.NewReader(b))
+	d.UseNumber()
+	for {
+		t, err := d.Token()
+		if err != nil {
+			return false
+		}
+		n, ok := t.(json.Number)
+		if !ok {
+			continue
+		}
+		f, err := strconv.ParseFloat(n.String(), 64)
+		if err != nil || math.IsInf(f, 0) {
+			return true
+		}
+		if f == 0 {
+			// Zero, or a value too small for a float64; checked here so that big.Rat is never
+			// given a huge exponent.
+			mantissa, _, _ := strings.Cut(strings.ToLower(n.String()), "e")
+			if strings.Trim(mantissa, "-0.") != "" {
+				return true
+			}
+			continue
+		}
+		sent, ok := new(big.Rat).SetString(n.String())
+		back, _ := new(big.Rat).SetString(strconv.FormatFloat(f, 'g', -1, 64))
+		if !ok || sent.Cmp(back) != 0 {
+			return true
+		}
+	}
 }
 
 // check returns the result of core's check of account id, or nil.
