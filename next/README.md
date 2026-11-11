@@ -827,6 +827,15 @@ What changes in a request:
   or a tool choice in a namespace goes to the namespace's function only when the namespace really
   was folded, not to a plain function that has its name. Where a name repeats, the first tool stays.
   An `apply_patch` function in a namespace is an ordinary function, not the patch tool.
+- The tools of an `additional_tools` input item (how a Responses Lite client, the Codex app,
+  declares tools) are moved to the end of the tools list and the item is removed, because xAI does
+  not take that item. This happens before the rules above, so a namespace in an item is flattened
+  or folded, counted toward the 200 tools and restored in the reply like one declared at the top
+  level, and a `tool_choice` that names a tool of an item is written the same way. The first
+  declaration of a function or custom tool name stays: a top-level tool beats one of an item, and
+  an earlier item beats a later one. A namespace of an item with the name of a top-level namespace
+  is one namespace with the children of both, each as its first declaration has it, as in today's
+  core. Items that carry no tools are removed too.
 - The Codex app's `automation_update` tool (in the `codex_app` or `codex_apps` namespace) is sent
   with parameters that accept any object, and `strict` false: with its own schema, a large `oneOf`
   with `$ref` references, xAI accepts the request and sends no events.
@@ -864,9 +873,8 @@ and creates no account or model cooldown; a 404 naming a missing model is scoped
 
 Not built, and why:
 
-- Namespace tools in an `additional_tools` input item (Responses Lite) are sent as the client wrote
-  them, and so is an `apply_patch` declared inside a namespace. Today's core moves the first to
-  the tools list and handles the second.
+- An `apply_patch` custom tool declared inside a namespace is sent as the client wrote it. Today's
+  core sends it as the patch function and turns xAI's call back.
 - The root-union schema rule of today's core (a function whose schema is a `oneOf` or `anyOf` with
   `$ref` or non-object branches gets the permissive schema, and a union branch without a type gets
   `object`) is built only for the Codex app's `automation_update`, which is what hangs xAI.
