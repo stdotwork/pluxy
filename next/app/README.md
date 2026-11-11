@@ -85,7 +85,24 @@ panel does, and does the panel's side of the page's hello
 ([extension pages](../ui/extension-pages/README.md)). Its `/send` address is the webview's one
 way out: the native side tags each message with the webview it came from and passes it to the
 window, which answers with the kit's channel, bound to the extension core lists the page under.
-So a page gets the same checks, permissions and limits as in the panel, and never the key.
+Before forwarding, native code enforces the 256 KiB transport body, 64 KiB channel call,
+exact version-0 call schema and known methods. Each document gets one hello, 30 admitted calls
+per rolling second and eight calls awaiting answers. A call remains in flight until the native
+reply callback confirms delivery, or the page closes. Requests and replies carry the document's
+native generation; a second document cannot reconnect. Native subframe navigation detection is
+verified on Linux WebKit. Windows currently reports only top-level navigation through this callback;
+subframe closure there still depends on the wrapper's load notification and has not been verified.
+Direct frame requests use these same checks.
+
+One extension may open four pages, with 60 admitted calls per rolling second and 16 in flight
+across them. Closing pages preserves the package's recent rate budget. At most 16 page webviews
+and 64 recent package budgets are retained. Replies are limited to 2 MiB each, covering 50 settings with 4,096 runes even when each rune
+needs six JSON bytes. Pending call replies use their existing in-flight reservations; theme
+events retain one delivery and one replacement per page. Failed call deliveries send a small
+native error; if even that cannot reach the renderer, the channel closes. The wrapper sends a
+bounded FIFO of eight calls one at a time; hello and closed messages always enter that FIFO. Refusals return an HTTP status and, for bodies within the transport limit with a readable id,
+the matching channel error. Oversized transport bodies are rejected without scanning for an id.
+Permissions and extension settings still use the shared kit's channel. No page receives a key.
 
 ## Native confirmations (Linux)
 
@@ -166,8 +183,14 @@ started by `go run ./e2e/panelcore` from `next/`, on random loopback ports in te
 and runs it on a private X server (`xvfb-run`) with a private session bus (`dbus-run-session`),
 a fresh HOME and XDG folders, once in each mode. In each it checks that the window's webview
 reaches every command, that at the top of an extension page's webview Tauri refuses every app
-command and the plugin commands tried, that the app reaches no command from that webview, that
-nothing reaches the app from the page's frame, that the page webview covers the page area, that
+command and the plugin commands tried, and that no app command is reached from that webview
+or its frame. It also runs a test-only sandboxed frame
+that posts directly to the native scheme: over-rate, over-in-flight, oversize, unknown method,
+invalid schema, repeated hello, wrong generation, explicit close and frame navigation while
+the wrapper's close message is suppressed. A separate real HTTP pages-site probe records whether
+that frame can reach the scheme, and navigation of that real frame closes native admission. It compares native handler arrivals,
+admissions, forwarding and real core settings operations, with a successful call on the same page.
+It checks that the page webview covers the page area, that
 closing the window leaves no webview and
 no web process, and that quitting stops only the app's own core. The `native-test` feature is
 for that test alone; release builds never have it.
@@ -224,9 +247,9 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
   icon.
 - The native test needs the desktop services above, and the pinned AppImage runtime from
   github.com (or a copy in its cache folder), so it does not run offline on a bare machine.
-- An extension page's frame can post messages to WebKit's message handler for the webview; Tauri
-  refuses them (the native test checks that no command is reached), but they are not filtered
-  before that.
+- Native admission bounds work after a scheme request reaches the handler. They do not bound
+  memory used by the browser engine before that point. Frames can also post to WebKit's IPC
+  handler; Tauri's capabilities refuse their commands before any app command runs.
 
 ## Package signatures and trust
 

@@ -58,7 +58,27 @@ await attempt("navigate the top", () => {
   return "navigated";
 });
 
+await attempt("direct pages-site scheme", () =>
+  fetch("pluxy-page://localhost/send?pages_site_probe", {
+    method: "POST",
+    mode: "no-cors",
+    body: JSON.stringify({
+      type: "call",
+      data: { v: 0, id: "real-site", method: "theme.get", params: null },
+    }),
+  }),
+);
+
 const report = JSON.stringify(results);
 document.getElementById("report").textContent = JSON.stringify(results, null, 2);
 await pluxy.call("config.set", { values: { report } });
 document.getElementById("state").textContent = "reported";
+
+// The native test asks the actual frame document to navigate within itself. Setting the
+// iframe src from its parent can reload a sandboxed frame rather than change only its hash.
+window.addEventListener("message", (e) => {
+  if (e.source === parent && e.data?.nativeHash === true) {
+    location.hash = "native-fragment";
+    parent.postMessage({ nativeHashChanged: true }, "*");
+  }
+});
