@@ -49,6 +49,9 @@ type ImportOptions struct {
 	// ChatGPT accounts then get it as "signin_with_chatgpt_identifier". Empty: the extension's
 	// default.
 	SIWCIdentifier string `json:"signin_with_chatgpt_identifier,omitempty"`
+	// ClaudeModelLevelCooling is upstream.claude.model-level-cooling: imported Claude accounts
+	// then get "model_level_cooling": true.
+	ClaudeModelLevelCooling bool `json:"model_level_cooling,omitempty"`
 }
 
 // DefaultImportOptions are the import settings when the config sets none.
@@ -627,6 +630,11 @@ func (x *translator) options() error {
 	default:
 		return fmt.Errorf("multimedia.disable-image-generation must be false, true, \"chat\" or \"passthrough\"")
 	}
+	if on, err := flag(x.t, "upstream.claude.model-level-cooling"); err != nil {
+		return err
+	} else if on {
+		x.res.Import.ClaudeModelLevelCooling = true
+	}
 	if v, ok := get(x.t, "upstream.codex.websocket-compression"); ok && v != nil {
 		if on, err := flag(x.t, "upstream.codex.websocket-compression"); err != nil {
 			return err
@@ -984,6 +992,9 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 		}
 		if rebuild {
 			settings["rebuild_mid_system_message"] = true
+		}
+		if x.res.Import.ClaudeModelLevelCooling {
+			settings["model_level_cooling"] = true
 		}
 	case "vertex":
 		settings["vertex"] = map[string]any{}

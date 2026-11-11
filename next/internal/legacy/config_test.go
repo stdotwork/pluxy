@@ -744,3 +744,30 @@ api-keys:
 		t.Error("an interactions written as text loaded")
 	}
 }
+
+// claude.model-level-cooling (each spelling) becomes model_level_cooling on the Claude keys'
+// accounts and on imported Claude accounts; off, it adds nothing.
+func TestClaudeModelLevelCooling(t *testing.T) {
+	for _, y := range []string{
+		"claude:\n  model-level-cooling: true\n",
+		"upstream:\n  claude:\n    model-level-cooling: true\n",
+		"oauth:\n  providers:\n    claude:\n      model-level-cooling: true\n",
+	} {
+		r := translate(t, y+"claude-api-key:\n  - api-key: claude-key\n")
+		equalJSON(t, r.Config["extensions"], `{"pluxy/claude": {"accounts": [{
+			"id": "claude-api-key-1", "settings": {"model_level_cooling": true},
+			"credential": {"kind": "api_key", "api_key": "claude-key"}
+		}]}}`)
+		if !r.Import.ClaudeModelLevelCooling {
+			t.Errorf("%q: Import = %+v", y, r.Import)
+		}
+		if strings.Contains(notices(r), "model-level-cooling") {
+			t.Errorf("%q: notices name it:\n%s", y, notices(r))
+		}
+	}
+	r := translate(t, "claude:\n  model-level-cooling: false\nclaude-api-key:\n  - api-key: claude-key\n")
+	equalJSON(t, r.Config["extensions"], `{"pluxy/claude": {"accounts": [{"id": "claude-api-key-1", "credential": {"kind": "api_key", "api_key": "claude-key"}}]}}`)
+	if r.Import.ClaudeModelLevelCooling {
+		t.Errorf("off: Import = %+v", r.Import)
+	}
+}

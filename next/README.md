@@ -427,6 +427,7 @@ subscription's token an hour before it expires.
 | `base_url` | Where the Messages API is. Default `https://api.anthropic.com`; requests go to `{base_url}/v1/messages`. A token count goes to `{base_url}/v1/messages/count_tokens` only when this is Anthropic's own origin (`https` and the host `api.anthropic.com`, port 443 or none, no user info); with any other base the account cannot count and core estimates the count. |
 | `client_id` | Claude's OAuth client. Default is Claude's. |
 | `rebuild_mid_system_message` | `true` moves the text of each `system` message in a Messages client's conversation into the top-level `system` prompt, after what it holds, and removes those messages, for a Claude-compatible upstream that refuses them there; non-text blocks in them are left out. Default `false`: such messages go upstream where the client put them. Requests in other formats already have every system message in the top-level prompt. |
+| `model_level_cooling` | `true` keeps a used-up shared subscription window (5-hour or 7-day) on the model that hit it, so the account's other models stay in use; default `false` blocks the whole account. Today's `claude.model-level-cooling`. |
 
 A Messages request goes to Anthropic unchanged: its body, so thinking blocks, signatures and
 `cache_control` markers arrive as the client wrote them, and its `anthropic-version`,
@@ -465,8 +466,21 @@ Anthropic refuses repaired: an empty `allowed_domains` or `blocked_domains` list
 `web_search_*` tool is removed, and a `tool_use` id or `tool_result` `tool_use_id` with other
 characters becomes `cpa_tid_v1_` and the ID in URL-safe base64, the same ID the same way.
 
-A 429 from a subscription whose usage window is used up blocks the account until the window
-resets; a 529 (overloaded) moves the request to another account.
+A 429 is read as today's core reads Anthropic's rate-limit headers. A refused shared 5-hour or
+7-day window (`anthropic-ratelimit-unified-5h-status` or `-7d-status` `rejected`, or the
+aggregate `anthropic-ratelimit-unified-status` `rejected` for another reason than below) is a
+quota refusal that blocks the whole account (only the model with `model_level_cooling`). A
+refusal of only a model's own weekly window (`7d_oi`) or of overage, while the shared windows
+have room, and any other 429, block only that model on the account, so its other models stay in
+use. The block lasts until the latest reset among the refused windows and `Retry-After`, when
+that is in the future and at most 7 days and an hour away (a later one is a billing boundary);
+otherwise it backs off. A model's own window or overage refusal waits for none of those resets,
+and an aggregate reset equal to overage's billing reset is not waited for. A refusal of a
+per-minute limit (one of Anthropic's exact per-minute messages, no quota status header, one
+`Retry-After`) waits for its `Retry-After` alone. When the reset kept is the 5-hour or 7-day
+window's, the quota refusal carries `quota_window_minutes` 300 or 10080. Unlike today's core,
+no random 1 to 30 seconds are added to the wait. A 529 (overloaded) moves the request to another
+account.
 
 **Quota.** For a subscription account, quota reads `GET {base_url}/api/oauth/usage` and `GET {base_url}/api/oauth/profile` (default base `https://api.anthropic.com`) with the access token, the OAuth beta in `anthropic-beta` and `anthropic-version`. Like the account's requests, it presents no client identity of its own. It reports the 5-hour window (`five_hour`), the weekly windows (`seven_day`, `seven_day_oauth_apps`, `seven_day_opus`, `seven_day_sonnet`, `seven_day_cowork`, the Fable window), any window counted in dollars, and extra usage (`extra_usage`), with the share used and reset time; the plan (Free, Pro, Max, Max 5x, Max 20x or Team) comes from the profile, and usage is still reported when the profile cannot be read. A setup token's quota reads only the
 usage, not the profile: such a token is made for inference and lacks the profile scope (today's core
@@ -1585,7 +1599,8 @@ are accepted silently.
 | `server.discovery.advertise-management` | | Dead |
 | `routing.strategy` | `routing.strategy`: `round-robin`, `fill-first` (also `fillfirst`, `ff`), `weighted-round-robin` (also `weightedroundrobin`, `wrr`; this core's `weighted`); this core's `weighted` and `least-active` work too. A name today's core does not know is `round-robin`, as there, and the log says so. | Supported |
 | `routing.session-affinity`, `routing.session-affinity-ttl` | `routing.session_affinity` with `ttl_ms` from the duration (default `1h`). | Supported |
-| `routing.session-affinity-subagents`, `routing.session-affinity-rebind-on` | | Later |
+| `routing.session-affinity-subagents` | A Claude Code subagent sends its session's `X-Claude-Code-Session-Id`, so with `routing.session-affinity` it stays on the session's account, as today's default `true` keeps it. `false` (spread subagents over the pool) is not built. | Later (`false`) |
+| `routing.session-affinity-rebind-on` | | Later |
 | `routing.force-model-prefix` (`force-model-prefix`) | `routing.force_model_prefix`. | Supported |
 | `routing.retry.max-retry-credentials` (`max-retry-credentials`) | `routing.max_accounts`. | Supported |
 | `routing.retry.request-retry` (`request-retry`) | `routing.request_retry`: rounds after the first, run as today's core runs them. Default 0, as in today's core (its example config's 3 is only an example). | Supported |
@@ -1602,7 +1617,8 @@ are accepted silently.
 | `client.codex.web-search-result-cache.*`, `client.claude.show-codex-commentary` | | Dropped: off by default and no need found |
 | `upstream.codex.disable-codex-cloaking` (`codex.disable-codex-cloaking`) | `codex_identity: false` on the Codex subscription accounts `-import-auth` adds. It does not change accounts already imported. | Supported when importing |
 | `upstream.codex.websocket-compression` | Always on; `false` is named in the log. | Supported (fixed on) |
-| `upstream.codex.model-level-cooling`, `upstream.claude.model-level-cooling` | Blocks are kept per model where the upstream says the limit is per model; usage limits remain account-wide. | Supported (fixed on) |
+| `upstream.codex.model-level-cooling` | Blocks are kept per model where the upstream says the limit is per model; usage limits remain account-wide. | Supported (fixed on) |
+| `upstream.claude.model-level-cooling` (`claude.model-level-cooling`) | `model_level_cooling: true` on the Claude keys' accounts and on the Claude subscription accounts `-import-auth` adds (see [Claude](#claude)). It does not change accounts already imported. | Supported |
 | `upstream.codex.upstream-request-compression`, `-min-bytes`, `upstream.codex.stream-bootstrap-buffering`, `stream-bootstrap-timeout` | | Later |
 | `upstream.codex.response-steering`, `upstream.codex.orphan-delegation-compatibility`, `oauth.providers.codex.header-defaults.*` (`codex-header-defaults`) | | Dropped: experimental or off by default, no need found |
 | `upstream.claude.header-defaults.*`, `disable-claude-cloak-mode`, `disable-cloaking-model-list`, `session-date-pin-days` (also `claude`, `claude-code`, `claude-header-defaults`), and the Claude keys' `cloak` and `fingerprint-profile` | This core never changes how a client presents itself. | Dropped: making other clients look like Claude Code is out of scope |

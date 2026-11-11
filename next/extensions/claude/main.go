@@ -3,12 +3,14 @@
 //
 // Account settings (all optional):
 //
-//	{"base_url": "https://api.anthropic.com"}
+//	{"base_url": "https://api.anthropic.com", "model_level_cooling": false}
 //
 // base_url is where the Messages API lives; requests go to {base_url}/v1/messages.
 // rebuild_mid_system_message (default false) moves the text of system messages in a Messages
 // client's conversation into the top-level system prompt, for a Claude-compatible upstream that
-// refuses them there; it is today's per-key setting of the same name. The OAuth
+// refuses them there; it is today's per-key setting of the same name.
+// model_level_cooling keeps a used-up shared subscription window on the model that hit it rather
+// than on the whole account (today's claude.model-level-cooling; see ratelimit.go). The OAuth
 // client can be changed with client_id; tests move the sign-in page and token endpoint to a fake
 // with authorize_url and token_url (sdk.TestLoginHost), which a normal run ignores; see oauth.go.
 //
@@ -104,6 +106,8 @@ type settings struct {
 	// RebuildMidSystemMessage moves system messages in the conversation into the top-level
 	// system prompt (midsystem.go).
 	RebuildMidSystemMessage bool `json:"rebuild_mid_system_message"`
+	// ModelLevelCooling keeps a refused shared usage window on the model, not the account.
+	ModelLevelCooling bool `json:"model_level_cooling"`
 }
 
 // readSettings reads an account's settings and fills in the defaults.
@@ -296,7 +300,7 @@ func post(ctx context.Context, call sdk.Call, s settings, path string, body []by
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		defer resp.Body.Close()
-		return nil, upstreamError(resp, call.Request.Model)
+		return nil, upstreamError(resp, call.Request.Model, s.ModelLevelCooling)
 	}
 	return resp, nil
 }
@@ -335,7 +339,7 @@ func check(ctx context.Context, call sdk.CheckCall) (*protocol.CheckResult, erro
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: "the upstream has no model list to check the key with", Scope: llm.ScopeCredential}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, upstreamError(resp, "")
+		return nil, upstreamError(resp, "", s.ModelLevelCooling)
 	}
 	var list struct {
 		Data []json.RawMessage `json:"data"`
@@ -552,8 +556,8 @@ func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Ev
 }
 
 // upstreamError turns a non-2xx Messages response into a structured error. model is the model the
-// request asked for.
-func upstreamError(resp *http.Response, model string) *llm.Error {
+// request asked for; modelLevelCooling is the account's model_level_cooling (see rateLimit).
+func upstreamError(resp *http.Response, model string, modelLevelCooling bool) *llm.Error {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	var parsed struct {
 		Error struct {
@@ -584,18 +588,15 @@ func upstreamError(resp *http.Response, model string) *llm.Error {
 		// and another account may serve the model.
 		e.Retryable = model != "" && strings.Contains(e.Message, model)
 	case s == http.StatusTooManyRequests:
-		// Only the model waits on this account, as today's core cools only the model that answered.
-		e.Code, e.Scope, e.Retryable = llm.CodeRateLimit, llm.ScopeModel, true
-		if model == "" {
-			// A call for no model (the usage endpoint): the account is the one limited.
+		var wait time.Duration
+		e.Code, e.Scope, wait, e.QuotaWindowMinutes = rateLimit(resp.Header, raw, modelLevelCooling, time.Now())
+		e.Retryable = true
+		if model == "" && e.Scope == llm.ScopeModel {
+			// A call that names no model (an account check, quota, a login) has no model to keep
+			// out: its 429 is the account's.
 			e.Scope = llm.ScopeCredential
 		}
-		if strings.EqualFold(resp.Header.Get("Anthropic-Ratelimit-Unified-Status"), "rejected") {
-			// A subscription's usage window is used up for every model; it opens again at the
-			// unified reset.
-			e.Code, e.Scope = llm.CodeQuota, llm.ScopeCredential
-		}
-		e.RetryAfterMS = rateLimitWait(resp.Header, time.Now())
+		e.RetryAfterMS = int64((wait + time.Millisecond - 1) / time.Millisecond)
 	case s == http.StatusServiceUnavailable || s == 529:
 		// 529 is Anthropic's overloaded_error: the request was refused, not run.
 		e.Code, e.Scope, e.Retryable = llm.CodeUnavailable, llm.ScopeEndpoint, true
@@ -607,20 +608,6 @@ func upstreamError(resp *http.Response, model string) *llm.Error {
 		e.Code, e.Scope = llm.CodeInvalidRequest, llm.ScopeRequest
 	}
 	return e
-}
-
-// rateLimitWait is how long to wait after a 429: Retry-After when given, otherwise the reset of a
-// subscription's usage window that was refused (anthropic-ratelimit-unified-reset, Unix seconds).
-func rateLimitWait(h http.Header, now time.Time) int64 {
-	if ms := retryAfter(h.Get("Retry-After"), now); ms > 0 {
-		return ms
-	}
-	if secs, err := strconv.ParseInt(strings.TrimSpace(h.Get("Anthropic-Ratelimit-Unified-Reset")), 10, 64); err == nil {
-		if d := time.Unix(secs, 0).Sub(now); d > 0 {
-			return d.Milliseconds()
-		}
-	}
-	return 0
 }
 
 // retryAfter reads a Retry-After header: delay seconds or an HTTP date.

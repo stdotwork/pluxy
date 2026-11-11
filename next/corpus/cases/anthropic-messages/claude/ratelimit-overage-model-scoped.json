@@ -1,0 +1,269 @@
+{
+  "description": "An overage refusal while the shared windows have room (the headers of today's issue 5915: 7-day allowed, 5-hour status left out with 0 utilization, overage refused for the spend cap) blocks only the model: the account still serves its other model.",
+  "source": [
+    "core/internal/runtime/executor/claude_executor_request.go (classifyClaudeUpstreamErrorWithCooling)",
+    "core/internal/runtime/executor/helps/claude_ratelimit.go (ClaudeHeadersIndicateUnifiedRateLimitRejection)",
+    "core/internal/runtime/executor/claude_executor_fable_ratelimit_test.go"
+  ],
+  "client": {
+    "path": "/v1/messages",
+    "auth": "none",
+    "headers": {
+      "x-api-key": "corpus-client-key",
+      "anthropic-version": "2023-06-01"
+    },
+    "body": {
+      "model": "claude-test",
+      "max_tokens": 256,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Say hello"
+        }
+      ]
+    }
+  },
+  "then": [
+    {
+      "path": "/v1/messages",
+      "auth": "none",
+      "headers": {
+        "x-api-key": "corpus-client-key",
+        "anthropic-version": "2023-06-01"
+      },
+      "body": {
+        "model": "claude-test-2",
+        "max_tokens": 256,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Say hello"
+          }
+        ]
+      }
+    }
+  ],
+  "upstream": [
+    {
+      "status": 429,
+      "headers": {
+        "Content-Type": "application/json",
+        "retry-after": "121180",
+        "anthropic-ratelimit-unified-status": "rejected",
+        "anthropic-ratelimit-unified-representative-claim": "seven_day_overage_included",
+        "anthropic-ratelimit-unified-7d-status": "allowed",
+        "anthropic-ratelimit-unified-7d-utilization": "0.69",
+        "anthropic-ratelimit-unified-5h-utilization": "0.00",
+        "anthropic-ratelimit-unified-7d_oi-status": "rejected",
+        "anthropic-ratelimit-unified-7d_oi-utilization": "1.02",
+        "anthropic-ratelimit-unified-overage-status": "rejected",
+        "anthropic-ratelimit-unified-overage-disabled-reason": "org_spend_cap_reached"
+      },
+      "body": {
+        "type": "error",
+        "error": {
+          "type": "rate_limit_error",
+          "message": "Fable usage window rejected."
+        }
+      }
+    },
+    {
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "id": "msg_corpus_2",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-test-2",
+        "content": [
+          {
+            "type": "text",
+            "text": "Hi."
+          }
+        ],
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 4,
+          "output_tokens": 2
+        }
+      }
+    }
+  ],
+  "account_models": [
+    "claude-test",
+    "claude-test-2"
+  ],
+  "old_core": {
+    "config": {
+      "routing": {
+        "cooldown": {
+          "disable-cooling": false
+        }
+      }
+    }
+  },
+  "volatile": [
+    "client.headers.Retry-After",
+    "then[*].headers.Retry-After"
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[0].body.messages[0].content",
+      "kind": "intended",
+      "reason": "A Messages request goes to Claude unchanged (passthrough): today's Claude API-key provider rewrites it: it adds cache_control breakpoints when the body has none, removes the thinking setting and thinking blocks for models missing from its catalog, sets stream false on a non-streamed request and drops a 1h cache TTL that follows a 5m one. The new core keeps the client's body, thinking blocks, signatures and cache markers as sent; a Claude Code client places its own breakpoints.",
+      "want": "Say hello"
+    },
+    {
+      "path": "upstream[0].body.stream",
+      "kind": "intended",
+      "reason": "A Messages request goes to Claude unchanged (passthrough): today's Claude API-key provider rewrites it: it adds cache_control breakpoints when the body has none, removes the thinking setting and thinking blocks for models missing from its catalog, sets stream false on a non-streamed request and drops a 1h cache TTL that follows a 5m one. The new core keeps the client's body, thinking blocks, signatures and cache markers as sent; a Claude Code client places its own breakpoints.",
+      "absent": true
+    },
+    {
+      "path": "upstream[1].body.messages[0].content",
+      "kind": "intended",
+      "reason": "A Messages request goes to Claude unchanged (passthrough): today's Claude API-key provider rewrites it: it adds cache_control breakpoints when the body has none, removes the thinking setting and thinking blocks for models missing from its catalog, sets stream false on a non-streamed request and drops a 1h cache TTL that follows a 5m one. The new core keeps the client's body, thinking blocks, signatures and cache markers as sent; a Claude Code client places its own breakpoints.",
+      "want": "Say hello"
+    },
+    {
+      "path": "upstream[1].body.stream",
+      "kind": "intended",
+      "reason": "A Messages request goes to Claude unchanged (passthrough): today's Claude API-key provider rewrites it: it adds cache_control breakpoints when the body has none, removes the thinking setting and thinking blocks for models missing from its catalog, sets stream false on a non-streamed request and drops a 1h cache TTL that follows a 5m one. The new core keeps the client's body, thinking blocks, signatures and cache markers as sent; a Claude Code client places its own breakpoints.",
+      "absent": true
+    },
+    {
+      "path": "upstream[*].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "Go's HTTP client asks for gzip and decodes it; today's core also offers deflate, br and zstd."
+    },
+    {
+      "path": "upstream[*].headers.Authorization",
+      "kind": "intended",
+      "reason": "The Claude extension sends an API key in x-api-key, as Anthropic's API defines it; today's core sends it as a bearer token whenever the base URL is not api.anthropic.com (it uses x-api-key only there).",
+      "absent": true
+    },
+    {
+      "path": "upstream[*].headers.X-Api-Key",
+      "kind": "intended",
+      "reason": "The Claude extension sends an API key in x-api-key, as Anthropic's API defines it; today's core sends it as a bearer token whenever the base URL is not api.anthropic.com (it uses x-api-key only there).",
+      "want": "sk-corpus-upstream"
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {
+          "message": "Fable usage window rejected.",
+          "type": "rate_limit_error"
+        },
+        "type": "error"
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 429
+    },
+    "then": [
+      {
+        "body": {
+          "content": [
+            {
+              "text": "Hi.",
+              "type": "text"
+            }
+          ],
+          "id": "msg_corpus_2",
+          "model": "claude-test-2",
+          "role": "assistant",
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "type": "message",
+          "usage": {
+            "input_tokens": 4,
+            "output_tokens": 2
+          }
+        },
+        "headers": {
+          "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+          "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+          "Content-Type": "application/json",
+          "X-Cpa-Trace-Id": "(volatile)"
+        },
+        "status": 200
+      }
+    ],
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 256,
+          "messages": [
+            {
+              "content": [
+                {
+                  "cache_control": {
+                    "type": "ephemeral"
+                  },
+                  "text": "Say hello",
+                  "type": "text"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "model": "claude-test",
+          "stream": false
+        },
+        "headers": {
+          "Accept": "application/json",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Anthropic-Version": "2023-06-01",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/messages?beta=true"
+      },
+      {
+        "body": {
+          "max_tokens": 256,
+          "messages": [
+            {
+              "content": [
+                {
+                  "cache_control": {
+                    "type": "ephemeral"
+                  },
+                  "text": "Say hello",
+                  "type": "text"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "model": "claude-test-2",
+          "stream": false
+        },
+        "headers": {
+          "Accept": "application/json",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Anthropic-Version": "2023-06-01",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/messages?beta=true"
+      }
+    ]
+  }
+}
