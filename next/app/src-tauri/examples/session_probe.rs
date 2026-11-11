@@ -28,7 +28,10 @@ fn main() {
         ["portal"] => linux::portal(),
         ["owner", name] => linux::owner(name),
         ["tray", pid, action] => linux::tray(pid, action),
-        _ => Err("usage: session_probe documents <file> | watcher | portal | owner <name>".into()),
+        _ => Err(
+            "usage: session_probe documents <file> | watcher | portal | owner <name> | tray <pid> <action>"
+                .into(),
+        ),
     };
     match result {
         Ok(lines) => lines.iter().for_each(|line| println!("{line}")),

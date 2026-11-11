@@ -58,7 +58,12 @@ struct App {
     pages_dir: std::path::PathBuf,
     pages: Mutex<Pages>,
     status: Mutex<Option<MenuItem<Wry>>>,
+    /// Start, Stop and Restart, in that order.
     core_actions: Mutex<Vec<MenuItem<Wry>>>,
+    /// The newest view the tray shows. Only the main thread touches it.
+    shown: Mutex<Shown>,
+    /// A tray Start, Stop or Restart is running; the tray refuses another until it ends.
+    busy: AtomicBool,
     has_tray: AtomicBool,
     quitting: AtomicBool,
 }
@@ -96,21 +101,148 @@ fn status_text(v: &View) -> String {
     }
 }
 
-fn show_status(app: &AppHandle, v: &View) {
-    if let Some(item) = app.state::<App>().status.lock().unwrap().as_ref() {
-        let _ = item.set_text(status_text(v));
+/// The newest view given to the tray. Views come from several threads; one that arrives after
+/// a newer one is dropped.
+#[derive(Default)]
+struct Shown {
+    view: Option<View>,
+}
+
+impl Shown {
+    fn offer(&mut self, v: View) -> bool {
+        if self
+            .view
+            .as_ref()
+            .is_some_and(|old| old.version > v.version)
+        {
+            return false;
+        }
+        self.view = Some(v);
+        true
     }
+}
+
+const CORE_ACTIONS: [&str; 3] = ["core-start", "core-stop", "core-restart"];
+
+/// The tray's status line, and whether Start, Stop and Restart are enabled. While a tray action
+/// runs, all three are off.
+fn tray_presentation(v: &View, busy: bool) -> (String, [bool; 3]) {
     let managed = v.mode == Some(Mode::Managed);
-    let running = v.core.as_ref().is_some_and(|c| c.state == "running");
-    let recovering = v.core.as_ref().is_some_and(|c| c.state == "recovering");
-    for item in app.state::<App>().core_actions.lock().unwrap().iter() {
-        let enabled = match item.id().as_ref() {
-            "core-start" => managed && !running,
-            "core-stop" => managed && (running || recovering),
-            _ => managed,
-        };
-        let _ = item.set_enabled(enabled);
+    if managed && busy {
+        return ("Core working…".into(), [false; 3]);
     }
+    let state = v.core.as_ref().map(|c| c.state);
+    let running = state == Some("running");
+    let recovering = state == Some("recovering");
+    (
+        status_text(v),
+        [
+            managed && !running,
+            managed && (running || recovering),
+            managed && running,
+        ],
+    )
+}
+
+/// Shows v in the tray, unless it already shows a newer view. The update runs on the main
+/// thread, so two updates never interleave.
+fn show_status(app: &AppHandle, v: &View) {
+    let handle = app.clone();
+    let v = v.clone();
+    let _ = app.run_on_main_thread(move || {
+        let st = handle.state::<App>();
+        let mut shown = st.shown.lock().unwrap();
+        if shown.offer(v) {
+            apply_tray(&handle, &shown);
+        }
+    });
+}
+
+/// Shows the tray's newest view again, as the busy flag now says.
+fn refresh_tray(app: &AppHandle) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let st = handle.state::<App>();
+        let shown = st.shown.lock().unwrap();
+        apply_tray(&handle, &shown);
+    });
+}
+
+fn apply_tray(app: &AppHandle, shown: &Shown) {
+    let Some(v) = shown.view.as_ref() else {
+        return;
+    };
+    let st = app.state::<App>();
+    let (text, enabled) = tray_presentation(v, st.busy.load(Ordering::SeqCst));
+    if let Some(item) = st.status.lock().unwrap().as_ref() {
+        let _ = item.set_text(text);
+    }
+    for item in st.core_actions.lock().unwrap().iter() {
+        if let Some(i) = CORE_ACTIONS.iter().position(|a| item.id().as_ref() == *a) {
+            let _ = item.set_enabled(enabled[i]);
+        }
+    }
+}
+
+/// A tray Start, Stop or Restart, one at a time. It acts only if its item would be enabled now,
+/// so a click on a disabled item (a desktop may still deliver one) changes nothing.
+fn tray_action(app: &AppHandle, action: &str) {
+    let Some(index) = CORE_ACTIONS.iter().position(|a| *a == action) else {
+        return;
+    };
+    let st = app.state::<App>();
+    if st
+        .busy
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        tray_refused(action, None, "busy");
+        return;
+    }
+    refresh_tray(app);
+    let app = app.clone();
+    let action = action.to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(feature = "native-test")]
+        native_test::tray_hold(&action);
+        let st = app.state::<App>();
+        let mut c = st.conn.lock().unwrap();
+        let before = c.view();
+        if st.quitting.load(Ordering::SeqCst) {
+            tray_refused(&action, before.mode, "quitting");
+        } else if !tray_presentation(&before, false).1[index] {
+            tray_refused(&action, before.mode, "disabled");
+        } else {
+            #[cfg(feature = "native-test")]
+            native_test::log(
+                "tray-action",
+                serde_json::json!({"action": action, "mode": before.mode}),
+            );
+            match index {
+                0 => {
+                    let _ = c.resume_core();
+                }
+                1 => c.stop_core(),
+                _ => {
+                    let _ = c.restart_core();
+                }
+            }
+        }
+        let v = c.view();
+        drop(c);
+        st.busy.store(false, Ordering::SeqCst);
+        show_status(&app, &v);
+        let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-connection", ());
+    });
+}
+
+fn tray_refused(action: &str, mode: Option<Mode>, reason: &str) {
+    #[cfg(feature = "native-test")]
+    native_test::log(
+        "tray-refused",
+        serde_json::json!({"action": action, "mode": mode, "reason": reason}),
+    );
+    let _ = (action, mode, reason);
 }
 
 /// The app's own address, which the window may show; it navigates nowhere else.
@@ -208,30 +340,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             "open" => {
                 let _ = open_window(app);
             }
-            "core-start" | "core-stop" | "core-restart" => {
-                let app = app.clone();
-                let action = e.id().as_ref().to_string();
-                tauri::async_runtime::spawn_blocking(move || {
-                    let st = app.state::<App>();
-                    let mut c = st.conn.lock().unwrap();
-                    if st.quitting.load(Ordering::SeqCst) || c.mode() != Some(Mode::Managed) {
-                        return;
-                    }
-                    match action.as_str() {
-                        "core-start" => {
-                            let _ = c.resume_core();
-                        }
-                        "core-stop" => c.stop_core(),
-                        _ => {
-                            let _ = c.restart_core();
-                        }
-                    }
-                    let v = c.view();
-                    drop(c);
-                    show_status(&app, &v);
-                    let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-connection", ());
-                });
-            }
+            "core-start" | "core-stop" | "core-restart" => tray_action(app, e.id().as_ref()),
             "quit" => quit(app),
             #[cfg(target_os = "linux")]
             "launch-settings" => {
@@ -669,6 +778,8 @@ pub fn run() {
                 pages: Mutex::new(Pages::default()),
                 status: Mutex::new(None),
                 core_actions: Mutex::new(Vec::new()),
+                shown: Mutex::new(Shown::default()),
+                busy: AtomicBool::new(false),
                 has_tray: AtomicBool::new(false),
                 quitting: AtomicBool::new(false),
             });
@@ -689,8 +800,14 @@ pub fn run() {
                 // No tray: closing the window quits the app.
                 Err(e) => eprintln!("pluxy-app: no tray icon: {e}"),
             }
-            let v = handle.state::<App>().conn.lock().unwrap().view();
+            // A core that exited before the app state existed had no one to recover it.
+            let (plan, v) = {
+                let st = handle.state::<App>();
+                let mut c = st.conn.lock().unwrap();
+                (c.core_exited(), c.view())
+            };
             show_status(&handle, &v);
+            recovery::schedule(handle.clone(), plan);
             if let Some(pid) = handle.state::<App>().conn.lock().unwrap().core_pid() {
                 eprintln!("pluxy-app: core started, pid {pid}");
             }
@@ -749,6 +866,66 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn managed(state: &'static str, version: u64) -> View {
+        View {
+            mode: Some(Mode::Managed),
+            core: Some(conn::CoreView {
+                state,
+                pid: None,
+                detail: None,
+            }),
+            version,
+            ..View::default()
+        }
+    }
+
+    /// Start, Stop and Restart as the old app enabled them: Restart only while running, none
+    /// while a tray action runs, none outside managed mode.
+    #[test]
+    fn tray_actions_follow_the_core_state() {
+        for (state, want) in [
+            ("running", [false, true, true]),
+            ("stopped", [true, false, false]),
+            ("recovering", [true, true, false]),
+            ("paused", [true, false, false]),
+        ] {
+            assert_eq!(
+                tray_presentation(&managed(state, 1), false).1,
+                want,
+                "{state}"
+            );
+            assert_eq!(
+                tray_presentation(&managed(state, 1), true),
+                ("Core working…".to_string(), [false; 3]),
+                "{state} while busy"
+            );
+        }
+        for mode in [Mode::Local, Mode::Remote] {
+            let v = View {
+                mode: Some(mode),
+                ..View::default()
+            };
+            assert_eq!(tray_presentation(&v, false).1, [false; 3]);
+            assert_eq!(tray_presentation(&v, true).1, [false; 3]);
+        }
+    }
+
+    #[test]
+    fn the_tray_drops_a_view_older_than_the_one_it_shows() {
+        let mut shown = Shown::default();
+        assert!(shown.offer(managed("running", 2)));
+        assert!(!shown.offer(managed("stopped", 1)));
+        assert_eq!(
+            shown.view.as_ref().unwrap().core.as_ref().unwrap().state,
+            "running"
+        );
+        assert!(shown.offer(managed("stopped", 3)));
+        assert_eq!(
+            shown.view.as_ref().unwrap().core.as_ref().unwrap().state,
+            "stopped"
+        );
+    }
 
     /// Every command the app handles is in the manifest, and the window's capability grants
     /// each to the window's webview only: no window-wide grant (which would cover the page

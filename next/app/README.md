@@ -41,15 +41,18 @@ address or key can always be fixed there.
 Closing the window destroys it and its webviews, so they hold no memory while the app sits in
 the tray. The tray menu shows what the app is connected to, and has "Open pluxy" (a new window)
 and "Quit pluxy". In managed mode, "Start core", "Stop core" and "Restart core" control only the
-core the app started. They work with the window closed and no renderer running. These actions
-are disabled in local and remote modes; the native side also refuses lifecycle requests there.
+core the app started. They work with the window closed and no renderer running. "Restart core"
+is enabled only while the core runs. While one of them runs, the tray says "Core working…",
+disables all three and refuses another click. They are disabled in local and remote modes, and
+the native side refuses them there too, even if a desktop delivers a click on a disabled item.
 
 When an owned core exits unexpectedly, the app retries after 2, 5 and 15 seconds, with at most
-three recovery attempts in a rolling five-minute window. Successful and manual restarts keep
-that budget. After the third failed recovery or another crash within that window, the tray
-shows "Core recovery paused" and the Connection page shows the reason. "Start core" explicitly
-tries again. A manual Stop, a mode change or a newer Start cancels scheduled recovery. An
-intentional Stop stays stopped. If the app cannot make its tray icon, closing the window quits the app.
+three automatic recovery attempts in a rolling five-minute window. A successful recovery keeps
+that budget, so a core that keeps crashing still stops being restarted. After the third failed
+recovery or another crash within that window, the tray shows "Core recovery paused" and the
+Connection page shows the reason. An explicit Start, Stop or Restart, from the tray or the
+window, or a mode change, cancels any scheduled recovery and clears the budget. A core you
+stopped stays stopped. If the app cannot make its tray icon, closing the window quits the app.
 
 ## Commands
 
@@ -204,10 +207,15 @@ closing the window leaves no webview and
 no web process, and that quitting stops only the app's own core. With the window closed, it
 finds the app's real StatusNotifierItem through the session's tray watcher and sends the actual
 Start/Stop/Restart menu events over com.canonical.dbusmenu. It kills only the reported owned
-core as an on-demand crash fixture, checks recovery and the three-attempt cutoff, checks that
-a pending recovery cannot undo manual Stop, and checks that local/remote tray actions cannot
-control a foreign core. Every tray operation asserts zero renderer processes and webviews. The `native-test` feature is
-for that test alone; release builds never have it.
+core as an on-demand crash fixture, after checking that the process is still the app's live
+child. It checks recovery, the three-attempt cutoff, and that an explicit Start clears the
+budget. It checks that a pending recovery cannot undo a manual Stop and that no recovery attempt
+ran before that Stop. After each step it reads which of Start, Stop and Restart the menu
+enables, including while an action is held busy. A click on a disabled item still reaches the
+app's handler, which the test confirms from the handler's own refusal; in local and remote modes
+every lifecycle click must be refused that way. It ends with a core running and checks that
+quitting stops that core. Every tray operation asserts zero renderer processes and webviews.
+The `native-test` feature is for that test alone; release builds never have it.
 
 The same native run uses fixture actions (compiled only with `native-test`) and real X input
 from `xdotool` to confirm, cancel, opt into remembering, click a native Start button and revoke
@@ -254,10 +262,10 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
 - Keys are typed into the window, which holds them until it hands them to the native side; a
   native entry dialog would keep them out of the webview entirely.
 - A kept key is stored in `connection.json`, not in the system keyring.
-- The Linux native test uses a real tray watcher and D-Bus menu. Icon placement and interaction
-  on other desktop tray hosts have not been checked. The native test's
-  session has a real tray watcher, but only a probe item is registered with it, not the app's own
-  icon.
+- The Linux native test drives the app's own tray item through a real tray watcher and its D-Bus
+  menu. How other desktops' tray hosts place and show the icon has not been checked.
+- Whether a desktop shows the tray icon is not checked when the window closes: on a desktop with
+  no tray host, closing the window leaves the app running with no way back to it but quitting it.
 - The native test needs the desktop services above, and the pinned AppImage runtime from
   github.com (or a copy in its cache folder), so it does not run offline on a bare machine.
 - Native admission bounds work after a scheme request reaches the handler. They do not bound

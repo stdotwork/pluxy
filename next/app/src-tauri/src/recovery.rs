@@ -19,17 +19,24 @@ pub struct Recovery {
 }
 
 impl Recovery {
-    /// A newer manual operation invalidates any scheduled work. Never erase the rolling budget.
+    /// An explicit action (Start, Stop, Restart, a mode change) invalidates any scheduled work
+    /// and clears the budget: only automatic recoveries count against it.
     pub fn cancel(&mut self) {
-        self.generation = self.generation.wrapping_add(1);
+        self.reset();
         self.armed = false;
-        self.due = None;
-        self.detail = None;
+        self.attempts.clear();
     }
 
+    /// A core started. The budget stays, so a crash loop through successful restarts still stops.
     pub fn running(&mut self) {
-        self.cancel();
+        self.reset();
         self.armed = true;
+    }
+
+    fn reset(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.due = None;
+        self.detail = None;
     }
 
     pub fn schedule(&mut self, now: Instant, detail: String) {
@@ -103,7 +110,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn delays_and_budget_survive_successful_and_manual_restarts() {
+    fn delays_and_budget_survive_successful_restarts() {
         let mut r = Recovery::default();
         let mut now = Instant::now();
         r.running();
@@ -115,9 +122,6 @@ mod tests {
             assert!(r.begin(generation, due));
             now = due;
             r.running();
-            // Even an explicit Stop and Start cannot refresh this budget.
-            r.cancel();
-            r.running();
         }
         r.schedule(now, "loop".into());
         assert!(r.plan().is_none());
@@ -125,6 +129,27 @@ mod tests {
         r.running();
         r.schedule(now + WINDOW, "later".into());
         assert_eq!(r.plan().unwrap().1, now + WINDOW + Duration::from_secs(2));
+    }
+
+    #[test]
+    fn an_explicit_action_clears_the_budget() {
+        let mut r = Recovery::default();
+        let mut now = Instant::now();
+        r.running();
+        for _ in 0..3 {
+            r.schedule(now, "crashed".into());
+            let (generation, due) = r.plan().unwrap();
+            assert!(r.begin(generation, due));
+            now = due;
+            r.running();
+        }
+        // Explicit Stop then Start (or Restart, or a mode change): the next crash is retried
+        // after the first delay again, not paused.
+        r.cancel();
+        r.running();
+        r.schedule(now, "crashed after Start".into());
+        assert_eq!(r.plan().unwrap().1, now + Duration::from_secs(2));
+        assert_eq!(r.status().unwrap().0, "recovering");
     }
 
     #[test]

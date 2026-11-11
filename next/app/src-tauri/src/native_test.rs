@@ -276,6 +276,23 @@ fn run(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Holds a tray action while the session's hold file exists, so the test can see the tray
+/// busy and click it again meanwhile.
+pub(crate) fn tray_hold(action: &str) {
+    let Ok(f) = std::env::var("PLUXY_APP_TEST_TRAY_HOLD") else {
+        return;
+    };
+    let f = std::path::Path::new(&f);
+    if !f.exists() {
+        return;
+    }
+    log("tray-held", json!({"action": action}));
+    let deadline = Instant::now() + WAIT;
+    while f.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 pub fn start(app: AppHandle) {
     std::thread::spawn(move || {
         if let Err(e) = run(&app) {

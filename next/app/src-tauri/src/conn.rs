@@ -98,6 +98,10 @@ pub struct View {
     pub core: Option<CoreView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Taken under the connection lock: a later view has a higher version, so the tray can
+    /// drop a view that reaches it after a newer one.
+    #[serde(skip)]
+    pub version: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -188,6 +192,7 @@ pub struct Connection {
     on_core_exit: Option<OnExit>,
     recovery: Recovery,
     error: Option<String>,
+    views: u64,
 }
 
 /// What a call needs, taken out of the connection so no lock is held while it runs.
@@ -224,6 +229,7 @@ impl Connection {
             on_core_exit,
             recovery: Recovery::default(),
             error,
+            views: 0,
         };
         if c.error.is_none() {
             c.connect();
@@ -334,6 +340,8 @@ impl Connection {
         {
             return None;
         }
+        #[cfg(feature = "native-test")]
+        eprintln!("native-test: recovery-attempt {{\"generation\":{generation}}}");
         // The supervisor has already reaped this child. Never signal a PID found by address.
         self.managed.take();
         if let Err(e) = self.start_core() {
@@ -508,6 +516,10 @@ impl Connection {
             core_path: self.settings.core_path.clone(),
             core,
             error: self.error.clone(),
+            version: {
+                self.views += 1;
+                self.views
+            },
         }
     }
 }
@@ -692,6 +704,8 @@ mod tests {
         let mut c = Connection::open(dirs, None);
         let v = c.view();
         assert!(v.signed_in && v.remembered);
+        // Each view is newer than the last, so the tray can drop one that arrives late.
+        assert!(c.view().version > v.version);
         assert!(!serde_json::to_string(&v)
             .unwrap()
             .contains("secret-key-123"));
