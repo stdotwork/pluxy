@@ -8,11 +8,13 @@ import { extensionsPage } from "./extensions";
 import { quotaPage } from "./quota";
 import { statusPage } from "./status";
 import { themesPage } from "./themes";
+import { usagePage } from "./usage";
 
 export const corePages = (): PageDef[] => [
   statusPage(),
   accountsPage(),
   quotaPage(),
+  usagePage(),
   extensionsPage(),
   themesPage(),
 ];

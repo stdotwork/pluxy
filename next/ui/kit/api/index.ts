@@ -10,6 +10,7 @@ import { packagesApi } from "./packages";
 import { quotaApi } from "./quota";
 import { settingsApi } from "./settings";
 import { statusApi } from "./status";
+import { usageEventsApi } from "./usageEvents";
 
 export * from "./accounts";
 export * from "./extensions";
@@ -17,6 +18,7 @@ export * from "./packages";
 export * from "./quota";
 export * from "./settings";
 export * from "./status";
+export * from "./usageEvents";
 
 export const api = (host: Host) => ({
   ...statusApi(host),
@@ -25,6 +27,7 @@ export const api = (host: Host) => ({
   ...quotaApi(host),
   ...extensionsApi(host),
   ...settingsApi(host),
+  ...usageEventsApi(host),
 });
 
 export type Api = ReturnType<typeof api>;
