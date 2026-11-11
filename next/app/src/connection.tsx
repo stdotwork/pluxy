@@ -43,7 +43,7 @@ function describe(c: Connection): [string, string][] {
   const rows: [string, string][] = [];
   if (c.target) rows.push(["Core", c.target]);
   if (c.mode === "managed" && c.core) {
-    rows.push(["Process", c.core.state === "running" ? `running, pid ${c.core.pid}` : "stopped"]);
+    rows.push(["Process", c.core.state === "running" ? `running, pid ${c.core.pid}` : c.core.state]);
     if (c.core.detail) rows.push(["Last words", c.core.detail]);
   }
   if (c.mode === "local" || c.mode === "remote")

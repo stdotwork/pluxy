@@ -20,7 +20,7 @@ export interface Connection {
   ca_file?: string;
   core_path?: string;
   /** The core this app runs, in managed mode. */
-  core?: { state: "running" | "stopped"; pid?: number; detail?: string };
+  core?: { state: "running" | "stopped" | "recovering" | "paused"; pid?: number; detail?: string };
   /** Why the app is not connected, when it is not. */
   error?: string;
 }

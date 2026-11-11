@@ -40,7 +40,16 @@ address or key can always be fixed there.
 
 Closing the window destroys it and its webviews, so they hold no memory while the app sits in
 the tray. The tray menu shows what the app is connected to, and has "Open pluxy" (a new window)
-and "Quit pluxy". If the app cannot make its tray icon, closing the window quits the app.
+and "Quit pluxy". In managed mode, "Start core", "Stop core" and "Restart core" control only the
+core the app started. They work with the window closed and no renderer running. These actions
+are disabled in local and remote modes; the native side also refuses lifecycle requests there.
+
+When an owned core exits unexpectedly, the app retries after 2, 5 and 15 seconds, with at most
+three recovery attempts in a rolling five-minute window. Successful and manual restarts keep
+that budget. After the third failed recovery or another crash within that window, the tray
+shows "Core recovery paused" and the Connection page shows the reason. "Start core" explicitly
+tries again. A manual Stop, a mode change or a newer Start cancels scheduled recovery. An
+intentional Stop stays stopped. If the app cannot make its tray icon, closing the window quits the app.
 
 ## Commands
 
@@ -113,7 +122,12 @@ reaches every command, that at the top of an extension page's webview Tauri refu
 command and the plugin commands tried, that the app reaches no command from that webview, that
 nothing reaches the app from the page's frame, that the page webview covers the page area, that
 closing the window leaves no webview and
-no web process, and that quitting stops only the app's own core. The `native-test` feature is
+no web process, and that quitting stops only the app's own core. With the window closed, it
+finds the app's real StatusNotifierItem through the session's tray watcher and sends the actual
+Start/Stop/Restart menu events over com.canonical.dbusmenu. It kills only the reported owned
+core as an on-demand crash fixture, checks recovery and the three-attempt cutoff, checks that
+a pending recovery cannot undo manual Stop, and checks that local/remote tray actions cannot
+control a foreign core. Every tray operation asserts zero renderer processes and webviews. The `native-test` feature is
 for that test alone; release builds never have it.
 
 Before the app, each run's session starts desktop services (`native/session.ts`, with the
@@ -142,15 +156,14 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
 - Tested on Linux only. On Windows the page document's address is
   `http://pluxy-page.localhost/`; neither Windows nor macOS has been run.
 - No installer or bundled core yet (`bundle.active` is off).
-- In managed mode the app does not restart a core that stops; the tray and the Connection page
-  show that it stopped and why, and the page offers to start it. A supervisor thread starts the
-  core and stays until it exits, since on Linux the parent-death signal follows the thread that
-  started it.
+- Recovery history lasts for the current app process; quitting the app ends its recovery window.
+  A supervisor thread starts the core and stays until it exits, since on Linux the parent-death
+  signal follows the thread that started it.
 - Keys are typed into the window, which holds them until it hands them to the native side; a
   native entry dialog would keep them out of the webview entirely.
 - A kept key is stored in `connection.json`, not in the system keyring.
-- Whether a desktop shows the tray icon is not checked: on a desktop with no tray host, closing
-  the window leaves the app running with no way back to it but quitting it. The native test's
+- The Linux native test uses a real tray watcher and D-Bus menu. Icon placement and interaction
+  on other desktop tray hosts have not been checked. The native test's
   session has a real tray watcher, but only a probe item is registered with it, not the app's own
   icon.
 - The native test needs the desktop services above, and the pinned AppImage runtime from

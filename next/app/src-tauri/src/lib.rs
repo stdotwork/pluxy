@@ -14,6 +14,7 @@ pub mod managed;
 mod native_test;
 pub mod pages;
 mod place;
+pub mod recovery;
 
 pub use command_names::COMMANDS;
 
@@ -43,6 +44,7 @@ struct App {
     pages_dir: std::path::PathBuf,
     pages: Mutex<Pages>,
     status: Mutex<Option<MenuItem<Wry>>>,
+    core_actions: Mutex<Vec<MenuItem<Wry>>>,
     has_tray: AtomicBool,
     quitting: AtomicBool,
 }
@@ -67,6 +69,12 @@ fn status_text(v: &View) -> String {
         (Some(Mode::Managed), Some(t), Some(c)) if c.state == "running" => {
             format!("Core running at {t}")
         }
+        (Some(Mode::Managed), _, Some(c)) if c.state == "paused" => {
+            "Core recovery paused — Start core to try again".into()
+        }
+        (Some(Mode::Managed), _, Some(c)) if c.state == "recovering" => {
+            "Core stopped — waiting to restart".into()
+        }
         (Some(Mode::Managed), _, _) => "Core stopped".into(),
         (Some(Mode::Local), Some(t), _) => format!("Connected to {t}"),
         (Some(Mode::Remote), Some(t), _) => format!("Remote core {t}"),
@@ -77,6 +85,17 @@ fn status_text(v: &View) -> String {
 fn show_status(app: &AppHandle, v: &View) {
     if let Some(item) = app.state::<App>().status.lock().unwrap().as_ref() {
         let _ = item.set_text(status_text(v));
+    }
+    let managed = v.mode == Some(Mode::Managed);
+    let running = v.core.as_ref().is_some_and(|c| c.state == "running");
+    let recovering = v.core.as_ref().is_some_and(|c| c.state == "recovering");
+    for item in app.state::<App>().core_actions.lock().unwrap().iter() {
+        let enabled = match item.id().as_ref() {
+            "core-start" => managed && !running,
+            "core-stop" => managed && (running || recovering),
+            _ => managed,
+        };
+        let _ = item.set_enabled(enabled);
     }
 }
 
@@ -150,13 +169,43 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open pluxy", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit pluxy", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&status, &sep, &open, &quit_item])?;
+    let start = MenuItem::with_id(app, "core-start", "Start core", false, None::<&str>)?;
+    let stop = MenuItem::with_id(app, "core-stop", "Stop core", false, None::<&str>)?;
+    let restart = MenuItem::with_id(app, "core-restart", "Restart core", false, None::<&str>)?;
+    let menu = Menu::with_items(
+        app,
+        &[&status, &start, &stop, &restart, &sep, &open, &quit_item],
+    )?;
     let mut tray = TrayIconBuilder::with_id("pluxy")
         .tooltip("pluxy")
         .menu(&menu)
         .on_menu_event(|app, e| match e.id().as_ref() {
             "open" => {
                 let _ = open_window(app);
+            }
+            "core-start" | "core-stop" | "core-restart" => {
+                let app = app.clone();
+                let action = e.id().as_ref().to_string();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let st = app.state::<App>();
+                    let mut c = st.conn.lock().unwrap();
+                    if st.quitting.load(Ordering::SeqCst) || c.mode() != Some(Mode::Managed) {
+                        return;
+                    }
+                    match action.as_str() {
+                        "core-start" => {
+                            let _ = c.resume_core();
+                        }
+                        "core-stop" => c.stop_core(),
+                        _ => {
+                            let _ = c.restart_core();
+                        }
+                    }
+                    let v = c.view();
+                    drop(c);
+                    show_status(&app, &v);
+                    let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-connection", ());
+                });
             }
             "quit" => quit(app),
             _ => {}
@@ -176,6 +225,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     }
     tray.build(app)?;
     *app.state::<App>().status.lock().unwrap() = Some(status);
+    *app.state::<App>().core_actions.lock().unwrap() = vec![start, stop, restart];
     Ok(())
 }
 
@@ -415,8 +465,12 @@ pub fn run() {
                 let app = handle.clone();
                 std::thread::spawn(move || {
                     if let Some(st) = app.try_state::<App>() {
-                        let v = st.conn.lock().unwrap().view();
+                        let mut c = st.conn.lock().unwrap();
+                        let plan = c.core_exited();
+                        let v = c.view();
+                        drop(c);
                         show_status(&app, &v);
+                        recovery::schedule(app.clone(), plan);
                     }
                     let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-connection", ());
                 });
@@ -430,6 +484,7 @@ pub fn run() {
                 pages_dir,
                 pages: Mutex::new(Pages::default()),
                 status: Mutex::new(None),
+                core_actions: Mutex::new(Vec::new()),
                 has_tray: AtomicBool::new(false),
                 quitting: AtomicBool::new(false),
             });

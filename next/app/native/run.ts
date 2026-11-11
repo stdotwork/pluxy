@@ -246,6 +246,10 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
     const setup: string[] = []; // session.ts's report of what failed at setup
     const onLine = (line: string) => {
       // The session's service checks are always shown: they say what this run stood on.
+      if (line.startsWith("native-recovery: ")) {
+        console.log(`  ${mode} | ${line}`);
+        return;
+      }
       if (line.startsWith("native-prereq: ")) {
         console.log(`  ${mode} | ${line}`);
         if (line === "native-prereq: ready") ready = true;

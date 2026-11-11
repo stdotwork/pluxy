@@ -10,11 +10,13 @@
 
 use crate::client::{certificates, Client, Reply};
 use crate::managed::{core_program, write_private, ManagedCore, OnExit};
+use crate::recovery::Recovery;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 use url::{Host, Url};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -184,6 +186,7 @@ pub struct Connection {
     key: Option<String>,
     managed: Option<ManagedCore>,
     on_core_exit: Option<OnExit>,
+    recovery: Recovery,
     error: Option<String>,
 }
 
@@ -219,6 +222,7 @@ impl Connection {
             key: None,
             managed: None,
             on_core_exit,
+            recovery: Recovery::default(),
             error,
         };
         if c.error.is_none() {
@@ -276,14 +280,69 @@ impl Connection {
         self.client = Some(Client::new(core.base(), None));
         self.key = Some(core.key().to_string());
         self.managed = Some(core);
+        self.recovery.running();
+        self.error = None;
         Ok(())
     }
 
     /// Stops the app's own core, if it runs one. A local or remote core is never stopped.
     pub fn stop_core(&mut self) {
+        self.recovery.cancel();
+        if self.settings.mode == Some(Mode::Managed) {
+            self.client = None;
+            self.key = None;
+            self.error = None;
+        }
         if let Some(mut core) = self.managed.take() {
             core.stop();
         }
+    }
+
+    /// Starts only an owned core; a live process is never replaced by Start.
+    pub fn resume_core(&mut self) -> Result<(), String> {
+        if self.settings.mode != Some(Mode::Managed) {
+            return Err("the app runs no core of its own in this mode".into());
+        }
+        if self.managed.as_ref().is_some_and(|m| m.exited().is_none()) {
+            return Ok(());
+        }
+        self.stop_core();
+        let result = self.start_core();
+        if let Err(e) = &result {
+            self.error = Some(e.clone());
+        }
+        result
+    }
+
+    /// Observe only the child we own. Exit callbacks from an older child cannot affect it.
+    pub fn core_exited(&mut self) -> Option<(u64, Instant)> {
+        if self.settings.mode != Some(Mode::Managed) || !self.recovery.armed() {
+            return None;
+        }
+        let why = self.managed.as_ref().and_then(ManagedCore::exited)?;
+        if self.recovery.plan().is_none() {
+            self.client = None;
+            self.key = None;
+            self.recovery.schedule(Instant::now(), why);
+        }
+        self.recovery.plan()
+    }
+
+    pub fn recover_core(&mut self, generation: u64) -> Option<(u64, Instant)> {
+        if self.settings.mode != Some(Mode::Managed)
+            || !self.recovery.begin(generation, Instant::now())
+        {
+            return None;
+        }
+        // The supervisor has already reaped this child. Never signal a PID found by address.
+        self.managed.take();
+        if let Err(e) = self.start_core() {
+            self.error = Some(e.clone());
+            self.recovery.schedule(Instant::now(), e);
+            return self.recovery.plan();
+        }
+        // A child can die during startup, before the connection lock is released.
+        self.core_exited()
     }
 
     /// Starts the app's own core again, in managed mode.
@@ -401,29 +460,40 @@ impl Connection {
 
     /// The app's own core, if it runs one: its process ID.
     pub fn core_pid(&self) -> Option<u32> {
-        self.managed.as_ref().map(ManagedCore::pid)
+        self.managed
+            .as_ref()
+            .filter(|m| m.exited().is_none())
+            .map(ManagedCore::pid)
     }
 
     pub fn view(&mut self) -> View {
         let core = if self.settings.mode == Some(Mode::Managed) {
-            Some(match self.managed.as_ref() {
-                Some(m) => match m.exited() {
-                    None => CoreView {
-                        state: "running",
-                        pid: Some(m.pid()),
-                        detail: None,
+            Some(if let Some((state, detail)) = self.recovery.status() {
+                CoreView {
+                    state,
+                    pid: None,
+                    detail: Some(detail),
+                }
+            } else {
+                match self.managed.as_ref() {
+                    Some(m) => match m.exited() {
+                        None => CoreView {
+                            state: "running",
+                            pid: Some(m.pid()),
+                            detail: None,
+                        },
+                        Some(why) => CoreView {
+                            state: "stopped",
+                            pid: None,
+                            detail: Some(why),
+                        },
                     },
-                    Some(why) => CoreView {
+                    None => CoreView {
                         state: "stopped",
                         pid: None,
-                        detail: Some(why),
+                        detail: self.error.clone(),
                     },
-                },
-                None => CoreView {
-                    state: "stopped",
-                    pid: None,
-                    detail: self.error.clone(),
-                },
+                }
             })
         } else {
             None
