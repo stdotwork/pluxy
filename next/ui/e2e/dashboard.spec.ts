@@ -78,7 +78,7 @@ test("the Dashboard sums up the requests core recorded and the accounts it holds
     for (const theme of ["default", "terminal", "paper"]) {
       await page.locator('nav a[href="#/themes"]').click();
       await page.getByRole("radio", { name: new RegExp(`^${theme}`, "i") }).check();
-      await page.locator('nav a[href="#/status"]').click();
+      await page.locator('nav a[data-part="nav-item"][href="#/status"]').click();
       await expect(stat(page, "Requests handled").locator("strong")).toHaveText("4");
       await page.screenshot({ path: `${process.env.DASHBOARD_SHOTS}/${theme}.png`, fullPage: true });
     }
