@@ -55,12 +55,17 @@ func (r *Redactor) Placeholder(secret string) string { return PlaceholderPrefix 
 
 // placeholderOf returns the placeholder of a secret's node. In settings, a secret that is not a
 // string has its type in its placeholder too, so the number 1234 and the string "1234" have
-// different ones and each goes back with its own type.
+// different ones and each goes back with its own type. Its hash uses a key of its own, derived
+// from the Redactor's, so no string's placeholder is ever a typed value's.
 func (r *Redactor) placeholderOf(n *yaml.Node, settings bool) string {
-	if settings && n.Tag != "!!str" {
-		return r.Placeholder(n.Tag + "\x00" + n.Value)
+	if !settings || n.Tag == "!!str" {
+		return r.Placeholder(n.Value)
 	}
-	return r.Placeholder(n.Value)
+	derive := hmac.New(sha256.New, r.key)
+	derive.Write([]byte("pluxy settings: a secret that is not a string"))
+	mac := hmac.New(sha256.New, derive.Sum(nil))
+	fmt.Fprintf(mac, "%d:%s%d:%s", len(n.Tag), n.Tag, len(n.Value), n.Value)
+	return PlaceholderPrefix + hex.EncodeToString(mac.Sum(nil)[:12])
 }
 
 // The rules that say which values are secrets. They go by key name, so they hold in both

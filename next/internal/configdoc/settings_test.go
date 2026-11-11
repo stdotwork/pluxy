@@ -163,3 +163,55 @@ func TestRestoreSettingsKeepsTypeOfEachPlaceholder(t *testing.T) {
 		}
 	}
 }
+
+// A string that spells a number's type and value is still a string: its placeholder is not the
+// number's, in any order or place, and it does not keep a placeholder from the number alive.
+func TestSettingsPlaceholdersOfTypedValuesAreTheirOwn(t *testing.T) {
+	r := NewRedactor()
+	for _, src := range []string{
+		`{"password":[1234,"!!int\u00001234"]}`,
+		`{"password":["!!int\u00001234",1234]}`,
+		`{"password":[1.2,"!!float\u00001.2"]}`,
+		`{"password":{"n":1234,"s":"!!int\u00001234"}}`,
+	} {
+		out, err := r.RedactSettings([]byte(src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var shown map[string]any
+		if err := json.Unmarshal(out, &shown); err != nil {
+			t.Fatal(err)
+		}
+		seen := map[any]bool{}
+		var each func(v any)
+		each = func(v any) {
+			switch v := v.(type) {
+			case []any:
+				for _, c := range v {
+					each(c)
+				}
+			case map[string]any:
+				for _, c := range v {
+					each(c)
+				}
+			default:
+				if seen[v] {
+					t.Errorf("redacted %s = %s: two secrets share a placeholder", src, out)
+				}
+				seen[v] = true
+			}
+		}
+		each(shown["password"])
+		if back, err := r.RestoreSettings(out, []byte(src)); err != nil || string(back) != src {
+			t.Errorf("round trip of %s = %s, %v", src, back, err)
+		}
+	}
+	// The number's placeholder, sent after the number became that string, matches no secret.
+	before, err := r.RedactSettings([]byte(`{"password":1234}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.RestoreSettings(before, []byte(`{"password":"!!int\u00001234"}`)); !errors.Is(err, ErrStale) {
+		t.Errorf("a number's placeholder after the number changed to a string: err = %v, want ErrStale", err)
+	}
+}
