@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -33,24 +34,36 @@ type exchange struct {
 // diagnostic frame went out is sent unrecorded.
 func (c *captureLog) roundTrip(rt http.RoundTripper, req *http.Request) (*http.Response, error) {
 	x := &exchange{req: protocol.UpstreamRequest{TimeMs: time.Now().UnixMilli(), Method: req.Method,
-		URL: capturedURL(req.URL), Headers: capturedHeaders(req.Header)}}
+		URL: capturedURL(req.URL)}}
+	x.req.Headers, x.req.HeadersLeftOut = capturedHeaders(req.Header)
+	hasBody := req.Body != nil && req.Body != http.NoBody
+	if hasBody {
+		x.reqBody = &bodyCapture{} // set before x is published: take reads it
+	}
 	if !c.add(x) {
 		return rt.RoundTrip(req)
 	}
-	if req.Body != nil && req.Body != http.NoBody {
-		x.reqBody = &bodyCapture{}
-		if req.GetBody != nil {
-			// A body the transport can read again is recorded from its own copy, so the bytes
-			// recorded are the bytes sent even when the transport sends it twice.
-			if b, err := req.GetBody(); err == nil {
-				_, _ = io.Copy(x.reqBody, b)
-				b.Close()
+	if hasBody {
+		// What the transport reads is what is recorded, as it reads it: the request is not held
+		// back to read the body first, and the body is read once.
+		r := *req // a RoundTripper must not change the request it is given
+		r.Body = teeBody{req.Body, x.reqBody}
+		if get := req.GetBody; get != nil {
+			r.GetBody = func() (io.ReadCloser, error) {
+				b, err := get()
+				if err != nil {
+					return nil, err
+				}
+				// The transport sends the body again: record that attempt in place of the
+				// first, so the capture is the body sent last, not both.
+				bc := &bodyCapture{}
+				c.mu.Lock()
+				x.reqBody = bc
+				c.mu.Unlock()
+				return teeBody{b, bc}, nil
 			}
-		} else {
-			r := *req // a RoundTripper must not change the request it is given
-			r.Body = teeBody{req.Body, x.reqBody}
-			req = &r
 		}
+		req = &r
 	}
 	resp, err := rt.RoundTrip(req)
 	c.mu.Lock()
@@ -59,7 +72,8 @@ func (c *captureLog) roundTrip(rt http.RoundTripper, req *http.Request) (*http.R
 		x.err = err.Error()
 		return resp, err
 	}
-	x.resp = &protocol.UpstreamResponse{TimeMs: time.Now().UnixMilli(), Status: resp.StatusCode, Headers: capturedHeaders(resp.Header)}
+	x.resp = &protocol.UpstreamResponse{TimeMs: time.Now().UnixMilli(), Status: resp.StatusCode}
+	x.resp.Headers, x.resp.HeadersLeftOut = capturedHeaders(resp.Header)
 	// A 101's body is the switched connection (a WebSocket's), which its reader needs as it is;
 	// its messages are not recorded.
 	if resp.StatusCode != http.StatusSwitchingProtocols && resp.Body != nil {
@@ -115,12 +129,17 @@ func (c *captureLog) take() *protocol.Diagnostic {
 }
 
 // capturedURL is u without its user name and password, with the values of query parameters
-// whose names are secret (protocol.SecretName) redacted.
+// whose names are secret (protocol.SecretName) redacted. A query that does not parse cannot be
+// told apart from its secrets, so all of it is redacted.
 func capturedURL(u *url.URL) string {
 	c := *u
 	c.User = nil
 	if c.RawQuery != "" {
-		q := c.Query()
+		q, err := url.ParseQuery(c.RawQuery)
+		if err != nil {
+			c.RawQuery = protocol.Redacted
+			return c.String()
+		}
 		secret := false
 		for k := range q {
 			if protocol.SecretName(k) {
@@ -136,26 +155,43 @@ func capturedURL(u *url.URL) string {
 }
 
 // capturedHeaders is a copy of h with the values of headers whose names are secret
-// (protocol.SecretName) redacted, keeping an authorization scheme such as Bearer.
-func capturedHeaders(h http.Header) map[string][]string {
+// (protocol.SecretName) redacted, keeping an authorization scheme such as Bearer. It keeps at
+// most protocol.CapturedHeaderBytes of header lines, taking names in order, and counts the lines
+// it left out.
+func capturedHeaders(h http.Header) (headers map[string][]string, leftOut int) {
 	if len(h) == 0 {
-		return nil
+		return nil, 0
 	}
+	names := make([]string, 0, len(h))
+	for k := range h {
+		names = append(names, k)
+	}
+	slices.Sort(names)
 	out := make(map[string][]string, len(h))
-	for k, vs := range h {
-		vs = append([]string(nil), vs...)
-		if protocol.SecretName(k) {
-			for i, v := range vs {
+	size := 0
+	for _, k := range names {
+		secret := protocol.SecretName(k)
+		for _, v := range h[k] {
+			if secret {
 				if scheme, _, ok := strings.Cut(v, " "); ok && scheme != "" && strings.Contains(strings.ToLower(k), "authorization") {
-					vs[i] = scheme + " " + protocol.Redacted
+					v = scheme + " " + protocol.Redacted
 				} else {
-					vs[i] = protocol.Redacted
+					v = protocol.Redacted
 				}
 			}
+			n := len(k) + len(v) + 3
+			if size+n > protocol.CapturedHeaderBytes {
+				leftOut++
+				continue
+			}
+			size += n
+			out[k] = append(out[k], v)
 		}
-		out[k] = vs
 	}
-	return out
+	if len(out) == 0 {
+		out = nil
+	}
+	return out, leftOut
 }
 
 // teeBody records what is read from a body as it is read.
