@@ -202,7 +202,7 @@ export function RoutingPage() {
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string>();
   const mounted = useRef(true);
-  const latest = useRef<CoreSettings>();
+  const latest = useRef<CoreSettings | undefined>(undefined);
   const turns = useRef(0);
   const chain = useRef<Promise<void>>(Promise.resolve());
   const refocus = useRef("");
