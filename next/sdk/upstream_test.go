@@ -240,10 +240,10 @@ func TestUpstreamSetsCallHeaders(t *testing.T) {
 	}
 }
 
-// An extension that has not wrapped any client in Upstream cannot send through a proxy or with an
-// account's headers, so a call that carries either is answered with an error and never reaches its handler or the upstream; a
-// call without a proxy still does, and once the process wraps a client the proxied call goes
-// through too.
+// An extension that has not wrapped any client in Upstream cannot send through a proxy, with an
+// account's headers or with a call's payload rules, so a call that carries any of them is
+// answered with an error and never reaches its handler or the upstream; a call without a proxy
+// still does, and once the process wraps a client the proxied call goes through too.
 func TestProxiedCallRefusedWithoutUpstream(t *testing.T) {
 	was := upstreamUsed.Swap(false)
 	t.Cleanup(func() { upstreamUsed.Store(was) })
@@ -334,6 +334,15 @@ func TestProxiedCallRefusedWithoutUpstream(t *testing.T) {
 	if strings.Contains(hr.Error.Message, headerSecret) {
 		t.Fatalf("the error shows a header value: %q", hr.Error.Message)
 	}
+	conn.Close()
+	// So do a call's payload rules, which only a wrapped client applies.
+	conn = dial(t, socket)
+	pcall := protocol.Call{Type: protocol.TypeCall, ID: "p", Op: protocol.OpGenerate, Request: request, Account: &protocol.Account{ID: "a"},
+		Payload: &payload.Rules{Override: []payload.Rule{{Models: []payload.Model{{}}, Params: map[string]any{"service_tier": "priority"}}}}}
+	if err := protocol.WriteFrame(conn, pcall); err != nil {
+		t.Fatal(err)
+	}
+	refused(t, reply(t, conn))
 	conn.Close()
 	conn = dial(t, socket)
 	if err := protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeCall, ID: "c", Op: protocol.OpCheck, Account: &protocol.Account{ID: "a", ProxyURL: proxy}}); err != nil {
