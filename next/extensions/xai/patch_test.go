@@ -148,7 +148,7 @@ func replyStream(t *testing.T, requestBody, upstream string) ([]string, error) {
 		t.Fatal(err)
 	}
 	if patch == nil {
-		t.Fatal("the request has no custom apply_patch tool")
+		t.Fatal("the request has nothing to turn back in the reply")
 	}
 	var out bytes.Buffer
 	w := openairesponses.NewStreamWriter(&out, req)
@@ -185,6 +185,9 @@ func detail(m map[string]any) string {
 	item := func(v any) string {
 		it, _ := v.(map[string]any)
 		d := fmt.Sprintf("%v %v", it["type"], it["name"])
+		if v, ok := it["namespace"]; ok {
+			d += fmt.Sprintf(" ns=%v", v)
+		}
 		if v, ok := it["input"]; ok {
 			d += fmt.Sprintf(" input=%q", v)
 		}

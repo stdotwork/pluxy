@@ -1,0 +1,209 @@
+{
+  "description": "The Codex app's namespace tools are sent as functions with qualified names (weather__get_forecast), a history call and a tool choice in a namespace are written the same way, and xAI's function call comes back as the call to get_forecast in the weather namespace.",
+  "source": [
+    "core/internal/runtime/executor/xai_executor_request.go",
+    "core/internal/runtime/executor/xai_executor_response.go",
+    "core/internal/runtime/executor/xai_executor_test.go"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "body": {
+      "model": "grok-4.6",
+      "stream": true,
+      "input": [
+        {"role":"user","content":"Weather in Oslo?"},
+        {
+          "type": "function_call",
+          "call_id": "call_old",
+          "namespace": "weather",
+          "name": "get_forecast",
+          "arguments": "{\"city\":\"Bergen\"}"
+        },
+        {"type":"function_call_output","call_id":"call_old","output":"rain"},
+        {"role":"user","content":"And Oslo?"}
+      ],
+      "tools": [
+        {"type":"function","name":"get_time","parameters":{"properties":{},"type":"object"}},
+        {
+          "type": "namespace",
+          "name": "weather",
+          "description": "Weather tools.",
+          "tools": [
+            {
+              "type": "function",
+              "name": "get_forecast",
+              "description": "Forecast for a city.",
+              "parameters": {
+                "properties": {"city":{"type":"string"}},
+                "required": ["city"],
+                "type": "object"
+              }
+            },
+            {
+              "type": "function",
+              "name": "get_alerts",
+              "description": "Alerts for a city.",
+              "parameters": {
+                "properties": {"city":{"type":"string"}},
+                "required": ["city"],
+                "type": "object"
+              }
+            },
+            {"type":"tool_search"}
+          ]
+        }
+      ],
+      "tool_choice": {"type":"function","namespace":"weather","name":"get_forecast"}
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"event":"response.created","data":{"type":"response.created","sequence_number":0,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"in_progress","model":"grok-test-upstream","output":[],"usage":null}}},
+        {"event":"response.output_item.added","data":{"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"fc_ns","type":"function_call","status":"in_progress","call_id":"call_ns","name":"weather__get_forecast","arguments":""}}},
+        {"event":"response.function_call_arguments.delta","data":{"type":"response.function_call_arguments.delta","sequence_number":2,"item_id":"fc_ns","output_index":0,"delta":"{\"city\":"}},
+        {"event":"response.function_call_arguments.delta","data":{"type":"response.function_call_arguments.delta","sequence_number":3,"item_id":"fc_ns","output_index":0,"delta":"\"Oslo\"}"}},
+        {"event":"response.function_call_arguments.done","data":{"type":"response.function_call_arguments.done","sequence_number":4,"item_id":"fc_ns","output_index":0,"arguments":"{\"city\":\"Oslo\"}"}},
+        {"event":"response.output_item.done","data":{"type":"response.output_item.done","sequence_number":5,"output_index":0,"item":{"id":"fc_ns","type":"function_call","status":"completed","call_id":"call_ns","name":"weather__get_forecast","arguments":"{\"city\":\"Oslo\"}"}}},
+        {"event":"response.completed","data":{"type":"response.completed","sequence_number":6,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"completed","model":"grok-test-upstream","output":[{"id":"fc_ns","type":"function_call","status":"completed","call_id":"call_ns","name":"weather__get_forecast","arguments":"{\"city\":\"Oslo\"}"}],"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}}}
+      ]
+    }
+  ],
+  "exceptions": [
+    {
+          "path": "client.events[1].data.item.name",
+          "kind": "intended",
+          "reason": "Today's core restores the name and namespace of a flattened namespace tool's call in the done events and the final response, but leaves the added event with the qualified name it sent xAI (weather__get_forecast). The extension restores the added event too, so every event of the call names the same tool.",
+          "want": "get_forecast"
+    },
+    {
+          "path": "client.events[1].data.item.namespace",
+          "kind": "intended",
+          "reason": "Today's core restores the name and namespace of a flattened namespace tool's call in the done events and the final response, but leaves the added event with the qualified name it sent xAI (weather__get_forecast). The extension restores the added event too, so every event of the call names the same tool.",
+          "want": "weather"
+    },
+    {
+      "path": "upstream[0].body.instructions",
+      "kind": "intended",
+      "reason": "Today's core's Codex translator sends empty instructions on every Responses request; the extension sends the request's instructions as the client wrote them.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.parallel_tool_calls",
+      "kind": "intended",
+      "reason": "Today's core's Codex translator adds this default to every Responses request with tools (tool_choice, parallel_tool_calls, strict false, additionalProperties false); the extension sends the client's tools and choices as the client wrote them.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.prompt_cache_key",
+      "kind": "gap",
+      "reason": "Today's core derives a session ID per conversation and sends it as prompt_cache_key; the extension has no session identity to derive from, so it sends only the client's own prompt_cache_key.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.X-Grok-Conv-Id",
+      "kind": "gap",
+      "reason": "Today's core sends its session ID as the x-grok-conv-id header; the extension sends the header only when the client's body carries a prompt_cache_key, since it has no session identity of its own.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.User-Agent",
+      "kind": "intended",
+      "reason": "The xAI extension names itself in its User-Agent (pluxy-xai and its version) and does not copy the Grok CLI's identity; today's core sends the Grok workspace's User-Agent unless the client sent one.",
+      "want": "pluxy-xai/0.1.0"
+    },
+    {
+      "path": "client.events[*].data.response.usage.input_tokens_details",
+      "kind": "gap",
+      "reason": "Today's core fills in zero cached and reasoning token counts when the upstream reports usage without them (EnsureResponsesUsageDetails); the new core reports xAI's usage as it comes. Whether to keep it is open.",
+      "absent": true
+    },
+    {
+      "path": "client.events[*].data.response.usage.output_tokens_details",
+      "kind": "gap",
+      "reason": "Today's core fills in zero cached and reasoning token counts when the upstream reports usage without them (EnsureResponsesUsageDetails); the new core reports xAI's usage as it comes. Whether to keep it is open.",
+      "absent": true
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"response":{"created_at":1700000000,"id":"resp_corpus","model":"grok-test-upstream","object":"response","output":[],"status":"in_progress","usage":null},"sequence_number":0,"type":"response.created"},"event":"response.created"},
+        {"data":{"item":{"arguments":"","call_id":"call_ns","id":"fc_ns","name":"weather__get_forecast","status":"in_progress","type":"function_call"},"output_index":0,"sequence_number":1,"type":"response.output_item.added"},"event":"response.output_item.added"},
+        {"data":{"delta":"{\"city\":","item_id":"fc_ns","output_index":0,"sequence_number":2,"type":"response.function_call_arguments.delta"},"event":"response.function_call_arguments.delta"},
+        {"data":{"delta":"\"Oslo\"}","item_id":"fc_ns","output_index":0,"sequence_number":3,"type":"response.function_call_arguments.delta"},"event":"response.function_call_arguments.delta"},
+        {"data":{"arguments":"{\"city\":\"Oslo\"}","item_id":"fc_ns","output_index":0,"sequence_number":4,"type":"response.function_call_arguments.done"},"event":"response.function_call_arguments.done"},
+        {"data":{"item":{"arguments":"{\"city\":\"Oslo\"}","call_id":"call_ns","id":"fc_ns","name":"get_forecast","namespace":"weather","status":"completed","type":"function_call"},"output_index":0,"sequence_number":5,"type":"response.output_item.done"},"event":"response.output_item.done"},
+        {"data":{"response":{"created_at":1700000000,"id":"resp_corpus","model":"grok-test-upstream","object":"response","output":[{"arguments":"{\"city\":\"Oslo\"}","call_id":"call_ns","id":"fc_ns","name":"get_forecast","namespace":"weather","status":"completed","type":"function_call"}],"status":"completed","usage":{"input_tokens":11,"input_tokens_details":{"cached_tokens":0},"output_tokens":7,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":18}},"sequence_number":6,"type":"response.completed"},"event":"response.completed"}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": ["reasoning.encrypted_content"],
+          "input": [
+            {"content":"Weather in Oslo?","role":"user"},
+            {
+              "arguments": "{\"city\":\"Bergen\"}",
+              "call_id": "call_old",
+              "name": "weather__get_forecast",
+              "type": "function_call"
+            },
+            {"call_id":"call_old","output":"rain","type":"function_call_output"},
+            {"content":"And Oslo?","role":"user"}
+          ],
+          "instructions": "",
+          "model": "grok-4.6",
+          "parallel_tool_calls": true,
+          "prompt_cache_key": "a683a1f4-2762-501c-9de1-8a17543f0ca3",
+          "store": false,
+          "stream": true,
+          "tool_choice": {"name":"weather__get_forecast","type":"function"},
+          "tools": [
+            {"name":"get_time","parameters":{"properties":{},"type":"object"},"type":"function"},
+            {
+              "description": "Forecast for a city.",
+              "name": "weather__get_forecast",
+              "parameters": {
+                "properties": {"city":{"type":"string"}},
+                "required": ["city"],
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "description": "Alerts for a city.",
+              "name": "weather__get_alerts",
+              "parameters": {
+                "properties": {"city":{"type":"string"}},
+                "required": ["city"],
+                "type": "object"
+              },
+              "type": "function"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0",
+          "X-Grok-Conv-Id": "a683a1f4-2762-501c-9de1-8a17543f0ca3"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      }
+    ]
+  }
+}
