@@ -860,3 +860,25 @@ fn a_catalog_folder_that_cannot_be_listed_keeps_the_store() {
     assert_eq!(store_names(&d), BTreeSet::from([digest(&v1)]));
     done(root);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_store_that_cannot_be_listed_is_reported() {
+    use std::os::unix::fs::PermissionsExt;
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false);
+    install(&mut c, &package("example/notes", "1.0.0"), local("n")).unwrap();
+    fs::set_permissions(d.store(), fs::Permissions::from_mode(0o300)).unwrap();
+    c.remove("example/notes").unwrap();
+    fs::set_permissions(d.store(), fs::Permissions::from_mode(0o700)).unwrap();
+    let left = c.take_cleanup().unwrap_or_default();
+    assert!(
+        left.contains("could not list") && left.contains("store"),
+        "{left:?}"
+    );
+    done(root);
+}

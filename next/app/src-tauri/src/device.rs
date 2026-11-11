@@ -455,7 +455,7 @@ impl Catalog {
             cleanup: vec![],
         };
         if let Err(e) = remove_tree(&c.dirs.staging()) {
-            c.cleanup.push(e);
+            c.cleanup.push(format!("could not delete {e}"));
         }
         c.collect();
         if let Some(left) = c.take_cleanup() {
@@ -467,15 +467,10 @@ impl Catalog {
         c
     }
 
-    /// What could not be deleted since the last call, if anything: the change it came from
-    /// was made.
+    /// What went wrong after a change was made, since the last call, if anything: the change
+    /// itself stands.
     pub fn take_cleanup(&mut self) -> Option<String> {
-        (!self.cleanup.is_empty()).then(|| {
-            format!(
-                "these folders could not be deleted: {}",
-                std::mem::take(&mut self.cleanup).join("; ")
-            )
-        })
+        (!self.cleanup.is_empty()).then(|| std::mem::take(&mut self.cleanup).join("; "))
     }
 
     pub fn view(&self) -> View {
@@ -526,13 +521,27 @@ impl Catalog {
             .flat_map(|p| std::iter::once(&p.active).chain(p.last_good.as_ref()))
             .map(|r| r.sha256.clone())
             .collect();
-        if let Ok(entries) = fs::read_dir(self.dirs.store()) {
-            for e in entries.flatten() {
-                let name = e.file_name();
-                if !keep.contains(name.to_string_lossy().as_ref()) {
-                    if let Err(e) = remove_tree(&e.path()) {
-                        self.cleanup.push(e);
-                    }
+        let store = self.dirs.store();
+        let entries = match fs::read_dir(&store) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+            Err(e) => {
+                let e = format!("could not list {}: {e}", store.display());
+                return self.cleanup.push(e);
+            }
+        };
+        for e in entries {
+            let e = match e {
+                Ok(e) => e,
+                Err(e) => {
+                    self.cleanup
+                        .push(format!("could not list {}: {e}", store.display()));
+                    continue;
+                }
+            };
+            if !keep.contains(e.file_name().to_string_lossy().as_ref()) {
+                if let Err(e) = remove_tree(&e.path()) {
+                    self.cleanup.push(format!("could not delete {e}"));
                 }
             }
         }
@@ -544,7 +553,7 @@ impl Catalog {
         let result = self.commit_inner(&c);
         // The staged folder is either in the store now or no longer needed.
         if let Err(e) = remove_tree(&c.staged) {
-            self.cleanup.push(e);
+            self.cleanup.push(format!("could not delete {e}"));
         }
         if result.is_err() {
             self.collect();
