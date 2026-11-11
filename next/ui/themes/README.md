@@ -219,6 +219,11 @@ These stay stable within a theme contract version:
 | `data-part="diff"` | A group of changed lines |
 | `data-part="diff-line"` | One diff line; context lines have no change attribute; `data-change` is `add` or `remove` |
 | `data-part="dialog"` | A dialog window |
+| `data-part="toolbar"` | A page's search, filters and actions |
+| `data-part="pager"` | Page size and previous/next controls |
+| `data-part="select"` | An item's batch selection checkbox |
+| `data-part="batch"` | Batch selection and account actions |
+| `data-part="account-meta"` | Account totals, active accounts and problems |
 
 Every other class name, element and attribute can change in any release.
 

@@ -18,6 +18,12 @@ export interface Account {
   renewal_error?: { code: string; message: string };
   created_at?: string;
   updated_at?: string;
+  priority?: number;
+  cooldown_until?: string;
+  cooldowns?: { until: string }[];
+  last_error?: { code: string; message: string };
+  active_requests?: number;
+  check?: { state: string; detail?: string; error?: { code: string; message: string } };
 }
 
 export const accountsApi = (host: Host) => ({
