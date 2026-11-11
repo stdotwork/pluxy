@@ -11,6 +11,10 @@
 // - closing the window leaves no webview and no web process, with the app still in the tray;
 // - quitting stops the app's own core, and leaves a local or remote core running.
 //
+// Then, in a session of its own (instances.ts, instances-session.ts), the single-instance
+// scenario: a second launch on the same profile exits and raises the first's window, a launch on
+// another profile runs as its own app, and a killed owner's stale lock is recovered.
+//
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
 // own (dbus-run-session, xvfb-run), and random ports. Inside that session, before the app,
 // native/session.ts starts the desktop services later checks need (the portals and a tray
@@ -26,6 +30,7 @@ import { tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline";
 import { buildSmokeAppImage } from "./appimage";
+import { runInstances } from "./instances";
 import { missingPrerequisites } from "./services";
 
 const app = join(import.meta.dir, "..");
@@ -417,6 +422,21 @@ try {
     const { core } = JSON.parse(run("go", ["run", "./e2e/panelcore", "-probe", "-prepare", prepared], next));
     const p = await runApp("managed", bin, { mode: "managed", core_path: core });
     problems.push(...p.map((x) => `managed: ${x}`));
+
+    // Two launches of the app on one profile: one app, one core, the first one's window raised.
+    const inst = await runInstances({
+      bin,
+      probe,
+      appImage,
+      core,
+      identifier,
+      timeoutMs: TIMEOUT,
+      sessions,
+      stopSession,
+      removeRun,
+    });
+    if (inst.setup !== undefined) throw new SetupError(inst.setup);
+    problems.push(...inst.problems.map((x) => `instances: ${x}`));
   } finally {
     rmSync(prepared, { recursive: true, force: true });
   }
@@ -449,4 +469,4 @@ if (problems.length > 0) {
   console.error(`\n${problems.length} problems:\n- ${problems.join("\n- ")}`);
   process.exit(1);
 }
-console.log("native test passed in all three modes");
+console.log("native test passed in all three modes and the single-instance scenario");

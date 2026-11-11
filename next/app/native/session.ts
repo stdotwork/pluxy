@@ -1,6 +1,6 @@
 // One native run's session. run.ts starts this inside the run's private session bus and X server:
 //
-//   dbus-run-session -- xvfb-run ... bun native/session.ts <session_probe> <AppImage> <nonce> <app>
+//   dbus-run-session -- xvfb-run ... bun native/session.ts <session_probe> <AppImage> <nonce> <app> [args...]
 //
 // It starts the desktop services the app's later checks need (the portal frontend with its gtk
 // backend, which start the document portal and the permission store, and the tray watcher),
@@ -28,9 +28,9 @@ import { createInterface } from "node:readline";
 import { smokeProblem } from "./appimage";
 import { busNames, documentPortal, gtkBackend, portalFrontend, type Service, trayWatcher } from "./services";
 
-const [probe, appImage, nonce, app] = process.argv.slice(2);
+const [probe, appImage, nonce, app, ...appArgs] = process.argv.slice(2);
 if (!probe || !appImage || !nonce || !app) {
-  console.error("usage: bun native/session.ts <session_probe> <AppImage> <nonce> <app>");
+  console.error("usage: bun native/session.ts <session_probe> <AppImage> <nonce> <app> [args...]");
   process.exit(2);
 }
 
@@ -248,7 +248,7 @@ let code = SETUP_FAILED;
 try {
   await setup();
   code = await new Promise<number>((resolve, reject) => {
-    appProc = spawn(app, [], { stdio: "inherit" });
+    appProc = spawn(app, appArgs, { stdio: "inherit" });
     appProc.once("error", reject);
     appProc.once("exit", (c) => resolve(c ?? 1));
   });
