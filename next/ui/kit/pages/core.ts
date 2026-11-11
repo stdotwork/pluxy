@@ -8,6 +8,7 @@ import { addAccountPage } from "./addAccount";
 import { configPage } from "./config";
 import { extensionsPage } from "./extensions";
 import { quotaPage } from "./quota";
+import { routingPage } from "./routing";
 import { statusPage } from "./status";
 import { themesPage } from "./themes";
 
@@ -15,6 +16,7 @@ export const corePages = (): PageDef[] => [
   statusPage(),
   accountsPage(),
   addAccountPage(),
+  routingPage(),
   quotaPage(),
   configPage(),
   extensionsPage(),

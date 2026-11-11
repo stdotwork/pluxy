@@ -69,6 +69,11 @@ describe("the README and the code agree", () => {
     }
   });
 
+  test("routing tiers have a documented theme hook", () => {
+    expect(PARTS).toContain("tier");
+    expect(readme).toContain('data-part="tier"');
+  });
+
   test("account sign-in hooks are part of the documented contract", () => {
     for (const part of ["method", "flow", "device-code"] as const) {
       expect(PARTS).toContain(part);

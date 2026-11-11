@@ -3,14 +3,18 @@ import type { Account } from "../kit/api/accounts";
 import { groupTiers, movePriority } from "../kit/pages/routing";
 
 const account = (id: string, priority?: number): Account => ({
-  id, priority, source: "login", state: "active", refreshable: false,
+  id,
+  priority,
+  source: "login",
+  state: "active",
+  refreshable: false,
 });
 test("tiers group equal priorities highest first, including default zero", () => {
   const items = [account("a", -4), account("b", 8), account("c"), account("d", 8)];
   expect(groupTiers(items)).toEqual([
-    { priority: 8, accounts: [items[1], items[3]] },
-    { priority: 0, accounts: [items[2]] },
-    { priority: -4, accounts: [items[0]] },
+    { priority: 8, accounts: [account("b", 8), account("d", 8)] },
+    { priority: 0, accounts: [account("c")] },
+    { priority: -4, accounts: [account("a", -4)] },
   ]);
   expect(items.map((a) => a.id)).toEqual(["a", "b", "c", "d"]);
   expect(groupTiers([])).toEqual([]);

@@ -26,6 +26,7 @@ export interface Account {
   created_at?: string;
   updated_at?: string;
   priority?: number;
+  weight?: number;
   cooldown_until?: string;
   cooldowns?: { until: string }[];
   last_error?: AccountError;
@@ -35,6 +36,8 @@ export interface Account {
 
 export const accountsApi = (host: Host) => ({
   accounts: () => host.call<{ accounts: Account[] }>("GET", "/accounts"),
+  changeAccountRouting: (id: string, change: { priority?: number; weight?: number | null }) =>
+    host.call<{ account: Account }>("PATCH", `/accounts/${one(id)}`, change),
   setDisabled: (id: string, disabled: boolean) =>
     host.call<{ account: Account }>("PATCH", `/accounts/${one(id)}`, { disabled }),
   refresh: (id: string) => host.call<{ account: Account }>("POST", `/accounts/${one(id)}/refresh`),
