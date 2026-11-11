@@ -300,3 +300,35 @@ func TestMatchPatternLongInputs(t *testing.T) {
 		t.Fatal("matchPattern did not finish within 3s on a long pattern and a long value")
 	}
 }
+
+// The upstream model, the requested model and its base are all tried against the rule's name
+// exactly: a name that differs only in case is another name.
+func TestModelNamesAreComparedExactly(t *testing.T) {
+	rules := func(name string) *Rules {
+		return &Rules{Override: []Rule{{Models: []Model{{Name: name}}, Params: map[string]any{"x": 1}}}}
+	}
+	for _, c := range []struct {
+		name       string
+		in         Input
+		rule       string
+		wantChange bool
+	}{
+		{"requested differs in case", Input{Model: "abc", RequestedModel: "ABC"}, "ABC", true},
+		{"upstream differs in case", Input{Model: "ABC", RequestedModel: "abc"}, "ABC", true},
+		{"upstream matches", Input{Model: "abc", RequestedModel: "ABC"}, "abc", true},
+		{"base of a suffixed request differs in case", Input{Model: "abc", RequestedModel: "ABC(8192)"}, "ABC", true},
+		{"neither is the name", Input{Model: "abc", RequestedModel: "ABC"}, "Abc", false},
+		{"case does not match", Input{Model: "abc"}, "ABC", false},
+	} {
+		got, changed := Apply(rules(c.rule), []byte(`{}`), c.in)
+		if changed != c.wantChange {
+			t.Errorf("%s: changed = %v, want %v (body %s)", c.name, changed, c.wantChange, got)
+		}
+	}
+	if got := modelCandidates("abc", "ABC"); len(got) != 2 || got[0] != "abc" || got[1] != "ABC" {
+		t.Errorf("modelCandidates = %q, want [abc ABC]", got)
+	}
+	if got := modelCandidates("abc", "abc"); len(got) != 1 {
+		t.Errorf("modelCandidates of equal names = %q, want one", got)
+	}
+}

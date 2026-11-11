@@ -392,12 +392,13 @@ func (e *engine) resolve(path string) [][]string {
 }
 
 // modelCandidates lists the names a rule's model name is tried against: the upstream model, the
-// requested model without a thinking suffix `(...)`, and the requested model as asked.
+// requested model without a thinking suffix `(...)`, and the requested model as asked. Names are
+// compared exactly, as rule names are, so a name that differs in case is kept.
 func modelCandidates(model, requested string) []string {
 	var out []string
 	add := func(s string) {
 		s = strings.TrimSpace(s)
-		if s == "" || slices.ContainsFunc(out, func(o string) bool { return strings.EqualFold(o, s) }) {
+		if s == "" || slices.Contains(out, s) {
 			return
 		}
 		out = append(out, s)
