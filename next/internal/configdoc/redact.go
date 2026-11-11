@@ -53,6 +53,16 @@ func (r *Redactor) ID(secret string) string {
 // Placeholder returns what a redacted document holds in place of secret.
 func (r *Redactor) Placeholder(secret string) string { return PlaceholderPrefix + r.ID(secret) }
 
+// placeholderOf returns the placeholder of a secret's node. In settings, a secret that is not a
+// string has its type in its placeholder too, so the number 1234 and the string "1234" have
+// different ones and each goes back with its own type.
+func (r *Redactor) placeholderOf(n *yaml.Node, settings bool) string {
+	if settings && n.Tag != "!!str" {
+		return r.Placeholder(n.Tag + "\x00" + n.Value)
+	}
+	return r.Placeholder(n.Value)
+}
+
 // The rules that say which values are secrets. They go by key name, so they hold in both
 // layouts of a config.yaml and in the JSON config:
 //   - the value of a key named like a secret (api-key, secret-key, management_key,
@@ -214,7 +224,7 @@ func (r *Redactor) redact(b []byte, isYAML, strict bool) ([]byte, error) {
 	}
 	repl := map[*yaml.Node]string{}
 	for _, n := range found {
-		p := r.Placeholder(n.Value)
+		p := r.placeholderOf(n, strict)
 		if !isYAML {
 			p = `"` + p + `"`
 		}
@@ -228,7 +238,7 @@ func (r *Redactor) redact(b []byte, isYAML, strict bool) ([]byte, error) {
 		return out, nil
 	}
 	for _, n := range found {
-		setScalar(n, "!!str", r.Placeholder(n.Value), 0)
+		setScalar(n, "!!str", r.placeholderOf(n, strict), 0)
 	}
 	out, err := d.encode()
 	if err != nil {
@@ -307,31 +317,25 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 		return edited, nil
 	}
 	// Each placeholder goes back as the secret's text in current, so it keeps its quotes, or
-	// in JSON its type. In settings, it goes back only where the secret is in current (paths),
-	// as the secret is written there: the same value may be a number in one place and a string
-	// in another.
-	type found struct{ tag, text string }
+	// in JSON its type. In settings, it goes back only where the secret is in current (paths).
 	type secret struct {
-		value string
-		found []found            // in the order current holds them
-		at    map[string][]found // by path, in the order current holds them
+		value, tag, text string
+		paths            map[string]bool
 	}
 	values := map[string]*secret{}
 	if cur, err := Parse(current, isYAML); err == nil {
 		where := paths(cur.root)
 		for _, n := range secrets(cur.root, settings) {
-			p := r.Placeholder(n.Value)
+			p := r.placeholderOf(n, settings)
 			s := values[p]
 			if s == nil {
-				s = &secret{value: n.Value, at: map[string][]found{}}
+				s = &secret{value: n.Value, tag: n.Tag, paths: map[string]bool{}}
+				if sp, ok := cur.span(n); ok {
+					s.text = string(cur.src[sp.start:sp.end])
+				}
 				values[p] = s
 			}
-			f := found{tag: n.Tag}
-			if sp, ok := cur.span(n); ok {
-				f.text = string(cur.src[sp.start:sp.end])
-			}
-			s.found = append(s.found, f)
-			s.at[where[n]] = append(s.at[where[n]], f)
+			s.paths[where[n]] = true
 		}
 	}
 	allowed := secrets(d.root, settings)
@@ -339,13 +343,11 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 	if settings {
 		where = paths(d.root)
 	}
-	type back struct{ value, tag, text string }
-	repl := map[*yaml.Node]back{}
-	taken := map[string]int{} // in settings, how many of a placeholder went back at a path
+	repl := map[*yaml.Node]*secret{}
 	for _, n := range held {
 		s, ok := values[n.Value]
 		switch {
-		case settings && ok && len(s.at[where[n]]) == 0:
+		case settings && ok && !s.paths[where[n]]:
 			return nil, fmt.Errorf("%w: line %d: a redacted value is not where its secret is; write the value itself there", ErrInvalid, d.line(n))
 		case settings && !slices.Contains(allowed, n),
 			// A URL that is a secret is one wherever it is, so in a config file its placeholder
@@ -355,14 +357,7 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 		case !ok:
 			return nil, fmt.Errorf("line %d: %w", d.line(n), ErrStale)
 		}
-		f := s.found[0]
-		if settings {
-			// The k-th at a path is written as the k-th there in current, or as the last.
-			at, k := s.at[where[n]], n.Value+where[n]
-			f = at[min(taken[k], len(at)-1)]
-			taken[k]++
-		}
-		repl[n] = back{s.value, f.tag, f.text}
+		repl[n] = s
 	}
 	want := map[string]int{}
 	texts := map[*yaml.Node]string{}

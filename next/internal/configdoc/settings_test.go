@@ -138,3 +138,28 @@ func TestRestoreSettingsKeepsEachType(t *testing.T) {
 		}
 	}
 }
+
+// A number and a string with the same text have different placeholders in settings, so each
+// keeps its type wherever its own placeholder goes, whatever else in the list changed.
+func TestRestoreSettingsKeepsTypeOfEachPlaceholder(t *testing.T) {
+	r := NewRedactor()
+	cur := []byte(`{"password":["1234",1234]}`)
+	out, err := r.RedactSettings(cur)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shown struct{ Password []string }
+	if err := json.Unmarshal(out, &shown); err != nil || len(shown.Password) != 2 || shown.Password[0] == shown.Password[1] {
+		t.Fatalf("redacted = %s, %v; want two different placeholders", out, err)
+	}
+	text, number := shown.Password[0], shown.Password[1]
+	for sent, want := range map[string]string{
+		`{"password":["replacement","` + number + `"]}`:  `{"password":["replacement",1234]}`,
+		`{"password":["` + number + `","` + text + `"]}`: `{"password":[1234,"1234"]}`,
+		`{"password":["` + text + `"]}`:                  `{"password":["1234"]}`,
+	} {
+		if back, err := r.RestoreSettings([]byte(sent), cur); err != nil || string(back) != want {
+			t.Errorf("restore %s = %s, %v; want %s", sent, back, err, want)
+		}
+	}
+}
