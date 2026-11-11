@@ -420,9 +420,9 @@ func TestOutboundProxyPasswordStaysSecret(t *testing.T) {
 	status, body := ask("inherits")
 	bodies = append(bodies, body)
 	requests, creds := httpProxy.seen()
-	if !strings.Contains(body, "fake upstream") || len(requests) <= len(before) || creds[len(creds)-1] != proxyUser+":"+proxyPassword {
-		t.Errorf("after the same-address PATCH a request got status %d, %q; the proxy saw %d new requests, last with %q",
-			status, body, len(requests)-len(before), creds[len(creds)-1])
+	if !strings.Contains(body, "fake upstream") || len(requests) <= len(before) || len(creds) == 0 || creds[len(creds)-1] != proxyUser+":"+proxyPassword {
+		t.Errorf("after the same-address PATCH a request got status %d, %q; the proxy saw %d new requests, with credentials %q",
+			status, body, len(requests)-len(before), creds)
 	}
 
 	// Sending back the user-less address of another proxy does not carry the first one's user name
