@@ -149,7 +149,8 @@ pub struct Catalog {
     /// Why nothing can be changed, when a catalog that could not be read could not be moved
     /// aside either: saving would replace it.
     locked: Option<String>,
-    /// Folders that could not be deleted since the last `take_cleanup`.
+    /// What went wrong after a change was made, since the last `take_cleanup`: folders that
+    /// could not be deleted, a catalog that could not be flushed to disk.
     cleanup: Vec<String>,
 }
 
@@ -361,8 +362,9 @@ fn sync_dir(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Writes bytes to path through a temporary file, readable only by this user.
-fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
+/// Writes bytes to path through a temporary file, readable only by this user. Err: path is as
+/// it was. Ok(Some): the new file is in place, but its folder could not be flushed to disk.
+fn write_private(path: &Path, bytes: &[u8]) -> Result<Option<String>, String> {
     let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
     let mut o = fs::OpenOptions::new();
     o.write(true).create(true).truncate(true);
@@ -379,7 +381,9 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
         let _ = fs::remove_file(&tmp);
         format!("{}: {e}", path.display())
     })?;
-    sync_dir(path.parent().unwrap_or(Path::new(".")))
+    Ok(sync_dir(path.parent().unwrap_or(Path::new(".")))
+        .err()
+        .map(|e| format!("{} was saved, but not flushed to disk: {e}", path.display())))
 }
 
 impl Catalog {
@@ -496,7 +500,16 @@ impl Catalog {
         self.packages.get(id)
     }
 
-    fn save(&self) -> Result<(), String> {
+    /// Saves the catalog. Err: nothing was saved, and the caller restores what it changed. A
+    /// failure once the new catalog is in place does not undo the change: it is kept for
+    /// `take_cleanup`.
+    fn save(&mut self) -> Result<(), String> {
+        let flushed = self.write()?;
+        self.cleanup.extend(flushed);
+        Ok(())
+    }
+
+    fn write(&self) -> Result<Option<String>, String> {
         if let Some(why) = &self.locked {
             return Err(why.clone());
         }
@@ -623,11 +636,13 @@ impl Catalog {
             .ok_or_else(|| format!("{id} is not installed on this device"))?;
         let was = p.enabled;
         p.enabled = enabled;
-        self.save().inspect_err(|_| {
+        if let Err(e) = self.save() {
             if let Some(p) = self.packages.get_mut(id) {
                 p.enabled = was;
             }
-        })
+            return Err(e);
+        }
+        Ok(())
     }
 
     pub fn remove(&mut self, id: &str) -> Result<(), String> {
