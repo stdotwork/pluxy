@@ -3,6 +3,7 @@ package payload
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"net/http"
 	"os"
 	"strings"
@@ -121,6 +122,7 @@ func TestValidateRefuses(t *testing.T) {
 		{"other escape", params(`a\*`), "a backslash may only escape a dot"},
 		{"leading zero index", params("a.01"), "no leading zeros"},
 		{"huge index", params("a.99999999999"), "at most"},
+		{"index that overflows an int", params("items.99999999999999999999"), "at most"},
 		{"unclosed query", params("a.#(b==1"), "a query is not closed"},
 		{"text after a query", params(`a.#(b==1)x`), "only `#` may follow"},
 		{"query without operator", params("a.#(b)"), "needs == or !="},
@@ -143,6 +145,7 @@ func TestValidateRefuses(t *testing.T) {
 		{"raw bare word", &Rules{DefaultRaw: []Rule{{Models: model, Params: map[string]any{"a": "hello"}}}}, `payload.default-raw[0].params["a"]: the raw value is not valid JSON`},
 		{"raw empty text", &Rules{DefaultRaw: []Rule{{Models: model, Params: map[string]any{"a": "  "}}}}, "the raw value is not valid JSON"},
 		{"raw null", &Rules{OverrideRaw: []Rule{{Models: model, Params: map[string]any{"a": nil}}}}, "the raw value is not valid JSON"},
+		{"raw null text is valid JSON, as in the old engine", &Rules{OverrideRaw: []Rule{{Models: model, Params: map[string]any{"a": "null", "b": " null "}}}}, ""},
 		{"plain value is not checked as JSON text", &Rules{Override: []Rule{{Models: model, Params: map[string]any{"a": "hello"}}}}, ""},
 		{"nil rules", nil, ""},
 	}
@@ -330,5 +333,95 @@ func TestModelNamesAreComparedExactly(t *testing.T) {
 	}
 	if got := modelCandidates("abc", "abc"); len(got) != 1 {
 		t.Errorf("modelCandidates of equal names = %q, want one", got)
+	}
+}
+
+func TestArrayIndexOverflow(t *testing.T) {
+	for _, c := range []struct {
+		s    string
+		want int
+	}{{"0", 0}, {"42", 42}, {"9223372036854775807", math.MaxInt}, {"9223372036854775808", math.MaxInt}, {"99999999999999999999", math.MaxInt}, {strings.Repeat("9", 1000), math.MaxInt}} {
+		if n, ok := arrayIndex(c.s); !ok || n != c.want {
+			t.Errorf("arrayIndex(%.30q) = %d, %v; want %d, true", c.s, n, ok, c.want)
+		}
+	}
+	if _, ok := arrayIndex("1a"); ok {
+		t.Error("arrayIndex accepted a non-digit")
+	}
+}
+
+// A rule path with an index that does not fit an int is skipped by Apply, in every list and in
+// the conditions, without panicking, and the body is untouched.
+func TestApplySkipsOverflowingIndex(t *testing.T) {
+	const path = "items.99999999999999999999"
+	models := []Model{{Name: "*"}}
+	for name, r := range map[string]*Rules{
+		"default":      {Default: []Rule{{Models: models, Params: map[string]any{path: 1}}}},
+		"default-raw":  {DefaultRaw: []Rule{{Models: models, Params: map[string]any{path: "1"}}}},
+		"override":     {Override: []Rule{{Models: models, Params: map[string]any{path: 1}}}},
+		"override-raw": {OverrideRaw: []Rule{{Models: models, Params: map[string]any{path: "1"}}}},
+		"filter":       {Filter: []FilterRule{{Models: models, Params: []string{path}}}},
+		"exist":        {Default: []Rule{{Models: []Model{{Name: "*", NotExist: []string{path}}}, Params: map[string]any{"z": 1}}}},
+	} {
+		body := []byte(`{"items":[1,2,3]}`)
+		got, changed := Apply(r, body, Input{Model: "m"})
+		if name == "exist" {
+			// The path names nothing, so not-exist holds and the rule applies.
+			if want := `{"items":[1,2,3],"z":1}`; string(got) != want {
+				t.Errorf("%s: got %s, want %s", name, got, want)
+			}
+			continue
+		}
+		if changed || !bytes.Equal(got, body) {
+			t.Errorf("%s: Apply changed the body: %s", name, got)
+		}
+	}
+}
+
+// A lookup that reports a value always returns its text, so callers may read raw[0].
+func TestLookupFoundHasText(t *testing.T) {
+	bodies := []string{
+		`{"a":1,"b":{"c":[1,{"d":null},"x",[],{}],"":2},"e":"","f":""}`,
+		`[1,[2,3],{"a":[]}]`,
+		` { "a" : [ 1 , 2 ] , "b" : { } } `,
+		`{"a":}`, `{"a":,"b":1}`, `{"a" 1}`, `{"a":1,}`, `[,]`, `[1,]`, `[1 2]`, `{"a":[1,`, `{"a":"`, `{`, `[`, ``, `   `, `7`, `"s"`,
+	}
+	paths := [][]string{
+		{"a"}, {"b"}, {"b", "c"}, {"b", "c", "0"}, {"b", "c", "1", "d"}, {"b", "c", "2"}, {"b", "c", "3"}, {"b", "c", "4"}, {"b", ""}, {"e"}, {"f"},
+		{"0"}, {"1"}, {"1", "0"}, {"2", "a"}, {"2", "a", "0"}, {"a", "0"}, {"a", "1"}, {"a", "2"}, {"b", "0"},
+		{"a", "99999999999999999999"}, {""}, {"x"},
+	}
+	found := 0
+	for _, b := range bodies {
+		for _, p := range paths {
+			v := lookup([]byte(b), p)
+			if v.ok {
+				found++
+				if len(v.raw) == 0 {
+					t.Errorf("lookup(%q, %q) found an empty value", b, p)
+				}
+			}
+		}
+	}
+	if found < 20 {
+		t.Fatalf("only %d lookups found a value; the check is not exercising lookup", found)
+	}
+}
+
+// A raw value given as the JSON text `null` is valid JSON: it is written as null, as the old
+// engine does (a Go nil, from a null in the config, is the one refused).
+func TestRawNullText(t *testing.T) {
+	for _, text := range []string{"null", " null "} {
+		r := &Rules{
+			OverrideRaw: []Rule{{Models: []Model{{Name: "*"}}, Params: map[string]any{"a": text}}},
+			DefaultRaw:  []Rule{{Models: []Model{{Name: "*"}}, Params: map[string]any{"b": text}}},
+		}
+		if err := Validate(r); err != nil {
+			t.Errorf("%q: Validate refused: %v", text, err)
+		}
+		got, _ := Apply(r, []byte(`{"a":1}`), Input{Model: "m"})
+		if want := `{"a":` + text + `,"b":` + text + `}`; string(got) != want { // raw text is written as it is
+			t.Errorf("%q: got %s, want %s", text, got, want)
+		}
 	}
 }
