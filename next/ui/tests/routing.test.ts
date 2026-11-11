@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { Account } from "../kit/api/accounts";
-import { groupTiers, movePriority } from "../kit/pages/routing";
+import { canMove, groupTiers, movePriority } from "../kit/pages/routing";
 
 const account = (id: string, priority?: number): Account => ({
   id,
@@ -30,4 +30,19 @@ test("moves join adjacent tiers or create one beyond the edge without renumberin
   const single = groupTiers([account("only")]);
   expect(movePriority(single, 0, "up")).toBe(1);
   expect(movePriority(single, 0, "down")).toBe(-1);
+});
+test("a sole member of the top or bottom tier cannot move further out", () => {
+  const tiers = groupTiers([account("a", 8), account("b", 0), account("c", 0), account("d", -4)]);
+  expect(canMove(tiers, 8, "up")).toBe(false);
+  expect(canMove(tiers, 8, "down")).toBe(true);
+  expect(canMove(tiers, 0, "up")).toBe(true);
+  expect(canMove(tiers, 0, "down")).toBe(true);
+  expect(canMove(tiers, -4, "up")).toBe(true);
+  expect(canMove(tiers, -4, "down")).toBe(false);
+  const alone = groupTiers([account("a", 3)]);
+  expect(canMove(alone, 3, "up")).toBe(false);
+  expect(canMove(alone, 3, "down")).toBe(false);
+  const shared = groupTiers([account("a", 8), account("b", 8)]);
+  expect(canMove(shared, 8, "up")).toBe(true);
+  expect(canMove(shared, 8, "down")).toBe(true);
 });
