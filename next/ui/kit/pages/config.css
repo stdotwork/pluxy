@@ -1,0 +1,147 @@
+@layer kit {
+  .kit-tabs {
+    display: grid;
+    gap: calc(var(--s) * 4);
+    min-width: 0;
+  }
+  .kit-tabs > [role="tablist"] {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+    padding-bottom: calc(var(--s) * 2);
+  }
+  [data-part="tab"] {
+    border: var(--px-shape-border) solid transparent;
+    border-radius: var(--px-shape-radius);
+    padding: calc(var(--s) * 2) calc(var(--s) * 3);
+    background: transparent;
+    color: var(--px-color-text-muted);
+    font: inherit;
+    cursor: pointer;
+  }
+  [data-part="tab"][aria-selected="true"] {
+    color: var(--px-color-accent);
+    background: var(--px-color-surface-raised);
+    border-color: var(--px-color-border);
+  }
+  [data-part="tab"]:focus-visible {
+    outline: 2px solid var(--px-color-focus);
+    outline-offset: 2px;
+  }
+  .kit-tabs > [role="tabpanel"] {
+    min-width: 0;
+  }
+  .kit-tabs[data-layout="side"] {
+    grid-template-columns: max-content minmax(0, 1fr);
+    align-items: start;
+  }
+  .kit-tabs[data-layout="side"] > [role="tablist"] {
+    flex-direction: column;
+    border-bottom: 0;
+    border-right: var(--px-shape-border) solid var(--px-color-border);
+    padding-right: calc(var(--s) * 3);
+  }
+  .config-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+    gap: calc(var(--s) * 3);
+    border: 0;
+    padding: 0;
+    margin: 0;
+    min-width: 0;
+  }
+  .config-fields .card {
+    min-width: 0;
+  }
+  .config-fields .mono {
+    display: block;
+    overflow-wrap: anywhere;
+    margin-top: calc(var(--s) * 2);
+    font-size: var(--px-font-size-small);
+  }
+  .config-source-search {
+    margin-block: calc(var(--s) * 3);
+  }
+  [data-page="config"] input[type="search"] {
+    font: inherit;
+    color: var(--px-color-text);
+    background: var(--px-color-surface-raised);
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--px-shape-radius);
+    padding: calc(var(--s) * 2) calc(var(--s) * 2.5);
+    width: 100%;
+  }
+  .config-source-search input {
+    flex: 1;
+    min-width: 10em;
+  }
+  .config-editor {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 26rem;
+    resize: vertical;
+    white-space: pre;
+    overflow-wrap: normal;
+    font-family: var(--px-font-mono);
+    line-height: var(--px-font-line-height);
+    tab-size: 2;
+  }
+  .config-dialog {
+    max-width: min(900px, 90vw);
+    max-height: 85vh;
+    box-sizing: border-box;
+    overflow: auto;
+    padding: calc(var(--s) * 5);
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--px-shape-radius);
+    color: var(--px-color-text);
+    background: var(--px-color-surface);
+    box-shadow: var(--px-shadow-raised);
+  }
+  .config-dialog::backdrop {
+    background: color-mix(in srgb, var(--px-color-bg) 70%, transparent);
+  }
+  .config-dialog h2 {
+    margin-top: 0;
+  }
+  .config-dialog .actions {
+    margin-top: calc(var(--s) * 4);
+  }
+  .config-diff-legend {
+    display: flex;
+    gap: calc(var(--s) * 6);
+    color: var(--px-color-text-muted);
+  }
+  .config-diff {
+    white-space: pre;
+    overflow: auto;
+    max-height: 50vh;
+    font-family: var(--px-font-mono);
+    line-height: var(--px-font-line-height);
+    border: var(--px-shape-border) solid var(--px-color-border);
+    padding: calc(var(--s) * 2);
+  }
+  .config-diff [data-part="diff-line"] {
+    display: block;
+    min-width: max-content;
+  }
+  .config-diff [data-change="add"] {
+    color: var(--px-color-diff-add);
+    background: color-mix(in srgb, var(--px-color-diff-add) 10%, transparent);
+  }
+  .config-diff [data-change="remove"] {
+    color: var(--px-color-diff-remove);
+    background: color-mix(in srgb, var(--px-color-diff-remove) 10%, transparent);
+  }
+  @media (max-width: 720px) {
+    .kit-tabs[data-layout="side"] {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .kit-tabs[data-layout="side"] > [role="tablist"] {
+      flex-direction: row;
+      border-right: 0;
+      border-bottom: var(--px-shape-border) solid var(--px-color-border);
+    }
+  }
+}

@@ -154,9 +154,18 @@ impl Client {
                 .delete(&url)
                 .header("Authorization", &auth)
                 .call(),
-            "POST" | "PATCH" => {
+            "POST" | "PATCH" | "PUT" => {
+                if method == "PUT" && path != "/config" {
+                    return Reply::failed(
+                        400,
+                        "invalid_request",
+                        "PUT is only allowed for /config",
+                    );
+                }
                 let req = if method == "POST" {
                     self.agent.post(&url)
+                } else if method == "PUT" {
+                    self.agent.put(&url)
                 } else {
                     self.agent.patch(&url)
                 }
@@ -249,6 +258,27 @@ mod tests {
         // Refused before anything is sent.
         let c = Client::new("http://127.0.0.1:1", None);
         assert_eq!(c.call("k", "PUT", "/status", None).status, 400);
+        assert_eq!(c.call("k", "TRACE", "/config", None).status, 400);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut head = Vec::new();
+            let mut byte = [0];
+            while !head.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).unwrap();
+                head.push(byte[0]);
+            }
+            assert!(head.starts_with(b"PUT /v0/management/config HTTP/1.1\r\n"));
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").unwrap();
+        });
+        let put = Client::new(&format!("http://{addr}"), None).call("k", "PUT", "/config", None);
+        assert_eq!(put.status, 200);
+        server.join().unwrap();
         assert!(certificates(b"not a pem").is_err());
     }
 }

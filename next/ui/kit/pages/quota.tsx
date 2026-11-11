@@ -22,6 +22,10 @@ const t = strings("quota", {
   idle: "Click here to refresh quota",
   loading: "Loading quota...",
   plan: "Plan",
+  renewal: "Renewal time",
+  renewsIn: "renews in {hint}",
+  endedAgo: "ended {hint} ago",
+  manualResets: "Manual resets",
   fetched: "Last updated",
   noLimits: "No quota data available",
   unlimited: "Unlimited",
@@ -117,10 +121,25 @@ function QuotaLimitBody({ limit }: { limit: QuotaLimit }) {
 }
 
 function QuotaSummary({ data }: { data: QuotaReply }) {
+  const end = data.quota.plan_ends_at;
+  const remaining = end ? end - Date.now() / 1000 : 0;
+  const resets = data.quota.limits.find((limit) => limit.id === "reset_credits");
   return (
     <Facts
       rows={[
         [t("plan"), data.quota.plan],
+        [
+          t("renewal"),
+          end ? (
+            <>
+              <Timestamp value={end} />{" "}
+              <span class="muted">
+                {t(remaining >= 0 ? "renewsIn" : "endedAgo", { hint: duration(Math.abs(remaining)) })}
+              </span>
+            </>
+          ) : undefined,
+        ],
+        [t("manualResets"), resets?.remaining?.toLocaleString()],
         [t("fetched"), <Timestamp value={data.fetched_at} />],
       ]}
     />
@@ -148,7 +167,9 @@ function QuotaBody({ state, refresh, disabled }: { state?: QuotaState; refresh()
         <>
           <QuotaSummary data={state.data} />
           {state.data.quota.limits.length ? (
-            state.data.quota.limits.map((limit) => <QuotaLimitBody key={limit.id} limit={limit} />)
+            state.data.quota.limits
+              .filter((limit) => limit.id !== "reset_credits")
+              .map((limit) => <QuotaLimitBody key={limit.id} limit={limit} />)
           ) : (
             <Empty>{t("noLimits")}</Empty>
           )}
