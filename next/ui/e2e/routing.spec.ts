@@ -53,7 +53,9 @@ test("routing saves strategy and priorities and shows live model cooling", async
   await expect(page.locator('[data-part="tier"]').first()).toContainText("route-middle");
   await expect(page.locator('[data-part="tier"]').first()).toContainText("Preferred");
   await expect(page.getByText(/^Weight \d+$/)).toHaveCount(0);
-  await page.getByRole("combobox", { name: "Within a tier", exact: true }).selectOption("weighted-round-robin");
+  await page
+    .getByRole("combobox", { name: "Within a tier", exact: true })
+    .selectOption("weighted-round-robin");
   await expect(middle.getByText("Weight 1", { exact: true })).toBeVisible();
   await middle.getByRole("button", { name: "Set weight…: route-middle", exact: true }).click();
   const weight = middle.getByRole("spinbutton", { name: "Set weight…: route-middle", exact: true });
@@ -150,14 +152,16 @@ test("row actions are named by account, and a sole member cannot leave the edge 
   await openPanel(page, core);
   await signIn(page, core);
   await goTo(page, "Routing");
-  const names = await page.locator('[data-part="tier"] [data-part="button"]').evaluateAll((buttons) =>
-    buttons.map((b) => b.getAttribute("aria-label") ?? b.textContent),
-  );
+  const names = await page
+    .locator('[data-part="tier"] [data-part="button"]')
+    .evaluateAll((buttons) => buttons.map((b) => b.getAttribute("aria-label") ?? b.textContent));
   expect(names.length).toBeGreaterThan(6);
   expect(new Set(names).size).toBe(names.length);
   await expect(page.getByRole("button", { name: "Move up a tier: route-lead", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Move down a tier: route-lead", exact: true })).toBeEnabled();
-  await expect(page.getByRole("button", { name: "Move down a tier: route-last", exact: true })).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Move down a tier: route-last", exact: true }),
+  ).toBeDisabled();
   await expect(page.getByRole("button", { name: "Move up a tier: route-last", exact: true })).toBeEnabled();
 });
 

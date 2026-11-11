@@ -105,7 +105,9 @@ const focusKey = (element: Element | null) =>
   element instanceof HTMLElement && element !== document.body
     ? element.id
       ? `#${element.id}`
-      : (element.getAttribute("aria-label") ?? (element.tagName === "BUTTON" ? element.textContent : "") ?? "")
+      : (element.getAttribute("aria-label") ??
+        (element.tagName === "BUTTON" ? element.textContent : "") ??
+        "")
     : "";
 /** Puts focus back on the control with this key, or on the row's other button when it is disabled. */
 function focusByKey(key: string) {
