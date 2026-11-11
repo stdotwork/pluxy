@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/internal/buildinfo"
 	"github.com/stdotwork/pluxy/next/internal/core"
 	"github.com/stdotwork/pluxy/next/internal/cred"
 	"github.com/stdotwork/pluxy/next/internal/legacy"
@@ -35,7 +36,12 @@ func main() {
 	watch := flag.Duration("watch-interval", time.Second, "how often to look for config file changes (0: do not watch)")
 	bundled := flag.String("bundled", "", "index of the registry of bundled packages (default: bundled/index.json beside this program, when it exists)")
 	importAuth := flag.String("import-auth", "", "copy the credential files of today's core's auth folder at this path into the credential store, then exit (run it while core is stopped)")
+	version := flag.Bool("version", false, "print the build's version, commit and build date, then exit")
 	flag.Parse()
+	if *version {
+		fmt.Println(buildinfo.Line())
+		return
+	}
 	if *importAuth != "" {
 		if err := importAuthDir(*configPath, *importAuth); err != nil {
 			log.Print(err)
@@ -111,6 +117,7 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string) 
 	// Core's log goes to standard error and, while the config says so, to its logs folder.
 	logs := logfile.New(core.LogsDir(configPath))
 	log.SetOutput(io.MultiWriter(os.Stderr, logs))
+	log.Print(buildinfo.Line())
 	c, err := core.Start(core.Options{ConfigPath: configPath, SafeMode: safeMode, Bundled: bundled, Logs: logs})
 	if err != nil {
 		if !safeMode {

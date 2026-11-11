@@ -49,6 +49,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 ```bash
 go generate ./internal/panel   # builds the web panel core embeds; needs Bun (skip it for a core without the panel)
 go build -o pluxy ./cmd/pluxy
+go build -ldflags "-X github.com/stdotwork/pluxy/next/internal/buildinfo.Version=1.2.3 -X github.com/stdotwork/pluxy/next/internal/buildinfo.Commit=$(git rev-parse HEAD) -X github.com/stdotwork/pluxy/next/internal/buildinfo.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o pluxy ./cmd/pluxy   # sets the build info; without -ldflags the version is dev, and a git checkout still records its commit and time
 go build -o extensions/openai-compatible/openai-compatible ./extensions/openai-compatible
 go build -o extensions/claude/claude ./extensions/claude
 ```
@@ -77,7 +78,16 @@ go build -o extensions/claude/claude ./extensions/claude
 ./pluxy -config config.json
 ```
 
-Then `curl http://127.0.0.1:8400/healthz` answers `ok`.
+Flags:
+
+- `-config`: the config file (default `config.json`).
+- `-version`: print the build's version, commit and build date on one line, `pluxy <version> (<commit>, <date>)`, and exit. It does not read the config. Core logs the same line when it starts.
+- `-safe-mode`: start with no extensions: client requests fail, the management API works.
+- `-watch-interval`: how often core looks for changes to the config file; `0` turns the watch off (default `1s`).
+- `-bundled`: the index of the bundled packages (default `bundled/index.json` beside the program, when it exists); see [Packages](#packages).
+- `-import-auth`: copy the credential files of today's core's auth folder into the credential store, then exit; see [config.yaml with today's key names](#configyaml-with-todays-key-names).
+
+A running core answers `curl http://127.0.0.1:8400/healthz` with `ok`.
 
 With a `management_key` set, the web panel is at `http://127.0.0.1:8400/panel/`: core's status,
 accounts, extensions and themes, the pages extensions bring and their settings. Sign in with the
@@ -1313,7 +1323,7 @@ block it was given; today's core counts each address. Behind a proxy that is not
 
 | Call | What it does |
 | --- | --- |
-| `GET /v0/management/status` | `desired` (the newest config version core has seen, with `error` when it was refused) and `active` (the one serving), each with `revision` and `hash`; `extensions`, one entry per running generation with `state` (`starting`, `active`, `idle`, `crashed`, `quarantined`, `draining`, `stopped`), `current`, `pid`, `restarts`, `last_error` and `active_requests`; `safe_mode`. |
+| `GET /v0/management/status` | `desired` (the newest config version core has seen, with `error` when it was refused) and `active` (the one serving), each with `revision` and `hash`; `extensions`, one entry per running generation with `state` (`starting`, `active`, `idle`, `crashed`, `quarantined`, `draining`, `stopped`), `current`, `pid`, `restarts`, `last_error` and `active_requests`; `safe_mode`; `version`, `commit` and `built`, the build's version, commit and build date as `-version` prints them. |
 | `POST /v0/management/reload` | Reload now. 200 with the status when the new revision is active; 422 with the status when it was refused. |
 | `GET /v0/management/ui` | The pages of the extensions that run and where they are served; see [extension pages](ui/extension-pages/README.md#how-core-serves-pages). |
 | `GET`, `PATCH /v0/management/extensions/{publisher}/{name}/config` | An extension's settings, checked against the schema its manifest declares; see [extension pages](ui/extension-pages/README.md#how-core-serves-pages). |
