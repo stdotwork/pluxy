@@ -525,7 +525,12 @@ whose describe reports `protocol_minor` 11 or more; for any other it fails the c
 proxy.
 
 In Go, `sdk.Upstream` does all of this for each client it wraps: requests made with the
-handler's context go through the call's proxy.
+handler's context go through the call's proxy. A proxy is honoured only by clients wrapped in
+`sdk.Upstream`; a client that is not, such as `http.DefaultClient`, sends direct. So the SDK
+answers a call that carries a proxy with `unsupported` (scope `credential`, retryable) and never
+runs the handler when the extension process has not created any `sdk.Upstream` transport. An
+extension that wraps some of its clients and not others still sends the others direct: wrap them
+all.
 
 ## The request
 

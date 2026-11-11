@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"sync/atomic"
+	"time"
 
+	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
@@ -17,7 +20,27 @@ import (
 // so the transport can access UpstreamInfo and core's cancellation: a request without it uses
 // no proxy. base must be non-nil and must not be changed after use.
 func Upstream(base *http.Transport) http.RoundTripper {
+	upstreamUsed.Store(true)
 	return upstreamTransport{base: base, proxies: &proxyPool{}}
+}
+
+// upstreamUsed is set when the process creates a transport with Upstream. An extension that never
+// does has no client that honours an account's proxy, so the SDK refuses a call that carries one
+// (refuseProxy) instead of letting the extension send it direct.
+var upstreamUsed atomic.Bool
+
+// defaultIdleConnTimeout is the idle connection timeout of a per-proxy transport whose base has
+// none, as http.DefaultTransport has.
+const defaultIdleConnTimeout = 90 * time.Second
+
+// refuseProxy returns the error for a call that carries a proxy when no client of the process
+// is wrapped in Upstream; nil otherwise. The message holds no part of the proxy URL.
+func refuseProxy(call protocol.Call) *llm.Error {
+	if call.Account == nil || call.Account.ProxyURL == "" || upstreamUsed.Load() {
+		return nil
+	}
+	return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
+		Message: fmt.Sprintf("this extension sends no request through sdk.Upstream, so it cannot use the proxy of account %q; the call was not sent", call.Account.ID)}
 }
 
 type upstreamTransport struct {
@@ -83,6 +106,11 @@ func (p *proxyPool) get(base *http.Transport, proxy string) (*http.Transport, er
 		p.by = map[string]*http.Transport{}
 	}
 	t := base.Clone()
+	// A transport the pool drops while a request still uses it must close its own idle
+	// connections, so none stays open for good.
+	if t.IdleConnTimeout <= 0 {
+		t.IdleConnTimeout = defaultIdleConnTimeout
+	}
 	// net/http speaks to http and https proxies (CONNECT for https targets) and to socks5 and
 	// socks5h ones, and fills in Proxy-Authorization or SOCKS5 authentication from the user name
 	// and password. It resolves target host names at a SOCKS5 proxy for both schemes.
