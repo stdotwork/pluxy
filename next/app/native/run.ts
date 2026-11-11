@@ -461,29 +461,25 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
   return problems;
 }
 
-/** Lets this user remove what the app left in its run folder: the device's package store keeps
- * its installed folders read-only, so they cannot be emptied as they are. Only the run's own
- * folders change, never past a mount (such as the document portal's) or a symlink. */
+/** Lets this user remove the device's package store the app left in its run folder, after the
+ * app has quit: the store keeps its installed folders read-only, so they cannot be emptied as
+ * they are. Only folders under the app's `device-packages` change. They are path-based changes,
+ * safe here because the app made that tree, holds no links or mounts in it (archives with links
+ * are refused), and no longer runs. */
 function makeRemovable(root: string) {
-  let dev: number;
-  try {
-    dev = lstatSync(root).dev;
-  } catch {
-    return; // already gone
-  }
   const walk = (dir: string) => {
     let entries: string[];
     try {
       const st = lstatSync(dir);
-      if (!st.isDirectory() || st.dev !== dev) return;
+      if (!st.isDirectory()) return;
       if ((st.mode & 0o700) !== 0o700) chmodSync(dir, 0o700);
       entries = readdirSync(dir);
     } catch {
-      return; // gone, or another service's: rmSync reports what it cannot remove
+      return; // gone: rmSync reports what it cannot remove
     }
     for (const e of entries) walk(join(dir, e));
   };
-  walk(root);
+  walk(join(root, "data", identifier, "device-packages"));
 }
 
 /** Removes a run's folder. A desktop service the run's bus started (such as the document portal,
