@@ -1623,11 +1623,7 @@ func headers(v any, path string) (map[string]string, []string, error) {
 	}
 	text := map[string]string{}
 	for k, val := range m {
-		if b, isBool := val.(bool); isBool {
-			text[k] = strconv.FormatBool(b)
-			continue
-		}
-		s, err := scalar(val, path+"."+k)
+		s, err := headerText(val, path+"."+k)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1638,6 +1634,22 @@ func headers(v any, path string) (map[string]string, []string, error) {
 		return nil, nil, fmt.Errorf("%s: %w", path, err)
 	}
 	return h, dynamic, nil
+}
+
+// headerText returns a header value, as YAML decodes it, as text: text, a number, or true or false.
+func headerText(v any, path string) (string, error) {
+	if b, isBool := v.(bool); isBool {
+		return strconv.FormatBool(b), nil
+	}
+	return scalar(v, path)
+}
+
+// HeaderText returns a header value of a provider section of a config.yaml, as YAML decodes it,
+// as the header core sends: written as text, without the spaces around it (upheader.Import).
+// ok is false for a value core refuses.
+func HeaderText(v any) (text string, ok bool) {
+	s, err := headerText(v, "")
+	return strings.TrimSpace(s), err == nil
 }
 
 // boolean_ reads a true or false setting; absent is false.

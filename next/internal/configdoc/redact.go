@@ -59,8 +59,13 @@ func (r *Redactor) Placeholder(secret string) string { return PlaceholderPrefix 
 // placeholderOf returns the placeholder of a secret's node. A secret that is not a string has its
 // type in its placeholder too, so the number 1234 and the string "1234" have different ones and
 // each goes back with its own type, wherever its placeholder is moved. Its hash uses a key of its
-// own, derived from the Redactor's, so no string's placeholder is ever a typed value's.
-func (r *Redactor) placeholderOf(n *yaml.Node) string {
+// own, derived from the Redactor's, so no string's placeholder is ever a typed value's. A secret
+// header value of a provider section has the placeholder of the header core reads from it
+// (texts, see found), the one Headers shows for that account.
+func (r *Redactor) placeholderOf(n *yaml.Node, texts map[*yaml.Node]string) string {
+	if t, ok := texts[n]; ok {
+		return r.Placeholder(t)
+	}
 	if n.Tag == "!!str" {
 		return r.Placeholder(n.Value)
 	}
@@ -163,8 +168,12 @@ func secretURL(s string) bool {
 // sectionLists are the top-level keys of a config.yaml whose value is a list of provider entries.
 var sectionLists = legacy.SectionLists()
 
-// ctx is how secrets reads a node: what the place it is in makes it.
-type ctx struct{ role role }
+// ctx is how secrets reads a node: what the place it is in makes it, and whether it is in a
+// provider section.
+type ctx struct {
+	role    role
+	section bool
+}
 
 // role is what a node's place makes it, for the rules that look at a value.
 type role int
@@ -189,7 +198,13 @@ func resolved(n *yaml.Node) *yaml.Node {
 // secrets returns the scalar nodes of the tree under n that hold secrets. strict: n is an
 // account's settings, not a config file, so it has no provider sections.
 func secrets(n *yaml.Node, strict bool) []*yaml.Node {
-	var out []*yaml.Node
+	out, _ := found(n, strict)
+	return out
+}
+
+// found is secrets, with the text core reads from each secret header value of a provider section
+// (legacy.HeaderText), which core reads as text without the spaces around it.
+func found(n *yaml.Node, strict bool) (out []*yaml.Node, texts map[*yaml.Node]string) {
 	// add records v as a secret, unless it is true, false, null or empty (see the rules above).
 	add := func(v *yaml.Node) {
 		if v.Kind == yaml.ScalarNode && v.Tag != "!!null" && v.Tag != "!!bool" && v.Value != "" && !slices.Contains(out, v) {
@@ -273,14 +288,14 @@ func secrets(n *yaml.Node, strict bool) []*yaml.Node {
 			}
 			return
 		}
-		plain := ctx{}
+		plain := ctx{section: c.section}
 		switch {
 		case c.role == roleSecret:
 			all(v, true)
 			return
 		case c.role == roleSections && v.Kind == yaml.MappingNode:
 			// Each section is a list of provider entries, read by the rules.
-			pairs(v, c, func(_ string, val *yaml.Node) { walk(val, plain) })
+			pairs(v, c, func(_ string, val *yaml.Node) { walk(val, ctx{section: true}) })
 			return
 		case c.role == roleEntries && v.Kind == yaml.SequenceNode:
 			// An entry is read by the rules; anything else in the list is a key.
@@ -288,7 +303,7 @@ func secrets(n *yaml.Node, strict bool) []*yaml.Node {
 				if resolved(x).Kind != yaml.MappingNode {
 					all(x, true)
 				} else {
-					walk(x, plain)
+					walk(x, ctx{section: true})
 				}
 			}
 			return
@@ -298,6 +313,17 @@ func secrets(n *yaml.Node, strict bool) []*yaml.Node {
 		case c.role == roleHeaders && v.Kind == yaml.MappingNode:
 			pairs(v, c, func(name string, val *yaml.Node) {
 				if secretHeader(name) {
+					if s := resolved(val); c.section && s.Kind == yaml.ScalarNode {
+						var v any
+						if s.Decode(&v) == nil {
+							if t, ok := legacy.HeaderText(v); ok {
+								if texts == nil {
+									texts = map[*yaml.Node]string{}
+								}
+								texts[s] = t
+							}
+						}
+					}
 					all(val, true)
 				} else {
 					walk(val, plain)
@@ -320,13 +346,13 @@ func secrets(n *yaml.Node, strict bool) []*yaml.Node {
 				case strings.EqualFold(key, "credential"):
 					all(val, false)
 				case strings.EqualFold(key, "headers"):
-					walk(val, ctx{role: roleHeaders})
+					walk(val, ctx{role: roleHeaders, section: c.section})
 				case c.role == roleTop && key == "api-keys" && resolved(val).Kind == yaml.MappingNode:
 					walk(val, ctx{role: roleSections})
 				case c.role == roleTop && slices.Contains(sectionLists, key):
 					walk(val, ctx{role: roleEntries})
 				case secretName(key):
-					walk(val, ctx{role: roleSecret})
+					walk(val, ctx{role: roleSecret, section: c.section})
 				default:
 					walk(val, plain)
 				}
@@ -338,7 +364,7 @@ func secrets(n *yaml.Node, strict bool) []*yaml.Node {
 	} else {
 		walk(n, ctx{role: roleTop})
 	}
-	return out
+	return out, texts
 }
 
 // Secrets returns the secret values the document holds.
@@ -390,27 +416,27 @@ func (r *Redactor) redact(b []byte, isYAML, strict bool) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	found := secrets(d.root, strict)
-	if len(found) == 0 {
+	nodes, texts := found(d.root, strict)
+	if len(nodes) == 0 {
 		return b, nil
 	}
 	repl := map[*yaml.Node]string{}
-	for _, n := range found {
-		p := r.placeholderOf(n)
+	for _, n := range nodes {
+		p := r.placeholderOf(n, texts)
 		if !isYAML {
 			p = `"` + p + `"`
 		}
 		repl[n] = p
 	}
 	var values []string
-	for _, n := range found {
+	for _, n := range nodes {
 		values = append(values, n.Value)
 	}
 	if out, ok := d.replace(repl); ok && redacted(out, isYAML, strict, values) {
 		return out, nil
 	}
-	for _, n := range found {
-		setScalar(n, "!!str", r.placeholderOf(n), 0)
+	for _, n := range nodes {
+		setScalar(n, "!!str", r.placeholderOf(n, texts), 0)
 	}
 	out, err := d.encode()
 	if err != nil {
@@ -490,36 +516,40 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 	}
 	// Each placeholder goes back as the secret's text in current, so it keeps its quotes, or
 	// in JSON its type. In settings, it goes back only where the secret is in current (paths).
+	// Two secrets of current may share a placeholder (a header's 1234 and "1234" are the same
+	// header text): a placeholder goes back as the one where it is, else as the first.
 	type secret struct {
 		value, tag, text string
-		paths            map[string]bool
+		paths            map[string]*secret // where the placeholder's secrets are, and which is there
 	}
 	values := map[string]*secret{}
 	if cur, err := Parse(current, isYAML); err == nil {
 		where := paths(cur.root)
-		for _, n := range secrets(cur.root, settings) {
-			p := r.placeholderOf(n)
+		nodes, texts := found(cur.root, settings)
+		for _, n := range nodes {
+			p := r.placeholderOf(n, texts)
+			this := &secret{value: n.Value, tag: n.Tag}
+			if sp, ok := cur.span(n); ok {
+				this.text = string(cur.src[sp.start:sp.end])
+			}
 			s := values[p]
 			if s == nil {
-				s = &secret{value: n.Value, tag: n.Tag, paths: map[string]bool{}}
-				if sp, ok := cur.span(n); ok {
-					s.text = string(cur.src[sp.start:sp.end])
-				}
+				s = this
+				s.paths = map[string]*secret{}
 				values[p] = s
 			}
-			s.paths[where[n]] = true
+			if s.paths[where[n]] == nil {
+				s.paths[where[n]] = this
+			}
 		}
 	}
 	allowed := secrets(d.root, settings)
-	var where map[*yaml.Node]string
-	if settings {
-		where = paths(d.root)
-	}
+	where := paths(d.root)
 	repl := map[*yaml.Node]*secret{}
 	for _, n := range held {
 		s, ok := values[n.Value]
 		switch {
-		case settings && ok && !s.paths[where[n]]:
+		case settings && ok && s.paths[where[n]] == nil:
 			return nil, fmt.Errorf("%w: line %d: a redacted value is not where its secret is; write the value itself there", ErrInvalid, d.line(n))
 		case settings && !slices.Contains(allowed, n),
 			// A URL that is a secret is one wherever it is, so in a config file its placeholder
@@ -528,6 +558,9 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 			return nil, fmt.Errorf("%w: line %d: a redacted value is where no secret goes; write the value itself there", ErrInvalid, d.line(n))
 		case !ok:
 			return nil, fmt.Errorf("line %d: %w", d.line(n), ErrStale)
+		}
+		if at := s.paths[where[n]]; at != nil {
+			s = at
 		}
 		repl[n] = s
 	}
