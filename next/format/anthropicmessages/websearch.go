@@ -183,29 +183,42 @@ func boundary(it llm.Item) bool {
 
 func scanWebSearches(items []llm.Item) webSearchHistory {
 	h := webSearchHistory{skip: map[int]bool{}, query: map[int]string{}, tail: map[int]bool{}}
+	// One pass from the end parses each search once and finds, for each, the next search with
+	// the same ID before the next user turn.
+	calls := make([]webSearchCall, len(items))
+	isCall := make([]bool, len(items))
+	next := make([]int, len(items))
+	later := map[string]int{} // nearest later search of each ID in this turn
 	after := false
 	for i := len(items) - 1; i >= 0; i-- {
 		h.tail[i] = !after
+		next[i] = -1
 		if boundary(items[i]) {
 			after = true
-		}
-	}
-	for i, it := range items {
-		c, ok := asWebSearchCall(it)
-		if !ok || !c.paused() || c.ID == "" {
+			clear(later)
 			continue
 		}
-		for j := i + 1; j < len(items) && !boundary(items[j]); j++ {
-			if next, ok := asWebSearchCall(items[j]); ok && next.ID == c.ID {
-				h.skip[i] = true
-				q := c.query()
-				if prev, ok := h.query[i]; ok && q == "" {
-					q = prev
-				}
-				h.query[j] = q
-				break
-			}
+		c, ok := asWebSearchCall(items[i])
+		if !ok {
+			continue
 		}
+		calls[i], isCall[i] = c, true
+		if j, found := later[c.ID]; found {
+			next[i] = j
+		}
+		later[c.ID] = i
+	}
+	for i := range items {
+		c, j := calls[i], next[i]
+		if !isCall[i] || !c.paused() || c.ID == "" || j < 0 {
+			continue
+		}
+		h.skip[i] = true
+		q := c.query()
+		if prev, ok := h.query[i]; ok && q == "" {
+			q = prev
+		}
+		h.query[j] = q
 	}
 	return h
 }

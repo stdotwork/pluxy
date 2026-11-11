@@ -631,9 +631,8 @@ func (a *Aggregator) Add(ev llm.Event) {
 			if added {
 				a.size += len(it.id) + itemOverhead
 			}
-			if it != nil {
-				a.size += len(it.results)
-			}
+			// The search's query input and results come in these events.
+			a.size += len(ev.Raw)
 		} else if b.upFormat != format {
 			b.lose("choices", "reply data in "+b.upFormat+" with no place in a Response")
 		}
@@ -656,7 +655,8 @@ func (a *Aggregator) Add(ev llm.Event) {
 const itemOverhead = len(`{"id":"","type":"function_call","status":"completed","call_id":"","name":"","arguments":""},`)
 
 // Size is about how many bytes of content the response holds so far: its id, the text,
-// reasoning and tool calls of its items with their ids, the upstream's final Response object, its
+// reasoning and tool calls of its items with their ids, its web searches as the upstream sent
+// them, the upstream's final Response object, its
 // finish reason and usage as the upstream sent them, and what it reports as lost, before JSON
 // escaping. Callers use it to bound what they collect.
 func (a *Aggregator) Size() int { return a.size + len(a.final) + a.b.lossSize }

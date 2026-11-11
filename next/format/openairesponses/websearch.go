@@ -101,6 +101,7 @@ func (b *builder) searchEvent(raw json.RawMessage) (it *item, added, consumed bo
 			}
 			_ = json.Unmarshal([]byte(it.input.String()), &in)
 			it.query = strings.TrimSpace(in.Query)
+			it.input = strings.Builder{} // read once; the query is what is kept
 			return nil, false, true
 		}
 	}
