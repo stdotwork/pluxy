@@ -941,6 +941,17 @@ Not built, and why:
 - For a Grok login: reading the Grok CLI's latest version from npm every 3 hours (set
   `client_version` when xAI asks for a newer CLI), the file name and legacy-file adoption today's
   core uses for its auth files, and opening the browser at sign-in.
+- Today's core answers `GET /v1/models` from the Grok CLI (a `grok-shell` User-Agent) with its own
+  entry shape (`api_backend`, context window, reasoning efforts). The Grok CLI reads a proxy's model
+  list only when its models endpoint is set to the proxy; today's desktop app instead writes each
+  model into the Grok CLI's config with its own base URL, so the list is not read there. pluxy's
+  model data has no reasoning efforts to fill that shape. The Grok CLI gets the ordinary OpenAI
+  model list.
+- Today's core turns an upstream Codex `keepalive` stream event into an SSE comment for the Grok
+  CLI, which ends the turn on an event type it does not know. pluxy's Responses stream passes on
+  only `response.*` and `error` events from the upstream, so no `keepalive` event reaches any client
+  (a test in `format/openairesponses` pins this). pluxy sends no comment in its place: a long
+  upstream silence reaches the client as silence.
 
 **Quota.** A Grok login's quota is what the Grok CLI shows: `GET {cli}/billing?format=credits` and `GET {cli}/billing` on the CLI's chat endpoint (the host the account's requests go to), and `GET {cli}/user?include=subscription` and `GET {cli}/settings` for the plan's name, with the login's token and the Grok CLI identity headers the requests carry. It reports the weekly credit window (`weekly`), the monthly credits (`monthly_credits`), the pay-as-you-go cap and use (`pay_as_you_go`) and the prepaid balance (`prepaid`), in `usd`. Nothing that spends from the account is sent (today's panel sent a one-token chat for paid accounts; that is not rebuilt). An API key answers unsupported. A Grok login's grant carries `identity` `{"sub", "email"}` from its ID token.
 
