@@ -37,7 +37,8 @@ type accountView struct {
 	LastError         *struct{ Code, Message string } `json:"last_error"`
 	LastErrorAt       *time.Time                      `json:"last_error_at"`
 	Settings          json.RawMessage
-	SettingsInexact   bool `json:"settings_inexact"`
+	SettingsInexact   bool   `json:"settings_inexact"`
+	ProxyURL          string `json:"proxy_url"`
 }
 
 // startAccountsCore runs core with the example OAuth provider and two accounts in its config
@@ -209,7 +210,7 @@ func TestManageAccountSettings(t *testing.T) {
 	})
 	const secret = "sk-account-settings-e2e"
 	// Every value below a key named like a secret is one too, however deep.
-	hidden := []string{secret, "sk-nested-object-e2e", "sk-nested-list-e2e", "sk-other-e2e", "sk-first-e2e", "sk-second-e2e"}
+	hidden := []string{secret, "sk-nested-object-e2e", "sk-nested-list-e2e", "sk-other-e2e", "sk-first-e2e", "sk-second-e2e", "e2e-proxy-pass"}
 	var l loginReply
 	if code := manage(t, base, "POST", "/accounts", map[string]any{"id": "keyed", "method": "settings",
 		"input": map[string]string{"settings": `{"base_url":"https://one.example/v1","api_key":"` + secret +
@@ -369,6 +370,34 @@ func TestManageAccountSettings(t *testing.T) {
 		if a := getAccount(t, base, "keyed"); len(a.Settings) == 0 || a.SettingsInexact != c.inexact {
 			t.Errorf("n %s: settings_inexact = %v, want %v; settings %s", c.n, a.SettingsInexact, c.inexact, a.Settings)
 		}
+	}
+
+	// Settings and the account's proxy_url in one PATCH: both change, the proxy's password never
+	// shows, and the settings' placeholder keeps its secret. (That the proxy shown and sent back
+	// keeps its password is TestPatchProxyURLRoundTrip's.)
+	both := func(body map[string]any) accountView {
+		t.Helper()
+		var raw json.RawMessage
+		if code := manage(t, base, "PATCH", "/accounts/keyed", body, &raw); code != http.StatusOK {
+			t.Fatalf("PATCH %v: %d %s", body, code, raw)
+		}
+		listed(raw)
+		return getAccount(t, base, "keyed")
+	}
+	a := both(map[string]any{"settings": map[string]any{"api_key": key, "proxied": true}, "proxy_url": "http://e2e-user:e2e-proxy-pass@127.0.0.1:9"})
+	if !strings.Contains(a.ProxyURL, "redacted") || !strings.Contains(string(a.Settings), `"proxied":true`) {
+		t.Fatalf("after PATCH of settings and proxy_url: proxy_url %q, settings %s", a.ProxyURL, a.Settings)
+	}
+	shown := a.ProxyURL
+	a = both(map[string]any{"settings": map[string]any{"api_key": key, "proxied": false}, "proxy_url": shown})
+	if a.ProxyURL != shown || !strings.Contains(string(a.Settings), `"proxied":false`) || !strings.Contains(string(a.Settings), key) {
+		t.Fatalf("after PATCH with the shown proxy_url and placeholder: proxy_url %q, settings %s", a.ProxyURL, a.Settings)
+	}
+	if a = both(map[string]any{"proxy_url": nil}); a.ProxyURL != "" {
+		t.Fatalf("proxy_url after null: %q", a.ProxyURL)
+	}
+	if got := received(); got["api_key"] != secret || got["proxied"] != false {
+		t.Fatalf("the extension received %v, want the kept secret and proxied false", got)
 	}
 
 	// A new secret replaces the old one; null removes the settings.
