@@ -2,6 +2,7 @@ package legacy
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -824,5 +825,48 @@ func TestClaudeModelLevelCooling(t *testing.T) {
 	equalJSON(t, r.Config["extensions"], `{"pluxy/claude": {"accounts": [{"id": "claude-api-key-1", "credential": {"kind": "api_key", "api_key": "claude-key"}}]}}`)
 	if r.Import.ClaudeModelLevelCooling {
 		t.Errorf("off: Import = %+v", r.Import)
+	}
+}
+
+// upstream.xai.inject-x-search, and its older spellings (oauth.providers.xai.inject-x-search and
+// the top-level xai), is an import option like Codex's: the xAI API-key accounts of the config get
+// "inject_x_search": true, the imported xAI logins do too (see TestXAIInjectXSearchImport), and it
+// is off by default. The v8 value wins over an older one.
+func TestXAIInjectXSearch(t *testing.T) {
+	const keys = "api-keys: {xai: [{name: grok, keys: [{api-key: xk-1}]}]}"
+	account := func(on bool) string {
+		if on {
+			return `{"id": "grok", "settings": {"inject_x_search": true}, "credential": {"kind": "api_key", "api_key": "xk-1"}}`
+		}
+		return `{"id": "grok", "credential": {"kind": "api_key", "api_key": "xk-1"}}`
+	}
+	for _, tc := range []struct {
+		name, yaml string
+		on         bool
+	}{
+		{"v8", "upstream: {xai: {inject-x-search: true}}", true},
+		{"older oauth.providers", "oauth: {providers: {xai: {inject-x-search: true}}}", true},
+		{"older top-level xai", "xai: {inject-x-search: true}", true},
+		{"false", "upstream: {xai: {inject-x-search: false}}", false},
+		{"unset", "port: 8317", false},
+		{"v8 wins over older", "upstream: {xai: {inject-x-search: false}}\noauth: {providers: {xai: {inject-x-search: true}}}", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := translate(t, tc.yaml+"\n"+keys)
+			equalJSON(t, r.Config["extensions"], `{"pluxy/xai": {"accounts": [`+account(tc.on)+`]}}`)
+			equalJSON(t, r.Import, fmt.Sprintf(`{"codex_identity": true, "image_generation_tool": true, "images": true, "inject_x_search": %t}`, tc.on))
+			if n := notices(r); strings.Contains(n, "inject-x-search") {
+				t.Errorf("notices name the setting, which is supported:\n%s", n)
+			}
+		})
+	}
+	for _, y := range []string{
+		"upstream: {xai: {inject-x-search: \"true\"}}",
+		"oauth: {providers: {xai: {inject-x-search: sometimes}}}",
+		"upstream: {xai: true}",
+	} {
+		if _, err := Translate([]byte(y)); err == nil {
+			t.Errorf("%q loaded", y)
+		}
 	}
 }

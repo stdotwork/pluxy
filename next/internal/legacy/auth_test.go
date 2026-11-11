@@ -412,6 +412,32 @@ func TestAuthFileRequestRetry(t *testing.T) {
 	}
 }
 
+// An imported xAI login gets "inject_x_search": true when the config turns on
+// upstream.xai.inject-x-search (or its older spelling), and no such setting by default, as an
+// imported Codex login gets its own options.
+func TestXAIInjectXSearchImport(t *testing.T) {
+	dir := writeFiles(t, map[string]any{
+		"xai-user.json": map[string]any{"type": "xai", "access_token": "fake-xai-access", "refresh_token": "fake-xai-refresh", "base_url": "http://127.0.0.1:3/v1"},
+	})
+	for _, tc := range []struct{ name, yaml, want string }{
+		{"default", "port: 8317", `{"base_url": "http://127.0.0.1:3/v1"}`},
+		{"false", "upstream: {xai: {inject-x-search: false}}", `{"base_url": "http://127.0.0.1:3/v1"}`},
+		{"v8", "upstream: {xai: {inject-x-search: true}}", `{"base_url": "http://127.0.0.1:3/v1", "inject_x_search": true}`},
+		{"older spelling", "oauth: {providers: {xai: {inject-x-search: true}}}", `{"base_url": "http://127.0.0.1:3/v1", "inject_x_search": true}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			files, _, err := ReadAuthDir(dir, translate(t, tc.yaml).Import, time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(files) != 1 {
+				t.Fatalf("imported %d accounts, want 1", len(files))
+			}
+			equalJSON(t, files[0].Record.Account.Settings, tc.want)
+		})
+	}
+}
+
 // siwcFile is a Codex file as today's core writes it after a Sign in with ChatGPT login: the
 // ChatGPT sign-in at the top and the SIWC token set in "siwc".
 func siwcFile(extra map[string]any) map[string]any {

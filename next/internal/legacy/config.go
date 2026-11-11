@@ -45,6 +45,10 @@ type ImportOptions struct {
 	// Images is false when multimedia.disable-image-generation is true, which also turns off the
 	// Images API routes: imported Codex accounts then get "images": false.
 	Images bool `json:"images"`
+	// InjectXSearch is true when upstream.xai.inject-x-search is set (or its older spelling): the
+	// xAI accounts of the config and imported xAI logins then get "inject_x_search": true, which
+	// injects xAI's native x_search tool. False by default.
+	InjectXSearch bool `json:"inject_x_search"`
 	// SIWCIdentifier is codex.signin-with-chatgpt-identifier, trimmed: imported Sign in with
 	// ChatGPT accounts then get it as "signin_with_chatgpt_identifier". Empty: the extension's
 	// default.
@@ -240,7 +244,7 @@ var rules = map[string]rule{
 	"upstream.claude":                                       {dropped, "making other clients look like Claude Code is out of scope"},
 	"upstream.claude.tool-search":                           {later, ""},
 	"upstream.claude.header-defaults":                       {dropped, "making other clients look like Claude Code is out of scope"},
-	"upstream.xai.inject-x-search":                          {later, ""},
+	"upstream.xai.inject-x-search":                          {supported, ""},
 
 	"oauth.auth-dir":                                       {supported, ""},
 	"oauth.auth-auto-refresh-workers":                      {dropped, "each account is renewed shortly before it expires"},
@@ -440,6 +444,7 @@ var readPaths = []string{
 	"routing.retry.max-retry-credentials", "routing.retry.max-retry-interval", "routing.retry.request-retry",
 	"routing.force-model-prefix", "oauth.model-alias", "oauth.excluded-models",
 	"upstream.codex.disable-codex-cloaking", "upstream.codex.websocket-compression",
+	"upstream.xai.inject-x-search",
 	"oauth.providers.codex.signin-with-chatgpt-identifier",
 	"multimedia.disable-image-generation", "oauth.auth-dir", "observability.usage.usage-statistics-enabled",
 	"observability.logs.logging-to-file", "observability.logs.logs-max-total-size-mb",
@@ -619,6 +624,11 @@ func (x *translator) options() error {
 		return err
 	} else if off {
 		x.res.Import.CodexIdentity = false
+	}
+	if on, err := flag(x.t, "upstream.xai.inject-x-search"); err != nil {
+		return err
+	} else if on {
+		x.res.Import.InjectXSearch = true
 	}
 	switch v, _ := get(x.t, "multimedia.disable-image-generation"); v {
 	case nil, false, "false", "":
@@ -1002,6 +1012,10 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 		}
 		if x.res.Import.ClaudeModelLevelCooling {
 			settings["model_level_cooling"] = true
+		}
+	case "xai":
+		if x.res.Import.InjectXSearch {
+			settings["inject_x_search"] = true
 		}
 	case "vertex":
 		settings["vertex"] = map[string]any{}
