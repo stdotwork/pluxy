@@ -11,3 +11,5 @@
 @import "./extensions/page.css";
 @import "./pages/quota.css";
 @import "./pages/usage.css";
+
+@import "./pages/config.css";

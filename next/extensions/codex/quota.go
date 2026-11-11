@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -25,7 +26,7 @@ const (
 	maxUsageBody = 1 << 20
 )
 
-// quota reads a ChatGPT subscription's usage windows and credit balance (protocol minor version 5).
+// quota reads a ChatGPT subscription's usage, renewal time and balances (protocol minor version 10).
 // An API key has no plan to report.
 func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	s, err := readSettings(call.Account.Settings)
@@ -86,8 +87,72 @@ func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	if q.Plan == "" {
 		q.Plan = a.planType
 	}
-	q.Raw, _ = json.Marshal(map[string]json.RawMessage{"usage": body})
+	raw := map[string]json.RawMessage{"usage": body}
+	if a.accountID != "" {
+		if b := optionalQuotaJSON(ctx, base+"/subscriptions?account_id="+url.QueryEscape(a.accountID), s, a); b != nil {
+			raw["subscriptions"] = b
+			var sub struct {
+				ActiveUntil json.RawMessage `json:"active_until"`
+			}
+			if json.Unmarshal(b, &sub) == nil {
+				var n number
+				_ = json.Unmarshal(sub.ActiveUntil, &n)
+				if n.ok {
+					q.PlanEndsAt = unixSeconds(n.v)
+				} else {
+					var value string
+					if json.Unmarshal(sub.ActiveUntil, &value) == nil {
+						if end, err := time.Parse(time.RFC3339, value); err == nil && end.Unix() > 0 {
+							q.PlanEndsAt = end.Unix()
+						}
+					}
+				}
+			}
+		}
+	}
+	if b := optionalQuotaJSON(ctx, base+"/wham/rate-limit-reset-credits", s, a); b != nil {
+		raw["reset_credits"] = b
+		var credits struct {
+			Available number `json:"available_count"`
+		}
+		if json.Unmarshal(b, &credits) == nil && credits.Available.ok && credits.Available.v >= 0 {
+			q.Limits = append(q.Limits, protocol.QuotaLimit{ID: "reset_credits", Label: "Manual resets", Remaining: &credits.Available.v, Unit: "resets"})
+		}
+	}
+	q.Raw, _ = json.Marshal(raw)
 	return q, nil
+}
+
+// Optional reads use the account's Codex identity too. A refused or malformed reply leaves its
+// fields out without losing the usage already read.
+func optionalQuotaJSON(ctx context.Context, endpoint string, s settings, a account) json.RawMessage {
+	if ctx.Err() != nil {
+		return nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+a.token)
+	setIdentity(req.Header, nil, s, a)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxUsageBody+1))
+	if err != nil || len(body) > maxUsageBody {
+		return nil
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal(body, &object) != nil || object == nil {
+		return nil
+	}
+	return body
 }
 
 // usagePayload is the usage endpoint's reply, as far as the extension reads it.

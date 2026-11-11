@@ -80,6 +80,16 @@ type item struct {
 	// opaque is a reasoning item's opaque record from another provider (an Anthropic thinking
 	// signature), written as its encrypted_content so the client can replay it.
 	opaque string
+	// out is the item's output_index: model items and web searches share one count.
+	out int
+	// A web search (websearch.go): its query, the input it is read from, its status once done
+	// and its results.
+	query      string
+	input      strings.Builder
+	streamed   bool
+	status     string
+	results    json.RawMessage
+	hasResults bool
 }
 
 // builder rebuilds Responses output from model events whose upstream format is not Responses.
@@ -89,7 +99,9 @@ type builder struct {
 	id       string
 	created  int64
 	items    map[int]*item
-	order    []int
+	order    []*item // every output item, in output order
+	nextOut  int
+	search   searches
 	messages int
 	reasons  int
 	finish   *llm.Finish
@@ -144,7 +156,8 @@ func (b *builder) lose(path, detail string) {
 }
 
 func (b *builder) open(idx int, s *llm.ItemStart) *item {
-	it := &item{kind: s.Kind, callID: s.CallID, name: s.Name}
+	it := &item{kind: s.Kind, callID: s.CallID, name: s.Name, out: b.nextOut}
+	b.nextOut++
 	switch s.Kind {
 	case llm.ItemMessage:
 		it.id = "msg_" + b.id + "_" + strconv.Itoa(b.messages)
@@ -156,7 +169,7 @@ func (b *builder) open(idx int, s *llm.ItemStart) *item {
 		it.id = "fc_" + s.CallID
 	}
 	b.items[idx] = it
-	b.order = append(b.order, idx)
+	b.order = append(b.order, it)
 	return it
 }
 
@@ -181,6 +194,8 @@ func textPart(text string) obj {
 // leaves out fields today's core writes only in the done event.
 func (b *builder) doneItem(it *item, final bool) obj {
 	switch it.kind {
+	case itemWebSearch:
+		return searchItem(it, false)
 	case llm.ItemMessage:
 		return obj{"id": it.id, "type": "message", "status": b.itemStatus(), "role": "assistant", "content": []any{textPart(it.text.String())}}
 	case llm.ItemReasoning:
@@ -214,9 +229,14 @@ func (b *builder) response(stream bool) obj {
 		}
 		r["incomplete_details"] = obj{"reason": reason}
 	}
+	if b.finish != nil && b.finish.RawReason == "pause_turn" {
+		// Claude paused a turn of server tool use (web search): the response is complete but
+		// the turn is not, and the client continues it, as today's core marks it.
+		r["end_turn"] = false
+	}
 	output := []any{}
-	for _, idx := range b.order {
-		if it := b.items[idx]; it.done {
+	for _, it := range b.order {
+		if it.done {
 			output = append(output, b.doneItem(it, true))
 		}
 	}
@@ -446,34 +466,37 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		return s.emit("response.in_progress", obj{"response": obj{"id": b.id, "object": "response", "created_at": b.created,
 			"status": "in_progress", "model": b.req.Model, "output": []any{}}})
 	case llm.EventItemStart:
+		if err := s.searchesDone(b.readySearches()); err != nil {
+			return err
+		}
 		it := b.open(ev.Index, ev.Item)
 		switch it.kind {
 		case llm.ItemMessage:
-			if err := s.emit("response.output_item.added", obj{"output_index": ev.Index,
+			if err := s.emit("response.output_item.added", obj{"output_index": it.out,
 				"item": obj{"id": it.id, "type": "message", "status": "in_progress", "role": "assistant", "content": []any{}}}); err != nil {
 				return err
 			}
-			return s.emit("response.content_part.added", obj{"output_index": ev.Index, "item_id": it.id, "content_index": 0, "part": textPart("")})
+			return s.emit("response.content_part.added", obj{"output_index": it.out, "item_id": it.id, "content_index": 0, "part": textPart("")})
 		case llm.ItemReasoning:
-			if err := s.emit("response.output_item.added", obj{"output_index": ev.Index,
+			if err := s.emit("response.output_item.added", obj{"output_index": it.out,
 				"item": obj{"id": it.id, "type": "reasoning", "status": "in_progress", "summary": []any{}}}); err != nil {
 				return err
 			}
-			return s.emit("response.reasoning_summary_part.added", obj{"output_index": ev.Index, "item_id": it.id, "summary_index": 0,
+			return s.emit("response.reasoning_summary_part.added", obj{"output_index": it.out, "item_id": it.id, "summary_index": 0,
 				"part": obj{"type": "summary_text", "text": ""}})
 		}
-		return s.emit("response.output_item.added", obj{"output_index": ev.Index,
+		return s.emit("response.output_item.added", obj{"output_index": it.out,
 			"item": obj{"id": it.id, "type": "function_call", "status": "in_progress", "arguments": "", "call_id": it.callID, "name": it.name}})
 	case llm.EventTextDelta, llm.EventReasoningDelta, llm.EventToolInputDelta:
 		it := b.items[ev.Index]
 		it.text.WriteString(ev.Delta)
 		switch it.kind {
 		case llm.ItemMessage:
-			return s.emit("response.output_text.delta", obj{"output_index": ev.Index, "item_id": it.id, "content_index": 0, "delta": ev.Delta, "logprobs": []any{}})
+			return s.emit("response.output_text.delta", obj{"output_index": it.out, "item_id": it.id, "content_index": 0, "delta": ev.Delta, "logprobs": []any{}})
 		case llm.ItemReasoning:
-			return s.emit("response.reasoning_summary_text.delta", obj{"output_index": ev.Index, "item_id": it.id, "summary_index": 0, "delta": ev.Delta})
+			return s.emit("response.reasoning_summary_text.delta", obj{"output_index": it.out, "item_id": it.id, "summary_index": 0, "delta": ev.Delta})
 		}
-		return s.emit("response.function_call_arguments.delta", obj{"output_index": ev.Index, "item_id": it.id, "delta": ev.Delta})
+		return s.emit("response.function_call_arguments.delta", obj{"output_index": it.out, "item_id": it.id, "delta": ev.Delta})
 	case llm.EventItemEnd:
 		if it := b.items[ev.Index]; it != nil && ev.Opaque != nil {
 			it.opaque = ev.Opaque.Data
@@ -481,10 +504,25 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		s.pending = append(s.pending, ev.Index)
 		return nil
 	case llm.EventNative:
+		if b.upFormat == llm.FormatAnthropicMessages && isBlockStart(ev.Raw) {
+			// A search with its results ends when the next block starts.
+			if err := s.searchesDone(b.readySearches()); err != nil {
+				return err
+			}
+		}
+		if it, added, consumed := b.searchEvent(ev.Raw); consumed {
+			if added {
+				return s.emit("response.output_item.added", obj{"output_index": it.out, "item": searchItem(it, true)})
+			}
+			return nil
+		}
 		b.lose("choices", "reply data in "+b.upFormat+" with no place in a Response")
 		return nil
 	case llm.EventFinish:
 		b.finish, b.usage = ev.Finish, ev.Usage
+		if err := s.searchesDone(b.endSearches()); err != nil {
+			return err
+		}
 		typ := "response.completed"
 		if b.incomplete() {
 			typ = "response.incomplete"
@@ -513,26 +551,36 @@ func (s *StreamWriter) flushEnds(ev llm.Event) error {
 		text := it.text.String()
 		switch it.kind {
 		case llm.ItemMessage:
-			if err := s.emit("response.output_text.done", obj{"output_index": idx, "item_id": it.id, "content_index": 0, "text": text, "logprobs": []any{}}); err != nil {
+			if err := s.emit("response.output_text.done", obj{"output_index": it.out, "item_id": it.id, "content_index": 0, "text": text, "logprobs": []any{}}); err != nil {
 				return err
 			}
-			if err := s.emit("response.content_part.done", obj{"output_index": idx, "item_id": it.id, "content_index": 0, "part": textPart(text)}); err != nil {
+			if err := s.emit("response.content_part.done", obj{"output_index": it.out, "item_id": it.id, "content_index": 0, "part": textPart(text)}); err != nil {
 				return err
 			}
 		case llm.ItemReasoning:
-			if err := s.emit("response.reasoning_summary_text.done", obj{"output_index": idx, "item_id": it.id, "summary_index": 0, "text": text}); err != nil {
+			if err := s.emit("response.reasoning_summary_text.done", obj{"output_index": it.out, "item_id": it.id, "summary_index": 0, "text": text}); err != nil {
 				return err
 			}
-			if err := s.emit("response.reasoning_summary_part.done", obj{"output_index": idx, "item_id": it.id, "summary_index": 0,
+			if err := s.emit("response.reasoning_summary_part.done", obj{"output_index": it.out, "item_id": it.id, "summary_index": 0,
 				"part": obj{"type": "summary_text", "text": text}}); err != nil {
 				return err
 			}
 		case llm.ItemToolCall:
-			if err := s.emit("response.function_call_arguments.done", obj{"output_index": idx, "item_id": it.id, "arguments": text}); err != nil {
+			if err := s.emit("response.function_call_arguments.done", obj{"output_index": it.out, "item_id": it.id, "arguments": text}); err != nil {
 				return err
 			}
 		}
-		if err := s.emit("response.output_item.done", obj{"output_index": idx, "item": s.b.doneItem(it, false)}); err != nil {
+		if err := s.emit("response.output_item.done", obj{"output_index": it.out, "item": s.b.doneItem(it, false)}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// searchesDone writes the done events of web searches that ended.
+func (s *StreamWriter) searchesDone(ended []*item) error {
+	for _, it := range ended {
+		if err := s.emit("response.output_item.done", obj{"output_index": it.out, "item": searchItem(it, false)}); err != nil {
 			return err
 		}
 	}
@@ -579,11 +627,18 @@ func (a *Aggregator) Add(ev llm.Event) {
 			a.size += len(ev.Opaque.Data)
 		}
 	case llm.EventNative:
-		if b.upFormat != format {
+		if it, added, consumed := b.searchEvent(ev.Raw); consumed {
+			if added {
+				a.size += len(it.id) + itemOverhead
+			}
+			// The search's query input and results come in these events.
+			a.size += len(ev.Raw)
+		} else if b.upFormat != format {
 			b.lose("choices", "reply data in "+b.upFormat+" with no place in a Response")
 		}
 	case llm.EventFinish:
 		b.finish, b.usage = ev.Finish, ev.Usage
+		b.endSearches()
 		if f := finalResponse(ev.Raw); b.upFormat == format && f != nil {
 			a.final = f
 		}
@@ -600,7 +655,8 @@ func (a *Aggregator) Add(ev llm.Event) {
 const itemOverhead = len(`{"id":"","type":"function_call","status":"completed","call_id":"","name":"","arguments":""},`)
 
 // Size is about how many bytes of content the response holds so far: its id, the text,
-// reasoning and tool calls of its items with their ids, the upstream's final Response object, its
+// reasoning and tool calls of its items with their ids, its web searches as the upstream sent
+// them, the upstream's final Response object, its
 // finish reason and usage as the upstream sent them, and what it reports as lost, before JSON
 // escaping. Callers use it to bound what they collect.
 func (a *Aggregator) Size() int { return a.size + len(a.final) + a.b.lossSize }

@@ -30,6 +30,8 @@ export const TOKENS = {
   "color.focus": { light: "#2f5fd0", dark: "#7aa2ff" },
   "color.meter-track": { light: "var(--px-color-surface-raised)" },
   "color.meter-fill": { light: "var(--px-color-accent)" },
+  "color.diff-add": { light: "#1f7a3d", dark: "#5cc98a" },
+  "color.diff-remove": { light: "#b42318", dark: "#ff7b72" },
   "font.body": { light: 'system-ui, -apple-system, "Segoe UI", sans-serif' },
   "font.mono": { light: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace' },
   "font.size": { light: "14px" },
@@ -77,6 +79,13 @@ export const PARTS = [
   "badge",
   "field",
   "meter",
+  "tabs",
+  "tab",
+  "tab-panel",
+  "code",
+  "diff",
+  "diff-line",
+  "dialog",
 ] as const;
 
 export type Part = (typeof PARTS)[number];
@@ -87,6 +96,7 @@ export const LAYOUT = {
   list: ["table", "cards"],
   detail: ["side", "below"],
   width: ["wide", "full", "narrow"],
+  tabs: ["top", "side"],
 } as const;
 
 export type LayoutOption = keyof typeof LAYOUT;
@@ -94,7 +104,13 @@ export type Layout = { [K in LayoutOption]: (typeof LAYOUT)[K][number] };
 
 export const LAYOUT_OPTIONS = Object.keys(LAYOUT) as LayoutOption[];
 
-export const DEFAULT_LAYOUT: Layout = { nav: "sidebar", list: "table", detail: "side", width: "wide" };
+export const DEFAULT_LAYOUT: Layout = {
+  nav: "sidebar",
+  list: "table",
+  detail: "side",
+  width: "wide",
+  tabs: "top",
+};
 
 export function isLayoutValue<K extends LayoutOption>(option: K, value: unknown): value is Layout[K] {
   return (LAYOUT[option] as readonly unknown[]).includes(value);

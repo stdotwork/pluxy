@@ -46,7 +46,7 @@ func (e *Extension) Quota(ctx context.Context, account protocol.Account) (*proto
 		if raw := bytes.TrimSpace(q.Raw); len(raw) > 0 && raw[0] != '{' {
 			return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s sent a quota raw that is not a JSON object", e.manifest.ID)}
 		}
-		out := &protocol.Quota{Plan: redact.String(q.Plan), Limits: make([]protocol.QuotaLimit, 0, len(q.Limits)), Raw: redact.Raw(q.Raw)}
+		out := &protocol.Quota{Plan: redact.String(q.Plan), PlanEndsAt: q.PlanEndsAt, Limits: make([]protocol.QuotaLimit, 0, len(q.Limits)), Raw: redact.Raw(q.Raw)}
 		for i, l := range q.Limits {
 			if l.ID == "" {
 				return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s reported quota limit %d without an id", e.manifest.ID, i)}
