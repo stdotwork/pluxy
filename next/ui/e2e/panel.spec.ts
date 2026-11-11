@@ -39,13 +39,13 @@ test("panel shows core, switches layout and theme live, and recovers from custom
 
   // Shared pages appear in their navigation groups.
   await expect(
-    nav(page).getByRole("group", { name: "Operate" }).getByRole("link", { name: "Status" }),
+    nav(page).getByRole("group", { name: "Operate" }).getByRole("link", { name: "Dashboard" }),
   ).toBeVisible();
   await expect(
     nav(page).getByRole("group", { name: "Control" }).getByRole("link", { name: "Themes" }),
   ).toBeVisible();
 
-  // Status: the extensions core runs, from its status.
+  // Dashboard: the extensions core runs, from its status.
   const main = page.locator('[data-part="main"]');
   await expect(main.getByText("test/local", { exact: true })).toBeVisible();
   await expect(main.getByText("test/alpha", { exact: true })).toBeVisible();

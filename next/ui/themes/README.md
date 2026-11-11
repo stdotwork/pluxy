@@ -97,6 +97,8 @@ anything.
 | `color.focus` | Keyboard focus ring | `#2f5fd0` / `#7aa2ff` |
 | `color.meter-track` | Unused part of a quota meter | `var(--px-color-surface-raised)` |
 | `color.meter-fill` | Used share of a quota meter | `var(--px-color-accent)` |
+| `color.chart-success` | Successful requests in the Dashboard's traffic chart | `var(--px-color-ok)` |
+| `color.chart-failure` | Failed requests in the Dashboard's traffic chart | `var(--px-color-danger)` |
 | `color.diff-add` | Added lines in a diff | `#1f7a3d` / `#5cc98a` |
 | `color.diff-remove` | Removed lines in a diff | `#b42318` / `#ff7b72` |
 
@@ -224,6 +226,8 @@ These stay stable within a theme contract version:
 | `data-part="method"` | A sign-in method tile with its label, kind caption and selected flow. |
 | `data-part="flow"` | A reusable account sign-in flow: inputs, prompts, waiting and terminal states. |
 | `data-part="device-code"` | The user code to enter on a device sign-in page. |
+| `data-part="stat"` | A figure with its label and hint on the Dashboard (requests handled, success rate, credentials); `data-tone` is `ok`, `warn` or `danger` when the figure has a verdict. |
+| `data-part="chart"` | The Dashboard's traffic chart (an SVG). Each bar carries `data-outcome`, `success` or `failure`. |
 
 Every other class name, element and attribute can change in any release.
 

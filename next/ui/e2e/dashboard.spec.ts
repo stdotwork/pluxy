@@ -14,7 +14,8 @@ async function chat(model: string): Promise<number> {
   return r.status;
 }
 
-const stat = (page: Page, name: string) => page.locator('[data-part="stat"]').filter({ has: page.getByText(name, { exact: true }) });
+const stat = (page: Page, name: string) =>
+  page.locator('[data-part="stat"]').filter({ has: page.getByText(name, { exact: true }) });
 
 test.beforeAll(async () => {
   // A sign-in account serves the fake's models fake-model and server-error.
@@ -26,7 +27,11 @@ test.beforeAll(async () => {
   });
   expect(started.status).toBe(202);
   await expect
-    .poll(async () => (await core.mgmt<{ login: { state: string } }>("GET", `/logins/${started.body.login.id}`)).body.login.state)
+    .poll(
+      async () =>
+        (await core.mgmt<{ login: { state: string } }>("GET", `/logins/${started.body.login.id}`)).body.login
+          .state,
+    )
     .toBe("done");
   for (const model of ["fake-model", "fake-model", "fake-model"]) expect(await chat(model)).toBe(200);
   expect(await chat("server-error")).toBeGreaterThanOrEqual(500);
@@ -52,8 +57,9 @@ test("the Dashboard sums up the requests core recorded and the accounts it holds
   await expect(chart.locator('[data-outcome="failure"]')).toHaveCount(1);
 
   // Credentials: what GET /accounts reports.
-  const accounts = (await core.mgmt<{ accounts: { disabled?: boolean; state: string }[] }>("GET", "/accounts"))
-    .body.accounts;
+  const accounts = (
+    await core.mgmt<{ accounts: { disabled?: boolean; state: string }[] }>("GET", "/accounts")
+  ).body.accounts;
   const active = accounts.filter((a) => !a.disabled && a.state === "active").length;
   expect(accounts.length).toBeGreaterThan(0);
   const credentials = stat(page, "Credentials");
@@ -61,7 +67,9 @@ test("the Dashboard sums up the requests core recorded and the accounts it holds
   await expect(credentials).toContainText(`${active} active · ${accounts.length - active} not serving`);
 
   // Fleet: requests and success rate per extension; Health and Runtime link on.
-  await expect(page.getByRole("table", { name: "Every provider, side by side" }).locator("tbody tr")).not.toHaveCount(0);
+  await expect(
+    page.getByRole("table", { name: "Every provider, side by side" }).locator("tbody tr"),
+  ).not.toHaveCount(0);
   await expect(page.getByRole("link", { name: "Open auth files" })).toHaveAttribute("href", "#/accounts");
   await expect(page.getByRole("link", { name: "Edit configuration" })).toHaveAttribute("href", "#/config");
   await expect(page.getByText(/^Updated /)).toBeVisible();
