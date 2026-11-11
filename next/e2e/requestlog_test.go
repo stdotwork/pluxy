@@ -305,9 +305,9 @@ func TestRequestLogJSON(t *testing.T) {
 			t.Fatalf("GET %s: %+v", path, got)
 		}
 	}
-	// Exactly 8 MiB is accepted. One byte more is refused without a partial reply.
+	// Exactly 2 MiB is accepted. One byte more is refused without a partial reply.
 	path := filepath.Join(c.logsDir(), name)
-	big := strings.Repeat("x", 8<<20)
+	big := strings.Repeat("x", 2<<20)
 	if err := os.WriteFile(path, []byte(big), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -318,8 +318,8 @@ func TestRequestLogJSON(t *testing.T) {
 	if err := json.Unmarshal(c.expect(t, http.StatusOK, http.MethodGet, "/request-error-logs/"+name+"?format=json", nil), &exact); err != nil {
 		t.Fatal(err)
 	}
-	if exact.Size != 8<<20 || exact.Content != big {
-		t.Fatal("8 MiB content changed")
+	if exact.Size != 2<<20 || exact.Content != big {
+		t.Fatal("2 MiB content changed")
 	}
 	if err := os.WriteFile(path, []byte(big+"x"), 0o600); err != nil {
 		t.Fatal(err)

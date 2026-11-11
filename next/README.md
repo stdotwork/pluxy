@@ -720,7 +720,7 @@ kept thinking back. What is kept belongs to one client key (the request's protoc
 Claude Code conversation (its `X-Claude-Code-Session-Id` header, else the session in
 `metadata.user_id`) and one model family; a request without a client key or a session is sent as
 written. Kept turns expire an hour after their last use; at most 10,240 turns and 256 MiB (session IDs included) are kept,
-and a turn over 8 MiB or 512 blocks is not. Kimi refusing a request whose thinking was put back
+and a turn over 2 MiB or 512 blocks is not. Kimi refusing a request whose thinking was put back
 (400, 422 or an error in the stream) drops that turn. The turns are kept in the extension's memory,
 so they are lost when core stops the idle extension (after 10 minutes without requests) or
 restarts it. Unlike today's core, which keeps only a conversation's latest reply, every kept turn
@@ -1600,8 +1600,8 @@ extension, so request logs hold what the client sent and received.
 | Call | What it does |
 | --- | --- |
 | `GET /v0/management/request-error-logs` | The error logs, newest first: `files`, each with `name`, `size` and `modified` (Unix seconds). |
-| `GET /v0/management/request-error-logs/{name}` | One error log, as a download, or with `?format=json` as `{"name", "size", "content"}` (`size` is bytes). JSON reads accept at most 8 MiB; larger files answer 413 with code `log_too_large`, without partial content. Plain downloads keep their existing size behavior. 400 for a name that is not an error log's as core writes them, 404 when there is none or the name is a link. |
-| `GET /v0/management/request-log-by-id/{id}` | The newest request log, plain or error, of the request with that trace ID (the `X-CPA-TRACE-ID` of its reply), as a download, or with `?format=json` as `{"name", "size", "content"}` under the same 8 MiB limit (413 above it); 404 when there is none. |
+| `GET /v0/management/request-error-logs/{name}` | One error log, as a download, or with `?format=json` as `{"name", "size", "content"}` (`size` is bytes). JSON reads accept at most 2 MiB; larger files answer 413 with code `log_too_large`, without partial content. Plain downloads keep their existing size behavior. 400 for a name that is not an error log's as core writes them, 404 when there is none or the name is a link. |
+| `GET /v0/management/request-log-by-id/{id}` | The newest request log, plain or error, of the request with that trace ID (the `X-CPA-TRACE-ID` of its reply), as a download, or with `?format=json` as `{"name", "size", "content"}` under the same 2 MiB limit (413 above it); 404 when there is none. |
 
 ## Profiling pages
 

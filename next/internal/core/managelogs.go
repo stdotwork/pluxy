@@ -19,7 +19,7 @@ import (
 const (
 	defaultLogLines = 1000
 	maxLogLines     = 10000
-	maxJSONLogBytes = 8 << 20
+	maxJSONLogBytes = 2 << 20
 )
 
 // handleLogs adds the log file calls, which answer 400 while logging to file is off.
@@ -117,7 +117,7 @@ func (c *Core) serveLogFile(w http.ResponseWriter, r *http.Request, name string)
 	if r.URL.Query().Get("format") == "json" {
 		// Check the size before allocating, and bound the read in case the file grows.
 		if info.Size() > maxJSONLogBytes {
-			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": map[string]string{"code": "log_too_large", "message": "JSON log content exceeds 8 MiB; use the plain download"}})
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": map[string]string{"code": "log_too_large", "message": "JSON log content exceeds 2 MiB; use the plain download"}})
 			return
 		}
 		content, err := io.ReadAll(io.LimitReader(f, maxJSONLogBytes+1))
@@ -126,7 +126,7 @@ func (c *Core) serveLogFile(w http.ResponseWriter, r *http.Request, name string)
 			return
 		}
 		if len(content) > maxJSONLogBytes {
-			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": map[string]string{"code": "log_too_large", "message": "JSON log content exceeds 8 MiB; use the plain download"}})
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": map[string]string{"code": "log_too_large", "message": "JSON log content exceeds 2 MiB; use the plain download"}})
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"name": name, "size": len(content), "content": string(content)})
