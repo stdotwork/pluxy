@@ -515,7 +515,7 @@ func (s *Stream) Next() llm.Event {
 		return *s.final
 	}
 	if err := s.seq.Check(reply.Event); err != nil {
-		s.fail(&llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s broke the protocol: %v", s.ext.manifest.ID, err)})
+		s.fail(redacted(s.redact, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s broke the protocol: %v", s.ext.manifest.ID, err)}))
 		return *s.final
 	}
 	ev := s.redact.Event(reply.Event)
@@ -533,7 +533,7 @@ func (s *Stream) readError(err error) *llm.Error {
 	var se *json.SyntaxError
 	var te *json.UnmarshalTypeError
 	if errors.Is(err, protocol.ErrFrameTooLarge) || errors.As(err, &se) || errors.As(err, &te) {
-		return &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s sent a bad frame: %v", s.ext.manifest.ID, err)}
+		return redacted(s.redact, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s sent a bad frame: %v", s.ext.manifest.ID, err)})
 	}
 	return &llm.Error{Code: llm.CodeExtensionCrashed, Message: fmt.Sprintf("extension %s ended the call without finishing it", s.ext.manifest.ID)}
 }

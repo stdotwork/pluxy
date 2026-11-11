@@ -36,11 +36,11 @@ func (e *Extension) Models(ctx context.Context, account protocol.Account) (*prot
 	defer stop()
 	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: protocol.OpModels, Account: &account}
 	if err := protocol.WriteFrame(conn, call); err != nil {
-		return nil, callError(ctx, e, err)
+		return nil, callError(ctx, e, redact, err)
 	}
 	var r protocol.Reply
 	if err := protocol.ReadFrame(conn, &r); err != nil {
-		return nil, callError(ctx, e, err)
+		return nil, callError(ctx, e, redact, err)
 	}
 	switch {
 	case r.Type == protocol.TypeModelsResult && r.Models != nil:
@@ -58,7 +58,7 @@ func (e *Extension) Models(ctx context.Context, account protocol.Account) (*prot
 	case r.Type == llm.EventError && r.Error != nil:
 		return nil, redact.Event(r.Event).Error
 	}
-	return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a models call", e.manifest.ID, r.Type)}
+	return nil, redacted(redact, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a models call", e.manifest.ID, r.Type)})
 }
 
 func redactModel(r *protocol.Redactor, m protocol.Model) protocol.Model {

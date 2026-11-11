@@ -35,11 +35,11 @@ func (e *Extension) Quota(ctx context.Context, account protocol.Account) (*proto
 	defer stop()
 	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: protocol.OpQuota, Account: &account}
 	if err := protocol.WriteFrame(conn, call); err != nil {
-		return nil, callError(ctx, e, err)
+		return nil, callError(ctx, e, redact, err)
 	}
 	var r protocol.Reply
 	if err := protocol.ReadFrame(conn, &r); err != nil {
-		return nil, callError(ctx, e, err)
+		return nil, callError(ctx, e, redact, err)
 	}
 	switch {
 	case r.Type == protocol.TypeQuotaResult && r.Quota != nil:
@@ -57,7 +57,7 @@ func (e *Extension) Quota(ctx context.Context, account protocol.Account) (*proto
 			}
 			for _, f := range []*float64{l.UsedPercent, l.Used, l.Limit, l.Remaining} {
 				if f != nil && (math.IsNaN(*f) || math.IsInf(*f, 0)) {
-					return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s reported quota limit %q with an amount that is not a number", e.manifest.ID, l.ID)}
+					return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s reported quota limit %q with an amount that is not a number", e.manifest.ID, redact.String(l.ID))}
 				}
 			}
 			l.ID, l.Label, l.Unit = redact.String(l.ID), redact.String(l.Label), redact.String(l.Unit)
@@ -71,7 +71,7 @@ func (e *Extension) Quota(ctx context.Context, account protocol.Account) (*proto
 	case r.Type == llm.EventError && r.Error != nil:
 		return nil, redact.Event(r.Event).Error
 	}
-	return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a quota call", e.manifest.ID, r.Type)}
+	return nil, redacted(redact, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a quota call", e.manifest.ID, r.Type)})
 }
 
 // Quota runs a quota call, starting the program first if it is idle. The caller holds a lease

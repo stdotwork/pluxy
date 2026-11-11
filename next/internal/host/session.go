@@ -75,12 +75,12 @@ func (e *Extension) OpenSession(ctx context.Context, account protocol.Account, i
 	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: protocol.OpSession, Account: &account, Session: &info}
 	if err := protocol.WriteFrame(conn, call); err != nil {
 		conn.Close()
-		return nil, e.sessionReadError(ctx, err)
+		return nil, e.sessionReadError(ctx, protocol.NewRedactor(creds...), err)
 	}
 	var reply protocol.Reply
 	if err := protocol.ReadFrame(conn, &reply); err != nil {
 		conn.Close()
-		return nil, e.sessionReadError(ctx, err)
+		return nil, e.sessionReadError(ctx, protocol.NewRedactor(creds...), err)
 	}
 	switch reply.Type {
 	case protocol.TypeSessionReady:
@@ -113,15 +113,15 @@ func (e *Extension) protocolError(what string) *llm.Error {
 	return &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s broke the protocol: %s", e.manifest.ID, what)}
 }
 
-// redacted removes credentials from an error core builds from what the extension sent, such as
-// a protocol error that quotes a frame's type.
+// redacted removes credentials and settings secrets from an error core builds from what the
+// extension sent, such as a protocol error that quotes a frame's type.
 func redacted(r *protocol.Redactor, e *llm.Error) *llm.Error {
 	e.Message = r.String(e.Message)
 	return e
 }
 
-func (e *Extension) sessionReadError(ctx context.Context, err error) *llm.Error {
-	s := &Stream{ctx: ctx, ext: e}
+func (e *Extension) sessionReadError(ctx context.Context, redact *protocol.Redactor, err error) *llm.Error {
+	s := &Stream{ctx: ctx, ext: e, redact: redact}
 	return s.readError(err)
 }
 
@@ -228,7 +228,7 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 			return t
 		}
 		s.Close()
-		t.fail((&Stream{ctx: ctx, ext: s.ext}).readError(err))
+		t.fail((&Stream{ctx: ctx, ext: s.ext, redact: t.redact}).readError(err))
 	}
 	return t
 }

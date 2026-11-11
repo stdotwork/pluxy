@@ -121,7 +121,7 @@ func (l *LoginCall) Next() protocol.Reply {
 		l.Close()
 		return *l.final
 	}
-	l.fail(&llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s sent %q during a login", l.ext.manifest.ID, r.Type)})
+	l.fail(redacted(l.redactor(), &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s sent %q during a login", l.ext.manifest.ID, r.Type)}))
 	return *l.final
 }
 
@@ -155,7 +155,7 @@ func (l *LoginCall) fail(e *llm.Error) {
 }
 
 func (l *LoginCall) readError(err error) *llm.Error {
-	return callError(l.ctx, l.ext, err)
+	return callError(l.ctx, l.ext, l.redactor(), err)
 }
 
 // Refresh runs a refresh call: the extension renews account's credential and returns the new
@@ -176,11 +176,11 @@ func (e *Extension) Refresh(ctx context.Context, account protocol.Account) (*pro
 	defer stop()
 	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: protocol.OpRefresh, Account: &account}
 	if err := protocol.WriteFrame(conn, call); err != nil {
-		return nil, callError(ctx, e, err)
+		return nil, callError(ctx, e, redact, err)
 	}
 	var r protocol.Reply
 	if err := protocol.ReadFrame(conn, &r); err != nil {
-		return nil, callError(ctx, e, err)
+		return nil, callError(ctx, e, redact, err)
 	}
 	switch {
 	case r.Type == protocol.TypeRefreshDone && validGrant(r.Grant):
@@ -230,15 +230,15 @@ func (e *Extension) dial(ctx context.Context) (net.Conn, *llm.Error) {
 	return conn, nil
 }
 
-// callError says why a login or refresh call's connection failed.
-func callError(ctx context.Context, e *Extension, err error) *llm.Error {
+// callError says why a call's connection failed, with redact applied to what the extension sent.
+func callError(ctx context.Context, e *Extension, redact *protocol.Redactor, err error) *llm.Error {
 	if ctx != nil && ctx.Err() != nil {
 		return &llm.Error{Code: llm.CodeCancelled, Message: "the call was cancelled"}
 	}
 	var se *json.SyntaxError
 	var te *json.UnmarshalTypeError
 	if errors.Is(err, protocol.ErrFrameTooLarge) || errors.As(err, &se) || errors.As(err, &te) {
-		return &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s sent a bad frame: %v", e.manifest.ID, err)}
+		return redacted(redact, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s sent a bad frame: %v", e.manifest.ID, err)})
 	}
 	return &llm.Error{Code: llm.CodeExtensionCrashed, Message: fmt.Sprintf("extension %s ended the call without finishing it", e.manifest.ID)}
 }

@@ -9,10 +9,12 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/internal/configdoc"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 	"github.com/stdotwork/pluxy/next/sdk"
@@ -206,8 +208,9 @@ func TestDrainClosesSessions(t *testing.T) {
 	waitClosed(t, drained, "the drain")
 }
 
-// sessionBadFrame is an extension that holds sessions without the SDK and answers every turn
-// with an event of an unknown type that holds the turn's API key and settings.
+// sessionBadFrame is an extension that holds sessions without the SDK and answers every turn,
+// and every other call on an account, with an event of an unknown type that holds the account's
+// API key and settings.
 func sessionBadFrame() {
 	socket := os.Getenv(protocol.EnvSocket)
 	ln, err := net.Listen("unix", socket)
@@ -215,6 +218,13 @@ func sessionBadFrame() {
 		os.Exit(1)
 	}
 	fmt.Print(protocol.HandshakeLine(protocol.Version, socket))
+	leak := func(a *protocol.Account) protocol.Reply {
+		key := ""
+		if a.Credential != nil {
+			key = a.Credential.APIKey
+		}
+		return protocol.Reply{Event: llm.Event{Type: "leak-" + key + string(a.Settings)}}
+	}
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -237,10 +247,50 @@ func sessionBadFrame() {
 				if protocol.ReadFrame(conn, &turn) != nil || turn.Account == nil || turn.Account.Credential == nil {
 					return
 				}
-				_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: "leak-" + turn.Account.Credential.APIKey + string(turn.Account.Settings)}})
+				_ = protocol.WriteFrame(conn, leak(turn.Account))
 				_, _ = io.Copy(io.Discard, conn)
+			default:
+				if call.Account != nil {
+					_ = protocol.WriteFrame(conn, leak(call.Account))
+					_, _ = io.Copy(io.Discard, conn)
+				}
 			}
 		}()
+	}
+}
+
+// Every other call whose reply breaks the protocol with a frame holding the account's credential
+// and the secret in its settings gets a protocol error without either in it.
+func TestProtocolErrorsAreRedacted(t *testing.T) {
+	ext, err := Start(filepath.Join(fakePackage(t, "session-bad-frame"), ManifestFile), Options{Log: io.Discard, SettingsSecrets: configdoc.SettingsSecrets})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ext.Stop()
+	ctx := context.Background()
+	const key, setting = "sk-protocol-leak-test-0123456789", "sk-protocol-setting-0123456789"
+	account := protocol.Account{ID: "a", Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: key},
+		Settings: json.RawMessage(`{"api_key":"` + setting + `"}`)}
+	errs := map[string]*llm.Error{}
+	_, errs["check"] = ext.Check(ctx, account)
+	_, errs["quota"] = ext.Quota(ctx, account)
+	_, errs["models"] = ext.Models(ctx, account)
+	_, errs["refresh"] = ext.Refresh(ctx, account)
+	login := ext.Login(ctx, account, protocol.Login{Method: "m"})
+	errs["login"] = login.Next().Error
+	login.Close()
+	s := ext.Generate(ctx, account, llm.Request{Model: "m"})
+	errs["generate"] = s.Next().Error
+	s.Close()
+	for op, e := range errs {
+		switch {
+		case e == nil || e.Code != llm.CodeExtensionProtocol:
+			t.Errorf("%s: %+v; want a protocol error", op, e)
+		case strings.Contains(e.Message, key) || strings.Contains(e.Message, setting):
+			t.Errorf("%s: the protocol error holds the credential or the settings secret: %q", op, e.Message)
+		case !strings.Contains(e.Message, protocol.Redacted):
+			t.Errorf("%s: the protocol error does not say what was removed: %q", op, e.Message)
+		}
 	}
 }
 

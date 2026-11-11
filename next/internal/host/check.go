@@ -32,11 +32,11 @@ func (e *Extension) Check(ctx context.Context, account protocol.Account) (*proto
 	defer stop()
 	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: protocol.OpCheck, Account: &account}
 	if err := protocol.WriteFrame(conn, call); err != nil {
-		return nil, callError(ctx, e, err)
+		return nil, callError(ctx, e, redact, err)
 	}
 	var r protocol.Reply
 	if err := protocol.ReadFrame(conn, &r); err != nil {
-		return nil, callError(ctx, e, err)
+		return nil, callError(ctx, e, redact, err)
 	}
 	switch {
 	case r.Type == protocol.TypeCheckResult && r.Check != nil:
@@ -44,7 +44,7 @@ func (e *Extension) Check(ctx context.Context, account protocol.Account) (*proto
 	case r.Type == llm.EventError && r.Error != nil:
 		return nil, redact.Event(r.Event).Error
 	}
-	return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a check call", e.manifest.ID, r.Type)}
+	return nil, redacted(redact, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a check call", e.manifest.ID, r.Type)})
 }
 
 // Check runs a check call, starting the program first if it is idle. The caller holds a lease
