@@ -791,6 +791,20 @@ What changes in a request:
   parameters gets an empty object schema. A request with more than 200 tools keeps the first 200,
   the most xAI accepts in one request.
 - A custom tool call and its output are sent as a function call and a function call output.
+- Codex's `apply_patch` custom tool is sent as a function whose one argument, `input`, holds the
+  patch text: its description tells the model so and keeps the client's grammar, its history calls
+  carry the text in `input` (a call whose input is not a string is an invalid request), and a
+  `tool_choice` that names it names a function. A request that declares `apply_patch` more than
+  once keeps the first declaration. xAI's function call to it goes back to a Responses client as
+  the custom tool call it expects: an added item, input events carrying the patch text as it
+  arrives, the end of the input, the done item and the final response's output all show a
+  `custom_tool_call` with the text as its `input`. The events keep xAI's sequence numbers. Arguments
+  that are not one `input` string end the reply with an upstream error that does not repeat them,
+  as do arguments of more than 16 MiB for one call or 32 MiB for the calls of one reply, white space
+  included (the extension keeps the patch text and not the arguments). A call that has its
+  arguments but no done event is finished when the reply ends, and is in the final output.
+  Only a Responses client can declare a custom tool, so only its reply is turned back; today's core
+  does not turn a Chat Completions client's `apply_patch` custom tool back either.
 - `store` is false unless the client set it: xAI keeps responses by default, and with
   `previous_response_id` removed a kept response is never used again. `include` asks for
   `reasoning.encrypted_content`, which carries a reasoning model's thinking to the next turn
@@ -826,11 +840,10 @@ and creates no account or model cooldown; a 404 naming a missing model is scoped
 Not built, and why:
 
 - Namespace tools (from the Codex app) are sent as the client wrote them. Today's core folds them
-  into functions and restores the names in the reply. That needs the reply side, which this
-  extension does not have yet.
-- An `apply_patch` custom tool is not wrapped in an `input` field, and its call is not restored
-  on the way back. Today's core does both, so a Codex `apply_patch` tool does not work through this
-  extension yet.
+  into functions and restores the names in the reply. The reply side exists now, for `apply_patch`
+  only; an `apply_patch` declared inside a namespace is not rewritten either.
+- A custom tool other than `apply_patch` is sent as a function with no input field, and its call
+  comes back as a function call, as today's core does it; a client cannot run it from that call.
 - Today's core sends an empty `instructions`, a string input as a list, and tool defaults
   (`tool_choice`, `parallel_tool_calls`, `strict`, `additionalProperties`) on every Responses
   request, through its Codex translator. These are not rules about xAI, so this extension does not
