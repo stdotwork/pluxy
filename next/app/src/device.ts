@@ -69,6 +69,18 @@ async function reply<T>(cmd: string, args?: Record<string, unknown>): Promise<Re
   }
 }
 
+/** Applies only the newest of the replies it is given, in the order it was given them: a reply
+ * that comes after a newer one's is dropped. */
+export function newest<T>(apply: (value: T) => void): (reply: Promise<T>) => void {
+  let n = 0;
+  return (reply) => {
+    const mine = ++n;
+    reply.then((v) => {
+      if (mine === n) apply(v);
+    });
+  };
+}
+
 export const device = {
   list: () => reply<DeviceCatalog>("device_list"),
   registries: () => reply<DeviceRegistry[]>("device_registries"),

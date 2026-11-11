@@ -13,7 +13,7 @@ import defaultTheme from "../../ui/themes/default.json";
 import paper from "../../ui/themes/paper.json";
 import terminal from "../../ui/themes/terminal.json";
 import { ConnectionPage } from "./connection";
-import { type DeviceCatalog, device } from "./device";
+import { type DeviceCatalog, device, newest } from "./device";
 import { devicePage } from "./devicePage";
 import { appHost, type Connection, connectionGet } from "./host";
 import { NativeExtensionPage } from "./nativePage";
@@ -59,16 +59,19 @@ function App(props: { initial: Connection }) {
     setGeneration((n) => n + 1);
   };
   const host = useMemo(() => appHost(conn, changed), [conn]);
-  // This device's catalog: reloaded when the native side says it changed.
+  // This device's catalog: reloaded when the native side says it changed, keeping the newest
+  // load's answer.
   const [catalog, setCatalog] = useState<DeviceCatalog>();
-  const loadDevice = useCallback(() => {
-    device.list().then((r) => {
-      if (r.body) setCatalog(r.body);
-    });
-  }, []);
+  const [applyDevice] = useState(() =>
+    newest<DeviceCatalog | undefined>((c) => {
+      if (c) setCatalog(c);
+    }),
+  );
+  const loadDevice = useCallback(() => applyDevice(device.list().then((r) => r.body)), [applyDevice]);
   useEffect(() => {
-    loadDevice();
+    // Listening first: a change made while the first load runs loads again.
     const off = listen("pluxy-device", loadDevice);
+    off.then(loadDevice, loadDevice);
     return () => {
       off.then(
         (f) => f(),
