@@ -45,6 +45,12 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `e2e/` | Black-box tests that drive the built core over HTTP. |
 | `corpus/` | Differential test corpus: cases replayed against this core and today's `core/`, with listed exceptions ([README](corpus/README.md)). |
 
+Go extensions build each upstream client's transport with `sdk.Upstream(base)`, where `base` is
+their configured `*http.Transport`. This includes login, token refresh and WebSocket handshake
+clients. The wrapper currently delegates unchanged to that transport. Build requests with the
+handler's context: it carries core's cancellation and `sdk.UpstreamInfo(ctx)`, which exposes the
+account ID and settings, request model and native format, and operation, without the credential.
+
 ## Run it
 
 ```bash

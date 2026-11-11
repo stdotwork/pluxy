@@ -58,6 +58,7 @@ var loginMethods = []protocol.LoginMethod{
 // model request. It follows no redirect: following a 307 or 308 would send the request body (a
 // refresh token, or an authorization code and its verifier) wherever the redirect points.
 var authClient = &http.Client{
+	Transport:     sdk.Upstream(http.DefaultTransport.(*http.Transport).Clone()),
 	Timeout:       30 * time.Second,
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 }
