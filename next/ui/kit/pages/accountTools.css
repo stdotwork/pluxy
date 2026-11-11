@@ -1,0 +1,14 @@
+@layer kit {
+  .account-tools {
+    margin-block-start: calc(var(--px-space-unit) * 4);
+    overflow-wrap: anywhere;
+  }
+  .account-tools h3,
+  .account-tools h4 {
+    margin: 0;
+  }
+  .account-tools pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+}
