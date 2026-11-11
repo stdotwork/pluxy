@@ -19,12 +19,19 @@ fn env(name: &str) -> Result<String, String> {
     std::env::var(name).map_err(|_| format!("{name} is not set"))
 }
 
+/// Clicks the element selector names: a button, input or link itself, otherwise the button
+/// inside it (the kit's buttons sit in a marked wrapper), once it is there and enabled. Fails
+/// when there is still nothing to click.
 fn click(main: &Webview, selector: &str) -> Result<(), String> {
-    main.eval(format!(
-        "(e => (e.matches('button') ? e : e.querySelector('button')).click())(document.querySelector({}))",
+    let js = format!(
+        "(e => {{ const t = e?.matches('button, input, a') ? e : e?.querySelector('button'); \
+         if (!t || t.disabled) return false; t.click(); return true; }})(document.querySelector({}))",
         json!(selector)
-    ))
-    .map_err(|e| e.to_string())
+    );
+    wait_for(&format!("something to click at {selector}"), || {
+        eval(main, &js).filter(|v| v == true)
+    })
+    .map(|_| ())
 }
 
 /// A data attribute of the first element matching selector, once it equals want.
