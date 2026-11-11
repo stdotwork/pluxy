@@ -141,6 +141,8 @@ most 1 MiB, 30 seconds. The last good feed is kept in `release-feed.json` in the
 folder with the time it was read, and shown again after a restart. When a check fails (offline,
 an error answer, a feed the app refuses) the page says why and keeps showing the last good feed
 with that time. A feed with any bad release is refused whole. Changing the address drops the copy.
+Only the latest check of the current feed is taken: an earlier check that finishes later, or one
+started before a feed change (even back to the same address), is ignored.
 
 The window gets only versions, channels, dates and whether a release has notes or a notes
 address; never notes text or a notes address. Each release's notes open in a webview of their

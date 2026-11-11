@@ -60,23 +60,17 @@ pub async fn release_check(webview: Webview) -> Result<View, String> {
     trusted(&webview)?;
     let app = webview.app_handle().clone();
     blocking(move || {
-        let source = app
-            .state::<App>()
-            .releases
-            .lock()
-            .unwrap()
-            .settings()
-            .source
-            .clone();
-        let Some(source) = source else {
+        let check = app.state::<App>().releases.lock().unwrap().begin_check();
+        let Some(check) = check else {
             return Err("No release feed is set.".to_string());
         };
-        let read = release::fetch(&source, &roots());
+        // Read without the lock; a check started later, or a feed change, wins over this one.
+        let read = release::fetch(&check.source, &roots());
         app.state::<App>()
             .releases
             .lock()
             .unwrap()
-            .checked(&source, read);
+            .checked(&check, read);
         Ok(view(&app))
     })
     .await?

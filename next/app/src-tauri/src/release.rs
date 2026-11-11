@@ -348,6 +348,18 @@ pub struct Releases {
     problem: Option<Problem>,
     pub change: Option<SourceChange>,
     revision: u64,
+    /// Bumped by each applied feed change, so a check of an earlier feed is never taken, even
+    /// when the address is the same again.
+    source_revision: u64,
+    /// The latest check started: only its result is taken.
+    checks: u64,
+}
+
+/// A check started by begin_check; its result counts only if it is still the latest one.
+pub struct Check {
+    pub source: String,
+    source_revision: u64,
+    check: u64,
 }
 
 /// The file at path when it holds at most limit bytes; never reads more than limit + 1.
@@ -401,6 +413,8 @@ impl Releases {
             problem: None,
             change: None,
             revision: 0,
+            source_revision: 0,
+            checks: 0,
         };
         r.cached = r.load_cache();
         r
@@ -480,17 +494,35 @@ impl Releases {
             ..self.settings.clone()
         };
         self.save(s)?;
+        self.source_revision += 1;
         self.cached = None;
         self.problem = None;
         let _ = fs::remove_file(&self.cache_path);
         Ok(())
     }
 
-    /// Takes a feed read for source, or the reason it could not be read. A bad feed, or a
-    /// problem, leaves the last good copy in place.
-    pub fn checked(&mut self, source: &str, read: Result<Vec<u8>, Problem>) {
-        if self.settings.source.as_deref() != Some(source) {
-            return; // the feed changed while this check ran
+    /// Takes the feed a check read, or the reason it could not be read, if that check is still
+    /// the latest of the current feed. A bad feed, or a problem, leaves the last good copy.
+    /// Starts a check of the current feed, if there is one.
+    pub fn begin_check(&mut self) -> Option<Check> {
+        let source = self.settings.source.clone()?;
+        self.checks += 1;
+        Some(Check {
+            source,
+            source_revision: self.source_revision,
+            check: self.checks,
+        })
+    }
+
+    pub fn checked(&mut self, check: &Check, read: Result<Vec<u8>, Problem>) {
+        let source = check.source.as_str();
+        // A later check was started, or the feed changed (even back to this address) while this
+        // check ran: its result is stale.
+        if check.check != self.checks
+            || check.source_revision != self.source_revision
+            || self.settings.source.as_deref() != Some(source)
+        {
+            return;
         }
         let feed = read.and_then(|b| {
             parse_feed(&b).map_err(|e| Problem {
@@ -762,7 +794,7 @@ mod tests {
             .check_source(Some("https://feed.example/feed.json"))
             .unwrap();
         r.apply_source(src.clone(), r.revision()).unwrap();
-        let src = src.unwrap();
+        let src = r.begin_check().unwrap();
         r.checked(&src, Ok(FEED.as_bytes().to_vec()));
         let v = r.view("0.1.0", Some("dev".into()));
         assert_eq!(v.app.latest.as_ref().unwrap().version, "0.2.0");
@@ -770,6 +802,7 @@ mod tests {
         assert_eq!(v.core.latest, None);
         assert_eq!(v.core.installed.as_deref(), Some("dev"));
         let at = v.checked_at.unwrap();
+        let src = r.begin_check().unwrap();
         r.checked(
             &src,
             Err(Problem {
@@ -781,6 +814,7 @@ mod tests {
         assert_eq!(v.checked_at, Some(at));
         assert!(v.problem.unwrap().offline);
         assert_eq!(v.app.latest.unwrap().version, "0.2.0");
+        let src = r.begin_check().unwrap();
         r.checked(&src, Ok(b"{\"format\":1,\"releases\":[{}]}".to_vec()));
         assert_eq!(r.view("0.1.0", None).app.latest.unwrap().version, "0.2.0");
         r.set_channel(Channel::Preview).unwrap();
@@ -799,6 +833,43 @@ mod tests {
         r3.apply_source(other, r3.revision()).unwrap();
         assert_eq!(r3.view("0.1.0", None).checked_at, None);
         assert_eq!(open().view("0.1.0", None).checked_at, None);
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn only_the_latest_check_of_the_current_feed_counts() {
+        let d = dir();
+        let mut r = Releases::open(d.join("release.json"), d.join("release-feed.json"));
+        let a = r.check_source(Some("https://a.example/feed.json")).unwrap();
+        r.apply_source(a.clone(), r.revision()).unwrap();
+        // Two checks overlap; the later one finishes first. The earlier one's failure does not
+        // replace its result.
+        let earlier = r.begin_check().unwrap();
+        let later = r.begin_check().unwrap();
+        r.checked(&later, Ok(FEED.as_bytes().to_vec()));
+        let offline = || {
+            Err(Problem {
+                offline: true,
+                message: "offline".into(),
+            })
+        };
+        r.checked(&earlier, offline());
+        let v = r.view("0.1.0", None);
+        assert_eq!(v.problem, None);
+        assert_eq!(v.app.latest.unwrap().version, "0.2.0");
+        // A, then B, then A again: a check started under the first A is not taken.
+        let stale = r.begin_check().unwrap();
+        let b = r.check_source(Some("https://b.example/feed.json")).unwrap();
+        r.apply_source(b, r.revision()).unwrap();
+        r.apply_source(a, r.revision()).unwrap();
+        r.checked(&stale, Ok(FEED.as_bytes().to_vec()));
+        let v = r.view("0.1.0", None);
+        assert_eq!(v.checked_at, None);
+        assert_eq!(v.app.latest, None);
+        // A check started now counts.
+        let now = r.begin_check().unwrap();
+        r.checked(&now, Ok(FEED.as_bytes().to_vec()));
+        assert_eq!(r.view("0.1.0", None).app.latest.unwrap().version, "0.2.0");
         fs::remove_dir_all(d).unwrap();
     }
 
