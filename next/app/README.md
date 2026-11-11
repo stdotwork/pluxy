@@ -52,12 +52,18 @@ profile, with its own app and core.
 
 Before anything else, the app takes an exclusive lock on `instance/lock` in the data folder
 (`flock`: the system releases it when the app ends, however it ends, so a killed app leaves nothing
-to recover) and listens on `instance/activate.sock` there. The folder, the lock and the socket are
-readable by your user only. A later launch sends the socket one fixed message; the first app
-accepts only a connection from the same user (peer credentials), reads at most 64 bytes for at
-most 2 seconds and ignores anything but that message. The launch exits once the first app has
-shown its window, or fails with a message on stderr if the first does not answer within 20
-seconds. A socket a killed app left behind is removed by the next app, which holds the lock.
+to recover). The folder must be your user's and not a link; the lock is opened inside it without
+following a link, and used only if it is a plain file of yours with mode 600. The app then listens
+on a socket in a short folder of yours: `pluxy-app/` in `XDG_RUNTIME_DIR`, else `pluxy-app-<uid>/`
+in the temporary folder, so a long data folder path does not matter. The socket's name is a digest
+of the data folder, and the app writes its path to `instance/address`. The folders, the lock, the
+address and the socket are readable by your user only. A later launch reads the address, connects
+without blocking, checks the socket is your user's, and sends it one fixed message; the first app
+accepts only a connection from the same user (peer credentials), reads at most 64 bytes from each
+for at most 2 seconds, serves up to 32 at once, and ignores anything but that message. The launch
+exits once the first app has shown its window, or fails with a message on stderr if the first does
+not answer within 20 seconds, or at once if the first could not listen. A socket a killed app left
+behind is removed by the next app, which holds the lock.
 The lock is not inherited by the app's core.
 
 ## Commands
@@ -191,10 +197,12 @@ no web process, and that quitting stops only the app's own core. Then, in a sess
 (`native/instances-session.ts`), it launches the app again and again on one profile and checks
 that each later launch exits 0 within 10 seconds, starts no app or core of its own (it counts the
 app and core processes), and has the first show its window, also after the window was hidden and
-after it was closed to the tray; that a launch with other `HOME` and `XDG_*` folders is an app and
+after it was closed to the tray; that the socket is in the runtime folder, where `instance/address`
+says; that a launch with other `HOME` and `XDG_*` folders is an app and
 core of its own; that after the first app is killed with SIGKILL (its lock file and socket stay)
 the next launch becomes the app, starts its core and is the one a later launch raises; and that
-the socket is gone when the app quits. The `native-test` feature is
+the socket and its address are gone when the app quits. The other profile's data folder is too long
+for a socket path, and a second launch of it still raises it. The `native-test` feature is
 for that test alone; release builds never have it.
 
 The same native run uses fixture actions (compiled only with `native-test`) and real X input

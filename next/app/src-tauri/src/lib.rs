@@ -484,8 +484,10 @@ pub fn run() {
                     }
                 };
             let raise = app.handle().clone();
-            if let Err(e) = instance.listen(move || raise_window(&raise)) {
-                // The lock still keeps a second app out; a later launch is told it cannot be raised.
+            if let Err(e) = instance.listen(&instance::socket_dirs(), move || raise_window(&raise))
+            {
+                // The lock still keeps a second app out; a later launch is told at once that this
+                // window cannot be raised.
                 eprintln!("pluxy-app: no way to raise this window from a later launch: {e}");
             }
             app.manage(instance);

@@ -38,7 +38,7 @@ fn holder() {
     let Start::First(held) = start(Path::new(&dir), Duration::from_secs(1)).unwrap() else {
         panic!("the holder is not the first");
     };
-    held.listen(|| {
+    held.listen(&[Path::new(&dir).parent().unwrap().join("run")], || {
         println!("activated");
         true
     })
@@ -105,13 +105,15 @@ fn a_launch_raises_the_holder_and_a_killed_holders_lock_is_recovered() {
     holder.0.kill().unwrap();
     holder.0.wait().unwrap();
     assert!(alive(sleeper), "the holder's child should outlive it");
-    assert!(dir.join("activate.sock").exists(), "a stale socket stays");
+    let socket = std::fs::read(dir.join("address")).unwrap();
+    let socket = Path::new(std::str::from_utf8(&socket).unwrap());
+    assert!(socket.exists(), "a stale socket stays");
 
     // The next launch takes over at once, though the child still runs: it never held the lock.
     let Start::First(taken) = start(&dir, Duration::from_secs(1)).unwrap() else {
         panic!("a dead holder's lock was not recovered");
     };
-    taken.listen(|| true).unwrap();
+    taken.listen(&[t.0.join("run")], || true).unwrap();
     assert!(matches!(
         start(&dir, Duration::from_secs(5)).unwrap(),
         Start::Raised
