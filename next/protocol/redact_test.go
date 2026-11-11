@@ -53,6 +53,31 @@ func TestRedactorEvent(t *testing.T) {
 	if ev.Error.Code != Redacted || ev.Error.Scope != Redacted {
 		t.Errorf("error code %q, scope %q", ev.Error.Code, ev.Error.Scope)
 	}
+	// A reply's format, its finish reason and an opaque item's format reach clients and logs too
+	// (core quotes an unexpected endpoint format): one core does not define that holds the
+	// credential is replaced whole, and a defined one is kept.
+	ev = r.Event(llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{Format: "fmt-sk-secret-123"}})
+	if ev.Response.Format != Redacted {
+		t.Errorf("response format %q", ev.Response.Format)
+	}
+	ev = r.Event(llm.Event{Type: llm.EventFinish, Finish: &llm.Finish{Reason: "why-sk-secret-123"}})
+	if ev.Finish.Reason != Redacted {
+		t.Errorf("finish reason %q", ev.Finish.Reason)
+	}
+	ev = r.Event(llm.Event{Type: llm.EventItemEnd, Opaque: &llm.Opaque{Format: "fmt-sk-secret-123", Data: "d"}})
+	if ev.Opaque.Format != Redacted {
+		t.Errorf("opaque format %q", ev.Opaque.Format)
+	}
+	short := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: "o"})
+	if ev := short.Event(llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{Format: llm.FormatOpenAIResponsesCompact}}); ev.Response.Format != llm.FormatOpenAIResponsesCompact {
+		t.Errorf("a defined response format became %q", ev.Response.Format)
+	}
+	if ev := short.Event(llm.Event{Type: llm.EventFinish, Finish: &llm.Finish{Reason: llm.FinishStop}}); ev.Finish.Reason != llm.FinishStop {
+		t.Errorf("a defined finish reason became %q", ev.Finish.Reason)
+	}
+	if ev := short.Event(llm.Event{Type: llm.EventItemEnd, Opaque: &llm.Opaque{Format: llm.FormatOpenAIResponses, Data: "d"}}); ev.Opaque.Format != llm.FormatOpenAIResponses {
+		t.Errorf("a defined opaque format became %q", ev.Opaque.Format)
+	}
 	// A defined code or scope is passed on as it is, even when a very short credential is part
 	// of it: routing acts on the exact value.
 	for _, key := range []string{"a", "it", "e"} {

@@ -595,7 +595,11 @@ var (
 	codes = set(llm.CodeInvalidRequest, llm.CodeAuth, llm.CodePermission, llm.CodeNotFound, llm.CodeRateLimit,
 		llm.CodeQuota, llm.CodeUnsupported, llm.CodeUpstream, llm.CodeUnavailable, llm.CodeCancelled, llm.CodeInternal,
 		llm.CodeExtensionCrashed, llm.CodeExtensionProtocol, llm.CodeExtensionUnavailable)
-	scopes = set(llm.ScopeRequest, llm.ScopeCredential, llm.ScopeModel, llm.ScopeEndpoint)
+	scopes   = set(llm.ScopeRequest, llm.ScopeCredential, llm.ScopeModel, llm.ScopeEndpoint)
+	finishes = set(llm.FinishStop, llm.FinishLength, llm.FinishToolCalls, llm.FinishContentFilter, llm.FinishOther)
+	formats  = set(llm.FormatOpenAIChat, llm.FormatOpenAIResponses, llm.FormatAnthropicMessages, llm.FormatGeminiGenerate,
+		llm.FormatOpenAIResponsesCompact, llm.FormatCodexAlphaSearch, llm.FormatGeminiInteractions,
+		llm.FormatOpenAIImagesGenerations, llm.FormatOpenAIImagesEdits, llm.OpaqueDevin)
 )
 
 func set(values ...string) map[string]bool {
@@ -615,9 +619,9 @@ func (r *Redactor) field(s string, known map[string]bool) string {
 }
 
 // Event returns ev with the credential removed from the text and upstream data it carries:
-// error messages, codes and scopes, every raw field, reasoning's opaque data, the translation
-// report, and the identifiers the upstream names the reply with (its id and model, tool call IDs,
-// the raw finish reason).
+// error messages, codes and scopes, every raw field, reasoning's opaque data and its format, the
+// translation report, the reply's format and finish reason, and the identifiers the upstream
+// names the reply with (its id and model, tool call IDs, the raw finish reason).
 // Generated content (deltas, tool names) is the reply itself and is left alone.
 func (r *Redactor) Event(ev llm.Event) llm.Event {
 	if r == nil || r.r == nil {
@@ -629,6 +633,7 @@ func (r *Redactor) Event(ev llm.Event) llm.Event {
 		resp.ID = r.String(resp.ID)
 		resp.Model = r.String(resp.Model)
 		resp.Raw = r.raw(resp.Raw)
+		resp.Format = r.field(resp.Format, formats)
 		if t := resp.Translation; t != nil {
 			tr := *t
 			tr.From, tr.To = r.String(tr.From), r.String(tr.To)
@@ -647,13 +652,13 @@ func (r *Redactor) Event(ev llm.Event) llm.Event {
 	}
 	if ev.Finish != nil {
 		f := *ev.Finish
-		f.RawReason = r.String(f.RawReason)
+		f.Reason, f.RawReason = r.field(f.Reason, finishes), r.String(f.RawReason)
 		ev.Finish = &f
 	}
 	ev.Usage = r.usage(ev.Usage)
 	if ev.Opaque != nil {
 		o := *ev.Opaque
-		o.Data = r.String(o.Data)
+		o.Format, o.Data = r.field(o.Format, formats), r.String(o.Data)
 		ev.Opaque = &o
 	}
 	if ev.Error != nil {
