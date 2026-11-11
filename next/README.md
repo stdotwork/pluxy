@@ -507,6 +507,18 @@ is moved into `anthropic-beta`. The client's own betas are never removed. Not bu
 `anthropic-beta-strip` and `anthropic-beta-append` settings, and the Claude Code beta profile
 today's core sends for clients it makes look like Claude Code.
 
+**Web search.** A Responses client's `web_search` tool becomes Claude's server web search tool
+(`web_search_20250305`, with its `name`, `max_uses`, `filters.allowed_domains` and `user_location`;
+none when `external_web_access` is `false`), as today's core sends it. Claude's `server_tool_use`
+and `web_search_tool_result` blocks come back as one `web_search_call` item with the query, status
+and results (each hit as Claude sent it, so its `encrypted_content` survives); a search Claude left
+without results when it paused the turn (`pause_turn`) stays `in_progress`. A replayed
+`web_search_call` goes back as the two blocks, in the assistant message around it; a paused search
+at the end of the history goes back as its `server_tool_use` alone, so Claude carries on. Chat
+clients get the text without the search blocks, as today. Not built: citations (today's core gives
+Claude's `citations` to a Responses client as the text's `annotations` and sends them back), the
+web search result cache and Codex's tool search on Claude.
+
 **Tool shapes.** A translated request's tools get the shapes Messages takes, as today's core
 gives them: a function name with characters other than letters, digits, `_` and `-`, or longer than
 64, is sent with each other character as `_` and cut to 64 (two names that would come out the same
@@ -779,6 +791,39 @@ What changes in a request:
   parameters gets an empty object schema. A request with more than 200 tools keeps the first 200,
   the most xAI accepts in one request.
 - A custom tool call and its output are sent as a function call and a function call output.
+- Codex's `apply_patch` custom tool is sent as a function whose one argument, `input`, holds the
+  patch text: its description tells the model so and keeps the client's grammar, its history calls
+  carry the text in `input` (a call whose input is not a string is an invalid request), and a
+  `tool_choice` that names it names a function. A request that declares `apply_patch` more than
+  once keeps the first declaration. xAI's function call to it goes back to a Responses client as
+  the custom tool call it expects: an added item, input events carrying the patch text as it
+  arrives, the end of the input, the done item and the final response's output all show a
+  `custom_tool_call` with the text as its `input`. The events keep xAI's sequence numbers. Arguments
+  that are not one `input` string end the reply with an upstream error that does not repeat them,
+  as do arguments of more than 16 MiB for one call or 32 MiB for the calls of one reply, white space
+  included (the extension keeps the patch text and not the arguments). A call that has its
+  arguments but no done event is finished when the reply ends, and is in the final output.
+  Only a Responses client can declare a custom tool, so only its reply is turned back; today's core
+  does not turn a Chat Completions client's `apply_patch` custom tool back either.
+- Namespace tools (from the Codex app, `{"type":"namespace","name":N,"tools":[...]}`) are sent as
+  functions, because xAI has no such tool. When the tools flattened are no more than 200, each
+  child is a function named `N__child` (a name that has the prefix, or starts with `mcp__`, keeps
+  its name), and `tool_search` children are left out. The count includes the `x_search` tool that
+  `inject_x_search` adds, as today's core counts it. With more than 200, each namespace is one
+  function named `N` whose arguments are `{"name": child, "arguments": {...}}` and whose
+  description lists the children with their schemas; folded namespaces come first when the tools
+  are cut to 200. A function call in the history that names a namespace, and a `tool_choice` that
+  does, are written the same way. xAI's call to such a function goes back to a Responses client as
+  the call to the child in its namespace, in the added item, the done item and the final response;
+  a folded namespace's call is unwrapped when its arguments name one of the namespace's children,
+  and stays a call to the namespace otherwise. A namespace declared more than once is one
+  namespace with the children of every declaration, each as its first declaration has it. A call
+  or a tool choice in a namespace goes to the namespace's function only when the namespace really
+  was folded, not to a plain function that has its name. Where a name repeats, the first tool stays.
+  An `apply_patch` function in a namespace is an ordinary function, not the patch tool.
+- The Codex app's `automation_update` tool (in the `codex_app` or `codex_apps` namespace) is sent
+  with parameters that accept any object, and `strict` false: with its own schema, a large `oneOf`
+  with `$ref` references, xAI accepts the request and sends no events.
 - `store` is false unless the client set it: xAI keeps responses by default, and with
   `previous_response_id` removed a kept response is never used again. `include` asks for
   `reasoning.encrypted_content`, which carries a reasoning model's thinking to the next turn
@@ -813,12 +858,14 @@ and creates no account or model cooldown; a 404 naming a missing model is scoped
 
 Not built, and why:
 
-- Namespace tools (from the Codex app) are sent as the client wrote them. Today's core folds them
-  into functions and restores the names in the reply. That needs the reply side, which this
-  extension does not have yet.
-- An `apply_patch` custom tool is not wrapped in an `input` field, and its call is not restored
-  on the way back. Today's core does both, so a Codex `apply_patch` tool does not work through this
-  extension yet.
+- Namespace tools in an `additional_tools` input item (Responses Lite) are sent as the client wrote
+  them, and so is an `apply_patch` declared inside a namespace. Today's core moves the first to
+  the tools list and handles the second.
+- The root-union schema rule of today's core (a function whose schema is a `oneOf` or `anyOf` with
+  `$ref` or non-object branches gets the permissive schema, and a union branch without a type gets
+  `object`) is built only for the Codex app's `automation_update`, which is what hangs xAI.
+- A custom tool other than `apply_patch` is sent as a function with no input field, and its call
+  comes back as a function call, as today's core does it; a client cannot run it from that call.
 - Today's core sends an empty `instructions`, a string input as a list, and tool defaults
   (`tool_choice`, `parallel_tool_calls`, `strict`, `additionalProperties`) on every Responses
   request, through its Codex translator. These are not rules about xAI, so this extension does not
@@ -1182,6 +1229,49 @@ later. Core asks an
 extension once per account and keeps the answer until the accounts change: a reload, or an
 account added, removed or signed in again.
 
+### Codex client catalog
+
+`GET /v1/models?client_version=0.153.0` returns the Codex client's catalog,
+`{"models": [...]}`, instead of the normal model list. The presence of `client_version`, even
+with an empty value, selects this reply before the Anthropic client check. Without that query
+parameter the lists above keep their usual shape.
+
+Core resolves the models served by accounts of `pluxy/codex` with the same exclusions, aliases
+and prefixes as the normal list. It sends one `codex.models` endpoint call containing the client
+version and each model's public and upstream names. The Codex extension loads its embedded
+catalog on the first such call and selects templates by upstream name. It removes
+`cpa_capabilities`, replaces `slug` with the public name and `display_name` when provided,
+and clears Codex-only options for names that a non-Codex account can also serve. The catalog
+keeps `minimal_client_version` from the template;
+clients below 0.144.0 receive reasoning levels only through `xhigh`, while empty or unparseable
+versions keep modern levels. Models without a template are omitted: a routing entry alone
+does not establish the capabilities the Codex client needs. The extension filters reasoning
+levels for older clients as today's core does. Catalog data stays in the extension program;
+core neither embeds it nor keeps a copy per account. No upstream request or remote refresh is
+made for this list.
+
+The call goes directly to the first enabled, usable Codex account in account order, with only
+its ID and no credential. It ignores cooldowns and concurrency limits, renews no credentials,
+records no routing result or usage event, and leaves account rotation alone. Model discovery
+uses saved credentials for plan metadata without renewing them. With no enabled, usable Codex
+account (including a configuration with only other extensions), the reply is 200
+`{"models":[]}`.
+
+To refresh the catalog by hand, from the repository root copy the reviewed catalog and rebuild
+the extension:
+
+```bash
+cp core/internal/registry/models/codex_client_models.json next/extensions/codex/client_models.json
+cd next
+go build -o extensions/codex/codex ./extensions/codex
+```
+
+Review the source and its changes before copying it, run the Codex catalog corpus and e2e tests,
+and reload core after replacing the extension program. The routing list in
+`extensions/codex/models.json` remains separate from this client metadata.
+
+### Account model names
+
 An account names its models with these fields, applied in this order:
 
 ```json
@@ -1481,6 +1571,23 @@ renamed `main-<time>.log` and a new one begins. `logs.max_total_size_mb` (today'
 first, `main.log` never; 0 (the default) is no cap. The cap is applied when a file is rotated, when a
 request log is written and when the setting changes. A change of either setting takes effect at the reload that makes it.
 
+Core also writes one access line when each client API request ends: after a streamed reply ends,
+and when a Responses WebSocket closes. It writes none for `/healthz`, the management API, the
+panel and its assets, or a path no route serves (a 404).
+
+```text
+200 | 1.234s | 127.0.0.1 | POST /v1/chat/completions | 20261109120000-3f9a0c2e5b7d4e18 | openai-main
+```
+
+The line is `<status> | <latency> | <client ip> | <METHOD> <path> | <trace id> | <account>`: the
+reply's status; the time the request took, to the millisecond (to the second above a minute); the
+client's address (the connection's peer, or the client a trusted proxy names, as in request logs);
+the method and the path only, never the query string (Gemini clients send their key in `?key=`),
+and no header or body; the reply's `X-CPA-TRACE-ID` and the account its last attempt went to, or
+`-` in either place when there is none, as for a request refused before routing. A reply of 400 or
+more is a warning: the line starts with `warning: `, like the other warnings, so `main.log` marks
+it `[warn ]`; every other line is `[info ]`.
+
 ```json
 {"logs": {"to_file": true, "max_total_size_mb": 100}}
 ```
@@ -1538,6 +1645,41 @@ extension, so request logs hold what the client sent and received.
 | `GET /v0/management/request-error-logs` | The error logs, newest first: `files`, each with `name`, `size` and `modified` (Unix seconds). |
 | `GET /v0/management/request-error-logs/{name}` | One error log, as a download. 400 for a name that is not an error log's as core writes them, 404 when there is none or the name is a link. |
 | `GET /v0/management/request-log-by-id/{id}` | The newest request log, plain or error, of the request with that trace ID (the `X-CPA-TRACE-ID` of its reply), as a download; 404 when there is none. |
+
+## Profiling pages
+
+Core can serve Go's profiling pages under `/debug/pprof/`: heap, goroutine and CPU profiles of
+the running core. They are off by default, and only a build made with the `pprof` build tag
+has them:
+
+```bash
+go build -tags pprof -o pluxy ./cmd/pluxy
+```
+
+Turn them on in `config.json`. `addr` defaults to `127.0.0.1:8316`:
+
+```json
+{"pprof": {"enable": true, "addr": "127.0.0.1:8316"}}
+```
+
+The pages are served on a listener of their own, at `addr`, and nowhere else: not on the
+client or management address. `addr` must be a loopback address: `127.0.0.0/8`, `::1` or
+`localhost`. Any other address fails the config load, and a reload that sets one is refused
+while the old config keeps running. Core logs the address it listens on when the listener
+starts. A reload that changes `enable` or `addr` starts, moves or stops the listener, without a
+restart.
+
+To read a heap profile from a running core:
+
+```bash
+go tool pprof http://127.0.0.1:8316/debug/pprof/heap
+```
+
+The index at `/debug/pprof/` lists every profile. A CPU profile of 30 seconds is
+`/debug/pprof/profile?seconds=30`.
+
+A default build with the setting on logs one line saying it has no profiling pages, and
+serves nothing on any address.
 
 ## Packages
 
@@ -1719,7 +1861,7 @@ are accepted silently.
 | `upstream.codex.upstream-request-compression`, `-min-bytes`, `upstream.codex.stream-bootstrap-buffering`, `stream-bootstrap-timeout` | | Later |
 | `upstream.codex.response-steering`, `upstream.codex.orphan-delegation-compatibility`, `oauth.providers.codex.header-defaults.*` (`codex-header-defaults`) | | Dropped: experimental or off by default, no need found |
 | `upstream.claude.header-defaults.*`, `disable-claude-cloak-mode`, `disable-cloaking-model-list`, `session-date-pin-days` (also `claude`, `claude-code`, `claude-header-defaults`), and the Claude keys' `cloak` and `fingerprint-profile` | This core never changes how a client presents itself. | Dropped: making other clients look like Claude Code is out of scope |
-| `upstream.claude.tool-search`, the Claude keys' `native-tool-search` | | Later |
+| `upstream.claude.tool-search`, the Claude keys' `native-tool-search` | | Dropped: Codex's tool search on Claude accounts, off by default with no panel or app control |
 | `rebuild-mid-system-message` (Claude keys) | The account's `rebuild_mid_system_message`. | Supported |
 | `upstream.xai.inject-x-search` (`oauth.providers.xai.inject-x-search`, `xai.inject-x-search`) | xAI accounts get `inject_x_search`; applies to API keys and imported Grok logins | Supported |
 | `experimental-cch-signing` (Claude keys) | | Dead |
@@ -1745,7 +1887,7 @@ are accepted silently.
 | `observability.logs.request-log` (`request-log`), `observability.logs.error-logs-max-files` (`error-logs-max-files`) | `logs.request_log` and `logs.error_logs_max_files`: [request logs](#request-logs). A negative count is the default, 10, as in today's core. | Supported |
 | `observability.usage.usage-statistics-enabled` (`usage-statistics-enabled`) | `usage.enabled`: the [usage record](#usage-statistics). Today's example config sets it to `false`, which turns the record off here too. | Supported |
 | `observability.usage.redis-usage-queue-retention-seconds` (`redis-usage-queue-retention-seconds`) | The record keeps requests by `usage.max_events` and `usage.max_age_ms`. | Dropped: it was how long a queued usage record waited for a reader that removed it; reading the record here removes nothing, and its default of 60 seconds would leave little to read |
-| `observability.pprof.*` (`pprof`) | | Dropped: a developer tool, off by default |
+| `observability.pprof.enable` (`pprof.enable`), `observability.pprof.addr` (`pprof.addr`) | `pprof.enable` and `pprof.addr`: the [profiling pages](#profiling-pages). Only a build with `-tags pprof` serves them; the default build logs that the setting does nothing. An address that is not loopback is refused. | Supported (in the `pprof` build) |
 | `models.catalog`, `models.codex-catalog`, `models.devin-catalog` | | Later |
 | `plugins.*` | Extensions are separate programs (packages), not libraries loaded into core. | Dropped: replaced by packages |
 | `credentials.*` (`credential-concurrency`, `credential-in-flight`) | | Dropped: only the Home control plane used them |

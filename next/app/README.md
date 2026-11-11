@@ -69,6 +69,8 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `sign_out` | Forgets the key (local and remote modes) |
 | `page_open`, `page_place`, `page_close` | Opens an extension page's webview over part of the window, moves it, closes it |
 | `page_send` | Passes the window's channel messages to a page's webview |
+| `confirmation_request` | Opens native review for an opaque action ID already prepared by native code; returns no approval or token |
+| `confirmation_settings` | Opens native settings to inspect and revoke exact remembered launches (Linux) |
 
 The window may also listen to the app's events. To add a command: add it to
 `command_names.rs`, to `generate_handler!` in `lib.rs`, and its `allow-<name>` permission to
@@ -91,7 +93,78 @@ panel does, and does the panel's side of the page's hello
 ([extension pages](../ui/extension-pages/README.md)). Its `/send` address is the webview's one
 way out: the native side tags each message with the webview it came from and passes it to the
 window, which answers with the kit's channel, bound to the extension core lists the page under.
-So a page gets the same checks, permissions and limits as in the panel, and never the key.
+Before forwarding, native code enforces the 256 KiB transport body, 64 KiB channel call,
+exact version-0 call schema and known methods. Each document gets one hello, 30 admitted calls
+per rolling second and eight calls awaiting answers. A call remains in flight until the native
+reply callback confirms delivery, or the page closes. Requests and replies carry the document's
+native generation; a second document cannot reconnect. Native subframe navigation detection is
+verified on Linux WebKit. Windows currently reports only top-level navigation through this callback;
+subframe closure there still depends on the wrapper's load notification and has not been verified.
+Direct frame requests use these same checks.
+
+One extension may open four pages, with 60 admitted calls per rolling second and 16 in flight
+across them. Closing pages preserves the package's recent rate budget. At most 16 page webviews
+and 64 recent package budgets are retained. Replies are limited to 2 MiB each, covering 50 settings with 4,096 runes even when each rune
+needs six JSON bytes. Pending call replies use their existing in-flight reservations; theme
+events retain one delivery and one replacement per page. Failed call deliveries send a small
+native error; if even that cannot reach the renderer, the channel closes. The wrapper sends a
+bounded FIFO of eight calls one at a time; hello and closed messages always enter that FIFO. Refusals return an HTTP status and, for bodies within the transport limit with a readable id,
+the matching channel error. Oversized transport bodies are rejected without scanning for an id.
+Permissions and extension settings still use the shared kit's channel. No page receives a key.
+
+## Native confirmations (Linux)
+
+Native code prepares each immutable action with its requester chain, executing package, full
+source/digest/signer/contract/generation, selected and resolved file identities, and launch recipe
+where applicable. The main window can ask to review that preparation's opaque ID. A GTK dialog
+shows the action and, for a native tool, “full access to your user account”. Only its native
+response handler issues approval. No IPC command accepts an approval result, gesture flag or token
+consumption request. Page webviews have no confirmation capability.
+
+The dialog offers **Remember this exact executable, argv and cwd**, unchecked by default for each
+launch review. Remembered launches are stored privately in `remembered-launches.json` next to
+`connection.json`. The tray's **Remembered launches…** menu opens native settings with individual
+revocation buttons. Approval binds the whole caller chain, executor, terminal adapter, ordered
+argv, opened cwd identity, environment-profile revision, reviewed environment changes and permitted
+secret-reference uses. Native callers must never put secret bytes in argv or settings.
+
+The settings file has a format version. Damaged, unversioned or unsupported settings are moved
+to a sibling `remembered-launches.json.corrupt-<time>` file. The app starts with no approvals,
+a native notice and a log message. Symlinks, files owned by another user and
+group/world-writable files are refused; remembering stays disabled if the unsafe file cannot be
+safely preserved. Newly created settings folders use mode 0700 and files use 0600. On open and
+save, an existing folder owned by this user is tightened to 0700 if group/world-writable; a folder
+owned by another user is refused. Disabled persistence hides Remember. If saving fails after
+confirmation, the one-time token is still issued and a native notice/log reports the failure.
+
+An executable is opened before checking its canonical path, device/inode, size, mtime, ctime and
+mode. SHA-256 is computed once for that metadata and cached in memory; unchanged metadata reuses
+it. A new app process hashes once before using persisted approvals. Metadata changes or same-path
+replacement require review again. A consumed token exposes the checked open executable and cwd
+handles for a later launcher to use with `fexecve` and `fchdir`. The executable handle is opened
+with `O_CLOEXEC`: in the child, a launcher must clear `FD_CLOEXEC` before `fexecve` of a `#!`
+script, or Linux returns `ENOENT`. The interpreter sees `/dev/fd/N` as the script's path.
+Wrapper scripts check only the script, not its interpreter or code it loads. This is a cooperative
+local-file check, not a defense against malicious same-user metadata manipulation.
+
+Each preparation records its native entry point's origin: Main, Tray, NativeUi, Page or Import.
+Page and Import origins cannot use remembered approval, even with a fresh native gesture; this
+rule is tested at the unit level. Import routing itself is separate work. Gesture construction
+is private to native handlers and fixtures, and a gesture expires after five seconds.
+
+Page Start uses the separate native entry point, always opens a fresh dialog, permits one pending
+confirmation per original package and one attempt per second, and shows a GTK notice with
+requester, action and outcome, including refusals. Page/Import pending entries have their own
+limit of 16; trusted requests have a separate limit of 64. Page dialogs focus Cancel and keep
+Confirm disabled for one second after mapping. Non-UTF-8 paths are refused before review;
+Unicode format characters (including bidi and zero-width characters), control characters and
+Pango line separators (U+2028/U+2029) are displayed as escaped Unicode.
+
+Import routing and real launchers are added separately; this module contains no launcher. Host
+callers must invalidate pending preparations/tokens when package, contract, environment or secret
+policy records change, and prepare a new action. Tokens and pending reviews expire after 60
+seconds, work once for their preparation, and fail on changed file identity or executable metadata.
+Revoking a remembered approval also invalidates its outstanding tokens.
 
 ## Build and check
 
@@ -118,8 +191,14 @@ started by `go run ./e2e/panelcore` from `next/`, on random loopback ports in te
 and runs it on a private X server (`xvfb-run`) with a private session bus (`dbus-run-session`),
 a fresh HOME and XDG folders, once in each mode. In each it checks that the window's webview
 reaches every command, that at the top of an extension page's webview Tauri refuses every app
-command and the plugin commands tried, that the app reaches no command from that webview, that
-nothing reaches the app from the page's frame, that the page webview covers the page area, that
+command and the plugin commands tried, and that no app command is reached from that webview
+or its frame. It also runs a test-only sandboxed frame
+that posts directly to the native scheme: over-rate, over-in-flight, oversize, unknown method,
+invalid schema, repeated hello, wrong generation, explicit close and frame navigation while
+the wrapper's close message is suppressed. A separate real HTTP pages-site probe records whether
+that frame can reach the scheme, and navigation of that real frame closes native admission. It compares native handler arrivals,
+admissions, forwarding and real core settings operations, with a successful call on the same page.
+It checks that the page webview covers the page area, that
 closing the window leaves no webview and
 no web process, and that quitting stops only the app's own core. The `native-test` feature is
 for that test alone; release builds never have it.
@@ -129,6 +208,19 @@ authenticate, bad keys and Cancel preserve the connection and saved settings, an
 keep choice controls persistence. Random keys are generated at runtime. The test inspects the
 main and page webviews' DOM, input values, storage and native callback/event payloads, and the
 app's stdout/stderr, for key canaries without passing those canaries to JavaScript.
+
+The same native run uses fixture actions (compiled only with `native-test`) and real X input
+from `xdotool` to confirm, cancel, opt into remembering, click a native Start button and revoke
+in native settings. It checks one-use token consumption and open handles, page command/message
+spoof refusal, exact native-gesture reuse without a dialog, different-chain review, changed
+executable metadata and same-path replacement review, revoked-token refusal, and page Start flood
+refusal with a visible host-owned notice. Unit tests cover action binding, cache reuse, persistence,
+expiry, cancellation, invalidation, gesture freshness, Page/Import origin denial, separate pending
+limits, superseded approvals, unsafe/corrupt settings and Unicode/path handling. A unit test forks
+a child and runs a fixture script through `fexecve`, checking `FD_CLOEXEC` behavior and the
+`/dev/fd/N` script path. The test prefers a target temporary folder and skips explicitly only
+when both it and the system temporary folder are mounted noexec. Native GUI fixture actions do
+not execute a program.
 
 Before the app, each run's session starts desktop services (`native/session.ts`, with the
 packages and paths in `native/services.ts`) and checks them for real; a missing or broken one
@@ -148,7 +240,7 @@ fails the run at setup, naming its package, and never skips:
 
 When the app has exited, the session stops what it started. On Ubuntu 24.04 the packages are
 `xdg-desktop-portal` (frontend, document portal, permission store), `xdg-desktop-portal-gtk`,
-`ayatana-indicator-application` and `squashfs-tools`; the document portal also needs FUSE
+`ayatana-indicator-application`, `squashfs-tools` and `xdotool`; the document portal also needs FUSE
 (`/dev/fuse`, `fusermount3`). CI installs them on a pinned `ubuntu-24.04` runner.
 
 ## Limits
@@ -172,6 +264,6 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
   icon.
 - The native test needs the desktop services above, and the pinned AppImage runtime from
   github.com (or a copy in its cache folder), so it does not run offline on a bare machine.
-- An extension page's frame can post messages to WebKit's message handler for the webview; Tauri
-  refuses them (the native test checks that no command is reached), but they are not filtered
-  before that.
+- Native admission bounds work after a scheme request reaches the handler. They do not bound
+  memory used by the browser engine before that point. Frames can also post to WebKit's IPC
+  handler; Tauri's capabilities refuse their commands before any app command runs.

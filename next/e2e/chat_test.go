@@ -238,9 +238,15 @@ func runCoreArgs(t *testing.T, cfg map[string]any, args ...string) (string, stri
 // arguments, and returns its base URL and its log.
 func runCoreFile(t *testing.T, path string, args ...string) (string, *coreLog) {
 	t.Helper()
+	return runCoreBin(t, filepath.Join(binDir, "pluxy"), path, args...)
+}
+
+// runCoreBin is runCoreFile for the program at bin, which may be built with other tags.
+func runCoreBin(t *testing.T, bin, path string, args ...string) (string, *coreLog) {
+	t.Helper()
 	logs := &coreLog{}
 	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, filepath.Join(binDir, "pluxy"), append([]string{"-config", path}, args...)...)
+	cmd := exec.CommandContext(ctx, bin, append([]string{"-config", path}, args...)...)
 	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
 	cmd.WaitDelay = 10 * time.Second
 	stderr, err := cmd.StderrPipe()

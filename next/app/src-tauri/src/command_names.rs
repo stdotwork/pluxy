@@ -11,4 +11,6 @@ pub const COMMANDS: &[&str] = &[
     "page_place",
     "page_close",
     "page_send",
+    "confirmation_request",
+    "confirmation_settings",
 ];

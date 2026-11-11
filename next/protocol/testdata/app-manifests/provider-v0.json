@@ -1,0 +1,11 @@
+{
+  "manifest_version": 0,
+  "id": "pluxy/codex",
+  "version": "0.1.0",
+  "protocol": [
+    0
+  ],
+  "programs": {
+    "linux/amd64": "bin/codex"
+  }
+}
