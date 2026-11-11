@@ -199,7 +199,7 @@ These stay stable within a theme contract version:
 | --- | --- |
 | `data-appearance="light"` or `"dark"` | Root element |
 | `data-nav`, `data-list`, `data-detail`, `data-width`, `data-tabs` | Root element, set to the active layout value |
-| `data-page="<page id>"` | Root element: `status`, `accounts`, `add-account`, `quota`, `config`, `extensions`, `themes`, or an extension page's ID |
+| `data-page="<page id>"` | Root element: `status`, `accounts`, `add-account`, `quota`, `logs`, `usage`, `config`, `extensions`, `themes`, or an extension page's ID |
 | `data-part="shell"` | The whole UI below the root |
 | `data-part="nav"` | The navigation |
 | `data-part="nav-group"` | A group of navigation entries under its label; `data-group` is `operate`, `gateway`, `observe`, `control` or `extensions` (the extensions' pages) |
@@ -221,6 +221,8 @@ These stay stable within a theme contract version:
 | `data-part="diff"` | A group of changed lines |
 | `data-part="diff-line"` | One diff line; context lines have no change attribute; `data-change` is `add` or `remove` |
 | `data-part="dialog"` | A dialog window |
+| `data-part="log"` | A core log or request log text view |
+| `data-part="log-line"` | One core log line; `data-level` is `info`, `warn` or empty for a line without a level |
 | `data-part="toolbar"` | A page's search, filters and actions |
 | `data-part="pager"` | Page size and previous/next controls |
 | `data-part="select"` | An item's batch selection checkbox |

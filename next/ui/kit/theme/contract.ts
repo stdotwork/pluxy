@@ -88,6 +88,8 @@ export const PARTS = [
   "diff",
   "diff-line",
   "dialog",
+  "log",
+  "log-line",
   "toolbar",
   "pager",
   "select",
