@@ -171,7 +171,9 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
         ))
         .map_err(|e| e.to_string())?;
         page.eval(format!("window.__TAURI_INTERNALS__.invoke('confirmation_request', {{action: {}}}).then(() => window.__confirmSpoof = 'accepted', e => window.__confirmSpoof = String(e))", serde_json::json!(id))).map_err(|e| e.to_string())?;
-        wait_for("page approval message delivery", || eval(page, "window.__approvalMessageSent ?? null").filter(|v| v == true))?;
+        wait_for("page approval message delivery", || {
+            eval(page, "window.__approvalMessageSent ?? null").filter(|v| v == true)
+        })?;
         let refused = wait_for("page refusal", || {
             eval(page, "window.__confirmSpoof ?? null").filter(|v| v.is_string())
         })?;
@@ -180,8 +182,13 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
             "page confirmation command was not refused",
         )?;
         page.eval("window.__TAURI_INTERNALS__.invoke('confirmation_consume', {action: 'forged', token: 'forged', approved: true}).then(() => window.__consumeSpoof = 'accepted', e => window.__consumeSpoof = String(e))").map_err(|e| e.to_string())?;
-        let refused = wait_for("page consume refusal", || eval(page, "window.__consumeSpoof ?? null").filter(|v| v.is_string()))?;
-        require(refused.as_str().is_some_and(|s| s != "accepted"), "page reached a consumption endpoint")?;
+        let refused = wait_for("page consume refusal", || {
+            eval(page, "window.__consumeSpoof ?? null").filter(|v| v.is_string())
+        })?;
+        require(
+            refused.as_str().is_some_and(|s| s != "accepted"),
+            "page reached a consumption endpoint",
+        )?;
         require(
             app.state::<crate::App>()
                 .confirmations
@@ -228,17 +235,28 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
         // Revoke the newest approval using a real button at a stable mnemonic, assigned below.
         key("pluxy remembered launches", "alt+r")?;
         wait_for("native revocation", || {
-            let st = app.state::<crate::App>(); let c = st.confirmations.lock().unwrap();
+            let st = app.state::<crate::App>();
+            let c = st.confirmations.lock().unwrap();
             (!c.issued.contains_key(&t)).then_some(())
         })?;
         require(consume(app, &t).is_err(), "revoked unconsumed token worked")?;
         key("pluxy remembered launches", "Escape")?;
         // Re-establish an exact approval, then prove page Start cannot consume it.
-        let id = ask(app, main, &a)?; let t = confirm(app, &id, true)?; consume(app, &t)?;
+        let id = ask(app, main, &a)?;
+        let t = confirm(app, &id, true)?;
+        consume(app, &t)?;
         let p = prepare(app, &a)?;
         let id = super::page_start(app, p)?;
         wait_for("page Start dialog", || window("pluxy native confirmation"))?;
-        require(app.state::<crate::App>().confirmations.lock().unwrap().issued.is_empty(), "page Start reused remembered approval")?;
+        require(
+            app.state::<crate::App>()
+                .confirmations
+                .lock()
+                .unwrap()
+                .issued
+                .is_empty(),
+            "page Start reused remembered approval",
+        )?;
         for _ in 0..10 {
             let p = prepare(app, &a)?;
             require(

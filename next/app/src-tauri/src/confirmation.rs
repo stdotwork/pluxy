@@ -165,9 +165,21 @@ impl Prepared {
         }
         Ok(())
     }
-    pub fn argv(&self) -> Option<&[String]> { self.exact.launch.as_ref().map(|l| l.argv.as_slice()) }
-    pub fn environment_revision(&self) -> Option<&str> { self.exact.launch.as_ref().map(|l| l.environment_revision.as_str()) }
-    pub(crate) fn notice(&self) -> String { format!("Requester: {}\nAction: {}", self.exact.chain[0].id, self.exact.what) }
+    pub fn argv(&self) -> Option<&[String]> {
+        self.exact.launch.as_ref().map(|l| l.argv.as_slice())
+    }
+    pub fn environment_revision(&self) -> Option<&str> {
+        self.exact
+            .launch
+            .as_ref()
+            .map(|l| l.environment_revision.as_str())
+    }
+    pub(crate) fn notice(&self) -> String {
+        format!(
+            "Requester: {}\nAction: {}",
+            self.exact.chain[0].id, self.exact.what
+        )
+    }
     pub fn review(&self) -> String {
         // JSON quoting makes argv boundaries, newlines and control characters unambiguous.
         let mut s = serde_json::to_string_pretty(&self.exact).expect("review JSON");
@@ -219,7 +231,9 @@ impl Gesture {
     // Real launcher gesture handlers are added with the launcher slice.
     #[cfg_attr(not(any(test, feature = "native-test")), allow(dead_code))]
     pub(crate) fn native_event() -> Self {
-        Self { created: Instant::now() }
+        Self {
+            created: Instant::now(),
+        }
     }
 }
 
@@ -435,14 +449,23 @@ impl Confirmations {
         p.prepared.check()?;
         let approval = if remember && p.prepared.exact.launch.is_some() {
             let id = crate::managed::random_key();
-            let mut approvals: Vec<_> = self.approvals.iter().filter(|a| a.exact != p.prepared.exact).cloned().collect();
+            let mut approvals: Vec<_> = self
+                .approvals
+                .iter()
+                .filter(|a| a.exact != p.prepared.exact)
+                .cloned()
+                .collect();
             approvals.push(Approval {
                 id: id.clone(),
                 exact: p.prepared.exact.clone(),
             });
             self.save(&approvals)?;
             self.approvals = approvals;
-            self.issued.retain(|_, t| t.approval.as_ref().is_none_or(|id| self.approvals.iter().any(|a| &a.id == id)));
+            self.issued.retain(|_, t| {
+                t.approval
+                    .as_ref()
+                    .is_none_or(|id| self.approvals.iter().any(|a| &a.id == id))
+            });
             Some(id)
         } else {
             None
@@ -465,7 +488,10 @@ impl Confirmations {
     }
     pub fn remembered(&mut self, p: Prepared, gesture: Gesture) -> Result<String, Box<Prepared>> {
         self.prune();
-        if gesture.created.elapsed() >= Duration::from_secs(5) || self.pending.len() >= 64 || p.check().is_err() {
+        if gesture.created.elapsed() >= Duration::from_secs(5)
+            || self.pending.len() >= 64
+            || p.check().is_err()
+        {
             return Err(Box::new(p));
         }
         let Some(approval) = self
@@ -512,7 +538,9 @@ impl Confirmations {
         })
     }
     /// Completion is available to native callers only and is removed when read.
-    pub fn take_result(&mut self, id: &str) -> Option<Result<Option<String>, String>> { self.results.remove(id) }
+    pub fn take_result(&mut self, id: &str) -> Option<Result<Option<String>, String>> {
+        self.results.remove(id)
+    }
     pub fn token_action(&self, token: &str) -> Option<&str> {
         self.issued.get(token).map(|t| t.action.as_str())
     }

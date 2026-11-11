@@ -73,13 +73,17 @@ pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> 
         let timed = completed.clone();
         // Closing/expiry cannot manufacture a confirm response. The engine checks its own clock.
         gtk::glib::timeout_add_local_once(LIFETIME, move || {
-            if timed.get() { return; }
+            if timed.get() {
+                return;
+            }
             if let Some(d) = expires.upgrade() {
                 d.response(gtk::ResponseType::Cancel);
             }
         });
         dialog.connect_response(move |d, response| {
-            if completed.replace(true) { return; }
+            if completed.replace(true) {
+                return;
+            }
             let st = app.state::<crate::App>();
             let mut c = st.confirmations.lock().unwrap();
             let result = c.finish(
@@ -93,9 +97,7 @@ pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> 
                 Ok(None) => "cancelled",
                 Err(_) => "expired, changed or revoked",
             };
-            let text = format!(
-                "{summary}\nOutcome: {outcome}"
-            );
+            let text = format!("{summary}\nOutcome: {outcome}");
             if c.results.len() >= 64 {
                 c.results.clear();
             }
@@ -104,7 +106,9 @@ pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> 
             notice(&app, text);
             d.hide();
             // No GTK state is queried after destroying this completed dialog.
-            unsafe { d.destroy(); }
+            unsafe {
+                d.destroy();
+            }
         });
         dialog.show_all();
     })
@@ -171,7 +175,12 @@ pub(crate) fn settings(app: &tauri::AppHandle) -> Result<(), String> {
             row.pack_start(&revoke, false, false, 4);
             rows.pack_start(&row, false, false, 4);
         }
-        dialog.connect_response(|d, _| { d.hide(); unsafe { d.destroy(); } });
+        dialog.connect_response(|d, _| {
+            d.hide();
+            unsafe {
+                d.destroy();
+            }
+        });
         dialog.show_all();
     })
     .map_err(|e| e.to_string())

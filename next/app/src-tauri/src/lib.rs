@@ -513,7 +513,11 @@ pub fn run() {
                 }
                 WindowEvent::Destroyed => {
                     #[cfg(target_os = "linux")]
-                    app.state::<App>().confirmations.lock().unwrap().invalidate();
+                    app.state::<App>()
+                        .confirmations
+                        .lock()
+                        .unwrap()
+                        .invalidate();
                     // Its webviews went with it.
                     app.state::<App>().pages.lock().unwrap().clear();
                     place::forget_all();
