@@ -17,6 +17,17 @@ async function chat(model: string): Promise<number> {
 const stat = (page: Page, name: string) => page.locator('[data-part="stat"]').filter({ has: page.getByText(name, { exact: true }) });
 
 test.beforeAll(async () => {
+  // A sign-in account serves the fake's models fake-model and server-error.
+  const started = await core.mgmt<{ login: { id: string } }>("POST", "/accounts", {
+    id: "dash-a",
+    extension: "test/alpha",
+    method: "api_key",
+    input: { api_key: "test-dash-a" },
+  });
+  expect(started.status).toBe(202);
+  await expect
+    .poll(async () => (await core.mgmt<{ login: { state: string } }>("GET", `/logins/${started.body.login.id}`)).body.login.state)
+    .toBe("done");
   for (const model of ["fake-model", "fake-model", "fake-model"]) expect(await chat(model)).toBe(200);
   expect(await chat("server-error")).toBeGreaterThanOrEqual(500);
 });
