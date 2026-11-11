@@ -721,6 +721,7 @@ sends them on every request of a login.
 | --- | --- |
 | `base_url` | Where xAI's API lives. Default `https://api.x.ai/v1`; requests go to `{base_url}/responses`. For a Grok login, the default means the Grok CLI's endpoint. |
 | `client_version` | Replaces the Grok CLI version a login's requests name (default 1.0.46). |
+| `inject_x_search` | Default `false`. Add xAI's native `x_search` tool when the request does not already have one, except when a forced hosted web search or image generation tool must be the only choice. Applies to API keys and Grok logins. |
 
 Every client format goes to xAI's Responses API. A Responses client's request passes through with
 the changes listed below. Chat Completions, Messages and Gemini clients are translated to
@@ -743,6 +744,16 @@ What changes in a request:
   `reasoning.encrypted_content`, which carries a reasoning model's thinking to the next turn
   without stored responses.
 - The `x-grok-conv-id` header is set to the request's `prompt_cache_key`, when the request has one.
+
+**X Search.** A client's native `{"type":"x_search"}` tool and its options go to xAI as
+written. With `inject_x_search`, the extension adds that tool once and also allows it in an
+`allowed_tools` selection. The final tools list keeps its first 200 entries. For requests using
+X Search, the extension hides its internal `x_user_search`, `x_semantic_search`,
+`x_keyword_search` and `x_thread_fetch` call traces, including their streamed deltas, and
+renumbers the remaining output indexes. The answer, citations, hosted search items and usage
+are kept. Client functions with those names are kept unless their call ID starts with
+`xs_call`; namespaced client calls are kept. Filtering applies to both JSON and streamed
+upstream replies and to every client format.
 
 Errors: 401, and a 403 whose body says the credential is bad, are authentication errors. Other 403
 replies are permission errors. A 429 that says the free usage is used up is a quota error, which
@@ -777,7 +788,7 @@ Not built, and why:
 - Checking the reasoning effort against each model's levels, and a default effort. Both need
   today's model catalog.
 - Image references, encrypted reasoning content, websockets, text to speech, image and video
-  generation, and the optional `x_search` tool.
+  generation.
 - For a Grok login: reading the Grok CLI's latest version from npm every 3 hours (set
   `client_version` when xAI asks for a newer CLI), the file name and legacy-file adoption today's
   core uses for its auth files, and opening the browser at sign-in.
@@ -1670,7 +1681,7 @@ are accepted silently.
 | `upstream.claude.header-defaults.*`, `disable-claude-cloak-mode`, `disable-cloaking-model-list`, `session-date-pin-days` (also `claude`, `claude-code`, `claude-header-defaults`), and the Claude keys' `cloak` and `fingerprint-profile` | This core never changes how a client presents itself. | Dropped: making other clients look like Claude Code is out of scope |
 | `upstream.claude.tool-search`, the Claude keys' `native-tool-search` | | Later |
 | `rebuild-mid-system-message` (Claude keys) | The account's `rebuild_mid_system_message`. | Supported |
-| `upstream.xai.inject-x-search` (`xai`) | | Later |
+| `upstream.xai.inject-x-search` (`oauth.providers.xai.inject-x-search`, `xai.inject-x-search`) | xAI accounts get `inject_x_search`; applies to API keys and imported Grok logins | Supported |
 | `experimental-cch-signing` (Claude keys) | | Dead |
 | `oauth.auth-dir` (`auth-dir`) | The folder `-import-auth` reads (see below). Core never reads or writes it while it runs; at each load it logs how many credential files there are not imported yet. | Supported |
 | `oauth.auth-auto-refresh-workers` (`auth-auto-refresh-workers`) | Each account is renewed shortly before it expires. | Dropped: no need for a pool size |
