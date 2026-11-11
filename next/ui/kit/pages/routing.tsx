@@ -148,9 +148,11 @@ function WeightEditor({ account, save }: { account: Account; save: (weight: numb
     focusByKey(refocus.current);
     refocus.current = "";
   }, [editing]);
-  const commit = (input: HTMLInputElement) => {
+  /** `restoreFocus`: the keyboard finished the edit, so focus goes back to the button; a blur leaves it where the user moved it. */
+  const commit = (input: HTMLInputElement, restoreFocus = false) => {
     if (closed.current || !input.reportValidity()) return;
     closed.current = true;
+    if (restoreFocus) refocus.current = focusKey(input);
     const weight = value === "" ? null : Number(value);
     setEditing(false);
     if (weight !== (account.weight ?? null)) save(weight);
@@ -182,7 +184,7 @@ function WeightEditor({ account, save }: { account: Account; save: (weight: numb
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
-                commit(e.currentTarget);
+                commit(e.currentTarget, true);
               }
               if (e.key === "Escape") {
                 closed.current = true;
