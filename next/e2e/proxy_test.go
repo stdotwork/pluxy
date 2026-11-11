@@ -354,8 +354,9 @@ func TestOutboundProxyPasswordStaysSecret(t *testing.T) {
 			"accounts": []any{key("own", "/own", socks.URL("socks5")), key("dead", "/dead", dead), key("inherits", "/inherits", "")},
 		},
 	})
-	var bodies []string
-	for _, id := range []string{"own", "dead", "inherits"} {
+	// ask sends a chat request pinned to account id and returns the status and the reply.
+	ask := func(id string) (int, string) {
+		t.Helper()
 		req, _ := http.NewRequest(http.MethodPost, base+"/v1/chat/completions",
 			strings.NewReader(`{"model":"m-proxy","messages":[{"role":"user","content":"hi"}]}`))
 		req.Header.Set("Authorization", "Bearer "+clientKey)
@@ -366,9 +367,14 @@ func TestOutboundProxyPasswordStaysSecret(t *testing.T) {
 		}
 		b, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		bodies = append(bodies, string(b))
-		if id == "dead" && resp.StatusCode < 400 {
-			t.Errorf("a request through a dead proxy: status %d", resp.StatusCode)
+		return resp.StatusCode, string(b)
+	}
+	var bodies []string
+	for _, id := range []string{"own", "dead", "inherits"} {
+		status, body := ask(id)
+		bodies = append(bodies, body)
+		if id == "dead" && status < 400 {
+			t.Errorf("a request through a dead proxy: status %d", status)
 		}
 	}
 	if len(up.under("/dead")) != 0 || len(up.under("/own")) == 0 || len(up.under("/inherits")) == 0 {
@@ -393,9 +399,6 @@ func TestOutboundProxyPasswordStaysSecret(t *testing.T) {
 	}
 	accounts, settings := read("/accounts"), read("/settings")
 	shown := map[string]string{"GET /config": read("/config"), "GET /accounts": accounts, "GET /settings": settings}
-	for i, b := range bodies {
-		shown["reply "+itoa(i)] = b
-	}
 	if !strings.Contains(accounts, `"proxy_url":"socks5://redacted@`+socks.addr+`"`) {
 		t.Errorf("GET /accounts does not show the account's proxy redacted: %s", accounts)
 	}
@@ -403,14 +406,64 @@ func TestOutboundProxyPasswordStaysSecret(t *testing.T) {
 		t.Errorf("GET /settings does not show the proxy redacted: %s", settings)
 	}
 
-	// Sending back the settings' proxy as shown keeps the password: requests still pass the proxy.
-	if code := manage(t, base, "PATCH", "/settings", map[string]any{"proxy-url": "http://redacted@" + httpProxy.addr}, nil); code != http.StatusOK {
+	// Sending back the settings' proxy as shown keeps the password: the next request through it
+	// still authenticates.
+	var patched json.RawMessage
+	if code := manage(t, base, "PATCH", "/settings", map[string]any{"proxy-url": "http://redacted@" + httpProxy.addr}, &patched); code != http.StatusOK {
 		t.Fatalf("PATCH /settings: status %d", code)
 	}
+	shown["PATCH /settings"] = string(patched)
 	if b, err := os.ReadFile(path); err != nil || !strings.Contains(string(b), httpProxy.URL("http")) {
 		t.Errorf("the config file lost the proxy's password: %s", b)
 	}
+	before, _ := httpProxy.seen()
+	status, body := ask("inherits")
+	bodies = append(bodies, body)
+	requests, creds := httpProxy.seen()
+	if !strings.Contains(body, "fake upstream") || len(requests) <= len(before) || len(creds) == 0 || creds[len(creds)-1] != proxyUser+":"+proxyPassword {
+		t.Errorf("after the same-address PATCH a request got status %d, %q; the proxy saw %d new requests, with credentials %q",
+			status, body, len(requests)-len(before), creds)
+	}
 
+	// Sending back the user-less address of another proxy does not carry the first one's user name
+	// and password to it: the setting becomes what was sent, and the second proxy never sees them.
+	other := newHTTPProxy(t, false)
+	patched = nil
+	if code := manage(t, base, "PATCH", "/settings", map[string]any{"proxy-url": "http://redacted@" + other.addr}, &patched); code != http.StatusOK {
+		t.Fatalf("PATCH /settings to another proxy: status %d", code)
+	}
+	shown["PATCH /settings to another proxy"] = string(patched)
+	settings = read("/settings")
+	shown["GET /settings after"] = settings
+	if !strings.Contains(settings, `"proxy-url":"http://redacted@`+other.addr+`"`) {
+		t.Errorf("GET /settings after the PATCH does not show the other proxy: %s", settings)
+	}
+	var stored struct {
+		ProxyURL string `json:"proxy_url"`
+	}
+	if b, err := os.ReadFile(path); err != nil || json.Unmarshal(b, &stored) != nil || stored.ProxyURL != "http://redacted@"+other.addr {
+		t.Errorf("the config file's proxy_url after the PATCH is %q, want the address that was sent without the first proxy's credentials (%v)", stored.ProxyURL, err)
+	}
+	first, _ := httpProxy.seen()
+	status, body = ask("inherits")
+	bodies = append(bodies, body)
+	requests, creds = other.seen()
+	if !strings.Contains(body, "fake upstream") || len(requests) == 0 {
+		t.Errorf("a request through the other proxy got status %d, %q; the proxy saw %d requests", status, body, len(requests))
+	}
+	for _, c := range creds {
+		if strings.Contains(c, proxyUser) || strings.Contains(c, proxyPassword) {
+			t.Errorf("the other proxy got the first proxy's credentials: %q", c)
+		}
+	}
+	if again, _ := httpProxy.seen(); len(again) != len(first) {
+		t.Errorf("the first proxy still got %d requests after the setting named another", len(again)-len(first))
+	}
+
+	shown["GET /config after"] = read("/config")
+	for i, b := range bodies {
+		shown["reply "+itoa(i)] = b
+	}
 	logs.mu.Lock()
 	shown["core's log"] = strings.Join(logs.lines, "\n")
 	logs.mu.Unlock()
@@ -427,8 +480,10 @@ func TestOutboundProxyPasswordStaysSecret(t *testing.T) {
 		t.Error("the logs folder holds no request log to check")
 	}
 	for where, s := range shown {
-		if strings.Contains(s, proxyPassword) {
-			t.Errorf("%s holds the proxy's password:\n%s", where, s)
+		for _, secret := range []string{proxyUser, proxyPassword} {
+			if strings.Contains(s, secret) {
+				t.Errorf("%s holds the proxy's user name or password %q:\n%s", where, secret, s)
+			}
 		}
 	}
 	if !strings.Contains(strings.Join(bodies, "\n"), "fake upstream") {
@@ -458,7 +513,7 @@ func TestOutboundProxyRefusesOtherSchemes(t *testing.T) {
 	if !errors.As(err, &exit) || strings.Contains(out, "listening on") {
 		t.Fatalf("core did not refuse an ftp proxy (%v):\n%s", err, out)
 	}
-	if !strings.Contains(out, "proxy_url") || !strings.Contains(out, "ftp://redacted@127.0.0.1:21") || strings.Contains(out, proxyPassword) {
+	if !strings.Contains(out, "proxy_url") || !strings.Contains(out, "(not a valid proxy URL)") || !strings.Contains(out, "must use http://") || strings.Contains(out, proxyPassword) || strings.Contains(out, proxyUser) {
 		t.Fatalf("core's refusal does not name the setting, or holds the password:\n%s", out)
 	}
 }

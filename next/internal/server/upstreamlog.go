@@ -81,7 +81,7 @@ func formatExchange(account string, x protocol.UpstreamExchange) []byte {
 	fmt.Fprintf(&b, "Account: %s\n", oneLine(account))
 	writeTime(&b, x.Request.TimeMs)
 	fmt.Fprintf(&b, "URL: %s\nMethod: %s\n", oneLine(upstreamURL(x.Request.URL)), oneLine(x.Request.Method))
-	writeUpstreamHeaders(&b, x.Request.Headers)
+	writeUpstreamHeaders(&b, x.Request.Headers, x.Request.HeadersLeftOut)
 	b.WriteString("\n")
 	writeBody(&b, x.Request.CapturedBody)
 	b.WriteString("\n\n=== UPSTREAM RESPONSE ===\n")
@@ -89,7 +89,7 @@ func formatExchange(account string, x protocol.UpstreamExchange) []byte {
 	case r != nil:
 		writeTime(&b, r.TimeMs)
 		fmt.Fprintf(&b, "Status: %d\n", r.Status)
-		writeUpstreamHeaders(&b, r.Headers)
+		writeUpstreamHeaders(&b, r.Headers, r.HeadersLeftOut)
 		b.WriteString("\n")
 		if r.Status == http.StatusSwitchingProtocols {
 			b.WriteString("[the connection switched protocols: its messages are not logged]")
@@ -126,32 +126,44 @@ func secretUpstreamName(name string) bool {
 	return sensitiveName(name) || protocol.SecretName(name)
 }
 
-// upstreamURL is raw without user name and password, secret query values masked.
+// unloggedURL stands for a URL that does not parse, which cannot be told apart from its secrets.
+const unloggedURL = "[URL not logged]"
+
+// upstreamURL is raw without user name and password, secret query values masked. A query that
+// does not parse (a bad escape, a ";") is masked whole, and a URL that does not parse is not
+// logged.
 func upstreamURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return raw
+		return unloggedURL
 	}
 	u.User = nil
-	if q := u.Query(); len(q) > 0 {
-		masked := false
-		for k := range q {
-			if secretUpstreamName(k) {
-				q[k] = []string{protocol.Redacted}
-				masked = true
-			}
+	if u.RawQuery == "" {
+		return u.String()
+	}
+	q, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		u.RawQuery = protocol.Redacted
+		return u.String()
+	}
+	masked := false
+	for k := range q {
+		if secretUpstreamName(k) {
+			q[k] = []string{protocol.Redacted}
+			masked = true
 		}
-		if masked {
-			u.RawQuery = q.Encode()
-		}
+	}
+	if masked {
+		u.RawQuery = q.Encode()
 	}
 	return u.String()
 }
 
 // writeUpstreamHeaders writes h as writeHeaders does, masking values by secretUpstreamName, up
-// to loggedHeaderBytes, then a line counting the header lines left out.
-func writeUpstreamHeaders(b *bytes.Buffer, h map[string][]string) {
-	written, left := 0, 0
+// to loggedHeaderBytes, then a line counting the header lines left out, those the extension left
+// out (leftOut) and those cut here.
+func writeUpstreamHeaders(b *bytes.Buffer, h map[string][]string, leftOut int) {
+	written, left := 0, max(0, leftOut)
 	for _, name := range slices.Sorted(func(yield func(string) bool) {
 		for k := range h {
 			if !yield(k) {

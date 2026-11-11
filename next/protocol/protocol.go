@@ -435,6 +435,11 @@ const (
 	CapturedEnd  = 96 << 10
 )
 
+// CapturedHeaderBytes bounds the header lines of one captured request or response: each line
+// counts its name, its value and 3 bytes (the ": " and the line end). Lines are taken in name
+// order; one that does not fit is left out and counted in HeadersLeftOut.
+const CapturedHeaderBytes = 16 << 10
+
 // UpstreamExchange is one upstream request and what came back.
 type UpstreamExchange struct {
 	Request UpstreamRequest `json:"request"`
@@ -451,6 +456,8 @@ type UpstreamRequest struct {
 	// URL is the whole URL, without user name and password, secret query values redacted.
 	URL     string              `json:"url"`
 	Headers map[string][]string `json:"headers,omitempty"`
+	// HeadersLeftOut counts the header lines left out of Headers (CapturedHeaderBytes).
+	HeadersLeftOut int `json:"headers_left_out,omitempty"`
 	CapturedBody
 }
 
@@ -460,6 +467,8 @@ type UpstreamResponse struct {
 	TimeMs  int64               `json:"time_ms,omitempty"`
 	Status  int                 `json:"status"`
 	Headers map[string][]string `json:"headers,omitempty"`
+	// HeadersLeftOut counts the header lines left out of Headers (CapturedHeaderBytes).
+	HeadersLeftOut int `json:"headers_left_out,omitempty"`
 	CapturedBody
 }
 
