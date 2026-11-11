@@ -3,6 +3,7 @@
 // the app is connected to. Keys are entered only in a native dialog.
 
 import { invoke } from "@tauri-apps/api/core";
+import { flushSync } from "preact/compat";
 import type { Feature, Host, Method, Reply } from "../../ui/kit/host";
 
 export type Mode = "managed" | "local" | "remote";
@@ -85,6 +86,8 @@ export function appHost(conn: Connection, changed: (c: Connection) => void): Hos
     },
     signOut() {
       signed = false;
+      // Remove Shell before it renders its browser sign-in form, including on a core 401.
+      flushSync(() => changed({ ...conn, signed_in: false }));
       invoke<Connection>("sign_out").then(changed, (e) =>
         changed({ ...conn, signed_in: false, error: `signing out: ${e}` }),
       );

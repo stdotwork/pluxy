@@ -211,6 +211,30 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
         return Err("Connection button did not sign in".into());
     }
 
+    // Sign-out must immediately return to native entry, never the kit's browser key form.
+    main.eval(
+        r#"window.__passwordSeen = false;
+      new MutationObserver(() => {
+        if (document.querySelector('input[type=password]')) window.__passwordSeen = true;
+      }).observe(document.body, {subtree: true, childList: true});
+      document.querySelector('button.signout').click();"#,
+    )
+    .map_err(|_| "could not sign out through the window")?;
+    wait_for("signed-out native entry", || {
+        eval(
+            main,
+            "document.querySelector('form[aria-label=Connection]') !== null",
+        )
+        .filter(|v| v == true)
+    })?;
+    if eval(
+        main,
+        "window.__passwordSeen || document.querySelector('input[type=password]') !== null",
+    ) != Some(json!(false))
+    {
+        return Err("sign-out exposed a webview key field".into());
+    }
+
     log(
         "keyentry",
         json!({"good": true, "bad_preserved": true, "cancel_preserved": true,
