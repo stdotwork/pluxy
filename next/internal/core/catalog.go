@@ -18,6 +18,6 @@ func catalog(exts map[string]*host.Managed) route.CatalogFunc {
 		if g == nil {
 			return nil, &llm.Error{Code: llm.CodeExtensionUnavailable, Message: fmt.Sprintf("extension %s does not run", a.Extension)}
 		}
-		return g.Models(ctx, protocol.Account{ID: a.ID, Settings: a.Settings, Credential: credential})
+		return g.Models(ctx, protocol.Account{ID: a.ID, Settings: a.Settings, Credential: credential, ProxyURL: a.ProxyURL, Headers: a.Headers})
 	}
 }

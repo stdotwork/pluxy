@@ -883,6 +883,23 @@ What changes in a request:
   or a tool choice in a namespace goes to the namespace's function only when the namespace really
   was folded, not to a plain function that has its name. Where a name repeats, the first tool stays.
   An `apply_patch` function in a namespace is an ordinary function, not the patch tool.
+  A custom `apply_patch` in a namespace, declared in the tools or in an `additional_tools` item, is
+  the patch tool of that namespace: it is sent as the patch function (`ns__apply_patch`, or as a
+  child described in the folded namespace's function), its history calls carry the text in
+  `input`, a `tool_choice` or an `allowed_tools` entry that names it names that function, and
+  xAI's call to it goes back as a `custom_tool_call` named `apply_patch` in its namespace, with
+  the same events as the top-level tool. A name belongs to its namespace, so a top-level
+  `apply_patch` and a namespace's are two tools. When one name is declared more than once, as
+  `ns__apply_patch` is for the child `apply_patch` of `ns`, the winner is the first, and a tool of
+  the tools list beats one of an `additional_tools` item, and a top-level tool beats a child, as in
+  today's core. For a folded namespace the child is known only from the call's arguments, so the
+  events of a call to that namespace are held until they name it, only for a namespace that has a
+  custom `apply_patch`. A call to the patch tool then shows the added item and the whole input
+  at the end of the arguments, with no input fragments, because the fragments are the wrapper's, not
+  patch text, and the client is never sent a `function_call` event for it. A call to another child
+  shows the same events as before, a little later, with the child's name in its added item. A
+  stream that opens with such a call, before `response.created`, ends with an upstream error,
+  since its first event cannot be held.
 - The tools of an `additional_tools` input item (how a Responses Lite client, the Codex app,
   declares tools) are moved to the end of the tools list and the item is removed, because xAI does
   not take that item. This happens before the rules above, so a namespace in an item is flattened
@@ -929,8 +946,6 @@ and creates no account or model cooldown; a 404 naming a missing model is scoped
 
 Not built, and why:
 
-- An `apply_patch` custom tool declared inside a namespace is sent as the client wrote it. Today's
-  core sends it as the patch function and turns xAI's call back.
 - The root-union schema rule of today's core (a function whose schema is a `oneOf` or `anyOf` with
   `$ref` or non-object branches gets the permissive schema, and a union branch without a type gets
   `object`) is built only for the Codex app's `automation_update`, which is what hangs xAI.
@@ -1252,6 +1267,68 @@ is known. `last_upstream_error` and the message's last error have credentials, t
 paths replaced, as today's core replaces them. A stream that has already started ends with the
 same error, and a Chat Completions stream then with `data: [DONE]`.
 
+### Outbound proxy
+
+`proxy_url` sends an extension's upstream traffic through a proxy (today's `proxy-url`): model
+requests, WebSocket connections, token renewals and logins alike. Set it at the top level for
+every account, or on an account for that one:
+
+```json
+{
+  "proxy_url": "socks5://user:password@proxy.example:1080",
+  "extensions": {"pluxy/codex": {"accounts": [
+    {"id": "work", "proxy_url": "http://proxy.example:3128", "...": "..."},
+    {"id": "home", "proxy_url": "direct", "...": "..."}
+  ]}}
+}
+```
+
+A value is an `http://`, `https://`, `socks5://` or `socks5h://` URL, with a user name and password
+when the proxy needs them, or `direct` or `none` for no proxy. An account's own value wins; one set
+to `direct` goes without a proxy even when the top-level one is set. A login that adds an account
+uses the `proxy_url` it names, else the top-level one, so the first sign-in goes through the proxy
+too. Any other value fails the load with a message. With a SOCKS5 proxy the proxy resolves host
+names, for `socks5` as for `socks5h`. Extensions run with a cleared environment, so
+`HTTP_PROXY` and `ALL_PROXY` never reach them; this is the only way to set a proxy.
+
+The user name and password are secret: the management API shows the URL with `redacted` in their
+place (`socks5://redacted@proxy.example:1080`), and they are removed from what extensions log and
+send back. An extension older than protocol 0.11 cannot use a proxy, so core does not send it the
+accounts that have one: their requests go to other accounts, and the error says why.
+
+### Upstream headers
+
+`headers` on an account adds HTTP headers to every upstream request of that account (today's
+`headers`), such as the key a gateway or relay in front of the provider asks for:
+
+```json
+{"extensions": {"pluxy/openai-compatible": {"accounts": [
+  {"id": "relay", "headers": {"X-Gateway-Key": "...", "X-Title": "pluxy"}, "...": "..."}
+]}}}
+```
+
+They go on the same traffic as the [outbound proxy](#outbound-proxy): model requests and their
+streams, WebSocket handshakes, token renewals, logins, model lists, checks and quota reads. A
+configured header replaces the extension's own value for that name (letter case aside); the
+extension's other headers stay. A value is sent as written: today's `$Header` (copy a header
+from the client's request) and `$CPA-SESSION-ID` are not supported. A login that adds an account
+uses the `headers` it names. `Host`, `Content-Length`, `Transfer-Encoding` and `Connection`, a
+name that is not a valid header name or is given twice (letter case aside), an empty value and a
+value with a line break fail the load with a message that names the header, never its value.
+A redirect to another host or scheme (`https` to `http`) than the request's first one carries
+the headers that are not secret (below) but not the secret ones, even one the provider set
+itself under that name, as an HTTP client leaves out `Authorization` there.
+`PATCH /accounts/{id}` with `headers` as an object replaces all the account's headers (one left
+out is removed), and with `null` or `{}` removes them all.
+
+The value of a header whose name is about authentication (it holds `auth`, `key`, `token`,
+`secret`, `cookie`, `session`, `password` or `signature`, letter case aside) is a secret, by the
+rule config redaction uses: `GET /config` and `GET /accounts` show the same placeholder in its
+place, a placeholder sent back keeps the value, and the value is removed from what extensions log
+and send back. Core writes no header value in its own logs or errors. An extension older than
+protocol 0.12 cannot send headers, so core does not send it the accounts that have them: their
+requests go to other accounts, and the error says why.
+
 ### Account checks
 
 When core starts, and when a reload adds or changes an account (its settings, its credential or
@@ -1412,7 +1489,8 @@ send it as a bearer token. With a management key set, the config may set no acco
 
 | Request | Does |
 | --- | --- |
-| `GET /accounts` | Lists every account (`source` `config` or `login`), its credential `kind`, `state` (`active`, or `reauth_required` when the provider refused the grant), `disabled`, `expires_at`, the last renewal error and the last [account check](#account-checks); its routing fields (`priority`, `weight`, `disable_cooling`, `max_concurrency`, `request_retry`, `prefix`, `models`, `excluded_models`, `model_alias`, `endpoint`); and what routing knows about it now: `cooldowns` (each live block's `scope`, `credential`, `model` with its `model`, or `endpoint`; `kind`, `rate_limit`, `quota` or `cooldown` for failures without a reset time; `until`; `backoff_level`; and the `error` that set it), `cooldown_until` (when the latest block on the whole account ends; model blocks do not count), `last_error` and `last_error_at` (the latest failure that set a block, until a request on the account that started after it succeeds; like a cooldown, it is not cleared by a request that started earlier, and a failure from a request that started before a success on the account sets none) and `active_requests`. An account that gets no requests (disabled, or waiting for a login) has no routing state. Never a secret. |
+| `GET /accounts` | Lists every account (`source` `config` or `login`), its credential `kind`, `state` (`active`, or `reauth_required` when the provider refused the grant), `disabled`, `expires_at`, the last renewal error and the last [account check](#account-checks); its routing fields (`priority`, `weight`, `disable_cooling`, `max_concurrency`, `request_retry`, `prefix`, `models`, `excluded_models`, `model_alias`, `endpoint`), its own `proxy_url`, with `redacted` in place of a user name and password, and its
+[`headers`](#upstream-headers), with a placeholder in place of each secret value; and what routing knows about it now: `cooldowns` (each live block's `scope`, `credential`, `model` with its `model`, or `endpoint`; `kind`, `rate_limit`, `quota` or `cooldown` for failures without a reset time; `until`; `backoff_level`; and the `error` that set it), `cooldown_until` (when the latest block on the whole account ends; model blocks do not count), `last_error` and `last_error_at` (the latest failure that set a block, until a request on the account that started after it succeeds; like a cooldown, it is not cleared by a request that started earlier, and a failure from a request that started before a success on the account sets none) and `active_requests`. An account that gets no requests (disabled, or waiting for a login) has no routing state. Never a secret. |
 | `POST /accounts` | Starts a login that adds an account: `{"id": "work", "extension": "pluxy/codex", "method": "device", "input": {...}, ...}` plus any account fields from the config (`settings`, `models`, `priority`, ...). `extension` names the extension that signs in and owns the account; it may be left out while only one extension runs. Replies 202 with the login, usually carrying its first prompt (a URL or a device code). |
 | `GET /logins/{id}` | The login's state (`pending`, `done`, `failed`, `cancelled`), prompt or error. |
 | `POST /logins/{id}/input` | `{"input": {...}}`: what the user entered for the prompt, such as the redirect URL of a browser login. |
@@ -1421,7 +1499,7 @@ send it as a bearer token. With a management key set, the config may set no acco
 | `POST /accounts/{id}/refresh` | Renews the account's credential now. |
 | `POST /vertex/import` | Adds a Vertex AI account from a Google service account key file, as today's `POST /v0/management/vertex/import` does: `multipart/form-data` with the key in `file` and an optional `location` (a form field, else a query parameter; default `us-central1`), at most 1 MiB in all. It runs the Gemini extension's [`service_account` login](#gemini) with the account ID `vertex-<project_id>` (`/`, `\` and `:` in the project ID become `_`, spaces `-`), the settings `vertex.project` and `vertex.location`, and the label `<project_id> (<client_email>)`, waits for it (one token fetch, at the key's `token_uri`) and answers once: 200 `{"status": "ok", "account", "project_id", "email", "location"}`. Errors have the usual `{"error": {"code", "message"}}` shape: 400 `file_required`, `invalid_json`, `project_id_missing` and `invalid_service_account` (also when the token endpoint refuses the key), 400 `invalid_request` for a location or project ID the extension refuses, 409 `conflict` for an account of that ID in the config, 413 for a larger request, 502 with the login's code (`unavailable`) when the token endpoint cannot be reached or fails, and 504 when it does not answer in 45 seconds. When a login added an account of that ID before, the import signs in to it again, so the key replaces the old one only when its `client_email` is the same service account (else 400 `invalid_request`, the account keeps its key) and a `location` the account does not have is a 409; today's core overwrote the file silently. It does not repair a key damaged by pasting (today's core rebuilds a mangled PEM); it takes the file Google gives. |
 | `POST /accounts/import` | Adds the accounts of one credential file of today's auth folder to the running core, read and added as [`-import-auth`](#importing-todays-auth-folder) reads and adds each file: `{"name": "<file name>.json", "content": "<the file's text>"}`. The content is the file itself, never a path on core's machine; `name` (a `.json` file name, no folder) gives the account ID, as the file's name does. The accounts serve at once, like an account a login adds. 200 `{"imported": [{"id", "extension", "ignored"}], "skipped": [...]}`: each account added, with the file's settings not supported yet that it left out (`ignored`), and why any other account of the file was skipped (a Codex file can hold two). Nothing added: 400 `invalid_request` for a file that is not JSON, of a type the import does not take or holding no token, with routing fields routing refuses once read (such as a `prefix` with a `/` inside, `a/b`; surrounding spaces and slashes are trimmed first), or a bad `name`; 409 `conflict` when the store or the config already has the account's ID, or a sign-in still running will take it (letter case aside); 413 for a file larger than 1 MiB. The message says why. Neither the reply nor core's log holds anything from the file but the account's ID. |
-| `PATCH /accounts/{id}` | `disabled` (`true` or `false`; disabled accounts get no requests) and any of the routing fields `priority`, `weight`, `disable_cooling`, `max_concurrency`, `request_retry`, `prefix`, `models`, `excluded_models` and `model_alias`, checked as the config's are; `null` sets one back to its default. A bad field changes nothing (400). Replies with the account. |
+| `PATCH /accounts/{id}` | `disabled` (`true` or `false`; disabled accounts get no requests) and any of the routing fields `priority`, `weight`, `disable_cooling`, `max_concurrency`, `request_retry`, `prefix`, `models`, `excluded_models`, `model_alias`, `proxy_url` and `headers`, checked as the config's are (a `proxy_url` sent back as `GET /accounts` shows it keeps the password it hides, and a header's placeholder sent back keeps its value; a placeholder that stands for no value the account has is a 400); `null` sets one back to its default. A bad field changes nothing (400). Replies with the account. |
 | `POST /accounts/{id}/cooldown/reset` | Clears the account's cooldowns, on its credential, its models and its endpoint (which accounts naming the same endpoint share), with their backoff steps and its last error, so it serves again at once. Works for config accounts too. Replies with `cleared`, the number of live blocks it cleared, and the account. |
 | `GET /accounts/{id}/models` | The models the account serves: its config's `models` when it lists them, else the ones its extension lists for it (the protocol's [`models`](protocol/README.md#models)). Each has its upstream `id`, what the extension says about it, `names` (the names clients use for it after the account's exclusions, aliases and prefix, and its extension's defaults for logins) and `excluded` when `excluded_models` leaves it out. |
 | `POST /accounts/{id}/test` | Sends the account one small request (`Hi`, at most 16 tokens of reply), straight to its extension: its cooldowns are ignored and its routing state is left as it is. `{"model": ...}` names the model by its upstream name; without it, the first the account serves. Replies 200 with `result`: `ok`, `model`, `served_model`, `latency_ms`, the start of the `reply`, `finish_reason` and `usage`, or `error`. The request spends what a request that size costs. |
@@ -1590,9 +1668,10 @@ to `management.secret-key`, or `remote-management.secret-key` when only that is 
 | `observability.logs.error-logs-max-files` | `logs.error_logs_max_files` | How many error logs are kept, the newest; 0 keeps all. Default 10. |
 | `observability.usage.usage-statistics-enabled` | `usage.enabled` | `true` or `false`: whether core keeps the [usage record](#usage-statistics). On unless the config turns it off. |
 | `token_count_estimate` (top level) | `token_count_estimate` (top level, in a `config.yaml` too) | `true` (the default) or `false`: whether a token count no account can give is answered with core's estimate or with an error. |
+| `proxy-url` (top level) | `proxy_url` | The [outbound proxy](#outbound-proxy) of every account without its own, shown with `redacted` in place of a user name and password; `""` removes it. Sending back the value as shown keeps the password. |
 
-The settings shown are those of the running config. Today's other basic settings (`proxy-url` and
-`ws-auth`) do not exist in this core yet, and `debug` is dropped (this
+The settings shown are those of the running config. Today's other basic setting `ws-auth` does
+not exist in this core yet, and `debug` is dropped (this
 core writes no debug-level lines); `max_attempts`, which today's core has no
 name for, is changed in the document.
 
@@ -1932,7 +2011,8 @@ are accepted silently.
 | `routing.cooldown.quota-response-mode` (`quota-cooldown-response-mode`) | `routing.quota_response_mode`: `retryable` (default) or `usage-limit`, letter case aside; another value fails the load, as in today's core. | Supported |
 | `routing.cooldown.save-cooldown-status` (`save-cooldown-status`) | Blocks live in memory and carry over reloads. | Dropped: no need found |
 | `quota-exceeded.switch-project`, `quota-exceeded.switch-preview-model` | | Dead |
-| `requests.proxy-url` (`proxy-url`) and every `proxy-url` | | Later |
+| `requests.proxy-url` (`proxy-url`) | `proxy_url`: the [outbound proxy](#outbound-proxy) of every account. A value that is not an `http`, `https`, `socks5` or `socks5h` URL, `direct` or `none` fails the load, where today's core logs it and goes without the proxy. | Supported |
+| Every `proxy-url` on a group or key | The account's `proxy_url`: a key's own, else its group's. | Supported |
 | `requests.payload.*` (`payload`) | | Later |
 | `requests.tls-handshake-timeout-seconds`, `requests.passthrough-headers`, `requests.nonstream-keepalive-interval`, `requests.streaming.*` (each also at the top level) | A request is retried on another account until its reply starts. | Dropped: off by default and no need found |
 | `client.codex.enable-apply-patch`, `client.codex.optimize-multi-agent-v2` (`codex.optimize-multi-agent-v2`) | | Later |
@@ -1958,7 +2038,8 @@ are accepted silently.
 | `oauth.providers.codex.signin-with-chatgpt-identifier` (`codex.signin-with-chatgpt-identifier`) | `signin_with_chatgpt_identifier` on the Sign in with ChatGPT (SIWC) accounts `-import-auth` adds. Left unset, they use the extension's default, `pluxy`. | Supported when importing |
 | `oauth.providers.antigravity.*` (`antigravity`, `antigravity-signature-*`, `quota-exceeded.antigravity-credits`), `oauth.providers.devin.*` (`devin`) | | Later |
 | `api-keys.meta` (`meta-api-key`) | | Later |
-| Every `headers` and `connection-pool` | | Later |
+| Every `headers` on a group or key | The account's [`headers`](#upstream-headers): a key's own, else its group's (a key's `headers: {}` sends none), and an `openai-compatibility` group's for all its keys. Names and values are trimmed and empty ones dropped, as in today's core. A header whose value today's core takes from the client's request (`$` and a header name, or `$CPA-SESSION-ID`) is named in the log and not imported. A header this core refuses (`Host`, `Content-Length`, `Transfer-Encoding`, `Connection`) fails the load, where today's core sends it. | Supported |
+| Every `connection-pool` | | Later |
 | Every `disable-cooling` on a group or key | The account's `disable_cooling`. | Supported |
 | Every `request-retry` on a group or key | The account's `request_retry`: a key's own, else its group's (an `openai-compatibility` group's for all its keys, which have none of their own there). A negative one inherits `routing.retry.request-retry`, as in today's core. | Supported |
 | The keys' `models[]` catalog fields (`display-name`, `max-context-length`, `force-mapping`, `is-compat`, `thinking`, `image`, `input-modalities`, `output-modalities`, `use-max-completion-tokens`, `support-configuration-update`, `openapi`) | A model's display name in lists is its upstream name. | Later |
@@ -2018,5 +2099,9 @@ account's, `disable_cooling` (or `disable-cooling`) is its `disable_cooling`, `r
 `request_retry`, and `label` (else `email`) is its label. A file's `prefix` is the account's `prefix`,
 its `excluded_models` (a list, or one comma-separated string) its `excluded_models`, and the
 entries of its `model_aliases` (or `models`) with a `name` and an `alias` its `model_alias`, as
-today's core reads them. A file's `proxy_url` and `headers` are not supported yet and are named
-in the output.
+today's core reads them. A file's `proxy_url` (or `proxy-url`) is the account's `proxy_url`; a file
+whose value this core cannot use is skipped rather than imported without its proxy. A file's
+`headers` are the account's `headers`: text values only, trimmed, empty ones dropped, as today's
+core reads them; one whose value today's core takes from the client's request (`$` and a header
+name, or `$CPA-SESSION-ID`) is named in the output and not imported, and a file with a header this
+core refuses is skipped rather than imported without it.

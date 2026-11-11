@@ -123,18 +123,21 @@ func TestExampleProviderSections(t *testing.T) {
 	vertex := exts[Gemini].(map[string]any)["accounts"].([]any)[3]
 	equalJSON(t, vertex, `{
 		"id": "vertex-1", "weight": 5, "prefix": "test", "disable_cooling": false, "request_retry": 3,
+		"proxy_url": "socks5://proxy.example.com:1080", "headers": {"X-Custom-Header": "custom-value"},
 		"models": [{"name": "gemini-2.5-flash", "alias": "vertex-flash"}, {"name": "gemini-2.5-pro", "alias": "vertex-pro"}],
 		"excluded_models": ["imagen-3.0-generate-002", "imagen-*"],
 		"settings": {"base_url": "https://example.com/api", "vertex": {}},
 		"credential": {"kind": "api_key", "api_key": "vk-123..."}
 	}`)
-	// A key's null fields inherit the group's; its own weight, proxy and request-retry are its
-	// own, and its empty excluded-models clears the group's.
+	// A key's null fields inherit the group's (its null headers the group's), its own weight,
+	// proxy and request-retry are its own, and its empty excluded-models clears the group's.
 	first := exts[Gemini].(map[string]any)["accounts"].([]any)[0].(map[string]any)
 	equalJSON(t, first["excluded_models"], `["gemini-2.5-pro", "gemini-2.5-*", "*-preview", "*flash*"]`)
+	equalJSON(t, first["proxy_url"], `"socks5://proxy.example.com:1080"`)
 	second := exts[Gemini].(map[string]any)["accounts"].([]any)[1]
 	equalJSON(t, second, `{
 		"id": "gemini-1-2", "priority": 0, "weight": 2, "prefix": "test", "disable_cooling": false, "request_retry": 0,
+		"proxy_url": "direct", "headers": {"X-Custom-Header": "custom-value"},
 		"models": [{"name": "gemini-2.5-flash", "alias": "gemini-flash"}],
 		"settings": {"base_url": "https://generativelanguage.googleapis.com"},
 		"credential": {"kind": "api_key", "api_key": "replace-with-second-gemini-key"}
@@ -143,6 +146,7 @@ func TestExampleProviderSections(t *testing.T) {
 	interactions := exts[Gemini].(map[string]any)["accounts"].([]any)[4]
 	equalJSON(t, interactions, `{
 		"id": "interactions-1", "weight": 5, "prefix": "native", "disable_cooling": false, "request_retry": 3,
+		"proxy_url": "socks5://proxy.example.com:1080", "headers": {"X-Custom-Header": "custom-value"},
 		"models": [{"name": "gemini-2.5-flash", "alias": "native-gemini-flash"}],
 		"excluded_models": ["gemini-2.5-pro"],
 		"settings": {"base_url": "https://generativelanguage.googleapis.com", "interactions": true},
@@ -160,7 +164,7 @@ func TestExampleProviderSections(t *testing.T) {
 	if strings.Contains(n, "unknown") || strings.Contains(n, "experimental-cch-signing") {
 		t.Errorf("notices name an unknown or dead key:\n%s", n)
 	}
-	for _, read := range []string{"prefix", "models.alias", "excluded-models"} {
+	for _, read := range []string{"prefix", "models.alias", "excluded-models", "proxy-url", "headers"} {
 		if strings.Contains(n, "."+read) {
 			t.Errorf("notices name %s, which is read:\n%s", read, n)
 		}
@@ -868,5 +872,62 @@ func TestXAIInjectXSearch(t *testing.T) {
 		if _, err := Translate([]byte(y)); err == nil {
 			t.Errorf("%q loaded", y)
 		}
+	}
+}
+
+// Two names of one header that differ only in spaces or letter case make the file fail to load,
+// naming both and no value, instead of one of them being kept by chance.
+func TestProviderHeadersRefuseSameHeaderTwice(t *testing.T) {
+	_, err := Translate([]byte(`
+claude-api-key:
+  - api-key: k1
+    base-url: https://gw.example
+    headers: {X-Gateway-Key: fake-gw-one, " X-Gateway-Key ": fake-gw-two}
+`))
+	if err == nil {
+		t.Fatal("a headers mapping with the same header twice loaded")
+	}
+	for _, want := range []string{`"X-Gateway-Key"`, `" X-Gateway-Key "`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not name %s", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "fake-gw") {
+		t.Errorf("error shows a value: %q", err)
+	}
+}
+
+// A provider key's headers, as today's core reads them: values that are numbers or true or false
+// are their text, names and values are trimmed, empty ones are dropped, and a value today's core
+// takes from the client's request is named and not imported. In the older layout an entry's
+// headers are its key's; an openai-compatibility group's are each of its keys'.
+func TestProviderHeaders(t *testing.T) {
+	r := translate(t, `
+claude-api-key:
+  - api-key: k1
+    base-url: https://gw.example
+    headers: {" X-Gateway-Key ": " fake-gw ", X-Port: 8080, X-On: true, X-Empty: "", X-Copy: "$X-Client", X-Session: "s-$CPA-SESSION-ID"}
+openai-compatibility:
+  - name: relay
+    base-url: https://relay.example/v1
+    headers: {X-Relay: one}
+    api-key-entries:
+      - api-key: k2
+      - api-key: k3
+`)
+	exts := asJSON(t, r.Config["extensions"]).(map[string]any)
+	claude := exts[Claude].(map[string]any)["accounts"].([]any)[0].(map[string]any)
+	equalJSON(t, claude["headers"], `{"X-Gateway-Key": "fake-gw", "X-Port": "8080", "X-On": "true"}`)
+	for _, a := range exts[OpenAICompatible].(map[string]any)["accounts"].([]any) {
+		equalJSON(t, a.(map[string]any)["headers"], `{"X-Relay": "one"}`)
+	}
+	n := notices(r)
+	for _, name := range []string{"X-Copy", "X-Session"} {
+		if !strings.Contains(n, "header "+name+" takes its value from the client's request") {
+			t.Errorf("notices do not name %s:\n%s", name, n)
+		}
+	}
+	if strings.Contains(n, "fake-gw") || strings.Contains(n, ".headers") {
+		t.Errorf("notices name the headers setting or a value:\n%s", n)
 	}
 }

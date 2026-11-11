@@ -308,6 +308,12 @@ func (s *server) handle(conn net.Conn) {
 	if err := protocol.ReadFrame(conn, &call); err != nil {
 		return
 	}
+	if call.Op != protocol.OpDescribe {
+		if err := refuseUpstream(call); err != nil {
+			_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: llm.EventError, Error: err}})
+			return
+		}
+	}
 	switch call.Op {
 	case protocol.OpDescribe:
 		_ = protocol.WriteFrame(conn, protocol.Reply{
@@ -479,6 +485,12 @@ func (s *server) session(conn net.Conn, call protocol.Call) {
 			c.Request = *f.Request
 		}
 		out := &Stream{w: conn}
+		if err := refuseUpstream(f); err != nil {
+			if out.send(llm.Event{Type: llm.EventError, Error: err}) != nil {
+				return
+			}
+			continue
+		}
 		mu.Lock()
 		running = true
 		mu.Unlock()

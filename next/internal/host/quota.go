@@ -20,6 +20,10 @@ func ReportsQuota(info protocol.Info) bool {
 // Quota runs a quota call: what account's plan allows and how much of it is used. Every string
 // of the account's credential is removed from the reply, as from every other reply.
 func (e *Extension) Quota(ctx context.Context, account protocol.Account) (*protocol.Quota, *llm.Error) {
+	proxy, perr := e.outbound(&account)
+	if perr != nil {
+		return nil, perr
+	}
 	e.held.add(account.ID, account.Credential)
 	conn, lerr := e.dial(ctx)
 	if lerr != nil {
@@ -36,7 +40,7 @@ func (e *Extension) Quota(ctx context.Context, account protocol.Account) (*proto
 	if err := protocol.ReadFrame(conn, &r); err != nil {
 		return nil, callError(ctx, e, err)
 	}
-	redact := protocol.NewRedactor(account.Credential)
+	redact := protocol.NewRedactor(account.Credential, proxy)
 	switch {
 	case r.Type == protocol.TypeQuotaResult && r.Quota != nil:
 		q := r.Quota
