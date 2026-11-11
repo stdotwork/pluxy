@@ -4,6 +4,14 @@ import { goTo, openPanel, signIn, useCore } from "./support";
 const core = useCore();
 
 test("logs show failures, trace lookup, continuous reading and clearing", async ({ page }) => {
+  const started = await core.mgmt<{ login: { id: string } }>("POST", "/accounts", {
+    id: "logs-account", extension: "test/alpha", method: "api_key", input: { api_key: "logs-test" },
+  });
+  expect(started.status).toBe(202);
+  await expect.poll(async () => {
+    const r = await core.mgmt<{ login: { state: string } }>("GET", "/logins/" + started.body.login.id);
+    return r.body.login.state;
+  }).toBe("done");
   const failed = await fetch(core.base + "/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: "Bearer " + core.clientKey, "Content-Type": "application/json" },

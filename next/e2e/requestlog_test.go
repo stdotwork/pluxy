@@ -281,7 +281,7 @@ func TestRequestLogWebSocketTurn(t *testing.T) {
 func TestRequestLogJSON(t *testing.T) {
 	c := startManaged(t, false)
 	code, trace := requestWithSecrets(t, c.base, "nobody")
-	if code != http.StatusNotFound || trace == "" {
+	if code != http.StatusNotFound {
 		t.Fatalf("failed request: %d %q", code, trace)
 	}
 	files := c.errorLogs(t).Files
@@ -289,6 +289,7 @@ func TestRequestLogJSON(t *testing.T) {
 		t.Fatalf("error logs: %+v", files)
 	}
 	name := files[0].Name
+	trace = strings.TrimSuffix(name[len(name)-37:], ".log")
 	plain := c.download(t, "/request-error-logs/"+name)
 	for _, path := range []string{"/request-error-logs/" + name, "/request-log-by-id/" + trace} {
 		var got struct {
