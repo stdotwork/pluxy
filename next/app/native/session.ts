@@ -136,7 +136,7 @@ async function setup() {
 
   // The backend first and ready: the frontend looks for its backends when it starts.
   const gtk = start(gtkBackend);
-  const tray = start(trayWatcher);
+  const tray = process.env.PLUXY_APP_TEST_NO_TRAY ? undefined : start(trayWatcher);
   await owns(busNames.gtkBackend, gtk);
   const frontend = start(portalFrontend);
   await owns(busNames.desktop, frontend);
@@ -177,19 +177,29 @@ async function setup() {
     `documents ok: ${docs.size} bytes added over D-Bus with a file descriptor, read back through ${docs.mount}/${docs.doc}/`,
   );
 
-  // A real item, through the watcher.
-  const watcher =
-    await until(`${trayWatcher.what} (package ${trayWatcher.package}) does not serve ${busNames.watcher}`, () => {
-      const out = ask("watcher");
-      const pid = Number(field(out, "watcher_pid"));
-      if (pid !== tray.proc.pid)
-        throw new Error(`pid ${pid} owns the name, not the service started here (${tray.proc.pid})`);
-      return out;
-    }, [tray]);
-  say(
-    `watcher ok: ${busNames.watcher} owned by pid ${field(watcher, "watcher_pid")}; registered ${field(watcher, "item")}` +
-      ` and found it in RegisteredStatusNotifierItems (${field(watcher, "property_reads")} property reads)`,
-  );
+  if (tray) {
+    // A real item, through the watcher.
+    const watcher =
+      await until(`${trayWatcher.what} (package ${trayWatcher.package}) does not serve ${busNames.watcher}`, () => {
+        const out = ask("watcher");
+        const pid = Number(field(out, "watcher_pid"));
+        if (pid !== tray.proc.pid)
+          throw new Error(`pid ${pid} owns the name, not the service started here (${tray.proc.pid})`);
+        return out;
+      }, [tray]);
+    say(
+      `watcher ok: ${busNames.watcher} owned by pid ${field(watcher, "watcher_pid")}; registered ${field(watcher, "item")}` +
+        ` and found it in RegisteredStatusNotifierItems (${field(watcher, "property_reads")} property reads)`,
+    );
+  } else {
+    try {
+      ask("owner", busNames.watcher);
+      throw new SetupError("no-tray case unexpectedly has a watcher");
+    } catch (e) {
+      if (e instanceof SetupError) throw e;
+    }
+    say("no watcher running: silent startup must show a window");
+  }
 
   // The disposable AppImage, in this session's cleared environment, in a folder of the run's own.
   const out = spawnSync(appImage as string, [nonce as string], {

@@ -267,6 +267,8 @@ async fn core_call(
     trusted(&webview)?;
     #[cfg(feature = "native-test")]
     native_test::ingress_operation(&method, &path);
+    #[cfg(feature = "native-test")]
+    native_test::window_call(&method, &path);
     let caller = state.conn.lock().unwrap().caller();
     tauri::async_runtime::spawn_blocking(move || caller.call(&method, &path, body.as_ref()))
         .await
