@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -108,6 +109,7 @@ func fakeExtension(mode string) {
 			}}
 		if mode == "session" {
 			ext.Session = openFakeSession
+			_ = sdk.Upstream(&http.Transport{}) // a turn with payload rules needs a wrapped client
 		}
 		err := sdk.Serve(ext)
 		if mode == "slow-exit" {
