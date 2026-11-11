@@ -1,4 +1,16 @@
 @layer kit {
+  .config-key-notice {
+    margin-block: calc(var(--s) * 3);
+    padding: calc(var(--s) * 3);
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--px-shape-radius);
+    background: var(--px-color-surface-raised);
+  }
+  [data-part="key-value"] {
+    font-family: var(--px-font-mono);
+    overflow-wrap: anywhere;
+    user-select: all;
+  }
   .kit-tabs {
     display: grid;
     gap: calc(var(--s) * 4);

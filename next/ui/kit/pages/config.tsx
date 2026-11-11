@@ -6,12 +6,14 @@ import type { PageDef } from "../shell";
 import { Tabs } from "../tabs";
 import { Button, Notice, PageHead, useKit } from "../ui";
 import { ConfigDialog } from "./configDialog";
+import { ConfigConnectivity, keyCards, useConfigKeys } from "./configKeys";
 import { ConfigSettings, type SettingsTab, settingsChange } from "./configSettings";
 import { ConfigSource } from "./configSource";
 import { configText as t } from "./configStrings";
 
 const configTabs = () => [
   { id: "common", label: t("common") },
+  { id: "connectivity", label: t("connectivity") },
   { id: "network", label: t("network") },
   { id: "logging", label: t("logging") },
   { id: "advanced", label: t("advanced") },
@@ -150,6 +152,17 @@ export function ConfigPage() {
     setSourceError(problem(current));
     setSaved(true);
   };
+  const keysChanged = async () => {
+    const current = await api.config();
+    if (current.status === 401) return unauthorized();
+    setSourceError(problem(current));
+    if (current.body) {
+      setDoc(current.body);
+      setText(current.body.content);
+    } else setDoc(undefined);
+  };
+  const keys = useConfigKeys(tab, keysChanged);
+  const shownKeys = keyCards(tab, search);
   return (
     <>
       <PageHead title={t("title")} />
@@ -200,23 +213,27 @@ export function ConfigPage() {
                   onInput={(e) => setSearch(e.currentTarget.value)}
                 />
               </label>
-              <ConfigSettings
-                tab={tab as SettingsTab}
-                search={search}
-                value={settings}
-                onChange={(v) => {
-                  setSettings(v);
-                  setSaved(false);
-                }}
-                dirty={dirtySettings}
-                busy={busy}
-                save={saveSettings}
-                discard={() => {
-                  setSettings(baseSettings);
-                  setError(undefined);
-                  setSaved(false);
-                }}
-              />
+              <ConfigConnectivity key={tab} state={keys} tab={tab} onChanged={keysChanged} search={search} />
+              {(tab !== "connectivity" || search.trim()) && (
+                <ConfigSettings
+                  tab={tab as SettingsTab}
+                  search={search}
+                  hasOtherResults={shownKeys.clients || shownKeys.management}
+                  value={settings}
+                  onChange={(v) => {
+                    setSettings(v);
+                    setSaved(false);
+                  }}
+                  dirty={dirtySettings}
+                  busy={busy}
+                  save={saveSettings}
+                  discard={() => {
+                    setSettings(baseSettings);
+                    setError(undefined);
+                    setSaved(false);
+                  }}
+                />
+              )}
             </div>
           )}
         </Tabs>

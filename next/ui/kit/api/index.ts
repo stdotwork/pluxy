@@ -8,6 +8,7 @@ import { accountsApi } from "./accounts";
 import { configApi } from "./config";
 import { extensionsApi } from "./extensions";
 import { logsApi } from "./logs";
+import { loginsApi } from "./logins";
 import { packagesApi } from "./packages";
 import { quotaApi } from "./quota";
 import { settingsApi } from "./settings";
@@ -17,6 +18,7 @@ export * from "./accounts";
 export * from "./config";
 export * from "./extensions";
 export * from "./logs";
+export * from "./logins";
 export * from "./packages";
 export * from "./quota";
 export * from "./settings";
@@ -30,6 +32,7 @@ export const api = (host: Host) => ({
   ...packagesApi(host),
   ...quotaApi(host),
   ...extensionsApi(host),
+  ...loginsApi(host),
   ...settingsApi(host),
 });
 
