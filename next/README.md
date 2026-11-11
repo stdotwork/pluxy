@@ -309,6 +309,58 @@ an install is the program with the packed `bundled` folder next to it. The same 
 uploaded beside the archives to an `https://` location, is a registry like any other: its
 relative archive URLs resolve against the index.
 
+### Run it in a container
+
+`Dockerfile` (build context: this folder) builds an Alpine image with a static `pluxy`, the web
+panel built in, and every extension packed by `pluxy-pack` as the bundled packages, so the first
+start installs and enables them. It runs as user `65532`, not root.
+
+```bash
+docker build -t pluxy .
+```
+
+Core reads no environment variables, so everything is set in `config.json`, and everything core
+keeps is in one folder: `/config`, a volume. It holds `config.json` and, beside it, the
+`credentials`, `packages` and `logs` folders core makes. Make a folder with a config file
+before the first start; `listen` must be `0.0.0.0:8400`, since the container's own `127.0.0.1`
+is not reachable from outside it, and the image's health check asks port 8400. Inside a container,
+requests through a published port come from Docker's network address, not from `127.0.0.1`, so
+the management API refuses them unless `management_allow_remote` is `true` (it still needs the
+management key). Publish the port on `127.0.0.1` only, as below, unless you want other machines
+to reach it:
+
+```json
+{
+  "listen": "0.0.0.0:8400",
+  "client_keys": ["choose-a-client-key"],
+  "management_key": "choose-a-management-key",
+  "management_allow_remote": true
+}
+```
+
+```bash
+mkdir config   # put config.json in it
+sudo chown -R 65532:65532 config   # the image's user must be able to write to it
+docker run -d --name pluxy -p 127.0.0.1:8400:8400 -v "$PWD/config:/config" pluxy
+```
+
+[`compose.example.yaml`](compose.example.yaml) runs the same with Docker Compose, also with a
+read-only root file system (`/tmp` is a `tmpfs`) and no added privileges.
+
+The image's `HEALTHCHECK` asks `http://127.0.0.1:8400/healthz` every 30 seconds. With another
+listen port or with `tls.enable`, replace it (`docker run --health-cmd ...`, or `healthcheck:` in
+Compose). Extension pages are served on a port of their own, by default a free port on the host
+of `listen`, which Docker does not publish: to use them from a container, set
+`extension_pages.listen` to a fixed port such as `0.0.0.0:8401`, publish it, and set
+`extension_pages.url` (see [extension pages](ui/extension-pages/README.md)).
+
+A release (a `next-v*` tag, built by `.github/workflows/next-release.yml`) uploads every
+extension's archives for Linux (amd64, arm64), macOS (amd64, arm64) and Windows (amd64) and a
+`registry.json` to its GitHub release, and pushes the image to `ghcr.io/stdotwork/pluxy`. Core
+knows no hosted registry by default and does not fetch from the network until asked: to install
+from a release's packages, add its `registry.json` under `packages.registries`, for example
+`https://github.com/stdotwork/pluxy/releases/download/next-v1.2.3/registry.json`.
+
 ## Codex
 
 The Codex provider extension (`extensions/codex`) serves OpenAI's Codex models from an OpenAI API
@@ -521,9 +573,13 @@ and results (each hit as Claude sent it, so its `encrypted_content` survives); a
 without results when it paused the turn (`pause_turn`) stays `in_progress`. A replayed
 `web_search_call` goes back as the two blocks, in the assistant message around it; a paused search
 at the end of the history goes back as its `server_tool_use` alone, so Claude carries on. Chat
-clients get the text without the search blocks, as today. Not built: citations (today's core gives
-Claude's `citations` to a Responses client as the text's `annotations` and sends them back), the
-web search result cache and Codex's tool search on Claude.
+clients get the text without the search blocks, as today. Claude's `citations` on the answer's
+text are not passed on, and a replayed message's `annotations` are not sent back to Claude. Today's
+core copies each citation as it is into the text's `annotations`, in Claude's own shape
+(`web_search_result_location`), which is none of the annotation types Responses defines, so a
+Responses client has no defined way to show it. Claude does not need citations in the history: the
+replayed search blocks carry the results. Not built: the web search result cache and Codex's tool
+search on Claude.
 
 **Tool shapes.** A translated request's tools get the shapes Messages takes, as today's core
 gives them: a function name with characters other than letters, digits, `_` and `-`, or longer than
