@@ -431,7 +431,9 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
           dg[k] && !assets.some((a) => a.path.includes(`/${dg[k]}/`) && a.status === 200),
           `the asset scheme served refused package ${k}`,
         );
-      console.log(`${mode} device ${JSON.stringify(d ?? { failed: failure })} (${assets.length} asset requests)`);
+      console.log(
+        `${mode} device ${JSON.stringify(d ?? { failed: failure })} (${assets.length} asset requests)`,
+      );
     }
 
     // Closing the window frees its webviews; the app stays in the tray.
