@@ -1,0 +1,271 @@
+/* The shell (shell.tsx): navigation, the page area and signing in. */
+@layer kit {
+  /* Shell and navigation */
+
+  .shell {
+    min-height: 100vh;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .nav {
+    background: var(--px-color-surface);
+    border: 0 solid var(--px-color-border);
+    display: flex;
+    gap: calc(var(--s) * 1);
+    z-index: 1;
+  }
+
+  .nav ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    gap: calc(var(--s) * 0.5);
+  }
+
+  .brand {
+    font-weight: var(--px-font-weight-strong);
+    color: var(--px-color-text);
+    text-decoration: none;
+    letter-spacing: 0.02em;
+    padding: calc(var(--s) * 2) calc(var(--s) * 3);
+  }
+
+  .nav-item {
+    display: block;
+    color: var(--px-color-text-muted);
+    text-decoration: none;
+    border-radius: var(--px-shape-radius);
+    padding: calc(var(--s) * 2) calc(var(--s) * 3);
+    transition:
+      background var(--t),
+      color var(--t);
+    background: none;
+    border: 0;
+    font: inherit;
+    text-align: start;
+    cursor: pointer;
+  }
+
+  .nav-item:hover {
+    background: var(--px-color-surface-raised);
+    color: var(--px-color-text);
+  }
+
+  .nav-item[aria-current="page"] {
+    background: color-mix(in srgb, var(--px-color-accent) 14%, transparent);
+    color: var(--px-color-accent);
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  .nav-item .short {
+    display: none;
+  }
+
+  .signout {
+    margin-top: auto;
+  }
+
+  /* Navigation groups: a label over each group's entries. */
+  .nav-group {
+    display: grid;
+    gap: calc(var(--s) * 0.5);
+  }
+
+  .nav-group-label {
+    font-size: var(--px-font-size-small);
+    font-weight: var(--px-font-weight-strong);
+    color: var(--px-color-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: calc(var(--s) * 2) calc(var(--s) * 3) calc(var(--s) * 0.5);
+  }
+
+  /* Where there is no room for the labels, screen readers still get them, and a line divides the groups. */
+  html:is([data-nav="rail"], [data-nav="top"]) .nav-group-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  html[data-nav="rail"] .nav-group + .nav-group {
+    border-top: var(--px-shape-border) solid var(--px-color-border);
+    padding-top: calc(var(--s) * 1);
+  }
+
+  html:is([data-nav="sidebar"], [data-nav="rail"]) .shell {
+    grid-template-columns: var(--px-size-nav) minmax(0, 1fr);
+  }
+
+  html[data-nav="rail"] .shell {
+    grid-template-columns: var(--rail) minmax(0, 1fr);
+  }
+
+  html:is([data-nav="sidebar"], [data-nav="rail"]) .nav {
+    flex-direction: column;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    border-inline-end-width: var(--px-shape-border);
+    padding: calc(var(--s) * 2);
+  }
+
+  html:is([data-nav="sidebar"], [data-nav="rail"]) .nav ul {
+    flex-direction: column;
+  }
+
+  html[data-nav="rail"] .nav {
+    padding-inline: calc(var(--s) * 1);
+    align-items: stretch;
+  }
+
+  html[data-nav="rail"] .brand {
+    padding-inline: 0;
+    text-align: center;
+    font-size: var(--px-font-size-small);
+  }
+
+  html[data-nav="rail"] .nav-item {
+    text-align: center;
+    padding-inline: calc(var(--s) * 1);
+    font-size: var(--px-font-size-small);
+  }
+
+  html[data-nav="rail"] .nav-item .full {
+    display: none;
+  }
+
+  html[data-nav="rail"] .nav-item .short {
+    display: inline;
+  }
+
+  html[data-nav="top"] .shell {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  html[data-nav="top"] .nav {
+    position: sticky;
+    top: 0;
+    flex-direction: row;
+    align-items: center;
+    border-block-end-width: var(--px-shape-border);
+    padding: calc(var(--s) * 1) calc(var(--s) * 3);
+    overflow-x: auto;
+  }
+
+  html[data-nav="top"] .signout {
+    margin-top: 0;
+    margin-inline-start: auto;
+  }
+
+  html[data-nav="top"] .nav-group {
+    display: flex;
+    align-items: center;
+  }
+
+  html[data-nav="top"] .nav-group + .nav-group {
+    border-inline-start: var(--px-shape-border) solid var(--px-color-border);
+    padding-inline-start: calc(var(--s) * 1);
+  }
+
+  /* Page area */
+
+  .main {
+    min-width: 0;
+  }
+
+  .content {
+    margin-inline: auto;
+    padding: calc(var(--s) * 6) calc(var(--s) * 6) calc(var(--s) * 12);
+    max-width: var(--px-size-width-wide);
+  }
+
+  html[data-width="full"] .content {
+    max-width: none;
+  }
+
+  html[data-width="narrow"] .content {
+    max-width: var(--px-size-width-narrow);
+  }
+
+  /* Signing in */
+
+  .signin {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: calc(var(--s) * 4);
+  }
+
+  .signin form {
+    width: min(100%, 24em);
+    gap: calc(var(--s) * 4);
+  }
+
+  .signin p {
+    margin: 0;
+  }
+
+  /* Narrow windows: the side navigation goes on top. */
+  @media (max-width: 720px) {
+    html:is([data-nav="sidebar"], [data-nav="rail"]) .shell {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    html:is([data-nav="sidebar"], [data-nav="rail"]) .nav {
+      height: auto;
+      flex-direction: row;
+      align-items: center;
+      border-inline-end-width: 0;
+      border-block-end-width: var(--px-shape-border);
+      overflow-x: auto;
+    }
+
+    html:is([data-nav="sidebar"], [data-nav="rail"]) .nav ul {
+      flex-direction: row;
+    }
+
+    html:is([data-nav="sidebar"], [data-nav="rail"]) .nav-group {
+      display: flex;
+      align-items: center;
+    }
+
+    html[data-nav="sidebar"] .nav-group-label {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+
+    html:is([data-nav="sidebar"], [data-nav="rail"]) .nav-group + .nav-group {
+      border-top: 0;
+      padding-top: 0;
+      border-inline-start: var(--px-shape-border) solid var(--px-color-border);
+      padding-inline-start: calc(var(--s) * 1);
+    }
+
+    html[data-nav="rail"] .nav-item .full {
+      display: inline;
+    }
+
+    html[data-nav="rail"] .nav-item .short {
+      display: none;
+    }
+
+    .signout {
+      margin-top: 0;
+      margin-inline-start: auto;
+    }
+
+    .content {
+      padding: calc(var(--s) * 4) calc(var(--s) * 4) calc(var(--s) * 10);
+    }
+  }
+}

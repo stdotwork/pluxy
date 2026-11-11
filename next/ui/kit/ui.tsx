@@ -5,8 +5,16 @@ import { type ComponentChildren, createContext } from "preact";
 import { useCallback, useContext, useEffect, useId, useRef, useState } from "preact/hooks";
 import { type Api, problem } from "./api";
 import type { Host, Reply } from "./host";
+import { strings } from "./strings";
 import type { Layout } from "./theme/contract";
 import type { ThemeState } from "./theme/state";
+
+const t = strings("kit", {
+  confirm: "Yes, {action}",
+  cancel: "Cancel",
+  details: "Details: {title}",
+  closeDetails: "Close details",
+});
 
 export interface Kit {
   host: Host;
@@ -130,9 +138,9 @@ export function ConfirmButton(props: { onConfirm: () => void; disabled?: boolean
           props.onConfirm();
         }}
       >
-        Yes, {props.children.toLowerCase()}
+        {t("confirm", { action: props.children.toLowerCase() })}
       </Button>
-      <Button onClick={() => setAsking(false)}>Cancel</Button>
+      <Button onClick={() => setAsking(false)}>{t("cancel")}</Button>
     </span>
   );
 }
@@ -328,10 +336,16 @@ export function Detail(props: { title: string; onClose: () => void; children: Co
     ref.current?.focus();
   }, [props.title]);
   return (
-    <aside class="detail" data-part="detail" aria-label={`Details: ${props.title}`} tabIndex={-1} ref={ref}>
+    <aside
+      class="detail"
+      data-part="detail"
+      aria-label={t("details", { title: props.title })}
+      tabIndex={-1}
+      ref={ref}
+    >
       <header class="card-head">
         <h2 class="mono">{props.title}</h2>
-        <Button label="Close details" onClick={props.onClose}>
+        <Button label={t("closeDetails")} onClick={props.onClose}>
           ✕
         </Button>
       </header>

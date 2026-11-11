@@ -193,6 +193,7 @@ These stay stable within a theme contract version:
 | `data-page="<page id>"` | Root element: `status`, `accounts`, `extensions`, `themes`, or an extension page's ID |
 | `data-part="shell"` | The whole UI below the root |
 | `data-part="nav"` | The navigation |
+| `data-part="nav-group"` | A group of navigation entries under its label; `data-group` is `operate`, `gateway`, `observe`, `control` or `extensions` (the extensions' pages) |
 | `data-part="nav-item"` | One navigation entry; the current one has `aria-current="page"` |
 | `data-part="main"` | The page area |
 | `data-part="page-title"` | A page's title |

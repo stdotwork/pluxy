@@ -5,10 +5,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { render } from "preact";
 import { useEffect, useMemo, useState } from "preact/hooks";
-import { AccountsPage } from "../../ui/kit/pages/accounts";
-import { ExtensionsPage } from "../../ui/kit/pages/extensions";
-import { StatusPage } from "../../ui/kit/pages/status";
-import { ThemesPage } from "../../ui/kit/pages/themes";
+import { corePages } from "../../ui/kit/pages/core";
 import { type PageDef, Shell } from "../../ui/kit/shell";
 import { ThemeState } from "../../ui/kit/theme/state";
 import defaultTheme from "../../ui/themes/default.json";
@@ -43,14 +40,12 @@ function App(props: { initial: Connection }) {
   const themes = useMemo(() => new ThemeState(host, document, [defaultTheme, terminal, paper]), [host]);
   const pages: PageDef[] = useMemo(
     () => [
-      { id: "status", title: "Status", short: "Status", render: () => <StatusPage /> },
-      { id: "accounts", title: "Accounts", short: "Accts", render: () => <AccountsPage /> },
-      { id: "extensions", title: "Extensions", short: "Ext", render: () => <ExtensionsPage /> },
-      { id: "themes", title: "Themes", short: "Theme", render: () => <ThemesPage /> },
+      ...corePages(),
       {
         id: "connection",
         title: "Connection",
         short: "Conn",
+        group: "control",
         render: () => <ConnectionPage connection={conn} onChange={changed} />,
       },
     ],

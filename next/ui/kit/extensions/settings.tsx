@@ -4,7 +4,21 @@
 
 import { useEffect, useId, useState } from "preact/hooks";
 import { problem as replyProblem, type SettingField, type Settings } from "../api";
+import { strings } from "../strings";
 import { Button, Card, Notice, useKit } from "../ui";
+
+const t = strings("settingsForm", {
+  none: "(none)",
+  unchanged: "unchanged",
+  valueSet: "A value is set.",
+  clear: "Clear {label}",
+  couldNotLoad: "could not load the settings",
+  settings: "Settings",
+  settingsOf: "Settings of {id}",
+  saved: "Saved.",
+  notSaved: "not saved",
+  saveSettings: "Save settings",
+});
 
 type Draft = Record<string, string | boolean>;
 
@@ -77,7 +91,7 @@ function FieldInput(props: {
       </label>
       {f.enum ? (
         <select id={id} value={value} onChange={(e) => props.onChange(e.currentTarget.value)}>
-          {!f.enum.includes(value) && <option value="">(none)</option>}
+          {!f.enum.includes(value) && <option value="">{t("none")}</option>}
           {f.enum.map((o) => (
             <option key={o} value={o}>
               {o}
@@ -91,7 +105,7 @@ function FieldInput(props: {
             ? {
                 type: "password" as const,
                 autocomplete: "off",
-                placeholder: props.isSet ? "unchanged" : undefined,
+                placeholder: props.isSet ? t("unchanged") : undefined,
               }
             : f.type === "string"
               ? { type: "text" as const, maxLength: f.maxLength }
@@ -108,14 +122,14 @@ function FieldInput(props: {
       {hint && <small class="hint">{hint}</small>}
       {f.writeOnly && props.isSet && (
         <span class="check">
-          <small class="hint">A value is set.</small>
+          <small class="hint">{t("valueSet")}</small>
           <label class="check">
             <input
               type="checkbox"
               checked={props.clear}
               onChange={(e) => props.onClear(e.currentTarget.checked)}
             />
-            <span>Clear {label}</span>
+            <span>{t("clear", { label })}</span>
           </label>
         </span>
       )}
@@ -142,7 +156,7 @@ export function SettingsForm(props: { id: string }) {
       if (r.body) {
         setSettings(r.body);
         setDraft(draftOf(r.body));
-      } else setMessage({ tone: "danger", text: replyProblem(r) ?? "could not load the settings" });
+      } else setMessage({ tone: "danger", text: replyProblem(r) ?? t("couldNotLoad") });
     });
     return () => {
       live = false;
@@ -151,11 +165,11 @@ export function SettingsForm(props: { id: string }) {
 
   if (missing) return null;
   return (
-    <Card title="Settings">
+    <Card title={t("settings")}>
       {settings && (
         <form
           class="stack"
-          aria-label={`Settings of ${props.id}`}
+          aria-label={t("settingsOf", { id: props.id })}
           noValidate
           onSubmit={async (e) => {
             e.preventDefault();
@@ -168,8 +182,8 @@ export function SettingsForm(props: { id: string }) {
               setSettings(r.body);
               setDraft(draftOf(r.body));
               setClear(new Set());
-              setMessage({ tone: "ok", text: "Saved." });
-            } else setMessage({ tone: "danger", text: replyProblem(r) ?? "not saved" });
+              setMessage({ tone: "ok", text: t("saved") });
+            } else setMessage({ tone: "danger", text: replyProblem(r) ?? t("notSaved") });
           }}
         >
           {Object.entries(settings.schema.properties).map(([name, f]) => (
@@ -192,7 +206,7 @@ export function SettingsForm(props: { id: string }) {
           {message && <Notice tone={message.tone}>{message.text}</Notice>}
           <div class="actions">
             <Button type="submit" variant="primary" disabled={busy}>
-              Save settings
+              {t("saveSettings")}
             </Button>
           </div>
         </form>
