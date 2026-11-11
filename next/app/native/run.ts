@@ -24,7 +24,16 @@
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline";
@@ -403,7 +412,9 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
       const d = steps.get("device") as
         | { passed?: boolean; v2_label?: string; digests?: Record<string, string> }
         | undefined;
-      check(d?.passed === true, "the device catalog check did not complete");
+      // Without its line, the app's failed step says where the check stopped and why.
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(d?.passed === true, `the device catalog check did not complete: ${failure}`);
       const dg = d?.digests ?? {};
       const served = (label: string | undefined, digest: string | undefined, status: number) =>
         assets.some((a) => a.label === label && a.path.includes(`/${digest}/`) && a.status === status);
@@ -420,7 +431,7 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
           dg[k] && !assets.some((a) => a.path.includes(`/${dg[k]}/`) && a.status === 200),
           `the asset scheme served refused package ${k}`,
         );
-      console.log(`${mode} device ${JSON.stringify(d)} (${assets.length} asset requests)`);
+      console.log(`${mode} device ${JSON.stringify(d ?? { failed: failure })} (${assets.length} asset requests)`);
     }
 
     // Closing the window frees its webviews; the app stays in the tray.
@@ -442,9 +453,35 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
         `${reached.length} commands reached, all from main: ${reached.every((w) => w === "main")})`,
     );
   } finally {
-    await removeRun(root);
+    // A folder left behind is a problem of its own; it must not hide this run's report.
+    await removeRun(root).catch((e) => problems.push(`the run folder ${root} was not removed: ${e}`));
   }
   return problems;
+}
+
+/** Lets this user remove what the app left in its run folder: the device's package store keeps
+ * its installed folders read-only, so they cannot be emptied as they are. Only the run's own
+ * folders change, never past a mount (such as the document portal's) or a symlink. */
+function makeRemovable(root: string) {
+  let dev: number;
+  try {
+    dev = lstatSync(root).dev;
+  } catch {
+    return; // already gone
+  }
+  const walk = (dir: string) => {
+    let entries: string[];
+    try {
+      const st = lstatSync(dir);
+      if (!st.isDirectory() || st.dev !== dev) return;
+      if ((st.mode & 0o700) !== 0o700) chmodSync(dir, 0o700);
+      entries = readdirSync(dir);
+    } catch {
+      return; // gone, or another service's: rmSync reports what it cannot remove
+    }
+    for (const e of entries) walk(join(dir, e));
+  };
+  walk(root);
 }
 
 /** Removes a run's folder. A desktop service the run's bus started (such as the document portal,
@@ -452,6 +489,7 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
 async function removeRun(root: string) {
   for (let i = 0; ; i++) {
     try {
+      makeRemovable(root);
       rmSync(root, { recursive: true, force: true });
       return;
     } catch (e) {
