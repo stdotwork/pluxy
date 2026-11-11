@@ -844,22 +844,22 @@ What changes in a request:
   An `apply_patch` function in a namespace is an ordinary function, not the patch tool.
   A custom `apply_patch` in a namespace, declared in the tools or in an `additional_tools` item, is
   the patch tool of that namespace: it is sent as the patch function (`ns__apply_patch`, or as a
-  child described in the folded namespace's function), its history calls carry the text in
-  `input`, a `tool_choice` or an `allowed_tools` entry that names it names that function, and
-  xAI's call to it goes back as a `custom_tool_call` named `apply_patch` in its namespace, with
-  the same events as the top-level tool. Any other custom tool in a namespace is handled the same
-  way: it is sent as a function and comes back as a `custom_tool_call` in its namespace. A name belongs to its namespace, so a top-level
-  `apply_patch` and a namespace's are two tools. When one name is declared more than once, as
-  `ns__apply_patch` is for the child `apply_patch` of `ns`, the winner is the first, and a tool of
-  the tools list beats one of an `additional_tools` item, and a top-level tool beats a child, as in
-  today's core. For a folded namespace the child is known only from the call's arguments, so the
-  events of a call to that namespace are held until they name it, only for a namespace that has a
-  custom tool. A call to a custom tool then shows the added item and the whole input
-  at the end of the arguments, with no input fragments, because the fragments are the wrapper's, not
-  patch text, and the client is never sent a `function_call` event for it. A call to another child
-  shows the same events as before, a little later, with the child's name in its added item. A
-  stream that opens with such a call, before `response.created`, ends with an upstream error,
-  since its first event cannot be held.
+  child described in the folded namespace's function), its history calls carry the text in `input`,
+  a `tool_choice` or an `allowed_tools` entry that names it names that function, and xAI's call to
+  it goes back as a `custom_tool_call` named `apply_patch` in its namespace, with the same events as
+  the top-level tool. Any other custom tool in a namespace is handled the same way: it is sent as a
+  function and comes back as a `custom_tool_call` in its namespace. A name belongs to its namespace,
+  so a top-level `apply_patch` and a namespace's are two tools. When one name is declared more than
+  once, as `ns__apply_patch` is for the child `apply_patch` of `ns`, the winner is the first, and a
+  tool of the tools list beats one of an `additional_tools` item, and a top-level tool beats a
+  child, as in today's core. For a folded namespace the child is known only from the call's
+  arguments, so the events of a call to that namespace are held until they name it, only for a
+  namespace that has a custom tool. A call to a custom tool then shows the added item and the whole
+  input at the end of the arguments, with no input fragments, because the fragments are the
+  wrapper's, not the tool's text, and the client is never sent a `function_call` event for it. A
+  call to another child shows the same events as before, a little later, with the child's name in
+  its added item. A stream that opens with such a call, before `response.created`, ends with an
+  upstream error, since its first event cannot be held.
 - The tools of an `additional_tools` input item (how a Responses Lite client, the Codex app,
   declares tools) are moved to the end of the tools list and the item is removed, because xAI does
   not take that item. This happens before the rules above, so a namespace in an item is flattened
