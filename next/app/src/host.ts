@@ -94,5 +94,6 @@ export function appHost(conn: Connection, changed: (c: Connection) => void): Hos
       set: (name, value) => write(`pluxy.${name}`, value),
     },
     features,
+    address: conn.target?.replace(/\/+$/, "") || undefined,
   };
 }
