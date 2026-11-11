@@ -9,6 +9,8 @@
 // - a second launch with the same HOME and XDG folders exits 0 within a bound, starts no second
 //   app, window or core, and the first's window is shown again: after it was hidden, and after it
 //   was closed to the tray;
+// - so is a login launch (`--autostart`, as the autostart entry runs it, with Silent Launch on):
+//   the first's window is shown, after it was hidden and after it was closed to the tray;
 // - a launch with other HOME and XDG folders is an instance of its own, with its own core; its
 //   data folder is too long for a socket path there, and a second launch of it still raises it;
 // - the socket is in the runtime folder, where the app's `instance/address` says;
@@ -67,8 +69,9 @@ class Launch {
   constructor(
     readonly label: string,
     env: Record<string, string | undefined>,
+    args: string[] = [],
   ) {
-    this.child = spawn(bin as string, [], { env, stdio: ["pipe", "pipe", "pipe"] });
+    this.child = spawn(bin as string, args, { env, stdio: ["pipe", "pipe", "pipe"] });
     this.pid = this.child.pid ?? 0;
     this.exited = new Promise((resolve) => this.child.once("close", (code) => resolve(code)));
     this.child.stdin?.on("error", () => {});
@@ -191,8 +194,8 @@ async function gone(pid: number, ms: number): Promise<boolean> {
 
 const launches: Launch[] = [];
 const roots: string[] = [];
-function launch(label: string, env: Record<string, string | undefined>): Launch {
-  const l = new Launch(label, { ...env, PLUXY_APP_TEST_INSTANCES: "1" });
+function launch(label: string, env: Record<string, string | undefined>, args: string[] = []): Launch {
+  const l = new Launch(label, { ...env, PLUXY_APP_TEST_INSTANCES: "1" }, args);
   launches.push(l);
   return l;
 }
@@ -212,9 +215,14 @@ async function owner(label: string, env: Record<string, string | undefined>) {
 }
 
 /** A second launch with the same profile: exits 0 in time, and starts nothing of its own. */
-async function second(label: string, env: Record<string, string | undefined>, owners: number[]) {
+async function second(
+  label: string,
+  env: Record<string, string | undefined>,
+  owners: number[],
+  args: string[] = [],
+) {
   const t0 = Date.now();
-  const s = launch(label, env);
+  const s = launch(label, env, args);
   const code = await s.exitWithin(SECOND_EXIT_MS);
   if (code === "timeout") {
     check(
@@ -284,6 +292,35 @@ async function main() {
   check(state?.exists && state.visible, `after close: the first's window is ${JSON.stringify(state)}`);
   say(`window after close: ${JSON.stringify(state)}`);
   check(counts().cores.length === 1, `after close: ${counts().cores.length} cores run, expected 1`);
+
+  // 3b. A login launch is a second launch too: with the autostart entry's argument and Silent
+  // Launch on (which hides the window only of a login launch that is the first), the first's
+  // window is shown, after it was hidden and after it was closed to the tray. The plain launches
+  // above are the same route's positive control.
+  const config = join(process.env.XDG_CONFIG_HOME as string, identifier as string);
+  writeFileSync(
+    join(config, "startup.json"),
+    JSON.stringify({ autostart_enabled: true, silent_start_enabled: true, start_core_on_launch: true }),
+    { mode: 0o600 },
+  );
+  for (const [how, cmd, closed] of [
+    ["hidden", "hide", false],
+    ["closed", "close", true],
+  ] as const) {
+    state = await first.app.command(cmd);
+    check(
+      closed ? state?.exists === false : state?.exists && state.visible === false,
+      `autostart, ${how}: the window is ${JSON.stringify(state)}`,
+    );
+    now = await second(`autostart launch, window ${how}`, home, owners, ["--autostart"]);
+    check(now.cores.length === 1, `autostart, ${how}: ${now.cores.length} cores run, expected 1`);
+    state = await first.app.command("state");
+    check(
+      state?.exists && state.visible,
+      `autostart, ${how}: the first's window is ${JSON.stringify(state)}`,
+    );
+    say(`window after autostart launch, ${how}: ${JSON.stringify(state)}`);
+  }
 
   // 4. Another profile (other HOME and XDG folders) is an instance of its own, with its own core.
   const rootB = mkdtempSync(join(tmpdir(), "pluxy-inst-"));

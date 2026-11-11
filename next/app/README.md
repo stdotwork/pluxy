@@ -53,8 +53,9 @@ and "Quit pluxy". If the app cannot make its tray icon, closing the window quits
 
 The app runs once per profile: your user and the app's data folder (on Linux
 `~/.local/share/dev.pluxy.desktop/`), not the place the program is installed. Launching it again
-on that profile shows the first app's window (a new one if it was closed to the tray) and exits
-with status 0, starting no core, tray icon or webview. Another `HOME` or `XDG_*` folder is another
+on that profile, from the app menu, a shortcut or the login autostart entry (Silent Launch applies
+only to a login launch that is the first), shows the first app's window (a new one if it was
+closed to the tray) and exits with status 0, starting no core, tray icon or webview. Another `HOME` or `XDG_*` folder is another
 profile, with its own app and core.
 
 Before anything else, the app takes an exclusive lock on `instance/lock` in the data folder
@@ -271,7 +272,8 @@ Then, in a session of its own
 (`native/instances-session.ts`), it launches the app again and again on one profile and checks
 that each later launch exits 0 within 10 seconds, starts no app or core of its own (it counts the
 app and core processes), and has the first show its window, also after the window was hidden and
-after it was closed to the tray; that the socket is in the runtime folder, where `instance/address`
+after it was closed to the tray, and for a login launch (`--autostart` with Silent Launch on) as
+well; that the socket is in the runtime folder, where `instance/address`
 says; that a launch with other `HOME` and `XDG_*` folders is an app and
 core of its own; that after the first app is killed with SIGKILL (its lock file and socket stay)
 the next launch becomes the app, starts its core and is the one a later launch raises; and that
