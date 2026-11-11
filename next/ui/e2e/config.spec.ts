@@ -111,7 +111,9 @@ for (const theme of ["default", "terminal", "paper"]) {
     await page.getByPlaceholder("Search config...").fill("error_logs_max_files");
     await page.getByRole("button", { name: "Next", exact: true }).click();
     await expect
-      .poll(() => editor.evaluate((e: HTMLTextAreaElement) => e.value.slice(e.selectionStart, e.selectionEnd)))
+      .poll(() =>
+        editor.evaluate((e: HTMLTextAreaElement) => e.value.slice(e.selectionStart, e.selectionEnd)),
+      )
       .toBe("error_logs_max_files");
     await page.getByRole("button", { name: "Previous", exact: true }).click();
     await page.getByPlaceholder("Search config...").fill("no-such-config-key");

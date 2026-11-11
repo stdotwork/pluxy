@@ -23,6 +23,8 @@ const t = strings("themes", {
   light: "Light",
   dark: "Dark",
   layout: "Layout",
+  tabs: "Tabs",
+  side: "Side",
   resetLayout: "Use the theme's layout",
   choicesStay: "Your choices here stay when you switch themes.",
   navigation: "Navigation",
@@ -76,6 +78,13 @@ const layoutChoices = (): { [K in LayoutOption]: { label: string; choices: Choic
     choices: [
       { value: "side", label: t("beside") },
       { value: "below", label: t("below") },
+    ],
+  },
+  tabs: {
+    label: t("tabs"),
+    choices: [
+      { value: "top", label: t("top") },
+      { value: "side", label: t("side") },
     ],
   },
   width: {

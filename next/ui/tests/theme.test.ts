@@ -78,6 +78,19 @@ describe("built-in themes", () => {
 });
 
 describe("reading a theme", () => {
+  test("accepts tabs side and diff color tokens", () => {
+    const r = ok({
+      ...base,
+      tokens: { "color.diff-add": "#1f7a3d", "color.diff-remove": "#b42318" },
+      dark: { "color.diff-add": "#5cc98a", "color.diff-remove": "#ff7b72" },
+      layout: { tabs: "side" },
+    });
+    expect(r.theme.tokens).toEqual({ "color.diff-add": "#1f7a3d", "color.diff-remove": "#b42318" });
+    expect(r.theme.dark).toEqual({ "color.diff-add": "#5cc98a", "color.diff-remove": "#ff7b72" });
+    expect(r.theme.layout).toEqual({ tabs: "side" });
+    expect(r.warnings).toEqual([]);
+  });
+
   test("refuses what the UI cannot use at all", () => {
     for (const [raw, why] of [
       [[], "not a JSON object"],
@@ -165,7 +178,7 @@ describe("resolving", () => {
 
   test("the person's layout and density override the theme's", () => {
     const r = resolve(theme, choose({ layout: { nav: "top" }, density: "1.25" }), env);
-    expect(r.layout).toEqual({ nav: "top", list: "cards", detail: "side", width: "wide" });
+    expect(r.layout).toEqual({ nav: "top", list: "cards", detail: "side", width: "wide", tabs: "top" });
     expect(r.tokens.density).toBe("1.25");
     expect(resolve(theme, choose({ density: "9" }), env).warnings).toHaveLength(1);
   });
