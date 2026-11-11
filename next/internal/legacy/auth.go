@@ -336,7 +336,10 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 				text[k] = s
 			}
 		}
-		h, dynamic := upheader.Import(text)
+		h, dynamic, err := upheader.Import(text)
+		if err != nil {
+			return f, nil, err.Error()
+		}
 		if err := upheader.Check("headers", h); err != nil {
 			return f, nil, err.Error()
 		}
