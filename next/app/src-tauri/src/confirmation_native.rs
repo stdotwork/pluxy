@@ -166,7 +166,7 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
         let id = ask(app, main, &a)?;
         // A page-supplied approval message cannot complete an actual pending dialog.
         page.eval(format!(
-            "fetch('/send', {{method: 'POST', body: JSON.stringify({{type: 'call', data: {{id: 'spoof-confirm', method: 'confirmation.approve', action: {}, approved: true, remember: true}}}})}}).then(() => window.__approvalMessageSent = true)",
+            "fetch('/send', {{method: 'POST', body: JSON.stringify({{type: 'call', data: {{v: 0, id: 'spoof-confirm', method: 'confirmation.approve', params: {{action: {}, approved: true, remember: true}}}}}})}}).then(() => window.__approvalMessageSent = true)",
             serde_json::json!(id)
         ))
         .map_err(|e| e.to_string())?;
@@ -264,9 +264,27 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
                 "page flood was admitted",
             )?;
         }
+        let (tx, rx) = mpsc::channel();
+        app.run_on_main_thread(move || {
+            let shown = gtk::Window::list_toplevels()
+                .into_iter()
+                .filter_map(|w| w.downcast::<gtk::Window>().ok())
+                .find(|w| w.title().as_deref() == Some("pluxy launch notice") && w.is_visible())
+                .and_then(|w| w.child())
+                .and_then(|c| c.downcast::<gtk::Label>().ok())
+                .map(|l| l.text().to_string());
+            let _ = tx.send(shown);
+        })
+        .map_err(|e| e.to_string())?;
+        let shown = rx
+            .recv_timeout(Duration::from_secs(5))
+            .map_err(|e| e.to_string())?
+            .ok_or("host-owned launch notice not visible")?;
         require(
-            window("pluxy launch notice").is_some(),
-            "host-owned launch notice not visible",
+            shown.contains("fixture/confirm")
+                && shown.contains("Start native fixture")
+                && (shown.contains("per second") || shown.contains("already pending")),
+            "notice did not show the refused page Start",
         )?;
         key("pluxy native confirmation", "alt+c")?;
         require(

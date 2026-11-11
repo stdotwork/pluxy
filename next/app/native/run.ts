@@ -232,8 +232,7 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
         return;
       }
       steps.set(step, value);
-      if (step === "confirmations")
-        console.log(`  ${mode} | native confirmations: ${JSON.stringify(value)}`);
+      if (step === "confirmations") console.log(`  ${mode} | native confirmations: ${JSON.stringify(value)}`);
       if (step === "frame") before = webProcesses(pid);
       if (step === "closed") {
         // Give the web processes a moment to exit, then let the app quit.
