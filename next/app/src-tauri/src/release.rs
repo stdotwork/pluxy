@@ -26,6 +26,10 @@ pub const MAX_RELEASES: usize = 256;
 pub const MAX_NOTES: usize = 64 << 10;
 pub const MAX_URL: usize = 2048;
 const MAX_VERSION: usize = 64;
+/// The most of release.json the app reads; it holds an address and a channel.
+const MAX_SETTINGS: u64 = 64 << 10;
+/// The most of the kept feed the app reads: a feed it accepted, written again.
+const MAX_CACHE: u64 = 2 * MAX_FEED;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -343,6 +347,20 @@ pub struct Releases {
     revision: u64,
 }
 
+/// The file at path when it holds at most limit bytes; never reads more than limit + 1.
+fn read_limited(path: &Path, limit: u64) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut b = Vec::new();
+    fs::File::open(path)?.take(limit + 1).read_to_end(&mut b)?;
+    if b.len() as u64 > limit {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("larger than {limit} bytes"),
+        ));
+    }
+    Ok(b)
+}
+
 fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -351,15 +369,21 @@ fn now() -> u64 {
 
 impl Releases {
     pub fn open(settings_path: PathBuf, cache_path: PathBuf) -> Releases {
-        let (settings, broken) = match fs::read(&settings_path) {
-            Ok(b) => match serde_json::from_slice::<Settings>(&b) {
-                Ok(s) => (s, None),
-                Err(e) => (
-                    Settings::default(),
-                    Some(format!("{}: {e}", settings_path.display())),
-                ),
-            },
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Settings::default(), None),
+        // A saved address passes the same checks as a new one, or the file counts as broken.
+        let loaded = match read_limited(&settings_path, MAX_SETTINGS) {
+            Ok(b) => serde_json::from_slice::<Settings>(&b)
+                .map_err(|e| e.to_string())
+                .and_then(|mut s| {
+                    if let Some(src) = &s.source {
+                        s.source = Some(https_url(src).map_err(|e| format!("source: {e}"))?);
+                    }
+                    Ok(s)
+                }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Settings::default()),
+            Err(e) => Err(e.to_string()),
+        };
+        let (settings, broken) = match loaded {
+            Ok(s) => (s, None),
             Err(e) => (
                 Settings::default(),
                 Some(format!("{}: {e}", settings_path.display())),
@@ -382,10 +406,7 @@ impl Releases {
     /// The cache, when it is for the current source and still passes every check.
     fn load_cache(&self) -> Option<Cached> {
         let source = self.settings.source.as_ref()?;
-        let bytes = fs::read(&self.cache_path).ok()?;
-        if bytes.len() as u64 > MAX_FEED * 2 {
-            return None;
-        }
+        let bytes = read_limited(&self.cache_path, MAX_CACHE).ok()?;
         let c: CacheFile = serde_json::from_slice(&bytes).ok()?;
         if &c.source != source {
             return None;
@@ -539,7 +560,10 @@ impl Releases {
             problem: self.problem.clone().or_else(|| {
                 self.broken.as_ref().map(|b| Problem {
                     offline: false,
-                    message: format!("The release settings could not be read: {b}"),
+                    message: format!(
+                        "The release settings could not be read: {b}. Fix or delete that file, \
+                         then restart the app; until then no feed is used and nothing is saved."
+                    ),
                 })
             }),
             changing_source: self.change.is_some(),
@@ -776,6 +800,49 @@ mod tests {
         assert!(b.set_channel(Channel::Stable).is_err());
         assert_eq!(fs::read(d.join("release.json")).unwrap(), b"{broken");
         assert!(b.view("0.1.0", None).problem.is_some());
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn settings_that_cannot_be_used_are_kept_and_shown() {
+        let d = dir();
+        let path = d.join("release.json");
+        // Each loads as broken: the file stays as it is, changes are refused, and the window is
+        // told what to do.
+        let padded = format!(
+            "{{\"channel\": \"stable\"{}}}",
+            " ".repeat(MAX_SETTINGS as usize)
+        );
+        for (bytes, why) in [
+            (padded.into_bytes(), "larger than"),
+            (
+                br#"{"source": "http://feed.example/feed.json"}"#.to_vec(),
+                "https://",
+            ),
+            (
+                br#"{"source": "https://u:p@feed.example/"}"#.to_vec(),
+                "user name",
+            ),
+        ] {
+            fs::write(&path, &bytes).unwrap();
+            let mut r = Releases::open(path.clone(), d.join("release-feed.json"));
+            assert_eq!(r.settings().source, None);
+            assert!(r.set_channel(Channel::Preview).is_err());
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+            let p = r.view("0.1.0", None).problem.unwrap();
+            assert!(p.message.contains(why), "{}", p.message);
+            assert!(p.message.contains("Fix or delete"), "{}", p.message);
+        }
+        // A kept feed larger than the cache limit is not read.
+        fs::write(&path, br#"{"source": "https://feed.example/feed.json"}"#).unwrap();
+        let cache = d.join("release-feed.json");
+        fs::write(&cache, vec![b' '; MAX_CACHE as usize + 1]).unwrap();
+        let r = Releases::open(path.clone(), cache);
+        assert_eq!(
+            r.settings().source.as_deref(),
+            Some("https://feed.example/feed.json")
+        );
+        assert_eq!(r.view("0.1.0", None).checked_at, None);
         fs::remove_dir_all(d).unwrap();
     }
 

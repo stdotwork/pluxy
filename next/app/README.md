@@ -131,8 +131,10 @@ changing or removing the address opens the native confirmation (below), with the
 new address; only its confirmed, one-use token applies the change, and cancelling, closing the
 window or letting it expire keeps the old address. The address must be `https://`, with a host
 and no user name or password. The choice is kept in `release.json` next to `connection.json`,
-readable only by your user; a file the app cannot read is shown as an error and never
-overwritten. The channel is a plain setting there too.
+readable only by your user. A file the app cannot use (unreadable, larger than 64 KiB, or with an
+address that fails the checks above) is shown as an error saying to fix or delete it, and is never
+overwritten; until then no feed is used. The channel is a plain setting there too. The kept feed
+is read only up to 2 MiB.
 
 "Check for Updates" reads the feed: https only, the public certificate roots, no redirects, at
 most 1 MiB, 30 seconds. The last good feed is kept in `release-feed.json` in the app's cache
