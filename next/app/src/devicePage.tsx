@@ -47,6 +47,7 @@ const t = strings("device", {
     "No curated source is set up in this app, so it cannot tell who published this package. Its pages still get no app commands, files or settings.",
   local: "File {name}",
   registry: "Registry {name}",
+  registryAt: "Registry {name} ({index})",
   digest: "Digest",
   installed: "Installed",
   contracts: "Formats",
@@ -78,7 +79,9 @@ const t = strings("device", {
 function sourceText(p: DevicePackage): string {
   return p.source.kind === "local"
     ? t("local", { name: p.source.name })
-    : t("registry", { name: p.source.name });
+    : p.source.index
+      ? t("registryAt", { name: p.source.name, index: p.source.index })
+      : t("registry", { name: p.source.name });
 }
 
 function releaseFacts(r: DeviceRelease): [string, ComponentChildren][] {

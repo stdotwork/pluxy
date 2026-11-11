@@ -5,7 +5,8 @@
 //! (computed there, not by the app). Each denial has a positive control on the same route:
 //!
 //! - registry: `pluxy/notes` (a reserved publisher) is refused; `example/notes` 1.0.0 installs,
-//!   is listed Unverified and its page answers through the channel; 2.0.0 replaces it while its
+//!   is listed Unverified (the Device extensions page names its registry's index) and its page
+//!   answers through the channel; 2.0.0 replaces it while its
 //!   page is open (the old page webview closes, the new one shows 2.0.0); 3.0.0, which needs a
 //!   host contract this app lacks, is refused and 2.0.0 keeps working; the page webview's request
 //!   for 1.0.0's files is refused (the asset lines the scheme logs); roll back to the last good
@@ -283,6 +284,20 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             && p["enabled"] == true,
         format!("example/notes 1.0.0 as listed: {p}"),
     )?;
+    // The Device extensions page names the registry by its index too, not only its name.
+    let index = fixtures.join("index.json").display().to_string();
+    main.eval("location.hash = '#/device'")
+        .map_err(|e| e.to_string())?;
+    wait_for("the registry's index on the Device extensions page", || {
+        eval(
+            main,
+            &format!(
+                "document.body.innerText.includes({})",
+                json!(format!("Registry fixture ({index})"))
+            ),
+        )
+        .filter(|v| v == true)
+    })?;
     let v1 = open_page(app, main, route, &notes1, "notes-1.0.0")?;
     out["v1_label"] = json!(v1);
 
