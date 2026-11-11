@@ -36,7 +36,8 @@ use pages::{Binding, Pages};
 use serde::Deserialize;
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
+use std::sync::{Mutex, OnceLock};
 use tauri::http::{header, Response};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -795,44 +796,81 @@ fn asset_scheme(
                 .asset_file(&id, &digest, &file)
         })
         .flatten();
-    tauri::async_runtime::spawn_blocking(move || {
-        // One file read at a time: a page asking for many large files at once holds one in
-        // memory, not all of them.
-        static READING: Mutex<()> = Mutex::new(());
-        let found = asset.and_then(|a| {
-            let _one = READING.lock().unwrap_or_else(|e| e.into_inner());
-            Some((a.read()?, a.kind))
-        });
-        let status = if found.is_some() { 200 } else { 404 };
-        #[cfg(feature = "native-test")]
-        native_test::log(
-            "asset",
-            serde_json::json!({"label": label, "path": path, "status": status}),
-        );
-        let (body, kind) = found.unwrap_or((Vec::new(), "text/plain"));
-        // As core's pages site: sandboxed with scripts, loading only from the asset scheme
-        // (where this webview gets only its own folder), and no requests from script, frames
-        // or forms.
-        let s = device::ASSET_SCHEME;
-        let csp = if status == 200 {
-            format!("sandbox allow-scripts; default-src 'none'; script-src {s}:; style-src {s}:; img-src {s}: data: blob:; font-src {s}: data:; media-src {s}: data: blob:; connect-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'")
-        } else {
-            "sandbox; default-src 'none'".to_string()
-        };
-        let resp = Response::builder()
-            .status(status)
-            .header(header::CONTENT_TYPE, kind)
-            .header("Content-Security-Policy", csp)
-            // A sandboxed page has an opaque origin; its module scripts and fonts load with
-            // CORS.
-            .header("Access-Control-Allow-Origin", "*")
-            .header(header::CACHE_CONTROL, "no-store")
-            .header("X-Content-Type-Options", "nosniff")
-            .header("Referrer-Policy", "no-referrer")
-            .body(body)
-            .expect("a response");
-        responder.respond(resp);
-    });
+    let job = AssetJob {
+        asset,
+        label,
+        path,
+        responder,
+    };
+    // Past the queue's bound, a request is answered at once rather than waited on.
+    if let Err(TrySendError::Full(job) | TrySendError::Disconnected(job)) =
+        asset_queue().try_send(job)
+    {
+        respond_asset(job, 503, None);
+    }
+}
+
+/// Asset requests waiting for a reader at most; they hold no file.
+const ASSET_QUEUE: usize = 1024;
+/// Threads that read asset files: at most this many files are read and hashed at a time.
+const ASSET_READERS: usize = 2;
+
+/// An asset request, its file found under the locks, waiting to be read.
+struct AssetJob {
+    asset: Option<device::Asset>,
+    label: String,
+    path: String,
+    responder: tauri::UriSchemeResponder,
+}
+
+fn asset_queue() -> &'static SyncSender<AssetJob> {
+    static QUEUE: OnceLock<SyncSender<AssetJob>> = OnceLock::new();
+    QUEUE.get_or_init(|| {
+        let (tx, rx) = sync_channel::<AssetJob>(ASSET_QUEUE);
+        let rx = std::sync::Arc::new(Mutex::new(rx));
+        for _ in 0..ASSET_READERS {
+            let rx = rx.clone();
+            std::thread::spawn(move || loop {
+                let job = rx.lock().unwrap_or_else(|e| e.into_inner()).recv();
+                let Ok(mut job) = job else { return };
+                let found = job.asset.take().and_then(|a| Some((a.read()?, a.kind)));
+                let status = if found.is_some() { 200 } else { 404 };
+                respond_asset(job, status, found);
+            });
+        }
+        tx
+    })
+}
+
+fn respond_asset(job: AssetJob, status: u16, found: Option<(Vec<u8>, &'static str)>) {
+    #[cfg(feature = "native-test")]
+    native_test::log(
+        "asset",
+        serde_json::json!({"label": job.label, "path": job.path, "status": status}),
+    );
+    #[cfg(not(feature = "native-test"))]
+    let _ = (&job.label, &job.path);
+    let (body, kind) = found.unwrap_or((Vec::new(), "text/plain"));
+    // As core's pages site: sandboxed with scripts, loading only from the asset scheme (where
+    // this webview gets only its own folder), and no requests from script, frames or forms.
+    let s = device::ASSET_SCHEME;
+    let csp = if status == 200 {
+        format!("sandbox allow-scripts; default-src 'none'; script-src {s}:; style-src {s}:; img-src {s}: data: blob:; font-src {s}: data:; media-src {s}: data: blob:; connect-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'")
+    } else {
+        "sandbox; default-src 'none'".to_string()
+    };
+    let resp = Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, kind)
+        .header("Content-Security-Policy", csp)
+        // A sandboxed page has an opaque origin; its module scripts and fonts load with CORS.
+        .header("Access-Control-Allow-Origin", "*")
+        .header(header::CACHE_CONTROL, "no-store")
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Referrer-Policy", "no-referrer")
+        .body(body)
+        .expect("a response");
+    job.responder.respond(resp);
 }
 
 /// The `pluxy-page:` scheme: the page webviews' app document and their way to the window.
