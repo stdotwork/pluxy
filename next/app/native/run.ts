@@ -9,7 +9,8 @@
 // - from inside the page's sandboxed frame nothing reaches the app (test/probe reports through
 //   its channel);
 // - closing the window leaves no webview and no web process, with the app still in the tray;
-// - quitting stops the app's own core, and leaves a local or remote core running.
+// - quitting stops the app's own core, and leaves a local or remote core running;
+// - in a second managed run, a core that exits before the app state exists is recovered.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
 // own (dbus-run-session, xvfb-run), and random ports. Inside that session, before the app,
@@ -175,8 +176,16 @@ async function managementStatus(base: string, key: string, ca?: string): Promise
   return r.status;
 }
 
-/** Runs the app once with connection as its saved connection, and checks what it reports. */
-async function runApp(mode: Mode, bin: string, connection: object, base?: string): Promise<string[]> {
+/** Runs the app once with connection as its saved connection, and checks what it reports.
+ * earlyExit: the app's setup waits for its core's exit callback before the app state exists
+ * (PLUXY_APP_TEST_EARLY_EXIT), and only the recovery of that core is checked. */
+async function runApp(
+  mode: Mode,
+  bin: string,
+  connection: object,
+  base?: string,
+  earlyExit = false,
+): Promise<string[]> {
   const root = mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
   const problems: string[] = [];
   const check = (ok: unknown, what: string) => {
@@ -217,6 +226,7 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
       PLUXY_APP_TEST_QUIT: quit,
       PLUXY_APP_TEST_STATE: join(root, "state.json"),
       PLUXY_APP_TEST_TRAY_HOLD: join(root, "tray-hold"),
+      ...(earlyExit ? { PLUXY_APP_TEST_EARLY_EXIT: "1" } : {}),
     };
     // The session script starts and checks the desktop services, then runs the app.
     const session = [
@@ -242,6 +252,7 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
     const pid = proc.pid ?? 0;
     sessions.add(pid);
     let ready = false; // session.ts said its setup is done and the app starts
+    let attempts = 0; // the app's recovery attempts
     if (!proc.stderr || !proc.stdout) throw new Error("the app's output is not piped");
     const log: string[] = []; // the app's last lines, shown when the run fails
     const setup: string[] = []; // session.ts's report of what failed at setup
@@ -258,6 +269,7 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
           setup.push(line.slice("native-prereq: FAILED ".length));
         return;
       }
+      if (line.startsWith("native-test: recovery-attempt ")) attempts++;
       const m = /^native-test: (\w+) (.*)$/.exec(line);
       if (!m) {
         if (process.env.PLUXY_APP_TEST_VERBOSE) console.error(`  ${mode} | ${line}`);
@@ -302,6 +314,34 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
       throw new SetupError(
         setup.length > 0 ? setup.join("\n") : `the session ended (${code}) before it was ready`,
       );
+    }
+    if (earlyExit) {
+      check(code === 0, `the app exited with ${code}`);
+      check(!steps.has("failed"), `the app's test steps failed: ${JSON.stringify(steps.get("failed"))}`);
+      // Without this the run would not test the early exit: the callback could have found the state.
+      const held = steps.get("early_exit_held");
+      check(
+        held?.callback_ran === true,
+        `the core's exit callback did not run first: ${JSON.stringify(held)}`,
+      );
+      const end = steps.get("early_exit") as
+        | { view?: { core?: { state?: string; pid?: number } } }
+        | undefined;
+      const core = end?.view?.core;
+      check(
+        core?.state === "running" && core.pid,
+        `a core that exited before the app state existed was not recovered: ${JSON.stringify(end)}`,
+      );
+      check(attempts === 1, `${attempts} recovery attempts, want 1`);
+      await Bun.sleep(1000);
+      check(core?.pid && !alive(core.pid), `the recovered core ${core?.pid} still runs after the app quit`);
+      if (problems.length > 0)
+        console.log(`${mode} early exit: the app's last lines:\n  ${log.join("\n  ")}`);
+      else
+        console.log(
+          `  ${mode} | native-recovery: a core that exited before the app state existed was recovered`,
+        );
+      return problems;
     }
     check(
       steps.get("recovery")?.ok === true,
@@ -463,6 +503,16 @@ try {
     const { core } = JSON.parse(run("go", ["run", "./e2e/panelcore", "-probe", "-prepare", prepared], next));
     const p = await runApp("managed", bin, { mode: "managed", core_path: core });
     problems.push(...p.map((x) => `managed: ${x}`));
+    // The first start runs a stand-in that says where it listens and exits at once; the next
+    // start, recovery's, runs the real core.
+    const early = join(prepared, "early-exit.sh");
+    writeFileSync(
+      early,
+      `#!/bin/sh\nif [ ! -e "$0.ran" ]; then\n  : > "$0.ran"\n  echo 'pluxy: listening on http://127.0.0.1:1' >&2\n  exit 7\nfi\nexec '${core}' "$@"\n`,
+      { mode: 0o755 },
+    );
+    const e = await runApp("managed", bin, { mode: "managed", core_path: early }, undefined, true);
+    problems.push(...e.map((x) => `managed, early exit: ${x}`));
   } finally {
     rmSync(prepared, { recursive: true, force: true });
   }

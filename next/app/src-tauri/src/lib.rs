@@ -765,10 +765,14 @@ pub fn run() {
                         show_status(&app, &v);
                         recovery::schedule(app.clone(), plan);
                     }
+                    #[cfg(feature = "native-test")]
+                    native_test::core_exit_seen();
                     let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-connection", ());
                 });
             });
             let conn = Connection::open(Dirs { config, core }, Some(on_exit));
+            #[cfg(feature = "native-test")]
+            native_test::hold_for_early_exit();
             // The page webviews keep nothing from one run to the next.
             let pages_dir = app.path().app_cache_dir()?.join("pages");
             let _ = std::fs::remove_dir_all(&pages_dir);

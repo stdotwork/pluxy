@@ -11,10 +11,15 @@
 //! 4. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!
+//! With `PLUXY_APP_TEST_EARLY_EXIT` set it does none of that: the app's setup waits for its
+//! core's exit callback before the app state exists, then the run waits for the app to start
+//! that core again and quits.
+//!
 //! Each step prints one line on stderr: `native-test: <step> <JSON>`.
 
 use crate::{App, COMMANDS, MAIN, WINDOW};
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Webview};
@@ -293,9 +298,53 @@ pub(crate) fn tray_hold(action: &str) {
     }
 }
 
+/// How many times the app's core exit callback has run.
+static CORE_EXITS: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) fn core_exit_seen() {
+    CORE_EXITS.fetch_add(1, Ordering::SeqCst);
+}
+
+/// With `PLUXY_APP_TEST_EARLY_EXIT` set, holds the app's setup before its state exists until the
+/// core's exit callback has run: the callback then finds no state to recover the core with.
+pub(crate) fn hold_for_early_exit() {
+    if std::env::var_os("PLUXY_APP_TEST_EARLY_EXIT").is_none() {
+        return;
+    }
+    let seen = wait_for("the core's exit callback", || {
+        (CORE_EXITS.load(Ordering::SeqCst) > 0).then_some(())
+    });
+    log("early_exit_held", json!({"callback_ran": seen.is_ok()}));
+}
+
+/// The early-exit run: the core exited before the app state existed. Waits past the first
+/// recovery delay for the app to run its core again, then quits.
+fn early_exit(app: &AppHandle) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let view = loop {
+        let v = app.state::<App>().conn.lock().unwrap().view();
+        let running = v
+            .core
+            .as_ref()
+            .is_some_and(|c| c.state == "running" && c.pid.is_some());
+        if running || Instant::now() > deadline {
+            break v;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    log("early_exit", json!({"view": view}));
+    crate::quit(app);
+    Ok(())
+}
+
 pub fn start(app: AppHandle) {
     std::thread::spawn(move || {
-        if let Err(e) = run(&app) {
+        let result = if std::env::var_os("PLUXY_APP_TEST_EARLY_EXIT").is_some() {
+            early_exit(&app)
+        } else {
+            run(&app)
+        };
+        if let Err(e) = result {
             // What the window showed, to tell why.
             let shown = app.get_webview(MAIN).and_then(|m| {
                 eval(
