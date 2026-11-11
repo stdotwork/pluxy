@@ -342,7 +342,7 @@ func TestKimiDomain(t *testing.T) {
 }
 
 func TestLargeFileIsSkipped(t *testing.T) {
-	big := `{"type":"claude","access_token":"` + strings.Repeat("a", maxAuthFile) + `"}`
+	big := `{"type":"claude","access_token":"` + strings.Repeat("a", MaxAuthFile) + `"}`
 	dir := writeFiles(t, map[string]any{"claude-big.json": []byte(big)})
 	files, skipped, err := ReadAuthDir(dir, DefaultImportOptions, time.Now())
 	if err != nil || len(files) != 0 || len(skipped) != 1 || !strings.Contains(skipped[0].Reason, "larger than") {
@@ -584,6 +584,30 @@ func TestSIWCAccountIDCollision(t *testing.T) {
 		want := []string{"foo-siwc.json:foo-siwc", "foo-siwc.json:foo-siwc-siwc", "foo.json:foo", "foo.json:foo-siwc-2"}
 		if !slices.Equal(ids, want) {
 			t.Errorf("ids %v, want %v", ids, want)
+		}
+	}
+}
+
+// One file read on its own gives what reading a folder holding only it gives: a Codex file's own
+// account and its SIWC account, as foo and foo-siwc; a file over MaxAuthFile is skipped, and a
+// file that is not JSON says so.
+func TestReadAuthFile(t *testing.T) {
+	b, _ := json.Marshal(siwcFile(nil))
+	files, skipped := ReadAuthFile("foo.json", b, DefaultImportOptions, time.Now())
+	var ids []string
+	for _, f := range files {
+		ids = append(ids, f.File+":"+f.Record.ID)
+	}
+	if want := []string{"foo.json:foo", "foo.json:foo-siwc"}; !slices.Equal(ids, want) || len(skipped) != 0 {
+		t.Errorf("ids %v, skipped %v; want %v", ids, skipped, want)
+	}
+	for _, c := range []struct{ content, reason string }{
+		{`{"type":"claude","access_token":"` + strings.Repeat("a", MaxAuthFile) + `"}`, "larger than 1024 KiB"},
+		{`{"type":"claude",`, "not a JSON object"},
+	} {
+		files, skipped := ReadAuthFile("x.json", []byte(c.content), DefaultImportOptions, time.Now())
+		if len(files) != 0 || !slices.Equal(skipped, []Skipped{{File: "x.json", Reason: c.reason}}) {
+			t.Errorf("files %v, skipped %v; want skipped %q", files, skipped, c.reason)
 		}
 	}
 }

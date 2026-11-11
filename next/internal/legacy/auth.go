@@ -82,15 +82,33 @@ func ReadAuthDir(dir string, opts ImportOptions, now time.Time) ([]AuthFile, []S
 	if err != nil {
 		return nil, nil, err
 	}
+	return readAuthFiles(files, func(name string) ([]byte, error) { return readLimited(filepath.Join(dir, name)) }, opts, now)
+}
+
+// ReadAuthFile reads one credential file of today's auth folder, named name and holding b, as
+// ReadAuthDir reads a folder that holds only that file: its account, and the SIWC account of a
+// Codex file, or why they are skipped.
+func ReadAuthFile(name string, b []byte, opts ImportOptions, now time.Time) ([]AuthFile, []Skipped) {
+	files, skipped, _ := readAuthFiles([]string{name}, func(string) ([]byte, error) {
+		if len(b) > MaxAuthFile {
+			return nil, errTooLarge
+		}
+		return b, nil
+	}, opts, now) // read never fails otherwise
+	return files, skipped
+}
+
+// readAuthFiles reads the credential files named files, each with read.
+func readAuthFiles(files []string, read func(name string) ([]byte, error), opts ImportOptions, now time.Time) ([]AuthFile, []Skipped, error) {
 	var out, siwcs []AuthFile
 	var skipped []Skipped
 	for _, name := range files {
-		b, err := readLimited(filepath.Join(dir, name))
+		b, err := read(name)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
 		if errors.Is(err, errTooLarge) {
-			skipped = append(skipped, Skipped{File: name, Reason: fmt.Sprintf("larger than %d KiB", maxAuthFile>>10)})
+			skipped = append(skipped, Skipped{File: name, Reason: TooLarge})
 			continue
 		}
 		if err != nil {
@@ -411,9 +429,12 @@ func authAliases(m map[string]any) []route.ModelAlias {
 	return out
 }
 
-// maxAuthFile bounds a credential file: today's are a few KiB, and a credential must fit in
+// MaxAuthFile bounds a credential file: today's are a few KiB, and a credential must fit in
 // one extension protocol frame.
-const maxAuthFile = 1 << 20
+const MaxAuthFile = 1 << 20
+
+// TooLarge is why a file larger than MaxAuthFile is skipped.
+var TooLarge = fmt.Sprintf("larger than %d KiB", MaxAuthFile>>10)
 
 var errTooLarge = errors.New("file too large")
 
@@ -423,8 +444,8 @@ func readLimited(path string) ([]byte, error) {
 		return nil, err
 	}
 	defer f.Close()
-	b, err := io.ReadAll(io.LimitReader(f, maxAuthFile+1))
-	if err == nil && len(b) > maxAuthFile {
+	b, err := io.ReadAll(io.LimitReader(f, MaxAuthFile+1))
+	if err == nil && len(b) > MaxAuthFile {
 		err = errTooLarge
 	}
 	return b, err
@@ -563,9 +584,15 @@ func object(m map[string]any) json.RawMessage {
 	return b
 }
 
+// Creator adds accounts: a credential store (cred.Store), or a running core's credential
+// manager (cred.Manager), which also makes them live.
+type Creator interface {
+	Create(r cred.Record) (cred.Record, error)
+}
+
 // Import adds the accounts of files to store, skipping those whose ID store or the config
 // (reserved) already uses. It returns the files it imported and those it skipped.
-func Import(store *cred.Store, files []AuthFile, reserved func(id string) bool) (imported []AuthFile, skipped []Skipped, err error) {
+func Import(store Creator, files []AuthFile, reserved func(id string) bool) (imported []AuthFile, skipped []Skipped, err error) {
 	for _, f := range files {
 		if reserved(f.Record.ID) {
 			skipped = append(skipped, Skipped{File: f.File, Reason: fmt.Sprintf("the config already has an account %q", f.Record.ID)})
