@@ -76,6 +76,36 @@ not answer within 20 seconds, or at once if the first could not listen. A socket
 behind is removed by the next app, which holds the lock.
 The lock is not inherited by the app's core.
 
+## Startup preferences
+
+The Connection page has three startup choices:
+
+- **Launch at startup** registers pluxy for your Linux login. Saving it writes
+  `$XDG_CONFIG_HOME/autostart/dev.pluxy.desktop.desktop` (or
+  `~/.config/autostart/dev.pluxy.desktop.desktop`). Its Exec command names the app by absolute
+  path with `--autostart`. Silent Launch controls whether a login launch shows a window.
+  Turning Launch at startup off and saving removes pluxy's entry. Merely opening the app does
+  not register it. The displayed choice is read from that entry, including desktop disable flags.
+  A file without pluxy's ownership marker is shown as a conflict and left alone.
+- **Silent Launch** suppresses the window only for an autostart launch in managed mode when
+  the session has a StatusNotifier watcher and a registered tray host. Local and remote modes
+  host no core, so they open normally. In that case no window or webview is
+  created. Without a host the app logs why and opens a window. Opening the app from its menu
+  or shortcut always shows the window.
+- **Start Core on Launch** starts the app's own core in managed mode. Turning it off leaves
+  the saved managed connection stopped until you press Start core. Local and remote modes
+  only connect; their core processes are never started or stopped by these choices.
+
+The defaults are login registration off, Silent Launch off, and Start Core on Launch on.
+Preferences live in `startup.json` beside `connection.json`, readable only by your user.
+A malformed file is moved to `startup.damaged-<random>.json` and defaults are used; failure to
+read or keep it aside is logged and still does not prevent startup. Saving preferences does
+not restart or change the current connection. No system service or second core supervisor is
+created. Login registration is implemented on Linux only. Registration resolves the executable
+when you enable it: the AppImage path if present, otherwise the running executable. It must be
+an existing regular file; paths containing percent or backslash are refused. Saving unrelated
+choices leaves the entry unchanged.
+
 ## Commands
 
 The window's webview, labelled `main`, is the only webview any capability names
@@ -88,6 +118,8 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 
 | Command | What it does |
 | --- | --- |
+| `startup_get` | Reads the native startup preferences |
+| `startup_set` | Saves the startup choices and explicitly writes/removes Linux login registration |
 | `connection_get` | The connection, without the key |
 | `connection_set` | Changes connection settings without accepting a key |
 | `key_entry` | Opens native key entry, checks the key against core, and returns only signed-in, wrong-key, cancelled or error status plus the connection without its key |
@@ -227,7 +259,15 @@ that frame can reach the scheme, and navigation of that real frame closes native
 admissions, forwarding and real core settings operations, with a successful call on the same page.
 It checks that the page webview covers the page area, that
 closing the window leaves no webview and
-no web process, and that quitting stops only the app's own core. Then, in a session of its own
+no web process, and that quitting stops only the app's own core. The startup sequence then enables login registration through the main webview command,
+checks the entry in its temporary XDG config folder, launches it with the real Desktop Entry consumer (gio launch), checks
+zero windows/webviews and no web process, and verifies that the app's real tray item belongs to
+its PID in the tray watcher's registered item list. It checks login with Silent Launch on and
+off, an app-menu launch with Silent Launch on, managed-core startup, core startup off, foreign
+core ownership, and removal. A separate session with no watcher verifies that a silent login
+opens exactly one window and webview. Visible launches are positive controls for the same
+renderer-process count used by silent launches.
+Then, in a session of its own
 (`native/instances-session.ts`), it launches the app again and again on one profile and checks
 that each later launch exits 0 within 10 seconds, starts no app or core of its own (it counts the
 app and core processes), and has the first show its window, also after the window was hidden and
@@ -236,8 +276,8 @@ says; that a launch with other `HOME` and `XDG_*` folders is an app and
 core of its own; that after the first app is killed with SIGKILL (its lock file and socket stay)
 the next launch becomes the app, starts its core and is the one a later launch raises; and that
 the socket and its address are gone when the app quits. The other profile's data folder is too long
-for a socket path, and a second launch of it still raises it. The `native-test` feature is
-for that test alone; release builds never have it.
+for a socket path, and a second launch of it still raises it. The
+`native-test` feature is for that test alone; release builds never have it.
 
 In local and remote modes, the test also drives the real GTK dialog with `xdotool`: good keys
 authenticate, bad keys and Cancel preserve the connection and saved settings, and the native
@@ -294,10 +334,10 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
   process with the same user's operating-system access, and transient native buffers are not
   guaranteed to be erased from memory.
 - A kept key is stored in `connection.json`, not in the system keyring.
-- Whether a desktop shows the tray icon is not checked: on a desktop with no tray host, closing
-  the window leaves the app running with no way back to it but quitting it. The native test's
-  session has a real tray watcher, but only a probe item is registered with it, not the app's own
-  icon.
+- The Linux native suite checks the app's own tray item in the watcher's registration list and
+  startup without a watcher. It does not check every desktop's tray UI or later loss of its host.
+- On a desktop with no tray host, closing the window leaves the app running with no way back to
+  it but quitting it.
 - Raising the first app's window is Unix only (a Unix socket); where there is none, a second
   launch exits with an error and the first's window stays as it was. The native test checks that
   the raised window is shown, not that it has the keyboard focus: that is the desktop's to give.

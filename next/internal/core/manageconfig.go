@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/stdotwork/pluxy/next/internal/configdoc"
+	"github.com/stdotwork/pluxy/next/internal/proxyurl"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/internal/server"
 )
@@ -242,6 +243,8 @@ type settingsView struct {
 	Observability observabilityView `json:"observability"`
 	// TokenCountEstimate is this core's own setting (no counterpart in today's core).
 	TokenCountEstimate bool `json:"token_count_estimate"`
+	// ProxyURL is the global proxy_url, with "redacted" in place of its user name and password.
+	ProxyURL string `json:"proxy-url"`
 }
 
 type observabilityView struct {
@@ -306,7 +309,7 @@ func settings(cfg *server.Config) settingsView {
 		}
 	}
 	v.SessionAffinityTTL = shortDuration(ttl)
-	return settingsView{TokenCountEstimate: cfg.TokenCountEstimateOn(), Routing: v, Observability: observabilityView{
+	return settingsView{TokenCountEstimate: cfg.TokenCountEstimateOn(), ProxyURL: proxyurl.Redact(cfg.ProxyURL), Routing: v, Observability: observabilityView{
 		Logs: logsView{LoggingToFile: cfg.Logs.ToFile, LogsMaxTotalSizeMB: cfg.Logs.MaxTotalSizeMB,
 			RequestLog: cfg.Logs.RequestLog, ErrorLogsMaxFiles: cfg.Logs.ErrorLogs()},
 		Usage: usageView{UsageStatisticsEnabled: cfg.Usage.On()}}}
@@ -471,6 +474,10 @@ func (c *Core) handleConfig(m *server.Management) {
 		var p configdoc.SettingsPatch
 		if !readStrictJSON(w, r, &p) {
 			return
+		}
+		// The proxy as GET shows it, sent back unchanged with the rest, keeps the password it hides.
+		if cur := c.Config().ProxyURL; p.ProxyURL != nil && len(proxyurl.Password(cur)) > 0 && strings.TrimSpace(*p.ProxyURL) == proxyurl.Redact(cur) {
+			p.ProxyURL = nil
 		}
 		err := c.WriteConfig("management API: settings", c.edit(func(d *configdoc.Doc) error {
 			if err := d.ApplySettings(p); err != nil {

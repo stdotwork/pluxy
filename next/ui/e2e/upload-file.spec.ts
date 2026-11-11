@@ -32,9 +32,11 @@ test("Upload File imports an auth file and refuses a file that is not JSON", asy
     { name: "devin-upload.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(file)) },
   ]);
   const results = page.locator('[data-part="upload-results"]');
+  // The file's proxy comes along: nothing is reported as left out.
   await expect(results).toContainText(
-    "devin-upload.json: File uploaded successfully: account devin-upload (pluxy/devin) · not supported yet, not imported: proxy_url",
+    "devin-upload.json: File uploaded successfully: account devin-upload (pluxy/devin)",
   );
+  await expect(results).not.toContainText("not supported yet");
   await expect(page.getByRole("button", { name: "devin-upload", exact: true })).toBeVisible();
   const added = (await core.mgmt<{ accounts: Account[] }>("GET", "/accounts")).body.accounts.find(
     (a) => a.id === "devin-upload",
@@ -44,6 +46,7 @@ test("Upload File imports an auth file and refuses a file that is not JSON", asy
     extension: "pluxy/devin",
     kind: "api_key",
     label: "upload-user",
+    proxy_url: "http://proxy.example:8080",
   });
   if (process.env.P7_SHOTS)
     await page.screenshot({ path: `${process.env.P7_SHOTS}/upload-ok.png`, fullPage: true });
