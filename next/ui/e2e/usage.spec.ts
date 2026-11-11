@@ -37,6 +37,20 @@ test("filters recorded requests and exports the matching rows", async ({ page })
   await signIn(page, core);
   await nav(page).getByRole("link", { name: "Usage", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Usage", exact: true })).toBeVisible();
+  const requests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/usage/events?")) requests.push(request.url());
+  });
+  await expect(page.getByLabel("Since", { exact: true })).toHaveAttribute("placeholder", "e.g. 24h or 2026-01-01T00:00:00Z");
+  await page.getByLabel("Since", { exact: true }).fill("invalid");
+  await expect(page.getByRole("alert")).toContainText("since");
+  await page.getByLabel("Since", { exact: true }).fill("");
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.locator('[data-page="usage"] [data-part="item"]')).toHaveCount(2);
+  requests.length = 0;
+  await page.getByLabel("Model", { exact: true }).pressSequentially("abc", { delay: 50 });
+  await expect.poll(() => requests.length).toBe(1);
+  expect(new URL(requests[0] ?? "http://invalid").searchParams.get("model")).toBe("abc");
   await page.getByLabel("Model", { exact: true }).fill("fake-model");
   const rows = page.locator('[data-page="usage"] [data-part="item"]');
   await expect(rows).toHaveCount(1);
