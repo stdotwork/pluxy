@@ -47,6 +47,7 @@ var loginMethods = []protocol.LoginMethod{
 // renewing, never a model request. It follows no redirect, which would send the form or token
 // wherever the redirect points.
 var authClient = &http.Client{
+	Transport:     sdk.Upstream(http.DefaultTransport.(*http.Transport).Clone()),
 	Timeout:       30 * time.Second,
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 }

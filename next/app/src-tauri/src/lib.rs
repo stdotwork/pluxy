@@ -8,6 +8,8 @@
 
 pub mod client;
 mod command_names;
+#[cfg(target_os = "linux")]
+pub mod confirmation;
 pub mod conn;
 pub mod managed;
 #[cfg(feature = "native-test")]
@@ -39,6 +41,8 @@ pub const MAIN: &str = "main";
 
 struct App {
     conn: Mutex<Connection>,
+    #[cfg(target_os = "linux")]
+    confirmations: Mutex<confirmation::Confirmations>,
     /// The page webviews' own web context's folder: nothing shared with the window's.
     pages_dir: std::path::PathBuf,
     pages: Mutex<Pages>,
@@ -141,6 +145,8 @@ fn close_pages(app: &AppHandle) {
 fn quit(app: &AppHandle) {
     let st = app.state::<App>();
     st.quitting.store(true, Ordering::SeqCst);
+    #[cfg(target_os = "linux")]
+    st.confirmations.lock().unwrap().invalidate();
     st.conn.lock().unwrap().stop_core();
     app.exit(0);
 }
@@ -149,8 +155,15 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let status = MenuItem::with_id(app, "status", "Not connected", false, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open pluxy", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit pluxy", true, None::<&str>)?;
+    let access = MenuItem::with_id(
+        app,
+        "launch-settings",
+        "Remembered launches…",
+        cfg!(target_os = "linux"),
+        None::<&str>,
+    )?;
     let sep = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&status, &sep, &open, &quit_item])?;
+    let menu = Menu::with_items(app, &[&status, &sep, &open, &access, &quit_item])?;
     let mut tray = TrayIconBuilder::with_id("pluxy")
         .tooltip("pluxy")
         .menu(&menu)
@@ -159,6 +172,10 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 let _ = open_window(app);
             }
             "quit" => quit(app),
+            #[cfg(target_os = "linux")]
+            "launch-settings" => {
+                let _ = confirmation::settings(app);
+            }
             _ => {}
         })
         .on_tray_icon_event(|tray, e| {
@@ -238,6 +255,8 @@ async fn core_call(
     body: Option<Value>,
 ) -> Result<client::Reply, String> {
     trusted(&webview)?;
+    #[cfg(feature = "native-test")]
+    native_test::ingress_operation(&method, &path);
     let caller = state.conn.lock().unwrap().caller();
     tauri::async_runtime::spawn_blocking(move || caller.call(&method, &path, body.as_ref()))
         .await
@@ -287,14 +306,43 @@ fn page_open(
         pages_origin,
     })?;
     let app_doc = page_scheme_url();
+    let navigation_app = webview.app_handle().clone();
+    let navigation_label = label.clone();
     let builder = WebviewBuilder::new(&label, WebviewUrl::CustomProtocol(app_doc.clone()))
         // A web context of their own, apart from the window's storage and cookies. Not
         // `incognito`: on Linux, Tauri then gives the webview no custom schemes at all.
         .data_directory(state.pages_dir.clone())
         .devtools(false)
         // The app's document at the top, the page's site in its frame; nowhere else.
-        .on_navigation(move |u| *u == app_doc || u.origin() == origin)
-        .on_new_window(|_, _| NewWindowResponse::Deny);
+        .on_navigation(move |u| {
+            navigation_app
+                .state::<App>()
+                .pages
+                .lock()
+                .unwrap()
+                .frame_navigation(&navigation_label, u);
+            notify_page_closed(&navigation_app, &navigation_label);
+            #[cfg(feature = "native-test")]
+            if u.scheme() == pages::SCHEME
+                && u.host_str() == Some("localhost")
+                && u.path() == "/ingress-test"
+            {
+                return true;
+            }
+            *u == app_doc || u.origin() == origin
+        })
+        .on_new_window(|_, _| NewWindowResponse::Deny)
+        .on_page_load(|wv, p| {
+            if p.event() == PageLoadEvent::Started {
+                wv.app_handle()
+                    .state::<App>()
+                    .pages
+                    .lock()
+                    .unwrap()
+                    .begin_document(wv.label());
+                notify_page_closed(wv.app_handle(), wv.label());
+            }
+        });
     let window: Window = webview.window();
     let b = rect.bounds();
     let placed = window
@@ -348,12 +396,101 @@ fn page_close(webview: Webview, state: tauri::State<App>, label: String) -> Resu
 
 /// Delivers a message of the window's channel to a page webview's app document.
 #[tauri::command]
-fn page_send(webview: Webview, label: String, msg: Value) -> Result<(), String> {
+fn page_send(
+    webview: Webview,
+    label: String,
+    generation: String,
+    msg: Value,
+) -> Result<(), String> {
     trusted(&webview)?;
-    let js = pages::delivery(&msg)?;
-    page_webview(webview.app_handle(), &label)?
-        .eval(js)
-        .map_err(|e| e.to_string())
+    deliver_page(webview.app_handle(), &label, &generation, msg)
+}
+
+fn deliver_page(app: &AppHandle, label: &str, generation: &str, msg: Value) -> Result<(), String> {
+    let target = page_webview(app, label)?;
+    let prepared = app
+        .state::<App>()
+        .pages
+        .lock()
+        .unwrap()
+        .prepare_delivery(label, generation, &msg)?;
+    let Some((js, ticket)) = prepared else {
+        return Ok(());
+    };
+    let callback_app = app.clone();
+    let callback_label = label.to_string();
+    let callback_generation = generation.to_string();
+    let callback_msg = serde_json::json!({"type":msg["type"],"data":{"id":msg["data"]["id"],"event":msg["data"]["event"],"error":{"code":msg["data"]["error"]["code"]}}});
+    let result = target
+        .eval_with_callback(js, move |result| {
+            finish_page_delivery(
+                &callback_app,
+                &callback_label,
+                &callback_generation,
+                &callback_msg,
+                ticket,
+                result == "true",
+            );
+        })
+        .map_err(|e| e.to_string());
+    if result.is_err() {
+        finish_page_delivery(app, label, generation, &msg, ticket, false);
+    }
+    result
+}
+
+fn finish_page_delivery(
+    app: &AppHandle,
+    label: &str,
+    generation: &str,
+    msg: &Value,
+    ticket: u64,
+    delivered: bool,
+) {
+    let next = app
+        .state::<App>()
+        .pages
+        .lock()
+        .unwrap()
+        .finish_delivery(label, generation, msg, ticket, delivered);
+    notify_page_closed(app, label);
+    if let Some(next) = next {
+        let _ = deliver_page(app, label, generation, next);
+    }
+}
+
+fn notify_page_closed(app: &AppHandle, label: &str) {
+    let closed = app.state::<App>().pages.lock().unwrap().take_closed(label);
+    if let Some(closed) = closed {
+        let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-page", closed);
+    }
+}
+
+/// Initiates review of a native-prepared action. No approval result, recipe or gesture input.
+#[tauri::command]
+fn confirmation_request(webview: Webview, action: String) -> Result<(), String> {
+    trusted(&webview)?;
+    #[cfg(target_os = "linux")]
+    {
+        confirmation::request(webview.app_handle(), action)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = action;
+        Err("native confirmations are supported on Linux only".into())
+    }
+}
+#[tauri::command]
+fn confirmation_settings(webview: Webview) -> Result<(), String> {
+    trusted(&webview)?;
+    #[cfg(target_os = "linux")]
+    {
+        confirmation::settings(webview.app_handle())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err("native confirmations are supported on Linux only".into())
+    }
 }
 
 /// The `pluxy-page:` scheme: the page webviews' app document and their way to the window.
@@ -366,17 +503,33 @@ fn page_scheme(
     let label = ctx.webview_label().to_string();
     let (served, msg) = {
         let st = app.state::<App>();
-        let pages = st.pages.lock().unwrap();
+        let mut pages = st.pages.lock().unwrap();
         pages::serve(
-            &pages,
+            &mut pages,
             &label,
             request.method().as_str(),
             request.uri().path(),
             request.body(),
         )
     };
+    #[cfg(feature = "native-test")]
+    native_test::ingress_count(
+        request.method().as_str(),
+        request.uri().path(),
+        served.status,
+        request.uri().query(),
+    );
     if let Some(m) = msg {
-        let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-page", m);
+        #[cfg(all(target_os = "linux", feature = "native-test"))]
+        if m.kind == "call" && m.data.get("id").and_then(Value::as_str) == Some("spoof-confirm") {
+            confirmation::native::PAGE_CLAIMS.fetch_add(1, Ordering::SeqCst);
+        }
+        let result = app.emit_to(EventTarget::webview(MAIN), "pluxy-page", m);
+        #[cfg(feature = "native-test")]
+        if result.is_ok() {
+            native_test::ingress_forwarded();
+        }
+        let _ = result;
     }
     let resp = Response::builder()
         .status(served.status)
@@ -387,6 +540,15 @@ fn page_scheme(
         .header("Referrer-Policy", "no-referrer")
         .body(served.body)
         .expect("a response");
+    #[cfg(feature = "native-test")]
+    let resp = {
+        let mut resp = resp;
+        resp.headers_mut().insert(
+            "Access-Control-Allow-Origin",
+            tauri::http::HeaderValue::from_static("*"),
+        );
+        resp
+    };
     responder.respond(resp);
 }
 
@@ -403,10 +565,15 @@ pub fn run() {
             page_place,
             page_close,
             page_send,
+            confirmation_request,
+            confirmation_settings,
         ])
         .register_asynchronous_uri_scheme_protocol(pages::SCHEME, page_scheme)
         .setup(|app| {
             let config = app.path().app_config_dir()?;
+            #[cfg(target_os = "linux")]
+            let confirmations =
+                confirmation::Confirmations::open(config.join("remembered-launches.json"))?;
             let core = app.path().app_data_dir()?.join("core");
             // When the app's core exits, the tray and the window show it. Off this thread: the
             // exit may come while a connection change holds the connection.
@@ -427,6 +594,8 @@ pub fn run() {
             let _ = std::fs::remove_dir_all(&pages_dir);
             app.manage(App {
                 conn: Mutex::new(conn),
+                #[cfg(target_os = "linux")]
+                confirmations: Mutex::new(confirmations),
                 pages_dir,
                 pages: Mutex::new(Pages::default()),
                 status: Mutex::new(None),
@@ -434,6 +603,17 @@ pub fn run() {
                 quitting: AtomicBool::new(false),
             });
             let handle = app.handle().clone();
+            #[cfg(target_os = "linux")]
+            if let Some(message) = handle
+                .state::<App>()
+                .confirmations
+                .lock()
+                .unwrap()
+                .startup_warning
+                .take()
+            {
+                confirmation::ui_notice(&handle, message);
+            }
             match build_tray(&handle) {
                 Ok(()) => handle.state::<App>().has_tray.store(true, Ordering::SeqCst),
                 // No tray: closing the window quits the app.
@@ -461,6 +641,12 @@ pub fn run() {
                     quit(app);
                 }
                 WindowEvent::Destroyed => {
+                    #[cfg(target_os = "linux")]
+                    app.state::<App>()
+                        .confirmations
+                        .lock()
+                        .unwrap()
+                        .invalidate();
                     // Its webviews went with it.
                     app.state::<App>().pages.lock().unwrap().clear();
                     place::forget_all();

@@ -12,14 +12,21 @@
 // - quitting stops the app's own core, and leaves a local or remote core running.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
-// own (dbus-run-session, xvfb-run), and random ports. Run from next/app: bun native/run.ts (needs
-// dbus-run-session, xvfb-run, Go and cargo).
+// own (dbus-run-session, xvfb-run), and random ports. Inside that session, before the app,
+// native/session.ts starts the desktop services later checks need (the portals and a tray
+// watcher), checks each of them for real, and runs a disposable AppImage with
+// APPIMAGE_EXTRACT_AND_RUN=1; a missing or broken service fails the run at setup (services.ts
+// names the packages). Run from next/app: bun native/run.ts (needs dbus-run-session, xvfb-run,
+// Go, cargo and those services).
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline";
+import { buildSmokeAppImage } from "./appimage";
+import { missingPrerequisites } from "./services";
 
 const app = join(import.meta.dir, "..");
 const next = join(app, "..");
@@ -34,6 +41,9 @@ const REFUSED = /not allowed( on window|\. Permissions associated| by ACL)/;
 const TIMEOUT = 240_000;
 
 type Mode = "managed" | "local" | "remote";
+/** The session's setup failed (session.ts said what is missing or broken, and never said it was
+ * ready): the app never ran, and the other modes would fail the same way. */
+class SetupError extends Error {}
 type Step = Record<string, unknown>;
 interface Call {
   ok: boolean;
@@ -75,8 +85,8 @@ async function startCore(
   return { proc, ...JSON.parse(line) };
 }
 
-/** The web processes among pid's descendants. */
-function webProcesses(pid: number): number {
+/** The processes among pid's descendants, with their names. */
+function descendants(pid: number): Map<number, string> {
   const parent = new Map<number, number>();
   const name = new Map<number, string>();
   for (const d of readdirSync("/proc")) {
@@ -90,17 +100,62 @@ function webProcesses(pid: number): number {
       // gone already
     }
   }
-  let n = 0;
+  const found = new Map<number, string>();
   for (const [p, comm] of name) {
-    if (!comm.startsWith("WebKitWebProces")) continue;
     for (let q = parent.get(p); q !== undefined && q > 1; q = parent.get(q)) {
       if (q === pid) {
-        n++;
+        found.set(p, comm);
         break;
       }
     }
   }
-  return n;
+  return found;
+}
+
+/** The web processes among pid's descendants. */
+function webProcesses(pid: number): number {
+  return [...descendants(pid).values()].filter((comm) => comm.startsWith("WebKitWebProces")).length;
+}
+
+/** Sends signal to the process group pid leads (each session runs in a group of its own). */
+function signalGroup(pid: number, signal: NodeJS.Signals) {
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    // gone already
+  }
+}
+
+/** The sessions still running, so an interrupted run can stop them. */
+const sessions = new Set<number>();
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.on(signal, () => {
+    // Bounded: TERM, a grace period, then KILL for each session, before the runner exits.
+    void Promise.all([...sessions].map(stopSession)).finally(() => process.exit(130));
+  });
+}
+
+/** Stops a session that did not finish: TERM first, so session.ts stops the services it started,
+ * then KILL for its whole group and every process still below it. */
+async function stopSession(pid: number) {
+  signalGroup(pid, "SIGTERM");
+  await Bun.sleep(10_000);
+  signalGroup(pid, "SIGKILL");
+  for (let i = 0; i < 3 && descendants(pid).size > 0; i++) {
+    killTree(pid);
+    await Bun.sleep(500);
+  }
+}
+
+/** Kills pid and everything it started: its session's bus, X server and services too. */
+function killTree(pid: number) {
+  for (const p of [...descendants(pid).keys(), pid]) {
+    try {
+      process.kill(p, "SIGKILL");
+    } catch {
+      // gone already
+    }
+  }
 }
 
 function alive(pid: number): boolean {
@@ -156,23 +211,47 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
       LIBGL_ALWAYS_SOFTWARE: "1",
       NO_AT_BRIDGE: "1",
       GTK_USE_PORTAL: "0",
+      // The FUSE-free way to run an AppImage, which the session's smoke AppImage uses.
+      APPIMAGE_EXTRACT_AND_RUN: "1",
       PLUXY_APP_TEST_PAGE: PAGE,
       PLUXY_APP_TEST_QUIT: quit,
     };
-    const xvfb = ["xvfb-run", "-a", "-s", "-screen 0 1280x800x24 -nolisten tcp", bin];
+    // The session script starts and checks the desktop services, then runs the app.
+    const session = [
+      process.execPath,
+      join(import.meta.dir, "session.ts"),
+      probe,
+      appImage,
+      randomUUID(),
+      bin,
+    ];
+    const xvfb = ["xvfb-run", "-a", "-s", "-screen 0 1280x800x24 -nolisten tcp", ...session];
     const proc = spawn("dbus-run-session", ["--", ...xvfb], {
       env,
       // Some xvfb-run versions send the program's stderr to stdout: read both.
       stdio: ["ignore", "pipe", "pipe"],
+      // A process group of its own, so a run that hangs can be stopped as a whole.
+      detached: true,
     });
     const steps = new Map<string, Step>();
     const reached: string[] = [];
     let before = 0;
     let after = -1;
     const pid = proc.pid ?? 0;
+    sessions.add(pid);
+    let ready = false; // session.ts said its setup is done and the app starts
     if (!proc.stderr || !proc.stdout) throw new Error("the app's output is not piped");
     const log: string[] = []; // the app's last lines, shown when the run fails
+    const setup: string[] = []; // session.ts's report of what failed at setup
     const onLine = (line: string) => {
+      // The session's service checks are always shown: they say what this run stood on.
+      if (line.startsWith("native-prereq: ")) {
+        console.log(`  ${mode} | ${line}`);
+        if (line === "native-prereq: ready") ready = true;
+        if (line.startsWith("native-prereq: FAILED "))
+          setup.push(line.slice("native-prereq: FAILED ".length));
+        return;
+      }
       const m = /^native-test: (\w+) (.*)$/.exec(line);
       if (!m) {
         if (process.env.PLUXY_APP_TEST_VERBOSE) console.error(`  ${mode} | ${line}`);
@@ -187,6 +266,7 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
         return;
       }
       steps.set(step, value);
+      if (step === "confirmations") console.log(`  ${mode} | native confirmations: ${JSON.stringify(value)}`);
       if (step === "frame") before = webProcesses(pid);
       if (step === "closed") {
         // Give the web processes a moment to exit, then let the app quit.
@@ -197,17 +277,27 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
       }
     };
     for (const stream of [proc.stdout, proc.stderr]) createInterface({ input: stream }).on("line", onLine);
+    let stopping: Promise<void> | undefined;
     const code = await new Promise<number | null>((resolve) => {
       const timer = setTimeout(() => {
         problems.push(`the app did not finish within ${TIMEOUT / 1000}s`);
-        proc.kill("SIGKILL");
+        stopping = stopSession(pid);
       }, TIMEOUT);
-      proc.on("exit", (c) => {
+      // "close", not "exit": it comes after the output is read, so the "ready" line is not missed.
+      proc.on("close", (c) => {
         clearTimeout(timer);
         resolve(c);
       });
     });
+    await stopping;
+    sessions.delete(pid);
 
+    // Only session.ts's own "ready" line says the app ran: an exit code alone could be the app's.
+    if (!ready) {
+      throw new SetupError(
+        setup.length > 0 ? setup.join("\n") : `the session ended (${code}) before it was ready`,
+      );
+    }
     check(code === 0, `the app exited with ${code}`);
     check(!steps.has("failed"), `the app's test steps failed: ${JSON.stringify(steps.get("failed"))}`);
 
@@ -255,6 +345,39 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
       check(fine, `from the page's frame, "${what}" ${r.status}: ${r.detail}`);
     }
 
+    for (const [step, expected] of [
+      ["ingress_site", { attempts: 1, arrivals: 0, blocked: true }],
+      ["ingress_recovery", { error: "unavailable", control: true }],
+      [
+        "ingress_navigation",
+        { native_closed: true, wrapper_closed_suppressed: true, status: 409, window_closed: true },
+      ],
+      ["ingress_closed", { closed: 204, subsequent_call: 409 }],
+      [
+        "http_navigation",
+        {
+          native_closed: true,
+          status: 409,
+          wrapper_closed_suppressed: true,
+          window_closed: true,
+          fragment_open: true,
+        },
+      ],
+    ] as const) {
+      const value = steps.get(step);
+      check(
+        value && Object.entries(expected).every(([key, want]) => value[key] === want),
+        `${step} evidence missing or wrong: ${JSON.stringify(value)}`,
+      );
+      console.log(`${mode} ${step} ${JSON.stringify(value)}`);
+    }
+
+    const ingress = steps.get("ingress");
+    check(ingress?.control === true, "the native ingress check did not finish");
+    if (ingress) console.log(`${mode} native ingress ${JSON.stringify(ingress)}`);
+
+    check(steps.get("confirmations")?.passed === true, "native confirmation checks did not complete");
+
     // Closing the window frees its webviews; the app stays in the tray.
     const closed = steps.get("closed") as
       | { webviews: string[]; tray: boolean; core_pid?: number }
@@ -288,40 +411,74 @@ async function removeRun(root: string) {
       return;
     } catch (e) {
       if (i === 20) throw e;
-      if (i === 10) spawnSync("fusermount", ["-u", "-z", join(root, "runtime", "doc")]);
+      if (i === 10) {
+        for (const tool of ["fusermount3", "fusermount"])
+          spawnSync(tool, ["-u", "-z", join(root, "runtime", "doc")]);
+      }
       await Bun.sleep(500);
     }
   }
 }
 
+// The services and tools the session needs, before anything is built.
+const missing = missingPrerequisites();
+if (missing.length > 0) {
+  console.error(
+    `native test setup failed: services or tools it needs are not installed (Ubuntu 24.04 package names):\n- ${missing.join("\n- ")}`,
+  );
+  process.exit(1);
+}
+
 run("bun", ["run", "build"], app);
-run("cargo", ["build", "--locked", "--features", "native-test"], tauri);
-const bin = join(tauri, "target", "debug", "pluxy-app");
+// The app, and the probe the session uses to check the desktop services (examples/session_probe.rs).
+run(
+  "cargo",
+  ["build", "--locked", "--features", "native-test", "--bin", "pluxy-app", "--example", "session_probe"],
+  tauri,
+);
+const targetDir = resolvePath(tauri, process.env.CARGO_TARGET_DIR ?? "target");
+const bin = join(targetDir, "debug", "pluxy-app");
+const probe = join(targetDir, "debug", "examples", "session_probe");
+const appImageDir = mkdtempSync(join(tmpdir(), "pluxy-app-native-appimage-"));
 const problems: string[] = [];
+let appImage = ""; // the smoke AppImage the sessions run
+let setupFailure: string | undefined;
 
-const prepared = mkdtempSync(join(tmpdir(), "pluxy-app-native-core-"));
 try {
-  const { core } = JSON.parse(run("go", ["run", "./e2e/panelcore", "-probe", "-prepare", prepared], next));
-  const p = await runApp("managed", bin, { mode: "managed", core_path: core });
-  problems.push(...p.map((x) => `managed: ${x}`));
-} finally {
-  rmSync(prepared, { recursive: true, force: true });
-}
-
-for (const mode of ["local", "remote"] as const) {
-  const c = await startCore(mode === "remote");
+  appImage = await buildSmokeAppImage(appImageDir);
+  const prepared = mkdtempSync(join(tmpdir(), "pluxy-app-native-core-"));
   try {
-    const conn = { mode, url: c.base, key: c.key, ...(c.ca ? { ca_file: c.ca } : {}) };
-    const p = await runApp(mode, bin, conn, c.base);
-    // The app only connected: its quitting leaves this core running.
-    if ((await managementStatus(c.base, c.key, c.ca)) !== 200) p.push("the core stopped when the app quit");
-    problems.push(...p.map((x) => `${mode}: ${x}`));
+    const { core } = JSON.parse(run("go", ["run", "./e2e/panelcore", "-probe", "-prepare", prepared], next));
+    const p = await runApp("managed", bin, { mode: "managed", core_path: core });
+    problems.push(...p.map((x) => `managed: ${x}`));
   } finally {
-    c.proc.stdin?.end();
-    await new Promise((r) => c.proc.once("exit", r));
+    rmSync(prepared, { recursive: true, force: true });
   }
+
+  for (const mode of ["local", "remote"] as const) {
+    const c = await startCore(mode === "remote");
+    try {
+      const conn = { mode, url: c.base, key: c.key, ...(c.ca ? { ca_file: c.ca } : {}) };
+      const p = await runApp(mode, bin, conn, c.base);
+      // The app only connected: its quitting leaves this core running.
+      if ((await managementStatus(c.base, c.key, c.ca)) !== 200) p.push("the core stopped when the app quit");
+      problems.push(...p.map((x) => `${mode}: ${x}`));
+    } finally {
+      c.proc.stdin?.end();
+      await new Promise((r) => c.proc.once("exit", r));
+    }
+  }
+} catch (e) {
+  if (!(e instanceof SetupError)) throw e;
+  setupFailure = e.message;
+} finally {
+  rmSync(appImageDir, { recursive: true, force: true });
 }
 
+if (setupFailure !== undefined) {
+  console.error(`\nnative test setup failed:\n${setupFailure}`);
+  process.exit(1);
+}
 if (problems.length > 0) {
   console.error(`\n${problems.length} problems:\n- ${problems.join("\n- ")}`);
   process.exit(1);

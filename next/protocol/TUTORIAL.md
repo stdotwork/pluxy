@@ -91,6 +91,8 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 }
 ```
 
+For upstream HTTP clients, wrap the configured transport with `sdk.Upstream(base)`, including clients for login, token refresh and WebSocket handshakes.
+
 The rules the SDK holds you to:
 
 - Start with `Start`, open items before writing to them, close them before `Finish`. Breaking the
