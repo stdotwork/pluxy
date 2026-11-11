@@ -91,6 +91,11 @@ export const PARTS = [
   "select",
   "batch",
   "account-meta",
+  "key-notice",
+  "key-value",
+  "method",
+  "flow",
+  "device-code",
 ] as const;
 
 export type Part = (typeof PARTS)[number];

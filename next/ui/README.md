@@ -17,8 +17,10 @@ pages in the same places.
 ## How a host build uses the kit
 
 A host implements `Host` (`kit/host.ts`): calling core's management API with the key, signing in
-and out, keeping small settings, and saying which optional features it has. The kit never holds
-the management key and never builds a URL to core; it asks the host. In the browser,
+and out, keeping small settings, and saying which optional features it has. The kit asks the host
+to call core and never builds its URL. After rotation, the kit holds the newly generated management
+key in page state until its notice closes or the person leaves its tab after seeing it. A reply
+that arrives after leaving the tab waits in page state until the person returns to see it. In the browser,
 `panel/browserHost.ts` sends every call to `/v0/management` on the origin that served the panel,
 and only those calls carry the key. The desktop app implements the same interface over its own
 connection to core, holding the key in its native side.
