@@ -120,14 +120,8 @@ pub fn validate(inputs: &ReleaseInputs) -> Result<(), String> {
     {
         return Err("cargo feature snapshot mismatch".into());
     }
-    let mut receipt_found = false;
     for artifact in &inputs.artifacts {
-        receipt_found |= scan_artifact(artifact)?;
-    }
-    if !receipt_found {
-        return Err(
-            "app artifact lacks matching build receipt; include the actual app executable".into(),
-        );
+        scan_artifact(artifact)?;
     }
     Ok(())
 }
@@ -246,21 +240,120 @@ const FORBIDDEN: [(&[u8], &str); 4] = [
     ),
 ];
 
-/// Checks one artifact: its bytes and, for an AppImage, every file inside it. Says whether it
-/// holds this build's receipt.
-fn scan_artifact(path: &Path) -> Result<bool, String> {
+/// Checks one artifact. Each must be the app executable or a type-2 AppImage holding it, and
+/// carry this build's receipt itself.
+fn scan_artifact(path: &Path) -> Result<(), String> {
     let meta =
         fs::symlink_metadata(path).map_err(|e| format!("artifact missing/unreadable: {e}"))?;
     if !meta.is_file() {
         return Err("artifact must be a regular file".into());
     }
     let what = path.display().to_string();
-    let file = fs::File::open(path).map_err(|e| format!("{what}: {e}"))?;
-    match appimage_offset(path)? {
-        None => scan_stream(file, &what),
-        // The runtime part as bytes; the squashfs image by the files in it.
-        Some(offset) => Ok(scan_stream(file.take(offset), &what)? | scan_appimage(path, offset)?),
+    let open = || fs::File::open(path).map_err(|e| format!("{what}: {e}"));
+    let receipt = match format(path)? {
+        Format::Executable => scan_stream(open()?, &what)?,
+        Format::AppImage(offset) => {
+            // The files inside first, then every byte of the AppImage itself.
+            let inside = scan_appimage(path, offset)?;
+            scan_stream(open()?, &what)?;
+            inside
+        }
+    };
+    if !receipt {
+        return Err(format!(
+            "{what}: lacks the matching build receipt; include the actual app executable"
+        ));
     }
+    Ok(())
+}
+
+/// What an artifact is, from its first bytes; it is never run.
+enum Format {
+    /// An ELF executable or shared object, such as the app's own binary.
+    Executable,
+    /// A type-2 AppImage, whose squashfs image starts at this offset.
+    AppImage(u64),
+}
+
+/// Reads an artifact's ELF header. Anything that is not an ELF executable or a type-2 AppImage
+/// cannot be looked inside, so it is refused. For an AppImage: the squashfs image must start
+/// where the runtime's header says it ends, and nothing but zero padding may follow it.
+fn format(path: &Path) -> Result<Format, String> {
+    let what = path.display();
+    let mut file = fs::File::open(path).map_err(|e| format!("{what}: {e}"))?;
+    let mut header = Vec::new();
+    file.by_ref()
+        .take(64)
+        .read_to_end(&mut header)
+        .map_err(|e| format!("{what}: {e}"))?;
+    let unsupported = || {
+        format!("{what}: not an app executable (ELF) or a type-2 AppImage, so it cannot be checked")
+    };
+    if header.len() < 20 || header[..4] != *b"\x7fELF" || !matches!(header[5], 1 | 2) {
+        return Err(unsupported());
+    }
+    let field = |at: usize, len: usize| -> Result<u64, String> {
+        let bytes = header
+            .get(at..at + len)
+            .ok_or_else(|| format!("{what}: short ELF header"))?;
+        let mut value = 0u64;
+        for (i, b) in bytes.iter().enumerate() {
+            let shift = if header[5] == 1 { i } else { len - 1 - i };
+            value |= u64::from(*b) << (8 * shift);
+        }
+        Ok(value)
+    };
+    // The AppImage specification's magic: "AI" and the type at offset 8.
+    if header[8..10] != *b"AI" {
+        return match field(0x10, 2)? {
+            2 | 3 => Ok(Format::Executable),
+            _ => Err(unsupported()),
+        };
+    }
+    if header[10] != 2 {
+        return Err(format!(
+            "{what}: AppImage type {} cannot be checked, only type 2",
+            header[10]
+        ));
+    }
+    // The runtime's own size: its section header table ends it (e_shoff + e_shentsize * e_shnum).
+    let (shoff, shentsize, shnum) = match header[4] {
+        1 => (field(0x20, 4)?, field(0x2e, 2)?, field(0x30, 2)?),
+        2 => (field(0x28, 8)?, field(0x3a, 2)?, field(0x3c, 2)?),
+        _ => return Err(format!("{what}: unknown ELF class")),
+    };
+    let offset = shentsize
+        .checked_mul(shnum)
+        .and_then(|n| n.checked_add(shoff))
+        .ok_or_else(|| format!("{what}: ELF header out of range"))?;
+    // The squashfs superblock (always little-endian): magic, inode count and bytes_used.
+    let mut superblock = [0; 48];
+    file.seek(SeekFrom::Start(offset))
+        .and_then(|_| file.read_exact(&mut superblock))
+        .map_err(|_| format!("{what}: no squashfs image where its runtime ends"))?;
+    if superblock[..4] != *b"hsqs" {
+        return Err(format!("{what}: no squashfs image where its runtime ends"));
+    }
+    let inodes = u32::from_le_bytes(superblock[4..8].try_into().unwrap());
+    if u64::from(inodes) > UNPACKED_ENTRIES_MAX {
+        return Err(format!("{what}: too many entries to unpack ({inodes})"));
+    }
+    let used = u64::from_le_bytes(superblock[40..48].try_into().unwrap());
+    let len = file.metadata().map_err(|e| format!("{what}: {e}"))?.len();
+    let end = offset
+        .checked_add(used)
+        .filter(|end| *end <= len)
+        .ok_or_else(|| format!("{what}: its squashfs image is cut short"))?;
+    let mut tail = Vec::new();
+    file.seek(SeekFrom::Start(end))
+        .and_then(|_| file.by_ref().take(4096).read_to_end(&mut tail))
+        .map_err(|e| format!("{what}: {e}"))?;
+    if len - end >= 4096 || tail.iter().any(|b| *b != 0) {
+        return Err(format!(
+            "{what}: data after its squashfs image (only zero padding may follow it)"
+        ));
+    }
+    Ok(Format::AppImage(offset))
 }
 
 /// Streams reader with overlap, so markers split across reads are still found; no
@@ -314,63 +407,17 @@ fn first_of(hay: &[u8], needles: &[&[u8]]) -> Option<usize> {
     None
 }
 
-/// Where an AppImage's squashfs image starts, read from its ELF header, never by running it.
-/// None for a file that is not an AppImage (such as the app executable). Refuses an AppImage
-/// that is not of type 2, or whose image is not where the header ends.
-fn appimage_offset(path: &Path) -> Result<Option<u64>, String> {
-    let what = path.display();
-    let mut file = fs::File::open(path).map_err(|e| format!("{what}: {e}"))?;
-    let mut header = Vec::new();
-    file.by_ref()
-        .take(64)
-        .read_to_end(&mut header)
-        .map_err(|e| format!("{what}: {e}"))?;
-    // The AppImage specification's magic: an ELF file with "AI" and the type at offset 8.
-    if header.len() < 16 || header[..4] != *b"\x7fELF" || header[8..10] != *b"AI" {
-        return Ok(None);
-    }
-    if header[10] != 2 {
-        return Err(format!(
-            "{what}: AppImage type {} cannot be checked, only type 2",
-            header[10]
-        ));
-    }
-    let field = |at: usize, len: usize| -> Result<u64, String> {
-        let bytes = header
-            .get(at..at + len)
-            .ok_or_else(|| format!("{what}: short ELF header"))?;
-        let mut value = 0u64;
-        for (i, b) in bytes.iter().enumerate() {
-            let shift = if header[5] == 1 { i } else { len - 1 - i };
-            value |= u64::from(*b) << (8 * shift);
-        }
-        Ok(value)
-    };
-    if header[5] != 1 && header[5] != 2 {
-        return Err(format!("{what}: unknown ELF byte order"));
-    }
-    // The runtime's own size: its section header table ends it (e_shoff + e_shentsize * e_shnum).
-    let (shoff, shentsize, shnum) = match header[4] {
-        1 => (field(0x20, 4)?, field(0x2e, 2)?, field(0x30, 2)?),
-        2 => (field(0x28, 8)?, field(0x3a, 2)?, field(0x3c, 2)?),
-        _ => return Err(format!("{what}: unknown ELF class")),
-    };
-    let offset = shentsize
-        .checked_mul(shnum)
-        .and_then(|n| n.checked_add(shoff))
-        .ok_or_else(|| format!("{what}: ELF header out of range"))?;
-    let mut magic = [0; 4];
-    file.seek(SeekFrom::Start(offset))
-        .and_then(|_| file.read_exact(&mut magic))
-        .map_err(|_| format!("{what}: no squashfs image where its runtime ends"))?;
-    if magic != *b"hsqs" {
-        return Err(format!("{what}: no squashfs image where its runtime ends"));
-    }
-    Ok(Some(offset))
-}
+// Bounds for unpacking an AppImage: many times what the app's package needs.
+const UNPACKED_BYTES_MAX: u64 = 2 << 30;
+const UNPACKED_ENTRIES_MAX: u64 = 100_000;
+const UNPACKED_DEPTH_MAX: usize = 32;
+const UNPACK_SECONDS: u64 = 600;
+/// JSON inside an AppImage larger than this is refused rather than parsed.
+const JSON_MAX: u64 = 1 << 20;
 
-/// Unpacks an AppImage's squashfs image (unsquashfs, from offset) into a private temporary
-/// folder and checks every file in it; the folder is removed after.
+/// Unpacks an AppImage's squashfs image into a private temporary folder and checks every file in
+/// it. Says whether an app executable inside carries the build's receipt. The folder is removed
+/// after, and a failure to remove it is an error.
 fn scan_appimage(path: &Path, offset: u64) -> Result<bool, String> {
     let what = path.display().to_string();
     let mut random = [0; 12];
@@ -385,37 +432,162 @@ fn scan_appimage(path: &Path, offset: u64) -> Result<bool, String> {
     builder
         .create(&dir)
         .map_err(|e| format!("{}: {e}", dir.display()))?;
-    let result = unpack_and_scan(path, offset, &dir.join("root"), &what);
-    let _ = fs::remove_dir_all(&dir);
-    result
+    let result = unpack_and_scan(path, offset, &dir, &what);
+    let removed = remove_unpacked(&dir)
+        .map_err(|e| format!("{what}: could not remove {}: {e}", dir.display()));
+    match (result, removed) {
+        (Ok(receipt), Ok(())) => Ok(receipt),
+        (Err(e), Ok(())) | (Ok(_), Err(e)) => Err(e),
+        (Err(e), Err(r)) => Err(format!("{e}; {r}")),
+    }
 }
 
-fn unpack_and_scan(path: &Path, offset: u64, root: &Path, what: &str) -> Result<bool, String> {
-    let out = std::process::Command::new("unsquashfs")
-        .args([
-            "-no-progress",
-            "-no-xattrs",
-            "-offset",
-            &offset.to_string(),
-            "-dest",
-        ])
-        .arg(root)
-        .arg(path)
-        .output()
+/// Removes the unpacked folder, making folders unpacked read-only writable first. Links are never
+/// followed (file_type does not follow them).
+fn remove_unpacked(dir: &Path) -> std::io::Result<()> {
+    let mut folders = vec![dir.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        #[cfg(unix)]
+        fs::set_permissions(&folder, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
+        for entry in fs::read_dir(&folder)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                folders.push(entry.path());
+            }
+        }
+    }
+    fs::remove_dir_all(dir)
+}
+
+fn unpack_and_scan(path: &Path, offset: u64, dir: &Path, what: &str) -> Result<bool, String> {
+    let offset = offset.to_string();
+    let errors = dir.join("errors");
+    // The listing first, before anything is unpacked: entry kinds, count, depth and size.
+    let listing = dir.join("listing");
+    run_bounded(
+        std::process::Command::new("unsquashfs")
+            .args(["-lls", "-offset", &offset])
+            .arg(path),
+        &listing,
+        &errors,
+        what,
+    )?;
+    let listing = fs::read(&listing).map_err(|e| format!("{what}: {e}"))?;
+    check_listing(&String::from_utf8_lossy(&listing), what)?;
+    let root = dir.join("root");
+    run_bounded(
+        std::process::Command::new("unsquashfs")
+            .args(["-no-progress", "-no-xattrs", "-offset", &offset, "-dest"])
+            .arg(&root)
+            .arg(path),
+        &dir.join("output"),
+        &errors,
+        what,
+    )?;
+    let mut budget = Budget::default();
+    scan_tree(&root, &root, what, 0, &mut budget)
+}
+
+/// Runs unsquashfs with no input, its output in files, for at most UNPACK_SECONDS.
+fn run_bounded(
+    command: &mut std::process::Command,
+    out: &Path,
+    errors: &Path,
+    what: &str,
+) -> Result<(), String> {
+    let file = |p: &Path| fs::File::create(p).map_err(|e| format!("{}: {e}", p.display()));
+    let mut child = command
+        .stdin(std::process::Stdio::null())
+        .stdout(file(out)?)
+        .stderr(file(errors)?)
+        .spawn()
         .map_err(|e| {
             format!("{what}: unsquashfs (package squashfs-tools) checks AppImages: {e}")
         })?;
-    if !out.status.success() {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(UNPACK_SECONDS);
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|e| format!("{what}: {e}"))? {
+            break status;
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("{what}: unsquashfs took over {UNPACK_SECONDS}s"));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    if !status.success() {
+        let mut said = Vec::new();
+        let _ = fs::File::open(errors).and_then(|f| f.take(4096).read_to_end(&mut said));
         return Err(format!(
             "{what}: unsquashfs could not unpack it: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
+            String::from_utf8_lossy(&said).trim()
         ));
     }
-    scan_tree(root, root, what)
+    Ok(())
 }
 
-/// Checks a folder unpacked from an AppImage: names, link targets and contents, and trust JSON.
-fn scan_tree(root: &Path, dir: &Path, appimage: &str) -> Result<bool, String> {
+/// Checks `unsquashfs -lls` output before unpacking: only folders, regular files and links, and
+/// the bounds on entries, depth and unpacked size. Lines that are not entries are skipped; the
+/// unpacked tree is checked against the same bounds again.
+fn check_listing(listing: &str, what: &str) -> Result<(), String> {
+    let (mut entries, mut bytes) = (0u64, 0u64);
+    for line in listing.lines() {
+        let mut fields = line.split_whitespace();
+        let mode = fields.next().unwrap_or_default();
+        if mode.len() != 10 || !mode[1..].bytes().all(|b| b"rwxsStT-".contains(&b)) {
+            continue;
+        }
+        entries += 1;
+        match mode.as_bytes()[0] {
+            b'd' | b'l' => {}
+            b'-' => {
+                let size = fields.nth(1).and_then(|s| s.parse::<u64>().ok());
+                bytes = bytes.saturating_add(
+                    size.ok_or_else(|| format!("{what}: unreadable listing line: {line}"))?,
+                );
+            }
+            _ => return Err(format!("{what}: holds a device, pipe or socket: {line}")),
+        }
+        let path = line
+            .find(" squashfs-root")
+            .map(|i| &line[i + 1..])
+            .ok_or_else(|| format!("{what}: unreadable listing line: {line}"))?;
+        let path = path.split(" -> ").next().unwrap_or(path);
+        if path.matches('/').count() > UNPACKED_DEPTH_MAX {
+            return Err(format!("{what}: too deep to unpack: {path}"));
+        }
+    }
+    if entries == 0 {
+        return Err(format!("{what}: unsquashfs listed nothing"));
+    }
+    if entries > UNPACKED_ENTRIES_MAX {
+        return Err(format!("{what}: too many entries to unpack ({entries})"));
+    }
+    if bytes > UNPACKED_BYTES_MAX {
+        return Err(format!("{what}: too large to unpack ({bytes} bytes)"));
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct Budget {
+    entries: u64,
+    bytes: u64,
+}
+
+/// Checks a folder unpacked from an AppImage: names, links, contents, nested containers and JSON.
+/// Says whether an ELF file in it carries the build's receipt.
+fn scan_tree(
+    root: &Path,
+    dir: &Path,
+    appimage: &str,
+    depth: usize,
+    budget: &mut Budget,
+) -> Result<bool, String> {
+    if depth > UNPACKED_DEPTH_MAX {
+        return Err(format!("{appimage}!{}: too deep", dir.display()));
+    }
     let mut found = false;
     for entry in fs::read_dir(dir).map_err(|e| format!("{appimage}: {e}"))? {
         let path = entry.map_err(|e| format!("{appimage}: {e}"))?.path();
@@ -423,6 +595,10 @@ fn scan_tree(root: &Path, dir: &Path, appimage: &str) -> Result<bool, String> {
             "{appimage}!{}",
             path.strip_prefix(root).unwrap_or(&path).display()
         );
+        budget.entries += 1;
+        if budget.entries > UNPACKED_ENTRIES_MAX {
+            return Err(format!("{appimage}: too many entries to unpack"));
+        }
         let name = path
             .file_name()
             .unwrap_or_default()
@@ -434,27 +610,130 @@ fn scan_tree(root: &Path, dir: &Path, appimage: &str) -> Result<bool, String> {
         }
         let meta = fs::symlink_metadata(&path).map_err(|e| format!("{what}: {e}"))?;
         if meta.is_dir() {
-            found |= scan_tree(root, &path, appimage)?;
+            found |= scan_tree(root, &path, appimage, depth + 1, budget)?;
         } else if meta.is_symlink() {
-            // Never followed: its target is checked as text.
             let target = fs::read_link(&path).map_err(|e| format!("{what}: {e}"))?;
             let target = target.to_string_lossy().to_ascii_lowercase();
             if target.contains("pluxy") && target.contains("test") {
                 return Err(format!("{what}: link to a test file name in package"));
             }
+            check_link(root, &path, &what)?;
         } else if meta.is_file() {
-            let file = fs::File::open(&path).map_err(|e| format!("{what}: {e}"))?;
-            found |= scan_stream(file, &what)?;
-            if name.ends_with(".json") && meta.len() <= 64 * 1024 {
-                let bytes = fs::read(&path).map_err(|e| format!("{what}: {e}"))?;
-                // Only trust-shaped JSON parses (closed schema); it must be empty.
-                if serde_json::from_slice::<TrustConfig>(&bytes).is_ok() {
-                    empty_trust(&bytes).map_err(|e| format!("{what}: {e}"))?;
-                }
+            budget.bytes += meta.len();
+            if budget.bytes > UNPACKED_BYTES_MAX {
+                return Err(format!("{appimage}: too large to unpack"));
             }
+            let mut file = fs::File::open(&path).map_err(|e| format!("{what}: {e}"))?;
+            let mut head = Vec::new();
+            file.by_ref()
+                .take(512)
+                .read_to_end(&mut head)
+                .map_err(|e| format!("{what}: {e}"))?;
+            if let Some(kind) = container(&head) {
+                return Err(format!(
+                    "{what}: compressed or archive file ({kind}) cannot be checked"
+                ));
+            }
+            file.seek(SeekFrom::Start(0))
+                .map_err(|e| format!("{what}: {e}"))?;
+            let receipt = scan_stream(file, &what)?;
+            found |= receipt && head.starts_with(b"\x7fELF");
+            check_json(&path, &name, &head, meta.len(), &what)?;
         } else {
             return Err(format!("{what}: not a regular file, folder or link"));
         }
     }
     Ok(found)
+}
+
+/// A link must lead, inside the package, to something that exists there. Targets are resolved
+/// by their text, never by following a link out of the folder.
+fn check_link(root: &Path, link: &Path, what: &str) -> Result<(), String> {
+    use std::path::Component;
+    let mut current = link.to_path_buf();
+    for _ in 0..40 {
+        let target = fs::read_link(&current).map_err(|e| format!("{what}: {e}"))?;
+        let mut inside: Vec<std::ffi::OsString> = current
+            .parent()
+            .and_then(|p| p.strip_prefix(root).ok())
+            .ok_or_else(|| format!("{what}: link outside the package"))?
+            .iter()
+            .map(|c| c.to_os_string())
+            .collect();
+        for part in target.components() {
+            match part {
+                Component::Normal(p) => inside.push(p.to_os_string()),
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    if inside.pop().is_none() {
+                        return Err(format!("{what}: link leads outside the package"));
+                    }
+                }
+                Component::RootDir | Component::Prefix(_) => {
+                    return Err(format!("{what}: link to an absolute path"));
+                }
+            }
+        }
+        let next = inside.iter().fold(root.to_path_buf(), |p, c| p.join(c));
+        let meta =
+            fs::symlink_metadata(&next).map_err(|_| format!("{what}: link to a missing file"))?;
+        if !meta.is_symlink() {
+            return Ok(());
+        }
+        current = next;
+    }
+    Err(format!("{what}: too many links in a row"))
+}
+
+/// The kind of a compressed or archive file, from its first bytes: none can be looked inside.
+fn container(head: &[u8]) -> Option<&'static str> {
+    const MAGIC: [(&[u8], &str); 14] = [
+        (b"\x1f\x8b", "gzip"),
+        (b"BZh", "bzip2"),
+        (b"\xfd7zXZ\x00", "xz"),
+        (b"\x28\xb5\x2f\xfd", "zstd"),
+        (b"\x04\x22\x4d\x18", "lz4"),
+        (b"PK\x03\x04", "zip"),
+        (b"PK\x05\x06", "zip"),
+        (b"7z\xbc\xaf\x27\x1c", "7z"),
+        (b"Rar!\x1a\x07", "rar"),
+        (b"hsqs", "squashfs"),
+        (b"070701", "cpio"),
+        (b"070702", "cpio"),
+        (b"070707", "cpio"),
+        (b"!<arch>\n", "ar"),
+    ];
+    if let Some((_, kind)) = MAGIC.iter().find(|(m, _)| head.starts_with(m)) {
+        return Some(kind);
+    }
+    if head.get(257..262) == Some(b"ustar") {
+        return Some("tar");
+    }
+    if head.len() >= 11 && head[..4] == *b"\x7fELF" && head[8..10] == *b"AI" {
+        return Some("AppImage");
+    }
+    None
+}
+
+/// JSON inside a package: a file named .json, or one that starts with `{`. It is decoded before
+/// it is checked, so escapes cannot hide a name or field; trust-shaped JSON, whatever its name,
+/// must be empty trust; JSON that cannot be checked is refused.
+fn check_json(path: &Path, name: &str, head: &[u8], len: u64, what: &str) -> Result<(), String> {
+    let named = name.ends_with(".json");
+    if !named && head.iter().find(|b| !b.is_ascii_whitespace()) != Some(&b'{') {
+        return Ok(());
+    }
+    if len > JSON_MAX {
+        return Err(format!("{what}: JSON too large to check"));
+    }
+    let bytes = fs::read(path).map_err(|e| format!("{what}: {e}"))?;
+    let value: Value = match serde_json::from_slice(&bytes) {
+        Ok(value) => value,
+        Err(_) if named => return Err(format!("{what}: invalid JSON")),
+        Err(_) => return Ok(()),
+    };
+    if value.get("roots").is_some() || value.get("updater").is_some() {
+        empty_trust(&bytes).map_err(|e| format!("{what}: {e}"))?;
+    }
+    reject_test(&value).map_err(|e| format!("{what}: {e}"))
 }
