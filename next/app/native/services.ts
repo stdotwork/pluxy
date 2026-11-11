@@ -55,5 +55,7 @@ export function missingPrerequisites(): string[] {
   }
   if (!Bun.which("mksquashfs")) missing.push(`${squashfs.what}: not on PATH (package ${squashfs.package})`);
   if (!Bun.which("xdotool")) missing.push("xdotool: not on PATH (package xdotool)");
+  // Makes the fake release feed's certificate authority (feed.ts).
+  if (!Bun.which("openssl")) missing.push("openssl: not on PATH (package openssl)");
   return missing;
 }

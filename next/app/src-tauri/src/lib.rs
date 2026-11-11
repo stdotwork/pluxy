@@ -26,6 +26,8 @@ pub mod pages;
 mod place;
 #[cfg(debug_assertions)]
 pub mod release_config;
+#[cfg(all(target_os = "linux", feature = "native-test"))]
+mod release_native;
 pub mod trust;
 
 pub use command_names::COMMANDS;
