@@ -109,7 +109,8 @@ func TestApplyMatchesOldEngine(t *testing.T) {
 }
 
 // Select, sent as JSON (the call frame's form), and Apply with Selected and nothing else about
-// the call give what the old engine returned: core matches the call, the extension only the body.
+// the call give what the old engine returned (but for deliberateDifferences): core matches the
+// call, the extension only the body.
 func TestSelectThenApplyMatchesOldEngine(t *testing.T) {
 	selected := 0
 	for _, c := range loadCases(t) {
@@ -139,8 +140,12 @@ func TestSelectThenApplyMatchesOldEngine(t *testing.T) {
 			if c.Input.Original != nil {
 				seam.Original = []byte(*c.Input.Original)
 			}
-			if got, _ := Apply(wire, []byte(c.Body), seam); string(got) != c.Old {
-				t.Errorf("body\n got: %s\nwant: %s", got, c.Old)
+			want := c.Old
+			if d, ok := deliberateDifferences[c.Name]; ok {
+				want = d.want
+			}
+			if got, _ := Apply(wire, []byte(c.Body), seam); string(got) != want {
+				t.Errorf("body\n got: %s\nwant: %s", got, want)
 			}
 		})
 	}
