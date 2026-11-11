@@ -259,8 +259,9 @@ offset 8) and writes `<out-dir>/pluxy-test_<version>_amd64.AppImage` and `test-p
 unpinned. The test command puts pinned copies there first, each checked against its SHA-256
 (`BUNDLER_TOOLS` in `package.ts`), and gives the AppImage plugin the pinned AppImage runtime
 (`LDAI_RUNTIME_FILE`), which it would otherwise download too. The build runs with a temporary
-HOME and cache folder, none of the caller's other environment, Cargo offline after `cargo fetch
---locked`, and every proxy variable pointing at a closed port, so any download still tried fails
+HOME and cache folder, a temporary Cargo home holding only links to the caller's dependency
+caches (so not the caller's Cargo config or credentials), none of the caller's other environment,
+Cargo offline after `cargo fetch --locked`, and every proxy variable pointing at a closed port, so any download still tried fails
 the build. Afterwards the tools folder must hold only the pinned tools and the bundler's own two
 plugin scripts. The AppImage's type is still checked on the output.
 
@@ -355,16 +356,23 @@ plus the trust and feature snapshots, in Cargo's `OUT_DIR`. A digest of all thre
 the app. The validator compares its own compiled inputs and requires the matching receipt in an
 artifact. Supply the actual app executable along with every package. The validator streams each
 regular file for test markers, test identifiers and Tauri updater keys or signatures. Each
-artifact must be an ELF executable or a type-2 AppImage, and carry the build's receipt itself;
-anything else is refused, since it cannot be looked inside. An AppImage (found by its header,
+artifact must be a well-formed ELF executable (type, machine and program headers inside the
+file) or a type-2 AppImage, and carry the build's receipt itself; anything else is refused,
+since it cannot be looked inside. An AppImage (found by its header,
 never run) must have its squashfs image where its runtime's header ends, with nothing after it
 but zero padding under 4 KiB. `unsquashfs` (package `squashfs-tools`) first lists the image
 (only folders, regular files and links; at most 100,000 entries, 32 folders deep and 2 GiB
-unpacked), then unpacks it into a private temporary folder, each within 10 minutes. Every name,
-link and file inside is checked: links must lead to an entry inside the package; compressed and
-archive files are refused; JSON (named `.json`, or starting with `{`) is decoded before it is
-checked, trust-shaped JSON must be empty trust whatever its name, and JSON over 1 MiB or invalid
-is refused; the receipt must be in an ELF file inside. Then every byte of the AppImage is
+unpacked), then unpacks it into a private temporary folder, each within 10 minutes and with its
+output capped (64 MiB of listing, 1 MiB otherwise). Every name, link and file inside is checked:
+links are resolved one name at a time as the system would and must lead to an entry inside the
+package; compressed and archive files with a known signature are refused; JSON (named `.json`,
+or whose first byte past whitespace is `{`) is decoded before it is checked, trust-shaped JSON
+must be empty trust whatever its name, JSON over 1 MiB or invalid is refused, and so is an
+unnamed file that starts like JSON, does not parse and names trust fields; the receipt must be
+in the package's app executable, `usr/bin/<mainBinaryName>` (`usr/bin/pluxy-app` by default).
+The gate checks our own build for test material; it does not stand against a hostile builder.
+A compressed file whose encoding has no known signature (raw deflate, brotli) is scanned as it
+is, so test material inside one would pass. Then every byte of the AppImage is
 scanned as well. The unpacked folder is removed, and a failure to remove it is an error.
 The receipt checks consistency for trusted packaging tools, not a malicious packager rewriting
 the binary and its evidence. Every supplied artifact must exist.
