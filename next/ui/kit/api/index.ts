@@ -12,6 +12,7 @@ import { packagesApi } from "./packages";
 import { quotaApi } from "./quota";
 import { settingsApi } from "./settings";
 import { statusApi } from "./status";
+import { systemApi } from "./system";
 
 export * from "./accounts";
 export * from "./config";
@@ -21,6 +22,7 @@ export * from "./packages";
 export * from "./quota";
 export * from "./settings";
 export * from "./status";
+export * from "./system";
 
 export const api = (host: Host) => ({
   ...configApi(host),
@@ -31,6 +33,7 @@ export const api = (host: Host) => ({
   ...extensionsApi(host),
   ...loginsApi(host),
   ...settingsApi(host),
+  ...systemApi(host),
 });
 
 export type Api = ReturnType<typeof api>;

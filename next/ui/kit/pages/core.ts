@@ -9,6 +9,7 @@ import { configPage } from "./config";
 import { extensionsPage } from "./extensions";
 import { quotaPage } from "./quota";
 import { statusPage } from "./status";
+import { systemPage } from "./system";
 import { themesPage } from "./themes";
 
 export const corePages = (): PageDef[] => [
@@ -17,6 +18,7 @@ export const corePages = (): PageDef[] => [
   addAccountPage(),
   quotaPage(),
   configPage(),
+  systemPage(),
   extensionsPage(),
   themesPage(),
 ];

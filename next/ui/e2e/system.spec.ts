@@ -51,6 +51,9 @@ for (const theme of ["default", "terminal"]) {
     for (const client of ["OpenAI", "Claude", "Gemini", "Codex"]) {
       await expect(connect.getByText(client, { exact: true })).toBeVisible();
     }
+    if (process.env.SYSTEM_SHOTS) {
+      await page.screenshot({ path: `${process.env.SYSTEM_SHOTS}/${theme}.png`, fullPage: true });
+    }
     await connect.getByRole("link", { name: "Config Panel" }).click();
     await expect(page.locator('[data-part="page-title"]')).toHaveText("Config Panel");
   });

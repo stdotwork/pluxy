@@ -96,6 +96,8 @@ export const PARTS = [
   "method",
   "flow",
   "device-code",
+  "tile",
+  "model-group",
 ] as const;
 
 export type Part = (typeof PARTS)[number];
