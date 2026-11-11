@@ -39,10 +39,12 @@ getrandom = "0.3"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-# The same GTK Tauri uses, to lay page webviews over the window (src/place.rs), and its D-Bus
-# layer, which examples/session_probe.rs uses for the native test.
+# The same GTK Tauri uses, to lay page webviews over the window (src/place.rs).
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
+
+# GTK's D-Bus layer, for the native test's probe (examples/session_probe.rs) only.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
 gio = "0.18"
 
 [profile.release]
