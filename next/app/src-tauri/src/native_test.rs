@@ -181,8 +181,11 @@ fn run(app: &AppHandle) -> Result<(), String> {
             "frame",
             serde_json::from_str(&report).unwrap_or(json!(report)),
         );
-        wv.eval("document.querySelector('iframe').src += '#native-fragment'")
+        wv.eval("window.addEventListener('message',e=>{if(e.data?.nativeHashChanged)window.__nativeHashChanged=true;});document.querySelector('iframe').contentWindow.postMessage({nativeHash:true},'*')")
             .map_err(|e| e.to_string())?;
+        wait_for("frame location hash change", || {
+            eval(&wv, "window.__nativeHashChanged === true").filter(|v| v == true)
+        })?;
         std::thread::sleep(Duration::from_millis(200));
         if app
             .state::<App>()
