@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -321,6 +322,44 @@ func TestImportSkipsKnownAccounts(t *testing.T) {
 	// The auth folder is left as it was.
 	if names, _ := AuthFiles(dir); len(names) != 3 {
 		t.Errorf("auth folder now holds %v", names)
+	}
+}
+
+// conflictCreator refuses one ID as a running core's manager refuses an ID a login will take.
+type conflictCreator struct {
+	Creator
+	id string
+}
+
+func (c conflictCreator) Create(r cred.Record) (cred.Record, error) {
+	if r.ID == c.id {
+		return cred.Record{}, fmt.Errorf("%w: a login for account %q is running", cred.ErrConflict, r.ID)
+	}
+	return c.Creator.Create(r)
+}
+
+// An ID the store refuses as taken by something else is skipped like one it already has: the
+// other accounts still import.
+func TestImportSkipsConflictingAccount(t *testing.T) {
+	dir := writeFiles(t, map[string]any{
+		"claude-a.json": map[string]any{"type": "claude", "access_token": "fake-a"},
+		"claude-b.json": map[string]any{"type": "claude", "access_token": "fake-b"},
+	})
+	store, err := cred.Open(cred.FileBackend{Dir: filepath.Join(t.TempDir(), "credentials")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, _, err := ReadAuthDir(dir, DefaultImportOptions, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	imported, skipped, err := Import(conflictCreator{store, "claude-a"}, files, func(string) bool { return false })
+	if err != nil || len(imported) != 1 || imported[0].Record.ID != "claude-b" ||
+		len(skipped) != 1 || !strings.Contains(skipped[0].Reason, "login") {
+		t.Fatalf("import: imported %v, skipped %v, err %v", imported, skipped, err)
+	}
+	if _, ok := store.Get("claude-a"); ok {
+		t.Error("claude-a was stored")
 	}
 }
 

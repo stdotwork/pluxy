@@ -592,7 +592,8 @@ type Creator interface {
 }
 
 // Import adds the accounts of files to store, skipping those whose ID store or the config
-// (reserved) already uses. It returns the files it imported and those it skipped.
+// (reserved) already uses, or store refuses as taken (cred.ErrConflict: a login still running
+// will take it). It returns the files it imported and those it skipped.
 func Import(store Creator, files []AuthFile, reserved func(id string) bool) (imported []AuthFile, skipped []Skipped, err error) {
 	for _, f := range files {
 		if reserved(f.Record.ID) {
@@ -602,6 +603,10 @@ func Import(store Creator, files []AuthFile, reserved func(id string) bool) (imp
 		switch _, err := store.Create(f.Record); {
 		case errors.Is(err, cred.ErrExists):
 			skipped = append(skipped, Skipped{File: f.File, Reason: fmt.Sprintf("the store already has an account %q", f.Record.ID)})
+		case errors.Is(err, cred.ErrConflict):
+			// A running core's manager: a login still running will take the ID. The file's other
+			// accounts still import.
+			skipped = append(skipped, Skipped{File: f.File, Reason: err.Error()})
 		case err != nil:
 			return imported, skipped, err
 		default:
