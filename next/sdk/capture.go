@@ -46,21 +46,26 @@ func (c *captureLog) roundTrip(rt http.RoundTripper, req *http.Request) (*http.R
 	if hasBody {
 		// What the transport reads is what is recorded, as it reads it: the request is not held
 		// back to read the body first, and the body is read once.
+		// When the transport sends the body again, each copy is recorded on its own and the
+		// copy read last is the one kept, not the copies joined. A copy made but never read
+		// (one kept ready for a retry that did not happen) changes nothing.
+		use := func(bc *bodyCapture) func() {
+			return func() {
+				c.mu.Lock()
+				x.reqBody = bc
+				c.mu.Unlock()
+			}
+		}
 		r := *req // a RoundTripper must not change the request it is given
-		r.Body = teeBody{req.Body, x.reqBody}
+		r.Body = &sentBody{teeBody: teeBody{req.Body, x.reqBody}, use: use(x.reqBody)}
 		if get := req.GetBody; get != nil {
 			r.GetBody = func() (io.ReadCloser, error) {
 				b, err := get()
 				if err != nil {
 					return nil, err
 				}
-				// The transport sends the body again: record that attempt in place of the
-				// first, so the capture is the body sent last, not both.
 				bc := &bodyCapture{}
-				c.mu.Lock()
-				x.reqBody = bc
-				c.mu.Unlock()
-				return teeBody{b, bc}, nil
+				return &sentBody{teeBody: teeBody{b, bc}, use: use(bc)}, nil
 			}
 		}
 		req = &r
@@ -206,6 +211,19 @@ func (b teeBody) Read(p []byte) (int, error) {
 		_, _ = b.c.Write(p[:n])
 	}
 	return n, err
+}
+
+// sentBody is one copy of a request body the transport sends: its first read makes it the copy
+// recorded.
+type sentBody struct {
+	teeBody
+	once sync.Once
+	use  func()
+}
+
+func (b *sentBody) Read(p []byte) (int, error) {
+	b.once.Do(b.use)
+	return b.teeBody.Read(p)
 }
 
 // bodyCapture keeps the start and the end of what is written to it (protocol.CapturedHead and

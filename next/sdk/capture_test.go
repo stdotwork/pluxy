@@ -165,6 +165,35 @@ func TestCaptureReplayedBody(t *testing.T) {
 	}
 }
 
+// A copy of the body made for a retry that never happens leaves the body that was sent in the
+// capture.
+func TestCaptureUnusedReplay(t *testing.T) {
+	const payload = `{"model":"example-model","input":"hello"}`
+	var read, early atomic.Int64
+	req := newBodyRequest(t, "http://upstream.invalid/v1", payload, &read, &early, nil)
+	unused := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			return nil, err
+		}
+		b, err := r.GetBody() // kept ready for a retry, then not needed
+		if err != nil {
+			return nil, err
+		}
+		b.Close()
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: http.NoBody, Request: r}, nil
+	})
+	c := &captureLog{}
+	resp, err := c.roundTrip(unused, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	d := c.take()
+	if d == nil || len(d.Upstream) != 1 || d.Upstream[0].Request.Body != payload || d.Upstream[0].Request.BodySize != int64(len(payload)) {
+		t.Errorf("captured request body: %+v, want %q", d, payload)
+	}
+}
+
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
@@ -302,8 +331,11 @@ func TestCaptureBoundsHeaders(t *testing.T) {
 		if lines, _ := size(r.Headers); lines != 2 {
 			t.Errorf("kept %d header lines, want 2 (the first two by name)", lines)
 		}
-		if _, ok := r.Headers["X-A"]; !ok {
-			t.Errorf("headers %v do not keep X-A", len(r.Headers))
+		want := strings.Repeat("v", 6000)
+		for _, k := range []string{"X-A", "X-B"} {
+			if vs := r.Headers[k]; len(vs) != 1 || vs[0] != want {
+				t.Errorf("header %s kept as %d values (%d bytes in the first), want its one value whole", k, len(vs), len(strings.Join(vs[:min(1, len(vs))], "")))
+			}
 		}
 		if n := headersLeftOut(t, r); n != 1 {
 			t.Errorf("headers_left_out = %d, want 1", n)

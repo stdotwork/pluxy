@@ -80,9 +80,12 @@ func newCaptureUpstream(t *testing.T, refuse bool) *captureUpstream {
 			}
 			io.WriteString(w, event("first-event "+key+" visible", "null"))
 			w.(http.Flusher).Flush()
+			// No timer lets the rest go: a reply held back until it ends would never reach the
+			// client, so a test cannot pass on it.
 			select {
 			case <-u.gate:
-			case <-time.After(10 * time.Second):
+			case <-r.Context().Done():
+				return
 			}
 			io.WriteString(w, event("second-event", "null")+event("", `"stop"`)+"data: [DONE]\n\n")
 		case strings.Contains(string(b), `"stream":true`):
@@ -367,16 +370,21 @@ func TestUpstreamCapture(t *testing.T) {
 		strings.NewReader(`{"model":"gpt-cap","stream":true,"messages":[{"role":"user","content":"gate-stream"}]}`))
 	req.Header.Set("Authorization", "Bearer "+clientKey)
 	req.Header.Set("X-Pluxy-Account", "cap-b")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	trace = resp.Header.Get("X-CPA-TRACE-ID")
-	br := bufio.NewReader(resp.Body)
-	var got strings.Builder
+	// The reply's headers and its first event must both arrive while the upstream holds the
+	// rest back: the wait for them starts before the request is sent.
+	var (
+		resp *http.Response
+		br   *bufio.Reader
+		got  strings.Builder
+	)
 	firstRead := make(chan error, 1)
 	go func() {
+		var err error
+		if resp, err = http.DefaultClient.Do(req); err != nil {
+			firstRead <- err
+			return
+		}
+		br = bufio.NewReader(resp.Body)
 		for !strings.Contains(got.String(), "first-event") {
 			line, err := br.ReadString('\n')
 			got.WriteString(line)
@@ -393,9 +401,12 @@ func TestUpstreamCapture(t *testing.T) {
 			t.Fatalf("reading the first event: %v; got %q", err, got.String())
 		}
 	case <-time.After(8 * time.Second):
+		cancel()
 		close(serving.gate)
 		t.Fatal("the first event did not reach the client while the upstream held the rest back")
 	}
+	defer resp.Body.Close()
+	trace = resp.Header.Get("X-CPA-TRACE-ID")
 	close(serving.gate)
 	rest, err := io.ReadAll(br)
 	if err != nil {
