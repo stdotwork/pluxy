@@ -41,9 +41,8 @@ const REFUSED = /not allowed( on window|\. Permissions associated| by ACL)/;
 const TIMEOUT = 240_000;
 
 type Mode = "managed" | "local" | "remote";
-/** The session's setup failed (session.ts exits with this code, after saying what is missing or
- * broken): the app never ran, and the other modes would fail the same way. */
-const SETUP_FAILED = 78;
+/** The session's setup failed (session.ts said what is missing or broken, and never said it was
+ * ready): the app never ran, and the other modes would fail the same way. */
 class SetupError extends Error {}
 type Step = Record<string, unknown>;
 interface Call {
@@ -116,6 +115,36 @@ function descendants(pid: number): Map<number, string> {
 /** The web processes among pid's descendants. */
 function webProcesses(pid: number): number {
   return [...descendants(pid).values()].filter((comm) => comm.startsWith("WebKitWebProces")).length;
+}
+
+/** Sends signal to the process group pid leads (each session runs in a group of its own). */
+function signalGroup(pid: number, signal: NodeJS.Signals) {
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    // gone already
+  }
+}
+
+/** The sessions still running, so an interrupted run can stop them. */
+const sessions = new Set<number>();
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.on(signal, () => {
+    for (const pid of sessions) signalGroup(pid, "SIGTERM");
+    process.exit(130);
+  });
+}
+
+/** Stops a session that did not finish: TERM first, so session.ts stops the services it started,
+ * then KILL for its whole group and every process still below it. */
+async function stopSession(pid: number) {
+  signalGroup(pid, "SIGTERM");
+  await Bun.sleep(10_000);
+  signalGroup(pid, "SIGKILL");
+  for (let i = 0; i < 3 && descendants(pid).size > 0; i++) {
+    killTree(pid);
+    await Bun.sleep(500);
+  }
 }
 
 /** Kills pid and everything it started: its session's bus, X server and services too. */
@@ -201,12 +230,16 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
       env,
       // Some xvfb-run versions send the program's stderr to stdout: read both.
       stdio: ["ignore", "pipe", "pipe"],
+      // A process group of its own, so a run that hangs can be stopped as a whole.
+      detached: true,
     });
     const steps = new Map<string, Step>();
     const reached: string[] = [];
     let before = 0;
     let after = -1;
     const pid = proc.pid ?? 0;
+    sessions.add(pid);
+    let ready = false; // session.ts said its setup is done and the app starts
     if (!proc.stderr || !proc.stdout) throw new Error("the app's output is not piped");
     const log: string[] = []; // the app's last lines, shown when the run fails
     const setup: string[] = []; // session.ts's report of what failed at setup
@@ -214,6 +247,7 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
       // The session's service checks are always shown: they say what this run stood on.
       if (line.startsWith("native-prereq: ")) {
         console.log(`  ${mode} | ${line}`);
+        if (line === "native-prereq: ready") ready = true;
         if (line.startsWith("native-prereq: FAILED "))
           setup.push(line.slice("native-prereq: FAILED ".length));
         return;
@@ -242,19 +276,25 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
       }
     };
     for (const stream of [proc.stdout, proc.stderr]) createInterface({ input: stream }).on("line", onLine);
+    let stopping: Promise<void> | undefined;
     const code = await new Promise<number | null>((resolve) => {
       const timer = setTimeout(() => {
         problems.push(`the app did not finish within ${TIMEOUT / 1000}s`);
-        killTree(pid);
+        stopping = stopSession(pid);
       }, TIMEOUT);
       proc.on("exit", (c) => {
         clearTimeout(timer);
         resolve(c);
       });
     });
+    await stopping;
+    sessions.delete(pid);
 
-    if (code === SETUP_FAILED || setup.length > 0) {
-      throw new SetupError(setup.length > 0 ? setup.join("\n") : "the session's setup failed");
+    // Only session.ts's own "ready" line says the app ran: an exit code alone could be the app's.
+    if (!ready) {
+      throw new SetupError(
+        setup.length > 0 ? setup.join("\n") : `the session ended (${code}) before it was ready`,
+      );
     }
     check(code === 0, `the app exited with ${code}`);
     check(!steps.has("failed"), `the app's test steps failed: ${JSON.stringify(steps.get("failed"))}`);

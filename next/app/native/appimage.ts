@@ -12,7 +12,7 @@
 // checks and change TAG and SHA256 together.
 
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -29,15 +29,19 @@ echo "pluxy-appimage-smoke arg=$1 appimage=\${APPIMAGE:+set} appdir=$APPDIR"
 
 const sha256 = (data: Uint8Array) => createHash("sha256").update(data).digest("hex");
 
-/** The runtime's path in the cache, downloaded and checked against the pinned digest. */
-export async function runtimeFile(): Promise<string> {
+/** The runtime's bytes, from the cache or downloaded, checked against the pinned digest. The
+ * caller uses these bytes, never the cache file again, so nothing unchecked runs. */
+export async function runtimeBytes(): Promise<Uint8Array> {
   if (process.platform !== "linux" || process.arch !== "x64") {
     throw new Error(`the AppImage smoke test needs Linux on x86_64, not ${process.platform} ${process.arch}`);
   }
   const dir = join(process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"), "pluxy-app-native");
   mkdirSync(dir, { recursive: true });
   const file = join(dir, `type2-runtime-${TAG}-${ASSET}`);
-  if (existsSync(file) && sha256(readFileSync(file)) === SHA256) return file;
+  if (existsSync(file)) {
+    const cached = new Uint8Array(readFileSync(file));
+    if (sha256(cached) === SHA256) return cached;
+  }
   rmSync(file, { force: true });
 
   const response = await fetch(URL);
@@ -45,15 +49,15 @@ export async function runtimeFile(): Promise<string> {
   const bytes = new Uint8Array(await response.arrayBuffer());
   const got = sha256(bytes);
   if (got !== SHA256) throw new Error(`${URL} has SHA-256 ${got}, not the pinned ${SHA256}`);
-  const part = `${file}.${process.pid}`;
-  writeFileSync(part, bytes);
+  const part = `${file}.${randomUUID()}`;
+  writeFileSync(part, bytes, { flag: "wx", mode: 0o600 });
   renameSync(part, file);
-  return file;
+  return bytes;
 }
 
 /** Builds the smoke AppImage in dir (an existing, empty folder) and returns its path. */
 export async function buildSmokeAppImage(dir: string): Promise<string> {
-  const runtime = await runtimeFile();
+  const runtime = await runtimeBytes();
   const appDir = join(dir, "AppDir");
   mkdirSync(appDir);
   writeFileSync(join(appDir, "AppRun"), APP_RUN, { mode: 0o755 });
@@ -67,7 +71,7 @@ export async function buildSmokeAppImage(dir: string): Promise<string> {
     throw new Error(`mksquashfs (package squashfs-tools) exited with ${made.status}: ${made.stderr}`);
   }
   const appImage = join(dir, "smoke.AppImage");
-  writeFileSync(appImage, Buffer.concat([readFileSync(runtime), readFileSync(image)]), { mode: 0o755 });
+  writeFileSync(appImage, Buffer.concat([runtime, readFileSync(image)]), { mode: 0o755 });
   return appImage;
 }
 
