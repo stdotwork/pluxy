@@ -192,28 +192,43 @@ func TestPprofReloadRefusedKeepsListener(t *testing.T) {
 // A reload starts the listener when the setting turns on, moves it when the address changes, and
 // closes it when the setting turns off.
 func TestPprofReloadStartsMovesAndStops(t *testing.T) {
-	a := fmt.Sprintf("127.0.0.1:%d", freePort(t))
-	b := fmt.Sprintf("127.0.0.1:%d", freePort(t))
 	cfg := pprofCfg(t, nil)
 	base, path, _ := runPprof(t, pprofBinary(t), cfg)
 
-	apply := func(what string, revision int, pprof map[string]any) {
+	// apply writes a pprof section that is on, reloads and wants the new revision. It picks the
+	// address itself and returns it: a port that was free when picked can be taken before the
+	// reload binds it (core's pages listener asks the system for a free port, as do its
+	// connections), and then the reload is refused with "address already in use". That refusal
+	// leaves the active revision as it was but still uses up a revision number, so apply picks
+	// another port, reloads again and wants the number after that.
+	active := 1
+	apply := func(what string) string {
 		t.Helper()
-		cfg["pprof"] = pprof
-		writeConfig(t, path, cfg)
-		code, s := reload(t, base)
-		if code != http.StatusOK || s.Active.Revision != revision || s.Desired.Error != "" {
+		for attempt := 1; ; attempt++ {
+			addr := fmt.Sprintf("127.0.0.1:%d", freePort(t))
+			cfg["pprof"] = map[string]any{"enable": true, "addr": addr}
+			writeConfig(t, path, cfg)
+			code, s := reload(t, base)
+			if code == http.StatusOK && s.Active.Revision == active+1 && s.Desired.Error == "" {
+				active++
+				return addr
+			}
+			if attempt < 5 && s.Active.Revision == active && strings.Contains(s.Desired.Error, "address already in use") {
+				t.Logf("%s: %s was taken before the reload bound it; picking another port", what, addr)
+				active++
+				continue
+			}
 			t.Fatalf("%s: reload %d, active %d, error %q; want 200 and active revision %d",
-				what, code, s.Active.Revision, s.Desired.Error, revision)
+				what, code, s.Active.Revision, s.Desired.Error, active+1)
 		}
 	}
 
-	apply("turn on", 2, map[string]any{"enable": true, "addr": a})
+	a := apply("turn on")
 	if code, _ := pprofGet(t, "http://"+a+"/debug/pprof/"); code != http.StatusOK {
 		t.Errorf("after turning on: pprof on %s answers %d; want 200", a, code)
 	}
 
-	apply("move", 3, map[string]any{"enable": true, "addr": b})
+	b := apply("move")
 	if listening(a) {
 		t.Errorf("after the move: the old address %s still accepts connections", a)
 	}
@@ -221,7 +236,12 @@ func TestPprofReloadStartsMovesAndStops(t *testing.T) {
 		t.Errorf("after the move: pprof on %s answers %d; want 200", b, code)
 	}
 
-	apply("turn off", 4, map[string]any{"enable": false, "addr": b})
+	// The off reload keeps the address b in its section, as the old test did; it must not bind.
+	cfg["pprof"] = map[string]any{"enable": false, "addr": b}
+	writeConfig(t, path, cfg)
+	if code, s := reload(t, base); code != http.StatusOK || s.Active.Revision != active+1 || s.Desired.Error != "" {
+		t.Fatalf("turn off: reload %d, active %d, error %q; want 200 and active revision %d", code, s.Active.Revision, s.Desired.Error, active+1)
+	}
 	if listening(b) {
 		t.Errorf("after turning off: %s still accepts connections", b)
 	}
