@@ -1761,8 +1761,8 @@ logs count toward `logs.max_total_size_mb`, which is applied after each file is 
 Secrets are left out of every request log: values of headers and query parameters whose names
 hold `authorization`, `api-key`, `apikey`, `api_key`, `token`, `secret`, `cookie` or `password`,
 and `key` (an authorization header keeps its scheme, as in `Bearer [redacted]`), and, anywhere in
-the file, every client key, the management key and every config account's credential, in the
-forms the credential redaction finds (JSON escapes, percent-encoding and the rest). Replies come
+the file, every client key, the management key, every config account's credential and the
+secrets in its settings (as `GET /config` finds them), in the forms the credential redaction finds (JSON escapes, percent-encoding and the rest). Replies come
 from the extension with the account's own credential and the secrets in its settings already
 removed. Today's core writes the
 reply's headers unmasked, logs requests that fail the client key check, and also writes what it

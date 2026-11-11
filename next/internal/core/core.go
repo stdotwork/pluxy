@@ -167,7 +167,7 @@ func Start(opts Options) (*Core, error) {
 }
 
 // configSecrets returns the redactor of every secret the config holds: the client keys, the
-// management key and the accounts' credentials.
+// management key, the accounts' credentials and the secrets in the accounts' settings.
 func configSecrets(cfg *server.Config) *protocol.Redactor {
 	cs := []*protocol.Credential{{Kind: protocol.CredentialAPIKey, APIKey: cfg.ManagementKey}}
 	for _, k := range cfg.ClientKeys {
@@ -175,6 +175,9 @@ func configSecrets(cfg *server.Config) *protocol.Redactor {
 	}
 	for _, a := range cfg.Accounts() {
 		cs = append(cs, a.Credential)
+		for _, s := range configdoc.SettingsSecrets(a.Settings) {
+			cs = append(cs, &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: s})
+		}
 	}
 	return protocol.NewRedactor(cs...)
 }
