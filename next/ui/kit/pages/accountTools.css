@@ -1,0 +1,25 @@
+@layer kit {
+  .account-tools {
+    margin-block-start: calc(var(--px-space-unit) * 4);
+    overflow-wrap: normal;
+  }
+  .account-tools .facts dt,
+  .account-tools .facts dd {
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+  .account-tools .account-tool-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .account-tools .account-tool-list .facts > div {
+    grid-template-columns: minmax(0, 0.4fr) minmax(0, 1fr);
+  }
+  .account-tools h3,
+  .account-tools h4 {
+    margin: 0;
+  }
+  .account-tools pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+}
