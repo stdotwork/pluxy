@@ -237,7 +237,8 @@ test("a rejected value in a policy field is restored on blur", async ({ page }) 
   await openPanel(page, core);
   await signIn(page, core);
   await goTo(page, "Routing");
-  const credentials = page.getByRole("spinbutton", { name: "Credentials per round", exact: true });
+  // The field's hint is part of its label, so the accessible name continues after the label text.
+  const credentials = page.getByRole("spinbutton", { name: /^Credentials per round / });
   const saved = await credentials.inputValue();
   await credentials.fill("-3");
   await credentials.press("Tab");
@@ -252,7 +253,7 @@ test("policy fields keep keyboard focus while a change is saved", async ({ page 
   await openPanel(page, core);
   await signIn(page, core);
   await goTo(page, "Routing");
-  const affinity = page.getByRole("switch", { name: "Session affinity", exact: true });
+  const affinity = page.getByRole("switch", { name: /^Session affinity / });
   const saved = () =>
     core.mgmt<CoreSettings>("GET", "/settings").then((r) => r.body.routing["session-affinity"]);
   const before = await saved();
