@@ -274,41 +274,80 @@ mod linux {
         let entries = MainContext::default().block_on(registered_items(&conn))?;
         let mut item = None;
         for entry in entries {
-            let Some((name, suffix)) = entry.split_once('/') else { continue };
+            let Some((name, suffix)) = entry.split_once('/') else {
+                continue;
+            };
             if owner_pid(&conn, name).ok() == Some(pid) {
                 item = Some((name.to_string(), format!("/{suffix}")));
                 break;
             }
         }
         let (name, path) = item.ok_or("the watcher lists no item owned by the app")?;
-        let (menu,) = call(&conn, &name, &path, "org.freedesktop.DBus.Properties", "Get",
-            Some(&(ITEM, "Menu").to_variant()), "(v)")?
-            .get::<(Variant,)>().ok_or("Menu is not a variant")?;
-        let menu = menu.get::<ObjectPath>().ok_or("Menu is not an object path")?;
+        let (menu,) = call(
+            &conn,
+            &name,
+            &path,
+            "org.freedesktop.DBus.Properties",
+            "Get",
+            Some(&(ITEM, "Menu").to_variant()),
+            "(v)",
+        )?
+        .get::<(Variant,)>()
+        .ok_or("Menu is not a variant")?;
+        let menu = menu
+            .get::<ObjectPath>()
+            .ok_or("Menu is not an object path")?;
         let interface = "com.canonical.dbusmenu";
-        let layout = call(&conn, &name, menu.as_str(), interface, "GetLayout",
-            Some(&(0i32, -1i32, Vec::<String>::new()).to_variant()), "(u(ia{sv}av))")?;
+        let layout = call(
+            &conn,
+            &name,
+            menu.as_str(),
+            interface,
+            "GetLayout",
+            Some(&(0i32, -1i32, Vec::<String>::new()).to_variant()),
+            "(u(ia{sv}av))",
+        )?;
         fn walk(node: Variant, rows: &mut Vec<(i32, String, bool)>) -> Result<(), String> {
-            let (id, props, children) = node.get::<(i32, HashMap<String, Variant>, Vec<Variant>)>()
+            let (id, props, children) = node
+                .get::<(i32, HashMap<String, Variant>, Vec<Variant>)>()
                 .ok_or("invalid dbusmenu layout")?;
-            let label = props.get("label").and_then(|v| v.get::<String>()).unwrap_or_default();
-            let enabled = props.get("enabled").and_then(|v| v.get::<bool>()).unwrap_or(true);
+            let label = props
+                .get("label")
+                .and_then(|v| v.get::<String>())
+                .unwrap_or_default();
+            let enabled = props
+                .get("enabled")
+                .and_then(|v| v.get::<bool>())
+                .unwrap_or(true);
             rows.push((id, label, enabled));
-            for child in children { walk(child, rows)?; }
+            for child in children {
+                walk(child, rows)?;
+            }
             Ok(())
         }
         let mut rows = Vec::new();
         walk(layout.child_value(1), &mut rows)?;
         let mut out = vec![format!("item={name}{path}")];
         for (_, label, enabled) in &rows {
-            if !label.is_empty() { out.push(format!("{label}={enabled}")); }
+            if !label.is_empty() {
+                out.push(format!("{label}={enabled}"));
+            }
         }
         if action != "inspect" {
-            let (id, _, _) = rows.iter().find(|(_, label, _)| label == action)
+            let (id, _, _) = rows
+                .iter()
+                .find(|(_, label, _)| label == action)
                 .ok_or_else(|| format!("tray has no {action:?} item: {rows:?}"))?;
             // Send even if disabled: the native action must refuse foreign-process control too.
-            call(&conn, &name, menu.as_str(), interface, "Event",
-                Some(&(*id, "clicked", 0i32.to_variant(), 0u32).to_variant()), "()")?;
+            call(
+                &conn,
+                &name,
+                menu.as_str(),
+                interface,
+                "Event",
+                Some(&(*id, "clicked", 0i32.to_variant(), 0u32).to_variant()),
+                "()",
+            )?;
             out.push(format!("clicked={action}"));
         }
         Ok(out)

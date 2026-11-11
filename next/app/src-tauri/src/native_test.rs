@@ -204,8 +204,11 @@ fn run(app: &AppHandle) -> Result<(), String> {
                 let view = app.state::<App>().conn.lock().unwrap().view();
                 let snapshot = json!({"app_pid": std::process::id(), "view": view,
                     "webviews": app.webviews().len(), "window": app.get_window(WINDOW).is_some()});
-                crate::managed::write_private(std::path::Path::new(&path),
-                    &serde_json::to_vec(&snapshot).unwrap()).expect("write test state");
+                crate::managed::write_private(
+                    std::path::Path::new(&path),
+                    &serde_json::to_vec(&snapshot).unwrap(),
+                )
+                .expect("write test state");
             }
             std::path::Path::new(&f).exists().then_some(())
         })?;

@@ -1,6 +1,6 @@
 // Drive the real watcher's StatusNotifierItem/dbusmenu with every renderer closed.
 import { spawnSync } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 
 interface Snapshot {
   app_pid: number;
@@ -11,14 +11,16 @@ interface Snapshot {
 
 export async function checkRecovery(probe: string, stateFile: string) {
   const read = (): Snapshot => JSON.parse(readFileSync(stateFile, "utf8"));
-  const assert = (ok: unknown, why: string) => { if (!ok) throw new Error(why); };
+  const assert = (ok: unknown, why: string) => {
+    if (!ok) throw new Error(why);
+  };
   const wait = async (what: string, predicate: (s: Snapshot) => boolean) => {
     const deadline = Date.now() + 40_000;
     for (;;) {
       const s = read();
       assert(!s.window && s.webviews === 0, "tray action recreated a window/webview");
       if (predicate(s)) return s;
-      if (Date.now() > deadline) throw new Error("timed out waiting for " + what + ": " + JSON.stringify(s));
+      if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}: ${JSON.stringify(s)}`);
       await Bun.sleep(50);
     }
   };
@@ -30,17 +32,22 @@ export async function checkRecovery(probe: string, stateFile: string) {
     for (const p of readdirSync("/proc")) {
       if (!/^[0-9]+$/.test(p)) continue;
       try {
-        const stat = readFileSync("/proc/" + p + "/stat", "utf8");
+        const stat = readFileSync(`/proc/${p}/stat`, "utf8");
         const end = stat.lastIndexOf(")");
         parents.set(Number(p), Number(stat.slice(end + 2).split(" ")[1]));
         names.set(Number(p), stat.slice(stat.indexOf("(") + 1, end));
-      } catch { /* process exited */ }
+      } catch {
+        /* process exited */
+      }
     }
     let count = 0;
     for (const [p, name] of names) {
       if (!name.startsWith("WebKitWebProces")) continue;
       for (let q = parents.get(p); q && q > 1; q = parents.get(q)) {
-        if (q === pid) { count++; break; }
+        if (q === pid) {
+          count++;
+          break;
+        }
       }
     }
     return count;
@@ -48,12 +55,15 @@ export async function checkRecovery(probe: string, stateFile: string) {
   const tray = (action: string) => {
     assert(renderers() === 0, "renderer process exists during tray-only operation");
     const r = spawnSync(probe, ["tray", String(pid), action], { encoding: "utf8", timeout: 15_000 });
-    assert(r.status === 0, "tray " + action + ": " + r.stderr);
+    assert(r.status === 0, `tray ${action}: ${r.stderr}`);
     return r.stdout;
   };
   const alive = (p: number) => {
-    try { return readFileSync("/proc/" + p + "/stat", "utf8").split(") ")[1]?.[0] !== "Z"; }
-    catch { return false; }
+    try {
+      return readFileSync(`/proc/${p}/stat`, "utf8").split(") ")[1]?.[0] !== "Z";
+    } catch {
+      return false;
+    }
   };
   const crash = (s: Snapshot) => {
     const core = s.view.core?.pid;
@@ -66,12 +76,12 @@ export async function checkRecovery(probe: string, stateFile: string) {
   if (first.view.mode !== "managed") {
     const menu = tray("inspect");
     for (const label of ["Start core", "Stop core", "Restart core"]) {
-      assert(!menu.includes(label + "=true"), "foreign mode enables " + label);
-      if (menu.includes(label + "=")) tray(label);
+      assert(!menu.includes(`${label}=true`), `foreign mode enables ${label}`);
+      if (menu.includes(`${label}=`)) tray(label);
     }
     await Bun.sleep(500);
     assert(!read().view.core, "foreign mode gained an owned core");
-    console.log("native-recovery: " + first.view.mode + ": tray lifecycle refused, zero renderers");
+    console.log(`native-recovery: ${first.view.mode}: tray lifecycle refused, zero renderers`);
     return;
   }
   const initial = first.view.core?.pid;
@@ -104,7 +114,9 @@ export async function checkRecovery(probe: string, stateFile: string) {
   s = await wait("crash-loop cutoff", (v) => v.view.core?.state === "paused");
   assert(s.view.core?.detail, "paused state has no reason");
   assert(tray("inspect").includes("Core recovery paused"), "tray hides paused state");
-  console.log("native-recovery: crash loop paused after three retries; reason visible in tray and connection");
+  console.log(
+    "native-recovery: crash loop paused after three retries; reason visible in tray and connection",
+  );
   tray("Start core");
   s = await wait("resume paused core", running);
   crash(s);

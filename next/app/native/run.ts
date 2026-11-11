@@ -272,7 +272,6 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
         // Give the web processes a moment to exit, then let the app quit.
         setTimeout(() => {
           after = webProcesses(pid);
-
         }, 3000);
       }
     };
@@ -298,7 +297,10 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
         setup.length > 0 ? setup.join("\n") : `the session ended (${code}) before it was ready`,
       );
     }
-    check(steps.get("recovery")?.ok === true, "tray/recovery check: " + JSON.stringify(steps.get("recovery")));
+    check(
+      steps.get("recovery")?.ok === true,
+      `tray/recovery check: ${JSON.stringify(steps.get("recovery"))}`,
+    );
     check(code === 0, `the app exited with ${code}`);
     check(!steps.has("failed"), `the app's test steps failed: ${JSON.stringify(steps.get("failed"))}`);
 

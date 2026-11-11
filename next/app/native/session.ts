@@ -26,9 +26,8 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { smokeProblem } from "./appimage";
-import { busNames, documentPortal, gtkBackend, portalFrontend, type Service, trayWatcher } from "./services";
-
 import { checkRecovery } from "./recovery";
+import { busNames, documentPortal, gtkBackend, portalFrontend, type Service, trayWatcher } from "./services";
 
 const [probe, appImage, nonce, app] = process.argv.slice(2);
 if (!probe || !appImage || !nonce || !app) {
@@ -262,7 +261,7 @@ try {
               await checkRecovery(probe, setting("PLUXY_APP_TEST_STATE"));
               console.log('native-test: recovery {"ok":true}');
             } catch (e) {
-              console.log("native-test: recovery " + JSON.stringify({ok: false, error: String(e)}));
+              console.log(`native-test: recovery ${JSON.stringify({ ok: false, error: String(e) })}`);
             } finally {
               writeFileSync(setting("PLUXY_APP_TEST_QUIT"), "");
             }
