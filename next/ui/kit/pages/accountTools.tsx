@@ -5,7 +5,6 @@ import { strings } from "../strings";
 import { Badge, Button, ConfirmButton, Facts, List, Notice, useKit, useLoad, when } from "../ui";
 import { credentialTools } from "./accountTools.helpers";
 import { ConfigDialog } from "./configDialog";
-import "./accountTools.css";
 
 const t = strings("accountTools", {
   health: "Health",
