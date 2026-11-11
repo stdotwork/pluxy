@@ -544,15 +544,26 @@ function tempDir(prefix: string): string {
   temporary.push(dir);
   return dir;
 }
-function removeTemporary() {
-  for (const dir of temporary.splice(0)) rmSync(dir, { recursive: true, force: true });
+/** Removes each folder, keeping those it could not remove for a later try; says whether all went. */
+function removeTemporary(): boolean {
+  const failed: string[] = [];
+  for (const dir of temporary.splice(0)) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch (e) {
+      failed.push(dir);
+      console.error(`could not remove ${dir}: ${(e as Error).message}`);
+    }
+  }
+  temporary.push(...failed);
+  return failed.length === 0;
 }
 
 let exitCode = 1;
 try {
   exitCode = await main();
 } finally {
-  removeTemporary();
+  if (!removeTemporary()) exitCode = 1;
 }
 process.exit(exitCode);
 
