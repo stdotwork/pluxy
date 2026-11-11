@@ -10,9 +10,13 @@ static ARRIVED: AtomicUsize = AtomicUsize::new(0);
 static ADMITTED: AtomicUsize = AtomicUsize::new(0);
 static FORWARDED: AtomicUsize = AtomicUsize::new(0);
 static OPERATIONS: AtomicUsize = AtomicUsize::new(0);
+static REAL_SITE: AtomicUsize = AtomicUsize::new(0);
 static ENABLED: AtomicBool = AtomicBool::new(false);
 
-pub fn count(method: &str, path: &str, status: u16) {
+pub fn count(method: &str, path: &str, status: u16, query: Option<&str>) {
+    if query == Some("pages_site_probe") {
+        REAL_SITE.fetch_add(1, SeqCst);
+    }
     if ENABLED.load(SeqCst) && method == "POST" && path == "/send" {
         ARRIVED.fetch_add(1, SeqCst);
         if status == 204 {
@@ -48,6 +52,14 @@ fn require(ok: bool, reason: &str) -> Result<(), String> {
     }
 }
 pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
+    require(
+        REAL_SITE.load(SeqCst) == 0,
+        "real pages-site probe unexpectedly reached the scheme; use a pages-site flood fixture",
+    )?;
+    log(
+        "ingress_site",
+        json!({"attempts":1,"arrivals":REAL_SITE.load(SeqCst),"blocked":true}),
+    );
     main.eval("location.hash = '#/extensions'")
         .map_err(|e| e.to_string())?;
     wait_for("old page to close", || {
@@ -165,5 +177,72 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
         json!({"arrivals":ARRIVED.load(SeqCst),"admitted":ADMITTED.load(SeqCst),"forwarded":FORWARDED.load(SeqCst),"operations":OPERATIONS.load(SeqCst),"flight_admitted":8,"rate_admitted":30,"control":true}),
     );
     ENABLED.store(false, SeqCst);
+    // Force exactly one real MessagePort delivery failure, then let the native error through.
+    w.eval("{ const original=MessagePort.prototype.postMessage; let once=true; MessagePort.prototype.postMessage=function(m,...rest){if(once && m.id==='recover'){once=false;throw new Error('native test delivery failure');}return original.call(this,m,...rest);}; }").map_err(|e|e.to_string())?;
+    let recovery = command(&w, "recovery", "recovery")?;
+    require(
+        recovery["answer"]["error"]["code"] == "unavailable",
+        "failed delivery did not return a native error",
+    )?;
+    let control = command(&w, "control", "control")?;
+    require(
+        control["answer"]["result"].is_object(),
+        "page stopped working after delivery error",
+    )?;
+    log(
+        "ingress_recovery",
+        json!({"error":"unavailable","control":true}),
+    );
+    // Suppress the wrapper's closed notification: native navigation alone must invalidate it.
+    w.eval("{ const original=window.fetch; window.fetch=(url, options) => options?.body && JSON.parse(options.body).type === 'closed' ? Promise.resolve(new Response('',{status:204})) : original(url,options); }").map_err(|e| e.to_string())?;
+    let nav = command(&w, "navigate", "navigated")?;
+    require(
+        nav["navigated"]["status"] == 409,
+        "second frame document called before native closure",
+    )?;
+    log(
+        "ingress_navigation",
+        json!({"native_closed":true,"wrapper_closed_suppressed":true,"status":409}),
+    );
+    main.eval("location.hash='#/extensions'")
+        .map_err(|e| e.to_string())?;
+    wait_for("navigation page closed", || {
+        app.state::<App>()
+            .pages
+            .lock()
+            .unwrap()
+            .labels()
+            .is_empty()
+            .then_some(())
+    })?;
+    main.eval("location.hash='#/ext/test/probe/probe'")
+        .map_err(|e| e.to_string())?;
+    let next = wait_for("closed control page", || {
+        app.state::<App>()
+            .pages
+            .lock()
+            .unwrap()
+            .labels()
+            .first()
+            .cloned()
+    })?;
+    let w = wait_for("closed control webview", || app.get_webview(&next))?;
+    wait_for("closed control welcome", || {
+        eval(
+            main,
+            "document.querySelector('[data-part=extension-frame]')?.dataset.phase",
+        )
+        .filter(|v| v == "connected")
+    })?;
+    w.eval("window.addEventListener('message',e=>{if(e.data?.ingress)window.__ingressReport=e.data.ingress;});").map_err(|e|e.to_string())?;
+    let closed = command(&w, "closed", "closed")?;
+    require(
+        closed["closed"]["status"] == 204 && closed["after"]["status"] == 409,
+        "closed message did not stop subsequent calls",
+    )?;
+    log(
+        "ingress_closed",
+        json!({"closed":204,"subsequent_call":409}),
+    );
     Ok(())
 }

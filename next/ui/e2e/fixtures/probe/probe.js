@@ -58,6 +58,17 @@ await attempt("navigate the top", () => {
   return "navigated";
 });
 
+await attempt("direct pages-site scheme", () =>
+  fetch("pluxy-page://localhost/send?pages_site_probe", {
+    method: "POST",
+    mode: "no-cors",
+    body: JSON.stringify({
+      type: "call",
+      data: { v: 0, id: "real-site", method: "theme.get", params: null },
+    }),
+  }),
+);
+
 const report = JSON.stringify(results);
 document.getElementById("report").textContent = JSON.stringify(results, null, 2);
 await pluxy.call("config.set", { values: { report } });

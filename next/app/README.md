@@ -91,9 +91,12 @@ native generation; a second document cannot reconnect. Direct frame requests use
 
 One extension may open four pages, with 60 admitted calls per rolling second and 16 in flight
 across them. Closing pages preserves the package's recent rate budget. At most 16 page webviews
-and 64 recent package budgets are retained. Replies are limited to 512 KiB each, eight pending
-delivery callbacks per page and 16 per package; the wrapper also retains at most eight outgoing
-fetches. Refusals return an HTTP status and, when the id is readable, the matching channel error.
+and 64 recent package budgets are retained. Replies are limited to 2 MiB each, covering 50 settings with 4,096 runes even when each rune
+needs six JSON bytes. Pending call replies use their existing in-flight reservations; theme
+events retain one delivery and one replacement per page. Failed call deliveries send a small
+native error; if even that cannot reach the renderer, the channel closes. The wrapper sends a
+bounded FIFO of eight calls one at a time; hello and closed messages always enter that FIFO. Refusals return an HTTP status and, for bodies within the transport limit with a readable id,
+the matching channel error. Oversized transport bodies are rejected without scanning for an id.
 Permissions and extension settings still use the shared kit's channel. No page receives a key.
 
 ## Build and check
@@ -124,7 +127,9 @@ reaches every command, that at the top of an extension page's webview Tauri refu
 command and the plugin commands tried, and that no app command is reached from that webview
 or its frame. It also runs a test-only sandboxed frame
 that posts directly to the native scheme: over-rate, over-in-flight, oversize, unknown method,
-invalid schema, repeated hello and wrong generation. It compares native handler arrivals,
+invalid schema, repeated hello, wrong generation, explicit close and frame navigation while
+the wrapper's close message is suppressed. A separate real HTTP pages-site probe records whether
+that frame can reach the scheme, and navigation of that real frame closes native admission. It compares native handler arrivals,
 admissions, forwarding and real core settings operations, with a successful call on the same page.
 It checks that the page webview covers the page area, that
 closing the window leaves no webview and

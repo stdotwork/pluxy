@@ -181,6 +181,28 @@ fn run(app: &AppHandle) -> Result<(), String> {
             "frame",
             serde_json::from_str(&report).unwrap_or(json!(report)),
         );
+        // The real HTTP pages-site frame navigates while wrapper closed is deliberately lost.
+        // The native navigation callback must invalidate admission before its new document loads.
+        wv.eval("{ const original=window.fetch; window.fetch=(u,o)=>o?.body && JSON.parse(o.body).type==='closed' ? Promise.resolve(new Response('',{status:204})) : original(u,o); document.querySelector('iframe').src += '?native-second'; }").map_err(|e|e.to_string())?;
+        wait_for("native HTTP frame navigation closure", || {
+            app.state::<App>()
+                .pages
+                .lock()
+                .unwrap()
+                .document_closed(&label)
+                .then_some(())
+        })?;
+        wv.eval("fetch('/frame').then(r=>r.json()).then(info=>fetch('/send',{method:'POST',body:JSON.stringify({generation:info.generation,type:'call',data:{v:0,id:'after-http-navigation',method:'theme.get',params:null}})})).then(r=>window.__navStatus=r.status)").map_err(|e|e.to_string())?;
+        let status = wait_for("HTTP navigation refusal", || {
+            eval(&wv, "window.__navStatus ?? null").filter(|v| v.is_number())
+        })?;
+        if status != 409 {
+            return Err("HTTP frame navigation left native calls open".into());
+        }
+        log(
+            "http_navigation",
+            json!({"native_closed":true,"status":status,"wrapper_closed_suppressed":true}),
+        );
     }
 
     ingress::run(app, &main)?;

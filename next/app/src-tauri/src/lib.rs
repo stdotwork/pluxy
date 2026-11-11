@@ -289,6 +289,8 @@ fn page_open(
         pages_origin,
     })?;
     let app_doc = page_scheme_url();
+    let navigation_app = webview.app_handle().clone();
+    let navigation_label = label.clone();
     let builder = WebviewBuilder::new(&label, WebviewUrl::CustomProtocol(app_doc.clone()))
         // A web context of their own, apart from the window's storage and cookies. Not
         // `incognito`: on Linux, Tauri then gives the webview no custom schemes at all.
@@ -296,6 +298,12 @@ fn page_open(
         .devtools(false)
         // The app's document at the top, the page's site in its frame; nowhere else.
         .on_navigation(move |u| {
+            navigation_app
+                .state::<App>()
+                .pages
+                .lock()
+                .unwrap()
+                .frame_navigation(&navigation_label, u);
             #[cfg(feature = "native-test")]
             if u.scheme() == pages::SCHEME
                 && u.host_str() == Some("localhost")
@@ -376,45 +384,59 @@ fn page_send(
     msg: Value,
 ) -> Result<(), String> {
     trusted(&webview)?;
-    let target = page_webview(webview.app_handle(), &label)?;
-    let app = webview.app_handle().clone();
-    let (js, ticket) =
-        app.state::<App>()
-            .pages
-            .lock()
-            .unwrap()
-            .prepare_delivery(&label, &generation, &msg)?;
+    deliver_page(webview.app_handle(), &label, &generation, msg)
+}
+
+fn deliver_page(app: &AppHandle, label: &str, generation: &str, msg: Value) -> Result<(), String> {
+    let target = page_webview(app, label)?;
+    let prepared = app
+        .state::<App>()
+        .pages
+        .lock()
+        .unwrap()
+        .prepare_delivery(label, generation, &msg)?;
+    let Some((js, ticket)) = prepared else {
+        return Ok(());
+    };
     let callback_app = app.clone();
-    let callback_label = label.clone();
-    let callback_generation = generation.clone();
-    // Keep only the reply identity while the renderer consumes it, never its payload.
-    let callback_msg = serde_json::json!({"type":msg["type"],"data":{"id":msg["data"]["id"]}});
+    let callback_label = label.to_string();
+    let callback_generation = generation.to_string();
+    let callback_msg = serde_json::json!({"type":msg["type"],"data":{"id":msg["data"]["id"],"event":msg["data"]["event"],"error":{"code":msg["data"]["error"]["code"]}}});
     let result = target
         .eval_with_callback(js, move |result| {
-            callback_app
-                .state::<App>()
-                .pages
-                .lock()
-                .unwrap()
-                .finish_delivery(
-                    &callback_label,
-                    &callback_generation,
-                    &callback_msg,
-                    ticket,
-                    result == "true",
-                );
+            finish_page_delivery(
+                &callback_app,
+                &callback_label,
+                &callback_generation,
+                &callback_msg,
+                ticket,
+                result == "true",
+            );
         })
         .map_err(|e| e.to_string());
     if result.is_err() {
-        app.state::<App>().pages.lock().unwrap().finish_delivery(
-            &label,
-            &generation,
-            &msg,
-            ticket,
-            false,
-        );
+        finish_page_delivery(app, label, generation, &msg, ticket, false);
     }
     result
+}
+
+fn finish_page_delivery(
+    app: &AppHandle,
+    label: &str,
+    generation: &str,
+    msg: &Value,
+    ticket: u64,
+    delivered: bool,
+) {
+    let next = app
+        .state::<App>()
+        .pages
+        .lock()
+        .unwrap()
+        .finish_delivery(label, generation, msg, ticket, delivered);
+    if let Some(next) = next {
+        let _ = deliver_page(app, label, generation, next);
+    }
 }
 
 /// The `pluxy-page:` scheme: the page webviews' app document and their way to the window.
@@ -441,6 +463,7 @@ fn page_scheme(
         request.method().as_str(),
         request.uri().path(),
         served.status,
+        request.uri().query(),
     );
     if let Some(m) = msg {
         let result = app.emit_to(EventTarget::webview(MAIN), "pluxy-page", m);

@@ -23,6 +23,10 @@
       }
       throw new Error(`missing answer: ${id}`);
     }
+    if (location.search) {
+      report({ navigated: await raw("call", call("after-navigation")) });
+      return;
+    }
     window.addEventListener("message", async (e) => {
       if (e.data?.type === "welcome" && e.ports[0])
         e.ports[0].onmessage = (m) => answers.set(m.data.id, m.data);
@@ -63,6 +67,13 @@
             results.push(r);
           }
           report({ rate: results, elapsed: performance.now() - start });
+        }
+        if (e.data.ingressCommand === "navigate") location.href = "/ingress-test?second";
+        if (e.data.ingressCommand === "closed")
+          report({ closed: await raw("closed", null), after: await raw("call", call("after-close")) });
+        if (e.data.ingressCommand === "recovery") {
+          const r = await raw("call", call("recover", "config.get"));
+          report({ recovery: r, answer: await answer("recover") });
         }
         if (e.data.ingressCommand === "control") {
           const r = await raw(

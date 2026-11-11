@@ -9,37 +9,56 @@ const frame = document.createElement("iframe");
 let hello = false;
 let loads = 0;
 let port;
-let sending = 0;
+const queue = [];
+let pumping = false;
 let generation;
 
-// Native admission is authoritative, including direct requests from the frame. Bound this
-// wrapper's own fetches too so it cannot retain an unbounded promise queue.
-async function send(type, data) {
-  if (sending >= 8) {
-    if (type === "call" && typeof data?.id === "string")
+// One FIFO preserves mutation/read order. Only calls consume its bounded capacity;
+// the single hello and closed lifecycle messages always reach native admission.
+function send(type, data) {
+  if (type === "call" && queue.filter((m) => m.type === "call").length >= 8) {
+    if (typeof data?.id === "string")
       port?.postMessage({ v: 0, id: data.id, error: { code: "rate_limited", message: "too many calls" } });
     return;
   }
-  sending++;
-  try {
-    const r = await fetch("/send", {
-      method: "POST",
-      body: JSON.stringify({ generation, type, data: data ?? null }),
-    });
-    if (!r.ok && type === "call") {
-      const refusal = await r.json();
-      if (typeof refusal.id === "string") port?.postMessage(refusal);
+  queue.push({ generation, type, data: data ?? null });
+  void pump();
+}
+async function pump() {
+  if (pumping) return;
+  pumping = true;
+  while (queue.length) {
+    const message = queue[0];
+    try {
+      const r = await fetch("/send", { method: "POST", body: JSON.stringify(message) });
+      if (!r.ok) {
+        const refusal = await r.json();
+        if (message.type === "call" && typeof refusal.id === "string") port?.postMessage(refusal);
+        if (message.type === "hello")
+          frame.contentWindow?.postMessage(
+            refusal.type === "refused"
+              ? refusal
+              : { pluxy: "host", type: "refused", reason: "native page transport refused the hello" },
+            "*",
+          );
+      }
+    } catch {
+      if (message.type === "call" && typeof message.data?.id === "string")
+        port?.postMessage({
+          v: 0,
+          id: message.data.id,
+          error: { code: "unavailable", message: "page transport failed" },
+        });
+      if (message.type === "hello")
+        frame.contentWindow?.postMessage(
+          { pluxy: "host", type: "refused", reason: "page transport failed" },
+          "*",
+        );
+    } finally {
+      queue.shift();
     }
-  } catch {
-    if (type === "call" && typeof data?.id === "string")
-      port?.postMessage({
-        v: 0,
-        id: data.id,
-        error: { code: "unavailable", message: "page transport failed" },
-      });
-  } finally {
-    sending--;
   }
+  pumping = false;
 }
 
 function closePort() {
@@ -62,7 +81,8 @@ Object.defineProperty(window, "__pluxyDeliver", {
     } else if (m.type === "refused") {
       win.postMessage(m.data, "*");
     } else if (m.type === "message") {
-      port?.postMessage(m.data);
+      if (!port) return false;
+      port.postMessage(m.data);
     }
     return true;
   },
@@ -80,7 +100,7 @@ window.addEventListener("message", (e) => {
 
 frame.addEventListener("load", () => {
   loads++;
-  if (loads > 1) {
+  if (loads === 2) {
     closePort();
     send("closed");
   }
