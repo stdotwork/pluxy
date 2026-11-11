@@ -790,14 +790,18 @@ fn registry_files_must_be_regular_files_in_the_index_folder() {
     mkfifo(&reg.join("fifo.tar.gz"));
     fs::write(root.join("outside.tar.gz"), &v1).unwrap();
     std::os::unix::fs::symlink(root.join("outside.tar.gz"), reg.join("link.tar.gz")).unwrap();
-    fs::write(reg.join("n1.tar.gz"), &v1).unwrap();
+    // A folder of the index's that is a link out of it.
+    std::os::unix::fs::symlink(&root, reg.join("sub")).unwrap();
+    fs::create_dir(reg.join("pkgs")).unwrap();
+    fs::write(reg.join("pkgs/n1.tar.gz"), &v1).unwrap();
     let p = platform();
     let art = |url: &str| serde_json::json!({p.clone(): {"url": url, "sha256": digest(&v1), "size": v1.len()}});
     let index = serde_json::json!({"registry_version": 0, "packages": {
         "example/notes": {"releases": [
             {"version": "3.0.0", "artifacts": art("fifo.tar.gz")},
             {"version": "2.0.0", "artifacts": art("link.tar.gz")},
-            {"version": "1.0.0", "artifacts": art("n1.tar.gz")}
+            {"version": "1.5.0", "artifacts": art("sub/outside.tar.gz")},
+            {"version": "1.0.0", "artifacts": art("pkgs/n1.tar.gz")}
         ]}
     }});
     fs::write(reg.join("index.json"), serde_json::to_vec(&index).unwrap()).unwrap();
@@ -827,9 +831,14 @@ fn registry_files_must_be_regular_files_in_the_index_folder() {
         offers(&dd).unwrap()[1].error.clone().unwrap_or_default()
     }));
     assert!(e.contains("not a regular file"), "{e}");
-    let e = stage_from_registry(&d, "fixture", "example/notes", Some("2.0.0")).unwrap_err();
-    assert!(e.contains("not a file inside the index's folder"), "{e}");
-    // The positive control on the same route.
+    for v in ["2.0.0", "1.5.0"] {
+        let e = stage_from_registry(&d, "fixture", "example/notes", Some(v)).unwrap_err();
+        assert!(
+            e.contains("not a file inside the index's folder"),
+            "{v}: {e}"
+        );
+    }
+    // The positive control on the same route, through a folder of the index's.
     stage_from_registry(&d, "fixture", "example/notes", Some("1.0.0")).unwrap();
     done(root);
 }

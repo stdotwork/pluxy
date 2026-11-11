@@ -785,6 +785,12 @@ fn read_bounded(path: &Path, max: u64) -> Result<Vec<u8>, String> {
     let f = o
         .open(path)
         .map_err(|e| format!("{}: {e}", path.display()))?;
+    read_open(f, path, max)
+}
+
+/// Reads the open file f (named path in errors), which must be a regular file of at most max
+/// bytes.
+fn read_open(f: fs::File, path: &Path, max: u64) -> Result<Vec<u8>, String> {
     if !f.metadata().is_ok_and(|m| m.is_file()) {
         return Err(format!("{} is not a regular file", path.display()));
     }
@@ -1550,21 +1556,57 @@ fn fetch_artifact(base: &Base, a: &Artifact) -> Result<Vec<u8>, String> {
                 let u = url::Url::parse(&a.url).map_err(|e| format!("{}: {e}", a.url))?;
                 return https_get(&u, a.size);
             }
-            // Inside the index's folder after links are followed, too.
-            let inside = store_path(&a.url)
-                .then(|| {
-                    Some((
-                        fs::canonicalize(dir).ok()?,
-                        fs::canonicalize(dir.join(&a.url)).ok()?,
-                    ))
-                })
-                .flatten()
-                .filter(|(d, p)| p.starts_with(d));
-            let (_, path) =
-                inside.ok_or_else(|| format!("{}: not a file inside the index's folder", a.url))?;
-            read_bounded(&path, a.size)
+            let outside = || format!("{}: not a file inside the index's folder", a.url);
+            if !store_path(&a.url) {
+                return Err(outside());
+            }
+            #[cfg(unix)]
+            {
+                let f = open_beneath(dir, &a.url).map_err(|e| format!("{}: {e}", outside()))?;
+                read_open(f, &dir.join(&a.url), a.size)
+            }
+            // shortcut: checks the path once, then opens it again, so a folder swapped for a
+            // link in between is followed; open beneath the folder there too when other
+            // platforms are supported.
+            #[cfg(not(unix))]
+            {
+                let inside = fs::canonicalize(dir)
+                    .ok()
+                    .zip(fs::canonicalize(dir.join(&a.url)).ok());
+                match inside {
+                    Some((d, p)) if p.starts_with(&d) => read_bounded(&p, a.size),
+                    _ => Err(outside()),
+                }
+            }
         }
     }
+}
+
+/// Opens rel, a `store_path`, under dir one part at a time, following no link at any step, so
+/// it cannot leave dir even while its folders change. dir itself may be reached through links.
+#[cfg(unix)]
+fn open_beneath(dir: &Path, rel: &str) -> Result<fs::File, String> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    let mut cur = fs::File::open(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let parts: Vec<&str> = rel.split('/').collect();
+    for (i, part) in parts.iter().enumerate() {
+        let name = std::ffi::CString::new(*part).map_err(|e| e.to_string())?;
+        // The file itself without blocking (`read_open` refuses what is not a regular file).
+        let kind = if i + 1 == parts.len() {
+            libc::O_NONBLOCK
+        } else {
+            libc::O_DIRECTORY
+        };
+        let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | kind;
+        // SAFETY: cur is an open folder and name a NUL-terminated string; the result is checked.
+        let fd = unsafe { libc::openat(cur.as_raw_fd(), name.as_ptr(), flags) };
+        if fd < 0 {
+            return Err(format!("{part}: {}", std::io::Error::last_os_error()));
+        }
+        // SAFETY: fd was just opened and nothing else owns it.
+        cur = unsafe { fs::File::from_raw_fd(fd) };
+    }
+    Ok(cur)
 }
 
 /// A package a registry offers.
