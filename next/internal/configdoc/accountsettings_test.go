@@ -194,3 +194,82 @@ extension:
 		})
 	}
 }
+
+// Outside account settings, everything below a key named like a secret is a secret too, written
+// in place or given through an alias, except in the provider sections today's core reads at the
+// top of a config.yaml: the v8 api-keys mapping and the older lists such as codex-api-key, whose
+// entries are read by the rules. An extension's own "settings" in its entry under "extensions",
+// which core does not read, is no exception.
+func TestRedactBelowSecretKeysOutsideSettings(t *testing.T) {
+	for _, tc := range []struct {
+		name, src string
+		isYAML    bool
+		secrets   []string
+		kept      []string // text the redacted document still holds
+	}{
+		{"extension-wide settings", `extensions:
+  pluxy/x:
+    settings:
+      password:
+        nested: fake-ext-nested
+`, true, []string{"fake-ext-nested"}, nil},
+		{"extension-wide settings, json", `{"extensions": {"pluxy/x": {"settings": {"password": {"nested": "fake-ext-json"}}}}}`,
+			false, []string{"fake-ext-json"}, nil},
+		{"mapping", `management:
+  secret-key:
+    primary: fake-inline-map
+`, true, []string{"fake-inline-map"}, nil},
+		{"mapping through an alias", `template: &t
+  nested: fake-aliased-map
+routing:
+  token: *t
+`, true, []string{"fake-aliased-map"}, nil},
+		{"list of mappings", `password:
+  - user: fake-list-map
+`, true, []string{"fake-list-map"}, nil},
+		{"list of mappings through an alias", `template: &l
+  - user: fake-aliased-list
+server:
+  private-key: *l
+`, true, []string{"fake-aliased-list"}, nil},
+		{"api-keys below the top", `access:
+  api-keys:
+    primary: fake-nested-api-keys
+`, true, []string{"fake-nested-api-keys"}, nil},
+		{"provider list below the top", `extensions:
+  pluxy/x:
+    codex-api-key:
+      - base-url: fake-not-a-section
+`, true, []string{"fake-not-a-section"}, nil},
+		{"secret mapping in a provider entry", `codex-api-key:
+  - api-key: fake-entry-key
+    base-url: https://codex.example.com
+    private-key:
+      inner: fake-entry-inner
+`, true, []string{"fake-entry-key", "fake-entry-inner"}, []string{"base-url: https://codex.example.com"}},
+		{"provider sections through an alias", `groups: &g
+  - api-key: fake-aliased-section
+    base-url: https://codex.example.com
+codex-api-key: *g
+sections: &s
+  claude:
+    - keys:
+        - api-key: fake-aliased-v8
+      base-url: https://claude.example.com
+api-keys: *s
+`, true, []string{"fake-aliased-section", "fake-aliased-v8"},
+			[]string{"base-url: https://codex.example.com", "base-url: https://claude.example.com"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			red, back := redactChecked(t, tc.src, tc.isYAML, tc.secrets)
+			if back != tc.src {
+				t.Errorf("round trip is not byte exact:\n%s", back)
+			}
+			for _, k := range tc.kept {
+				if !strings.Contains(red, k) {
+					t.Errorf("the redacted document lacks %q:\n%s", k, red)
+				}
+			}
+		})
+	}
+}

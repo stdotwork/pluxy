@@ -169,6 +169,17 @@ var families = []family{
 	{"interactions", "interactions-api-key", Gemini},
 }
 
+// SectionLists returns the keys at the top of a config.yaml whose value is a list of provider key
+// entries, in today's core's older spelling (codex-api-key and the rest). In the v8 layout the
+// sections are the values of the top-level api-keys mapping.
+func SectionLists() []string {
+	var out []string
+	for _, f := range families {
+		out = append(out, f.old)
+	}
+	return out
+}
+
 // Statuses of a setting, as next/README.md names them.
 const (
 	supported = iota

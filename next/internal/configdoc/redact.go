@@ -17,6 +17,8 @@ import (
 	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/stdotwork/pluxy/next/internal/legacy"
 )
 
 // A redacted document holds a placeholder in place of each secret: PlaceholderPrefix and the
@@ -77,12 +79,13 @@ func (r *Redactor) placeholderOf(n *yaml.Node) string {
 //     Cookie, ...), in any "headers" mapping;
 //   - a URL with a user name, password or query, anywhere.
 //
-// Below a key named like a secret, a list's items that are not mappings are secrets too, however
-// deep; a list of mappings (provider entries in a config file) is read by the rules above. Account
-// settings are stricter: everything below a key named like a secret is one. That holds for
-// settings on their own (RedactSettings) and for the "settings" of each item of an "accounts"
-// list in a config file. Everywhere, true, false, null and the empty string are never secrets:
-// they carry none, and hiding them would hide what a setting is.
+// Everything below a key named like a secret is a secret too, however deep, except in the provider
+// sections today's core reads at the top of a config.yaml: the v8 api-keys mapping and the older
+// lists of entries (codex-api-key and the rest, legacy.SectionLists), whose entries are read by
+// the rules above. Account settings have no such sections, on their own (RedactSettings) or as
+// the "settings" of each item of an "accounts" list in a config file. Everywhere, true, false,
+// null and the empty string are never secrets: they carry none, and hiding them would hide what a
+// setting is.
 var secretNames = map[string]bool{
 	"api-key": true, "api-keys": true, "apikey": true, "secret-key": true, "management-key": true,
 	"client-keys": true, "password": true, "secret": true, "token": true, "private-key": true,
@@ -119,21 +122,22 @@ func secretURL(s string) bool {
 	return err == nil && u.Host != "" && (u.User != nil || u.RawQuery != "")
 }
 
-// ctx is how secrets reads a node: strictly or not, and what the place it is in makes it.
-type ctx struct {
-	strict bool
-	role   role
-}
+// sectionLists are the top-level keys of a config.yaml whose value is a list of provider entries.
+var sectionLists = legacy.SectionLists()
+
+// ctx is how secrets reads a node: what the place it is in makes it.
+type ctx struct{ role role }
 
 // role is what a node's place makes it, for the rules that look at a value.
 type role int
 
 const (
 	rolePlain    role = iota
+	roleTop           // a config file's top-level mapping
 	roleSecret        // the value of a key named like a secret
+	roleSections      // the v8 api-keys mapping, at the top of a config file
+	roleEntries       // an older list of provider entries, at the top of a config file
 	roleHeaders       // the value of a "headers" key
-	roleAccounts      // the value of an "accounts" key
-	roleAccount       // an item of an accounts list
 )
 
 // resolved returns the node an alias stands for, or n itself.
@@ -144,9 +148,8 @@ func resolved(n *yaml.Node) *yaml.Node {
 	return n
 }
 
-// secrets returns the scalar nodes of the tree under n that hold secrets. strict: everything
-// below a key named like a secret is one (account settings), as it is in the settings of a config
-// file's accounts.
+// secrets returns the scalar nodes of the tree under n that hold secrets. strict: n is an
+// account's settings, not a config file, so it has no provider sections.
 func secrets(n *yaml.Node, strict bool) []*yaml.Node {
 	var out []*yaml.Node
 	// add records v as a secret, unless it is true, false, null or empty (see the rules above).
@@ -191,9 +194,9 @@ func secrets(n *yaml.Node, strict bool) []*yaml.Node {
 		}
 	}
 	// walk reads the tree under v by the rules above, in the way c says the place v is in reads
-	// it: v may be the value of a key a rule names (headers, accounts, a secret key) or an item
-	// of an accounts list, whose settings are read strictly. An alias is read as its anchor would
-	// be in the alias's place, whatever the anchor's own place, and a mapping merged with "<<" is
+	// it: v may be a config file's top-level mapping or the value of a key a rule names (headers,
+	// a secret key, a provider section). An alias is read as its anchor would be in the alias's
+	// place, whatever the anchor's own place, and a mapping merged with "<<" is
 	// read as part of the mapping it is merged into. Each anchor is read at most once in each
 	// way, so an alias back into its own anchor, or anchors that nest aliases many times over,
 	// cost no more than the document's size.
@@ -232,14 +235,17 @@ func secrets(n *yaml.Node, strict bool) []*yaml.Node {
 			}
 			return
 		}
-		plain := ctx{strict: c.strict}
+		plain := ctx{}
 		switch {
-		case c.role == roleSecret && (c.strict || v.Kind == yaml.ScalarNode):
+		case c.role == roleSecret:
 			all(v, true)
 			return
-		case c.role == roleSecret && v.Kind == yaml.SequenceNode:
-			// A list of keys, or of lists of keys; a list of mappings (provider key entries) is
-			// walked.
+		case c.role == roleSections && v.Kind == yaml.MappingNode:
+			// Each section is a list of provider entries, read by the rules.
+			pairs(v, c, func(_ string, val *yaml.Node) { walk(val, plain) })
+			return
+		case c.role == roleEntries && v.Kind == yaml.SequenceNode:
+			// An entry is read by the rules; anything else in the list is a key.
 			for _, x := range v.Content {
 				if resolved(x).Kind != yaml.MappingNode {
 					all(x, true)
@@ -247,6 +253,9 @@ func secrets(n *yaml.Node, strict bool) []*yaml.Node {
 					walk(x, plain)
 				}
 			}
+			return
+		case c.role == roleSections || c.role == roleEntries:
+			all(v, true)
 			return
 		case c.role == roleHeaders && v.Kind == yaml.MappingNode:
 			pairs(v, c, func(name string, val *yaml.Node) {
@@ -256,11 +265,6 @@ func secrets(n *yaml.Node, strict bool) []*yaml.Node {
 					walk(val, plain)
 				}
 			})
-			return
-		case c.role == roleAccounts && v.Kind == yaml.SequenceNode:
-			for _, x := range v.Content {
-				walk(x, ctx{strict: c.strict, role: roleAccount})
-			}
 			return
 		}
 		switch v.Kind {
@@ -278,20 +282,24 @@ func secrets(n *yaml.Node, strict bool) []*yaml.Node {
 				case strings.EqualFold(key, "credential"):
 					all(val, false)
 				case strings.EqualFold(key, "headers"):
-					walk(val, ctx{strict: c.strict, role: roleHeaders})
-				case c.role == roleAccount && strings.EqualFold(key, "settings"):
-					walk(val, ctx{strict: true})
-				case strings.EqualFold(key, "accounts"):
-					walk(val, ctx{strict: c.strict, role: roleAccounts})
+					walk(val, ctx{role: roleHeaders})
+				case c.role == roleTop && key == "api-keys" && resolved(val).Kind == yaml.MappingNode:
+					walk(val, ctx{role: roleSections})
+				case c.role == roleTop && slices.Contains(sectionLists, key):
+					walk(val, ctx{role: roleEntries})
 				case secretName(key):
-					walk(val, ctx{strict: c.strict, role: roleSecret})
+					walk(val, ctx{role: roleSecret})
 				default:
 					walk(val, plain)
 				}
 			})
 		}
 	}
-	walk(n, ctx{strict: strict})
+	if strict {
+		walk(n, ctx{})
+	} else {
+		walk(n, ctx{role: roleTop})
+	}
 	return out
 }
 
