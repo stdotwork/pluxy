@@ -1528,6 +1528,23 @@ renamed `main-<time>.log` and a new one begins. `logs.max_total_size_mb` (today'
 first, `main.log` never; 0 (the default) is no cap. The cap is applied when a file is rotated, when a
 request log is written and when the setting changes. A change of either setting takes effect at the reload that makes it.
 
+Core also writes one access line when each client API request ends: after a streamed reply ends,
+and when a Responses WebSocket closes. It writes none for `/healthz`, the management API, the
+panel and its assets, or a path no route serves (a 404).
+
+```text
+200 | 1.234s | 127.0.0.1 | POST /v1/chat/completions | 20261109120000-3f9a0c2e5b7d4e18 | openai-main
+```
+
+The line is `<status> | <latency> | <client ip> | <METHOD> <path> | <trace id> | <account>`: the
+reply's status; the time the request took, to the millisecond (to the second above a minute); the
+client's address (the connection's peer, or the client a trusted proxy names, as in request logs);
+the method and the path only, never the query string (Gemini clients send their key in `?key=`),
+and no header or body; the reply's `X-CPA-TRACE-ID` and the account its last attempt went to, or
+`-` in either place when there is none, as for a request refused before routing. A reply of 400 or
+more is a warning: the line starts with `warning: `, like the other warnings, so `main.log` marks
+it `[warn ]`; every other line is `[info ]`.
+
 ```json
 {"logs": {"to_file": true, "max_total_size_mb": 100}}
 ```
