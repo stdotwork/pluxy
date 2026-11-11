@@ -413,24 +413,34 @@ removes the account's credential from every string and from `raw`, as from every
 ### `endpoint`
 
 Version 0.7. A client request to one of the provider's endpoints beyond generation, which core
-passes to an account's extension whole: core reads nothing of it but the model, and the extension
-writes the reply's body. Core sends it only to an extension whose describe reports
+passes to an account's extension. Except for core-built bodies below, core reads nothing of it
+but the model, and the extension writes the reply's body. Core sends it only to an extension whose describe reports
 `protocol_minor` 7 or more and lists `endpoint` in `operations`; for any other, core treats the
 account as one that does not serve the endpoint.
 
 The call carries `account` and `request` as `generate` does. The request has no items: `model`
 is the body's `model` (renamed for the account and without its thinking suffix, which is in
 `options.thinking_suffix`, as for `generate`; empty for an endpoint that takes no model, when the
-body names none), and `native` holds the client's body and headers,
+body names none), and `native` holds the body (the client's, or core-built as below) and headers,
 with `native.format` naming the endpoint:
 
 | `native.format` | Client route | Body |
 | --- | --- | --- |
 | `openai.responses.compact` | `POST /v1/responses/compact` (and `/backend-api/codex/responses/compact`) | A Responses request; the reply is one JSON object. Core refuses `"stream": true` itself. |
+| `codex.models` | `GET /v1/models?client_version=<version>` | Core builds `{"client_version":"<version>","models":[{"name":"team/coding","upstream":"gpt-6.1-sol","display_name":"Coding","non_codex":true}]}`. Presence of the query key selects this endpoint, even with an empty value. Core lists accounts of `pluxy/codex` under their normal aliases, exclusions and prefixes, keeps the first mapping of a repeated public name, and sorts by public name. `display_name` is omitted when empty. `non_codex` is true when any other extension's account can also serve that public name, including an account with an unknown model list; the extension then clears the Codex-only options as described below. The GET body is ignored. One direct call goes to the first enabled, usable `pluxy/codex` account in account order, carrying only its `account.id` (no settings or credential), with `request.model` empty. No routing reservation, cooldown, concurrency limit, credential renewal, result, rotation or usage event is involved; there are no retries. Without such an account core returns 200 `{"models":[]}` itself. The extension returns one JSON object in the Codex catalog shape, omitting unknown templates and replacing each slug with `name`. No upstream request or remote refresh is made. |
 | `codex.alpha_search` | `POST /v1/alpha/search` (and `/backend-api/codex/alpha/search`) | Codex's search request, in Codex's own shape; the reply is one JSON object. Its `model` is optional: a request without one is sent to any account, with `request.model` empty. |
 | `openai.images.generations` | `POST /v1/images/generations` | An Images API request; the reply is one JSON object, or server-sent events when it asks for `"stream": true`. Core refuses a request without a `prompt` and names `gpt-image-2` as the model when it names none. |
 | `openai.images.edits` | `POST /v1/images/edits` | As for generations. A `multipart/form-data` edit arrives in its JSON form: each field a member (`n`, `output_compression` and `partial_images` as numbers, `stream` as a boolean, `mask[file_id]` and `mask[image_url]` inside `mask`), the image files (`image[]`, else `image`) added to `images` as `{"image_url": "data:..."}` and the mask file as `mask.image_url`. Core refuses a form without an image file. |
 | `gemini.interactions` | `POST /v1beta/interactions` | Gemini's Interactions API request, in Google's own shape; the reply is one JSON object, or server-sent events when it asks for `"stream": true`, which the extension sends with each event's name. The request names a model or an agent: core refuses one that names both or neither, a `stream` that is not a boolean, and a body that is not JSON, removes a `models/` prefix from the model, and sends a request with an agent and no model to any account, with `request.model` empty. The client's `Api-Revision` header is in `native.headers` (`api-revision`). Google's clients may send the client key in `x-goog-api-key` or `?key=`. |
+
+For `codex.models`, `non_codex` clears `prefer_websockets`, `use_responses_lite`,
+`supports_reasoning_effort_updates`, `supports_search_tool` and an existing
+`supports_image_detail_original` to false, sets `service_tiers` to an empty array and `tool_mode`
+to `"direct"`, and sets `apply_patch_tool_type`, `upgrade` and `availability_nux` to null.
+Catalog errors are returned without updating routing state, and are never retried.
+
+Adding an endpoint format uses the existing version 0.7 operation and frames; it does not
+require a new protocol minor version (as with `codex.alpha_search` and `gemini.interactions`).
 
 The reply is a stream of events as for `generate`, without items: `response.start`, whose
 `response.format` is the endpoint's format and whose `response.raw` says how to send the body,
@@ -447,7 +457,8 @@ order, then `finish`, with `usage` when the upstream reported it.
 | --- | --- |
 | `content_type` | The body's media type, which core sends as the reply's `Content-Type`. Required. With `text/event-stream`, core sends each piece to the client as soon as it arrives. |
 
-The body is text: send it as it should reach the client. An `error` before `response.start` is
+The body is text: send it as it should reach the client. Except for the direct `codex.models`
+call above, an `error` before `response.start` is
 routed as for `generate`: core tries another account when it is retryable, and otherwise answers
 the client with an error in OpenAI's shape. An `error` after `response.start` ends the body where
 it is; a `text/event-stream` body then gets a last `error` event. An account that does not serve
