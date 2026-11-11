@@ -295,7 +295,16 @@ fn page_open(
         .data_directory(state.pages_dir.clone())
         .devtools(false)
         // The app's document at the top, the page's site in its frame; nowhere else.
-        .on_navigation(move |u| *u == app_doc || u.origin() == origin)
+        .on_navigation(move |u| {
+            #[cfg(feature = "native-test")]
+            if u.scheme() == pages::SCHEME
+                && u.host_str() == Some("localhost")
+                && u.path() == "/ingress-test"
+            {
+                return true;
+            }
+            *u == app_doc || u.origin() == origin
+        })
         .on_new_window(|_, _| NewWindowResponse::Deny);
     let window: Window = webview.window();
     let b = rect.bounds();
