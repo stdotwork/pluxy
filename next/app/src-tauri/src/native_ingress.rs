@@ -200,9 +200,12 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
         nav["navigated"]["status"] == 409,
         "second frame document called before native closure",
     )?;
+    wait_for("ingress window closed state", || {
+        eval(main,"document.querySelector('[data-part=extension-frame]')?.dataset.phase === 'closed' && document.body.innerText.includes('Load the page again')").filter(|v|v==true)
+    })?;
     log(
         "ingress_navigation",
-        json!({"native_closed":true,"wrapper_closed_suppressed":true,"status":409}),
+        json!({"native_closed":true,"wrapper_closed_suppressed":true,"status":409,"window_closed":true}),
     );
     main.eval("location.hash='#/extensions'")
         .map_err(|e| e.to_string())?;

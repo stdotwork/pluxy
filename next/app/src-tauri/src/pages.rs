@@ -37,6 +37,7 @@ struct Document {
     hello: bool,
     welcome: bool,
     closed: bool,
+    closed_notified: bool,
     recent: VecDeque<Instant>,
     waiting: HashSet<String>,
     answering: HashSet<String>,
@@ -44,7 +45,7 @@ struct Document {
     next_reply: u64,
     theme_active: bool,
     theme_pending: Option<Value>,
-    frame_started: bool,
+    frame_url: Option<Url>,
 }
 #[derive(Default)]
 struct Package {
@@ -53,6 +54,7 @@ struct Package {
 struct Page {
     binding: Binding,
     document: Document,
+    previous_closed: Option<ToWindow>,
 }
 #[derive(Default)]
 pub struct Pages {
@@ -103,6 +105,7 @@ impl Pages {
             Page {
                 binding,
                 document: Document::default(),
+                previous_closed: None,
             },
         );
         Ok(label)
@@ -129,19 +132,45 @@ impl Pages {
         if let Some(w) = self.open.get_mut(label) {
             // A second top-level document gets a fresh generation but cannot reconnect.
             let loaded = w.document.loaded;
+            if loaded && !w.document.closed_notified {
+                w.previous_closed = Some(ToWindow {
+                    label: label.into(),
+                    generation: w.document.generation.clone(),
+                    kind: "closed".into(),
+                    data: Value::Null,
+                });
+            }
             w.document = Document {
                 generation: self.generation.to_string(),
                 loaded: true,
                 closed: loaded,
+                closed_notified: loaded,
                 ..Document::default()
             };
         }
     }
-    /// The navigation callback includes subframes. Only the first exact page URL may start
-    /// a document. Any later pages-site navigation (including a nested frame) closes it.
+    /// Return each native closure once, using the generation the window already knows.
+    pub fn take_closed(&mut self, label: &str) -> Option<ToWindow> {
+        let w = self.open.get_mut(label)?;
+        if let Some(previous) = w.previous_closed.take() {
+            return Some(previous);
+        }
+        if !w.document.closed || w.document.closed_notified {
+            return None;
+        }
+        w.document.closed_notified = true;
+        Some(ToWindow {
+            label: label.into(),
+            generation: w.document.generation.clone(),
+            kind: "closed".into(),
+            data: Value::Null,
+        })
+    }
     pub fn document_closed(&self, label: &str) -> bool {
         self.open.get(label).is_none_or(|w| w.document.closed)
     }
+    /// WebKit reports subframe navigation. Ignore fragment-only changes, but close on a
+    /// second document or a nested frame loading another pages-site document.
     pub fn frame_navigation(&mut self, label: &str, url: &Url) {
         let Some(w) = self.open.get_mut(label) else {
             return;
@@ -151,11 +180,26 @@ impl Pages {
             self.ingress_fixture && url.scheme() == SCHEME && url.path() == "/ingress-test";
         #[cfg(not(feature = "native-test"))]
         let test_frame = false;
-        if url.origin().ascii_serialization() != w.binding.pages_origin && !test_frame {
+        if !Url::parse(&w.binding.pages_origin).is_ok_and(|origin| origin.origin() == url.origin())
+            && !test_frame
+        {
             return;
         }
-        if !w.document.frame_started && !w.document.hello && (*url == w.binding.url || test_frame) {
-            w.document.frame_started = true;
+        if let Some(previous) = &w.document.frame_url {
+            let mut before = previous.clone();
+            before.set_fragment(None);
+            let mut after = url.clone();
+            after.set_fragment(None);
+            if before == after && previous.fragment() != url.fragment() {
+                w.document.frame_url = Some(url.clone());
+                return;
+            }
+        }
+        if w.document.frame_url.is_none()
+            && !w.document.hello
+            && (*url == w.binding.url || test_frame)
+        {
+            w.document.frame_url = Some(url.clone());
         } else {
             w.document.closed = true;
             w.document.waiting.clear();
@@ -180,6 +224,9 @@ impl Pages {
         }
         let data = match sent.kind.as_str() {
             "hello" => {
+                if !sent.data.get().trim_start().starts_with('{') {
+                    return Err(fail(400, "bad_request"));
+                }
                 if d.hello {
                     return Err(fail(409, "bad_request"));
                 }
@@ -278,6 +325,8 @@ impl Pages {
             }
             "closed" => {
                 w.document.closed = true;
+                // This message itself is forwarded; no second native notification is needed.
+                w.document.closed_notified = true;
                 w.document.waiting.clear();
                 w.document.replies.clear();
             }
@@ -1477,6 +1526,72 @@ mod tests {
         let next = page(&mut p, "test/beta", now);
         p.frame_navigation(&next, &Url::parse("http://localhost:8401/nested").unwrap());
         assert!(p.document_closed(&next));
+    }
+    #[test]
+    fn normalized_origins_fragments_and_single_close_notification() {
+        let now = Instant::now();
+        let mut p = Pages::default();
+        for origin in ["https://example.com:443", "https://例え.テスト:443"] {
+            let mut b = binding("test/alpha");
+            b.pages_origin = origin.into();
+            b.url = Url::parse(&format!("{origin}/index.html")).unwrap();
+            let url = b.url.clone();
+            let label = p.bind(b).unwrap();
+            p.begin_document(&label);
+            p.frame_navigation(&label, &url);
+            hello(&mut p, &label, now);
+            let mut hash = url.clone();
+            hash.set_fragment(Some("section"));
+            p.frame_navigation(&label, &hash);
+            assert!(!p.document_closed(&label));
+            assert!(p.take_closed(&label).is_none());
+            hash.set_fragment(None);
+            p.frame_navigation(&label, &hash);
+            assert!(!p.document_closed(&label));
+            let mut next = url.clone();
+            next.set_path("/next.html");
+            p.frame_navigation(&label, &next);
+            let closed = p.take_closed(&label).unwrap();
+            assert_eq!(closed.kind, "closed");
+            assert_eq!(closed.label, label);
+            assert!(p.take_closed(&label).is_none());
+            p.frame_navigation(&label, &next);
+            assert!(p.take_closed(&label).is_none());
+            p.unbind(&label);
+        }
+        let label = page(&mut p, "test/beta", now);
+        assert_eq!(
+            request(
+                &mut p,
+                &label,
+                "call",
+                call("one", "theme.get", Value::Null),
+                now
+            )
+            .0
+            .status,
+            204
+        );
+        let gen = p.open[&label].document.generation.clone();
+        let error = call_error("one", "unavailable");
+        let (_, ticket) = p.prepare_delivery(&label, &gen, &error).unwrap().unwrap();
+        p.finish_delivery(&label, &gen, &error, ticket, false);
+        assert_eq!(p.take_closed(&label).unwrap().generation, gen);
+        assert!(p.take_closed(&label).is_none());
+    }
+    #[test]
+    fn hello_arrays_are_refused_before_window_forwarding() {
+        let mut p = Pages::default();
+        let now = Instant::now();
+        let label = p.bind(binding("test/alpha")).unwrap();
+        p.begin_document(&label);
+        refused(
+            request(&mut p, &label, "hello", json!(["page", "hello", [0]]), now),
+            400,
+            "bad_request",
+            None,
+        );
+        hello(&mut p, &label, now);
     }
     #[test]
     fn pages_packages_and_origins() {

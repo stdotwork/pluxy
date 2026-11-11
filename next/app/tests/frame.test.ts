@@ -18,7 +18,8 @@ function wrapper() {
   const code = readFileSync(new URL("../page/frame.js", import.meta.url), "utf8").split(
     'const r = await fetch("/frame");',
   )[0];
-  runInNewContext(code ?? "", context);
+  Object.assign(context, { replies: messages });
+  runInNewContext(`${code ?? ""}\nport = { postMessage: value => replies.push(value) };`, context);
   return {
     requests,
     messages,
@@ -54,4 +55,22 @@ test("the wrapper passes a native hello refusal to the frame", async () => {
   w.requests[0]?.resolve({ ok: false, json: async () => refusal });
   await tick();
   expect(w.messages).toEqual([refusal]);
+});
+
+test("an oversized transport refusal uses the original call id", async () => {
+  const w = wrapper();
+  w.send("call", "oversized");
+  w.requests[0]?.resolve({
+    ok: false,
+    status: 413,
+    json: async () => ({ v: 0, id: null, error: { code: "too_large" } }),
+  });
+  await tick();
+  expect(w.messages).toEqual([
+    {
+      v: 0,
+      id: "oversized",
+      error: { code: "too_large", message: "native page transport refused the call" },
+    },
+  ]);
 });

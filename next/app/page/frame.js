@@ -33,7 +33,19 @@ async function pump() {
       const r = await fetch("/send", { method: "POST", body: JSON.stringify(message) });
       if (!r.ok) {
         const refusal = await r.json();
-        if (message.type === "call" && typeof refusal.id === "string") port?.postMessage(refusal);
+        if (message.type === "call") {
+          const id = typeof refusal.id === "string" ? refusal.id : message.data?.id;
+          if (typeof id === "string")
+            port?.postMessage({
+              ...refusal,
+              v: 0,
+              id,
+              error: {
+                code: r.status === 413 ? "too_large" : (refusal.error?.code ?? "bad_request"),
+                message: refusal.error?.message ?? "native page transport refused the call",
+              },
+            });
+        }
         if (message.type === "hello")
           frame.contentWindow?.postMessage(
             refusal.type === "refused"

@@ -304,6 +304,7 @@ fn page_open(
                 .lock()
                 .unwrap()
                 .frame_navigation(&navigation_label, u);
+            notify_page_closed(&navigation_app, &navigation_label);
             #[cfg(feature = "native-test")]
             if u.scheme() == pages::SCHEME
                 && u.host_str() == Some("localhost")
@@ -322,6 +323,7 @@ fn page_open(
                     .lock()
                     .unwrap()
                     .begin_document(wv.label());
+                notify_page_closed(wv.app_handle(), wv.label());
             }
         });
     let window: Window = webview.window();
@@ -434,8 +436,16 @@ fn finish_page_delivery(
         .lock()
         .unwrap()
         .finish_delivery(label, generation, msg, ticket, delivered);
+    notify_page_closed(app, label);
     if let Some(next) = next {
         let _ = deliver_page(app, label, generation, next);
+    }
+}
+
+fn notify_page_closed(app: &AppHandle, label: &str) {
+    let closed = app.state::<App>().pages.lock().unwrap().take_closed(label);
+    if let Some(closed) = closed {
+        let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-page", closed);
     }
 }
 

@@ -181,9 +181,21 @@ fn run(app: &AppHandle) -> Result<(), String> {
             "frame",
             serde_json::from_str(&report).unwrap_or(json!(report)),
         );
+        wv.eval("document.querySelector('iframe').src += '#native-fragment'")
+            .map_err(|e| e.to_string())?;
+        std::thread::sleep(Duration::from_millis(200));
+        if app
+            .state::<App>()
+            .pages
+            .lock()
+            .unwrap()
+            .document_closed(&label)
+        {
+            return Err("fragment navigation closed admission".into());
+        }
         // The real HTTP pages-site frame navigates while wrapper closed is deliberately lost.
         // The native navigation callback must invalidate admission before its new document loads.
-        wv.eval("{ const original=window.fetch; window.fetch=(u,o)=>o?.body && JSON.parse(o.body).type==='closed' ? Promise.resolve(new Response('',{status:204})) : original(u,o); document.querySelector('iframe').src += '?native-second'; }").map_err(|e|e.to_string())?;
+        wv.eval("{ const original=window.fetch; window.fetch=(u,o)=>o?.body && JSON.parse(o.body).type==='closed' ? Promise.resolve(new Response('',{status:204})) : original(u,o); const frame=document.querySelector('iframe');const next=new URL(frame.src);next.hash='';next.search='?native-second';frame.src=next.href; }").map_err(|e|e.to_string())?;
         wait_for("native HTTP frame navigation closure", || {
             app.state::<App>()
                 .pages
@@ -199,9 +211,12 @@ fn run(app: &AppHandle) -> Result<(), String> {
         if status != 409 {
             return Err("HTTP frame navigation left native calls open".into());
         }
+        wait_for("window closed state", || {
+            eval(&main,"document.querySelector('[data-part=extension-frame]')?.dataset.phase === 'closed' && document.body.innerText.includes('Load the page again')").filter(|v|v==true)
+        })?;
         log(
             "http_navigation",
-            json!({"native_closed":true,"status":status,"wrapper_closed_suppressed":true}),
+            json!({"native_closed":true,"status":status,"wrapper_closed_suppressed":true,"window_closed":true,"fragment_open":true}),
         );
     }
 

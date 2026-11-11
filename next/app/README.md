@@ -87,7 +87,10 @@ Before forwarding, native code enforces the 256 KiB transport body, 64 KiB chann
 exact version-0 call schema and known methods. Each document gets one hello, 30 admitted calls
 per rolling second and eight calls awaiting answers. A call remains in flight until the native
 reply callback confirms delivery, or the page closes. Requests and replies carry the document's
-native generation; a second document cannot reconnect. Direct frame requests use these same checks.
+native generation; a second document cannot reconnect. Native subframe navigation detection is
+verified on Linux WebKit. Windows currently reports only top-level navigation through this callback;
+subframe closure there still depends on the wrapper's load notification and has not been verified.
+Direct frame requests use these same checks.
 
 One extension may open four pages, with 60 admitted calls per rolling second and 16 in flight
 across them. Closing pages preserves the package's recent rate budget. At most 16 page webviews
