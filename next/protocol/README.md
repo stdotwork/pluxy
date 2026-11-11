@@ -555,7 +555,12 @@ Core sends a call that has headers only to an extension whose describe reports
 `credential`), so routing moves on, and the traffic never leaves without them. A `login` that
 adds a new account carries the `headers` the request to add it named.
 
-In Go, `sdk.Upstream` sets them on each request made with the handler's context.
+In Go, `sdk.Upstream` sets them on each request made with the handler's context. On a redirect
+to another host than the first request's it leaves out the headers whose names are secret, as
+`net/http` leaves out `Authorization` and `Cookie` there, so the redirect target never gets
+them; the other headers stay. As with a proxy, the SDK answers a call that carries headers with
+`unsupported` (scope `credential`, retryable) and never runs the handler when the extension
+process has not created any `sdk.Upstream` transport.
 
 ## The request
 

@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/internal/upheader"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
@@ -77,10 +78,20 @@ func (t upstreamTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 }
 
 // withHeaders returns a copy of req (a RoundTripper must not change the request it is given)
-// with each of headers set over every value req has for that name, in any letter case.
+// with each of headers set over every value req has for that name, in any letter case. On a
+// redirect to another host than the first request's, the headers whose names are secret
+// (upheader.Secret) are left out, as net/http leaves Authorization and Cookie out there: the
+// redirect target must not receive them.
 func withHeaders(req *http.Request, headers map[string]string) *http.Request {
 	r := req.Clone(req.Context())
+	if r.Header == nil {
+		r.Header = http.Header{}
+	}
+	crossHost := redirectedAway(req)
 	for name, value := range headers {
+		if crossHost && upheader.Secret(name) {
+			continue
+		}
 		for k := range r.Header {
 			if strings.EqualFold(k, name) {
 				delete(r.Header, k)
@@ -89,6 +100,22 @@ func withHeaders(req *http.Request, headers map[string]string) *http.Request {
 		r.Header.Set(name, value)
 	}
 	return r
+}
+
+// redirectedAway reports whether req follows a redirect to a host (name and port as written,
+// letter case aside) other than the one the first request of its redirect chain went to.
+func redirectedAway(req *http.Request) bool {
+	if req.Response == nil || req.URL == nil {
+		return false
+	}
+	first := req.Response
+	for first.Request != nil && first.Request.Response != nil {
+		first = first.Request.Response
+	}
+	if first.Request == nil || first.Request.URL == nil {
+		return true // the chain cannot be traced, so the new host is not known to be the first
+	}
+	return !strings.EqualFold(first.Request.URL.Host, req.URL.Host)
 }
 
 // transport returns the transport for requests through proxy ("" for none).
