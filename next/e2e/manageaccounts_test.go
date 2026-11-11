@@ -205,9 +205,12 @@ func TestManageAccountSettings(t *testing.T) {
 		"extension":       map[string]any{"manifest": filepath.Join(pkg, "pluxy-extension.json"), "accounts": []any{}},
 	})
 	const secret = "sk-account-settings-e2e"
+	// Every value below a key named like a secret is one too, however deep.
+	hidden := []string{secret, "sk-nested-object-e2e", "sk-nested-list-e2e"}
 	var l loginReply
 	if code := manage(t, base, "POST", "/accounts", map[string]any{"id": "keyed", "method": "settings",
-		"input": map[string]string{"settings": `{"base_url":"https://one.example/v1","api_key":"` + secret + `"}`}}, &l); code != http.StatusAccepted {
+		"input": map[string]string{"settings": `{"base_url":"https://one.example/v1","api_key":"` + secret +
+			`","password":{"primary":"sk-nested-object-e2e"},"api_keys":[["sk-nested-list-e2e"]]}`}}, &l); code != http.StatusAccepted {
 		t.Fatalf("login: %d", code)
 	}
 	for deadline := time.Now().Add(10 * time.Second); l.Login.State == "pending" && time.Now().Before(deadline); {
@@ -223,16 +226,20 @@ func TestManageAccountSettings(t *testing.T) {
 	// of the management API holds the secret.
 	listed := func(reply []byte) map[string]any {
 		t.Helper()
-		if strings.Contains(string(reply), secret) {
-			t.Fatalf("the management API showed the secret: %s", reply)
+		for _, h := range hidden {
+			if strings.Contains(string(reply), h) {
+				t.Fatalf("the management API showed the secret %s: %s", h, reply)
+			}
 		}
 		var list struct{ Accounts []accountView }
 		var raw json.RawMessage
 		if code := manage(t, base, "GET", "/accounts", nil, &raw); code != http.StatusOK {
 			t.Fatalf("GET /accounts: %d", code)
 		}
-		if strings.Contains(string(raw), secret) {
-			t.Fatalf("GET /accounts showed the secret: %s", raw)
+		for _, h := range hidden {
+			if strings.Contains(string(raw), h) {
+				t.Fatalf("GET /accounts showed the secret %s: %s", h, raw)
+			}
 		}
 		_ = json.Unmarshal(raw, &list)
 		for _, a := range list.Accounts {

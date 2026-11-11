@@ -153,10 +153,10 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 // redactor, so they read as GET /config shows the config file's (server.SettingsSecrets).
 type settingsSecrets struct{ r *configdoc.Redactor }
 
-func (s settingsSecrets) Redact(settings []byte) ([]byte, error) { return s.r.Redact(settings, false) }
+func (s settingsSecrets) Redact(settings []byte) ([]byte, error) { return s.r.RedactSettings(settings) }
 
 func (s settingsSecrets) Restore(sent, current []byte) ([]byte, error) {
-	b, err := s.r.Restore(sent, current, false)
+	b, err := s.r.RestoreSettings(sent, current)
 	if errors.Is(err, configdoc.ErrStale) {
 		return nil, server.ErrStaleSecret
 	}
