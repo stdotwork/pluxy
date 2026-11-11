@@ -228,7 +228,9 @@ fn startup(app: &AppHandle, stage: &str) -> Result<(), String> {
         }
     }
     if let Some(main) = app.get_webview(MAIN) {
-        wait_for("startup window shell", || eval(&main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true))?;
+        wait_for("startup window shell", || {
+            eval(&main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true)
+        })?;
     }
     let connection = app.state::<App>().conn.lock().unwrap().view();
     log(

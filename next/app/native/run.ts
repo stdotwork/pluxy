@@ -25,8 +25,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline";
-import { descendants, webProcesses } from "./processes";
 import { buildSmokeAppImage } from "./appimage";
+import { descendants, webProcesses } from "./processes";
 import { missingPrerequisites } from "./services";
 
 const app = join(import.meta.dir, "..");
@@ -284,7 +284,7 @@ async function runApp(
         log.some((l) => l.startsWith("startup preferences passed:")),
         "startup suite gave no success report",
       );
-      console.log(mode + ": startup " + (problems.length === 0 ? "ok" : "FAILED"));
+      console.log(`${mode}: startup ${problems.length === 0 ? "ok" : "FAILED"}`);
       for (const line of log) console.log(line);
       return problems;
     }

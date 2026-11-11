@@ -178,22 +178,26 @@ async function setup() {
   );
 
   if (tray) {
-  // A real item, through the watcher.
-  const watcher =
-    await until(`${trayWatcher.what} (package ${trayWatcher.package}) does not serve ${busNames.watcher}`, () => {
-      const out = ask("watcher");
-      const pid = Number(field(out, "watcher_pid"));
-      if (pid !== tray.proc.pid)
-        throw new Error(`pid ${pid} owns the name, not the service started here (${tray.proc.pid})`);
-      return out;
-    }, [tray]);
-  say(
-    `watcher ok: ${busNames.watcher} owned by pid ${field(watcher, "watcher_pid")}; registered ${field(watcher, "item")}` +
-      ` and found it in RegisteredStatusNotifierItems (${field(watcher, "property_reads")} property reads)`,
-  );
-
+    // A real item, through the watcher.
+    const watcher =
+      await until(`${trayWatcher.what} (package ${trayWatcher.package}) does not serve ${busNames.watcher}`, () => {
+        const out = ask("watcher");
+        const pid = Number(field(out, "watcher_pid"));
+        if (pid !== tray.proc.pid)
+          throw new Error(`pid ${pid} owns the name, not the service started here (${tray.proc.pid})`);
+        return out;
+      }, [tray]);
+    say(
+      `watcher ok: ${busNames.watcher} owned by pid ${field(watcher, "watcher_pid")}; registered ${field(watcher, "item")}` +
+        ` and found it in RegisteredStatusNotifierItems (${field(watcher, "property_reads")} property reads)`,
+    );
   } else {
-    try { ask("owner", busNames.watcher); throw new SetupError("no-tray case unexpectedly has a watcher"); } catch (e) { if (e instanceof SetupError) throw e; }
+    try {
+      ask("owner", busNames.watcher);
+      throw new SetupError("no-tray case unexpectedly has a watcher");
+    } catch (e) {
+      if (e instanceof SetupError) throw e;
+    }
     say("no watcher running: silent startup must show a window");
   }
 

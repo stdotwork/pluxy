@@ -31,4 +31,3 @@ export function descendants(pid: number): Map<number, string> {
 export function webProcesses(pid: number): number {
   return [...descendants(pid).values()].filter((comm) => comm.startsWith("WebKitWebProces")).length;
 }
-
