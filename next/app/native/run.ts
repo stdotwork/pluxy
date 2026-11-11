@@ -344,6 +344,10 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
       check(fine, `from the page's frame, "${what}" ${r.status}: ${r.detail}`);
     }
 
+    const ingress = steps.get("ingress");
+    check(ingress?.control === true, "the native ingress check did not finish");
+    if (ingress) console.log(mode + " native ingress " + JSON.stringify(ingress));
+
     // Closing the window frees its webviews; the app stays in the tray.
     const closed = steps.get("closed") as
       | { webviews: string[]; tray: boolean; core_pid?: number }

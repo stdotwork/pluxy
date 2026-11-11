@@ -238,6 +238,8 @@ async fn core_call(
     body: Option<Value>,
 ) -> Result<client::Reply, String> {
     trusted(&webview)?;
+    #[cfg(feature = "native-test")]
+    native_test::ingress_operation(&method, &path);
     let caller = state.conn.lock().unwrap().caller();
     tauri::async_runtime::spawn_blocking(move || caller.call(&method, &path, body.as_ref()))
         .await
@@ -375,6 +377,8 @@ fn page_scheme(
             request.body(),
         )
     };
+    #[cfg(feature = "native-test")]
+    native_test::ingress_count(request.method().as_str(), request.uri().path(), served.status, msg.is_some());
     if let Some(m) = msg {
         let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-page", m);
     }
@@ -387,6 +391,12 @@ fn page_scheme(
         .header("Referrer-Policy", "no-referrer")
         .body(served.body)
         .expect("a response");
+    #[cfg(feature = "native-test")]
+    let resp = {
+        let mut resp = resp;
+        resp.headers_mut().insert("Access-Control-Allow-Origin", tauri::http::HeaderValue::from_static("*"));
+        resp
+    };
     responder.respond(resp);
 }
 

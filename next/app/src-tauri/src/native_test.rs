@@ -19,6 +19,10 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Webview};
 
+#[path = "native_ingress.rs"]
+mod ingress;
+pub use ingress::{count as ingress_count, operation as ingress_operation};
+
 const WAIT: Duration = Duration::from_secs(60);
 
 /// Tauri's own commands a page webview might try.
@@ -176,6 +180,8 @@ fn run(app: &AppHandle) -> Result<(), String> {
             serde_json::from_str(&report).unwrap_or(json!(report)),
         );
     }
+
+    ingress::run(app, &main)?;
 
     // For screenshots: keep the window open until this file exists.
     if let Ok(f) = std::env::var("PLUXY_APP_TEST_HOLD") {
