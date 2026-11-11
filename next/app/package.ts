@@ -14,7 +14,8 @@
 // Tauri's AppImage bundler runs tools it downloads when they are missing from its tools folder.
 // test puts pinned copies there first (BUNDLER_TOOLS, each checked against its SHA-256), gives the
 // AppImage plugin the pinned AppImage runtime (LDAI_RUNTIME_FILE), and runs the build in a cleared
-// environment: a temporary HOME and cache folder, no credentials, Cargo offline after `cargo fetch`,
+// environment: a temporary HOME, cache folder and Cargo home (links to the dependency caches only),
+// no credentials, Cargo offline after `cargo fetch`,
 // and every proxy variable pointing at a closed port, so a download that is still tried fails the
 // build. After the build, the tools folder must hold only the pinned tools and the two plugin
 // scripts the bundler writes from its own copy.
@@ -37,6 +38,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -95,7 +97,9 @@ const BUNDLER_TOOLS: (Pin & { file: string })[] = [
 /** What the bundler writes into its tools folder from its own embedded copies. */
 const BUNDLER_SCRIPTS = ["linuxdeploy-plugin-gtk.sh", "linuxdeploy-plugin-gstreamer.sh"];
 
-/** The build's environment: nothing of the caller's but the toolchain's paths. */
+/** The build's environment: nothing of the caller's but the toolchain's paths. Its Cargo home is a
+ * temporary folder holding only links to the caller's dependency caches (registry and git, when
+ * there), so the offline build finds the crates but not the caller's Cargo config or credentials. */
 function isolatedEnv(work: string, runtime: string): Record<string, string> {
   const closed = "http://127.0.0.1:9";
   const env: Record<string, string> = {
@@ -106,7 +110,7 @@ function isolatedEnv(work: string, runtime: string): Record<string, string> {
     XDG_CONFIG_HOME: join(work, "config"),
     XDG_DATA_HOME: join(work, "data"),
     TMPDIR: join(work, "tmp"),
-    CARGO_HOME: process.env.CARGO_HOME ?? join(homedir(), ".cargo"),
+    CARGO_HOME: join(work, "cargo"),
     RUSTUP_HOME: process.env.RUSTUP_HOME ?? join(homedir(), ".rustup"),
     CARGO_TARGET_DIR: targetDir,
     CARGO_NET_OFFLINE: "true",
@@ -122,8 +126,13 @@ function isolatedEnv(work: string, runtime: string): Record<string, string> {
     const value = process.env[name];
     if (value) env[name] = value;
   }
-  for (const dir of ["home", "cache", "config", "data", "tmp"]) {
+  for (const dir of ["home", "cache", "config", "data", "tmp", "cargo"]) {
     mkdirSync(join(work, dir), { recursive: true, mode: 0o700 });
+  }
+  const callerCargo = process.env.CARGO_HOME ?? join(homedir(), ".cargo");
+  for (const cache of ["registry", "git"]) {
+    if (existsSync(join(callerCargo, cache)))
+      symlinkSync(join(callerCargo, cache), join(work, "cargo", cache));
   }
   return env;
 }
@@ -139,14 +148,15 @@ async function testPackage(outDir: string) {
   try {
     const runtime = join(work, "runtime-x86_64");
     writeFileSync(runtime, await runtimeBytes(), { mode: 0o600 });
+    // What the build needs from the network, fetched here by the lockfile with the caller's
+    // Cargo; the build is offline.
+    run("cargo", ["fetch", "--locked"], tauriDir);
     const env = isolatedEnv(work, runtime);
     const tools = join(env.XDG_CACHE_HOME as string, "tauri");
     mkdirSync(tools, { mode: 0o700 });
     for (const tool of BUNDLER_TOOLS) {
       writeFileSync(join(tools, tool.file), await pinnedBytes(tool), { mode: 0o700 });
     }
-    // What the build needs from the network, fetched here by the lockfile; the build is offline.
-    run("cargo", ["fetch", "--locked"], tauriDir);
     const pubkey = temporaryUpdaterKey();
     const overlay = join(work, "tauri.test.conf.json");
     writeFileSync(
