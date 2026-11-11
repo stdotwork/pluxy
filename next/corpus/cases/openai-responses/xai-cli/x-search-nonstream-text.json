@@ -1,0 +1,175 @@
+{
+  "description": "Native x_search reaches xAI, but its internal calls and deltas are hidden while the answer, citations and usage reach the client.",
+  "source": [
+    "core/internal/runtime/executor/xai_executor_request.go",
+    "core/internal/runtime/executor/xai_executor_execute.go",
+    "core/internal/runtime/executor/xai_executor_response.go",
+    "core/internal/runtime/executor/xai_executor_request.go"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "body": {
+      "model": "grok-4.6",
+      "stream": false,
+      "input": "Say hello",
+      "tools": [{"type":"x_search","allowed_x_handles":["example"]}],
+      "parallel_tool_calls": true
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"event":"response.created","data":{"type":"response.created","sequence_number":0,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"in_progress","model":"grok-test-upstream","output":[],"usage":null}}},
+        {"event":"response.output_item.added","data":{"type":"response.output_item.added","output_index":0,"item":{"id":"xs_internal","type":"custom_tool_call","call_id":"xs_call_1","name":"x_keyword_search","input":"{\"query\":\"test\"}"},"sequence_number":1}},
+        {"event":"response.custom_tool_call_input.delta","data":{"type":"response.custom_tool_call_input.delta","output_index":0,"item_id":"xs_internal","delta":"private trace","sequence_number":2}},
+        {"event":"response.output_item.done","data":{"type":"response.output_item.done","output_index":0,"item":{"id":"xs_internal","type":"custom_tool_call","call_id":"xs_call_1","name":"x_keyword_search","input":"{\"query\":\"test\"}"},"sequence_number":3}},
+        {"event":"response.output_item.added","data":{"type":"response.output_item.added","sequence_number":4,"output_index":1,"item":{"id":"msg_corpus","type":"message","status":"in_progress","role":"assistant","content":[]}}},
+        {"event":"response.output_text.delta","data":{"type":"response.output_text.delta","sequence_number":5,"item_id":"msg_corpus","output_index":1,"content_index":0,"delta":"Hello"}},
+        {"event":"response.output_text.delta","data":{"type":"response.output_text.delta","sequence_number":6,"item_id":"msg_corpus","output_index":1,"content_index":0,"delta":" there."}},
+        {"event":"response.output_item.done","data":{"type":"response.output_item.done","sequence_number":7,"output_index":1,"item":{"id":"msg_corpus","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hello there.","annotations":[]}]}}},
+        {"event":"response.completed","data":{"type":"response.completed","sequence_number":8,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"completed","model":"grok-test-upstream","output":[{"id":"xs_internal","type":"custom_tool_call","call_id":"xs_call_1","name":"x_keyword_search","input":"{\"query\":\"test\"}"},{"id":"msg_corpus","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hello there.","annotations":[]}]}],"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}}}
+      ]
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[0].body.instructions",
+      "kind": "intended",
+      "reason": "Today's core's Codex translator sends empty instructions on every Responses request; the extension sends the request's instructions as the client wrote them.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.prompt_cache_key",
+      "kind": "gap",
+      "reason": "Today's core derives a session ID per conversation and sends it as prompt_cache_key; the extension has no session identity to derive from, so it sends only the client's own prompt_cache_key.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.X-Grok-Conv-Id",
+      "kind": "gap",
+      "reason": "Today's core sends its session ID as the x-grok-conv-id header; the extension sends the header only when the client's body carries a prompt_cache_key, since it has no session identity of its own.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.input",
+      "kind": "intended",
+      "reason": "Today's core's Codex translator writes a Responses input as a list of messages; the extension sends a plain string input as the client wrote it.",
+      "want": "Say hello"
+    },
+    {
+      "path": "upstream[0].body.stream",
+      "kind": "intended",
+      "reason": "A non-streamed client gets a non-streamed upstream request, and its reply is read as one response; today's core always asks xAI for a stream and reads the stream into one reply."
+    },
+    {
+      "path": "upstream[0].headers.Accept",
+      "kind": "intended",
+      "reason": "Follows the request's stream flag (see the upstream stream exception); today's core always asks for an event stream."
+    },
+    {
+      "path": "upstream[0].headers.User-Agent",
+      "kind": "intended",
+      "reason": "A Grok login's requests carry the Grok CLI's User-Agent (xai-grok-workspace and the CLI version), which today's core forces on requests to the CLI's endpoint; on another address, such as the fake upstream, today's core forwards the client's User-Agent.",
+      "want": "xai-grok-workspace/1.0.46"
+    },
+    {
+      "path": "client.body.usage.input_tokens_details",
+      "kind": "gap",
+      "reason": "Today's core fills in zero cached and reasoning token counts when the upstream reports usage without them (EnsureResponsesUsageDetails); the new core reports xAI's usage as it comes. Whether to keep it is open.",
+      "absent": true
+    },
+    {
+      "path": "client.body.usage.output_tokens_details",
+      "kind": "gap",
+      "reason": "Today's core fills in zero cached and reasoning token counts when the upstream reports usage without them (EnsureResponsesUsageDetails); the new core reports xAI's usage as it comes. Whether to keep it is open.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.X-Authenticateresponse",
+      "kind": "intended",
+      "reason": "The extension sends the Grok CLI's identity headers on every request of a Grok login; today's core sends them only when the request goes to the exact cli-chat-proxy.grok.com address, so a login pointed elsewhere (here the fake upstream) gets the standard headers.",
+      "want": "authenticate-response"
+    },
+    {
+      "path": "upstream[0].headers.X-Grok-Client-Identifier",
+      "kind": "intended",
+      "reason": "The extension sends the Grok CLI's identity headers on every request of a Grok login; today's core sends them only when the request goes to the exact cli-chat-proxy.grok.com address, so a login pointed elsewhere (here the fake upstream) gets the standard headers.",
+      "want": "grok-shell"
+    },
+    {
+      "path": "upstream[0].headers.X-Grok-Client-Version",
+      "kind": "intended",
+      "reason": "The extension sends the Grok CLI's identity headers on every request of a Grok login; today's core sends them only when the request goes to the exact cli-chat-proxy.grok.com address, so a login pointed elsewhere (here the fake upstream) gets the standard headers.",
+      "want": "1.0.46"
+    },
+    {
+      "path": "upstream[0].headers.X-Xai-Token-Auth",
+      "kind": "intended",
+      "reason": "The extension sends the Grok CLI's identity headers on every request of a Grok login; today's core sends them only when the request goes to the exact cli-chat-proxy.grok.com address, so a login pointed elsewhere (here the fake upstream) gets the standard headers.",
+      "want": "xai-grok-cli"
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "created_at": 1700000000,
+        "id": "resp_corpus",
+        "model": "grok-test-upstream",
+        "object": "response",
+        "output": [
+          {
+            "content": [{"annotations":[],"text":"Hello there.","type":"output_text"}],
+            "id": "msg_corpus",
+            "role": "assistant",
+            "status": "completed",
+            "type": "message"
+          }
+        ],
+        "status": "completed",
+        "usage": {
+          "input_tokens": 11,
+          "input_tokens_details": {"cached_tokens":0},
+          "output_tokens": 7,
+          "output_tokens_details": {"reasoning_tokens":0},
+          "total_tokens": 18
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": ["reasoning.encrypted_content"],
+          "input": [
+            {"content":[{"text":"Say hello","type":"input_text"}],"role":"user","type":"message"}
+          ],
+          "instructions": "",
+          "model": "grok-4.6",
+          "parallel_tool_calls": true,
+          "prompt_cache_key": "06900b83-7dc3-595f-b42d-b429ae5f4c0b",
+          "store": false,
+          "stream": true,
+          "tools": [{"allowed_x_handles":["example"],"type":"x_search"}]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0",
+          "X-Grok-Conv-Id": "06900b83-7dc3-595f-b42d-b429ae5f4c0b"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      }
+    ]
+  }
+}

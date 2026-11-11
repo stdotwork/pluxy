@@ -223,6 +223,9 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 		if u := text(m, "base_url"); u != "" {
 			settings["base_url"] = u
 		}
+		if opts.InjectXSearch {
+			settings["inject_x_search"] = true
+		}
 	case "meta":
 		// The minted API key is the access token and the device (dca:) token the refresh token,
 		// which mints a new key. Today's core keeps the device token in dca_token, or as the
