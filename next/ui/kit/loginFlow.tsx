@@ -451,27 +451,29 @@ export function LoginFlow(props: LoginFlowProps) {
           }}
         >
           {!props.existingAccountId && !props.newAccountId && (
-            <label class="field" data-part="field">
-              <span class="label">{t("accountId")}</span>
-              <input
-                type="text"
-                required
-                maxLength={128}
-                pattern="[A-Za-z0-9][A-Za-z0-9._\x2D]{0,127}"
-                value={accountId}
-                aria-invalid={!validId}
-                aria-describedby={!validId ? idHint : undefined}
-                onInput={(e) => {
-                  typedId.current = true;
-                  setAccountId(e.currentTarget.value);
-                }}
-              />
+            <div class="field" data-part="field">
+              <label>
+                <span class="label">{t("accountId")}</span>
+                <input
+                  type="text"
+                  required
+                  maxLength={128}
+                  pattern="[A-Za-z0-9][A-Za-z0-9._\x2D]{0,127}"
+                  value={accountId}
+                  aria-invalid={!validId}
+                  aria-describedby={!validId ? idHint : undefined}
+                  onInput={(e) => {
+                    typedId.current = true;
+                    setAccountId(e.currentTarget.value);
+                  }}
+                />
+              </label>
               {!validId && (
                 <small id={idHint} class="hint">
                   {t("invalidId")}
                 </small>
               )}
-            </label>
+            </div>
           )}
           <LoginFields
             fields={inputs}

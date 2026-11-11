@@ -90,12 +90,12 @@ export function AddAccountPage() {
                   setAccountId(e.currentTarget.value);
                 }}
               />
-              {!validId && (
-                <small id={idHint} class="hint">
-                  {t("invalidId")}
-                </small>
-              )}
             </label>
+            {!validId && (
+              <small id={idHint} class="hint">
+                {t("invalidId")}
+              </small>
+            )}
             <List<MethodTile>
               label={t("methods")}
               items={selected ? tiles.filter((tile) => tile.id === selected) : tiles}
