@@ -353,6 +353,12 @@ with an `upstream` error (502, scope `request`, not retryable) instead of finish
 error is not retried on another account, because the upstream may have run the request, and it puts
 no cooldown on the account.
 
+A Responses-lite client's stream, and a Responses-lite WebSocket turn, skip the `id` restoration, as
+today's core does: the final event's output is sent as the upstream sent it. A lite WebSocket turn
+on a Codex account also keeps an empty `output` empty; an empty `output` on a lite HTTP stream is
+still filled from the finished items, as today's HTTP handler does. A lite request that is not
+streamed gets the repairs.
+
 **Images.** `POST /v1/images/generations` and `POST /v1/images/edits` (OpenAI's Images API) go
 to a Codex account as [endpoint calls](protocol/README.md#endpoint), routed by `model` (default
 `gpt-image-2`), as today's core serves them: the body goes to `{base_url}/images/generations` or

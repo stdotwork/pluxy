@@ -201,7 +201,7 @@ func (s *wsSession) Turn(ctx context.Context, call sdk.Call, out *sdk.Stream) er
 		}
 		return openairesponses.UpstreamWebsocketLost()
 	}
-	err = s.relay(ctx, c, renamer{&reporting{Stream: out, tr: ur.tr}, ur.names})
+	err = s.relay(ctx, c, renamer{&reporting{Stream: out, tr: ur.tr}, ur.names}, ur.repairs())
 	var e *llm.Error
 	if errors.As(err, &e) && e.ProviderCode != openairesponses.CodePreviousResponseNotFound {
 		// Today's core gives up a socket that reported an error: the next turn connects again.
@@ -211,9 +211,8 @@ func (s *wsSession) Turn(ctx context.Context, call sdk.Call, out *sdk.Stream) er
 }
 
 // relay turns the upstream's messages into events until the turn's terminal message.
-func (s *wsSession) relay(ctx context.Context, c *wsConn, out eventSender) error {
+func (s *wsSession) relay(ctx context.Context, c *wsConn, out eventSender, rep *repairs) error {
 	dec := openairesponses.NewStreamDecoder()
-	rep := newRepairs()
 	idle := time.NewTimer(wsIdleTimeout)
 	defer idle.Stop()
 	for {

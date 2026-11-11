@@ -30,6 +30,16 @@ type upstreamRequest struct {
 	// names maps the function names the request sent upstream in place of the client's to the
 	// client's, for the reply.
 	names map[string]string
+	// keepOutput says that the reply's terminal event is left as the upstream sent it, without
+	// the id restoration and without the output rebuild (see repairs).
+	keepOutput bool
+}
+
+// repairs returns the repairs the request's reply gets.
+func (u *upstreamRequest) repairs() *repairs {
+	p := newRepairs()
+	p.keepOutput = u.keepOutput
+	return p
 }
 
 // buildRequest returns the Codex request for req: the client's Responses body, or the request
@@ -74,6 +84,11 @@ func buildRequest(req llm.Request, accountID string, s settings, a account, ws b
 		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "the request body is not a JSON object", Scope: llm.ScopeRequest}
 	}
 	sh := shaper{m: m, req: req, model: model, effort: effort, s: s, a: a, accountID: accountID, ws: ws}
+	// A Responses-lite client's stream, or its turn over the upstream WebSocket, keeps its
+	// output as the upstream sent it, as today's core does (preserveNativeOutput). Core's
+	// Responses writer still rebuilds an empty output for an HTTP client, as today's HTTP
+	// handler does.
+	nativeLite := sh.passthrough() && sh.lite()
 	if err := sh.shape(); err != nil {
 		return nil, err
 	}
@@ -81,7 +96,8 @@ func buildRequest(req llm.Request, accountID string, s settings, a account, ws b
 	if err != nil {
 		return nil, err
 	}
-	return &upstreamRequest{body: out, tr: tr, model: model, sessionID: sh.sessionID, names: sh.names}, nil
+	return &upstreamRequest{body: out, tr: tr, model: model, sessionID: sh.sessionID, names: sh.names,
+		keepOutput: nativeLite && (ws || req.Stream)}, nil
 }
 
 // Fields the Codex endpoint does not take, removed from every request.
@@ -182,22 +198,9 @@ func (h *shaper) lite() bool {
 }
 
 // liteRequest reports whether a request comes from a Responses-lite client, as today's core reads
-// it: the X-Openai-Internal-Codex-Responses-Lite header (lower-case in headers) says true, or the
-// body's client_metadata carries the same flag, as a WebSocket client sends it
-// (ws_request_header_x_openai_internal_codex_responses_lite, true or "true"). m holds the
-// request's top-level fields.
+// it (see openairesponses.LiteRequest). m holds the request's top-level fields.
 func liteRequest(headers map[string]string, m map[string]json.RawMessage) bool {
-	if strings.EqualFold(strings.TrimSpace(headers["x-openai-internal-codex-responses-lite"]), "true") {
-		return true
-	}
-	var meta struct {
-		Lite json.RawMessage `json:"ws_request_header_x_openai_internal_codex_responses_lite"`
-	}
-	if json.Unmarshal(m["client_metadata"], &meta) != nil {
-		return false
-	}
-	var s string
-	return string(meta.Lite) == "true" || json.Unmarshal(meta.Lite, &s) == nil && strings.EqualFold(strings.TrimSpace(s), "true")
+	return openairesponses.LiteRequest(headers, m)
 }
 
 // webSearchTools are the tool types that declare hosted web search.

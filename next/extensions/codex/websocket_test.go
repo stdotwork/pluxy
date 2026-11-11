@@ -230,7 +230,7 @@ func TestSilentUpstreamIsLost(t *testing.T) {
 	c.mu.Unlock()
 	defer close(turn)
 	var e *llm.Error
-	if err := s.relay(context.Background(), c, &collected{}); !errors.As(err, &e) || e.ProviderCode != openairesponses.CodeUpstreamWebsocketLost ||
+	if err := s.relay(context.Background(), c, &collected{}, newRepairs()); !errors.As(err, &e) || e.ProviderCode != openairesponses.CodeUpstreamWebsocketLost ||
 		e.Scope != llm.ScopeRequest {
 		t.Fatalf("relay: %+v; want upstream_websocket_lost on the request, which puts no cooldown on the account", err)
 	}
@@ -268,7 +268,7 @@ func TestRelayEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := &collected{}
-	if err := s.relay(context.Background(), c, out); err != nil {
+	if err := s.relay(context.Background(), c, out, newRepairs()); err != nil {
 		t.Fatal(err)
 	}
 	if len(out.events) < 2 || out.events[0].Type != llm.EventResponseStart || out.events[0].Response.ID != "resp_1" ||
@@ -306,7 +306,7 @@ func TestSessionRelayEmptyIncomplete(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := &collected{}
-	err = s.relay(context.Background(), c, out)
+	err = s.relay(context.Background(), c, out, newRepairs())
 	var e *llm.Error
 	if !errors.As(err, &e) || e.Code != llm.CodeUpstream || e.Scope != llm.ScopeRequest || e.Retryable {
 		t.Fatalf("relay: %v; want the empty incomplete error", err)
@@ -402,7 +402,7 @@ func TestSessionRelayFailedFirstMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := &collected{}
-	err = s.relay(context.Background(), c, out)
+	err = s.relay(context.Background(), c, out, newRepairs())
 	var e *llm.Error
 	if !errors.As(err, &e) || e.Code != llm.CodeQuota || e.Status != http.StatusTooManyRequests || e.Scope != llm.ScopeCredential || e.RetryAfterMS != 7_200_000 {
 		t.Fatalf("relay: %+v; want the usage limit's 429 quota error on the credential, retry after 7200000 ms", err)
@@ -437,7 +437,7 @@ func TestSessionRelayFailedWithStatus(t *testing.T) {
 	if err := c.c.Write(context.Background(), websocket.MessageText, []byte(`{"type":"response.create"}`)); err != nil {
 		t.Fatal(err)
 	}
-	err = s.relay(context.Background(), c, &collected{})
+	err = s.relay(context.Background(), c, &collected{}, newRepairs())
 	var e *llm.Error
 	if !errors.As(err, &e) || e.Code != llm.CodeQuota || e.Scope != llm.ScopeCredential || e.RetryAfterMS != 60_000 {
 		t.Fatalf("relay: %+v; want the usage limit's quota error on the credential, retry after 60000 ms", err)

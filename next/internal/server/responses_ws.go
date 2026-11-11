@@ -24,6 +24,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/stdotwork/pluxy/next/format/openaichat"
 	"github.com/stdotwork/pluxy/next/format/openairesponses"
+	"github.com/stdotwork/pluxy/next/internal/legacy"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -489,7 +490,9 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 	turnReq := sessReq
 	turnReq.Stream = true
 	m := g.newMeter(s.r, arrived, turnReq, clientToken(s.r, false))
+	var attemptExt string // the extension of the last account tried
 	rr.Attempting = func(a route.Attempt) {
+		attemptExt = a.Extension
 		m.attempt(a, "")
 		if turnTrace != nil {
 			turnTrace.account = a.Account
@@ -559,6 +562,9 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 		}
 		return s.send(data)
 	}, req)
+	// A Responses-lite turn on a Codex account reaches the client as the upstream sent it, with
+	// an empty output left empty, as today's core does (its preserveNativeOutput).
+	sw.KeepOutput = attemptExt == legacy.Codex && liteTurn(sessReq)
 	defer func() { logTranslation(s.r, nil, sw) }()
 	for {
 		if ev.Type == llm.EventError {
@@ -622,6 +628,16 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 		s.transcript.Commit(httpTurn.Body, completed)
 	}
 	return true
+}
+
+// liteTurn reports whether the client's turn is a Responses-lite one.
+func liteTurn(req llm.Request) bool {
+	if req.Native == nil {
+		return false
+	}
+	var m map[string]json.RawMessage
+	_ = json.Unmarshal(req.Native.Body, &m)
+	return openairesponses.LiteRequest(req.Native.Headers, m)
 }
 
 func marshalItems(items []json.RawMessage) json.RawMessage {
