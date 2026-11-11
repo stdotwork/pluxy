@@ -305,6 +305,7 @@ test("the panel draws an extension's settings form from its schema, and saves th
 }) => {
   await signIn(page);
   await nav(page).getByRole("link", { name: "Extensions" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Extensions" })).toBeVisible();
   await page.getByRole("row", { name: /test\/alpha/ }).click();
   const form = page.getByRole("form", { name: "Settings of test/alpha" });
   await expect(form).toBeVisible();
