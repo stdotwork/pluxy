@@ -15,6 +15,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | Path | What it is |
 | --- | --- |
 | `cmd/pluxy` | The core program. |
+| `cmd/pluxy-pack` | Builds each extension's release archives and the bundled registry index. |
 | `protocol/` | The extension protocol: [README](protocol/README.md), [tutorial](protocol/TUTORIAL.md), wire types and framing. |
 | `llm/` | The internal model of a request and its streamed reply, shared by core and extensions. |
 | `sdk/` | Go SDK for writing extensions. |
@@ -272,6 +273,35 @@ Today's core has no setting for this: it always estimates for those accounts.
 
 A config written for today's core, with its key names, works too: see
 [config.yaml with today's key names](#configyaml-with-todays-key-names).
+
+### Pack the extensions
+
+`pluxy-pack` builds every extension under `extensions/` as a release archive and writes the
+bundled registry index a fresh install starts from:
+
+```bash
+go run ./cmd/pluxy-pack -out dist -platforms linux/amd64,darwin/arm64
+```
+
+It writes one `dist/bundled/<publisher>-<name>-<version>-<goos>-<goarch>.tar.gz` per extension
+and platform, and `dist/bundled/index.json`, which pins each archive's SHA-256 and size. Packing
+the same sources twice gives byte-identical archives and index. `-platforms` defaults to the host
+platform; `-extensions codex,claude` packs only those extension folders, by folder name or
+package ID. `go run ./cmd/pluxy-pack -h` lists the flags.
+
+Core installs and enables every package the bundled index lists on its first start with an
+empty packages folder:
+
+```bash
+go build -trimpath -ldflags "-s -w" -o pluxy ./cmd/pluxy
+./pluxy -config config.json -bundled dist/bundled/index.json
+```
+
+`pluxy` itself is a plain `go build` of `./cmd/pluxy`, as above; the `-ldflags` only make it
+smaller. Without `-bundled`, core looks for `bundled/index.json` beside the `pluxy` program, so
+an install is the program with the packed `bundled` folder next to it. The same `index.json`,
+uploaded beside the archives to an `https://` location, is a registry like any other: its
+relative archive URLs resolve against the index.
 
 ## Codex
 
