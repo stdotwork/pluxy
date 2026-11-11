@@ -127,6 +127,7 @@ export function browserHost(): Host {
       set: (name, value) => write(local, PREFS + name, value),
     },
     features: new Set<Feature>(["signOut", "rotateManagementKey"]),
+    address: window.location.origin,
   };
   return host;
 }

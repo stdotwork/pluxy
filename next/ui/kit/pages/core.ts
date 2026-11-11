@@ -10,6 +10,7 @@ import { extensionsPage } from "./extensions";
 import { logsPage } from "./logs";
 import { quotaPage } from "./quota";
 import { statusPage } from "./status";
+import { systemPage } from "./system";
 import { themesPage } from "./themes";
 import { usagePage } from "./usage";
 
@@ -21,6 +22,7 @@ export const corePages = (): PageDef[] => [
   logsPage(),
   usagePage(),
   configPage(),
+  systemPage(),
   extensionsPage(),
   themesPage(),
 ];
