@@ -137,8 +137,11 @@ export function filterAccounts(accounts: Account[], filters: AccountFilters, now
         a.reason,
         a.last_error?.code,
         a.last_error?.message,
+        a.last_error?.status?.toString(),
+        a.last_error?.provider_code,
         a.check?.error?.code,
         a.check?.error?.message,
+        a.check?.error?.status?.toString(),
         a.renewal_error?.message,
       ].some((s) => s && matches(s))
     );

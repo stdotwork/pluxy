@@ -56,3 +56,8 @@ test("sort orders and combined filters have exact results", () => {
   expect(filterAccounts(rows, { sort: "priority" }).map((a) => a.id)).toEqual(["a", "m", "z"]);
   expect(filterAccounts(rows, { status: "enabled", search: "z" }).map((a) => a.id)).toEqual(["z"]);
 });
+
+test("search finds HTTP errors whose message does not repeat their status", () => {
+  const rows = [account("denied", { last_error: { code: "auth", message: "Access denied", status: 403 } })];
+  expect(filterAccounts(rows, { search: "403" }).map((a) => a.id)).toEqual(["denied"]);
+});
