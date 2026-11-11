@@ -1,4 +1,6 @@
 import type { ExtensionStatus } from "../api";
+import type { PageDef } from "../shell";
+import { strings } from "../strings";
 import {
   Button,
   Card,
@@ -14,6 +16,30 @@ import {
   when,
 } from "../ui";
 
+const t = strings("status", {
+  title: "Status",
+  short: "Status",
+  tip: "Operations overview",
+  refresh: "Refresh",
+  reloadConfig: "Reload config",
+  reloadRefused: "Reload refused: {error}",
+  safeMode: "Core runs in safe mode: no extension runs, so client requests fail.",
+  config: "Config",
+  activeRevision: "Active revision",
+  activeSince: "Active since",
+  hash: "Hash",
+  refused: "Revision {revision} was refused: {why}. Revision {active} still serves.",
+  noReason: "no reason given",
+  runningExtensions: "Running extensions",
+  noExtensionRuns: "No extension runs.",
+  extension: "Extension",
+  version: "Version",
+  state: "State",
+  requests: "Requests",
+  restarts: "Restarts",
+  lastError: "Last error",
+});
+
 export function StatusPage() {
   const { api } = useKit();
   const status = useLoad(api.status);
@@ -24,55 +50,59 @@ export function StatusPage() {
   return (
     <>
       <PageHead
-        title="Status"
+        title={t("title")}
         actions={
           <>
             <Button onClick={status.reload} disabled={status.loading}>
-              Refresh
+              {t("refresh")}
             </Button>
             <Button variant="primary" disabled={reload.busy} onClick={() => reload.run(api.reload)}>
-              Reload config
+              {t("reloadConfig")}
             </Button>
           </>
         }
       />
       {status.error && <Notice tone="danger">{status.error}</Notice>}
-      {reload.error && <Notice tone="danger">Reload refused: {reload.error}</Notice>}
-      {s?.safe_mode && (
-        <Notice tone="warn">Core runs in safe mode: no extension runs, so client requests fail.</Notice>
-      )}
+      {reload.error && <Notice tone="danger">{t("reloadRefused", { error: reload.error })}</Notice>}
+      {s?.safe_mode && <Notice tone="warn">{t("safeMode")}</Notice>}
       {s && (
         <div class="stack">
-          <Card title="Config">
+          <Card title={t("config")}>
             <Facts
               rows={[
-                ["Active revision", <span class="mono">{s.active.revision}</span>],
-                ["Active since", when(s.active.at)],
-                ["Hash", s.active.hash && <span class="mono">{s.active.hash.slice(0, 12)}</span>],
+                [t("activeRevision"), <span class="mono">{s.active.revision}</span>],
+                [t("activeSince"), when(s.active.at)],
+                [t("hash"), s.active.hash && <span class="mono">{s.active.hash.slice(0, 12)}</span>],
               ]}
             />
             {failed && (
               <Notice tone="danger">
-                Revision {failed.revision} was refused: {failed.error ?? "no reason given"}. Revision{" "}
-                {s.active.revision} still serves.
+                {t("refused", {
+                  revision: failed.revision,
+                  why: failed.error ?? t("noReason"),
+                  active: s.active.revision,
+                })}
               </Notice>
             )}
           </Card>
-          <Card title="Running extensions">
+          <Card title={t("runningExtensions")}>
             {s.extensions.length === 0 ? (
-              <Empty>No extension runs.</Empty>
+              <Empty>{t("noExtensionRuns")}</Empty>
             ) : (
               <List<ExtensionStatus>
-                label="Running extensions"
+                label={t("runningExtensions")}
                 items={s.extensions}
                 id={(e) => `${e.id}#${e.generation}`}
                 columns={[
-                  { label: "Extension", value: (e) => e.id, mono: true },
-                  { label: "Version", value: (e) => e.version, mono: true },
-                  { label: "State", value: (e) => <StateBadge state={e.current ? e.state : "draining"} /> },
-                  { label: "Requests", value: (e) => e.active_requests },
-                  { label: "Restarts", value: (e) => e.restarts },
-                  { label: "Last error", value: (e) => e.last_error ?? "" },
+                  { label: t("extension"), value: (e) => e.id, mono: true },
+                  { label: t("version"), value: (e) => e.version, mono: true },
+                  {
+                    label: t("state"),
+                    value: (e) => <StateBadge state={e.current ? e.state : "draining"} />,
+                  },
+                  { label: t("requests"), value: (e) => e.active_requests },
+                  { label: t("restarts"), value: (e) => e.restarts },
+                  { label: t("lastError"), value: (e) => e.last_error ?? "" },
                 ]}
               />
             )}
@@ -82,3 +112,12 @@ export function StatusPage() {
     </>
   );
 }
+
+export const statusPage = (): PageDef => ({
+  id: "status",
+  group: "operate",
+  title: t("title"),
+  short: t("short"),
+  tip: t("tip"),
+  render: () => <StatusPage />,
+});

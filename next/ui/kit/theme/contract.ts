@@ -59,6 +59,25 @@ export function tokenProperty(name: string): string {
   return `--px-${name.replaceAll(".", "-")}`;
 }
 
+/** Every data-part hook a theme's CSS can rely on, in the order the README lists them. */
+export const PARTS = [
+  "shell",
+  "nav",
+  "nav-group",
+  "nav-item",
+  "main",
+  "page-title",
+  "list",
+  "item",
+  "detail",
+  "card",
+  "button",
+  "badge",
+  "field",
+] as const;
+
+export type Part = (typeof PARTS)[number];
+
 /** Each layout option's values; the first is the default. */
 export const LAYOUT = {
   nav: ["sidebar", "rail", "top"],

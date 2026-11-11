@@ -76,6 +76,15 @@ test("panel shows core, switches layout and theme live, and recovers from custom
   const { requests, problems } = await open(page);
   await signIn(page);
 
+  // The navigation groups its pages; a group that holds no page is not shown.
+  await expect(
+    nav(page).getByRole("group", { name: "Operate" }).getByRole("link", { name: "Status" }),
+  ).toBeVisible();
+  await expect(
+    nav(page).getByRole("group", { name: "Control" }).getByRole("link", { name: "Themes" }),
+  ).toBeVisible();
+  await expect(nav(page).getByRole("group", { name: "Observe" })).toHaveCount(0);
+
   // Status: the extensions core runs, from its status.
   const main = page.locator('[data-part="main"]');
   await expect(main.getByText("test/local", { exact: true })).toBeVisible();

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { LAYOUT, MAX_THEME_BYTES, THEME_VERSION, TOKENS, tokenProperty } from "../kit/theme/contract";
+import { LAYOUT, MAX_THEME_BYTES, PARTS, THEME_VERSION, TOKENS, tokenProperty } from "../kit/theme/contract";
 import { type Choices, DEFAULT_CHOICES, resolve, tokensCss } from "../kit/theme/engine";
 import { parseTheme, parseThemeText } from "../kit/theme/validate";
 
@@ -54,6 +54,13 @@ describe("the README and the code agree", () => {
       ]),
     );
     expect(documented).toEqual(LAYOUT as unknown as Record<string, string[]>);
+  });
+
+  test("every data-part hook", () => {
+    const documented = rows("### Hooks you can rely on")
+      .map(([hook]) => hook?.match(/^`data-part="([^"]+)"`/)?.[1])
+      .filter((h) => h !== undefined);
+    expect(documented).toEqual([...PARTS]);
   });
 
   test("the version the README describes", () => {

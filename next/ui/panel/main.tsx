@@ -1,11 +1,8 @@
 // The panel core serves: the kit's shell with the core pages, in a browser.
 
 import { render } from "preact";
-import { AccountsPage } from "../kit/pages/accounts";
-import { ExtensionsPage } from "../kit/pages/extensions";
-import { StatusPage } from "../kit/pages/status";
-import { ThemesPage } from "../kit/pages/themes";
-import { type PageDef, Shell } from "../kit/shell";
+import { corePages } from "../kit/pages/core";
+import { Shell } from "../kit/shell";
 import { ThemeState } from "../kit/theme/state";
 import defaultTheme from "../themes/default.json";
 import paper from "../themes/paper.json";
@@ -23,11 +20,4 @@ if (url.searchParams.has("safe")) {
   history.replaceState(null, "", url);
 }
 
-const pages: PageDef[] = [
-  { id: "status", title: "Status", short: "Status", render: () => <StatusPage /> },
-  { id: "accounts", title: "Accounts", short: "Accts", render: () => <AccountsPage /> },
-  { id: "extensions", title: "Extensions", short: "Ext", render: () => <ExtensionsPage /> },
-  { id: "themes", title: "Themes", short: "Theme", render: () => <ThemesPage /> },
-];
-
-render(<Shell host={host} themes={themes} pages={pages} extensionPages />, document.body);
+render(<Shell host={host} themes={themes} pages={corePages()} extensionPages />, document.body);

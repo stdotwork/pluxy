@@ -7,7 +7,7 @@ pages in the same places.
 
 | Folder | What it holds |
 | --- | --- |
-| `kit/` | What both builds share: the host-services interface (`host.ts`), the management API calls (`api.ts`), components (`ui.tsx`), the shell and its layouts (`shell.tsx`, `kit.css`), the theme engine (`theme/`) and the pages core offers (`pages/`) |
+| `kit/` | What both builds share: the host-services interface (`host.ts`), the management API calls by area (`api/`), the string layer (`strings.ts`), components (`ui.tsx`, `ui.css`), the shell and its layouts (`shell.tsx`, `shell.css`), the stylesheet that puts the kit's CSS in order (`kit.css`), the theme engine (`theme/`) and the pages core offers (`pages/`, listed in `pages/core.ts`) |
 | `panel/` | The browser build: its entry page, and `browserHost.ts`, the kit's host in a browser |
 | `themes/` | The theme contract and the built-in themes, as theme files |
 | `extension-pages/` | The extension pages contract, and `pluxy-page.js`, the module an extension's page loads to talk to the panel |
@@ -28,12 +28,16 @@ A build then picks its pages and mounts the shell:
 ```tsx
 const host = browserHost();
 const themes = new ThemeState(host, document, [defaultTheme, terminal, paper]);
-render(<Shell host={host} themes={themes} pages={[statusPage, accountsPage /* ... */]} />, document.body);
+render(<Shell host={host} themes={themes} pages={corePages()} />, document.body);
 ```
 
 A page is a `PageDef`: a stable ID (its address is `#/<id>`), a title, a short label for the rail
-navigation, and a render function. A build only bundles the pages it imports, so pages for the
-desktop app add nothing to the panel.
+navigation, its navigation group, an optional tooltip, and a render function. The navigation shows
+the groups Operate, Gateway, Observe, Control and Extension pages, in that order, each holding its
+pages in the order the build lists them; a group with no page is not shown. `corePages()`
+(`kit/pages/core.ts`) is the pages core offers: the panel shows exactly these, and the desktop app
+adds its own after them. A build only bundles the pages it imports, so pages for the desktop app
+add nothing to the panel.
 
 With `extensionPages` set, the shell adds the pages of the extensions that run, after the
 build's own: each is a `PageDef` (address `#/ext/<publisher>/<name>/<page>`) whose render shows
@@ -42,6 +46,56 @@ way with `extensionPage`, as the desktop app does), talking to the panel through
 a message channel, never with the management key. The Extensions page draws each extension's
 settings form from its schema. The contract for both, and the module pages use, are in
 [extension-pages](extension-pages/README.md).
+
+## Texts and locales
+
+Every text the kit shows goes through `kit/strings.ts`. Each page or part declares its English
+texts beside it under its own namespace, and shows them with the function `strings` returns:
+
+```tsx
+const t = strings("accounts", {
+  title: "Accounts",
+  selected: { one: "{count} account selected", other: "{count} accounts selected" },
+});
+t("title");                  // "Accounts"
+t("selected", { count: 3 }); // "3 accounts selected"
+```
+
+`{name}` is a placeholder; a text with a count has a `one` and an `other` form, picked by the
+language's plural rules. Where a sentence holds markup, keep the placeholder in the text and fill
+it with `rich(t("key"), { name: <span>...</span> })`. There is no central catalogue: a locale is a
+data file of texts by `namespace.key` (`{"lang": "de", "texts": {"accounts.title": "Konten"}}`),
+which the host loads and passes to `setLocale` before rendering. A key the locale lacks shows the
+English text. Only English ships today.
+
+## Adding a page
+
+A page lives in `kit/pages/<page>.tsx` and owns everything about itself, so pages added side by
+side touch shared files only by one line each:
+
+- **The page and its strings:** `kit/pages/<page>.tsx` declares its texts with
+  `strings("<page>", {...})` and exports its `PageDef` as a function, such as
+  `export const routingPage = (): PageDef => ({ id: "routing", group: "gateway", title: t("title"), short: t("short"), tip: t("tip"), render: () => <RoutingPage /> })`.
+  A part with texts of its own declares its own namespace. A page as large as two files splits
+  along a typed interface, as Accounts does (`accounts.tsx` the list, `accountDetail.tsx` one
+  account's details, joined by `AccountDetailProps`).
+- **The page list:** one entry in `corePages()` (`kit/pages/core.ts`), in the order the page
+  shows within its group. The page ID never changes: it is the address and the theme hook
+  `data-page`.
+- **Management calls:** the area's calls and reply types in `kit/api/<area>.ts`, as
+  `export const <area>Api = (host: Host) => ({...})`, and two lines in `kit/api/index.ts` (the
+  `export *` and the spread into `api`), so pages call `useKit().api.<call>`. Core's settings
+  (`GET` and `PATCH /settings`) are already there, in `kit/api/settings.ts`, for every page that
+  shows them.
+- **Styles:** `kit/pages/<page>.css` beside the page, its rules inside `@layer kit { ... }`, and
+  one `@import` line at the end of `kit/kit.css` (the order of those lines is the cascade order).
+  Colours come from tokens.
+- **Themes:** lists use the kit's `List`, a list with details `MasterDetail`, and every new
+  visible part carries a `data-part` hook. A new hook, token or layout value goes into
+  [the theme contract](themes/README.md) and `kit/theme/contract.ts` in the same change.
+- **Refreshing:** a page that refreshes on its own does so only while the document is visible.
+- **Tests:** a browser test for the page in `e2e/<page>.spec.ts`; unit tests in `tests/` only for
+  pure code.
 
 ## Why Preact, built with Bun
 

@@ -1,0 +1,12 @@
+/* An extension page (page.tsx). */
+@layer kit {
+  /* An extension page: the extension's own document, in a frame from the pages site. */
+  .extension-frame {
+    display: block;
+    width: 100%;
+    height: max(28rem, calc(100vh - 12rem));
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--px-shape-radius);
+    background: var(--px-color-surface);
+  }
+}
