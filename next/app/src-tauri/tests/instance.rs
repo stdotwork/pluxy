@@ -24,6 +24,9 @@ fn temp() -> Temp {
         &pluxy_app::managed::random_key()[..12]
     ));
     std::fs::create_dir_all(&d).unwrap();
+    // The holder's socket folder is made in here: it is no one else's to change.
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700)).unwrap();
     Temp(d)
 }
 

@@ -55,7 +55,10 @@ Before anything else, the app takes an exclusive lock on `instance/lock` in the 
 to recover). The folder must be your user's and not a link; the lock is opened inside it without
 following a link, and used only if it is a plain file of yours with mode 600. The app then listens
 on a socket in a short folder of yours: `pluxy-app/` in `XDG_RUNTIME_DIR`, else `pluxy-app-<uid>/`
-in the temporary folder, so a long data folder path does not matter. The socket's name is a digest
+in the temporary folder, so a long data folder path does not matter. The app skips a folder that
+another user could swap for theirs: one with a link above it, or below a folder that belongs to
+another user (other than root) or that others may write in without its sticky bit (as `/tmp` has
+it). The socket's name is a digest
 of the data folder, and the app writes its path to `instance/address`. The folders, the lock, the
 address and the socket are readable by your user only. A later launch reads the address, connects
 without blocking, checks the socket is your user's, and sends it one fixed message; the first app

@@ -13,12 +13,18 @@
 //! The first app then listens on a socket in a short folder of its user's: `pluxy-app` in
 //! `XDG_RUNTIME_DIR`, else `pluxy-app-<uid>` in the temporary folder. A data folder can be too
 //! long for a socket path (about 100 bytes); the socket's name is a digest of the data folder, so
-//! each profile has its own. The first app writes the socket's path to `instance/address`, and a
-//! later launch that cannot take the lock reads it there (so both need not agree on where the
-//! runtime folder is), connects, checks the socket is its own user's, and sends the one message
-//! `pluxy-activate 1`; the first app shows its window (a new one if it was closed to the tray)
-//! and answers `ok`, and the later launch exits. If the first app could not listen, it leaves the
-//! address empty, and a later launch says so at once.
+//! each profile has its own. No folder above the socket's may be a link or one another user could
+//! rename things in (of a user other than this one or root, or open to others' writes and not
+//! sticky, as `/tmp` is): one could swap the socket's folder for theirs after it was checked. The
+//! socket's folder is used through a handle on it, except to bind, which takes a path.
+//!
+//! The first app writes the socket's path to `instance/address`, and a later launch that cannot
+//! take the lock reads it there (so both need not agree on where the runtime folder is), opening
+//! it without waiting (a FIFO there would otherwise wait for a writer), connects, checks the
+//! socket is its own user's, and sends the one message `pluxy-activate 1`; the first app shows
+//! its window (a new one if it was closed to the tray) and answers `ok`, and the later launch
+//! exits, all within one deadline. If the first app could not listen, it leaves the address
+//! empty, and a later launch says so at once.
 //!
 //! The socket accepts only connections from the same user, reads at most [`MAX_MESSAGE`] bytes
 //! from each for at most [`READ_BOUND`], serves up to [`MAX_CONNECTIONS`] at once (one that says
@@ -76,16 +82,20 @@ pub struct Instance {
 }
 
 /// The folders, in order, where the first app may put its socket: `pluxy-app` in
-/// `XDG_RUNTIME_DIR` (when set), then `pluxy-app-<uid>` in the temporary folder.
+/// `XDG_RUNTIME_DIR` (when set), then `pluxy-app-<uid>` in the temporary folder. Links in those
+/// are resolved here: [`Instance::listen`] refuses a folder with a link above it.
 pub fn socket_dirs() -> Vec<PathBuf> {
+    let resolved = |p: PathBuf| std::fs::canonicalize(&p).unwrap_or(p);
     let mut dirs = Vec::new();
     if let Some(r) = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) {
         if r.is_absolute() {
-            dirs.push(r.join("pluxy-app"));
+            dirs.push(resolved(r).join("pluxy-app"));
         }
     }
     #[cfg(unix)]
-    dirs.push(std::env::temp_dir().join(format!("pluxy-app-{}", unsafe { libc::geteuid() })));
+    dirs.push(
+        resolved(std::env::temp_dir()).join(format!("pluxy-app-{}", unsafe { libc::geteuid() })),
+    );
     dirs
 }
 
@@ -120,9 +130,9 @@ pub fn start(dir: &Path, wait: Duration) -> Result<Start, String> {
                 }));
             }
             Err(std::fs::TryLockError::WouldBlock) => {
-                let left = deadline.saturating_duration_since(Instant::now());
+                // One deadline for the whole launch: reading the address, each try and each wait.
                 let tried = fsx::read_address(&d).and_then(|socket| match socket {
-                    Some(socket) => ipc::activate(&socket, left),
+                    Some(socket) => ipc::activate(&socket, deadline),
                     None => Err(io::ErrorKind::Unsupported.into()),
                 });
                 match tried {
@@ -134,14 +144,17 @@ pub fn start(dir: &Path, wait: Duration) -> Result<Start, String> {
                     Err(e) if e.kind() == io::ErrorKind::InvalidData => {
                         return Err(format!("pluxy is already running for this profile: {e}"));
                     }
-                    Err(e) if left.is_zero() => {
-                        return Err(format!(
-                            "pluxy is already running for this profile but did not answer: {e}"
-                        ));
+                    Err(e) => {
+                        let left = deadline.saturating_duration_since(Instant::now());
+                        if left.is_zero() {
+                            return Err(format!(
+                                "pluxy is already running for this profile but did not answer: {e}"
+                            ));
+                        }
+                        // The holder may not be listening yet, its queue may be full, or it may
+                        // be closing (its lock goes after its socket): try the lock again too.
+                        std::thread::sleep(Duration::from_millis(100).min(left));
                     }
-                    // The holder may not be listening yet, its queue may be full, or it may be
-                    // closing (its lock goes after its socket): try the lock again too.
-                    Err(_) => std::thread::sleep(Duration::from_millis(100).min(left)),
                 }
             }
             Err(std::fs::TryLockError::Error(e)) => {
@@ -278,11 +291,13 @@ mod fsx {
     /// that only they can read and write.
     fn open_in(dir: &OwnedFd, name: &str, flags: i32) -> io::Result<File> {
         let n = cstr(name.as_bytes())?;
+        // Without O_NONBLOCK, opening a FIFO waits for a writer, before its type can be checked;
+        // it is cleared again once the file is known to be a plain one.
         let fd = unsafe {
             libc::openat(
                 dir.as_raw_fd(),
                 n.as_ptr(),
-                flags | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NOCTTY,
+                flags | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NOCTTY | libc::O_NONBLOCK,
                 0o600 as libc::c_uint,
             )
         };
@@ -307,7 +322,40 @@ mod fsx {
                 st.st_mode & 0o777
             )));
         }
+        let fl = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+        if fl < 0
+            || unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFL, fl & !libc::O_NONBLOCK) } < 0
+        {
+            return Err(io::Error::last_os_error());
+        }
         Ok(file)
+    }
+
+    /// What `name` in `dir` is, not following a link.
+    pub fn stat_in(dir: &OwnedFd, name: &str) -> io::Result<libc::stat> {
+        let n = cstr(name.as_bytes())?;
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        let r = unsafe {
+            libc::fstatat(
+                dir.as_raw_fd(),
+                n.as_ptr(),
+                &mut st,
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        };
+        if r != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(st)
+    }
+
+    /// Sets the mode of `name` in `dir`.
+    pub fn chmod_in(dir: &OwnedFd, name: &str, mode: libc::mode_t) -> io::Result<()> {
+        let n = cstr(name.as_bytes())?;
+        if unsafe { libc::fchmodat(dir.as_raw_fd(), n.as_ptr(), mode, 0) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
     }
 
     pub fn open_lock(dir: &OwnedFd) -> io::Result<File> {
@@ -492,18 +540,46 @@ mod ipc {
         d.as_millis().saturating_add(1).min(i32::MAX as u128) as i32
     }
 
-    /// Makes `dir` for this user only (not through a link, and only if it is this user's) and
-    /// binds `socket` in it, removing a socket a dead app left there.
-    pub fn listen(dir: &Path, socket: &Path) -> io::Result<Listener> {
-        let _dir = super::fsx::open_dir(dir)?;
+    /// Refuses `dir` if another user could replace it or any folder above it after it is
+    /// checked: each must be a folder (not a link) of this user's or root's and, if others may
+    /// write in it, sticky.
+    fn check_parents(dir: &Path) -> io::Result<()> {
+        use std::os::unix::fs::MetadataExt;
+        for p in dir
+            .ancestors()
+            .skip(1)
+            .filter(|p| !p.as_os_str().is_empty())
         {
-            use std::os::unix::fs::{FileTypeExt, MetadataExt};
-            // The name is this profile's, and the caller holds its lock: a socket of this user's
-            // there is a dead app's. Anything else is not ours to remove; binding then says so.
-            if let Ok(m) = std::fs::symlink_metadata(socket) {
-                if m.file_type().is_socket() && m.uid() == euid() {
-                    std::fs::remove_file(socket)?;
-                }
+            let m = std::fs::symlink_metadata(p)?;
+            if !m.file_type().is_dir() {
+                return Err(io::Error::other(format!("{} is not a folder", p.display())));
+            }
+            let open = m.mode() & 0o022 != 0 && m.mode() & 0o1000 == 0;
+            if (m.uid() != euid() && m.uid() != 0) || open {
+                return Err(io::Error::other(format!(
+                    "{} can be changed by other users",
+                    p.display()
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Makes `dir` for this user only (not through a link, and only if it is this user's) and
+    /// binds `socket`, a name in it, removing a socket a dead app left there.
+    pub fn listen(dir: &Path, socket: &Path) -> io::Result<Listener> {
+        check_parents(dir)?;
+        let d = super::fsx::open_dir(dir)?;
+        let name = socket
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or(io::ErrorKind::InvalidInput)?
+            .to_owned();
+        // The name is this profile's, and the caller holds its lock: a socket of this user's
+        // there is a dead app's. Anything else is not ours to remove; binding then says so.
+        if let Ok(st) = super::fsx::stat_in(&d, &name) {
+            if st.st_mode & libc::S_IFMT == libc::S_IFSOCK && st.st_uid == euid() {
+                super::fsx::remove(&d, &name)?;
             }
         }
         let (addr, len) = address(socket)?;
@@ -515,27 +591,34 @@ mod ipc {
                 len,
             )
         })?;
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600))?;
-        }
+        super::fsx::chmod_in(&d, &name, 0o600)?;
         cvt(unsafe { libc::listen(fd.as_raw_fd(), BACKLOG) })?;
-        Ok(Listener(UnixListener::from(fd)))
+        Ok(Listener {
+            l: UnixListener::from(fd),
+            dir: d,
+            name,
+        })
     }
 
-    pub struct Listener(UnixListener);
+    pub struct Listener {
+        l: UnixListener,
+        dir: OwnedFd,
+        name: String,
+    }
 
     /// A socket being served, and the way to stop serving it.
     pub struct Listening {
         pub socket: PathBuf,
+        dir: OwnedFd,
+        name: String,
         wake: OwnedFd,
     }
 
     impl Listening {
         /// Stops the serving thread (through its pipe: nothing to wait on) and removes the
-        /// socket.
+        /// socket from its folder.
         pub fn stop(&self) {
-            let _ = std::fs::remove_file(&self.socket);
+            let _ = super::fsx::remove(&self.dir, &self.name);
             unsafe {
                 libc::write(
                     self.wake.as_raw_fd(),
@@ -594,13 +677,19 @@ mod ipc {
             let (r, w) = unsafe { (OwnedFd::from_raw_fd(p[0]), OwnedFd::from_raw_fd(p[1])) };
             set_flags(r.as_raw_fd())?;
             set_flags(w.as_raw_fd())?;
+            let Listener { l, dir, name } = self;
             std::thread::Builder::new()
                 .name("instance-socket".into())
-                .spawn(move || self.run(r, on_activate))?;
-            Ok(Listening { socket, wake: w })
+                .spawn(move || Self::run(l, r, on_activate))?;
+            Ok(Listening {
+                socket,
+                dir,
+                name,
+                wake: w,
+            })
         }
 
-        fn run(self, wake: OwnedFd, on_activate: impl Fn() -> bool) {
+        fn run(l: UnixListener, wake: OwnedFd, on_activate: impl Fn() -> bool) {
             let mut conns: Vec<Conn> = Vec::new();
             loop {
                 let now = Instant::now();
@@ -613,7 +702,7 @@ mod ipc {
                 }];
                 if accepting {
                     fds.push(libc::pollfd {
-                        fd: self.0.as_raw_fd(),
+                        fd: l.as_raw_fd(),
                         events: libc::POLLIN,
                         revents: 0,
                     });
@@ -659,7 +748,7 @@ mod ipc {
                 }
                 if accepting && fds[1].revents != 0 {
                     while conns.len() < MAX_CONNECTIONS {
-                        match self.0.accept() {
+                        match l.accept() {
                             Ok((s, _)) => {
                                 // Only this user's connections are read at all.
                                 if peer_uid(s.as_raw_fd()).ok() == Some(euid())
@@ -723,10 +812,9 @@ mod ipc {
         Ok(UnixStream::from(fd))
     }
 
-    /// Asks the app on the socket to raise its window; Ok once it has answered `ok`, all within
-    /// `bound`: connecting, writing and reading.
-    pub fn activate(socket: &Path, bound: Duration) -> io::Result<()> {
-        let deadline = Instant::now() + bound;
+    /// Asks the app on the socket to raise its window; Ok once it has answered `ok`, all by
+    /// `deadline`: connecting, writing and reading.
+    pub fn activate(socket: &Path, deadline: Instant) -> io::Result<()> {
         let mut s = connect(socket, deadline)?;
         // Only an app of this user's is told anything.
         if peer_uid(s.as_raw_fd())? != euid() {
@@ -774,7 +862,7 @@ mod ipc {
 mod ipc {
     use std::io;
     use std::path::{Path, PathBuf};
-    use std::time::Duration;
+    use std::time::Instant;
 
     pub struct Listener;
     pub struct Listening {
@@ -799,7 +887,7 @@ mod ipc {
         Err(io::ErrorKind::Unsupported.into())
     }
 
-    pub fn activate(_: &Path, _: Duration) -> io::Result<()> {
+    pub fn activate(_: &Path, _: Instant) -> io::Result<()> {
         Err(io::ErrorKind::Unsupported.into())
     }
 }
@@ -826,6 +914,8 @@ mod tests {
             &crate::managed::random_key()[..12]
         ));
         fs::create_dir_all(&d).unwrap();
+        // The tests' socket folders are made in here: it is no one else's to change.
+        fs::set_permissions(&d, fs::Permissions::from_mode(0o700)).unwrap();
         Temp(d)
     }
 
@@ -1156,7 +1246,7 @@ mod tests {
         let _held = fill_queue(&sock);
         let s = sock.clone();
         let r = within(Duration::from_secs(5), move || {
-            ipc::activate(&s, Duration::from_millis(500)).is_err()
+            ipc::activate(&s, Instant::now() + Duration::from_millis(500)).is_err()
         });
         assert_eq!(
             r,
@@ -1188,5 +1278,123 @@ mod tests {
         let r = start(&dir, Duration::from_millis(1500));
         assert!(matches!(r, Ok(Start::Raised)), "{:?}", r.err());
         assert_eq!(n.load(Ordering::SeqCst), 1);
+    }
+
+    /// A FIFO where the address goes (left there, or planted while the folder was open to
+    /// others) does not hold up a later launch: opening it does not wait for a writer.
+    #[test]
+    fn a_fifo_in_place_of_the_address_does_not_hang_a_launch() {
+        use std::os::unix::ffi::OsStrExt;
+        let t = temp();
+        let dir = t.0.join("instance");
+        let held = first(&dir); // holds the lock, not listening yet
+        let fifo = std::ffi::CString::new(dir.join(ADDRESS).as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        let d = dir.clone();
+        let e = within(Duration::from_secs(5), move || {
+            start(&d, Duration::from_millis(300)).err()
+        })
+        .expect("a launch hung opening the FIFO at the address")
+        .expect("a launch ran as a second instance");
+        assert!(
+            e.contains("did not answer") && e.contains("not a plain file"),
+            "{e}"
+        );
+        // The positive control on the same route: once the holder listens, its address replaces
+        // the FIFO and a launch raises it.
+        held.listen(&t.run(), || true).unwrap();
+        assert!(matches!(
+            start(&dir, Duration::from_secs(5)).unwrap(),
+            Start::Raised
+        ));
+    }
+
+    /// A launch whose holder takes connections and never answers fails at its deadline, not one
+    /// retry after it.
+    #[test]
+    fn a_launch_that_gets_no_answer_ends_at_its_deadline() {
+        let t = temp();
+        let dir = t.0.join("instance");
+        let _held = first(&dir);
+        let sock = t.0.join("mute.sock");
+        let _mute = std::os::unix::net::UnixListener::bind(&sock).unwrap(); // never accepts
+        fs::write(dir.join(ADDRESS), sock.as_os_str().as_encoded_bytes()).unwrap();
+        fs::set_permissions(dir.join(ADDRESS), fs::Permissions::from_mode(0o600)).unwrap();
+        let wait = Duration::from_millis(300);
+        let t0 = Instant::now();
+        let e = start(&dir, wait).err().unwrap();
+        let took = t0.elapsed();
+        assert!(e.contains("did not answer"), "{e}");
+        // A retry after the deadline sleeps 100 ms first; the margin is for a loaded machine.
+        assert!(
+            took >= wait && took < wait + Duration::from_millis(80),
+            "took {took:?} for a {wait:?} deadline"
+        );
+    }
+
+    /// A socket folder another user could swap for theirs is not used: one in a folder open to
+    /// others' writes and not sticky, one below such a folder, one below a link. The sticky
+    /// folder after them, as `/tmp` is, is used.
+    #[test]
+    fn a_socket_folder_others_could_replace_is_not_used() {
+        let t = temp();
+        let dir = t.0.join("instance");
+        let i = first(&dir);
+        let mode = |p: &Path, m: u32| {
+            fs::create_dir_all(p).unwrap();
+            fs::set_permissions(p, fs::Permissions::from_mode(m)).unwrap();
+        };
+        let open = t.0.join("open");
+        mode(&open, 0o777);
+        mode(&open.join("inner"), 0o700);
+        let real = t.0.join("real");
+        mode(&real, 0o700);
+        let link = t.0.join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let sticky = t.0.join("sticky");
+        mode(&sticky, 0o1777);
+        let refused = [
+            open.join("app"),
+            open.join("inner").join("app"),
+            link.join("app"),
+        ];
+        let mut dirs = refused.to_vec();
+        dirs.push(sticky.join("app"));
+        i.listen(&dirs, || true).unwrap();
+        assert_eq!(socket_of(&i).parent().unwrap(), sticky.join("app"));
+        for d in refused {
+            assert!(!d.exists(), "{} was made", d.display());
+        }
+        assert!(matches!(
+            start(&dir, Duration::from_secs(5)).unwrap(),
+            Start::Raised
+        ));
+    }
+
+    /// Quitting removes the socket from the folder it was made in, also when that folder's path
+    /// now leads somewhere else: what is there is not this app's.
+    #[test]
+    fn quitting_removes_the_socket_from_its_own_folder() {
+        let t = temp();
+        let dir = t.0.join("instance");
+        let (i, _) = counting(&t, &dir);
+        let name = socket_of(&i).file_name().unwrap().to_owned();
+        let run = t.0.join("run");
+        let moved = t.0.join("moved");
+        fs::rename(&run, &moved).unwrap();
+        let theirs = t.0.join("theirs");
+        fs::create_dir(&theirs).unwrap();
+        fs::write(theirs.join(&name), b"theirs").unwrap();
+        std::os::unix::fs::symlink(&theirs, &run).unwrap();
+        i.release();
+        assert_eq!(
+            fs::read(theirs.join(&name)).unwrap(),
+            b"theirs",
+            "quitting removed a file through the path"
+        );
+        assert!(
+            !moved.join(&name).exists(),
+            "the socket stayed in its folder"
+        );
     }
 }
