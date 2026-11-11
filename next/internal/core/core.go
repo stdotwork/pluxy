@@ -49,6 +49,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/usage"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
+	"github.com/stdotwork/pluxy/next/sdk/payload"
 )
 
 // Options configure a Core.
@@ -139,6 +140,13 @@ func Start(opts Options) (*Core, error) {
 			return s.Config.ProxyURL
 		}
 		return ""
+	}
+	// ... and the payload rules of that config.
+	c.opts.Host.Payload = func() *payload.Rules {
+		if s := c.cur.Load(); s != nil {
+			return s.Config.Payload
+		}
+		return nil
 	}
 	cfg, err := server.LoadConfig(opts.ConfigPath)
 	if err != nil {

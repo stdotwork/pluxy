@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/stdotwork/pluxy/next/internal/server"
+	"github.com/stdotwork/pluxy/next/sdk/payload"
 	"gopkg.in/yaml.v3"
 )
 
@@ -1084,5 +1085,49 @@ func TestPlaceholderIdentity(t *testing.T) {
 	}
 	if strings.Contains(p, "fake-secret") {
 		t.Errorf("placeholder %q shows the secret", p)
+	}
+}
+
+// Payload rules from a settings change land in each file's own layout and read back as sent:
+// in a config.yaml as block YAML under requests.payload (or the older top-level payload when
+// only that is there), in a JSON config as payload with numbers kept; null removes them, and a
+// path outside the supported syntax is refused.
+func TestApplySettingsPayload(t *testing.T) {
+	rules := json.RawMessage(`{"override":[{"models":[{"name":"gpt-*","protocol":"codex"}],"params":{"service_tier":"priority","n":128000,"on":"true"}}],` +
+		`"filter":[{"models":[{"name":"gpt-*"}],"params":["tools.#(name==\"apply_patch\")"]}]}`)
+	want := payload.Rules{
+		Override: []payload.Rule{{Models: []payload.Model{{Name: "gpt-*", Protocol: "codex"}}, Params: map[string]any{"service_tier": "priority", "n": float64(128000), "on": "true"}}},
+		Filter:   []payload.FilterRule{{Models: []payload.Model{{Name: "gpt-*"}}, Params: []string{`tools.#(name=="apply_patch")`}}},
+	}
+	for _, c := range []struct {
+		name, src, key string
+		isYAML         bool
+	}{
+		{"json", editJSON, `"payload": {`, false},
+		{"v8", editYAMLV8, "requests:\n  payload:\n    override:", true},
+		{"older", editYAMLOld + "payload:\n  filter: []\n", "\npayload:\n  override:", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := edited(t, c.src, c.isYAML, func(d *Doc) error { return d.ApplySettings(SettingsPatch{Payload: rules}) })
+			if !strings.Contains(got, c.key) {
+				t.Errorf("no %q in\n%s", c.key, got)
+			}
+			if cfg := loads(t, got, c.isYAML); cfg.Payload == nil || !reflect.DeepEqual(*cfg.Payload, want) {
+				t.Errorf("payload read back %+v, want %+v, from\n%s", cfg.Payload, want, got)
+			}
+			removed := edited(t, got, c.isYAML, func(d *Doc) error { return d.ApplySettings(SettingsPatch{Payload: json.RawMessage(`null`)}) })
+			if cfg := loads(t, removed, c.isYAML); cfg.Payload != nil || strings.Contains(removed, "payload:") || strings.Contains(removed, `"payload"`) {
+				t.Errorf("null left payload rules in\n%s", removed)
+			}
+		})
+	}
+	d := mustParse(t, editJSON, false)
+	err := d.ApplySettings(SettingsPatch{Payload: json.RawMessage(`{"filter":[{"models":[{"name":"m"}],"params":["tools.*"]}]}`)})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), `payload.filter[0].params: path "tools.*"`) {
+		t.Errorf("a wildcard path: err = %v", err)
+	}
+	err = d.ApplySettings(SettingsPatch{Payload: json.RawMessage(`{"filters":[]}`)})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), `unknown field "filters"`) {
+		t.Errorf("a misspelt list: err = %v", err)
 	}
 }

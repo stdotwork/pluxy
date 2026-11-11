@@ -22,6 +22,7 @@ import (
 
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
+	"github.com/stdotwork/pluxy/next/sdk/payload"
 )
 
 // waitDelay bounds how long collecting an exited program waits for a child process of it that
@@ -46,6 +47,9 @@ type Options struct {
 	// ProxyURL returns core's global proxy_url setting, read at each call: the proxy of every
 	// account without one of its own (proxyurl.Resolve). Nil: none.
 	ProxyURL func() string
+	// Payload returns core's payload rules, read at each generate, count_tokens and endpoint
+	// call: the call carries those that match it (protocol minor version 14). Nil: none.
+	Payload func() *payload.Rules
 }
 
 // Extension is a running extension program.
@@ -415,6 +419,12 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 		s.fail(perr)
 		return s
 	}
+	rules, perr := e.payload(ctx, account.ID, req)
+	if perr != nil {
+		s := &Stream{}
+		s.fail(perr)
+		return s
+	}
 	e.held.add(account.ID, account.Credential)
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", e.socket)
@@ -427,7 +437,7 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 	s := &Stream{conn: conn, ctx: ctx, ext: e, redact: protocol.NewRedactor(account.Credential, proxy),
 		capture: capture(ctx, e.info), account: account.ID}
 	s.stop = context.AfterFunc(ctx, func() { conn.Close() })
-	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: op, Account: &account, Request: &req, Capture: s.capture != nil}
+	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: op, Account: &account, Request: &req, Capture: s.capture != nil, Payload: rules}
 	if err := protocol.WriteFrame(conn, call); err != nil {
 		if errors.Is(err, protocol.ErrFrameTooLarge) {
 			// The request is valid but too big to pass on in one frame; only a smaller request

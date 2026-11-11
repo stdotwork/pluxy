@@ -19,6 +19,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/proxyurl"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/internal/server"
+	"github.com/stdotwork/pluxy/next/sdk/payload"
 )
 
 // The management calls that read and change core's config file: the document itself, the
@@ -245,6 +246,8 @@ type settingsView struct {
 	TokenCountEstimate bool `json:"token_count_estimate"`
 	// ProxyURL is the global proxy_url, with "redacted" in place of its user name and password.
 	ProxyURL string `json:"proxy-url"`
+	// Payload is the payload rules, with today's core's names; absent when there are none.
+	Payload *payload.Rules `json:"payload,omitempty"`
 }
 
 type observabilityView struct {
@@ -309,7 +312,7 @@ func settings(cfg *server.Config) settingsView {
 		}
 	}
 	v.SessionAffinityTTL = shortDuration(ttl)
-	return settingsView{TokenCountEstimate: cfg.TokenCountEstimateOn(), ProxyURL: proxyurl.Redact(cfg.ProxyURL), Routing: v, Observability: observabilityView{
+	return settingsView{TokenCountEstimate: cfg.TokenCountEstimateOn(), ProxyURL: proxyurl.Redact(cfg.ProxyURL), Payload: cfg.Payload, Routing: v, Observability: observabilityView{
 		Logs: logsView{LoggingToFile: cfg.Logs.ToFile, LogsMaxTotalSizeMB: cfg.Logs.MaxTotalSizeMB,
 			RequestLog: cfg.Logs.RequestLog, ErrorLogsMaxFiles: cfg.Logs.ErrorLogs()},
 		Usage: usageView{UsageStatisticsEnabled: cfg.Usage.On()}}}

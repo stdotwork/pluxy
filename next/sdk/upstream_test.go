@@ -12,6 +12,7 @@ import (
 
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
+	"github.com/stdotwork/pluxy/next/sdk/payload"
 )
 
 type recordUpstream struct {
@@ -232,5 +233,82 @@ func TestUpstreamSetsCallHeaders(t *testing.T) {
 	}
 	if !reflect.DeepEqual(req.Header, header) {
 		t.Errorf("the extension's request changed: %v", req.Header)
+	}
+}
+
+// A call's payload rules change each JSON request body once, inside the root the extension
+// names, and leave bodies that are not JSON or are encoded as they are. The second account's
+// retry and net/http's own resend get the same bytes (GetBody).
+func TestUpstreamAppliesPayload(t *testing.T) {
+	rules := &payload.Rules{
+		Override: []payload.Rule{{Models: []payload.Model{{}}, Params: map[string]any{"service_tier": "priority"}}},
+		Filter:   []payload.FilterRule{{Models: []payload.Model{{}}, Params: []string{`tools.#(name=="apply_patch")`}}},
+	}
+	const body = `{"model":"m","tools":[{"name":"apply_patch","n":1},{"name":"apply_patch","n":2}]}`
+	// The old engine removes only the first match (testdata case "example filter codex flat
+	// tools, two patches: first only").
+	const want = `{"model":"m","service_tier":"priority","tools":[{"name":"apply_patch","n":2}]}`
+	ctx, _ := withUpstreamInfo(context.Background(), protocol.Call{Op: protocol.OpGenerate, Payload: rules})
+	send := func(ctx context.Context, contentType, encoding, body string) (*recordUpstream, *http.Request) {
+		t.Helper()
+		base := &http.Transport{}
+		recorder := &recordUpstream{}
+		base.RegisterProtocol("record", recorder)
+		req, err := http.NewRequestWithContext(ctx, "POST", "record://upstream.test/v1/responses", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", contentType)
+		if encoding != "" {
+			req.Header.Set("Content-Encoding", encoding)
+		}
+		resp, err := Upstream(base).RoundTrip(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return recorder, req
+	}
+	sameJSON := func(got, want string) bool {
+		var g, w any
+		return json.Unmarshal([]byte(got), &g) == nil && json.Unmarshal([]byte(want), &w) == nil && reflect.DeepEqual(g, w)
+	}
+
+	rec, _ := send(ctx, "application/json; charset=utf-8", "", body)
+	if !sameJSON(rec.body, want) {
+		t.Errorf("upstream got %s, want %s", rec.body, want)
+	}
+	if n := rec.request.ContentLength; n != int64(len(rec.body)) {
+		t.Errorf("ContentLength %d for a body of %d bytes", n, len(rec.body))
+	}
+	again, err := rec.request.GetBody()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := io.ReadAll(again); string(b) != rec.body {
+		t.Errorf("GetBody gave %s, the request sent %s", b, rec.body)
+	}
+
+	wrapped := `{"project":"p","request":` + body + `}`
+	rec, _ = send(WithPayloadRoot(ctx, "request"), "application/json", "", wrapped)
+	if w := `{"project":"p","request":` + want + `}`; !sameJSON(rec.body, w) {
+		t.Errorf("with root request: upstream got %s, want %s", rec.body, w)
+	}
+
+	for _, c := range []struct{ contentType, encoding string }{{"application/x-www-form-urlencoded", ""}, {"application/json", "gzip"}, {"", ""}} {
+		if rec, _ = send(ctx, c.contentType, c.encoding, body); rec.body != body {
+			t.Errorf("Content-Type %q, Content-Encoding %q: upstream got %s, want it unchanged", c.contentType, c.encoding, rec.body)
+		}
+	}
+	if rec, _ = send(context.Background(), "application/json", "", body); rec.body != body {
+		t.Errorf("without the call's context: upstream got %s, want it unchanged", rec.body)
+	}
+
+	// Capture comes after the rules: the request log shows the body as it went upstream.
+	captured, capture := withUpstreamInfo(context.Background(), protocol.Call{Op: protocol.OpGenerate, Payload: rules, Capture: true})
+	rec, _ = send(captured, "application/json", "", body)
+	d := capture.take()
+	if d == nil || len(d.Upstream) != 1 || d.Upstream[0].Request.Body != rec.body || !sameJSON(rec.body, want) {
+		t.Errorf("captured %+v, upstream got %s", d, rec.body)
 	}
 }

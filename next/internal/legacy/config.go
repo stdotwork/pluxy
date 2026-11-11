@@ -222,7 +222,7 @@ var rules = map[string]rule{
 	"quota-exceeded.switch-preview-model":               {dead, ""},
 
 	"requests.proxy-url":                     {supported, ""},
-	"requests.payload":                       {later, ""},
+	"requests.payload":                       {supported, ""},
 	"requests.tls-handshake-timeout-seconds": {dropped, "off by default and no need found"},
 	"requests.passthrough-headers":           {dropped, "off by default and no need found"},
 	"requests.nonstream-keepalive-interval":  {dropped, "off by default and no need found"},
@@ -448,7 +448,7 @@ var readPaths = []string{
 	"routing.retry.max-retry-credentials", "routing.retry.max-retry-interval", "routing.retry.request-retry",
 	"routing.force-model-prefix", "oauth.model-alias", "oauth.excluded-models",
 	"upstream.codex.disable-codex-cloaking", "upstream.codex.websocket-compression",
-	"upstream.xai.inject-x-search", "requests.proxy-url",
+	"upstream.xai.inject-x-search", "requests.proxy-url", "requests.payload",
 	"oauth.providers.codex.signin-with-chatgpt-identifier",
 	"multimedia.disable-image-generation", "oauth.auth-dir", "observability.usage.usage-statistics-enabled",
 	"observability.logs.logging-to-file", "observability.logs.logs-max-total-size-mb",
@@ -676,6 +676,14 @@ func (x *translator) options() error {
 			return err
 		}
 		x.out["proxy_url"] = proxy
+	}
+	// The payload rules keep today's names, so they go across as they are; the config's own
+	// check (payload.Validate) refuses what this core cannot apply.
+	if rules, _ := get(x.t, "requests.payload"); rules != nil {
+		if _, isMap := rules.(tree); !isMap {
+			return errors.New("requests.payload must be a mapping")
+		}
+		x.out["payload"] = rules
 	}
 	return nil
 }

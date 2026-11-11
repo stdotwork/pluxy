@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/llm"
+	"github.com/stdotwork/pluxy/next/sdk/payload"
 )
 
 // Version is the protocol version this package implements: the major version, which the
@@ -28,8 +29,8 @@ const Version = 0
 // minor 8 adds the request's caller; minor 9 adds a login grant's account settings;
 // minor 10 adds the subscription's end time to quota; minor 11 adds the account's proxy_url;
 // minor 12 adds the account's headers; minor 13 adds upstream capture (Call.Capture and the
-// diagnostic frame).
-const Minor = 13
+// diagnostic frame); minor 14 adds payload rules (Call.Payload).
+const Minor = 14
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
@@ -135,6 +136,11 @@ type Call struct {
 	// Capture asks a generate, count_tokens or endpoint call, or a session.turn, to report its
 	// upstream exchanges in a diagnostic frame before its terminal event (minor version 13).
 	Capture bool `json:"capture,omitempty"`
+	// Payload is the config's payload rules that apply to a generate, count_tokens or endpoint
+	// call (minor version 14), for the extension to apply to each JSON body it sends upstream:
+	// core matched their models to the call already, so each model holds only its body
+	// conditions (payload.Select). Nil: none.
+	Payload *payload.Rules `json:"payload,omitempty"`
 }
 
 // Login is the subject of a login call.
