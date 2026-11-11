@@ -295,6 +295,9 @@ every `theme` event.
 
 - The desktop app shows each page in a webview of its own, which can call no app command, with
   the page in the same sandboxed frame and the same channel ([the app's README](../../app/README.md#extension-pages)).
+  Its native transport enforces the call schema, size, rate and in-flight limits before forwarding,
+  including direct scheme requests from a frame. It also bounds package totals and queued replies,
+  permits one hello per document, and binds messages to the native webview and document generation.
 - A package needs a program even when it only brings pages.
 - Settings reach the extension's pages, not its program.
 - The page's frame has a fixed size within the panel's content area; a page cannot resize it.

@@ -305,7 +305,17 @@ fn page_open(
             }
             *u == app_doc || u.origin() == origin
         })
-        .on_new_window(|_, _| NewWindowResponse::Deny);
+        .on_new_window(|_, _| NewWindowResponse::Deny)
+        .on_page_load(|wv, p| {
+            if p.event() == PageLoadEvent::Started {
+                wv.app_handle()
+                    .state::<App>()
+                    .pages
+                    .lock()
+                    .unwrap()
+                    .begin_document(wv.label());
+            }
+        });
     let window: Window = webview.window();
     let b = rect.bounds();
     let placed = window
@@ -359,12 +369,52 @@ fn page_close(webview: Webview, state: tauri::State<App>, label: String) -> Resu
 
 /// Delivers a message of the window's channel to a page webview's app document.
 #[tauri::command]
-fn page_send(webview: Webview, label: String, msg: Value) -> Result<(), String> {
+fn page_send(
+    webview: Webview,
+    label: String,
+    generation: String,
+    msg: Value,
+) -> Result<(), String> {
     trusted(&webview)?;
-    let js = pages::delivery(&msg)?;
-    page_webview(webview.app_handle(), &label)?
-        .eval(js)
-        .map_err(|e| e.to_string())
+    let target = page_webview(webview.app_handle(), &label)?;
+    let app = webview.app_handle().clone();
+    let (js, ticket) =
+        app.state::<App>()
+            .pages
+            .lock()
+            .unwrap()
+            .prepare_delivery(&label, &generation, &msg)?;
+    let callback_app = app.clone();
+    let callback_label = label.clone();
+    let callback_generation = generation.clone();
+    // Keep only the reply identity while the renderer consumes it, never its payload.
+    let callback_msg = serde_json::json!({"type":msg["type"],"data":{"id":msg["data"]["id"]}});
+    let result = target
+        .eval_with_callback(js, move |result| {
+            callback_app
+                .state::<App>()
+                .pages
+                .lock()
+                .unwrap()
+                .finish_delivery(
+                    &callback_label,
+                    &callback_generation,
+                    &callback_msg,
+                    ticket,
+                    result == "true",
+                );
+        })
+        .map_err(|e| e.to_string());
+    if result.is_err() {
+        app.state::<App>().pages.lock().unwrap().finish_delivery(
+            &label,
+            &generation,
+            &msg,
+            ticket,
+            false,
+        );
+    }
+    result
 }
 
 /// The `pluxy-page:` scheme: the page webviews' app document and their way to the window.
@@ -377,9 +427,9 @@ fn page_scheme(
     let label = ctx.webview_label().to_string();
     let (served, msg) = {
         let st = app.state::<App>();
-        let pages = st.pages.lock().unwrap();
+        let mut pages = st.pages.lock().unwrap();
         pages::serve(
-            &pages,
+            &mut pages,
             &label,
             request.method().as_str(),
             request.uri().path(),
@@ -391,10 +441,14 @@ fn page_scheme(
         request.method().as_str(),
         request.uri().path(),
         served.status,
-        msg.is_some(),
     );
     if let Some(m) = msg {
-        let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-page", m);
+        let result = app.emit_to(EventTarget::webview(MAIN), "pluxy-page", m);
+        #[cfg(feature = "native-test")]
+        if result.is_ok() {
+            native_test::ingress_forwarded();
+        }
+        let _ = result;
     }
     let resp = Response::builder()
         .status(served.status)

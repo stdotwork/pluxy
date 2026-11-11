@@ -1,28 +1,27 @@
-//! Extension pages. Each page the window shows gets a webview of its own, labelled `page-<n>`,
-//! that no capability names, so it can call no app command and no Tauri plugin. It loads one
-//! app document (`../page/`) from the `pluxy-page:` scheme, which shows the extension's page in
-//! a sandboxed frame from core's pages site. The scheme is the webview's one way out: `/send`
-//! passes the page's channel messages to the window, tagged with the webview they came from,
-//! never with anything the page says about itself.
-
+//! The native boundary for page webviews, including requests posted directly by a hostile frame.
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::collections::HashMap;
+use serde_json::{json, value::RawValue, Value};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::time::{Duration, Instant};
 use url::Url;
 
-/// The scheme the page webviews load the app's document from.
 pub const SCHEME: &str = "pluxy-page";
-/// The most one message from a page webview may hold. The window's channel refuses calls over
-/// 64 KiB with an answer; this only keeps the transport bounded.
 pub const MAX_SEND: usize = 256 << 10;
-/// The most page webviews open at once.
+pub const MAX_CALL: usize = 64 << 10;
 pub const MAX_OPEN: usize = 16;
-
+pub const MAX_PACKAGE_PAGES: usize = 4;
+pub const MAX_RATE: usize = 30;
+pub const MAX_WAITING: usize = 8;
+pub const MAX_PACKAGE_RATE: usize = 60;
+pub const MAX_PACKAGE_WAITING: usize = 16;
+pub const MAX_REPLIES: usize = 8;
+pub const MAX_PACKAGE_REPLIES: usize = 16;
+const MAX_PACKAGE_BUDGETS: usize = 64;
+const MAX_REPLY: usize = 2 * MAX_SEND;
 const INDEX: &str = include_str!("../../page/index.html");
 const SCRIPT: &str = include_str!("../../page/frame.js");
 const STYLE: &str = include_str!("../../page/frame.css");
 
-/// The page a webview shows, as the window opened it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Binding {
     pub extension: String,
@@ -32,8 +31,425 @@ pub struct Binding {
     pub pages_origin: String,
 }
 
-/// Why url may not be shown as a page from pages_origin: it must be an http or https address on
-/// that origin.
+#[derive(Default)]
+struct Document {
+    generation: String,
+    loaded: bool,
+    hello: bool,
+    welcome: bool,
+    closed: bool,
+    recent: VecDeque<Instant>,
+    waiting: HashSet<String>,
+    answering: HashSet<String>,
+    replies: HashSet<u64>,
+    next_reply: u64,
+}
+#[derive(Default)]
+struct Package {
+    recent: VecDeque<Instant>,
+}
+struct Page {
+    binding: Binding,
+    document: Document,
+}
+#[derive(Default)]
+pub struct Pages {
+    next: u64,
+    generation: u64,
+    open: HashMap<String, Page>,
+    packages: HashMap<String, Package>,
+    #[cfg(feature = "native-test")]
+    pub ingress_fixture: bool,
+}
+fn expire(recent: &mut VecDeque<Instant>, now: Instant) {
+    while recent
+        .front()
+        .is_some_and(|t| now.duration_since(*t) >= Duration::from_secs(1))
+    {
+        recent.pop_front();
+    }
+}
+impl Pages {
+    pub fn bind(&mut self, binding: Binding) -> Result<String, String> {
+        let now = Instant::now();
+        for p in self.packages.values_mut() {
+            expire(&mut p.recent, now);
+        }
+        self.packages.retain(|id, p| {
+            !p.recent.is_empty() || self.open.values().any(|w| &w.binding.extension == id)
+        });
+        if self.open.len() >= MAX_OPEN
+            || self
+                .open
+                .values()
+                .filter(|w| w.binding.extension == binding.extension)
+                .count()
+                >= MAX_PACKAGE_PAGES
+        {
+            return Err("too many extension pages are open".into());
+        }
+        if !self.packages.contains_key(&binding.extension)
+            && self.packages.len() >= MAX_PACKAGE_BUDGETS
+        {
+            return Err("too many extension packages opened recently".into());
+        }
+        self.next = self.next.checked_add(1).ok_or("page labels exhausted")?;
+        self.packages.entry(binding.extension.clone()).or_default();
+        let label = format!("page-{}", self.next);
+        self.open.insert(
+            label.clone(),
+            Page {
+                binding,
+                document: Document::default(),
+            },
+        );
+        Ok(label)
+    }
+    pub fn get(&self, label: &str) -> Option<&Binding> {
+        self.open.get(label).map(|w| &w.binding)
+    }
+    pub fn unbind(&mut self, label: &str) -> Option<Binding> {
+        self.open.remove(label).map(|w| w.binding)
+    }
+    pub fn labels(&self) -> Vec<String> {
+        self.open.keys().cloned().collect()
+    }
+    pub fn clear(&mut self) {
+        self.open.clear();
+    }
+    /// Called only for the top document's native navigation callback, never a frame's fetch.
+    /// The sequence binds lifetime; it is not a secret or proof of which frame sent a request.
+    pub fn begin_document(&mut self, label: &str) {
+        self.generation = self
+            .generation
+            .checked_add(1)
+            .expect("document generations exhausted");
+        if let Some(w) = self.open.get_mut(label) {
+            // A second top-level document gets a fresh generation but cannot reconnect.
+            let loaded = w.document.loaded;
+            w.document = Document {
+                generation: self.generation.to_string(),
+                loaded: true,
+                closed: loaded,
+                ..Document::default()
+            };
+        }
+    }
+    fn refusal(&self, label: &str, sent: Sent, now: Instant) -> Result<ToWindow, Refusal> {
+        let w = self
+            .open
+            .get(label)
+            .ok_or_else(|| Refusal::new(403, "bad_request"))?;
+        let d = &w.document;
+        let id = call_id(sent.data.get());
+        let fail = |status, code| Refusal {
+            status,
+            code,
+            id: id.clone(),
+        };
+        if !d.loaded || d.closed || sent.generation != d.generation {
+            return Err(fail(409, "bad_request"));
+        }
+        let data = match sent.kind.as_str() {
+            "hello" => {
+                if d.hello {
+                    return Err(fail(409, "bad_request"));
+                }
+                let h: Hello =
+                    serde_json::from_str(sent.data.get()).map_err(|_| fail(400, "bad_request"))?;
+                if h.pluxy != "page" || h.kind != "hello" || h.v != 0 || h.versions.len() > 16 {
+                    return Err(fail(400, "bad_request"));
+                }
+                serde_json::from_str(sent.data.get()).map_err(|_| fail(400, "bad_request"))?
+            }
+            "call" => {
+                let data: Value =
+                    serde_json::from_str(sent.data.get()).map_err(|_| fail(400, "bad_request"))?;
+                if serde_json::to_vec(&data)
+                    .map_err(|_| fail(400, "bad_request"))?
+                    .len()
+                    > MAX_CALL
+                {
+                    return Err(fail(413, "too_large"));
+                }
+                let c: Call =
+                    serde_json::from_str(sent.data.get()).map_err(|_| fail(400, "bad_request"))?;
+                if !data.as_object().is_some_and(|o| {
+                    o.len() == 4
+                        && ["v", "id", "method", "params"]
+                            .iter()
+                            .all(|k| o.contains_key(*k))
+                }) || c.v != 0
+                    || !valid_id(&c.id)
+                    || !(c.params.is_null() || c.params.is_object())
+                {
+                    return Err(fail(400, "bad_request"));
+                }
+                let params_ok = match c.method.as_str() {
+                    "theme.get" | "config.get" => c.params.is_null(),
+                    "config.set" => c.params.as_object().is_some_and(|p| {
+                        p.len() == 1 && p.get("values").is_some_and(Value::is_object)
+                    }),
+                    _ => return Err(fail(400, "unknown_method")),
+                };
+                if !params_ok || !d.welcome || d.waiting.contains(&c.id) {
+                    return Err(fail(400, "bad_request"));
+                }
+                let package = &w.binding.extension;
+                let package_waiting: usize = self
+                    .open
+                    .values()
+                    .filter(|p| &p.binding.extension == package)
+                    .map(|p| p.document.waiting.len())
+                    .sum();
+                if d.waiting.len() >= MAX_WAITING
+                    || d.recent
+                        .iter()
+                        .filter(|t| now.duration_since(**t) < Duration::from_secs(1))
+                        .count()
+                        >= MAX_RATE
+                    || package_waiting >= MAX_PACKAGE_WAITING
+                    || self.packages[package]
+                        .recent
+                        .iter()
+                        .filter(|t| now.duration_since(**t) < Duration::from_secs(1))
+                        .count()
+                        >= MAX_PACKAGE_RATE
+                {
+                    return Err(fail(429, "rate_limited"));
+                }
+                data
+            }
+            "closed" => {
+                if sent.data.get().trim() != "null" {
+                    return Err(fail(400, "bad_request"));
+                }
+                Value::Null
+            }
+            _ => return Err(fail(400, "bad_request")),
+        };
+        Ok(ToWindow {
+            label: label.into(),
+            generation: d.generation.clone(),
+            kind: sent.kind,
+            data,
+        })
+    }
+    fn admit(&mut self, label: &str, sent: Sent, now: Instant) -> Result<ToWindow, Refusal> {
+        let msg = self.refusal(label, sent, now)?;
+        let w = self.open.get_mut(label).unwrap();
+        match msg.kind.as_str() {
+            "hello" => w.document.hello = true,
+            "call" => {
+                expire(&mut w.document.recent, now);
+                w.document.recent.push_back(now);
+                w.document
+                    .waiting
+                    .insert(msg.data["id"].as_str().unwrap().into());
+                let p = self.packages.get_mut(&w.binding.extension).unwrap();
+                expire(&mut p.recent, now);
+                p.recent.push_back(now);
+            }
+            "closed" => {
+                w.document.closed = true;
+                w.document.waiting.clear();
+                w.document.replies.clear();
+            }
+            _ => unreachable!(),
+        }
+        Ok(msg)
+    }
+    /// Reserve a bounded reply slot. A native eval callback releases it after consumption;
+    /// an unresponsive renderer cannot accumulate an unbounded queue of eval scripts.
+    pub fn prepare_delivery(
+        &mut self,
+        label: &str,
+        generation: &str,
+        msg: &Value,
+    ) -> Result<(String, u64), String> {
+        let w = self.open.get(label).ok_or("unbound page")?;
+        let d = &w.document;
+        if d.generation != generation || d.closed || !d.hello {
+            return Err("stale page document".into());
+        }
+        let kind = msg
+            .get("type")
+            .and_then(Value::as_str)
+            .ok_or("missing reply type")?;
+        match kind {
+            "welcome" | "refused" if !d.welcome && d.replies.is_empty() => {}
+            "message" if d.welcome => {
+                let data = &msg["data"];
+                if let Some(id) = data.get("id") {
+                    if !id
+                        .as_str()
+                        .is_some_and(|id| d.waiting.contains(id) && !d.answering.contains(id))
+                    {
+                        return Err("reply is not for a pending call".into());
+                    }
+                } else if data.get("event").and_then(Value::as_str) != Some("theme") {
+                    return Err("unknown channel event".into());
+                }
+            }
+            _ => return Err("unexpected page reply".into()),
+        }
+        let package_replies: usize = self
+            .open
+            .values()
+            .filter(|p| p.binding.extension == w.binding.extension)
+            .map(|p| p.document.replies.len())
+            .sum();
+        if d.replies.len() >= MAX_REPLIES || package_replies >= MAX_PACKAGE_REPLIES {
+            return Err("page reply queue is full".into());
+        }
+        let text = serde_json::to_string(msg).map_err(|e| e.to_string())?;
+        if text.len() > MAX_REPLY {
+            return Err("the reply is too large".into());
+        }
+        let w = self.open.get_mut(label).unwrap();
+        let ticket = w
+            .document
+            .next_reply
+            .checked_add(1)
+            .ok_or("reply tickets exhausted")?;
+        w.document.next_reply = ticket;
+        w.document.replies.insert(ticket);
+        // The page may receive the welcome before the eval callback reaches this process.
+        // It can call immediately; reservation still prevents another welcome from queuing.
+        if kind == "welcome" {
+            w.document.welcome = true;
+        }
+        if let Some(id) = msg["data"]["id"].as_str() {
+            w.document.answering.insert(id.into());
+        }
+        let generation = serde_json::to_string(generation).unwrap();
+        Ok((
+            format!("window.__pluxyDeliver({text},{generation})"),
+            ticket,
+        ))
+    }
+    pub fn finish_delivery(
+        &mut self,
+        label: &str,
+        generation: &str,
+        msg: &Value,
+        ticket: u64,
+        delivered: bool,
+    ) {
+        let Some(w) = self.open.get_mut(label) else {
+            return;
+        };
+        if w.document.generation != generation {
+            return;
+        }
+        if !w.document.replies.remove(&ticket) {
+            return;
+        }
+        if let Some(id) = msg["data"]["id"].as_str() {
+            w.document.answering.remove(id);
+        }
+        if !delivered {
+            if msg["type"] == "welcome" {
+                w.document.welcome = false;
+            }
+            return;
+        }
+        match msg["type"].as_str() {
+            Some("welcome") => w.document.welcome = true,
+            Some("refused") => w.document.closed = true,
+            Some("message") => {
+                if let Some(id) = msg["data"]["id"].as_str() {
+                    w.document.waiting.remove(id);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+fn valid_id(id: &str) -> bool {
+    !id.is_empty() && id.encode_utf16().count() <= 64
+}
+#[derive(Deserialize)]
+struct Identity<'a> {
+    #[serde(borrow)]
+    id: &'a RawValue,
+}
+fn call_id(data: &str) -> Option<String> {
+    let identity: Identity<'_> = serde_json::from_str(data).ok()?;
+    // Every UTF-16 code unit can use six bytes as a JSON escape. Reject a larger id
+    // before allocating it, even while identifying an oversized transport refusal.
+    if identity.id.get().len() > 64 * 6 + 2 {
+        return None;
+    }
+    let id: String = serde_json::from_str(identity.id.get()).ok()?;
+    valid_id(&id).then_some(id)
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Sent {
+    generation: String,
+    #[serde(rename = "type")]
+    kind: String,
+    data: Box<RawValue>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Call {
+    v: u8,
+    id: String,
+    method: String,
+    params: Value,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Hello {
+    pluxy: String,
+    #[serde(rename = "type")]
+    kind: String,
+    v: u8,
+    versions: Vec<u64>,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct ToWindow {
+    pub label: String,
+    pub generation: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub data: Value,
+}
+#[derive(Debug, PartialEq)]
+pub struct Served {
+    pub status: u16,
+    pub kind: &'static str,
+    pub body: Vec<u8>,
+    pub csp: String,
+}
+fn served(status: u16, kind: &'static str, body: impl Into<Vec<u8>>, csp: String) -> Served {
+    Served {
+        status,
+        kind,
+        body: body.into(),
+        csp,
+    }
+}
+struct Refusal {
+    status: u16,
+    code: &'static str,
+    id: Option<String>,
+}
+impl Refusal {
+    fn new(status: u16, code: &'static str) -> Self {
+        Self {
+            status,
+            code,
+            id: None,
+        }
+    }
+    fn served(self, csp: String) -> Served {
+        served(self.status, "application/json", json!({"v":0,"id":self.id,"error":{"code":self.code,"message":"the native page transport refused this message"}}).to_string(), csp)
+    }
+}
+
 pub fn page_url(url: &str, pages_origin: &str) -> Result<Url, String> {
     let u = Url::parse(url).map_err(|_| "the page address is not a URL".to_string())?;
     let o = Url::parse(pages_origin).map_err(|_| "the pages site is not a URL".to_string())?;
@@ -46,102 +462,36 @@ pub fn page_url(url: &str, pages_origin: &str) -> Result<Url, String> {
     Ok(u)
 }
 
-/// The open page webviews.
-#[derive(Default)]
-pub struct Pages {
-    next: u64,
-    open: HashMap<String, Binding>,
-    #[cfg(feature = "native-test")]
-    pub ingress_fixture: bool,
-}
-
-impl Pages {
-    /// A label for a new page webview, bound to b.
-    pub fn bind(&mut self, b: Binding) -> Result<String, String> {
-        if self.open.len() >= MAX_OPEN {
-            return Err("too many extension pages are open".into());
-        }
-        self.next += 1;
-        let label = format!("page-{}", self.next);
-        self.open.insert(label.clone(), b);
-        Ok(label)
-    }
-
-    pub fn get(&self, label: &str) -> Option<&Binding> {
-        self.open.get(label)
-    }
-
-    pub fn unbind(&mut self, label: &str) -> Option<Binding> {
-        self.open.remove(label)
-    }
-
-    pub fn labels(&self) -> Vec<String> {
-        self.open.keys().cloned().collect()
-    }
-
-    pub fn clear(&mut self) {
-        self.open.clear();
-    }
-}
-
-/// A message from a page webview, passed on to the window as it is: the window's channel checks
-/// everything in it.
-#[derive(Debug, Deserialize)]
-pub struct Sent {
-    #[serde(rename = "type")]
-    pub kind: String,
-    #[serde(default)]
-    pub data: Value,
-}
-
-/// What the window gets: the message, and the webview it came from.
-#[derive(Clone, Debug, Serialize)]
-pub struct ToWindow {
-    pub label: String,
-    #[serde(rename = "type")]
-    pub kind: String,
-    #[serde(skip_serializing_if = "Value::is_null")]
-    pub data: Value,
-}
-
-/// A reply of the `pluxy-page:` scheme.
-#[derive(Debug, PartialEq)]
-pub struct Served {
-    pub status: u16,
-    pub kind: &'static str,
-    pub body: Vec<u8>,
-    /// The policy of the app document: its own files, frames from the pages site only.
-    pub csp: String,
-}
-
-fn served(status: u16, kind: &'static str, body: impl Into<Vec<u8>>, csp: String) -> Served {
-    Served {
-        status,
-        kind,
-        body: body.into(),
-        csp,
-    }
-}
-
-/// Answers a request of the `pluxy-page:` scheme from the webview labelled label. Ok(Some) is a
-/// message for the window. Only page webviews get anything; the window and any other webview
-/// get 403.
+/// The native scheme handler. Its caller supplies the webview label, never request data.
 pub fn serve(
-    pages: &Pages,
+    pages: &mut Pages,
     label: &str,
     method: &str,
     path: &str,
     body: &[u8],
 ) -> (Served, Option<ToWindow>) {
-    let none = "default-src 'none'".to_string();
-    let Some(b) = pages.get(label) else {
-        return (served(403, "text/plain", "not a page webview", none), None);
+    serve_at(pages, label, method, path, body, Instant::now())
+}
+fn serve_at(
+    pages: &mut Pages,
+    label: &str,
+    method: &str,
+    path: &str,
+    body: &[u8],
+    now: Instant,
+) -> (Served, Option<ToWindow>) {
+    let Some(w) = pages.open.get(label) else {
+        return (
+            Refusal {
+                status: 403,
+                code: "bad_request",
+                id: body_id(body),
+            }
+            .served("default-src 'none'".into()),
+            None,
+        );
     };
-    let csp = format!(
-        "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; \
-         frame-src {}/; base-uri 'none'; form-action 'none'",
-        b.pages_origin
-    );
+    let csp = format!("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-src {}/; base-uri 'none'; form-action 'none'", w.binding.pages_origin);
     #[cfg(feature = "native-test")]
     let csp = if pages.ingress_fixture {
         csp.replace("frame-src ", "frame-src pluxy-page: ")
@@ -149,6 +499,17 @@ pub fn serve(
             .replace("connect-src 'self'", "connect-src pluxy-page:")
     } else {
         csp
+    };
+    let fail = |status, code| {
+        (
+            Refusal {
+                status,
+                code,
+                id: body_id(body),
+            }
+            .served(csp.clone()),
+            None,
+        )
     };
     match (method, path) {
         ("GET", "/") => (served(200, "text/html; charset=utf-8", INDEX, csp), None),
@@ -158,10 +519,10 @@ pub fn serve(
         ),
         ("GET", "/frame.css") => (served(200, "text/css; charset=utf-8", STYLE, csp), None),
         ("GET", "/frame") => {
-            let info = serde_json::json!({"url": b.url.as_str(), "title": b.title});
+            let info = json!({"url": w.binding.url.as_str(), "title": w.binding.title, "generation": w.document.generation});
             #[cfg(feature = "native-test")]
             let info = if pages.ingress_fixture {
-                serde_json::json!({"url":"pluxy-page://localhost/ingress-test", "title":b.title})
+                json!({"url":"pluxy-page://localhost/ingress-test", "title":w.binding.title, "generation":w.document.generation})
             } else {
                 info
             };
@@ -189,126 +550,728 @@ pub fn serve(
         ),
         ("POST", "/send") => {
             if body.len() > MAX_SEND {
-                return (served(413, "text/plain", "too large", csp), None);
+                return fail(413, "too_large");
             }
             let Ok(sent) = serde_json::from_slice::<Sent>(body) else {
-                return (served(400, "text/plain", "not a message", csp), None);
+                return fail(400, "bad_request");
             };
-            if !matches!(sent.kind.as_str(), "hello" | "call" | "closed") {
-                return (served(400, "text/plain", "not a message", csp), None);
+            match pages.admit(label, sent, now) {
+                Ok(msg) => (served(204, "text/plain", "", csp), Some(msg)),
+                Err(e) => (e.served(csp), None),
             }
-            let msg = ToWindow {
-                label: label.to_string(),
-                kind: sent.kind,
-                data: sent.data,
-            };
-            (served(204, "text/plain", "", csp), Some(msg))
         }
-        _ => (served(404, "text/plain", "not found", csp), None),
+        _ => fail(404, "bad_request"),
     }
 }
-
-/// What the window sends a page webview: kept to the kinds the app document handles.
-pub fn delivery(msg: &Value) -> Result<String, String> {
-    let kind = msg.get("type").and_then(Value::as_str).unwrap_or("");
-    if !matches!(kind, "welcome" | "refused" | "message") {
-        return Err(format!("not a page message: {kind:?}"));
-    }
-    // JSON is a JavaScript expression, so the script holds the message as data only.
-    let text = serde_json::to_string(msg).map_err(|e| e.to_string())?;
-    if text.len() > 2 * MAX_SEND {
-        return Err("the message is too large".into());
-    }
-    Ok(format!("window.__pluxyDeliver({text})"))
+#[derive(Deserialize)]
+struct BodyIdentity<'a> {
+    #[serde(borrow)]
+    data: &'a RawValue,
+}
+fn body_id(body: &[u8]) -> Option<String> {
+    let body: BodyIdentity<'_> = serde_json::from_slice(body).ok()?;
+    call_id(body.data.get())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn binding() -> Binding {
+    fn binding(extension: &str) -> Binding {
         Binding {
-            extension: "test/alpha".into(),
+            extension: extension.into(),
             page: "usage".into(),
-            title: "Alpha usage".into(),
-            url: Url::parse("http://localhost:8401/test/alpha/abc/index.html").unwrap(),
+            title: "Usage".into(),
+            url: Url::parse("http://localhost:8401/test/alpha/hash/index.html").unwrap(),
             pages_origin: "http://localhost:8401".into(),
         }
     }
-
-    #[test]
-    fn pages_come_from_the_pages_site_only() {
-        assert!(page_url(
-            "http://localhost:8401/a/b/1/index.html",
-            "http://localhost:8401"
-        )
-        .is_ok());
-        assert!(page_url("http://localhost:8402/a.html", "http://localhost:8401").is_err());
-        assert!(page_url("https://localhost:8401/a.html", "http://localhost:8401").is_err());
-        assert!(page_url("javascript:alert(1)", "http://localhost:8401").is_err());
-        assert!(page_url("file:///etc/passwd", "file:///").is_err());
-        assert!(page_url("tauri://localhost/index.html", "tauri://localhost").is_err());
+    fn request(
+        p: &mut Pages,
+        label: &str,
+        kind: &str,
+        data: Value,
+        now: Instant,
+    ) -> (Served, Option<ToWindow>) {
+        let generation = p
+            .open
+            .get(label)
+            .map(|w| w.document.generation.clone())
+            .unwrap_or_default();
+        let body =
+            serde_json::to_vec(&json!({"generation":generation,"type":kind,"data":data})).unwrap();
+        serve_at(p, label, "POST", "/send", &body, now)
     }
-
-    #[test]
-    fn only_page_webviews_are_served_and_messages_are_tagged_by_label() {
-        let mut pages = Pages::default();
-        let label = pages.bind(binding()).unwrap();
-        assert_eq!(label, "page-1");
-
-        let (r, m) = serve(&pages, "main", "GET", "/", b"");
-        assert_eq!((r.status, m.is_none()), (403, true));
-        let (r, _) = serve(&pages, "page-9", "GET", "/frame", b"");
-        assert_eq!(r.status, 403);
-
-        let (r, _) = serve(&pages, &label, "GET", "/", b"");
-        assert_eq!(r.status, 200);
-        assert!(r.csp.contains("frame-src http://localhost:8401/"));
-        let (r, _) = serve(&pages, &label, "GET", "/frame", b"");
-        assert!(String::from_utf8(r.body)
-            .unwrap()
-            .contains("/test/alpha/abc/index.html"));
-
-        // Whatever the message says about itself, the window gets the webview's label.
-        let (r, m) = serve(
-            &pages,
-            &label,
-            "POST",
-            "/send",
-            br#"{"type":"call","data":{"v":0,"id":"1","method":"config.get","params":null},"label":"page-2"}"#,
-        );
-        assert_eq!(r.status, 204);
-        let m = m.unwrap();
-        assert_eq!((m.label.as_str(), m.kind.as_str()), ("page-1", "call"));
-
-        for bad in [&b"{}"[..], b"not json", br#"{"type":"welcome"}"#] {
-            assert_eq!(serve(&pages, &label, "POST", "/send", bad).0.status, 400);
-        }
-        let big = vec![b' '; MAX_SEND + 1];
-        assert_eq!(serve(&pages, &label, "POST", "/send", &big).0.status, 413);
+    fn call(id: &str, method: &str, params: Value) -> Value {
+        json!({"v":0,"id":id,"method":method,"params":params})
+    }
+    fn hello(p: &mut Pages, label: &str, now: Instant) {
         assert_eq!(
-            serve(&pages, &label, "GET", "/etc/passwd", b"").0.status,
-            404
+            request(
+                p,
+                label,
+                "hello",
+                json!({"pluxy":"page","type":"hello","v":0,"versions":[0]}),
+                now
+            )
+            .0
+            .status,
+            204
         );
-
-        pages.unbind(&label);
-        assert_eq!(serve(&pages, &label, "GET", "/", b"").0.status, 403);
+        deliver(p, label, json!({"type":"welcome","data":{"v":0}}), true);
     }
-
-    #[test]
-    fn deliveries_are_data() {
-        let js = delivery(&serde_json::json!({"type":"message","data":"</script>\u{2028}`${x}`"}))
-            .unwrap();
-        assert!(js.starts_with("window.__pluxyDeliver({") && js.ends_with("})"));
-        assert!(delivery(&serde_json::json!({"type":"eval"})).is_err());
+    fn page(p: &mut Pages, ext: &str, now: Instant) -> String {
+        let label = p.bind(binding(ext)).unwrap();
+        p.begin_document(&label);
+        hello(p, &label, now);
+        label
     }
-
+    fn deliver(p: &mut Pages, label: &str, msg: Value, ok: bool) {
+        let generation = p.open[label].document.generation.clone();
+        let (_, ticket) = p.prepare_delivery(label, &generation, &msg).unwrap();
+        p.finish_delivery(label, &generation, &msg, ticket, ok);
+    }
+    fn answer(p: &mut Pages, label: &str, id: &str) {
+        deliver(
+            p,
+            label,
+            json!({"type":"message","data":{"v":0,"id":id,"result":{}}}),
+            true,
+        );
+    }
+    fn refused(r: (Served, Option<ToWindow>), status: u16, code: &str, id: Option<&str>) {
+        assert_eq!(r.0.status, status);
+        assert!(r.1.is_none());
+        let v: Value = serde_json::from_slice(&r.0.body).unwrap();
+        assert_eq!(v["error"]["code"], code);
+        assert_eq!(v["id"].as_str(), id);
+    }
     #[test]
-    fn open_pages_are_bounded() {
-        let mut pages = Pages::default();
-        for _ in 0..MAX_OPEN {
-            pages.bind(binding()).unwrap();
+    fn schemas_methods_and_call_size() {
+        let mut p = Pages::default();
+        let now = Instant::now();
+        let label = page(&mut p, "test/alpha", now);
+        for bad in [
+            json!({"v":0,"id":"bad","method":"theme.get","params":null,"extra":1}),
+            call("bad", "config.get", json!({})),
+            call("bad", "config.set", json!({"values":[],"extra":1})),
+            call("bad", "theme.get", json!([])),
+            json!({"v":1,"id":"bad","method":"theme.get","params":null}),
+        ] {
+            refused(
+                request(&mut p, &label, "call", bad, now),
+                400,
+                "bad_request",
+                Some("bad"),
+            );
         }
-        assert!(pages.bind(binding()).is_err());
+        refused(
+            request(
+                &mut p,
+                &label,
+                "call",
+                call("bad", "missing", Value::Null),
+                now,
+            ),
+            400,
+            "unknown_method",
+            Some("bad"),
+        );
+        refused(
+            request(
+                &mut p,
+                &label,
+                "call",
+                call(
+                    "big",
+                    "config.set",
+                    json!({"values":{"x":"x".repeat(MAX_CALL)}}),
+                ),
+                now,
+            ),
+            413,
+            "too_large",
+            Some("big"),
+        );
+        assert_eq!(
+            request(
+                &mut p,
+                &label,
+                "call",
+                call("valid", "config.get", Value::Null),
+                now
+            )
+            .0
+            .status,
+            204
+        );
+        assert_eq!(p.open[&label].document.waiting.len(), 1);
+    }
+    #[test]
+    fn transport_exact_boundary_preserves_ids() {
+        let mut p = Pages::default();
+        let now = Instant::now();
+        let label = page(&mut p, "test/alpha", now);
+        let base=serde_json::to_vec(&json!({"generation":p.open[&label].document.generation,"type":"call","data":call("size","theme.get",Value::Null)})).unwrap();
+        let mut body = base.clone();
+        body.resize(MAX_SEND, b' ');
+        assert_eq!(serve(&mut p, &label, "POST", "/send", &body).0.status, 204);
+        answer(&mut p, &label, "size");
+        body.push(b' ');
+        refused(
+            serve(&mut p, &label, "POST", "/send", &body),
+            413,
+            "too_large",
+            Some("size"),
+        );
+        assert_eq!(serve(&mut p, &label, "POST", "/send", &base).0.status, 204);
+    }
+    #[test]
+    fn envelope_boundary_and_utf16_ids() {
+        let mut p = Pages::default();
+        let now = Instant::now();
+        let label = page(&mut p, "test/alpha", now);
+        let mut c = call("size", "config.set", json!({"values":{"x":""}}));
+        let overhead = serde_json::to_vec(&c).unwrap().len();
+        c["params"]["values"]["x"] = json!("x".repeat(MAX_CALL - overhead));
+        assert_eq!(
+            request(&mut p, &label, "call", c.clone(), now).0.status,
+            204
+        );
+        answer(&mut p, &label, "size");
+        c["params"]["values"]["x"] = json!("x".repeat(MAX_CALL - overhead + 1));
+        refused(
+            request(&mut p, &label, "call", c, now),
+            413,
+            "too_large",
+            Some("size"),
+        );
+        let id = "😀".repeat(32);
+        assert_eq!(
+            request(
+                &mut p,
+                &label,
+                "call",
+                call(&id, "theme.get", Value::Null),
+                now
+            )
+            .0
+            .status,
+            204
+        );
+        refused(
+            request(
+                &mut p,
+                &label,
+                "call",
+                call(&"😀".repeat(33), "theme.get", Value::Null),
+                now,
+            ),
+            400,
+            "bad_request",
+            None,
+        );
+    }
+    #[test]
+    fn rolling_page_rate_includes_answered_calls() {
+        let mut p = Pages::default();
+        let now = Instant::now();
+        let label = page(&mut p, "test/alpha", now);
+        for i in 0..MAX_RATE {
+            let id = i.to_string();
+            assert_eq!(
+                request(
+                    &mut p,
+                    &label,
+                    "call",
+                    call(&id, "theme.get", Value::Null),
+                    now
+                )
+                .0
+                .status,
+                204
+            );
+            answer(&mut p, &label, &id);
+        }
+        refused(
+            request(
+                &mut p,
+                &label,
+                "call",
+                call("over", "theme.get", Value::Null),
+                now + Duration::from_millis(999),
+            ),
+            429,
+            "rate_limited",
+            Some("over"),
+        );
+        assert_eq!(
+            request(
+                &mut p,
+                &label,
+                "call",
+                call("next", "theme.get", Value::Null),
+                now + Duration::from_secs(1)
+            )
+            .0
+            .status,
+            204
+        );
+    }
+    #[test]
+    fn in_flight_ends_only_on_delivery_or_close() {
+        let mut p = Pages::default();
+        let now = Instant::now();
+        let label = page(&mut p, "test/alpha", now);
+        for i in 0..MAX_WAITING {
+            assert_eq!(
+                request(
+                    &mut p,
+                    &label,
+                    "call",
+                    call(&i.to_string(), "config.get", Value::Null),
+                    now
+                )
+                .0
+                .status,
+                204
+            );
+        }
+        refused(
+            request(
+                &mut p,
+                &label,
+                "call",
+                call("over", "config.get", Value::Null),
+                now,
+            ),
+            429,
+            "rate_limited",
+            Some("over"),
+        );
+        deliver(
+            &mut p,
+            &label,
+            json!({"type":"message","data":{"v":0,"id":"0","result":{}}}),
+            false,
+        );
+        refused(
+            request(
+                &mut p,
+                &label,
+                "call",
+                call("over", "config.get", Value::Null),
+                now,
+            ),
+            429,
+            "rate_limited",
+            Some("over"),
+        );
+        answer(&mut p, &label, "0");
+        assert_eq!(
+            request(
+                &mut p,
+                &label,
+                "call",
+                call("next", "config.get", Value::Null),
+                now
+            )
+            .0
+            .status,
+            204
+        );
+        p.unbind(&label);
+        let other = page(&mut p, "test/alpha", now);
+        assert_eq!(
+            request(
+                &mut p,
+                &other,
+                "call",
+                call("control", "config.get", Value::Null),
+                now
+            )
+            .0
+            .status,
+            204
+        );
+    }
+    #[test]
+    fn package_budgets_span_pages_and_reopen() {
+        let mut p = Pages::default();
+        let now = Instant::now();
+        let labels: Vec<_> = (0..4).map(|_| page(&mut p, "test/alpha", now)).collect();
+        for label in &labels[..2] {
+            for i in 0..8 {
+                assert_eq!(
+                    request(
+                        &mut p,
+                        label,
+                        "call",
+                        call(&i.to_string(), "config.get", Value::Null),
+                        now
+                    )
+                    .0
+                    .status,
+                    204
+                );
+            }
+        }
+        refused(
+            request(
+                &mut p,
+                &labels[2],
+                "call",
+                call("over", "config.get", Value::Null),
+                now,
+            ),
+            429,
+            "rate_limited",
+            Some("over"),
+        );
+        answer(&mut p, &labels[0], "0");
+        assert_eq!(
+            request(
+                &mut p,
+                &labels[2],
+                "call",
+                call("control", "config.get", Value::Null),
+                now
+            )
+            .0
+            .status,
+            204
+        );
+        for label in labels {
+            p.unbind(&label);
+        }
+        for _ in 0..(MAX_PACKAGE_RATE - 17) {
+            let label = page(&mut p, "test/alpha", now);
+            assert_eq!(
+                request(
+                    &mut p,
+                    &label,
+                    "call",
+                    call("one", "theme.get", Value::Null),
+                    now
+                )
+                .0
+                .status,
+                204
+            );
+            p.unbind(&label);
+        }
+        let label = page(&mut p, "test/alpha", now);
+        refused(
+            request(
+                &mut p,
+                &label,
+                "call",
+                call("over", "theme.get", Value::Null),
+                now,
+            ),
+            429,
+            "rate_limited",
+            Some("over"),
+        );
+        let other = page(&mut p, "test/beta", now);
+        assert_eq!(
+            request(
+                &mut p,
+                &other,
+                "call",
+                call("control", "theme.get", Value::Null),
+                now
+            )
+            .0
+            .status,
+            204
+        );
+    }
+    #[test]
+    fn hello_generation_and_unbound_routes() {
+        let mut p = Pages::default();
+        let now = Instant::now();
+        let label = page(&mut p, "test/alpha", now);
+        refused(
+            request(
+                &mut p,
+                &label,
+                "hello",
+                json!({"pluxy":"page","type":"hello","v":0,"versions":[0]}),
+                now,
+            ),
+            409,
+            "bad_request",
+            None,
+        );
+        let body=serde_json::to_vec(&json!({"generation":"wrong","type":"call","data":call("wrong","theme.get",Value::Null)})).unwrap();
+        refused(
+            serve(&mut p, &label, "POST", "/send", &body),
+            409,
+            "bad_request",
+            Some("wrong"),
+        );
+        assert_eq!(
+            request(
+                &mut p,
+                &label,
+                "call",
+                call("control", "theme.get", Value::Null),
+                now
+            )
+            .0
+            .status,
+            204
+        );
+        let generation = p.open[&label].document.generation.clone();
+        p.begin_document(&label);
+        assert_ne!(generation, p.open[&label].document.generation);
+        refused(
+            request(
+                &mut p,
+                &label,
+                "call",
+                call("closed", "theme.get", Value::Null),
+                now,
+            ),
+            409,
+            "bad_request",
+            Some("closed"),
+        );
+        assert!(p
+            .prepare_delivery(
+                &label,
+                &generation,
+                &json!({"type":"message","data":{"id":"control"}})
+            )
+            .is_err());
+        p.unbind(&label);
+        assert_eq!(serve(&mut p, &label, "GET", "/frame", b"").0.status, 403);
+        assert_eq!(serve(&mut p, "main", "GET", "/frame", b"").0.status, 403);
+        let next = page(&mut p, "test/alpha", now);
+        assert_eq!(
+            request(
+                &mut p,
+                &next,
+                "call",
+                call("control", "theme.get", Value::Null),
+                now
+            )
+            .0
+            .status,
+            204
+        );
+    }
+    #[test]
+    fn replies_are_bounded_and_duplicate_answers_rejected() {
+        let mut p = Pages::default();
+        let now = Instant::now();
+        let labels: Vec<_> = (0..3).map(|_| page(&mut p, "test/alpha", now)).collect();
+        let msg = json!({"type":"message","data":{"v":0,"event":"theme","data":"</script>"}});
+        for label in &labels[..2] {
+            let gen = p.open[label].document.generation.clone();
+            for _ in 0..MAX_REPLIES {
+                let (js, _) = p.prepare_delivery(label, &gen, &msg).unwrap();
+                assert!(js.starts_with("window.__pluxyDeliver({"));
+            }
+            assert!(p.prepare_delivery(label, &gen, &msg).is_err());
+        }
+        let gen = p.open[&labels[2]].document.generation.clone();
+        assert!(p.prepare_delivery(&labels[2], &gen, &msg).is_err());
+        p.unbind(&labels[0]);
+        assert!(p.prepare_delivery(&labels[2], &gen, &msg).is_ok());
+        let label = page(&mut p, "test/beta", now);
+        let gen = p.open[&label].document.generation.clone();
+        assert_eq!(
+            request(
+                &mut p,
+                &label,
+                "call",
+                call("pending", "theme.get", Value::Null),
+                now
+            )
+            .0
+            .status,
+            204
+        );
+        let reply = json!({"type":"message","data":{"v":0,"id":"pending","result":{}}});
+        let (_, ticket) = p.prepare_delivery(&label, &gen, &reply).unwrap();
+        assert!(p.prepare_delivery(&label, &gen, &reply).is_err());
+        p.finish_delivery(&label, &gen, &reply, ticket, true);
+        assert!(p.prepare_delivery(&label, &gen, &reply).is_err());
+        assert!(p
+            .prepare_delivery(
+                &label,
+                &gen,
+                &json!({"type":"message","data":{"event":"theme","data":"x".repeat(MAX_REPLY)}})
+            )
+            .is_err());
+        assert!(p.prepare_delivery(&label, &gen, &msg).is_ok());
+    }
+    #[test]
+    fn missing_duplicate_fields_and_unknown_transport_shapes() {
+        let mut p = Pages::default();
+        let now = Instant::now();
+        let label = page(&mut p, "test/alpha", now);
+        for data in [
+            json!({"v":0,"id":"bad","method":"theme.get"}),
+            json!({"id":"bad","method":"theme.get","params":null}),
+            json!({"v":0,"id":"bad","params":null}),
+        ] {
+            refused(
+                request(&mut p, &label, "call", data, now),
+                400,
+                "bad_request",
+                Some("bad"),
+            );
+        }
+        let generation = &p.open[&label].document.generation;
+        let body = format!(
+            r#"{{"generation":"{generation}","type":"call","data":{{"v":0,"id":"duplicate","method":"theme.get","method":"config.get","params":null}}}}"#
+        );
+        refused(
+            serve(&mut p, &label, "POST", "/send", body.as_bytes()),
+            400,
+            "bad_request",
+            Some("duplicate"),
+        );
+        assert_eq!(
+            request(
+                &mut p,
+                &label,
+                "call",
+                call("control", "theme.get", Value::Null),
+                now
+            )
+            .0
+            .status,
+            204
+        );
+    }
+    #[test]
+    fn retained_package_budgets_and_protocol_handshakes_are_bounded() {
+        let mut p = Pages::default();
+        let now = Instant::now();
+        for i in 0..MAX_PACKAGE_BUDGETS {
+            let label = page(&mut p, &format!("test/p{i}"), now);
+            assert_eq!(
+                request(
+                    &mut p,
+                    &label,
+                    "call",
+                    call("one", "theme.get", Value::Null),
+                    now
+                )
+                .0
+                .status,
+                204
+            );
+            p.unbind(&label);
+        }
+        assert!(p.bind(binding("test/overflow")).is_err());
+        let label = page(&mut p, "test/p0", now);
+        assert_eq!(
+            request(
+                &mut p,
+                &label,
+                "call",
+                call("control", "theme.get", Value::Null),
+                now
+            )
+            .0
+            .status,
+            204
+        );
+        let mut p = Pages::default();
+        let label = p.bind(binding("test/alpha")).unwrap();
+        p.begin_document(&label);
+        refused(
+            request(
+                &mut p,
+                &label,
+                "call",
+                call("early", "theme.get", Value::Null),
+                now,
+            ),
+            400,
+            "bad_request",
+            Some("early"),
+        );
+        refused(
+            request(
+                &mut p,
+                &label,
+                "hello",
+                json!({"pluxy":"page","type":"hello","v":0,"versions":[],"extra":true}),
+                now,
+            ),
+            400,
+            "bad_request",
+            None,
+        );
+        hello(&mut p, &label, now);
+        assert_eq!(
+            request(
+                &mut p,
+                &label,
+                "call",
+                call("control", "theme.get", Value::Null),
+                now
+            )
+            .0
+            .status,
+            204
+        );
+        assert_eq!(
+            request(&mut p, &label, "closed", Value::Null, now).0.status,
+            204
+        );
+        refused(
+            request(
+                &mut p,
+                &label,
+                "call",
+                call("late", "theme.get", Value::Null),
+                now,
+            ),
+            409,
+            "bad_request",
+            Some("late"),
+        );
+        let other = page(&mut p, "test/alpha", now);
+        assert_eq!(
+            request(
+                &mut p,
+                &other,
+                "call",
+                call("control", "theme.get", Value::Null),
+                now
+            )
+            .0
+            .status,
+            204
+        );
+    }
+    #[test]
+    fn pages_packages_and_origins() {
+        let mut p = Pages::default();
+        for i in 0..MAX_OPEN {
+            p.bind(binding(&format!("test/p{i}"))).unwrap();
+        }
+        assert!(p.bind(binding("test/extra")).is_err());
+        p.clear();
+        for _ in 0..MAX_PACKAGE_PAGES {
+            p.bind(binding("test/alpha")).unwrap();
+        }
+        assert!(p.bind(binding("test/alpha")).is_err());
+        assert!(p.bind(binding("test/beta")).is_ok());
+        assert!(page_url("http://localhost:8401/a", "http://localhost:8401").is_ok());
+        for url in [
+            "http://localhost:8402/a",
+            "https://localhost:8401/a",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+        ] {
+            assert!(page_url(url, "http://localhost:8401").is_err());
+        }
     }
 }

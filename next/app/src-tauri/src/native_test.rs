@@ -21,7 +21,9 @@ use tauri::{AppHandle, Manager, Webview};
 
 #[path = "native_ingress.rs"]
 mod ingress;
-pub use ingress::{count as ingress_count, operation as ingress_operation};
+pub use ingress::{
+    count as ingress_count, forwarded as ingress_forwarded, operation as ingress_operation,
+};
 
 const WAIT: Duration = Duration::from_secs(60);
 

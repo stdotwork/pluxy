@@ -58,12 +58,13 @@ export function NativeExtensionPage(props: ExtensionPageProps) {
     let channel: Channel | undefined;
     let ports: MessageChannel | undefined;
     let hello = false;
+    let generation: string | undefined;
     let stopListening = () => {};
     setPhase("loading");
     setError(undefined);
 
     const send = (msg: unknown) => {
-      if (label) invoke("page_send", { label, msg }).catch(() => {});
+      if (label && generation) invoke("page_send", { label, generation, msg }).catch(() => {});
     };
     const close = () => {
       channel?.close();
@@ -72,6 +73,7 @@ export function NativeExtensionPage(props: ExtensionPageProps) {
       ports = undefined;
     };
     const onMessage = (m: PageMessage) => {
+      if (generation && m.generation !== generation) return;
       if (m.type === "closed") {
         close();
         setPhase("closed");
@@ -84,6 +86,7 @@ export function NativeExtensionPage(props: ExtensionPageProps) {
       // One hello per webview: a second document there gets nothing.
       if (m.type !== "hello" || hello || !isHello(m.data)) return;
       hello = true;
+      generation = m.generation;
       if (pickVersion(m.data) === undefined) {
         send({
           type: "refused",

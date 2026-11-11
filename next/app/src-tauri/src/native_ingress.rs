@@ -12,15 +12,17 @@ static FORWARDED: AtomicUsize = AtomicUsize::new(0);
 static OPERATIONS: AtomicUsize = AtomicUsize::new(0);
 static ENABLED: AtomicBool = AtomicBool::new(false);
 
-pub fn count(method: &str, path: &str, status: u16, forwarded: bool) {
+pub fn count(method: &str, path: &str, status: u16) {
     if ENABLED.load(SeqCst) && method == "POST" && path == "/send" {
         ARRIVED.fetch_add(1, SeqCst);
         if status == 204 {
             ADMITTED.fetch_add(1, SeqCst);
         }
-        if forwarded {
-            FORWARDED.fetch_add(1, SeqCst);
-        }
+    }
+}
+pub fn forwarded() {
+    if ENABLED.load(SeqCst) {
+        FORWARDED.fetch_add(1, SeqCst);
     }
 }
 pub fn operation(method: &str, path: &str) {
@@ -149,6 +151,14 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
     require(
         OPERATIONS.load(SeqCst) == 10,
         "flood executed extra core operations",
+    )?;
+    require(
+        ARRIVED.load(SeqCst) == 62,
+        "not every hostile request reached the handler",
+    )?;
+    require(
+        ADMITTED.load(SeqCst) == 41 && FORWARDED.load(SeqCst) == 41,
+        "refusals reached the window",
     )?;
     log(
         "ingress",

@@ -9,13 +9,37 @@ const frame = document.createElement("iframe");
 let hello = false;
 let loads = 0;
 let port;
-let queue = Promise.resolve();
+let sending = 0;
+let generation;
 
-// In order, one at a time: the native side passes each on as it arrives.
-function send(type, data) {
-  queue = queue.then(() =>
-    fetch("/send", { method: "POST", body: JSON.stringify({ type, data }) }).catch(() => {}),
-  );
+// Native admission is authoritative, including direct requests from the frame. Bound this
+// wrapper's own fetches too so it cannot retain an unbounded promise queue.
+async function send(type, data) {
+  if (sending >= 8) {
+    if (type === "call" && typeof data?.id === "string")
+      port?.postMessage({ v: 0, id: data.id, error: { code: "rate_limited", message: "too many calls" } });
+    return;
+  }
+  sending++;
+  try {
+    const r = await fetch("/send", {
+      method: "POST",
+      body: JSON.stringify({ generation, type, data: data ?? null }),
+    });
+    if (!r.ok && type === "call") {
+      const refusal = await r.json();
+      if (typeof refusal.id === "string") port?.postMessage(refusal);
+    }
+  } catch {
+    if (type === "call" && typeof data?.id === "string")
+      port?.postMessage({
+        v: 0,
+        id: data.id,
+        error: { code: "unavailable", message: "page transport failed" },
+      });
+  } finally {
+    sending--;
+  }
 }
 
 function closePort() {
@@ -25,9 +49,10 @@ function closePort() {
 
 // The app's answers, delivered by the native side.
 Object.defineProperty(window, "__pluxyDeliver", {
-  value: (m) => {
+  value: (m, documentGeneration) => {
+    if (documentGeneration !== generation) return false;
     const win = frame.contentWindow;
-    if (!win || typeof m !== "object" || m === null) return;
+    if (!win || typeof m !== "object" || m === null) return false;
     if (m.type === "welcome" && !port) {
       const ch = new MessageChannel();
       port = ch.port1;
@@ -39,6 +64,7 @@ Object.defineProperty(window, "__pluxyDeliver", {
     } else if (m.type === "message") {
       port?.postMessage(m.data);
     }
+    return true;
   },
 });
 
@@ -61,7 +87,8 @@ frame.addEventListener("load", () => {
 });
 
 const r = await fetch("/frame");
-const { url, title } = await r.json();
+const { url, title, generation: documentGeneration } = await r.json();
+generation = documentGeneration;
 frame.title = title;
 frame.sandbox = "allow-scripts";
 frame.referrerPolicy = "no-referrer";

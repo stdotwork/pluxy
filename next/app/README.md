@@ -83,7 +83,18 @@ panel does, and does the panel's side of the page's hello
 ([extension pages](../ui/extension-pages/README.md)). Its `/send` address is the webview's one
 way out: the native side tags each message with the webview it came from and passes it to the
 window, which answers with the kit's channel, bound to the extension core lists the page under.
-So a page gets the same checks, permissions and limits as in the panel, and never the key.
+Before forwarding, native code enforces the 256 KiB transport body, 64 KiB channel call,
+exact version-0 call schema and known methods. Each document gets one hello, 30 admitted calls
+per rolling second and eight calls awaiting answers. A call remains in flight until the native
+reply callback confirms delivery, or the page closes. Requests and replies carry the document's
+native generation; a second document cannot reconnect. Direct frame requests use these same checks.
+
+One extension may open four pages, with 60 admitted calls per rolling second and 16 in flight
+across them. Closing pages preserves the package's recent rate budget. At most 16 page webviews
+and 64 recent package budgets are retained. Replies are limited to 512 KiB each, eight pending
+delivery callbacks per page and 16 per package; the wrapper also retains at most eight outgoing
+fetches. Refusals return an HTTP status and, when the id is readable, the matching channel error.
+Permissions and extension settings still use the shared kit's channel. No page receives a key.
 
 ## Build and check
 
@@ -110,8 +121,12 @@ started by `go run ./e2e/panelcore` from `next/`, on random loopback ports in te
 and runs it on a private X server (`xvfb-run`) with a private session bus (`dbus-run-session`),
 a fresh HOME and XDG folders, once in each mode. In each it checks that the window's webview
 reaches every command, that at the top of an extension page's webview Tauri refuses every app
-command and the plugin commands tried, that the app reaches no command from that webview, that
-nothing reaches the app from the page's frame, that the page webview covers the page area, that
+command and the plugin commands tried, and that no app command is reached from that webview
+or its frame. It also runs a test-only sandboxed frame
+that posts directly to the native scheme: over-rate, over-in-flight, oversize, unknown method,
+invalid schema, repeated hello and wrong generation. It compares native handler arrivals,
+admissions, forwarding and real core settings operations, with a successful call on the same page.
+It checks that the page webview covers the page area, that
 closing the window leaves no webview and
 no web process, and that quitting stops only the app's own core. The `native-test` feature is
 for that test alone; release builds never have it.
@@ -155,6 +170,6 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
   icon.
 - The native test needs the desktop services above, and the pinned AppImage runtime from
   github.com (or a copy in its cache folder), so it does not run offline on a bare machine.
-- An extension page's frame can post messages to WebKit's message handler for the webview; Tauri
-  refuses them (the native test checks that no command is reached), but they are not filtered
-  before that.
+- Native admission bounds work after a scheme request reaches the handler. They do not bound
+  memory used by the browser engine before that point. Frames can also post to WebKit's IPC
+  handler; Tauri's capabilities refuse their commands before any app command runs.
