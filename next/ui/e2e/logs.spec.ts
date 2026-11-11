@@ -127,7 +127,8 @@ test("filters, downloads and logging-off guidance follow the selected theme", as
     ).toBe(200);
     await goTo(page, "Themes");
     await page.getByRole("radio", { name: new RegExp(`^${theme}`, "i") }).check();
-    await goTo(page, "Logs Viewer");
+    await page.locator('nav a[href="#/logs"]').click();
+    await expect(page.getByRole("heading", { level: 1, name: "Logs Viewer" })).toBeVisible();
     await expect(log.locator('[data-part="log-line"]').first()).toBeVisible();
     if (process.env.LOGS_SHOTS)
       await page.screenshot({ path: `${process.env.LOGS_SHOTS}/${theme}-lines.png`, fullPage: true });
