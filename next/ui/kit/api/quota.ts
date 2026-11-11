@@ -17,6 +17,7 @@ export interface QuotaLimit {
 
 export interface Quota {
   plan?: string;
+  plan_ends_at?: number;
   limits: QuotaLimit[];
 }
 

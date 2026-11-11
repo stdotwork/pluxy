@@ -3,6 +3,20 @@ import { goTo, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 
+test("quota shows the subscription renewal time", async ({ page }) => {
+  await openPanel(page, core);
+  await signIn(page, core);
+  await goTo(page, "Quota Management");
+  const card = page.locator('[data-part="item"]').filter({ hasText: "quota-a" });
+  await card.getByRole("button", { name: "Refresh Quota", exact: true }).click();
+  await expect(card.getByText("Renewal time", { exact: true })).toBeVisible();
+  await expect(card.locator('time[datetime="2031-01-01T00:00:00.000Z"]')).toBeVisible();
+  await expect(card.getByText(/renews in/)).toBeVisible();
+  if (process.env.RENEWAL_SHOTS) {
+    await card.screenshot({ path: `${process.env.RENEWAL_SHOTS}/default.png` });
+  }
+});
+
 test.beforeAll(async () => {
   for (const id of ["quota-a", "quota-b"]) {
     const started = await core.mgmt<{ login: { id: string } }>("POST", "/accounts", {

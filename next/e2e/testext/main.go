@@ -273,7 +273,7 @@ func check(context.Context, sdk.CheckCall) (*protocol.CheckResult, error) {
 
 func quota(context.Context, sdk.QuotaCall) (*protocol.Quota, error) {
 	pct := func(v float64) *float64 { return &v }
-	return &protocol.Quota{Plan: quotaPlan, Limits: []protocol.QuotaLimit{
+	return &protocol.Quota{Plan: quotaPlan, PlanEndsAt: 1924992000, Limits: []protocol.QuotaLimit{
 		{ID: "five_hour", Label: "5-hour limit", UsedPercent: pct(fiveHourPercent), ResetsAt: fiveHourResetsAt, WindowSeconds: fiveHourWindowSec},
 		{ID: "weekly", Label: "Weekly limit", UsedPercent: pct(weeklyPercent), ResetsAt: weeklyResetsAt, WindowSeconds: weeklyWindowSec},
 	}}, nil
