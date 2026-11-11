@@ -10,7 +10,8 @@ import (
 const captureMinor = 13
 
 // CaptureFunc receives a captured call's upstream exchanges, with the call's account ID. Every
-// string in d has had the call's credentials removed (protocol.Redactor).
+// string in d has had the call's credentials removed (protocol.Redactor); a body's BodySize is
+// the length of what is left of it plus what was cut out (see redactDiagnostic).
 type CaptureFunc func(account string, d protocol.Diagnostic)
 
 type captureKey struct{}
@@ -32,23 +33,36 @@ func capture(ctx context.Context, info protocol.Info) CaptureFunc {
 	return f
 }
 
-// redactDiagnostic removes r's credentials from every string of d.
+// redactDiagnostic removes r's credentials from every string of d. In a body it also removes the
+// bytes beside a cut that could be a secret cut in two (Redactor.TrimCut), and it sets BodySize
+// to the length of what is left of the pieces plus the bytes left out between them, so a body
+// that was cut is told from one that only got shorter because a credential was replaced.
 func redactDiagnostic(r *protocol.Redactor, d protocol.Diagnostic) protocol.Diagnostic {
 	out := protocol.Diagnostic{UpstreamLeftOut: d.UpstreamLeftOut}
-	body := func(b protocol.CapturedBody) protocol.CapturedBody {
-		return protocol.CapturedBody{Body: r.String(b.Body), BodyEnd: r.String(b.BodyEnd), BodySize: b.BodySize}
-	}
 	for _, x := range d.Upstream {
 		y := protocol.UpstreamExchange{Error: r.String(x.Error), Request: protocol.UpstreamRequest{TimeMs: x.Request.TimeMs,
 			Method: r.String(x.Request.Method), URL: r.String(x.Request.URL), Headers: redactHeaders(r, x.Request.Headers),
-			CapturedBody: body(x.Request.CapturedBody)}}
+			HeadersLeftOut: x.Request.HeadersLeftOut, CapturedBody: redactBody(r, x.Request.CapturedBody)}}
 		if x.Response != nil {
 			y.Response = &protocol.UpstreamResponse{TimeMs: x.Response.TimeMs, Status: x.Response.Status,
-				Headers: redactHeaders(r, x.Response.Headers), CapturedBody: body(x.Response.CapturedBody)}
+				Headers: redactHeaders(r, x.Response.Headers), HeadersLeftOut: x.Response.HeadersLeftOut,
+				CapturedBody: redactBody(r, x.Response.CapturedBody)}
 		}
 		out.Upstream = append(out.Upstream, y)
 	}
 	return out
+}
+
+func redactBody(r *protocol.Redactor, b protocol.CapturedBody) protocol.CapturedBody {
+	head, end := b.Body, b.BodyEnd
+	left := max(0, b.BodySize-int64(len(head)+len(end))) // what the extension cut out between
+	if left > 0 {
+		h, e := r.TrimCut(head, end)
+		left += int64(len(head) - len(h) + len(end) - len(e))
+		head, end = h, e
+	}
+	head, end = r.String(head), r.String(end)
+	return protocol.CapturedBody{Body: head, BodyEnd: end, BodySize: int64(len(head)+len(end)) + left}
 }
 
 func redactHeaders(r *protocol.Redactor, h map[string][]string) map[string][]string {
