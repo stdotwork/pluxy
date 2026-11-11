@@ -145,3 +145,52 @@ func TestSecretsOfAliasLoopsAndChains(t *testing.T) {
 		}
 	}
 }
+
+// An alias stands for its anchor wherever a rule looks at a value: an accounts list given by
+// alias, an account merged from a template with <<, and headers given by alias, in account
+// settings and in a provider entry.
+func TestRedactAliasesWhereRulesLookAtTheValue(t *testing.T) {
+	for _, tc := range []struct {
+		name, src string
+		secrets   []string
+	}{
+		{"accounts list", `list: &l
+  - id: a
+    settings:
+      password: {nested: fake-list-nested}
+extension:
+  manifest: x.json
+  accounts: *l
+`, []string{"fake-list-nested"}},
+		{"merged account", `base: &b
+  settings:
+    password: {nested: fake-merge-nested}
+extension:
+  manifest: x.json
+  accounts:
+    - <<: *b
+      id: a
+`, []string{"fake-merge-nested"}},
+		{"headers", `h: &h
+  Authorization: Bearer fake-header-alias
+h2: &h2
+  X-Api-Key: fake-settings-header
+openai-compatibility:
+  - name: local
+    base-url: https://compat.example.com/v1
+    headers: *h
+extension:
+  manifest: x.json
+  accounts:
+    - id: a
+      settings:
+        headers: *h2
+`, []string{"Bearer fake-header-alias", "fake-settings-header"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, back := redactChecked(t, tc.src, true, tc.secrets); back != tc.src {
+				t.Errorf("round trip is not byte exact:\n%s", back)
+			}
+		})
+	}
+}

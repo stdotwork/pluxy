@@ -119,6 +119,31 @@ func secretURL(s string) bool {
 	return err == nil && u.Host != "" && (u.User != nil || u.RawQuery != "")
 }
 
+// ctx is how secrets reads a node: strictly or not, and what the place it is in makes it.
+type ctx struct {
+	strict bool
+	role   role
+}
+
+// role is what a node's place makes it, for the rules that look at a value.
+type role int
+
+const (
+	rolePlain    role = iota
+	roleSecret        // the value of a key named like a secret
+	roleHeaders       // the value of a "headers" key
+	roleAccounts      // the value of an "accounts" key
+	roleAccount       // an item of an accounts list
+)
+
+// resolved returns the node an alias stands for, or n itself.
+func resolved(n *yaml.Node) *yaml.Node {
+	if n.Kind == yaml.AliasNode && n.Alias != nil {
+		return n.Alias
+	}
+	return n
+}
+
 // secrets returns the scalar nodes of the tree under n that hold secrets. strict: everything
 // below a key named like a secret is one (account settings), as it is in the settings of a config
 // file's accounts.
@@ -165,71 +190,108 @@ func secrets(n *yaml.Node, strict bool) []*yaml.Node {
 			}
 		}
 	}
-	// walk reads the tree under v by the rules above; account: v is an item of an accounts list,
-	// whose settings are read strictly. An alias is read where it is used, as the place it is
-	// used in reads it (an anchor in account settings is strict there, whatever its own place).
-	// Each anchor is read at most once in each way, so an alias back into its own anchor, or
-	// anchors that nest aliases many times over, cost no more than the document's size.
+	// walk reads the tree under v by the rules above, in the way c says the place v is in reads
+	// it: v may be the value of a key a rule names (headers, accounts, a secret key) or an item
+	// of an accounts list, whose settings are read strictly. An alias is read as its anchor would
+	// be in the alias's place, whatever the anchor's own place, and a mapping merged with "<<" is
+	// read as part of the mapping it is merged into. Each anchor is read at most once in each
+	// way, so an alias back into its own anchor, or anchors that nest aliases many times over,
+	// cost no more than the document's size.
 	type reading struct {
-		n               *yaml.Node
-		strict, account bool
+		n *yaml.Node
+		c ctx
 	}
 	read := map[reading]bool{}
-	var walk func(v *yaml.Node, strict, account bool)
-	walk = func(v *yaml.Node, strict, account bool) {
-		switch v.Kind {
-		case yaml.AliasNode:
-			if k := (reading{v.Alias, strict, account}); v.Alias != nil && !read[k] {
-				read[k] = true
-				walk(v.Alias, strict, account)
+	var walk func(v *yaml.Node, c ctx)
+	// pairs reads the key-value pairs of the mapping m, and those of the mappings merged into it.
+	var pairs func(m *yaml.Node, c ctx, each func(key string, val *yaml.Node))
+	pairs = func(m *yaml.Node, c ctx, each func(key string, val *yaml.Node)) {
+		for i := 0; i+1 < len(m.Content); i += 2 {
+			key, val := m.Content[i], m.Content[i+1]
+			if key.Value != "<<" || key.Tag != "!!merge" {
+				each(key.Value, val)
+				continue
 			}
+			merged := []*yaml.Node{val}
+			if r := resolved(val); r.Kind == yaml.SequenceNode {
+				merged = r.Content
+			}
+			for _, x := range merged {
+				if r := resolved(x); r.Kind == yaml.MappingNode && !read[reading{r, c}] {
+					read[reading{r, c}] = true
+					pairs(r, c, each)
+				}
+			}
+		}
+	}
+	walk = func(v *yaml.Node, c ctx) {
+		if v.Kind == yaml.AliasNode {
+			if k := (reading{v.Alias, c}); v.Alias != nil && !read[k] {
+				read[k] = true
+				walk(v.Alias, c)
+			}
+			return
+		}
+		plain := ctx{strict: c.strict}
+		switch {
+		case c.role == roleSecret && (c.strict || v.Kind == yaml.ScalarNode):
+			all(v, true)
+			return
+		case c.role == roleSecret && v.Kind == yaml.SequenceNode:
+			// A list of keys, or of lists of keys; a list of mappings (provider key entries) is
+			// walked.
+			for _, x := range v.Content {
+				if resolved(x).Kind != yaml.MappingNode {
+					all(x, true)
+				} else {
+					walk(x, plain)
+				}
+			}
+			return
+		case c.role == roleHeaders && v.Kind == yaml.MappingNode:
+			pairs(v, c, func(name string, val *yaml.Node) {
+				if secretHeader(name) {
+					all(val, true)
+				} else {
+					walk(val, plain)
+				}
+			})
+			return
+		case c.role == roleAccounts && v.Kind == yaml.SequenceNode:
+			for _, x := range v.Content {
+				walk(x, ctx{strict: c.strict, role: roleAccount})
+			}
+			return
+		}
+		switch v.Kind {
 		case yaml.ScalarNode:
 			if secretURL(v.Value) {
 				add(v)
 			}
 		case yaml.SequenceNode:
-			for _, c := range v.Content {
-				walk(c, strict, false)
+			for _, x := range v.Content {
+				walk(x, plain)
 			}
 		case yaml.MappingNode:
-			for i := 0; i+1 < len(v.Content); i += 2 {
-				key, val := v.Content[i].Value, v.Content[i+1]
+			pairs(v, c, func(key string, val *yaml.Node) {
 				switch {
 				case strings.EqualFold(key, "credential"):
 					all(val, false)
-				case strings.EqualFold(key, "headers") && val.Kind == yaml.MappingNode:
-					for j := 0; j+1 < len(val.Content); j += 2 {
-						if secretHeader(val.Content[j].Value) {
-							all(val.Content[j+1], true)
-						} else {
-							walk(val.Content[j+1], strict, false)
-						}
-					}
-				case account && strings.EqualFold(key, "settings"):
-					walk(val, true, false)
-				case strings.EqualFold(key, "accounts") && val.Kind == yaml.SequenceNode:
-					for _, c := range val.Content {
-						walk(c, strict, true)
-					}
-				case secretName(key) && (strict || val.Kind == yaml.ScalarNode || val.Kind == yaml.AliasNode):
-					all(val, true)
-				case secretName(key) && val.Kind == yaml.SequenceNode:
-					// A list of keys, or of lists of keys; a list of mappings (provider key
-					// entries) is walked.
-					for _, c := range val.Content {
-						if c.Kind != yaml.MappingNode {
-							all(c, true)
-						} else {
-							walk(c, strict, false)
-						}
-					}
+				case strings.EqualFold(key, "headers"):
+					walk(val, ctx{strict: c.strict, role: roleHeaders})
+				case c.role == roleAccount && strings.EqualFold(key, "settings"):
+					walk(val, ctx{strict: true})
+				case strings.EqualFold(key, "accounts"):
+					walk(val, ctx{strict: c.strict, role: roleAccounts})
+				case secretName(key):
+					walk(val, ctx{strict: c.strict, role: roleSecret})
 				default:
-					walk(val, strict, false)
+					walk(val, plain)
 				}
-			}
+			})
 		}
 	}
-	walk(n, strict, false)
+	walk(n, ctx{strict: strict})
 	return out
 }
 
