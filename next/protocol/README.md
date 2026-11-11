@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.9
+# pluxy extension protocol, version 0.10
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -16,10 +16,11 @@ usage window that ran out is. Version 0.7 adds [endpoint calls](#endpoint): clie
 provider's endpoints beyond generation, such as Responses compaction, whose reply the extension
 writes. Version 0.8 adds the request's [`caller`](#the-request): a value that stands for the
 client key a request came with, so an extension can keep what it learns from replies per client.
-Version 0.9 adds optional non-secret account settings to a login grant.
+Version 0.9 adds optional non-secret account settings to a login grant. Version 0.10 adds the
+optional quota `plan_ends_at`, the end of the subscription in Unix seconds.
 It is deliberately small; later versions add capabilities and more operations without changing
 what is described here. An extension written for version 0 works unchanged with a core that
-speaks 0.9 (see [Versioning](#versioning)).
+speaks 0.10 (see [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
 the details. A Go SDK (`github.com/stdotwork/pluxy/next/sdk`) implements the extension side of
@@ -385,6 +386,7 @@ event as for `generate`.
 | Field | Meaning |
 | --- | --- |
 | `plan` | The account's plan, as the provider names it, for people. |
+| `plan_ends_at` | Optional, since 0.10: when the subscription ends, in Unix seconds. Omitted when unknown. |
 | `limits` | The plan's limits: usage windows, allowances and balances. At most 1000. |
 | limit `id` | Names the limit within the extension, the same on every call (`five_hour`, `weekly`). Required, unique in the list. |
 | limit `label` | For people, in English (`5-hour limit`, `Weekly limit`). |
@@ -956,7 +958,7 @@ removes `previous_response_id`.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.9. An extension reports the minor version it
+raise the minor version: this document is version 0.10. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -973,8 +975,9 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.7 | [Endpoint calls](#endpoint): the `endpoint` operation. |
 | 0.8 | The request's `caller`. |
 | 0.9 | A login grant's optional `settings` object. |
+| 0.10 | Quota's optional `plan_ends_at`. |
 
-## What version 0.9 leaves out
+## What version 0.10 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

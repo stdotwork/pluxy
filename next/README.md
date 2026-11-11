@@ -15,6 +15,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | Path | What it is |
 | --- | --- |
 | `cmd/pluxy` | The core program. |
+| `cmd/pluxy-pack` | Builds each extension's release archives and the bundled registry index. |
 | `protocol/` | The extension protocol: [README](protocol/README.md), [tutorial](protocol/TUTORIAL.md), wire types and framing. |
 | `llm/` | The internal model of a request and its streamed reply, shared by core and extensions. |
 | `sdk/` | Go SDK for writing extensions. |
@@ -49,6 +50,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 ```bash
 go generate ./internal/panel   # builds the web panel core embeds; needs Bun (skip it for a core without the panel)
 go build -o pluxy ./cmd/pluxy
+go build -ldflags "-X github.com/stdotwork/pluxy/next/internal/buildinfo.Version=1.2.3 -X github.com/stdotwork/pluxy/next/internal/buildinfo.Commit=$(git rev-parse HEAD) -X github.com/stdotwork/pluxy/next/internal/buildinfo.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o pluxy ./cmd/pluxy   # sets the build info; without -ldflags the version is dev, and a git checkout still records its commit and time
 go build -o extensions/openai-compatible/openai-compatible ./extensions/openai-compatible
 go build -o extensions/claude/claude ./extensions/claude
 ```
@@ -77,7 +79,16 @@ go build -o extensions/claude/claude ./extensions/claude
 ./pluxy -config config.json
 ```
 
-Then `curl http://127.0.0.1:8400/healthz` answers `ok`.
+Flags:
+
+- `-config`: the config file (default `config.json`).
+- `-version`: print the build's version, commit and build date on one line, `pluxy <version> (<commit>, <date>)`, and exit. It does not read the config. Core logs the same line when it starts.
+- `-safe-mode`: start with no extensions: client requests fail, the management API works.
+- `-watch-interval`: how often core looks for changes to the config file; `0` turns the watch off (default `1s`).
+- `-bundled`: the index of the bundled packages (default `bundled/index.json` beside the program, when it exists); see [Packages](#packages).
+- `-import-auth`: copy the credential files of today's core's auth folder into the credential store, then exit; see [config.yaml with today's key names](#configyaml-with-todays-key-names).
+
+A running core answers `curl http://127.0.0.1:8400/healthz` with `ok`.
 
 With a `management_key` set, the web panel is at `http://127.0.0.1:8400/panel/`: core's status,
 accounts, extensions and themes, the pages extensions bring and their settings. Sign in with the
@@ -263,6 +274,35 @@ Today's core has no setting for this: it always estimates for those accounts.
 A config written for today's core, with its key names, works too: see
 [config.yaml with today's key names](#configyaml-with-todays-key-names).
 
+### Pack the extensions
+
+`pluxy-pack` builds every extension under `extensions/` as a release archive and writes the
+bundled registry index a fresh install starts from:
+
+```bash
+go run ./cmd/pluxy-pack -out dist -platforms linux/amd64,darwin/arm64
+```
+
+It writes one `dist/bundled/<publisher>-<name>-<version>-<goos>-<goarch>.tar.gz` per extension
+and platform, and `dist/bundled/index.json`, which pins each archive's SHA-256 and size. Packing
+the same sources twice gives byte-identical archives and index. `-platforms` defaults to the host
+platform; `-extensions codex,claude` packs only those extension folders, by folder name or
+package ID. `go run ./cmd/pluxy-pack -h` lists the flags.
+
+Core installs and enables every package the bundled index lists on its first start with an
+empty packages folder:
+
+```bash
+go build -trimpath -ldflags "-s -w" -o pluxy ./cmd/pluxy
+./pluxy -config config.json -bundled dist/bundled/index.json
+```
+
+`pluxy` itself is a plain `go build` of `./cmd/pluxy`, as above; the `-ldflags` only make it
+smaller. Without `-bundled`, core looks for `bundled/index.json` beside the `pluxy` program, so
+an install is the program with the packed `bundled` folder next to it. The same `index.json`,
+uploaded beside the archives to an `https://` location, is a registry like any other: its
+relative archive URLs resolve against the index.
+
 ## Codex
 
 The Codex provider extension (`extensions/codex`) serves OpenAI's Codex models from an OpenAI API
@@ -411,7 +451,7 @@ plan's models without the image models and has no quota to report. Binding SIWC 
 subscription, as today's core does through its management API (`/v8/management/oauth/siwc/*`)
 and its `-siwc-bind` flag, is not built: the login method replaces it.
 
-**Quota.** For a ChatGPT sign-in account, `GET /v0/management/accounts/{id}/quota` reads `GET {backend}/wham/usage`, where `{backend}` is the account's `base_url` without a trailing `/codex` (default `https://chatgpt.com/backend-api`), with the access token, the `Chatgpt-Account-Id` header and the same `User-Agent` and `Originator` the account's requests carry (so `codex_identity` applies). It reports the plan (`plan_type`), the 5-hour and weekly or monthly windows (`five_hour`, `weekly`, `monthly`), code review's windows (`code_review_*`), each extra limit such as one model's (`<name>_five_hour` and so on) and the credit balance (`credits`), with the share used, reset time and window length. An API key or a SIWC account answers unsupported. A sign-in's grant carries `identity` `{"email", "account_id"}`: members of one ChatGPT workspace share its account ID, so the e-mail address tells them apart.
+**Quota.** For a ChatGPT sign-in account, `GET /v0/management/accounts/{id}/quota` reads `GET {backend}/wham/usage`, where `{backend}` is the account's `base_url` without a trailing `/codex` (default `https://chatgpt.com/backend-api`), with the access token, the `Chatgpt-Account-Id` header and the same `User-Agent` and `Originator` the account's requests carry (so `codex_identity` applies). It also reads `GET {backend}/subscriptions?account_id=...` for `active_until` (reported as optional `plan_ends_at` in Unix seconds), and `GET {backend}/wham/rate-limit-reset-credits` for `available_count` (the `reset_credits` limit, labelled "Manual resets", with `remaining` in `resets`). Both extra reads use the same identity; a failed extra read leaves its field out without failing the usage read. Nothing spends a reset. It reports the plan (`plan_type`), the 5-hour and weekly or monthly windows (`five_hour`, `weekly`, `monthly`), code review's windows (`code_review_*`), each extra limit such as one model's (`<name>_five_hour` and so on) and the credit balance (`credits`), with the share used, reset time and window length. An API key or a SIWC account answers unsupported. A sign-in's grant carries `identity` `{"email", "account_id"}`: members of one ChatGPT workspace share its account ID, so the e-mail address tells them apart.
 
 ## Claude
 
@@ -1213,7 +1253,7 @@ send it as a bearer token. With a management key set, the config may set no acco
 | `POST /accounts/{id}/cooldown/reset` | Clears the account's cooldowns, on its credential, its models and its endpoint (which accounts naming the same endpoint share), with their backoff steps and its last error, so it serves again at once. Works for config accounts too. Replies with `cleared`, the number of live blocks it cleared, and the account. |
 | `GET /accounts/{id}/models` | The models the account serves: its config's `models` when it lists them, else the ones its extension lists for it (the protocol's [`models`](protocol/README.md#models)). Each has its upstream `id`, what the extension says about it, `names` (the names clients use for it after the account's exclusions, aliases and prefix, and its extension's defaults for logins) and `excluded` when `excluded_models` leaves it out. |
 | `POST /accounts/{id}/test` | Sends the account one small request (`Hi`, at most 16 tokens of reply), straight to its extension: its cooldowns are ignored and its routing state is left as it is. `{"model": ...}` names the model by its upstream name; without it, the first the account serves. Replies 200 with `result`: `ok`, `model`, `served_model`, `latency_ms`, the start of the `reply`, `finish_reason` and `usage`, or `error`. The request spends what a request that size costs. |
-| `GET /accounts/{id}/quota` | The account's plan and usage, read from its provider when asked (the protocol's [`quota`](protocol/README.md#quota)): `quota` with `plan`, `limits` (each with `id`, `label`, and what the provider gives of `used_percent`, `used`, `limit`, `remaining`, `unit`, `unlimited`, `resets_at`, `window_seconds`, `models`) and `raw`, the provider's replies; and `fetched_at`. 422 with code `unsupported` for an account with no plan to report, such as an API key, or whose extension reads no quota; 502 with the provider's error code when the provider refused or failed. Each provider's section says what it reports. |
+| `GET /accounts/{id}/quota` | The account's plan and usage, read from its provider when asked (the protocol's [`quota`](protocol/README.md#quota)): `quota` with `plan`, optional `plan_ends_at` (the subscription end in Unix seconds), `limits` (each with `id`, `label`, and what the provider gives of `used_percent`, `used`, `limit`, `remaining`, `unit`, `unlimited`, `resets_at`, `window_seconds`, `models`) and `raw`, the provider's replies; and `fetched_at`. 422 with code `unsupported` for an account with no plan to report, such as an API key, or whose extension reads no quota; 502 with the provider's error code when the provider refused or failed. Each provider's section says what it reports. |
 | `GET /login-methods` | For each running extension that signs in, its `extension` ID and `methods`: each `method`, `kind` (`browser`, `device`, `api_key`), `label` and the `inputs` it asks for (`name`, `label`, `secret`, `optional`), as its describe reports them; what a panel needs to offer "add account". |
 | `DELETE /accounts/{id}` | Removes the account and its credential. |
 
@@ -1313,7 +1353,7 @@ block it was given; today's core counts each address. Behind a proxy that is not
 
 | Call | What it does |
 | --- | --- |
-| `GET /v0/management/status` | `desired` (the newest config version core has seen, with `error` when it was refused) and `active` (the one serving), each with `revision` and `hash`; `extensions`, one entry per running generation with `state` (`starting`, `active`, `idle`, `crashed`, `quarantined`, `draining`, `stopped`), `current`, `pid`, `restarts`, `last_error` and `active_requests`; `safe_mode`. |
+| `GET /v0/management/status` | `desired` (the newest config version core has seen, with `error` when it was refused) and `active` (the one serving), each with `revision` and `hash`; `extensions`, one entry per running generation with `state` (`starting`, `active`, `idle`, `crashed`, `quarantined`, `draining`, `stopped`), `current`, `pid`, `restarts`, `last_error` and `active_requests`; `safe_mode`; `version`, `commit` and `built`, the build's version, commit and build date as `-version` prints them. |
 | `POST /v0/management/reload` | Reload now. 200 with the status when the new revision is active; 422 with the status when it was refused. |
 | `GET /v0/management/ui` | The pages of the extensions that run and where they are served; see [extension pages](ui/extension-pages/README.md#how-core-serves-pages). |
 | `GET`, `PATCH /v0/management/extensions/{publisher}/{name}/config` | An extension's settings, checked against the schema its manifest declares; see [extension pages](ui/extension-pages/README.md#how-core-serves-pages). |

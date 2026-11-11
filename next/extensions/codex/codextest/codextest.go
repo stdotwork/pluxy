@@ -58,6 +58,9 @@ type Server struct {
 	RefreshFailure string
 	// Usage, if set, is the body of the usage endpoint's reply; the default is DefaultUsage.
 	Usage string
+	// Optional quota replies; empty means the endpoint is unavailable.
+	Subscriptions string
+	ResetCredits  string
 	// AccessTTL is how long the n-th issued access token lasts (n from 1). Default: an hour.
 	AccessTTL func(n int) time.Duration
 	// SIWCGrantScope, if set, is the scope a SIWC grant names in place of SIWCScope.
@@ -109,6 +112,8 @@ func New(t testing.TB) *Server {
 	mux.HandleFunc("POST /responses", s.responses)
 	mux.HandleFunc("POST /backend-api/codex/responses", s.responses)
 	mux.HandleFunc("GET /backend-api/wham/usage", s.usage)
+	mux.HandleFunc("GET /backend-api/subscriptions", s.quotaExtra)
+	mux.HandleFunc("GET /backend-api/wham/rate-limit-reset-credits", s.quotaExtra)
 	s.Server = httptest.NewServer(mux)
 	t.Cleanup(s.Close)
 	return s
@@ -561,6 +566,28 @@ func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
 	}
 	if body == "" {
 		body = DefaultUsage
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(body))
+}
+
+func (s *Server) quotaExtra(w http.ResponseWriter, r *http.Request) {
+	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	s.mu.Lock()
+	s.requests = append(s.requests, Request{Path: r.URL.RequestURI(), Header: r.Header.Clone()})
+	behaviour := s.access[tok]
+	body := s.ResetCredits
+	if r.URL.Path == "/backend-api/subscriptions" {
+		body = s.Subscriptions
+	}
+	s.mu.Unlock()
+	if behaviour != "text" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if body == "" {
+		http.NotFound(w, r)
+		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(body))

@@ -277,10 +277,14 @@
               "used_percent": 2,
               "window_seconds": 604800
             },
-            {"id":"credits","label":"Credit balance","remaining":12.5,"unit":"credits"}
+            {"id":"credits","label":"Credit balance","remaining":12.5,"unit":"credits"},
+            {"id":"reset_credits","label":"Manual resets","remaining":0,"unit":"resets"}
           ],
+          "plan_ends_at": 1924992000,
           "plan": "plus",
           "raw": {
+            "subscriptions": {"active_until":"2031-01-01T00:00:00Z"},
+            "reset_credits": {"available_count":0,"credits":[]},
             "usage": {
               "account_id": "[redacted]",
               "additional_rate_limits": [
@@ -350,9 +354,9 @@
     },
     {
       "path": "client_more",
-      "kind": "gap",
+      "kind": "intended",
       "absent": true,
-      "reason": "The panel's Codex card makes two more calls (the subscription's end date and the rate-limit reset credits, see upstream[1] and upstream[2]); the new quota call makes neither, so there are no further replies."
+      "reason": "The new quota call folds the subscription and reset-credit reads into its single management response, so it has one reply rather than separate management replies for the extra upstream requests."
     },
     {
       "path": "upstream[0].headers.User-Agent",
@@ -378,16 +382,50 @@
       "reason": "The panel gives every Codex call the Content-Type of its request header set, including GETs without a body; the new core's GET sends none."
     },
     {
-      "path": "upstream[1]",
-      "kind": "gap",
-      "absent": true,
-      "reason": "Not rebuilt in the new quota call: the panel also reads the subscription's end date (GET /backend-api/subscriptions?account_id=...) to show when the plan lapses; the quota shape has no such field. A finding for the owner."
+      "path": "upstream[1].headers.User-Agent",
+      "kind": "intended",
+      "reason": "The new core uses the Codex extension's own User-Agent for every quota request; its version is intentionally not pinned here."
     },
     {
-      "path": "upstream[2]",
-      "kind": "gap",
+      "path": "upstream[1].headers.Originator",
+      "kind": "intended",
+      "want": "codex-tui",
+      "reason": "The new core uses the Codex client identity on the subscription request."
+    },
+    {
+      "path": "upstream[1].headers.Accept",
+      "kind": "intended",
+      "want": "application/json",
+      "reason": "The new core asks for JSON explicitly on the subscription request."
+    },
+    {
+      "path": "upstream[1].headers.Content-Type",
+      "kind": "intended",
       "absent": true,
-      "reason": "Not rebuilt in the new quota call: the panel also reads the account's rate-limit reset credits (GET /backend-api/wham/rate-limit-reset-credits) and lets the operator redeem one; the quota shape has no such field. A finding for the owner."
+      "reason": "The new core's GET subscription request has no request body and sends no Content-Type."
+    },
+    {
+      "path": "upstream[2].headers.User-Agent",
+      "kind": "intended",
+      "reason": "The new core uses the Codex extension's own User-Agent for every quota request; its version is intentionally not pinned here."
+    },
+    {
+      "path": "upstream[2].headers.Originator",
+      "kind": "intended",
+      "want": "codex-tui",
+      "reason": "The new core uses the Codex client identity on the reset-credit request."
+    },
+    {
+      "path": "upstream[2].headers.Content-Type",
+      "kind": "intended",
+      "absent": true,
+      "reason": "The new core's GET reset-credit request has no request body and sends no Content-Type."
+    },
+    {
+      "path": "upstream[2].headers.Openai-Beta",
+      "kind": "intended",
+      "absent": true,
+      "reason": "The new core uses its own Codex identity and does not send the panel's OpenAI-Beta header."
     }
   ]
 }
