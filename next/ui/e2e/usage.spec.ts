@@ -41,7 +41,10 @@ test("filters recorded requests and exports the matching rows", async ({ page })
   page.on("request", (request) => {
     if (request.url().includes("/usage/events?")) requests.push(request.url());
   });
-  await expect(page.getByLabel("Since", { exact: true })).toHaveAttribute("placeholder", "e.g. 24h or 2026-01-01T00:00:00Z");
+  await expect(page.getByLabel("Since", { exact: true })).toHaveAttribute(
+    "placeholder",
+    "e.g. 24h or 2026-01-01T00:00:00Z",
+  );
   await page.getByLabel("Since", { exact: true }).fill("invalid");
   await expect(page.getByRole("alert")).toContainText("since");
   await page.getByLabel("Since", { exact: true }).fill("");

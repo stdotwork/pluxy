@@ -10,6 +10,7 @@ const t = strings("usage", {
   short: "Usage",
   tip: "Recorded requests",
   since: "Since",
+  sinceHint: "e.g. 24h or 2026-01-01T00:00:00Z",
   model: "Model",
   provider: "Provider",
   account: "Account",
@@ -53,6 +54,12 @@ export function UsagePage() {
   const [capped, setCapped] = useState(false);
   const [revision, setRevision] = useState(0);
   const generation = useRef(0);
+  const changeFilters = (next: UsageFilters) => {
+    generation.current++;
+    setLoading(true);
+    setLost(false);
+    setFilters(next);
+  };
 
   useEffect(() => {
     const current = ++generation.current;
@@ -87,9 +94,10 @@ export function UsagePage() {
       setLost(missing);
       setLoading(false);
     };
-    void load();
+    const timer = setTimeout(() => void load(), 300);
     return () => {
       generation.current++;
+      clearTimeout(timer);
     };
   }, [filters, revision]);
 
@@ -139,8 +147,10 @@ export function UsagePage() {
     <label class="field" data-part="field">
       <span class="label">{label}</span>
       <input
+        type="text"
+        placeholder={name === "since" ? t("sinceHint") : undefined}
         value={filters[name]}
-        onInput={(e) => setFilters({ ...filters, [name]: e.currentTarget.value })}
+        onInput={(e) => changeFilters({ ...filters, [name]: e.currentTarget.value })}
       />
     </label>
   );
@@ -170,7 +180,7 @@ export function UsagePage() {
           <select
             aria-label={t("failed")}
             value={filters.failed}
-            onChange={(e) => setFilters({ ...filters, failed: e.currentTarget.value })}
+            onChange={(e) => changeFilters({ ...filters, failed: e.currentTarget.value })}
           >
             <option value="">{t("all")}</option>
             <option value="true">{t("yes")}</option>
