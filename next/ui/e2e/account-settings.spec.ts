@@ -91,6 +91,39 @@ test("Edit sets priority and an excluded model, and asks before discarding", asy
   expect((await listed("settings-key"))?.priority).toBe(5);
 });
 
+test("the unsaved-changes question stays on while a save runs, and a failed save keeps the edit", async ({
+  page,
+}) => {
+  await addAccount("settings-slow", "api_key", { api_key: "account-settings-test-input" });
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/v0/management/accounts/settings-slow", async (route) => {
+    if (route.request().method() !== "PATCH") return route.continue();
+    await held;
+    await route.fulfill({ status: 500, json: { error: { code: "internal", message: "the save failed" } } });
+  });
+  await openPanel(page, core);
+  await signIn(page, core);
+  const detail = await openAccount(page, "settings-slow");
+  await detail.getByRole("button", { name: "Edit", exact: true }).click();
+  const form = page.getByRole("dialog", { name: "Edit settings-slow", exact: true });
+  await form.getByLabel("Priority (priority)").fill("7");
+  await form.getByRole("button", { name: "Save", exact: true }).click();
+  // Leaving while the save runs asks first, and stays put.
+  await page.evaluate(() => {
+    location.hash = "#/status";
+  });
+  await expect(form.getByText("Discard unsaved changes?")).toBeVisible();
+  await expect(page).toHaveURL(/#\/accounts$/);
+  release();
+  await expect(form.getByText("the save failed")).toBeVisible();
+  await form.getByRole("button", { name: "Keep editing", exact: true }).click();
+  await expect(form.getByLabel("Priority (priority)")).toHaveValue("7");
+  expect((await listed("settings-slow"))?.priority).toBeUndefined();
+});
+
 test("settings show a placeholder for a secret, and saving keeps the secret", async ({ page }) => {
   await addAccount("settings-secret", "settings", {
     settings: JSON.stringify({ base_url: "https://one.example/v1", api_key: secret }),

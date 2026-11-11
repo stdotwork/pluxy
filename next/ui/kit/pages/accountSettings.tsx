@@ -4,6 +4,7 @@
 
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { Account } from "../api";
+import { guardLeave } from "../shell";
 import { strings } from "../strings";
 import { Button, Choices, Facts, Notice, Switch, useAction, useKit } from "../ui";
 import {
@@ -115,8 +116,8 @@ export function AccountSettings(props: { account: Account }) {
 
 /**
  * Asks before the page is left while dirty.current is set: the browser's own question on unload,
- * and ask(go) on a hash change (go makes the change after all). The modal form blocks every other
- * way out.
+ * and ask(go) before the shell follows a hash change (go makes the change after all). The modal
+ * form blocks every other way out.
  */
 function useLeaveGuard(dirty: { current: boolean }, ask: (go: () => void) => void) {
   const state = useRef({ dirty, ask });
@@ -127,17 +128,15 @@ function useLeaveGuard(dirty: { current: boolean }, ask: (go: () => void) => voi
       e.preventDefault();
       e.returnValue = "";
     };
-    const hash = (e: HashChangeEvent) => {
-      if (!state.current.dirty.current) return;
-      e.stopImmediatePropagation();
-      history.replaceState(null, "", e.oldURL);
-      state.current.ask(() => location.assign(e.newURL));
-    };
     window.addEventListener("beforeunload", beforeUnload);
-    window.addEventListener("hashchange", hash, true);
+    const unguard = guardLeave((go) => {
+      if (!state.current.dirty.current) return false;
+      state.current.ask(go);
+      return true;
+    });
     return () => {
       window.removeEventListener("beforeunload", beforeUnload);
-      window.removeEventListener("hashchange", hash, true);
+      unguard();
     };
   }, []);
 }
@@ -173,7 +172,8 @@ function EditForm(props: { account: Account; close: () => void; saved: () => voi
   const save = useAction(props.saved);
   const dirty = draftChanged(a, draft);
   const guard = useRef(false);
-  guard.current = dirty && !save.busy;
+  // On until the save succeeds, which closes the form: leaving during a save asks too.
+  guard.current = dirty;
   const ask = (go: () => void) => (dirty ? setLeave({ go }) : go());
   useLeaveGuard(guard, (go) => setLeave({ go }));
   const set = <K extends keyof SettingsDraft>(key: K, value: SettingsDraft[K]) => {
