@@ -42,7 +42,6 @@ pub fn core_call(method: &str, path: &str) {
 }
 
 /// The app asks the window what closing should do.
-#[allow(dead_code)]
 pub fn prompted() {
     PROMPTS.fetch_add(1, SeqCst);
     log("window_prompt", json!({}));

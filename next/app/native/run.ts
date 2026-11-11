@@ -209,6 +209,13 @@ async function runApp(
     writeFileSync(join(dirs.config, identifier, "connection.json"), JSON.stringify(connection), {
       mode: 0o600,
     });
+    // The main checks close the window to the tray; the window suite starts with Ask every time.
+    if (!suite)
+      writeFileSync(
+        join(dirs.config, identifier, "window.json"),
+        JSON.stringify({ close_behavior: "minimize-to-tray" }),
+        { mode: 0o600 },
+      );
     const quit = join(root, "quit");
     // Only what the app needs: no display or session bus but the run's own.
     const env: Record<string, string> = {

@@ -8,6 +8,7 @@
 import { useId, useState } from "preact/hooks";
 import { Button, Card, Choices, Facts, Notice, PageHead, Switch } from "../../ui/kit/ui";
 import { type Connection, type ConnectionChange, connectionSet, coreRestart, type Mode } from "./host";
+import { WindowSettings } from "./window";
 
 const MODES = [
   { value: "managed" as const, label: "Run core here", note: "the app starts and stops it" },
@@ -160,6 +161,7 @@ export function ConnectionPage(props: { connection: Connection; onChange: (c: Co
           </Button>
         </form>
       </Card>
+      <WindowSettings />
     </>
   );
 }

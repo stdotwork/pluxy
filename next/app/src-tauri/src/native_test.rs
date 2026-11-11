@@ -28,6 +28,12 @@ pub use ingress::{
 #[path = "native_window.rs"]
 pub mod window;
 
+/// The app asked the window what closing should do.
+pub fn window_prompted() {
+    #[cfg(target_os = "linux")]
+    window::prompted();
+}
+
 /// A management call from the window, for the window checks' count of polls.
 pub fn window_call(method: &str, path: &str) {
     #[cfg(target_os = "linux")]

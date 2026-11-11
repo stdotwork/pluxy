@@ -96,3 +96,17 @@ export function appHost(conn: Connection, changed: (c: Connection) => void): Hos
     features,
   };
 }
+
+/** What closing the window does: the old app's choices and names. */
+export type CloseBehavior = "ask" | "exit" | "minimize-to-tray";
+export interface WindowPreferences {
+  close_behavior: CloseBehavior;
+  /** Whether the desktop shows the app's tray icon now; without it, closing the window quits. */
+  tray: boolean;
+}
+export const windowGet = () => invoke<WindowPreferences>("window_get");
+export const windowSet = (closeBehavior: CloseBehavior) =>
+  invoke<WindowPreferences>("window_set", { closeBehavior });
+/** The answer to the close prompt. */
+export const windowClose = (action: Exclude<CloseBehavior, "ask">, remember: boolean) =>
+  invoke<void>("window_close", { action, remember });
