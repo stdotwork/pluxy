@@ -1796,6 +1796,19 @@ KiB, with a line saying how many bytes were left out between them. While only er
 written, every request keeps its reply's start and end until it ends, in case it fails, so an
 error log keeps less of a reply: the first 32 KiB and the last 96 KiB.
 
+A request log also holds what the provider extension sent upstream and what came back: between
+the client's request and its reply, an `=== UPSTREAM REQUEST ===` section (the account, time, the
+whole URL, method, headers and body) and an `=== UPSTREAM RESPONSE ===` section (time, status,
+headers and body, or the error that kept a response from coming) for each upstream request, so a
+refused attempt and the retry on another account show as two pairs. Each body keeps its first 32
+KiB and its last 96 KiB, a streamed reply recorded as the extension reads it, without holding it
+back; when a request made more than two upstream requests, the first and the last are kept, with
+a line saying how many were left out between them. A Responses WebSocket turn that opens the
+upstream socket holds its handshake; the messages on that socket are not written. This needs an
+extension that implements [protocol](protocol/README.md#upstream-capture) 0.13; it is captured
+only while `logs.request_log` is on, so error logs written with it off have no upstream sections,
+and with it off nothing is recorded or sent.
+
 With `logs.request_log` off (the default), core writes only the requests that fail, as
 `error-<name>.log`, as today's core does: a reply status of 400 or more, or a streamed reply that
 fails after it began; a client that goes away is not a failure. `logs.error_logs_max_files`
@@ -1806,11 +1819,14 @@ Secrets are left out of every request log: values of headers and query parameter
 hold `authorization`, `api-key`, `apikey`, `api_key`, `token`, `secret`, `cookie` or `password`,
 and `key` (an authorization header keeps its scheme, as in `Bearer [redacted]`), and, anywhere in
 the file, every client key, the management key and every config account's credential, in the
-forms the credential redaction finds (JSON escapes, percent-encoding and the rest). Replies come
-from the extension with the account's own credential already removed. Today's core writes the
-reply's headers unmasked, logs requests that fail the client key check, and also writes what it
-sent to the upstream and what came back; here the upstream exchange happens in the provider
-extension, so request logs hold what the client sent and received.
+forms the credential redaction finds (JSON escapes, percent-encoding and the rest). Replies and
+upstream sections come from the extension with the account's own credential, its proxy's password
+and its secret header values already removed; in the upstream sections the values of headers and
+query parameters whose names hold `auth`, `key`, `token`, `secret`, `cookie`, `session`,
+`password` or `signature` are masked too, the URL's user name and password are left out, and the
+characters a secret could be made of on each side of a body's left-out middle are left out with it.
+Today's core writes the reply's headers unmasked and logs requests that fail the client key
+check.
 
 ```json
 {"logs": {"request_log": true, "error_logs_max_files": 10}}
