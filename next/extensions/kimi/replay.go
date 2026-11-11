@@ -31,8 +31,9 @@ import (
 // the program (the per-extension data folder the protocol plans) if that shows up in use.
 
 // Bounds, as today's core's: kept content expires an hour after it was last used, and the cache
-// holds at most replayMaxEntries turns and replayMaxBytes of content, dropping the least recently
-// used first. A turn over replayMaxEntryBytes or replayMaxBlocks is not kept.
+// holds at most replayMaxEntries turns and replayMaxBytes of content and keys (a key holds the
+// client's session ID, which the client chooses), dropping the least recently used first. A turn
+// over replayMaxEntryBytes, key included, or replayMaxBlocks is not kept.
 const (
 	replayTTL           = time.Hour
 	replayMaxEntries    = 10240
@@ -82,7 +83,7 @@ func (c *replayCache) get(key string) ([]byte, bool) {
 }
 
 func (c *replayCache) put(key string, content []byte) {
-	if len(content) > replayMaxEntryBytes {
+	if len(key)+len(content) > replayMaxEntryBytes {
 		return
 	}
 	c.mu.Lock()
@@ -92,7 +93,7 @@ func (c *replayCache) put(key string, content []byte) {
 	}
 	now := c.now()
 	c.entries[key] = c.order.PushFront(&replayEntry{key: key, content: content, used: now})
-	c.bytes += len(content)
+	c.bytes += len(key) + len(content)
 	for el := c.order.Back(); el != nil; el = c.order.Back() {
 		e := el.Value.(*replayEntry)
 		if c.order.Len() <= c.maxEntries && c.bytes <= c.maxBytes && now.Sub(e.used) < replayTTL {
@@ -114,7 +115,7 @@ func (c *replayCache) drop(key string, content []byte) {
 func (c *replayCache) remove(el *list.Element) {
 	e := c.order.Remove(el).(*replayEntry)
 	delete(c.entries, e.key)
-	c.bytes -= len(e.content)
+	c.bytes -= len(e.key) + len(e.content)
 }
 
 // replayTurn is the replay state of one request: its scope, and the kept content it put back.

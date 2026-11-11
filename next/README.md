@@ -605,7 +605,7 @@ Messages request resends that turn without thinking but otherwise exactly as Kim
 kept thinking back. What is kept belongs to one client key (the request's protocol `caller`), one
 Claude Code conversation (its `X-Claude-Code-Session-Id` header, else the session in
 `metadata.user_id`) and one model family; a request without a client key or a session is sent as
-written. Kept turns expire an hour after their last use; at most 10,240 turns and 256 MiB are kept,
+written. Kept turns expire an hour after their last use; at most 10,240 turns and 256 MiB (session IDs included) are kept,
 and a turn over 8 MiB or 512 blocks is not. Kimi refusing a request whose thinking was put back
 (400, 422 or an error in the stream) drops that turn. The turns are kept in the extension's memory,
 so they are lost when core stops the idle extension (after 10 minutes without requests) or

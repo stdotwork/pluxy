@@ -292,6 +292,21 @@ func TestReplayCacheBounds(t *testing.T) {
 	if c.put("big", make([]byte, replayMaxEntryBytes+1)); c.entries["big"] != nil {
 		t.Error("a turn over the entry size bound was kept")
 	}
+
+	// Keys count toward the size bound: a client chooses its session ID, so turns with long keys
+	// and little content cannot grow the cache past it.
+	c = newReplayCache()
+	c.now = func() time.Time { return now }
+	c.maxEntries, c.maxBytes = 100, 64
+	for i := range 10 {
+		c.put(fmt.Sprintf("%030d", i), []byte("x"))
+	}
+	if c.bytes > c.maxBytes || len(c.entries) != 2 {
+		t.Errorf("long keys: bytes %d, %d entries; want at most %d bytes, 2 entries", c.bytes, len(c.entries), c.maxBytes)
+	}
+	if c.put(strings.Repeat("k", replayMaxEntryBytes), []byte("x")); len(c.entries) != 2 {
+		t.Error("a turn whose key is over the entry size bound was kept")
+	}
 }
 
 // A stream the capture cannot rebuild exactly is not kept: an unknown delta, an error event, or
