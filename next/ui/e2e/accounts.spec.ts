@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { Account } from "../kit/api/accounts";
-import { goTo, openPanel, signIn, useCore } from "./support";
+import { goTo, nav, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 const searchText = "Search name, account, type, provider, or error (403, 429, invalid). Use * as a wildcard";
@@ -26,7 +26,8 @@ for (const theme of ["default", "terminal"]) {
     await page.addInitScript((id) => localStorage.setItem("pluxy.theme", `pluxy/${id}`), theme);
     await openPanel(page, core);
     await signIn(page, core);
-    await goTo(page, "Accounts");
+    await nav(page).locator('a[href="#/accounts"]').click();
+    await expect(page.getByRole("heading", { name: /Accounts$/, level: 1 })).toBeVisible();
     await page.getByLabel("Per page", { exact: true }).selectOption("10");
     await expect(page.getByText("Page 1 / 4 · 33 accounts", { exact: true })).toBeVisible();
     await expect(page.locator('[data-part="item"]')).toHaveCount(10);
