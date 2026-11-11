@@ -3,6 +3,13 @@
 import type { Host } from "../host";
 import { one } from "./path";
 
+export interface AccountError {
+  code: string;
+  message: string;
+  status?: number;
+  provider_code?: string;
+}
+
 export interface Account {
   id: string;
   source: "config" | "login";
@@ -18,17 +25,13 @@ export interface Account {
   renewal_error?: { code: string; message: string };
   created_at?: string;
   updated_at?: string;
+  priority?: number;
   check?: { state: string; detail?: string; error?: AccountError; at?: string };
   cooldown_until?: string;
   cooldowns?: AccountCooldown[];
   last_error?: AccountError;
   last_error_at?: string;
   active_requests?: number;
-}
-
-export interface AccountError {
-  code: string;
-  message: string;
 }
 
 export interface AccountCooldown {
