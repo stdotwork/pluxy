@@ -47,9 +47,13 @@ const PLUGINS: &[&str] = &[
 const ACTING: &[&str] = &[
     "sign_out",
     "core_restart",
+    "key_entry",
     "confirmation_settings",
     "device_install_file",
 ];
+
+#[path = "key_entry_test.rs"]
+mod key_entry_test;
 
 pub(crate) fn log(step: &str, v: Value) {
     eprintln!("native-test: {step} {v}");
@@ -233,6 +237,7 @@ fn run(app: &AppHandle) -> Result<(), String> {
         );
     }
 
+    key_entry_test::check(app, &main)?;
     ingress::run(app, &main)?;
 
     // This device's extension catalog (device_native.rs), with fixtures from native/device.ts.
