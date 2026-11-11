@@ -9,6 +9,8 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -16,12 +18,14 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 	"github.com/stdotwork/pluxy/next/sdk"
+	"github.com/stdotwork/pluxy/next/sdk/payload"
 )
 
 // fakeSession is the session the "session" fake extension holds. Each turn's reply has the ID
 // "turn-<n>", n counting the session's turns, so a test sees its turns share one session. A
 // turn for model "wait" waits for an interrupt and finishes with the interrupt's message as its
-// raw reason. The account "no-session" takes no sessions.
+// raw reason; one for model "payload" finishes with a message after sdk.ApplyPayload as its raw
+// reason. The account "no-session" takes no sessions.
 type fakeSession struct {
 	turns      int
 	interrupts chan json.RawMessage
@@ -38,6 +42,11 @@ func (f *fakeSession) Turn(ctx context.Context, call sdk.Call, out *sdk.Stream) 
 	f.turns++
 	if err := out.Start(llm.ResponseInfo{ID: fmt.Sprintf("turn-%d", f.turns), Model: call.Request.Model}); err != nil {
 		return err
+	}
+	if call.Request.Model == "payload" {
+		// The upstream message a turn would send: the call's payload rules apply to it.
+		b := sdk.ApplyPayload(ctx, []byte(`{"model":"payload","tools":[{"name":"apply_patch","n":1},{"name":"apply_patch","n":2}]}`))
+		return out.Finish(llm.Finish{Reason: llm.FinishStop, RawReason: string(b)}, nil)
 	}
 	if call.Request.Model == "wait" {
 		select {
@@ -206,9 +215,10 @@ func TestDrainClosesSessions(t *testing.T) {
 	waitClosed(t, drained, "the drain")
 }
 
-// sessionBadFrame is an extension that holds sessions without the SDK and answers every turn
-// with an event of an unknown type that holds the turn's API key.
-func sessionBadFrame() {
+// sessionBadFrame is an extension that holds sessions without the SDK, reports protocol minor
+// version minor, and answers every turn with an event of an unknown type that holds the turn's API
+// key.
+func sessionBadFrame(minor int) {
 	socket := os.Getenv(protocol.EnvSocket)
 	ln, err := net.Listen("unix", socket)
 	if err != nil {
@@ -229,7 +239,7 @@ func sessionBadFrame() {
 			switch call.Op {
 			case protocol.OpDescribe:
 				_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: protocol.TypeDescribeResult},
-					Info: &protocol.Info{ID: os.Getenv(protocol.EnvExtensionID), Version: "0.0.0", Protocol: protocol.Version, ProtocolMinor: 1,
+					Info: &protocol.Info{ID: os.Getenv(protocol.EnvExtensionID), Version: "0.0.0", Protocol: protocol.Version, ProtocolMinor: minor,
 						Operations: []string{protocol.OpGenerate, protocol.OpSession}}})
 			case protocol.OpSession:
 				_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: protocol.TypeSessionReady}})
@@ -263,5 +273,103 @@ func TestSessionProtocolErrorIsRedacted(t *testing.T) {
 	}
 	if strings.Contains(ev.Error.Message, key) {
 		t.Errorf("protocol error holds the credential: %q", ev.Error.Message)
+	}
+}
+
+// payloadTurnRules is a rule set for model on a fake extension's channel (the last part of its
+// extension ID, which is its mode).
+func payloadTurnRules(model, channel string) *payload.Rules {
+	models := []payload.Model{{Name: model, Protocol: channel}}
+	return &payload.Rules{
+		Override: []payload.Rule{{Models: models, Params: map[string]any{"service_tier": "priority"}}},
+		Filter:   []payload.FilterRule{{Models: models, Params: []string{`tools.#(name=="apply_patch")`}}},
+	}
+}
+
+// A session turn carries the payload rules that match it, and the SDK applies them to the message
+// the extension sends upstream (sdk.ApplyPayload); a turn that no rule matches gets none, and
+// rules for another model change nothing. Of two apply_patch tools the filter removes only the
+// first, as in the old engine's oracle case "example filter codex flat tools, two patches: first
+// only", so the second tool stays only if the rules were applied once.
+func TestSessionTurnAppliesPayloadRules(t *testing.T) {
+	const message = `{"model":"payload","tools":[{"name":"apply_patch","n":1},{"name":"apply_patch","n":2}]}`
+	const changed = `{"model":"payload","service_tier":"priority","tools":[{"name":"apply_patch","n":2}]}`
+	for _, c := range []struct {
+		name  string
+		rules *payload.Rules
+		want  string
+	}{
+		{"rules match the turn", payloadTurnRules("payload", "session"), changed},
+		{"rules for another model", payloadTurnRules("other", "session"), message},
+		{"no rules", nil, message},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			opts := Options{Log: &syncBuffer{}}
+			if c.rules != nil {
+				opts.Payload = func() *payload.Rules { return c.rules }
+			}
+			ext, err := Start(filepath.Join(fakePackage(t, "session"), ManifestFile), opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ext.Stop()
+			s, e := ext.OpenSession(context.Background(), protocol.Account{ID: "a"}, responsesSession)
+			if e != nil {
+				t.Fatalf("OpenSession: %+v", e)
+			}
+			defer s.Close()
+			for turn := 1; turn <= 2; turn++ {
+				evs := turnEvents(s, context.Background(), "a", "payload")
+				if len(evs) != 2 || evs[1].Type != llm.EventFinish {
+					t.Fatalf("turn %d: %+v; want start and finish", turn, evs)
+				}
+				got := evs[1].Finish.RawReason
+				var g, w any
+				if json.Unmarshal([]byte(got), &g) != nil || json.Unmarshal([]byte(c.want), &w) != nil || !reflect.DeepEqual(g, w) {
+					t.Errorf("turn %d: the message the extension sent is %s, want %s", turn, got, c.want)
+				}
+			}
+		})
+	}
+}
+
+// An extension older than protocol 0.15 cannot apply payload rules to a session turn (0.14 only
+// to a call's HTTP requests), so a turn that rules match is refused before it reaches it, as
+// unsupported for the account, and the session stays open; a turn no rule matches reaches it.
+func TestOldExtensionGetsNoSessionTurnWithPayloadRules(t *testing.T) {
+	for _, mode := range []string{"session-bad-frame", "session-bad-frame-14"} {
+		t.Run(mode, func(t *testing.T) {
+			rules := payloadTurnRules("payload", mode)
+			ext, err := Start(filepath.Join(fakePackage(t, mode), ManifestFile), Options{Log: &syncBuffer{},
+				Payload: func() *payload.Rules { return rules }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ext.Stop()
+			account := protocol.Account{ID: "a", Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-fake-key"}}
+			s, e := ext.OpenSession(context.Background(), account, responsesSession)
+			if e != nil {
+				t.Fatalf("OpenSession: %+v", e)
+			}
+			defer s.Close()
+			turn := s.Turn(context.Background(), account, llm.Request{Model: "payload"})
+			ev := turn.Next()
+			turn.Close()
+			if ev.Type != llm.EventError || ev.Error.Code != llm.CodeUnsupported || ev.Error.Scope != llm.ScopeCredential || !ev.Error.Retryable ||
+				!strings.Contains(ev.Error.Message, "payload rules") {
+				t.Fatalf("event %+v, want a retryable unsupported error for the account that names payload rules", ev)
+			}
+			if s.Ended() {
+				t.Error("the refused turn ended the session")
+			}
+			// The fake extension answers any turn with an unknown frame: one that no rule
+			// matches reaches it.
+			turn = s.Turn(context.Background(), account, llm.Request{Model: "other"})
+			ev = turn.Next()
+			turn.Close()
+			if ev.Type != llm.EventError || ev.Error.Code != llm.CodeExtensionProtocol {
+				t.Fatalf("turn no rule matches: event %+v, want the extension's protocol error", ev)
+			}
+		})
 	}
 }
