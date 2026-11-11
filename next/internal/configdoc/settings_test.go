@@ -76,3 +76,25 @@ func TestRestoreSettingsKeepsSecretsInPlace(t *testing.T) {
 		t.Errorf("config restore of moved placeholders = %s, %v; want them accepted", out, err)
 	}
 }
+
+// A key that is the empty string is a key like any other: below a secret key, its value is a
+// secret too.
+func TestRedactEmptyKey(t *testing.T) {
+	r := NewRedactor()
+	for _, c := range []struct {
+		src    string
+		strict []bool
+	}{
+		{`{"password":{"":"fake-empty-key"}}`, []bool{true}},
+		{`{"headers":{"Authorization":{"":"fake-empty-key"}}}`, []bool{true, false}},
+		{`{"api_keys":[[{"":"fake-empty-key"}]]}`, []bool{true, false}},
+		{`{"credential":{"kind":"api_key","":"fake-empty-key"}}`, []bool{true, false}},
+	} {
+		for _, strict := range c.strict {
+			out, err := r.redact([]byte(c.src), false, strict)
+			if err != nil || strings.Contains(string(out), "fake-empty-key") {
+				t.Errorf("redact(%s, strict %v) = %s, %v", c.src, strict, out, err)
+			}
+		}
+	}
+}

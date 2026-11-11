@@ -110,24 +110,25 @@ func secrets(n *yaml.Node, strict bool) []*yaml.Node {
 			out = append(out, v)
 		}
 	}
-	// all adds every scalar under v, except the values of keys named skip.
-	var all func(v *yaml.Node, skip string)
-	all = func(v *yaml.Node, skip string) {
+	// all adds every scalar under v; with kind false, except the values of keys named "kind" (a
+	// credential's kind).
+	var all func(v *yaml.Node, kind bool)
+	all = func(v *yaml.Node, kind bool) {
 		switch v.Kind {
 		case yaml.ScalarNode:
 			add(v)
 		case yaml.AliasNode:
 			if v.Alias != nil {
-				all(v.Alias, skip)
+				all(v.Alias, kind)
 			}
 		case yaml.SequenceNode:
 			for _, c := range v.Content {
-				all(c, skip)
+				all(c, kind)
 			}
 		case yaml.MappingNode:
 			for i := 0; i+1 < len(v.Content); i += 2 {
-				if v.Content[i].Value != skip {
-					all(v.Content[i+1], skip)
+				if kind || v.Content[i].Value != "kind" {
+					all(v.Content[i+1], kind)
 				}
 			}
 		}
@@ -148,23 +149,23 @@ func secrets(n *yaml.Node, strict bool) []*yaml.Node {
 				key, val := v.Content[i].Value, v.Content[i+1]
 				switch {
 				case strings.EqualFold(key, "credential"):
-					all(val, "kind")
+					all(val, false)
 				case strings.EqualFold(key, "headers") && val.Kind == yaml.MappingNode:
 					for j := 0; j+1 < len(val.Content); j += 2 {
 						if secretHeader(val.Content[j].Value) {
-							all(val.Content[j+1], "")
+							all(val.Content[j+1], true)
 						} else {
 							walk(val.Content[j+1])
 						}
 					}
 				case secretName(key) && (strict || val.Kind == yaml.ScalarNode || val.Kind == yaml.AliasNode):
-					all(val, "")
+					all(val, true)
 				case secretName(key) && val.Kind == yaml.SequenceNode:
 					// A list of keys, or of lists of keys; a list of mappings (provider key
 					// entries) is walked.
 					for _, c := range val.Content {
 						if c.Kind != yaml.MappingNode {
-							all(c, "")
+							all(c, true)
 						} else {
 							walk(c)
 						}
