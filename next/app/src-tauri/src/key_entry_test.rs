@@ -147,7 +147,9 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
     // Success must establish authentication, not merely retain the initial key.
     main.eval("window.__keySignedOut = false; window.__TAURI_INTERNALS__.invoke('sign_out').then(v => window.__keySignedOut = !v.signed_in)")
         .map_err(|_| "could not sign out before native entry")?;
-    wait_for("native sign-out", || eval(main, "window.__keySignedOut").filter(|v| v == true))?;
+    wait_for("native sign-out", || {
+        eval(main, "window.__keySignedOut").filter(|v| v == true)
+    })?;
     if app.state::<App>().conn.lock().unwrap().view().signed_in {
         return Err("positive control did not start signed out".into());
     }
