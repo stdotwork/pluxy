@@ -11,7 +11,7 @@
 // sha256sum of the downloaded file, and the release's detached signature (runtime-x86_64.sig)
 // verifies with gpg against the public key the release ships (signing-pubkey.asc, fingerprint
 // 570C 77AC EA40 C0F1 B758 902C BF96 CCA5 6490 F695). To move to another release, repeat those
-// checks and change TAG and SHA256 together.
+// checks and change TAG and the digest together.
 
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -29,10 +29,22 @@ import {
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
+/** A file downloaded from a fixed address and pinned by its SHA-256. */
+export interface Pin {
+  /** Its file name in the cache folder. */
+  cache: string;
+  url: string;
+  sha256: string;
+}
+
 const TAG = "20251108";
 const ASSET = "runtime-x86_64";
-const SHA256 = "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d";
-const URL = `https://github.com/AppImage/type2-runtime/releases/download/${TAG}/${ASSET}`;
+/** The AppImage type 2 runtime (see the top of this file). */
+export const RUNTIME: Pin = {
+  cache: `type2-runtime-${TAG}-${ASSET}`,
+  url: `https://github.com/AppImage/type2-runtime/releases/download/${TAG}/${ASSET}`,
+  sha256: "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d",
+};
 
 /** What the AppRun script prints; the runtime sets APPIMAGE and APPDIR. */
 const APP_RUN = `#!/bin/sh
@@ -41,30 +53,35 @@ echo "pluxy-appimage-smoke arg=$1 appimage=\${APPIMAGE:+set} appdir=$APPDIR"
 
 const sha256 = (data: Uint8Array) => createHash("sha256").update(data).digest("hex");
 
-/** The runtime's bytes, from the cache or downloaded, checked against the pinned digest. The
- * caller uses these bytes, never the cache file again, so nothing unchecked runs. */
-export async function runtimeBytes(): Promise<Uint8Array> {
-  if (process.platform !== "linux" || process.arch !== "x64") {
-    throw new Error(`the AppImage smoke test needs Linux on x86_64, not ${process.platform} ${process.arch}`);
-  }
+/** A pinned file's bytes, from the cache folder or downloaded, checked against its digest every
+ * time. The caller uses these bytes, never the cache file again, so nothing unchecked runs. */
+export async function pinnedBytes(pin: Pin): Promise<Uint8Array> {
   const dir = join(process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"), "pluxy-app-native");
   mkdirSync(dir, { recursive: true });
-  const file = join(dir, `type2-runtime-${TAG}-${ASSET}`);
+  const file = join(dir, pin.cache);
   if (existsSync(file)) {
     const cached = new Uint8Array(readFileSync(file));
-    if (sha256(cached) === SHA256) return cached;
+    if (sha256(cached) === pin.sha256) return cached;
   }
   rmSync(file, { force: true });
 
-  const response = await fetch(URL);
-  if (!response.ok) throw new Error(`downloading ${URL}: HTTP ${response.status}`);
+  const response = await fetch(pin.url);
+  if (!response.ok) throw new Error(`downloading ${pin.url}: HTTP ${response.status}`);
   const bytes = new Uint8Array(await response.arrayBuffer());
   const got = sha256(bytes);
-  if (got !== SHA256) throw new Error(`${URL} has SHA-256 ${got}, not the pinned ${SHA256}`);
+  if (got !== pin.sha256) throw new Error(`${pin.url} has SHA-256 ${got}, not the pinned ${pin.sha256}`);
   const part = `${file}.${randomUUID()}`;
   writeFileSync(part, bytes, { flag: "wx", mode: 0o600 });
   renameSync(part, file);
   return bytes;
+}
+
+/** The runtime's bytes, checked against the pinned digest. */
+export async function runtimeBytes(): Promise<Uint8Array> {
+  if (process.platform !== "linux" || process.arch !== "x64") {
+    throw new Error(`the AppImage smoke test needs Linux on x86_64, not ${process.platform} ${process.arch}`);
+  }
+  return pinnedBytes(RUNTIME);
 }
 
 /** Builds the smoke AppImage in dir (an existing, empty folder) and returns its path. */
