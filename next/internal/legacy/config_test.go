@@ -123,6 +123,7 @@ func TestExampleProviderSections(t *testing.T) {
 	vertex := exts[Gemini].(map[string]any)["accounts"].([]any)[3]
 	equalJSON(t, vertex, `{
 		"id": "vertex-1", "weight": 5, "prefix": "test", "disable_cooling": false, "request_retry": 3,
+		"proxy_url": "socks5://proxy.example.com:1080",
 		"models": [{"name": "gemini-2.5-flash", "alias": "vertex-flash"}, {"name": "gemini-2.5-pro", "alias": "vertex-pro"}],
 		"excluded_models": ["imagen-3.0-generate-002", "imagen-*"],
 		"settings": {"base_url": "https://example.com/api", "vertex": {}},
@@ -132,9 +133,11 @@ func TestExampleProviderSections(t *testing.T) {
 	// own, and its empty excluded-models clears the group's.
 	first := exts[Gemini].(map[string]any)["accounts"].([]any)[0].(map[string]any)
 	equalJSON(t, first["excluded_models"], `["gemini-2.5-pro", "gemini-2.5-*", "*-preview", "*flash*"]`)
+	equalJSON(t, first["proxy_url"], `"socks5://proxy.example.com:1080"`)
 	second := exts[Gemini].(map[string]any)["accounts"].([]any)[1]
 	equalJSON(t, second, `{
 		"id": "gemini-1-2", "priority": 0, "weight": 2, "prefix": "test", "disable_cooling": false, "request_retry": 0,
+		"proxy_url": "direct",
 		"models": [{"name": "gemini-2.5-flash", "alias": "gemini-flash"}],
 		"settings": {"base_url": "https://generativelanguage.googleapis.com"},
 		"credential": {"kind": "api_key", "api_key": "replace-with-second-gemini-key"}
@@ -143,6 +146,7 @@ func TestExampleProviderSections(t *testing.T) {
 	interactions := exts[Gemini].(map[string]any)["accounts"].([]any)[4]
 	equalJSON(t, interactions, `{
 		"id": "interactions-1", "weight": 5, "prefix": "native", "disable_cooling": false, "request_retry": 3,
+		"proxy_url": "socks5://proxy.example.com:1080",
 		"models": [{"name": "gemini-2.5-flash", "alias": "native-gemini-flash"}],
 		"excluded_models": ["gemini-2.5-pro"],
 		"settings": {"base_url": "https://generativelanguage.googleapis.com", "interactions": true},
@@ -160,7 +164,7 @@ func TestExampleProviderSections(t *testing.T) {
 	if strings.Contains(n, "unknown") || strings.Contains(n, "experimental-cch-signing") {
 		t.Errorf("notices name an unknown or dead key:\n%s", n)
 	}
-	for _, read := range []string{"prefix", "models.alias", "excluded-models"} {
+	for _, read := range []string{"prefix", "models.alias", "excluded-models", "proxy-url"} {
 		if strings.Contains(n, "."+read) {
 			t.Errorf("notices name %s, which is read:\n%s", read, n)
 		}

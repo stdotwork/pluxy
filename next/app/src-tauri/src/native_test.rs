@@ -111,6 +111,9 @@ fn probe(w: &Webview, calls: &[&str]) -> Result<Value, String> {
 }
 
 fn run(app: &AppHandle) -> Result<(), String> {
+    if let Ok(stage) = std::env::var("PLUXY_APP_TEST_STARTUP") {
+        return startup(app, &stage);
+    }
     let main = wait_for("the window", || app.get_webview(MAIN))?;
     wait_for("the window's shell", || {
         eval(&main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true)
@@ -269,6 +272,45 @@ fn run(app: &AppHandle) -> Result<(), String> {
         })?;
     }
     log("quit", json!({}));
+    crate::quit(app);
+    Ok(())
+}
+
+fn startup(app: &AppHandle, stage: &str) -> Result<(), String> {
+    if stage == "enable" || stage == "disable" {
+        let main = wait_for("the startup settings window", || app.get_webview(MAIN))?;
+        let enabled = stage == "enable";
+        main.eval(format!(
+            "window.__TAURI_INTERNALS__.invoke('startup_set', {{ preferences: {{ autostart_enabled: {enabled}, silent_start_enabled: false, start_core_on_launch: true }} }}).then((v) => {{ window.__startupResult = {{ ok: true, value: v }}; }}, (e) => {{ window.__startupResult = {{ error: String(e) }}; }})"
+        )).map_err(|e| e.to_string())?;
+        let result = wait_for("saving startup settings", || {
+            eval(&main, "window.__startupResult ?? null").filter(|v| !v.is_null())
+        })?;
+        if result["ok"] != true {
+            return Err(format!("startup settings command failed: {result}"));
+        }
+    }
+    if let Some(main) = app.get_webview(MAIN) {
+        wait_for("startup window shell", || {
+            eval(&main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true)
+        })?;
+    }
+    let connection = app.state::<App>().conn.lock().unwrap().view();
+    log(
+        "startup",
+        json!({
+            "app_pid": std::process::id(),
+            "windows": app.windows().len(),
+            "webviews": app.webviews().len(),
+            "tray": app.state::<App>().has_tray.load(std::sync::atomic::Ordering::SeqCst),
+            "core_pid": connection.core.and_then(|c| c.pid),
+        }),
+    );
+    if let Ok(file) = std::env::var("PLUXY_APP_TEST_STARTUP_CONTINUE") {
+        wait_for("startup process and tray inspection", || {
+            std::path::Path::new(&file).exists().then_some(())
+        })?;
+    }
     crate::quit(app);
     Ok(())
 }

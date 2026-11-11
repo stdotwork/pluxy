@@ -97,5 +97,19 @@ export function appHost(conn: Connection, changed: (c: Connection) => void): Hos
       set: (name, value) => write(`pluxy.${name}`, value),
     },
     features,
+    address: conn.target?.replace(/\/+$/, "") || undefined,
   };
 }
+
+export interface StartupPreferences {
+  autostart_enabled: boolean;
+  silent_start_enabled: boolean;
+  start_core_on_launch: boolean;
+}
+export interface StartupView extends StartupPreferences {
+  registration_owned: boolean;
+  registration_conflict: boolean;
+}
+export const startupGet = () => invoke<StartupView>("startup_get");
+export const startupSet = (preferences: StartupPreferences) =>
+  invoke<StartupView>("startup_set", { preferences });

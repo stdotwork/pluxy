@@ -383,10 +383,14 @@ type nsRestorer struct {
 	first      bool              // the stream's first event, on response.start, was a call's added event
 	open       map[int]bool      // model item indexes of calls to restore
 	dispatched map[string]string // item ID of a call to a folded namespace -> namespace
+	// children is the child of a call to a folded namespace that is known before its done item, by
+	// item ID and call ID (dispatchHold has held the call's events until its arguments named it).
+	// The call's added item then names the child, which it cannot otherwise.
+	children map[string]string
 }
 
 func newNSRestorer(refs map[string]*nsRef) *nsRestorer {
-	return &nsRestorer{refs: refs, open: map[int]bool{}, dispatched: map[string]string{}}
+	return &nsRestorer{refs: refs, open: map[int]bool{}, dispatched: map[string]string{}, children: map[string]string{}}
 }
 
 func (r *nsRestorer) Transform(ev llm.Event) (llm.Event, error) {
@@ -482,7 +486,13 @@ func (r *nsRestorer) restoreItem(v any, added bool) bool {
 		r.dispatched[id] = ref.namespace
 	}
 	item["namespace"] = ref.namespace
-	if !added {
+	if added {
+		if child := r.children[str(item, "id")]; child != "" {
+			item["name"] = child
+		} else if child := r.children[str(item, "call_id")]; child != "" {
+			item["name"] = child
+		}
+	} else {
 		if child, args, ok := unwrapDispatcher(str(item, "arguments"), ref); ok {
 			item["name"], item["arguments"] = child, string(args)
 		}

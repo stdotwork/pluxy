@@ -1,0 +1,48 @@
+@layer kit {
+  .system-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 12em), 1fr));
+    gap: calc(var(--s) * 3);
+  }
+  .system-tile {
+    padding: calc(var(--s) * 3);
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--px-shape-radius);
+    background: var(--px-color-surface-raised);
+    min-width: 0;
+  }
+  .system-tile-label,
+  .system-tile-sub {
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+  }
+  .system-tile-value {
+    font-weight: var(--px-font-weight-strong);
+    overflow-wrap: anywhere;
+  }
+  .system-tile-sub {
+    overflow-wrap: anywhere;
+  }
+  .system-group + .system-group {
+    margin-top: calc(var(--s) * 4);
+  }
+  .system-group h3 {
+    display: flex;
+    gap: calc(var(--s) * 2);
+    align-items: baseline;
+    margin: 0 0 calc(var(--s) * 2);
+  }
+  .system-group-count {
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+    font-weight: normal;
+  }
+  .system-hint {
+    margin: 0 0 calc(var(--s) * 3);
+    color: var(--px-color-text-muted);
+  }
+  .system-group td,
+  .system-group th[scope="row"] {
+    overflow-wrap: anywhere;
+  }
+}

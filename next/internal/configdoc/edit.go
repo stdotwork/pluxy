@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/stdotwork/pluxy/next/internal/proxyurl"
 )
 
 // place returns where a setting is in the document: the JSON path in a JSON config; in a
@@ -122,6 +124,9 @@ type SettingsPatch struct {
 	// the default) or with an error saying counting is unsupported (false). This core's own
 	// setting, so it keeps its name in a config.yaml.
 	TokenCountEstimate *bool `json:"token_count_estimate"`
+	// ProxyURL is the proxy of every account without one of its own: an http, https, socks5 or
+	// socks5h URL, direct or none; empty removes it (no proxy).
+	ProxyURL *string `json:"proxy-url"`
 }
 
 // ObservabilityPatch is a change to the usage and log settings.
@@ -196,7 +201,31 @@ func (d *Doc) ApplySettings(p SettingsPatch) error {
 			return err
 		}
 	}
+	if p.ProxyURL != nil {
+		if err := d.applyProxyURL(*p.ProxyURL); err != nil {
+			return err
+		}
+	}
 	return d.applyObservability(p.Observability)
+}
+
+// applyProxyURL writes the global proxy setting; "" removes it, in both spellings of a
+// config.yaml, so an older spelling cannot take over.
+func (d *Doc) applyProxyURL(s string) error {
+	s = strings.TrimSpace(s)
+	if err := proxyurl.Check("proxy-url", s); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	if s == "" {
+		if d.YAML {
+			d.Delete("requests", "proxy-url")
+			d.Delete("proxy-url")
+		} else {
+			d.Delete("proxy_url")
+		}
+		return nil
+	}
+	return d.Set(String(s), d.place("proxy_url", "requests.proxy-url", "proxy-url")...)
 }
 
 // applyObservability writes a change to the usage and log settings.
