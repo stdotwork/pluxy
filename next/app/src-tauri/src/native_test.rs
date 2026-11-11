@@ -226,6 +226,12 @@ fn run(app: &AppHandle) -> Result<(), String> {
     }
 
     ingress::run(app, &main)?;
+    #[cfg(target_os = "linux")]
+    {
+        let mut all: Vec<&str> = COMMANDS.to_vec();
+        all.extend(PLUGINS);
+        crate::release_native::run(app, &main, |w| probe(w, &all))?;
+    }
 
     // For screenshots: keep the window open until this file exists.
     if let Ok(f) = std::env::var("PLUXY_APP_TEST_HOLD") {

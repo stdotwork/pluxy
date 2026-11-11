@@ -21,6 +21,8 @@ pub mod conn;
 pub mod managed;
 #[cfg(feature = "native-test")]
 mod native_test;
+#[cfg(all(target_os = "linux", feature = "native-test"))]
+mod release_native;
 pub mod pages;
 mod place;
 #[cfg(debug_assertions)]

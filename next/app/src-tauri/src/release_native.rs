@@ -1,0 +1,376 @@
+//! The native test's release feed check, in native-test builds only. It drives the Updates page
+//! as the person would (real DOM clicks, real GTK dialogs through X input) against the runner's
+//! fake https feed (`native/run.ts`), and reads what the window, the notes webview, the files the
+//! app keeps and the runner's stand-in browser show. Expected versions come from the feed fixture
+//! (`native/release-feed.json`), not from the app's parser.
+use crate::confirmation::native::{key, window};
+use crate::native_test::{eval, log, wait_for};
+use gtk::prelude::*;
+use serde_json::{json, Value};
+use std::fs;
+use std::path::PathBuf;
+use std::sync::mpsc;
+use std::time::Duration;
+use tauri::{AppHandle, Manager, Webview};
+
+const DIALOG: &str = "pluxy native confirmation";
+
+fn env(name: &str) -> Result<String, String> {
+    std::env::var(name).map_err(|_| format!("{name} is not set"))
+}
+
+fn click(main: &Webview, selector: &str) -> Result<(), String> {
+    main.eval(format!(
+        "(e => (e.matches('button') ? e : e.querySelector('button')).click())(document.querySelector({}))",
+        json!(selector)
+    ))
+    .map_err(|e| e.to_string())
+}
+
+/// A data attribute of the first element matching selector, once it equals want.
+fn wait_attr(
+    main: &Webview,
+    what: &str,
+    selector: &str,
+    attr: &str,
+    want: &str,
+) -> Result<(), String> {
+    let expr = format!(
+        "document.querySelector({})?.dataset[{}] ?? null",
+        json!(selector),
+        json!(attr)
+    );
+    wait_for(what, || eval(main, &expr).filter(|v| v == want).map(|_| ()))
+        .map_err(|e| format!("{e}: {selector} {attr} is {:?}", eval(main, &expr)))
+}
+
+fn attr(main: &Webview, selector: &str, attr: &str) -> Value {
+    eval(
+        main,
+        &format!(
+            "document.querySelector({})?.dataset[{}] ?? null",
+            json!(selector),
+            json!(attr)
+        ),
+    )
+    .unwrap_or(Value::Null)
+}
+
+/// The text the native confirmation shows, read from its GTK labels.
+fn dialog_text(app: &AppHandle) -> Result<String, String> {
+    let (tx, rx) = mpsc::channel();
+    app.run_on_main_thread(move || {
+        fn labels(w: &gtk::Widget, out: &mut String) {
+            if let Some(l) = w.downcast_ref::<gtk::Label>() {
+                out.push_str(&l.text());
+                out.push('\n');
+            }
+            if let Some(c) = w.downcast_ref::<gtk::Container>() {
+                for child in c.children() {
+                    labels(&child, out);
+                }
+            }
+        }
+        let mut out = String::new();
+        for w in gtk::Window::list_toplevels() {
+            if let Ok(d) = w.downcast::<gtk::Dialog>() {
+                if d.title().as_deref() == Some(DIALOG) && d.is_visible() {
+                    labels(d.upcast_ref(), &mut out);
+                }
+            }
+        }
+        let _ = tx.send(out);
+    })
+    .map_err(|e| e.to_string())?;
+    rx.recv_timeout(Duration::from_secs(5))
+        .map_err(|e| e.to_string())
+}
+
+/// Asks for a feed change in the window and waits for its native dialog.
+fn ask_source(app: &AppHandle, main: &Webview, url: &str) -> Result<String, String> {
+    main.eval(format!(
+        "{{ const i = document.querySelector('[data-part=release-source-input]'); i.value = {}; \
+         i.dispatchEvent(new Event('input', {{bubbles: true}})); }}",
+        json!(url)
+    ))
+    .map_err(|e| e.to_string())?;
+    std::thread::sleep(Duration::from_millis(200));
+    click(main, "[data-part=release-source-change]")?;
+    wait_for("the feed change's native confirmation", || window(DIALOG))?;
+    let text = dialog_text(app)?;
+    if !text.contains(url) {
+        return Err(format!(
+            "the native confirmation does not show {url}: {text}"
+        ));
+    }
+    Ok(text)
+}
+
+fn browser_log(path: &str) -> Vec<String> {
+    fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(String::from)
+        .collect()
+}
+
+/// A notes webview's document, as its own DOM has it.
+const NOTES_DOM: &str = "({href: location.href, scripts: document.scripts.length, \
+    images: document.images.length, embedded: document.querySelectorAll('iframe, object, embed, frame, form, input').length, \
+    handlers: [...document.querySelectorAll('*')].filter(e => [...e.attributes].some(a => a.name.startsWith('on'))).length, \
+    links: [...document.links].map(a => a.href), heading: document.querySelector('main h2')?.textContent ?? null, \
+    text: document.body.innerText, ran: window.__hostileRan ?? null, \
+    internals: typeof window.__TAURI_INTERNALS__?.invoke === 'function'})";
+
+fn area(main: &Webview, product: &str) -> Value {
+    eval(
+        main,
+        &format!(
+            "(() => {{ const r = document.querySelector('[data-part=release-notes][data-product={product}]')?.getBoundingClientRect(); \
+             return r ? {{x: r.left, y: r.top, width: r.width, height: r.height}} : null; }})()"
+        ),
+    )
+    .unwrap_or(Value::Null)
+}
+
+fn placed(app: &AppHandle, label: &str) -> Result<Value, String> {
+    let (tx, rx) = mpsc::channel();
+    let l = label.to_string();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(crate::place::allocation(&l));
+    })
+    .map_err(|e| e.to_string())?;
+    Ok(json!(rx
+        .recv_timeout(Duration::from_secs(5))
+        .ok()
+        .flatten()))
+}
+
+fn near(a: &Value, b: &Value) -> bool {
+    ["x", "y", "width", "height"].iter().all(
+        |k| matches!((a[k].as_f64(), b[k].as_f64()), (Some(x), Some(y)) if (x - y).abs() <= 2.0),
+    )
+}
+
+pub(crate) fn run(
+    app: &AppHandle,
+    main: &Webview,
+    probe: impl Fn(&Webview) -> Result<Value, String>,
+) -> Result<(), String> {
+    let feed = env("PLUXY_APP_TEST_FEED")?;
+    let other = env("PLUXY_APP_TEST_FEED_OTHER")?;
+    let base = feed.trim_end_matches("/feed.json").to_string();
+    let browser = env("PLUXY_APP_TEST_BROWSER_LOG")?;
+    let offline = env("PLUXY_APP_TEST_FEED_OFFLINE")?;
+    let settings: PathBuf = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| e.to_string())?
+        .join("release.json");
+    let mut evidence = json!({});
+
+    main.eval("location.hash = '#/updates'")
+        .map_err(|e| e.to_string())?;
+    wait_for("the Updates page", || {
+        eval(
+            main,
+            "document.querySelector('[data-part=release-check]') !== null",
+        )
+        .filter(|v| v == true)
+    })?;
+    // No built-in feed: nothing set, nothing kept.
+    wait_attr(
+        main,
+        "no feed at first",
+        "[data-part=release-source]",
+        "source",
+        "",
+    )?;
+    evidence["no_default"] = json!(!settings.exists());
+
+    // A feed change opens the native confirmation; confirming applies it.
+    ask_source(app, main, &feed)?;
+    key(DIALOG, "alt+o")?;
+    wait_attr(
+        main,
+        "the confirmed feed",
+        "[data-part=release-source]",
+        "source",
+        &feed,
+    )?;
+    let kept: Value = serde_json::from_slice(&fs::read(&settings).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    evidence["confirmed"] = json!(kept["source"] == feed);
+
+    // Check for Updates: the stable channel's releases.
+    click(main, "[data-part=release-check]")?;
+    let app_card = "[data-part=release-product][data-product=app]";
+    let core_card = "[data-part=release-product][data-product=core]";
+    wait_attr(
+        main,
+        "the app's stable release",
+        app_card,
+        "latest",
+        "0.2.0",
+    )?;
+    wait_attr(main, "core's stable release", core_card, "latest", "1.4.0")?;
+    evidence["stable"] = json!({
+        "app": attr(main, app_card, "latest"), "core": attr(main, core_card, "latest"),
+        "installed_app": attr(main, app_card, "installed"),
+    });
+    let checked = attr(main, "[data-part=release-checked]", "at");
+    if checked.as_str().is_none_or(str::is_empty) {
+        return Err("no check time shown".into());
+    }
+
+    // Cancelling another change keeps the old feed, its file and its last good copy.
+    let before = fs::read(&settings).map_err(|e| e.to_string())?;
+    ask_source(app, main, &other)?;
+    key(DIALOG, "alt+c")?;
+    wait_attr(
+        main,
+        "the cancelled change to settle",
+        "[data-part=release-source]",
+        "changing",
+        "false",
+    )?;
+    evidence["cancel_kept"] = json!(
+        attr(main, "[data-part=release-source]", "source") == feed
+            && fs::read(&settings).map_err(|e| e.to_string())? == before
+            && attr(main, app_card, "latest") == "0.2.0"
+    );
+
+    // Preview (latest): the newest release on either channel, from the same copy.
+    click(main, "[data-part=release-channel] input[value=preview]")?;
+    wait_attr(
+        main,
+        "the app's preview release",
+        app_card,
+        "latest",
+        "0.3.0-preview.1",
+    )?;
+    wait_attr(
+        main,
+        "core's preview release",
+        core_card,
+        "latest",
+        "1.5.0-rc.1",
+    )?;
+    evidence["preview"] =
+        json!({"app": attr(main, app_card, "latest"), "core": attr(main, core_card, "latest")});
+
+    // The notes webview: hostile notes as text, no grants, no way out but a rendered link.
+    let notes_sel = "[data-part=release-notes][data-product=app]";
+    wait_for("the app's notes webview", || {
+        attr(main, notes_sel, "label")
+            .as_str()
+            .filter(|l| l.starts_with("notes-"))
+            .and_then(|l| app.get_webview(l))
+    })?;
+    let label = attr(main, notes_sel, "label")
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let notes = app.get_webview(&label).ok_or("no notes webview")?;
+    let dom = wait_for("the notes document", || {
+        eval(&notes, NOTES_DOM).filter(|d| d["heading"].is_string())
+    })?;
+    let good = format!("{base}/notes/0.3.0-preview.1");
+    let full = format!("{base}/releases/0.3.0-preview.1");
+    evidence["notes"] = json!({
+        "label": label, "href": dom["href"], "scripts": dom["scripts"], "images": dom["images"],
+        "embedded": dom["embedded"], "handlers": dom["handlers"], "links": dom["links"],
+        "heading": dom["heading"], "ran": dom["ran"], "internals": dom["internals"],
+        "script_as_text": dom["text"].as_str().is_some_and(|t| t.contains("<script>window.__hostileRan = 1</script>")),
+    });
+    // The same command from the window (control) and from the notes webview (refused).
+    main.eval("window.__releaseControl = null; window.__TAURI_INTERNALS__.invoke('release_get').then(v => window.__releaseControl = {ok: true, source: v.source}, e => window.__releaseControl = {ok: false, error: String(e)})")
+        .map_err(|e| e.to_string())?;
+    evidence["control"] = wait_for("the window's control call", || {
+        eval(main, "window.__releaseControl").filter(|v| !v.is_null())
+    })?;
+    evidence["notes_probe"] = probe(&notes)?;
+
+    // Navigation: an address the notes do not link to opens nothing; the rendered link opens
+    // in the browser, and the notes webview stays on its document.
+    notes
+        .eval(format!(
+            "location.href = {}",
+            json!(format!("{base}/not-linked"))
+        ))
+        .map_err(|e| e.to_string())?;
+    std::thread::sleep(Duration::from_millis(1500));
+    let unlinked = browser_log(&browser);
+    notes
+        .eval("document.querySelector('main a').click()")
+        .map_err(|e| e.to_string())?;
+    let opened = wait_for("the browser to get the notes link", || {
+        let l = browser_log(&browser);
+        (!l.is_empty()).then_some(l)
+    })?;
+    std::thread::sleep(Duration::from_millis(1100));
+    click(main, "[data-part=release-notes-full][data-product=app]")?;
+    let full_opened = wait_for("the browser to get the full notes", || {
+        let l = browser_log(&browser);
+        (l.len() >= 2).then_some(l)
+    })?;
+    evidence["navigation"] = json!({
+        "unlinked_opened": unlinked, "opened": opened, "full": full_opened,
+        "expected": [good, full],
+        "stayed": eval(&notes, "location.href").unwrap_or(Value::Null),
+    });
+
+    // Expand and Collapse: the notes area grows and shrinks, and the webview follows it.
+    let collapsed = area(main, "app");
+    click(main, "[data-part=release-notes-toggle][data-product=app]")?;
+    let expanded = wait_for("the notes to expand", || {
+        let a = area(main, "app");
+        (a["height"].as_f64()? > collapsed["height"].as_f64()? + 50.0).then_some(a)
+    })?;
+    std::thread::sleep(Duration::from_millis(500));
+    let expanded_placed = placed(app, &label)?;
+    click(main, "[data-part=release-notes-toggle][data-product=app]")?;
+    wait_for("the notes to collapse", || {
+        let a = area(main, "app");
+        ((a["height"].as_f64()? - collapsed["height"].as_f64()?).abs() <= 2.0).then_some(())
+    })?;
+    std::thread::sleep(Duration::from_millis(500));
+    evidence["expand"] = json!({
+        "collapsed": collapsed, "expanded": expanded,
+        "follows": near(&expanded, &expanded_placed) && near(&collapsed, &placed(app, &label)?),
+    });
+
+    // Offline: the runner stops the feed; the last good copy stays, with its time and an error.
+    fs::write(&offline, b"").map_err(|e| e.to_string())?;
+    wait_for("the feed to go offline", || {
+        std::path::Path::new(&format!("{offline}-done"))
+            .exists()
+            .then_some(())
+    })?;
+    click(main, "[data-part=release-check]")?;
+    wait_attr(
+        main,
+        "the offline error",
+        "[data-part=release-problem]",
+        "offline",
+        "true",
+    )?;
+    evidence["offline"] = json!({
+        "kept": attr(main, app_card, "latest") == "0.3.0-preview.1",
+        "same_time": attr(main, "[data-part=release-checked]", "at") == checked,
+        "message": eval(main, "document.querySelector('[data-part=release-problem]')?.textContent ?? null"),
+    });
+
+    // Leaving the page closes its notes webviews.
+    main.eval("location.hash = '#/status'")
+        .map_err(|e| e.to_string())?;
+    wait_for("the notes webviews to close", || {
+        app.webviews()
+            .keys()
+            .all(|l| !l.starts_with("notes-"))
+            .then_some(())
+    })?;
+    evidence["closed"] = json!(true);
+    log("release", evidence);
+    Ok(())
+}
