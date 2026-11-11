@@ -37,7 +37,7 @@ func serveModels(mux *http.ServeMux, src Source) {
 			write(w, r, g.Router.Models(r.Context()))
 		}
 	}
-	mux.HandleFunc("GET /v1/models", list(false, func(w http.ResponseWriter, r *http.Request, models []protocol.Model) {
+	mux.HandleFunc("GET /v1/models", accessLog(list(false, func(w http.ResponseWriter, r *http.Request, models []protocol.Model) {
 		if anthropicClient(r) {
 			writeList(w, http.StatusOK, anthropicList(models))
 			return
@@ -47,8 +47,8 @@ func serveModels(mux *http.ServeMux, src Source) {
 			data[i] = openAIModel(m)
 		}
 		writeList(w, http.StatusOK, map[string]any{"object": "list", "data": data})
-	}))
-	mux.HandleFunc("GET /v1/models/{model...}", list(false, func(w http.ResponseWriter, r *http.Request, models []protocol.Model) {
+	})))
+	mux.HandleFunc("GET /v1/models/{model...}", accessLog(list(false, func(w http.ResponseWriter, r *http.Request, models []protocol.Model) {
 		id := r.PathValue("model")
 		var items []map[string]any
 		if anthropicClient(r) {
@@ -66,15 +66,15 @@ func serveModels(mux *http.ServeMux, src Source) {
 		}
 		writeList(w, http.StatusNotFound, map[string]any{"error": map[string]string{
 			"message": "Model not found", "type": "invalid_request_error", "code": "model_not_found"}})
-	}))
-	mux.HandleFunc("GET /v1beta/models", list(true, func(w http.ResponseWriter, _ *http.Request, models []protocol.Model) {
+	})))
+	mux.HandleFunc("GET /v1beta/models", accessLog(list(true, func(w http.ResponseWriter, _ *http.Request, models []protocol.Model) {
 		out := make([]map[string]any, len(models))
 		for i, m := range models {
 			out[i] = geminiModel(m, true)
 		}
 		writeList(w, http.StatusOK, map[string]any{"models": out})
-	}))
-	mux.HandleFunc("GET /v1beta/models/{name...}", list(true, func(w http.ResponseWriter, r *http.Request, models []protocol.Model) {
+	})))
+	mux.HandleFunc("GET /v1beta/models/{name...}", accessLog(list(true, func(w http.ResponseWriter, r *http.Request, models []protocol.Model) {
 		// As in today's core: the name matches with or without "models/" before it, against
 		// the model's resource name as it is held.
 		name := r.PathValue("name")
@@ -85,7 +85,7 @@ func serveModels(mux *http.ServeMux, src Source) {
 			}
 		}
 		writeList(w, http.StatusNotFound, map[string]any{"error": map[string]string{"message": "Not Found", "type": "not_found"}})
-	}))
+	})))
 }
 
 // anthropicClient reports whether a model list request comes from an Anthropic client: it sends
