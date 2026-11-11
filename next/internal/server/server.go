@@ -194,7 +194,18 @@ func NewHandler(src Source) http.Handler {
 		mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) { serveResponsesWebSocket(w, r, src) })
 	}
 	serveModels(mux, src)
+	// The health probe a container or load balancer sends. It takes no key and reads no config,
+	// so it is not refused, counted or logged as a client request.
+	mux.HandleFunc("GET /healthz", serveHealthz)
 	return withCORS(src, mux)
+}
+
+// serveHealthz answers 200 with the text "ok". A GET pattern also matches HEAD; net/http sends
+// HEAD's headers and no body.
+func serveHealthz(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, "ok")
 }
 
 // refused returns the error that answers a request that may not use the client API, or nil when
