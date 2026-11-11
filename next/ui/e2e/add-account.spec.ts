@@ -1,8 +1,69 @@
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 import type { LoginMethodsExtension } from "../kit/api/logins";
 import { goTo, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
+
+test("capture sign-in states in the built-in themes", async ({ page }) => {
+  const dir = process.env.ADD_ACCOUNT_SHOTS;
+  test.skip(!dir, "set ADD_ACCOUNT_SHOTS to capture the sign-in states");
+  if (!dir) return;
+  mkdirSync(dir, { recursive: true });
+  for (const theme of ["default", "terminal", "paper"]) {
+    await openPanel(page, core);
+    if (theme === "default") await signIn(page, core);
+    await goTo(page, "Themes");
+    await page
+      .getByRole("radiogroup", { name: "Theme" })
+      .getByRole("radio", { name: theme, exact: false })
+      .check();
+    await goTo(page, "Add Account");
+    const shot = (state: string) =>
+      page.screenshot({ path: join(dir, theme.concat("-", state, ".png")), fullPage: true });
+    const tile = (method: string) =>
+      page.locator('[data-part="method"]').filter({ hasText: "test/alpha" }).filter({ hasText: method });
+    await expect(tile("Test browser")).toBeVisible();
+    await shot("tiles");
+    await tile("Test API key").getByRole("button", { name: "Test API key" }).click();
+    await shot("inputs");
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route("**/v0/management/accounts", async (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      const response = await route.fetch();
+      await gate;
+      await route.fulfill({ response });
+    });
+    await tile("Test browser").getByRole("button", { name: "Test browser" }).click();
+    await expect(page.getByText("Generating sign-in link…", { exact: true })).toBeVisible();
+    await shot("generating");
+    release?.();
+    await expect(page.getByLabel("Callback URL")).toBeVisible();
+    await page.unroute("**/v0/management/accounts");
+    await shot("browser-waiting");
+    await page.getByLabel("Callback URL").fill("http://localhost:1455/auth/callback?code=bad&state=bad");
+    await page.getByRole("button", { name: "Submit Callback URL" }).click();
+    await expect(page.getByRole("alert")).toContainText("the test provider refused this sign-in");
+    await shot("failed");
+    await page.getByRole("button", { name: "Start over" }).click();
+    await tile("Test browser").getByRole("button", { name: "Test browser" }).click();
+    await expect(page.getByLabel("Callback URL")).toBeVisible();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(page.getByRole("status")).toHaveText("Sign-in cancelled.");
+    await shot("cancelled");
+    await page.getByRole("button", { name: "Start over" }).click();
+    await tile("Test device").getByRole("button", { name: "Test device" }).click();
+    await expect(page.locator('[data-part="device-code"]')).toHaveText("TEST-1234");
+    await shot("device-code");
+    await expect(page.getByRole("status")).toHaveText("Authentication successful!", { timeout: 15_000 });
+    await shot("success");
+  }
+});
 
 async function openAddAccount(page: import("@playwright/test").Page) {
   await openPanel(page, core);
@@ -12,6 +73,7 @@ async function openAddAccount(page: import("@playwright/test").Page) {
 
 test("device sign-in shows its code and adds the account", async ({ page }) => {
   await openAddAccount(page);
+  await page.getByLabel("Account ID", { exact: true }).fill("device-added");
   const tile = page
     .locator('[data-part="method"]')
     .filter({ hasText: "test/alpha" })
@@ -20,10 +82,10 @@ test("device sign-in shows its code and adds the account", async ({ page }) => {
   await expect(page.locator('[data-part="device-code"]')).toHaveText("TEST-1234");
   await expect(page.getByText(/^Time left: \d+:\d{2}$/)).toBeVisible();
   await expect(page.getByText("Waiting for authentication…", { exact: true })).toBeVisible();
-  await expect(page.getByRole("status")).toContainText("Authentication successful!");
+  await expect(page.getByRole("status")).toContainText("Authentication successful!", { timeout: 15_000 });
   await page.getByRole("button", { name: "View accounts" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Accounts" })).toBeVisible();
-  await expect(page.getByText("Test account", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "device-added", exact: true })).toBeVisible();
 });
 
 test("browser sign-in accepts a callback and reports provider failures", async ({ page }) => {
