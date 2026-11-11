@@ -10,8 +10,8 @@ import (
 	"unicode/utf8"
 )
 
-// inputDecoder reads the patch text out of the arguments of an apply_patch function call,
-// {"input":"<patch text>"}, while the arguments arrive in fragments. It accepts only that shape: an
+// inputDecoder reads the text of a custom tool call (the patch text of apply_patch, say) out of the
+// arguments of the function call it was sent as, {"input":"<text>"}, while the arguments arrive in fragments. It accepts only that shape: an
 // object with one field named input whose value is a string, and nothing after the object. Text
 // is handed out as soon as a whole character of it has arrived, so a fragment may end inside an
 // escape or inside a character. One decoder reads one call.
@@ -42,11 +42,11 @@ const (
 // headTokens are what comes before the patch text, each with optional white space before it.
 var headTokens = [...]string{"{", `"input"`, ":", `"`}
 
-var errPatchInput = errors.New("apply_patch arguments are not a JSON object with one input string")
+var errPatchInput = errors.New("custom tool arguments are not a JSON object with one input string")
 
-var errPatchTooLarge = errors.New("apply_patch arguments are too large")
+var errPatchTooLarge = errors.New("custom tool arguments are too large")
 
-// The most argument bytes one apply_patch call may have, and the most all of a reply's calls may
+// The most argument bytes one custom tool call may have, and the most all of a reply's calls may
 // have; a patch of several megabytes is the largest anyone writes.
 var (
 	maxCallArguments  = 16 << 20
@@ -298,7 +298,7 @@ func (d *inputDecoder) Finish(final string, has bool) (input, tail string, err e
 	}
 	sent := d.Input()
 	if !strings.HasPrefix(whole.Input(), sent) {
-		return "", "", errors.New("apply_patch arguments differ from the fragments that came before")
+		return "", "", errors.New("custom tool arguments differ from the fragments that came before")
 	}
 	return whole.Input(), whole.Input()[len(sent):], nil
 }
