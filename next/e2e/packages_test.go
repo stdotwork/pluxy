@@ -28,8 +28,9 @@ func TestCommonAppManifestInstall(t *testing.T) {
 		t.Fatal(err)
 	}
 	var cases []struct {
-		File      string
-		CoreError string `json:"core_error"`
+		File          string
+		CoreError     string `json:"core_error"`
+		ProviderIndex bool   `json:"provider_index"`
 	}
 	if err := json.Unmarshal(b, &cases); err != nil {
 		t.Fatal(err)
@@ -47,7 +48,7 @@ func TestCommonAppManifestInstall(t *testing.T) {
 			srv := codextest.New(t)
 			index := writeRegistry(t, manifestArchive(t, m, canary), "")
 			// App-only releases omit provider protocol metadata in the index too.
-			if strings.HasPrefix(tc.File, "app-only-") {
+			if strings.HasPrefix(tc.File, "app-only-") && !tc.ProviderIndex {
 				b, err := os.ReadFile(index)
 				if err != nil {
 					t.Fatal(err)
@@ -93,16 +94,17 @@ func TestCommonAppManifestInstall(t *testing.T) {
 				}
 				var ui struct {
 					Extensions []struct {
-						ID    string
-						Pages []any
+						ID     string
+						Pages  []any
+						Config bool
 					}
 				}
 				if code := manage(t, base, "GET", "/ui", nil, &ui); code != http.StatusOK {
 					t.Fatalf("ui: %d", code)
 				}
 				for _, e := range ui.Extensions {
-					if e.ID == "pluxy/codex" && len(e.Pages) > 0 {
-						t.Errorf("app pages exposed by core: %+v", e)
+					if e.ID == "pluxy/codex" && (len(e.Pages) > 0 || e.Config) {
+						t.Errorf("app pages/settings exposed by core: %+v", e)
 					}
 				}
 			}
@@ -133,18 +135,19 @@ func manifestArchive(t *testing.T, m []byte, canary ...[]byte) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := []byte("#!/bin/sh\nexit 99\n")
-	if len(canary) > 0 {
-		app = canary[0]
-	}
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
-	for _, f := range []struct {
+	type archiveFile struct {
 		name string
 		mode int64
 		body []byte
-	}{{"pluxy-extension.json", 0o644, m}, {"bin/", 0o755, nil}, {"bin/codex", 0o755, prog}, {"bin/app-canary", 0o755, app}} {
+	}
+	files := []archiveFile{{"pluxy-extension.json", 0o644, m}, {"bin/", 0o755, nil}, {"bin/codex", 0o755, prog}}
+	if len(canary) > 0 {
+		files = append(files, archiveFile{"bin/app-canary", 0o755, canary[0]}, archiveFile{"app-pages/", 0o755, nil}, archiveFile{"app-pages/index.html", 0o644, []byte("<!doctype html><title>App only</title>")})
+	}
+	for _, f := range files {
 		h := &tar.Header{Name: f.name, Mode: f.mode, Size: int64(len(f.body)), Typeflag: tar.TypeReg}
 		if strings.HasSuffix(f.name, "/") {
 			h.Typeflag = tar.TypeDir

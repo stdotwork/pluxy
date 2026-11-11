@@ -21,7 +21,7 @@ import (
 // ManifestFile is the manifest's file name inside a package folder.
 const ManifestFile = "pluxy-extension.json"
 
-// Manifest is a package manifest, version 0.
+// Manifest is a provider package manifest (version 0), optionally with app contributions (1).
 type Manifest struct {
 	ManifestVersion int               `json:"manifest_version"`
 	ID              string            `json:"id"`
@@ -32,6 +32,8 @@ type Manifest struct {
 	UI *UI `json:"ui,omitempty"`
 	// Config is the schema of the extension's settings, if any.
 	Config *ConfigSection `json:"config,omitempty"`
+	// App belongs to the desktop host. Core never executes or serves it.
+	App json.RawMessage `json:"app,omitempty"`
 
 	dir string
 }
@@ -164,7 +166,7 @@ func LoadManifest(path string) (*Manifest, error) {
 }
 
 func (m *Manifest) validate() error {
-	if m.ManifestVersion != 0 {
+	if m.ManifestVersion != 0 && m.ManifestVersion != 1 {
 		return fmt.Errorf("manifest_version %d is not supported", m.ManifestVersion)
 	}
 	if !idPattern.MatchString(m.ID) {
@@ -172,6 +174,21 @@ func (m *Manifest) validate() error {
 	}
 	if !ValidVersion(m.Version) {
 		return fmt.Errorf("version %q is not 1 to 64 letters, digits, '.', '+', '_' and '-' starting with a letter or digit", m.Version)
+	}
+	if m.ManifestVersion == 1 && len(m.App) > 0 && string(m.App) != "null" {
+		var app AppContribution
+		if err := json.Unmarshal(m.App, &app); err != nil {
+			return fmt.Errorf("app: %w", err)
+		}
+		if err := app.validate(); err != nil {
+			return err
+		}
+		if len(m.Protocol) == 0 && len(m.Programs) == 0 {
+			return errors.New("app-only package: install it in the desktop app")
+		}
+		if len(m.Programs) == 0 {
+			return errors.New("provider programs must be declared separately from app.programs")
+		}
 	}
 	if len(m.Protocol) == 0 {
 		return errors.New("protocol must list at least one version")
@@ -187,15 +204,20 @@ func (m *Manifest) validate() error {
 		}
 	}
 	if m.Config != nil {
-		if m.Config.Version != ConfigVersion {
-			return fmt.Errorf("config.version %d is not supported (this core reads %d)", m.Config.Version, ConfigVersion)
-		}
-		s, err := extconfig.Parse(m.Config.Schema)
-		if err != nil {
-			return fmt.Errorf("config: %w", err)
-		}
-		m.Config.schema = s
+		return m.Config.validate()
 	}
+	return nil
+}
+
+func (c *ConfigSection) validate() error {
+	if c.Version != ConfigVersion {
+		return fmt.Errorf("config.version %d is not supported (this core reads %d)", c.Version, ConfigVersion)
+	}
+	s, err := extconfig.Parse(c.Schema)
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	c.schema = s
 	return nil
 }
 

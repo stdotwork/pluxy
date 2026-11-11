@@ -9,7 +9,7 @@ a mixed package. Start with the [tutorial](TUTORIAL.md).
 
 An app package has one `pluxy-extension.json` at the archive root. It uses `manifest_version: 1`,
 the same `publisher/name` ID and package version rules as the [provider manifest](../../protocol/README.md#package-manifest).
-Version 0 provider manifests keep their existing meaning. Version 1 adds `app`. A mixed package
+Version 0 provider manifests keep their existing meaning and ignore an unknown app field. Version 1 adds `app`. A mixed package
 keeps provider `protocol`, `programs`, `ui` and `config` at the top level and adds `app` beside
 them. App-only packages omit provider fields; no dummy provider is needed.
 
@@ -25,7 +25,9 @@ them. App-only packages omit provider fields; no dummy provider is needed.
 | `operations` | Native only: declared operations, each with an `id`, plain `description`, and `input_schema` and `output_schema` JSON objects. At least one is required. |
 | `state` | Native only: `version` written by this release and nonempty `readable_versions` list. Check state compatibility before swap or rollback. |
 
-Resource and operation IDs are unique within their respective lists. Paths must stay inside the
+Resource and operation IDs use 1 to 32 lower-case letters, digits and hyphens, starting with a
+letter or digit, and are unique within their respective lists. State and host contract versions
+are nonnegative integers. Paths must stay inside the
 package. Web packages cannot declare programs, native operations or state; native packages cannot
 request folder grants through `resources`. Resources describe exact files or bounded subtrees
 selected later by the user, never automatic home-directory access. Native import routing, jobs

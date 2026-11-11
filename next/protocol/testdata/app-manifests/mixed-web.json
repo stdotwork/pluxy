@@ -25,6 +25,26 @@
           "path": "index.html"
         }
       ]
-    }
+    },
+    "config": {
+      "version": 0,
+      "schema": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "resources": [
+      {
+        "id": "notes",
+        "kind": "file",
+        "operations": [
+          "read"
+        ]
+      }
+    ]
   }
 }

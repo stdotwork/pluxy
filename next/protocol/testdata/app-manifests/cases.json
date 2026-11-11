@@ -1,46 +1,69 @@
 [
   {
     "file": "provider-v0.json",
-    "core_error": ""
+    "core_error": "",
+    "manifest_valid": true
   },
   {
     "file": "app-only-web.json",
-    "core_error": "app-only package: install it in the desktop app"
+    "core_error": "app-only package: install it in the desktop app",
+    "manifest_valid": true
   },
   {
     "file": "mixed-web.json",
-    "core_error": ""
+    "core_error": "",
+    "manifest_valid": true
   },
   {
     "file": "app-only-native.json",
-    "core_error": "app-only package: install it in the desktop app"
+    "core_error": "app-only package: install it in the desktop app",
+    "manifest_valid": true
   },
   {
     "file": "mixed-native.json",
-    "core_error": ""
+    "core_error": "",
+    "manifest_valid": true
   },
   {
     "file": "invalid-tier.json",
-    "core_error": "app.tier"
+    "core_error": "app.tier",
+    "manifest_valid": false
   },
   {
     "file": "web-with-program.json",
-    "core_error": "web app cannot declare"
+    "core_error": "web app cannot declare",
+    "manifest_valid": false
   },
   {
     "file": "native-with-resources.json",
-    "core_error": "native app cannot declare resources"
+    "core_error": "native app cannot declare resources",
+    "manifest_valid": false
   },
   {
     "file": "escaping-app-program.json",
-    "core_error": "app program"
+    "core_error": "app program",
+    "manifest_valid": false
   },
   {
     "file": "partial-provider.json",
-    "core_error": "provider programs"
+    "core_error": "provider programs",
+    "manifest_valid": false
   },
   {
     "file": "app-in-v0.json",
-    "core_error": "app requires manifest_version 1"
+    "core_error": "",
+    "manifest_valid": true
+  },
+  {
+    "file": "app-only-web.json",
+    "provider_index": true,
+    "core_error": "app-only package: install it in the desktop app",
+    "manifest_valid": true
+  },
+  {
+    "file": "app-only-native.json",
+    "provider_index": true,
+    "core_error": "app-only package: install it in the desktop app",
+    "manifest_valid": true
   }
 ]
