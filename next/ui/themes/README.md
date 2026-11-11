@@ -222,6 +222,11 @@ These stay stable within a theme contract version:
 | `data-part="dialog"` | A dialog window |
 | `data-part="log"` | A core log or request log text view |
 | `data-part="log-line"` | One core log line; `data-level` is `info`, `warn` or empty for a line without a level |
+| `data-part="toolbar"` | A page's search, filters and actions |
+| `data-part="pager"` | Page size and previous/next controls |
+| `data-part="select"` | An item's batch selection checkbox |
+| `data-part="batch"` | Batch selection and account actions |
+| `data-part="account-meta"` | Account totals, active accounts and problems |
 | `data-part="key-notice"` | A notice revealing a newly generated key until closed or its tab is left |
 | `data-part="key-value"` | The selectable value of a newly generated key inside its notice |
 | `data-part="method"` | A sign-in method tile with its label, kind caption and selected flow. |

@@ -3,6 +3,13 @@
 import type { Host } from "../host";
 import { one } from "./path";
 
+interface AccountError {
+  code: string;
+  message: string;
+  status?: number;
+  provider_code?: string;
+}
+
 export interface Account {
   id: string;
   source: "config" | "login";
@@ -18,6 +25,12 @@ export interface Account {
   renewal_error?: { code: string; message: string };
   created_at?: string;
   updated_at?: string;
+  priority?: number;
+  cooldown_until?: string;
+  cooldowns?: { until: string }[];
+  last_error?: AccountError;
+  active_requests?: number;
+  check?: { state: string; detail?: string; error?: AccountError };
 }
 
 export const accountsApi = (host: Host) => ({
