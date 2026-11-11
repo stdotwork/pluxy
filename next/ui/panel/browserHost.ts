@@ -38,6 +38,13 @@ export function browserHost(): Host {
   const local = store("localStorage");
   const session = store("sessionStorage");
   let key = read(session, KEY) ?? read(local, KEY);
+  let remember = read(session, KEY) === null && read(local, KEY) !== null;
+
+  function keep(candidate: string) {
+    key = candidate;
+    write(remember ? local : session, KEY, candidate);
+    write(remember ? session : local, KEY, null);
+  }
 
   async function send<T>(method: Method, path: string, body: unknown, withKey: string): Promise<Reply<T>> {
     if (!path.startsWith("/") || path.split("/").includes("..")) {
@@ -73,17 +80,21 @@ export function browserHost(): Host {
   const host: Host = {
     async call<T>(method: Method, path: string, body?: unknown) {
       if (!key) return { status: 401, error: { code: "unauthorized", message: "not signed in" } };
-      return send<T>(method, path, body, key);
+      const reply = await send<T>(method, path, body, key);
+      if (method === "POST" && path === "/management-key/rotate" && reply.status === 200) {
+        const value = (reply.body as { value?: unknown } | undefined)?.value;
+        if (typeof value === "string" && value.length > 0) keep(value);
+      }
+      return reply;
     },
     signedIn: () => key !== null,
-    async signIn(candidate, remember) {
+    async signIn(candidate, keepOnDevice) {
       const r = await send("GET", "/status", undefined, candidate);
       if (r.status === 401) return "core refused this key";
       if (r.status === 404) return "core's management API is off: set management_key in its config";
       if (r.status !== 200) return r.status === 0 ? "core could not be reached" : `core answered ${r.status}`;
-      key = candidate;
-      write(remember ? local : session, KEY, candidate);
-      write(remember ? session : local, KEY, null);
+      remember = keepOnDevice;
+      keep(candidate);
       return undefined;
     },
     signOut() {
@@ -95,7 +106,7 @@ export function browserHost(): Host {
       get: (name) => read(local, PREFS + name),
       set: (name, value) => write(local, PREFS + name, value),
     },
-    features: new Set<Feature>(["signOut"]),
+    features: new Set<Feature>(["signOut", "rotateManagementKey"]),
   };
   return host;
 }

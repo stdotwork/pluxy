@@ -219,6 +219,8 @@ These stay stable within a theme contract version:
 | `data-part="diff"` | A group of changed lines |
 | `data-part="diff-line"` | One diff line; context lines have no change attribute; `data-change` is `add` or `remove` |
 | `data-part="dialog"` | A dialog window |
+| `data-part="key-notice"` | A notice revealing a newly generated key until closed or its tab is left |
+| `data-part="key-value"` | The selectable value of a newly generated key inside its notice |
 
 Every other class name, element and attribute can change in any release.
 
