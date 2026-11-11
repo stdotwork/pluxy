@@ -6,6 +6,11 @@ include!("src/command_names.rs");
 mod build_config;
 
 fn main() {
+    assert!(
+        std::env::var_os("CARGO_FEATURE_NATIVE_TEST").is_none()
+            || std::env::var("PROFILE").as_deref() == Ok("debug"),
+        "native-test fixture actions must never be built in a release profile"
+    );
     use sha2::{Digest, Sha256};
     // Package tooling validates these snapshots from the same OUT_DIR as the app build.
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo OUT_DIR"));
