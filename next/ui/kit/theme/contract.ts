@@ -102,6 +102,8 @@ export const PARTS = [
   "flow",
   "device-code",
   "tier",
+  "tile",
+  "model-group",
   "stat",
   "chart",
   "account-tools",
