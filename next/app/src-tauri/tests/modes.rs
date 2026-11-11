@@ -176,31 +176,22 @@ fn local_connects_to_a_running_core_and_leaves_it_running() {
     let refused = c.change(Change {
         mode: Some(Mode::Local),
         url: Some("http://192.0.2.1:8400".into()),
-        key: Some(core.key.clone()),
         ..Change::default()
     });
     assert!(refused.unwrap_err().contains("not on this computer"));
-    let refused = c.change(Change {
-        mode: Some(Mode::Local),
-        url: Some(core.base.clone()),
-        key: Some("wrong".into()),
-        ..Change::default()
-    });
-    assert_eq!(refused.unwrap_err(), "core refused this key");
-    assert_eq!(
-        c.view().mode,
-        None,
-        "a refused change changed the connection"
-    );
-
     c.change(Change {
         mode: Some(Mode::Local),
         url: Some(core.base.clone()),
-        key: Some(core.key.clone()),
-        remember: false,
         ..Change::default()
     })
     .unwrap();
+    assert_eq!(
+        c.sign_in(&pluxy_app::managed::random_key(), false)
+            .unwrap_err(),
+        "core refused this key"
+    );
+    assert!(!c.view().signed_in);
+    c.sign_in(&core.key, false).unwrap();
     let v = c.view();
     assert_eq!(
         (v.mode, v.target.as_deref(), v.signed_in),
@@ -240,28 +231,27 @@ fn remote_needs_https_and_trusts_the_given_authority_only() {
     let refused = c.change(Change {
         mode: Some(Mode::Remote),
         url: Some(http),
-        key: Some(core.key.clone()),
         ..Change::default()
     });
     assert!(refused.unwrap_err().contains("https"));
-    // Without its authority, the certificate is not trusted, and the key is never accepted.
-    let refused = c.change(Change {
-        mode: Some(Mode::Remote),
-        url: Some(core.base.clone()),
-        key: Some(core.key.clone()),
-        ..Change::default()
-    });
-    assert!(refused.is_err());
-
+    // Without its authority, TLS authentication fails without accepting the key.
     c.change(Change {
         mode: Some(Mode::Remote),
         url: Some(core.base.clone()),
-        key: Some(core.key.clone()),
-        remember: true,
+        ..Change::default()
+    })
+    .unwrap();
+    let error = c.sign_in(&core.key, false).unwrap_err();
+    assert!(error.contains("TLS"), "{error}");
+    assert!(!error.contains(&core.key));
+    c.change(Change {
+        mode: Some(Mode::Remote),
+        url: Some(core.base.clone()),
         ca_file: Some(ca.clone()),
         ..Change::default()
     })
     .unwrap();
+    c.sign_in(&core.key, true).unwrap();
     let v = c.view();
     assert_eq!(
         (v.mode, v.target.as_deref(), v.signed_in),

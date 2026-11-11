@@ -27,19 +27,60 @@ pub fn random_key() -> String {
 
 /// Writes `path` readable only by this user, replacing it in one step.
 pub fn write_private(path: &Path, data: &[u8]) -> io::Result<()> {
-    let tmp = path.with_extension("tmp");
-    let mut opts = fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
+    write_private_with_nonce(path, data, random_key)
+}
+
+fn write_private_with_nonce(
+    path: &Path,
+    data: &[u8],
+    mut nonce: impl FnMut() -> String,
+) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let name = path
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no file name"))?;
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
+    let folder = fs::File::open(parent)?;
+    let (tmp, mut f) = loop {
+        let mut name = name.to_os_string();
+        name.push(format!(".{}.tmp", nonce()));
+        let tmp = parent.join(name);
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        }
+        match opts.open(&tmp) {
+            Ok(f) => break (tmp, f),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    };
+    let result = (|| {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            f.set_permissions(fs::Permissions::from_mode(0o600))?;
+        }
+        f.write_all(data)?;
+        f.sync_all()?;
+        drop(f);
+        fs::rename(&tmp, path)?;
+        // The file is in place once renamed; syncing the folder only makes the rename durable
+        // sooner, and some filesystems refuse it, so a failure here does not fail the write.
+        #[cfg(unix)]
+        let _ = folder.sync_all();
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
     }
-    let mut f = opts.open(&tmp)?;
-    f.write_all(data)?;
-    f.sync_all()?;
-    drop(f);
-    fs::rename(&tmp, path)
+    result
 }
 
 /// The core config the app keeps, `<dir>/config.json`. The app writes it once, the first time,
@@ -329,6 +370,39 @@ impl Drop for ManagedCore {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn private_write_refuses_planted_temp_symlinks() {
+        use std::os::unix::{
+            ffi::OsStrExt,
+            fs::{symlink, PermissionsExt},
+        };
+        let dir = std::env::temp_dir().join(format!("pluxy-private-{}", super::random_key()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("connection.json");
+        let victim = dir.join("victim");
+        std::fs::write(&victim, b"untouched").unwrap();
+        let planted = dir.join("connection.json.planted.tmp");
+        symlink(&victim, &planted).unwrap();
+        let old_temp = path.with_extension("tmp");
+        symlink(&victim, &old_temp).unwrap();
+        let mut nonces = ["planted".to_string(), super::random_key()].into_iter();
+        let key = super::random_key();
+        super::write_private_with_nonce(&path, key.as_bytes(), || nonces.next().unwrap()).unwrap();
+        assert_eq!(std::fs::read(&victim).unwrap(), b"untouched");
+        assert_eq!(std::fs::read(&path).unwrap(), key.as_bytes());
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            std::fs::read_link(&planted).unwrap().as_os_str().as_bytes(),
+            victim.as_os_str().as_bytes()
+        );
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 4);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     use super::*;
 
     fn temp(name: &str) -> PathBuf {
