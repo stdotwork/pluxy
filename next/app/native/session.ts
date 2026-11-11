@@ -249,7 +249,11 @@ try {
   await setup();
   code = await new Promise<number>((resolve, reject) => {
     appProc = process.env.PLUXY_APP_TEST_STARTUP_SUITE
-      ? spawn(process.execPath, [join(import.meta.dir, "startup.ts"), app, process.env.PLUXY_APP_TEST_STARTUP_SUITE], { stdio: "inherit" })
+      ? spawn(
+          process.execPath,
+          [join(import.meta.dir, "startup.ts"), app, process.env.PLUXY_APP_TEST_STARTUP_SUITE],
+          { stdio: "inherit" },
+        )
       : spawn(app, [], { stdio: "inherit" });
     appProc.once("error", reject);
     appProc.once("exit", (c) => resolve(c ?? 1));

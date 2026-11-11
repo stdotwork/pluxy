@@ -176,7 +176,13 @@ async function managementStatus(base: string, key: string, ca?: string): Promise
 }
 
 /** Runs the app once with connection as its saved connection, and checks what it reports. */
-async function runApp(mode: Mode, bin: string, connection: object, base?: string, startup = false): Promise<string[]> {
+async function runApp(
+  mode: Mode,
+  bin: string,
+  connection: object,
+  base?: string,
+  startup = false,
+): Promise<string[]> {
   const root = mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
   const problems: string[] = [];
   const check = (ok: unknown, what: string) => {
@@ -302,7 +308,10 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
     check(!steps.has("failed"), `the app's test steps failed: ${JSON.stringify(steps.get("failed"))}`);
 
     if (startup) {
-      check(log.some((l) => l.startsWith("startup preferences passed:")), "startup suite gave no success report");
+      check(
+        log.some((l) => l.startsWith("startup preferences passed:")),
+        "startup suite gave no success report",
+      );
       console.log(mode + ": startup " + (problems.length === 0 ? "ok" : "FAILED"));
       for (const line of log) console.log(line);
       return problems;
@@ -424,7 +433,7 @@ try {
   try {
     const { core } = JSON.parse(run("go", ["run", "./e2e/panelcore", "-probe", "-prepare", prepared], next));
     const p = await runApp("managed", bin, { mode: "managed", core_path: core });
-    p.push(...await runApp("managed", bin, { mode: "managed", core_path: core }, undefined, true));
+    p.push(...(await runApp("managed", bin, { mode: "managed", core_path: core }, undefined, true)));
     problems.push(...p.map((x) => `managed: ${x}`));
   } finally {
     rmSync(prepared, { recursive: true, force: true });
@@ -435,7 +444,7 @@ try {
     try {
       const conn = { mode, url: c.base, key: c.key, ...(c.ca ? { ca_file: c.ca } : {}) };
       const p = await runApp(mode, bin, conn, c.base);
-      p.push(...await runApp(mode, bin, conn, c.base, true));
+      p.push(...(await runApp(mode, bin, conn, c.base, true)));
       // The app only connected: its quitting leaves this core running.
       if ((await managementStatus(c.base, c.key, c.ca)) !== 200) p.push("the core stopped when the app quit");
       problems.push(...p.map((x) => `${mode}: ${x}`));

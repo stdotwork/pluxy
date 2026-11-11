@@ -26,11 +26,20 @@ async function launch(stage: string, argv: string[] = [bin as string]) {
     });
   }
   const code = await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("startup launch timed out")); }, 60_000);
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error("startup launch timed out"));
+    }, 60_000);
     child.once("error", reject);
-    child.once("close", (c) => { clearTimeout(timer); resolve(c); });
+    child.once("close", (c) => {
+      clearTimeout(timer);
+      resolve(c);
+    });
   });
-  check(code === 0 && !lines.some((l) => l.startsWith("native-test: failed")), "startup stage failed: " + stage);
+  check(
+    code === 0 && !lines.some((l) => l.startsWith("native-test: failed")),
+    "startup stage failed: " + stage,
+  );
   const line = lines.find((l) => l.startsWith("native-test: startup "));
   check(line, "no startup report: " + stage);
   return JSON.parse(line.slice("native-test: startup ".length));
@@ -39,20 +48,39 @@ async function launch(stage: string, argv: string[] = [bin as string]) {
 await launch("enable");
 check(existsSync(entry), "enabling did not write the XDG autostart entry");
 const text = readFileSync(entry, "utf8");
-const exec = text.split("\n").find((l) => l.startsWith("Exec="))?.slice(5);
+const exec = text
+  .split("\n")
+  .find((l) => l.startsWith("Exec="))
+  ?.slice(5);
 check(exec && exec.endsWith(" --silent-start"), "autostart entry has no silent flag");
 // Parse the generated Desktop Entry quoted argument, never a shell command.
 check(exec.startsWith('"') && exec.endsWith('" --silent-start'), "unexpected Exec quoting");
 const executable = exec.slice(1, -'" --silent-start'.length).replaceAll("%%", "%");
 check(executable === bin, "Exec does not name this app");
 const silent = await launch("silent", [executable, "--silent-start"]);
-check(silent.windows === 0 && silent.webviews === 0 && silent.tray === true, "silent launch created a window or missed its tray");
-check((mode === "managed") === (silent.core_pid !== null), "start-core preference did not respect connection ownership");
+check(
+  silent.windows === 0 && silent.webviews === 0 && silent.tray === true,
+  "silent launch created a window or missed its tray",
+);
+check(
+  (mode === "managed") === (silent.core_pid !== null),
+  "start-core preference did not respect connection ownership",
+);
 const prefs = JSON.parse(readFileSync(settings, "utf8"));
-writeFileSync(settings, JSON.stringify({ ...prefs, silent_start_enabled: true, start_core_on_launch: false }));
+writeFileSync(
+  settings,
+  JSON.stringify({ ...prefs, silent_start_enabled: true, start_core_on_launch: false }),
+);
 const stopped = await launch("silent");
-check(stopped.windows === 0 && stopped.webviews === 0 && stopped.core_pid === null, "saved silent/core-off preferences were ignored");
+check(
+  stopped.windows === 0 && stopped.webviews === 0 && stopped.core_pid === null,
+  "saved silent/core-off preferences were ignored",
+);
 writeFileSync(settings, JSON.stringify({ ...prefs, silent_start_enabled: false }));
 await launch("disable");
 check(!existsSync(entry), "disabling left the autostart entry behind");
-console.log("startup preferences passed: " + mode + "; Exec silent, zero windows/webviews, native tray, managed-only core, registration removed");
+console.log(
+  "startup preferences passed: " +
+    mode +
+    "; Exec silent, zero windows/webviews, native tray, managed-only core, registration removed",
+);
