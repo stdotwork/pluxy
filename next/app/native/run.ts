@@ -224,13 +224,15 @@ async function managementStatus(base: string, key: string, ca?: string): Promise
 }
 
 /** Runs the app once with connection as its saved connection, and checks what it reports.
- * updaterKey goes into the run's test trust profile. */
+ * updaterKey goes into the run's test trust profile; with key, the run also drives native key
+ * entry. */
 async function runApp(
   mode: Mode,
   artifact: Artifact,
   updaterKey: string,
   connection: object,
   base?: string,
+  key?: string,
 ): Promise<string[]> {
   const { label, bin } = artifact;
   const root = mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
@@ -269,6 +271,9 @@ async function runApp(
       { mode: 0o600 },
     );
     const quit = join(root, "quit");
+    const keyFile = join(root, "key-input");
+    const wrongKey = randomUUID();
+    if (key) writeFileSync(keyFile, JSON.stringify({ key, wrong: wrongKey }), { mode: 0o600 });
     // Only what the app needs: no display or session bus but the run's own.
     const env: Record<string, string> = {
       PATH: process.env.PATH ?? "/usr/bin:/bin",
@@ -289,6 +294,7 @@ async function runApp(
       APPIMAGE_EXTRACT_AND_RUN: "1",
       PLUXY_APP_TEST_PAGE: PAGE,
       PLUXY_APP_TEST_QUIT: quit,
+      ...(key ? { PLUXY_APP_TEST_KEY_FILE: keyFile } : {}),
     };
     // The session script starts and checks the desktop services, then runs the app.
     const session = [
@@ -319,6 +325,10 @@ async function runApp(
     const log: string[] = []; // the app's last lines, shown when the run fails
     const setup: string[] = []; // session.ts's report of what failed at setup
     const onLine = (line: string) => {
+      if (key && [key, wrongKey].some((canary) => line.includes(canary))) {
+        problems.push("management key appeared on stdout/stderr");
+        return;
+      }
       // The session's service checks are always shown: they say what this run stood on.
       if (line.startsWith("native-prereq: ")) {
         console.log(`  ${label} | ${line}`);
@@ -399,6 +409,21 @@ async function runApp(
         gate?.passed === false && gate.identifier === identifier && /identifier/.test(gate.error ?? ""),
         `the ${identifier} app's updater gate was not refused for its identifier: ${JSON.stringify(gate)}`,
       );
+    }
+
+    if (key) {
+      const entry = steps.get("keyentry");
+      for (const field of [
+        "good",
+        "bad_preserved",
+        "cancel_preserved",
+        "session",
+        "remember",
+        "webviews_clean",
+        "events_clean",
+      ])
+        check(entry?.[field] === true, `native key entry did not prove ${field}`);
+      console.log(`  ${label} | native key entry: ${JSON.stringify(entry ?? {})}`);
     }
 
     // The window: connected in this mode, every command reached, core's status through the app.
@@ -631,7 +656,7 @@ async function main(): Promise<number> {
       const c = await startCore(mode === "remote");
       try {
         const conn = { mode, url: c.base, key: c.key, ...(c.ca ? { ca_file: c.ca } : {}) };
-        const p = await runApp(mode, dev(mode), updaterKey, conn, c.base);
+        const p = await runApp(mode, dev(mode), updaterKey, conn, c.base, c.key);
         // The app only connected: its quitting leaves this core running.
         if ((await managementStatus(c.base, c.key, c.ca)) !== 200)
           p.push("the core stopped when the app quit");
@@ -653,7 +678,7 @@ async function main(): Promise<number> {
       const c = await startCore(false);
       try {
         const conn = { mode: "local", url: c.base, key: c.key };
-        const p = await runApp("local", packaged, updaterKey, conn, c.base);
+        const p = await runApp("local", packaged, updaterKey, conn, c.base, c.key);
         if ((await managementStatus(c.base, c.key)) !== 200) p.push("the core stopped when the app quit");
         problems.push(...p.map((x) => `packaged: ${x}`));
       } finally {

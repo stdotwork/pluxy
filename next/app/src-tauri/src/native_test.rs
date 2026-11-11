@@ -43,7 +43,15 @@ const PLUGINS: &[&str] = &[
 ];
 
 /// Commands the window's probe leaves out: they take no arguments and would act.
-const ACTING: &[&str] = &["sign_out", "core_restart", "confirmation_settings"];
+const ACTING: &[&str] = &[
+    "sign_out",
+    "core_restart",
+    "key_entry",
+    "confirmation_settings",
+];
+
+#[path = "key_entry_test.rs"]
+mod key_entry_test;
 
 /// Reports the updater gate (`trust::updater_gate`) with what it read: the compiled test marker,
 /// identifier and product name. The app calls this first, before any other step.
@@ -245,6 +253,7 @@ fn run(app: &AppHandle) -> Result<(), String> {
         );
     }
 
+    key_entry_test::check(app, &main)?;
     ingress::run(app, &main)?;
 
     // For screenshots: keep the window open until this file exists.

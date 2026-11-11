@@ -49,9 +49,7 @@ test("config settings, exact source diff, revision and concurrent edit protectio
   const revision = (await core.mgmt<{ active: { revision: number } }>("GET", "/status")).body.active.revision;
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Configuration saved successfully", { exact: true })).toBeVisible();
-  await nav(page)
-    .getByRole("link", { name: /^(Status|Dashboard)$/ })
-    .click();
+  await nav(page).getByRole("link", { name: "Dashboard" }).click();
   await expect(page.locator(".facts > div").filter({ hasText: "Active revision" }).locator("dd")).toHaveText(
     String(revision + 1),
   );

@@ -573,9 +573,13 @@ and results (each hit as Claude sent it, so its `encrypted_content` survives); a
 without results when it paused the turn (`pause_turn`) stays `in_progress`. A replayed
 `web_search_call` goes back as the two blocks, in the assistant message around it; a paused search
 at the end of the history goes back as its `server_tool_use` alone, so Claude carries on. Chat
-clients get the text without the search blocks, as today. Not built: citations (today's core gives
-Claude's `citations` to a Responses client as the text's `annotations` and sends them back), the
-web search result cache and Codex's tool search on Claude.
+clients get the text without the search blocks, as today. Claude's `citations` on the answer's
+text are not passed on, and a replayed message's `annotations` are not sent back to Claude. Today's
+core copies each citation as it is into the text's `annotations`, in Claude's own shape
+(`web_search_result_location`), which is none of the annotation types Responses defines, so a
+Responses client has no defined way to show it. Claude does not need citations in the history: the
+replayed search blocks carry the results. Not built: the web search result cache and Codex's tool
+search on Claude.
 
 **Tool shapes.** A translated request's tools get the shapes Messages takes, as today's core
 gives them: a function name with characters other than letters, digits, `_` and `-`, or longer than
@@ -937,6 +941,17 @@ Not built, and why:
 - For a Grok login: reading the Grok CLI's latest version from npm every 3 hours (set
   `client_version` when xAI asks for a newer CLI), the file name and legacy-file adoption today's
   core uses for its auth files, and opening the browser at sign-in.
+- Today's core answers `GET /v1/models` from the Grok CLI (a `grok-shell` User-Agent) with its own
+  entry shape (`api_backend`, context window, reasoning efforts). The Grok CLI reads a proxy's model
+  list only when its models endpoint is set to the proxy; today's desktop app instead writes each
+  model into the Grok CLI's config with its own base URL, so the list is not read there. pluxy's
+  model data has no reasoning efforts to fill that shape. The Grok CLI gets the ordinary OpenAI
+  model list.
+- Today's core turns an upstream Codex `keepalive` stream event into an SSE comment for the Grok
+  CLI, which ends the turn on an event type it does not know. pluxy's Responses stream passes on
+  only `response.*` and `error` events from the upstream, so no `keepalive` event reaches any client
+  (a test in `format/openairesponses` pins this). pluxy sends no comment in its place: a long
+  upstream silence reaches the client as silence.
 
 **Quota.** A Grok login's quota is what the Grok CLI shows: `GET {cli}/billing?format=credits` and `GET {cli}/billing` on the CLI's chat endpoint (the host the account's requests go to), and `GET {cli}/user?include=subscription` and `GET {cli}/settings` for the plan's name, with the login's token and the Grok CLI identity headers the requests carry. It reports the weekly credit window (`weekly`), the monthly credits (`monthly_credits`), the pay-as-you-go cap and use (`pay_as_you_go`) and the prepaid balance (`prepaid`), in `usd`. Nothing that spends from the account is sent (today's panel sent a one-token chat for paid accounts; that is not rebuilt). An API key answers unsupported. A Grok login's grant carries `identity` `{"sub", "email"}` from its ID token.
 
@@ -1397,6 +1412,7 @@ send it as a bearer token. With a management key set, the config may set no acco
 | `POST /accounts/{id}/login` | Signs in to an existing account again (`{"method": ..., "input": ...}`), replacing its credential. The login must sign in to the same upstream account: when the provider reports who signed in (the grant's [`identity`](protocol/README.md#login), such as an e-mail address and an account ID), every field core stored for the account must match, letter case aside; an account stored without one is checked by its `label`. Otherwise the login ends `failed` with code `invalid_request` and the account keeps its credential, as today's core refuses with "Authenticated account does not match target credential". To use the other account, add it as a new one. |
 | `POST /accounts/{id}/refresh` | Renews the account's credential now. |
 | `POST /vertex/import` | Adds a Vertex AI account from a Google service account key file, as today's `POST /v0/management/vertex/import` does: `multipart/form-data` with the key in `file` and an optional `location` (a form field, else a query parameter; default `us-central1`), at most 1 MiB in all. It runs the Gemini extension's [`service_account` login](#gemini) with the account ID `vertex-<project_id>` (`/`, `\` and `:` in the project ID become `_`, spaces `-`), the settings `vertex.project` and `vertex.location`, and the label `<project_id> (<client_email>)`, waits for it (one token fetch, at the key's `token_uri`) and answers once: 200 `{"status": "ok", "account", "project_id", "email", "location"}`. Errors have the usual `{"error": {"code", "message"}}` shape: 400 `file_required`, `invalid_json`, `project_id_missing` and `invalid_service_account` (also when the token endpoint refuses the key), 400 `invalid_request` for a location or project ID the extension refuses, 409 `conflict` for an account of that ID in the config, 413 for a larger request, 502 with the login's code (`unavailable`) when the token endpoint cannot be reached or fails, and 504 when it does not answer in 45 seconds. When a login added an account of that ID before, the import signs in to it again, so the key replaces the old one only when its `client_email` is the same service account (else 400 `invalid_request`, the account keeps its key) and a `location` the account does not have is a 409; today's core overwrote the file silently. It does not repair a key damaged by pasting (today's core rebuilds a mangled PEM); it takes the file Google gives. |
+| `POST /accounts/import` | Adds the accounts of one credential file of today's auth folder to the running core, read and added as [`-import-auth`](#importing-todays-auth-folder) reads and adds each file: `{"name": "<file name>.json", "content": "<the file's text>"}`. The content is the file itself, never a path on core's machine; `name` (a `.json` file name, no folder) gives the account ID, as the file's name does. The accounts serve at once, like an account a login adds. 200 `{"imported": [{"id", "extension", "ignored"}], "skipped": [...]}`: each account added, with the file's settings not supported yet that it left out (`ignored`), and why any other account of the file was skipped (a Codex file can hold two). Nothing added: 400 `invalid_request` for a file that is not JSON, of a type the import does not take or holding no token, with routing fields routing refuses once read (such as a `prefix` with a `/` inside, `a/b`; surrounding spaces and slashes are trimmed first), or a bad `name`; 409 `conflict` when the store or the config already has the account's ID, or a sign-in still running will take it (letter case aside); 413 for a file larger than 1 MiB. The message says why. Neither the reply nor core's log holds anything from the file but the account's ID. |
 | `PATCH /accounts/{id}` | `disabled` (`true` or `false`; disabled accounts get no requests) and any of the routing fields `priority`, `weight`, `disable_cooling`, `max_concurrency`, `request_retry`, `prefix`, `models`, `excluded_models` and `model_alias`, checked as the config's are; `null` sets one back to its default. A bad field changes nothing (400). Replies with the account. |
 | `POST /accounts/{id}/cooldown/reset` | Clears the account's cooldowns, on its credential, its models and its endpoint (which accounts naming the same endpoint share), with their backoff steps and its last error, so it serves again at once. Works for config accounts too. Replies with `cleared`, the number of live blocks it cleared, and the account. |
 | `GET /accounts/{id}/models` | The models the account serves: its config's `models` when it lists them, else the ones its extension lists for it (the protocol's [`models`](protocol/README.md#models)). Each has its upstream `id`, what the extension says about it, `names` (the names clients use for it after the account's exclusions, aliases and prefix, and its extension's defaults for logins) and `excluded` when `excluded_models` leaves it out. |
@@ -1701,8 +1717,8 @@ extension, so request logs hold what the client sent and received.
 | Call | What it does |
 | --- | --- |
 | `GET /v0/management/request-error-logs` | The error logs, newest first: `files`, each with `name`, `size` and `modified` (Unix seconds). |
-| `GET /v0/management/request-error-logs/{name}` | One error log, as a download. 400 for a name that is not an error log's as core writes them, 404 when there is none or the name is a link. |
-| `GET /v0/management/request-log-by-id/{id}` | The newest request log, plain or error, of the request with that trace ID (the `X-CPA-TRACE-ID` of its reply), as a download; 404 when there is none. |
+| `GET /v0/management/request-error-logs/{name}` | One error log, as a download, or with `?format=json` as `{"name", "size", "content"}` (`size` is bytes). JSON reads accept at most 2 MiB; larger files answer 413 with code `log_too_large`, without partial content. Plain downloads keep their existing size behavior. 400 for a name that is not an error log's as core writes them, 404 when there is none or the name is a link. |
+| `GET /v0/management/request-log-by-id/{id}` | The newest request log, plain or error, of the request with that trace ID (the `X-CPA-TRACE-ID` of its reply), as a download, or with `?format=json` as `{"name", "size", "content"}` under the same 2 MiB limit (413 above it); 404 when there is none. |
 
 ## Profiling pages
 
@@ -1966,6 +1982,10 @@ becomes an account added by login, with the file's name (less `.json`) as its ID
 again skips the files already imported. A file whose account ID the config or the store already
 uses is skipped, as is a file larger than 1 MiB. The import never changes the auth folder, and
 it refuses a `credentials_dir` that is the auth folder or inside it.
+
+To add one file to a running core instead, send it to the management API's
+[`POST /accounts/import`](#accounts-added-by-login) (the panel's "Upload File" on Accounts): it
+reads the file the same way and the account serves at once.
 
 Both cores renewing the same login signs one of them out: the provider replaces the refresh
 token at each renewal, and the other core's copy stops working. Once an account is imported,
