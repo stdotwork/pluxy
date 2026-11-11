@@ -46,9 +46,9 @@ test("panel shows core, switches layout and theme live, and recovers from custom
   ).toBeVisible();
 
   // Dashboard: the extensions core runs, from its status.
-  const main = page.locator('[data-part="main"]');
-  await expect(main.getByText("test/local", { exact: true })).toBeVisible();
-  await expect(main.getByText("test/alpha", { exact: true })).toBeVisible();
+  const running = page.getByRole("table", { name: "Running extensions" });
+  await expect(running.getByText("test/local", { exact: true })).toBeVisible();
+  await expect(running.getByText("test/alpha", { exact: true })).toBeVisible();
 
   // Accounts: config accounts of both extensions.
   await goTo(page, "Accounts");
