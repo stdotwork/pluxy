@@ -214,7 +214,7 @@ func TestUpstreamSetsCallHeaders(t *testing.T) {
 	base.RegisterProtocol("record", recorder)
 	call := protocol.Call{Op: protocol.OpGenerate, Account: &protocol.Account{ID: "a",
 		Headers: map[string]string{"anthropic-version": "configured", "X-Gateway-Key": "fake-gw"}}}
-	ctx := withUpstreamInfo(context.Background(), call)
+	ctx, _ := withUpstreamInfo(context.Background(), call)
 	req, err := http.NewRequestWithContext(ctx, "POST", "record://upstream.test/v1/messages", strings.NewReader(`{}`))
 	if err != nil {
 		t.Fatal(err)

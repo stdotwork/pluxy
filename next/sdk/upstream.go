@@ -16,8 +16,11 @@ import (
 // account has a proxy (Info.ProxyURL) goes through a copy of base that sends every request
 // through that proxy, one copy per proxy, kept for reuse. A call whose account has headers
 // (Info.Headers) sends each of them on every request, in place of any value the extension set
-// for the same name. Use the handler's context on requests so the transport can access
-// UpstreamInfo and core's cancellation: a request without it uses no proxy and no headers.
+// for the same name. A call core asks to capture (protocol minor version 13) records each request
+// and what came back, without its secrets, and the SDK reports them to core before the call's
+// terminal event; a response body is recorded as it is read, its start and end only. Use the
+// handler's context on requests so the transport can access UpstreamInfo and core's
+// cancellation: a request without it uses no proxy and no headers and is not recorded.
 // base must be non-nil and must not be changed after use.
 func Upstream(base *http.Transport) http.RoundTripper {
 	return upstreamTransport{base: base, proxies: &proxyPool{}}
@@ -39,6 +42,9 @@ func (t upstreamTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	}
 	if len(info.Headers) > 0 {
 		req = withHeaders(req, info.Headers)
+	}
+	if info.capture != nil {
+		return info.capture.roundTrip(rt, req)
 	}
 	return rt.RoundTrip(req)
 }
@@ -136,6 +142,8 @@ type Info struct {
 	// Headers are the account's extra headers, which Upstream sets on each request; read-only.
 	// Values of headers about authentication are secret: never log or show them.
 	Headers map[string]string
+
+	capture *captureLog // the call's capture, when core asked for one
 }
 
 type upstreamInfoKey struct{}
@@ -147,8 +155,15 @@ func UpstreamInfo(ctx context.Context) (Info, bool) {
 	return info, ok
 }
 
-func withUpstreamInfo(ctx context.Context, call protocol.Call) context.Context {
+// withUpstreamInfo returns ctx carrying call's upstream information, and the call's capture when
+// core asked for one (nil otherwise).
+func withUpstreamInfo(ctx context.Context, call protocol.Call) (context.Context, *captureLog) {
 	info := Info{Operation: call.Op}
+	switch {
+	case !call.Capture:
+	case call.Type == protocol.TypeSessionTurn, call.Op == protocol.OpGenerate, call.Op == protocol.OpCountTokens, call.Op == protocol.OpEndpoint:
+		info.capture = &captureLog{}
+	}
 	if call.Type == protocol.TypeSessionTurn {
 		info.Operation = protocol.TypeSessionTurn
 	}
@@ -162,5 +177,5 @@ func withUpstreamInfo(ctx context.Context, call protocol.Call) context.Context {
 			info.Format = call.Request.Native.Format
 		}
 	}
-	return context.WithValue(ctx, upstreamInfoKey{}, info)
+	return context.WithValue(ctx, upstreamInfoKey{}, info), info.capture
 }

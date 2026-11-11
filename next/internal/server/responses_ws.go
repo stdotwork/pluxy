@@ -409,6 +409,9 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
+	if g.RequestLog != nil && g.RequestLog.All {
+		ctx = turnTrace.captureUpstream(ctx)
+	}
 	turn := &wsTurn{cancel: cancel}
 	var opened []Session // sessions this turn opened
 	var sess Session     // the session the last attempt ran on; nil for an HTTP attempt

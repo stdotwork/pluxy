@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+
+	"github.com/stdotwork/pluxy/next/protocol"
 )
 
 // refused are the headers a setting may not name: net/http writes them from the request itself,
@@ -65,15 +67,7 @@ func token(s string) bool {
 // Secret reports whether a header's name is about authentication (Authorization, X-Api-Key,
 // Cookie, ...), so its value is a secret. This is the rule config redaction uses for every
 // "headers" mapping.
-func Secret(name string) bool {
-	h := strings.ToLower(name)
-	for _, part := range []string{"auth", "key", "token", "secret", "cookie", "session", "password", "signature"} {
-		if strings.Contains(h, part) {
-			return true
-		}
-	}
-	return false
-}
+func Secret(name string) bool { return protocol.SecretName(name) }
 
 // Secrets returns the values of h that are secret, in name order.
 func Secrets(h map[string]string) []string {

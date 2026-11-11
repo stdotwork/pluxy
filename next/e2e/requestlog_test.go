@@ -274,5 +274,18 @@ func TestRequestLogWebSocketTurn(t *testing.T) {
 			t.Errorf("turn log lacks %q:\n%s", want, text)
 		}
 	}
+	// The turn opened the upstream socket: its handshake is logged, its messages are not.
+	reqs, resps := sections(text, "UPSTREAM REQUEST"), sections(text, "UPSTREAM RESPONSE")
+	if len(reqs) != 1 || len(resps) != 1 {
+		t.Fatalf("%d upstream requests and %d responses in the turn log, want 1 and 1:\n%s", len(reqs), len(resps), text)
+	}
+	for _, want := range []string{"Account: acct-ws", "URL: " + u.URL + "/v1/responses", "Method: GET", "Authorization: Bearer [redacted]", "Upgrade: websocket"} {
+		if !strings.Contains(reqs[0], want) {
+			t.Errorf("the handshake request lacks %q:\n%s", want, reqs[0])
+		}
+	}
+	if !strings.Contains(resps[0], "Status: 101") || !strings.Contains(resps[0], "its messages are not logged") || strings.Contains(resps[0], "response.completed") {
+		t.Errorf("the handshake response:\n%s", resps[0])
+	}
 	wantNoSecrets(t, "the turn log", text, clientKey, "sk-ws-secret", managementKey)
 }

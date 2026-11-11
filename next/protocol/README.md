@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.12
+# pluxy extension protocol, version 0.13
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -20,9 +20,10 @@ Version 0.9 adds optional non-secret account settings to a login grant. Version 
 optional quota `plan_ends_at`, the end of the subscription in Unix seconds. Version 0.11 adds
 the account's [`proxy_url`](#accounts): the proxy the call's upstream traffic goes through.
 Version 0.12 adds the account's [`headers`](#headers): extra HTTP headers on that traffic.
-It is deliberately small; later versions add capabilities and more operations without changing
+Version 0.13 adds [upstream capture](#upstream-capture): what the extension sent upstream and got
+back, for core's request logs. It is deliberately small; later versions add capabilities and more operations without changing
 what is described here. An extension written for version 0 works unchanged with a core that
-speaks 0.12 (see [Versioning](#versioning)).
+speaks 0.13 (see [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
 the details. A Go SDK (`github.com/stdotwork/pluxy/next/sdk`) implements the extension side of
@@ -226,6 +227,7 @@ Core opens a connection and writes one call frame:
 | `request` | For `generate`, `count_tokens` and `endpoint`: the model request (below). |
 | `login` | For `login`: what to sign in with (see [Login and refresh](#login-and-refresh)). |
 | `session` | For `session`: what kind of session to open (see [Sessions](#sessions)). |
+| `capture` | Since 0.13, for `generate`, `count_tokens` and `endpoint`: true when core asks for the call's [upstream capture](#upstream-capture). Absent: false. |
 
 An extension that gets an `op` it does not know replies with an `error` event whose code is
 `unsupported`.
@@ -955,6 +957,7 @@ terminal event. A turn's `error` ends that turn, not the session.
 | --- | --- |
 | `account` | Always the account the session opened with (the same `id`). Its `credential` is the newest one core holds, which may have been renewed since the session opened: use it for any new upstream connection. A connection already open stays as it is. |
 | `request` | A model request, as for `generate`. A turn may continue the session's previous response; for `openai.responses`, `native.body.previous_response_id` names it and `items` hold only the new input. A turn that continues nothing carries the whole conversation. |
+| `capture` | Since 0.13: true when core asks for the turn's [upstream capture](#upstream-capture), as for `generate`. |
 
 Core removes every credential the session has carried, in all the forms listed under
 [Errors](#errors), from every event of every turn.
@@ -1021,12 +1024,77 @@ socket to one session. Turns on an account that takes no sessions go out as sepa
 calls, each carrying the whole conversation so far: core keeps the earlier input and output and
 removes `previous_response_id`.
 
+## Upstream capture
+
+Version 0.13. Core writes request logs (see [the README](../README.md#request-logs)), and for a
+provider that rebuilds a request in another format, what it sent upstream and what came back is
+the first thing to look at. Core asks for it with `"capture": true` on a `generate`,
+`count_tokens` or `endpoint` call frame, or on a `session.turn` frame, only while its config
+writes every request to a request log (`logs.request_log`), and only to an extension whose
+describe reports `protocol_minor` 13 or more. A call without it records nothing and sends nothing
+more. Other operations (`login`, `refresh`, `models`, `check`, `quota`, and the `session` call that
+opens a session) never carry it.
+
+For a call with `capture`, the extension records each upstream HTTP request the call makes, and
+each WebSocket handshake, with what came back, and sends one `diagnostic` frame before the call's
+terminal event (`finish` or `error`):
+
+```json
+{"type": "diagnostic", "diagnostic": {"upstream": [
+  {"request": {"time_ms": 1794268800123, "method": "POST", "url": "https://api.openai.com/v1/chat/completions",
+     "headers": {"Authorization": ["Bearer [redacted]"], "Content-Type": ["application/json"]},
+     "body": "{\"model\":\"gpt-4.1-mini\",\"stream\":true,...}", "body_size": 312},
+   "response": {"time_ms": 1794268800456, "status": 200, "headers": {"Content-Type": ["text/event-stream"]},
+     "body": "data: {...}\n\n...", "body_end": "...data: [DONE]\n\n", "body_size": 412345}}
+]}}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `upstream` | The call's upstream exchanges, in the order their requests were sent. At most 2: when the call made more, its first and its last. |
+| `upstream_left_out` | How many exchanges between those two were left out. Absent: none. |
+| exchange `request` | The request as it was sent: after everything the extension and the account's [`headers`](#headers) did to it. |
+| exchange `response` | What came back. Absent when no response came, with `error` saying why. |
+| exchange `error` | Why the request got no response, such as a connection that was refused. |
+| `time_ms` | When the request was sent, or the response's headers arrived, in Unix milliseconds. |
+| request `method`, `url` | The HTTP method and the whole URL, without its user name and password and with the values of secret query parameters (below) replaced by `[redacted]`. |
+| `headers` | The headers, an object of name to a list of values, as sent or received. |
+| response `status` | The HTTP status. |
+| `body` | The body as text (bytes that are not UTF-8 arrive as U+FFFD): all of it, or, when it is longer than 128 KiB, its first 32 KiB. |
+| `body_end` | When the body is longer than 128 KiB: its last 96 KiB. Absent otherwise. |
+| `body_size` | The body's full length in bytes. For a response: how much of it the extension had read when it sent the frame. |
+
+Rules:
+
+- Remove secrets before sending them: the value of every header and query parameter whose name
+  is about authentication (the rule under [Headers](#headers)) becomes `[redacted]`, keeping an
+  authorization scheme such as `Bearer [redacted]`. Core also removes the call's credential, its
+  proxy's password and its secret header values from everything in the frame, in all the forms
+  listed under [Errors](#errors), as from every event.
+- Record a response body as the extension reads it, keeping only its start and its end: never hold
+  a whole stream or delay a piece of it to record it. What the extension had not read when it sent
+  the frame is not in it.
+- A WebSocket handshake is an exchange: the `GET` request and the `101` response's status and
+  headers, with no body. The messages on the socket are not captured. A turn that uses a socket an
+  earlier turn opened makes no exchange, and a socket opened by the `session` call itself, before
+  any turn, is not captured.
+- A `diagnostic` frame is not an event and takes no part in the ordering rules. Send at most one
+  per call or turn, at any point before its terminal event.
+
+Core writes each exchange into the request's log, between the client's request and its reply. It
+ignores a `diagnostic` frame on a call it did not ask to capture, keeps at most two exchanges per
+request log (the first and the last, across every account a request tried), and cuts any body or
+header list longer than the bounds above itself.
+
+In Go, `sdk.Upstream` does all of this for each client it wraps, for requests made with the
+handler's context.
+
 ## Versioning
 
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.12. An extension reports the minor version it
+raise the minor version: this document is version 0.13. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1046,8 +1114,9 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.10 | Quota's optional `plan_ends_at`. |
 | 0.11 | The account's optional [`proxy_url`](#proxy). |
 | 0.12 | The account's optional [`headers`](#headers). |
+| 0.13 | [Upstream capture](#upstream-capture): the call's optional `capture` and the `diagnostic` frame. |
 
-## What version 0.12 leaves out
+## What version 0.13 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,
