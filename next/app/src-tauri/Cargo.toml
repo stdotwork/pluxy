@@ -18,6 +18,8 @@ path = "src/main.rs"
 # For the native test only (native/run.ts): the app probes its webviews' command access and
 # reports on stderr. Never in a release build.
 native-test = []
+# Loads publisher roots only for tests that create an isolated temporary trust profile.
+artifact-test-trust = []
 
 # The native test's probe of the desktop services (native/session.ts). Not part of any build
 # without the native-test feature.
@@ -26,16 +28,21 @@ name = "session_probe"
 required-features = ["native-test"]
 
 [build-dependencies]
+serde_json = "1"
+json-patch = "4"
+sha2 = { version = "=0.10.9", default-features = false }
+tauri-utils = { version = "=2.10.2", default-features = false }
 tauri-build = { version = "=2.7.3", features = [] }
 
 [dependencies]
 tauri = { version = "=2.12.4", features = ["tray-icon", "unstable"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
+ed25519-dalek = { version = "=2.2.0", default-features = false }
 url = "2"
 ureq = { version = "3.5", default-features = false, features = ["rustls"] }
 getrandom = "0.3"
-sha2 = "0.10"
+sha2 = "=0.10.9"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -43,6 +50,10 @@ libc = "0.2"
 # The same GTK Tauri uses, to lay page webviews over the window (src/place.rs).
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
+
+[dev-dependencies]
+json-patch = "4"
+tauri-utils = { version = "=2.10.2", default-features = false }
 
 # GTK's D-Bus layer, for the native test's probe (examples/session_probe.rs) only.
 [target.'cfg(target_os = "linux")'.dev-dependencies]

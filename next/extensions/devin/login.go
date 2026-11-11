@@ -43,6 +43,7 @@ const loginWait = 5 * time.Minute
 // authClient talks to Devin's login API. Its timeout covers only signing in, never a model
 // request. It follows no redirect, which would send the code or token wherever it points.
 var authClient = &http.Client{
+	Transport:     sdk.Upstream(http.DefaultTransport.(*http.Transport).Clone()),
 	Timeout:       30 * time.Second,
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 }

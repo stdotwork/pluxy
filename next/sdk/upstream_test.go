@@ -1,0 +1,207 @@
+package sdk
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stdotwork/pluxy/next/llm"
+	"github.com/stdotwork/pluxy/next/protocol"
+)
+
+type recordUpstream struct {
+	request *http.Request
+	body    string
+}
+
+func (r *recordUpstream) RoundTrip(req *http.Request) (*http.Response, error) {
+	r.request = req
+	body, err := io.ReadAll(req.Body)
+	r.body = string(body)
+	return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("reply")), Request: req}, err
+}
+
+func TestUpstreamUnmodified(t *testing.T) {
+	base := &http.Transport{ForceAttemptHTTP2: true}
+	recorder := &recordUpstream{}
+	base.RegisterProtocol("record", recorder)
+	t.Cleanup(base.CloseIdleConnections)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "PATCH", "record://upstream.test/v1/turn?mode=raw", strings.NewReader(`{"input":"hello"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header = http.Header{"Authorization": {"Bearer caller-value"}, "X-Custom": {"one", "two"}}
+	header := req.Header.Clone()
+	resp, err := Upstream(base).RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if recorder.request.Context() != ctx || recorder.request.Method != "PATCH" || recorder.request.URL.String() != "record://upstream.test/v1/turn?mode=raw" || !reflect.DeepEqual(recorder.request.Header, header) || recorder.body != `{"input":"hello"}` {
+		t.Fatalf("upstream received a changed request: %+v, body %q", recorder.request, recorder.body)
+	}
+	if resp.Request != recorder.request || resp.StatusCode != 200 {
+		t.Fatalf("changed response: %+v", resp)
+	}
+}
+
+// Dispatch through the same socket host used by the other SDK tests. No handler may
+// lose core's cancellation or inherit the preceding session turn's metadata.
+func TestUpstreamInfoHandlers(t *testing.T) {
+	if _, ok := UpstreamInfo(context.Background()); ok {
+		t.Fatal("unrelated context has upstream info")
+	}
+	type observation struct {
+		info Info
+		ok   bool
+		ctx  context.Context
+	}
+	seen := make(chan observation, 1)
+	observe := func(ctx context.Context) {
+		info, ok := UpstreamInfo(ctx)
+		seen <- observation{info, ok, ctx}
+		<-ctx.Done()
+	}
+	stream := func(ctx context.Context, _ Call, _ *Stream) error { observe(ctx); return ctx.Err() }
+	ext := Extension{ID: "test/sdk", Version: "0.0.0", Generate: stream, CountTokens: stream, Endpoint: stream,
+		LoginMethods: []protocol.LoginMethod{{Method: "device", Kind: protocol.LoginDevice}},
+		Login: func(ctx context.Context, _ LoginCall, _ *LoginSession) (*protocol.Grant, error) {
+			observe(ctx)
+			return nil, ctx.Err()
+		},
+		Refresh: func(ctx context.Context, _ RefreshCall) (*protocol.Credential, error) {
+			observe(ctx)
+			return nil, ctx.Err()
+		},
+		Models: func(ctx context.Context, _ ModelsCall) (*protocol.ModelList, error) {
+			observe(ctx)
+			return nil, ctx.Err()
+		},
+		Check: func(ctx context.Context, _ CheckCall) (*protocol.CheckResult, error) {
+			observe(ctx)
+			return nil, ctx.Err()
+		},
+		Quota:   func(ctx context.Context, _ QuotaCall) (*protocol.Quota, error) { observe(ctx); return nil, ctx.Err() },
+		Session: func(ctx context.Context, _ SessionCall) (Session, error) { observe(ctx); return nil, ctx.Err() },
+	}
+	socket, _, _ := startServe(t, ext)
+	account := protocol.Account{ID: "account-a", Settings: json.RawMessage(`{"base_url":"https://upstream.test"}`), Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: t.Name()}}
+	request := &llm.Request{Model: "model-a", Native: &llm.Native{Format: llm.FormatOpenAIResponses, Body: json.RawMessage(`{"input":"hi"}`)}}
+	check := func(t *testing.T, want Info) context.Context {
+		t.Helper()
+		select {
+		case got := <-seen:
+			if !got.ok || !reflect.DeepEqual(got.info, want) {
+				t.Fatalf("UpstreamInfo = %+v, %v; want %+v", got.info, got.ok, want)
+			}
+			encoded, err := json.Marshal(got.info)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(encoded), account.Credential.APIKey) {
+				t.Fatal("metadata contains the credential")
+			}
+			// Info must not retain the credential via an embedded account.
+			typ := reflect.TypeOf(got.info)
+			for i := 0; i < typ.NumField(); i++ {
+				if typ.Field(i).Type == reflect.TypeOf(account) || typ.Field(i).Type == reflect.TypeOf(account.Credential) {
+					t.Fatal("metadata can retain a credential")
+				}
+			}
+			return got.ctx
+		case <-time.After(5 * time.Second):
+			t.Fatal("handler was not called")
+			return nil
+		}
+	}
+	waitCancelled := func(t *testing.T, ctx context.Context) {
+		t.Helper()
+		select {
+		case <-ctx.Done():
+		case <-time.After(5 * time.Second):
+			t.Fatal("core disconnect did not cancel handler")
+		}
+	}
+	for _, op := range []string{protocol.OpGenerate, protocol.OpCountTokens, protocol.OpModels, protocol.OpCheck, protocol.OpQuota, protocol.OpEndpoint, protocol.OpLogin, protocol.OpRefresh, protocol.OpSession} {
+		t.Run(op, func(t *testing.T) {
+			conn := dial(t, socket)
+			defer conn.Close()
+			call := protocol.Call{Type: protocol.TypeCall, ID: "c", Op: op, Account: &account}
+			want := Info{AccountID: account.ID, Settings: account.Settings, Operation: op}
+			if op == protocol.OpGenerate || op == protocol.OpCountTokens || op == protocol.OpEndpoint {
+				call.Request = request
+				want.Model, want.Format = "model-a", llm.FormatOpenAIResponses
+			}
+			if op == protocol.OpLogin {
+				call.Login = &protocol.Login{Method: "device"}
+			}
+			if op == protocol.OpSession {
+				call.Session = &protocol.SessionInfo{Format: protocol.SessionOpenAIResponses}
+			}
+			if err := protocol.WriteFrame(conn, call); err != nil {
+				t.Fatal(err)
+			}
+			ctx := check(t, want)
+			conn.Close()
+			waitCancelled(t, ctx)
+		})
+	}
+	// Use a second host for turns, whose opening returns immediately.
+	ext.Session = func(ctx context.Context, _ SessionCall) (Session, error) {
+		info, ok := UpstreamInfo(ctx)
+		seen <- observation{info, ok, ctx}
+		return testSession{turn: func(ctx context.Context, _ Call, out *Stream) error {
+			info, ok := UpstreamInfo(ctx)
+			seen <- observation{info, ok, ctx}
+			if err := out.Start(llm.ResponseInfo{ID: "r"}); err != nil {
+				return err
+			}
+			return out.Finish(llm.Finish{Reason: llm.FinishStop}, nil)
+		}}, nil
+	}
+	socket, _, _ = startServe(t, ext)
+	conn := dial(t, socket)
+	defer conn.Close()
+	if err := protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeCall, ID: "s", Op: protocol.OpSession, Account: &account, Session: &protocol.SessionInfo{Format: protocol.SessionOpenAIResponses}}); err != nil {
+		t.Fatal(err)
+	}
+	opening := check(t, Info{AccountID: account.ID, Settings: account.Settings, Operation: protocol.OpSession})
+	var reply protocol.Reply
+	if err := protocol.ReadFrame(conn, &reply); err != nil || reply.Type != protocol.TypeSessionReady {
+		t.Fatalf("session ready: %+v, %v", reply, err)
+	}
+	for _, turn := range []struct{ id, model, format string }{{"turn-a", "model-a", llm.FormatOpenAIResponses}, {"turn-b", "model-b", ""}} {
+		account.ID = turn.id
+		r := &llm.Request{Model: turn.model}
+		if turn.format != "" {
+			r.Native = &llm.Native{Format: turn.format, Body: json.RawMessage("{}")}
+		}
+		if err := protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeSessionTurn, Account: &account, Request: r}); err != nil {
+			t.Fatal(err)
+		}
+		ctx := check(t, Info{AccountID: turn.id, Settings: account.Settings, Model: turn.model, Format: turn.format, Operation: protocol.TypeSessionTurn})
+		for {
+			if err := protocol.ReadFrame(conn, &reply); err != nil {
+				t.Fatal(err)
+			}
+			if reply.Event.Terminal() {
+				if reply.Type != llm.EventFinish {
+					t.Fatalf("turn: %+v", reply)
+				}
+				break
+			}
+		}
+		if ctx.Err() != nil {
+			t.Fatal("turn context cancelled before disconnect")
+		}
+	}
+	conn.Close()
+	waitCancelled(t, opening)
+}
