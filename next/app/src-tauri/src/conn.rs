@@ -395,6 +395,9 @@ impl Connection {
         }
     }
 
+    #[cfg(feature = "native-test")]
+    pub(crate) fn test_settings_path(&self) -> PathBuf { self.dirs.settings() }
+
     pub fn mode(&self) -> Option<Mode> {
         self.settings.mode
     }
@@ -460,6 +463,13 @@ fn check_key(client: &Client, key: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_changes_cannot_supply_a_key() {
+        let change = serde_json::json!({"mode": "local", "key": crate::managed::random_key()});
+        assert!(serde_json::from_value::<Change>(change).is_err(),
+            "connection_set still accepts a key from a webview");
+    }
 
     #[test]
     fn local_means_this_computer() {

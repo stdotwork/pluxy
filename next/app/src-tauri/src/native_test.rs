@@ -35,7 +35,10 @@ const PLUGINS: &[&str] = &[
 ];
 
 /// Commands the window's probe leaves out: they take no arguments and would act.
-const ACTING: &[&str] = &["sign_out", "core_restart"];
+const ACTING: &[&str] = &["sign_out", "core_restart", "key_entry"];
+
+#[path = "key_entry_test.rs"]
+mod key_entry_test;
 
 fn log(step: &str, v: Value) {
     eprintln!("native-test: {step} {v}");
@@ -176,6 +179,8 @@ fn run(app: &AppHandle) -> Result<(), String> {
             serde_json::from_str(&report).unwrap_or(json!(report)),
         );
     }
+
+    key_entry_test::check(app, &main)?;
 
     // For screenshots: keep the window open until this file exists.
     if let Ok(f) = std::env::var("PLUXY_APP_TEST_HOLD") {
