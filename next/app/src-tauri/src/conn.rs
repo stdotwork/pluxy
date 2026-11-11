@@ -214,6 +214,16 @@ impl Connection {
     /// The connection the saved settings describe; in managed mode this starts the app's core.
     /// on_core_exit runs whenever a core the app started exits.
     pub fn open(dirs: Dirs, on_core_exit: Option<OnExit>) -> Connection {
+        Self::open_at_startup(dirs, on_core_exit, true)
+    }
+
+    /// Startup alone may leave a saved managed core stopped. Explicit connection changes and
+    /// Start/Restart retain their existing behaviour; foreign cores are always only connected.
+    pub fn open_at_startup(
+        dirs: Dirs,
+        on_core_exit: Option<OnExit>,
+        start_core: bool,
+    ) -> Connection {
         let (settings, error) = match Settings::load(&dirs.settings()) {
             Ok(s) => (s, None),
             Err(e) => (Settings::default(), Some(e)),
@@ -228,7 +238,7 @@ impl Connection {
             on_core_exit,
             error,
         };
-        if c.error.is_none() {
+        if c.error.is_none() && (start_core || c.settings.mode != Some(Mode::Managed)) {
             c.connect();
         }
         c
@@ -769,6 +779,35 @@ mod tests {
         ] {
             assert!(local_origin(bad).is_err(), "{bad:?} was allowed");
         }
+    }
+
+    #[test]
+    fn startup_core_off_keeps_saved_managed_mode_without_starting_a_program() {
+        let dir =
+            std::env::temp_dir().join(format!("pluxy-startup-{}", crate::managed::random_key()));
+        let dirs = Dirs {
+            config: dir.join("config"),
+            core: dir.join("core"),
+        };
+        Settings {
+            mode: Some(Mode::Managed),
+            core_path: Some("/missing/startup-test-core".into()),
+            ..Settings::default()
+        }
+        .save(&dirs.settings())
+        .unwrap();
+        let mut c = Connection::open_at_startup(dirs, None, false);
+        assert_eq!(c.mode(), Some(Mode::Managed));
+        assert!(c.core_pid().is_none());
+        assert!(
+            c.view().error.is_none(),
+            "a disabled startup must not try the missing program"
+        );
+        assert!(
+            c.restart_core().is_err(),
+            "explicit Start still tries the chosen program"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
