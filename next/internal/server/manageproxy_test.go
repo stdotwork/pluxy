@@ -41,6 +41,9 @@ func TestPatchProxyURLWithoutSecretRoundTrip(t *testing.T) {
 	account := route.Account{ID: "a", ProxyURL: stored}
 	var view AccountView
 	view.fields(account, nil)
+	if view.ProxyURL != stored {
+		t.Fatalf("the view shows %q, want the stored %q", view.ProxyURL, stored)
+	}
 	raw, _ := json.Marshal(view.ProxyURL)
 	if err := patchFields["proxy_url"](&account, raw); err != nil {
 		t.Fatal(err)
