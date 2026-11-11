@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/stdotwork/pluxy/next/internal/cred"
+	"github.com/stdotwork/pluxy/next/internal/proxyurl"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
@@ -310,10 +311,23 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 	}
 	r.Account.ExcludedModels = authExcluded(m)
 	r.Account.ModelAlias = authAliases(m)
-	for _, k := range []string{"proxy_url", "proxy-url", "headers"} {
+	// proxy_url (or proxy-url), as today's core reads it: the first that is set counts. A value
+	// this core cannot use skips the file rather than sending its traffic without the proxy.
+	for _, k := range []string{"proxy_url", "proxy-url"} {
 		if v, ok := m[k]; ok && !isZero(v) {
-			f.Ignored = append(f.Ignored, strings.ReplaceAll(k, "-", "_"))
+			p, isText := v.(string)
+			if !isText {
+				return f, nil, k + " is not text"
+			}
+			if err := proxyurl.Check(k, p); err != nil {
+				return f, nil, err.Error()
+			}
+			r.Account.ProxyURL = strings.TrimSpace(p)
+			break
 		}
+	}
+	if v, ok := m["headers"]; ok && !isZero(v) {
+		f.Ignored = append(f.Ignored, "headers")
 	}
 	f.Record = r
 	if typ == "codex" {

@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.10
+# pluxy extension protocol, version 0.11
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -17,10 +17,11 @@ provider's endpoints beyond generation, such as Responses compaction, whose repl
 writes. Version 0.8 adds the request's [`caller`](#the-request): a value that stands for the
 client key a request came with, so an extension can keep what it learns from replies per client.
 Version 0.9 adds optional non-secret account settings to a login grant. Version 0.10 adds the
-optional quota `plan_ends_at`, the end of the subscription in Unix seconds.
+optional quota `plan_ends_at`, the end of the subscription in Unix seconds. Version 0.11 adds
+the account's [`proxy_url`](#accounts): the proxy the call's upstream traffic goes through.
 It is deliberately small; later versions add capabilities and more operations without changing
 what is described here. An extension written for version 0 works unchanged with a core that
-speaks 0.10 (see [Versioning](#versioning)).
+speaks 0.11 (see [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
 the details. A Go SDK (`github.com/stdotwork/pluxy/next/sdk`) implements the extension side of
@@ -220,7 +221,7 @@ Core opens a connection and writes one call frame:
 | --- | --- |
 | `id` | Call ID for logs and traces. Unique per core process. |
 | `op` | The operation. Version 0 has `describe`, `generate`, `login` and `refresh`; version 0.1 adds `session`; version 0.2 adds `count_tokens`; version 0.3 adds `models`; version 0.4 adds `check`; version 0.5 adds `quota`; version 0.7 adds `endpoint`. |
-| `account` | For `generate`, `count_tokens`, `endpoint`, `refresh`, `session`, `models`, `check` and `quota`: the account to use (below). For `login`: the account being signed in to, with its `id` and `settings` but no `credential`. |
+| `account` | For `generate`, `count_tokens`, `endpoint`, `refresh`, `session`, `models`, `check` and `quota`: the account to use (below). For `login`: the account being signed in to, with its `id`, `settings` and `proxy_url` but no `credential`. |
 | `request` | For `generate`, `count_tokens` and `endpoint`: the model request (below). |
 | `login` | For `login`: what to sign in with (see [Login and refresh](#login-and-refresh)). |
 | `session` | For `session`: what kind of session to open (see [Sessions](#sessions)). |
@@ -480,6 +481,7 @@ the endpoint (or does not serve it for this account's credential) answers with c
 | `id` | The account's ID in core's configuration. |
 | `settings` | Extension-specific settings, passed through as configured. |
 | `credential` | The credential for this call (below). |
+| `proxy_url` | Since 0.11, optional: the proxy every upstream request of this call goes through (below). Absent: no proxy. |
 
 An extension only ever receives its own accounts: core stores each credential with the ID of the
 extension that created it and never sends it to another.
@@ -498,6 +500,32 @@ A credential has a `kind` and the fields that kind uses:
 Every string in a credential except `kind` counts as secret: core removes each of them, in their
 JSON, URL and base64 forms, from everything a call sends back. Keep values that are not secret,
 especially short ones, out of the credential.
+
+### Proxy
+
+From version 0.11 an account may carry `proxy_url`, an `http://`, `https://`, `socks5://` or
+`socks5h://` URL: `scheme://[user:password@]host[:port]`. The extension sends every upstream
+request and connection of the call through it: model requests, WebSocket handshakes, token
+renewals in `refresh`, and everything a `login` sends (token exchange, device polling). An
+`http` or `https` proxy gets plain HTTP requests in absolute form and a `CONNECT` tunnel for
+TLS; a SOCKS5 proxy gets a `CONNECT` to the target, and with `socks5h` it resolves the
+target's host name (Go's `net/http` lets the proxy resolve it for `socks5` too). The user name and password, when present, authenticate to the proxy
+(HTTP Basic in `Proxy-Authorization`, or SOCKS5 user/password) and are secret: an extension never
+logs or shows them, and core removes them from everything a call sends back, as it does a
+credential's strings. An extension that cannot use the proxy fails the call rather than send
+it without one.
+
+Core decides the proxy; the extension never chooses one. It sends the account's own
+`proxy_url` setting, else core's global `proxy_url`; an account set to `direct` or `none` gets
+none even when the global one is set, and then `proxy_url` is absent. A `login` that adds a new
+account carries the `proxy_url` the request to add it named, else the global one, so even a
+first sign-in goes through the proxy. Core sends a call that has a proxy only to an extension
+whose describe reports `protocol_minor` 11 or more; for any other it fails the call itself with
+`unsupported` (scope `credential`), so routing moves on, and the traffic never leaves without the
+proxy.
+
+In Go, `sdk.Upstream` does all of this for each client it wraps: requests made with the
+handler's context go through the call's proxy.
 
 ## The request
 
@@ -973,7 +1001,7 @@ removes `previous_response_id`.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.10. An extension reports the minor version it
+raise the minor version: this document is version 0.11. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -991,8 +1019,9 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.8 | The request's `caller`. |
 | 0.9 | A login grant's optional `settings` object. |
 | 0.10 | Quota's optional `plan_ends_at`. |
+| 0.11 | The account's optional [`proxy_url`](#proxy). |
 
-## What version 0.10 leaves out
+## What version 0.11 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

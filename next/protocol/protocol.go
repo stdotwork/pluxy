@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -25,8 +26,8 @@ const Version = 0
 // suffix; minor 3 adds model listing; minor 4 adds account checks; minor 5 adds quota and the
 // identity of a login's grant; minor 6 adds an error's quota window; minor 7 adds endpoint calls;
 // minor 8 adds the request's caller; minor 9 adds a login grant's account settings;
-// minor 10 adds the subscription's end time to quota.
-const Minor = 10
+// minor 10 adds the subscription's end time to quota; minor 11 adds the account's proxy_url.
+const Minor = 11
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
@@ -142,6 +143,34 @@ type Account struct {
 	ID         string          `json:"id"`
 	Settings   json.RawMessage `json:"settings,omitempty"`
 	Credential *Credential     `json:"credential,omitempty"`
+	// ProxyURL is the proxy every upstream request of the call goes through (minor version 11):
+	// an http, https, socks5 or socks5h URL (ParseProxyURL). Empty: no proxy. Its user name and
+	// password are secret.
+	ProxyURL string `json:"proxy_url,omitempty"`
+}
+
+// ParseProxyURL parses an account's ProxyURL: an http, https, socks5 or socks5h URL with a
+// host and nothing after it but an optional "/". Its error never quotes the URL, which may
+// hold a password.
+func ParseProxyURL(s string) (*url.URL, error) {
+	u, err := url.Parse(s)
+	if err != nil {
+		return nil, errors.New("is not a valid URL")
+	}
+	switch u.Scheme {
+	case "http", "https", "socks5", "socks5h":
+	default:
+		return nil, errors.New("must use http://, https://, socks5:// or socks5h://")
+	}
+	if u.Hostname() == "" || u.Opaque != "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return nil, errors.New("must be scheme://[user:password@]host[:port], with nothing after the port")
+	}
+	if p := u.Port(); p != "" {
+		if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
+			return nil, errors.New("has a port that is not a number from 1 to 65535")
+		}
+	}
+	return u, nil
 }
 
 // Credential kinds core knows. Extensions may use other kinds; core stores them as they are.

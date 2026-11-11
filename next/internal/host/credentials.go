@@ -21,6 +21,14 @@ func (e *Extension) Login(ctx context.Context, account protocol.Account, login p
 	// in everything the call sends back.
 	l := &LoginCall{ext: e, ctx: ctx, account: account.ID}
 	l.addSecrets(login.Input)
+	proxy, perr := e.proxied(&account)
+	if perr != nil {
+		l.fail(perr)
+		return l
+	}
+	if proxy != nil {
+		l.addSecrets(map[string]string{"proxy": proxy.APIKey, "proxy password": proxy.AccessToken})
+	}
 	conn, lerr := e.dial(ctx)
 	if lerr != nil {
 		l.fail(lerr)
@@ -148,6 +156,10 @@ func (l *LoginCall) readError(err error) *llm.Error {
 // Refresh runs a refresh call: the extension renews account's credential and returns the new
 // one. Errors have the sent credential removed from them.
 func (e *Extension) Refresh(ctx context.Context, account protocol.Account) (*protocol.Credential, *llm.Error) {
+	proxy, perr := e.proxied(&account)
+	if perr != nil {
+		return nil, perr
+	}
 	e.held.add(account.ID, account.Credential)
 	conn, lerr := e.dial(ctx)
 	if lerr != nil {
@@ -169,7 +181,7 @@ func (e *Extension) Refresh(ctx context.Context, account protocol.Account) (*pro
 		e.held.add(account.ID, r.Grant.Credential)
 		return r.Grant.Credential, nil
 	case r.Type == llm.EventError && r.Error != nil:
-		redact := protocol.NewRedactor(account.Credential)
+		redact := protocol.NewRedactor(account.Credential, proxy)
 		return nil, redact.Event(r.Event).Error
 	}
 	return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a refresh", e.manifest.ID, r.Type)}

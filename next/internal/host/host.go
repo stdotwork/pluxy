@@ -43,6 +43,9 @@ type Options struct {
 	// Log receives the program's stderr and later stdout, one prefixed line at a time, with
 	// the credentials the extension holds removed (protocol.Redactor). Default os.Stderr.
 	Log io.Writer
+	// ProxyURL returns core's global proxy_url setting, read at each call: the proxy of every
+	// account without one of its own (proxyurl.Resolve). Nil: none.
+	ProxyURL func() string
 }
 
 // Extension is a running extension program.
@@ -406,6 +409,12 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 		return failed(llm.CodeExtensionUnavailable, fmt.Sprintf("extension %s is not running", e.manifest.ID))
 	default:
 	}
+	proxy, perr := e.proxied(&account)
+	if perr != nil {
+		s := &Stream{}
+		s.fail(perr)
+		return s
+	}
 	e.held.add(account.ID, account.Credential)
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", e.socket)
@@ -415,7 +424,7 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 		}
 		return failed(llm.CodeExtensionUnavailable, fmt.Sprintf("extension %s is not reachable: %v", e.manifest.ID, err))
 	}
-	s := &Stream{conn: conn, ctx: ctx, ext: e, redact: protocol.NewRedactor(account.Credential)}
+	s := &Stream{conn: conn, ctx: ctx, ext: e, redact: protocol.NewRedactor(account.Credential, proxy)}
 	s.stop = context.AfterFunc(ctx, func() { conn.Close() })
 	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: op, Account: &account, Request: &req}
 	if err := protocol.WriteFrame(conn, call); err != nil {
