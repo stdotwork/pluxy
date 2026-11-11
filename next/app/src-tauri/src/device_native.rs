@@ -325,9 +325,10 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     .map_err(|e| e.to_string())?;
     marker_from(app, &v2, "notes-2.0.0-after")?;
 
-    // The page webview asks for 1.0.0's files: the asset scheme refuses (its asset line says so).
+    // The 2.0.0 page asks for 1.0.0's files: the asset scheme refuses that page webview (its
+    // asset line says so), while it served 2.0.0's to it.
     w2.eval(format!(
-        "{{ const f = document.createElement('iframe'); f.src = {}; document.body.append(f); }}",
+        "document.querySelector('iframe').contentWindow.postMessage({{deviceLoad: {}}}, '*')",
         json!(format!(
             "pluxy-app://localhost/example/notes/{notes1}/index.html"
         ))

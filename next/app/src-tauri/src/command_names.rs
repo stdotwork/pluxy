@@ -13,4 +13,12 @@ pub const COMMANDS: &[&str] = &[
     "page_send",
     "confirmation_request",
     "confirmation_settings",
+    "device_list",
+    "device_registries",
+    "device_install",
+    "device_install_file",
+    "device_enable",
+    "device_remove",
+    "device_rollback",
+    "device_page_open",
 ];

@@ -1,0 +1,435 @@
+use super::*;
+use std::io::Write;
+
+fn temp() -> PathBuf {
+    let mut rnd = [0u8; 8];
+    getrandom::fill(&mut rnd).unwrap();
+    let base = std::env::var_os("CARGO_TARGET_TMPDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let d = base.join(format!("pluxy-device-{}", hex(&rnd)));
+    fs::create_dir_all(&d).unwrap();
+    d
+}
+
+fn dirs(root: &Path) -> Dirs {
+    Dirs {
+        root: root.join("device-packages"),
+        registries: root.join("device-registries.json"),
+    }
+}
+
+fn manifest(id: &str, version: &str, extra: Value) -> Vec<u8> {
+    let mut m = serde_json::json!({
+        "manifest_version": 1, "id": id, "version": version,
+        "app": {"version": 0, "tier": "web", "host_versions": [0],
+            "ui": {"version": 0, "dir": "pages", "pages": [{"id": "p", "title": "P", "short": "P", "path": "index.html"}]}}
+    });
+    if let Value::Object(o) = extra {
+        for (k, v) in o {
+            m["app"][k] = v;
+        }
+    }
+    serde_json::to_vec(&m).unwrap()
+}
+
+/// A gzip-compressed tar of (name, bytes) files, with names written into the header as given.
+fn archive(files: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut b = tar::Builder::new(Vec::new());
+    for (name, data) in files {
+        let mut h = tar::Header::new_old();
+        h.as_old_mut().name[..name.len()].copy_from_slice(name.as_bytes());
+        h.set_size(data.len() as u64);
+        h.set_mode(0o644);
+        h.set_entry_type(tar::EntryType::Regular);
+        h.set_cksum();
+        b.append(&h, *data).unwrap();
+    }
+    let tar = b.into_inner().unwrap();
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    gz.write_all(&tar).unwrap();
+    gz.finish().unwrap()
+}
+
+fn package(id: &str, version: &str) -> Vec<u8> {
+    let m = manifest(id, version, Value::Null);
+    archive(&[
+        ("pluxy-extension.json", &m),
+        ("pages/index.html", format!("<p>{version}").as_bytes()),
+    ])
+}
+
+fn local(name: &str) -> Source {
+    Source {
+        kind: "local".into(),
+        name: name.into(),
+        index: None,
+    }
+}
+
+fn install(c: &mut Catalog, bytes: &[u8], source: Source) -> Result<(), String> {
+    let cand = stage(&c.dirs, bytes, source, None)?;
+    c.commit(cand)
+}
+
+fn store_names(d: &Dirs) -> BTreeSet<String> {
+    fs::read_dir(d.store())
+        .map(|r| {
+            r.flatten()
+                .map(|e| e.file_name().into_string().unwrap())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn digest(b: &[u8]) -> String {
+    hex(&Sha256::digest(b))
+}
+
+#[test]
+fn shared_manifest_fixtures_agree_with_core() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../protocol/testdata/app-manifests");
+    let cases: Vec<Value> =
+        serde_json::from_slice(&fs::read(dir.join("cases.json")).unwrap()).unwrap();
+    assert!(cases.len() >= 10, "the shared cases were not read");
+    for case in cases {
+        let file = case["file"].as_str().unwrap();
+        let m: Manifest = serde_json::from_slice(&fs::read(dir.join(file)).unwrap()).unwrap();
+        let got = validate(&m);
+        assert_eq!(
+            got.is_ok(),
+            case["manifest_valid"] == true,
+            "{file}: {:?}",
+            got.err()
+        );
+    }
+}
+
+#[test]
+fn ids_versions_and_paths() {
+    for ok in ["example/notes", "a.b/c-d", "0/9"] {
+        assert!(valid_id(ok), "{ok}");
+    }
+    for bad in [
+        "example",
+        "Example/notes",
+        "-a/b",
+        "a/b/c",
+        "a/",
+        "/b",
+        "a/.b",
+    ] {
+        assert!(!valid_id(bad), "{bad}");
+    }
+    assert!(valid_version("1.0.0+b_1-x"));
+    assert!(!valid_version(".1") && !valid_version("") && !valid_version(&"1".repeat(65)));
+    for bad in ["", "/a", "a/../b", "..", "a//b", "./a", "a\\b"] {
+        assert!(!local_path(bad), "{bad}");
+    }
+    assert!(local_path("a/b.html"));
+}
+
+#[test]
+fn install_swap_failed_candidate_rollback_and_remove() {
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false);
+    let v1 = package("example/notes", "1.0.0");
+    let v2 = package("example/notes", "2.0.0");
+    install(&mut c, &v1, local("notes-1.tar.gz")).unwrap();
+    let p = c.get("example/notes").unwrap();
+    assert_eq!(p.active.sha256, digest(&v1));
+    assert!(p.enabled && p.last_good.is_none());
+    assert_eq!(p.active.files.len(), 1);
+    let (url, folder, title) = c.page("example/notes", "p").unwrap();
+    assert_eq!(
+        url,
+        format!(
+            "pluxy-app://localhost/example/notes/{}/index.html",
+            digest(&v1)
+        )
+    );
+    assert!(url.starts_with(&folder) && title == "P");
+    assert_eq!(
+        c.asset("example/notes", &digest(&v1), "index.html")
+            .unwrap()
+            .0,
+        b"<p>1.0.0"
+    );
+
+    install(&mut c, &v2, local("notes-1.tar.gz")).unwrap();
+    let p = c.get("example/notes").unwrap();
+    assert_eq!(p.active.sha256, digest(&v2));
+    assert_eq!(p.last_good.as_ref().unwrap().sha256, digest(&v1));
+    assert!(c
+        .asset("example/notes", &digest(&v1), "index.html")
+        .is_none());
+    assert_eq!(store_names(&d), BTreeSet::from([digest(&v1), digest(&v2)]));
+
+    // Candidates that fail leave the catalog and store as they were.
+    let bad_host = archive(&[
+        (
+            "pluxy-extension.json",
+            &manifest(
+                "example/notes",
+                "3.0.0",
+                serde_json::json!({"host_versions": [1]}),
+            ),
+        ),
+        ("pages/index.html", b"x"),
+    ]);
+    let e = install(&mut c, &bad_host, local("notes-1.tar.gz")).unwrap_err();
+    assert!(e.contains("host contract"), "{e}");
+    let other_source = package("example/notes", "4.0.0");
+    let e = install(&mut c, &other_source, local("elsewhere.tar.gz")).unwrap_err();
+    assert!(e.contains("remove it first"), "{e}");
+    let e = install(&mut c, &v2, local("notes-1.tar.gz")).unwrap_err();
+    assert!(e.contains("already installed"), "{e}");
+    assert_eq!(c.get("example/notes").unwrap().active.sha256, digest(&v2));
+    assert_eq!(store_names(&d), BTreeSet::from([digest(&v1), digest(&v2)]));
+    assert!(fs::read_dir(d.staging()).unwrap().next().is_none());
+
+    // The catalog persists; roll back makes 1.0.0 active again.
+    let mut c = Catalog::open(d.clone(), false);
+    c.rollback("example/notes").unwrap();
+    let p = c.get("example/notes").unwrap();
+    assert_eq!(p.active.sha256, digest(&v1));
+    assert_eq!(p.last_good.as_ref().unwrap().sha256, digest(&v2));
+
+    c.set_enabled("example/notes", false).unwrap();
+    assert!(c.page("example/notes", "p").is_err());
+    assert!(c
+        .asset("example/notes", &digest(&v1), "index.html")
+        .is_none());
+    c.set_enabled("example/notes", true).unwrap();
+
+    c.remove("example/notes").unwrap();
+    assert!(c.get("example/notes").is_none() && store_names(&d).is_empty());
+    assert!(Catalog::open(d, false).view().packages.is_empty());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn reserved_native_and_other_packages_are_refused_before_the_store() {
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false);
+    let e = install(&mut c, &package("pluxy/notes", "1.0.0"), local("x.tar.gz")).unwrap_err();
+    assert!(e.contains("reserved"), "{e}");
+    // The positive control on the same route.
+    install(
+        &mut c,
+        &package("example/notes", "1.0.0"),
+        local("x.tar.gz"),
+    )
+    .unwrap();
+
+    let native = archive(&[(
+        "pluxy-extension.json",
+        &serde_json::to_vec(&serde_json::json!({
+            "manifest_version": 1, "id": "example/tool", "version": "1",
+            "app": {"version": 0, "tier": "native", "host_versions": [0],
+                "programs": {"linux/amd64": "bin/t"},
+                "operations": [{"id": "x", "description": "d", "input_schema": {}, "output_schema": {}}],
+                "state": {"version": 0, "readable_versions": [0]}}
+        }))
+        .unwrap(),
+    )]);
+    let e = install(&mut c, &native, local("t.tar.gz")).unwrap_err();
+    assert!(e.contains("native tool"), "{e}");
+    let provider = archive(&[(
+        "pluxy-extension.json",
+        br#"{"manifest_version":0,"id":"example/p","version":"1","protocol":[0],"programs":{"linux/amd64":"p"}}"#,
+    )]);
+    let e = install(&mut c, &provider, local("p.tar.gz")).unwrap_err();
+    assert!(e.contains("install it in core"), "{e}");
+    let missing_page = archive(&[(
+        "pluxy-extension.json",
+        &manifest("example/x", "1", Value::Null),
+    )]);
+    assert!(install(&mut c, &missing_page, local("m.tar.gz")).is_err());
+    for (name, data) in [
+        ("../evil", b"x".as_slice()),
+        ("/abs", b"x".as_slice()),
+        ("pages/../../x", b"x".as_slice()),
+    ] {
+        let a = archive(&[
+            (
+                "pluxy-extension.json",
+                &manifest("example/y", "1", Value::Null),
+            ),
+            ("pages/index.html", b"x"),
+            (name, data),
+        ]);
+        let e = install(&mut c, &a, local("y.tar.gz")).unwrap_err();
+        assert!(e.contains("leaves the package folder"), "{name}: {e}");
+    }
+    assert!(install(&mut c, b"not gzip", local("z.tar.gz")).is_err());
+    assert_eq!(store_names(&d).len(), 1);
+    assert!(fs::read_dir(d.staging()).unwrap().next().is_none());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn links_devices_and_duplicates_are_refused() {
+    let root = temp();
+    let d = dirs(&root);
+    let m = manifest("example/l", "1", Value::Null);
+    for kind in [
+        tar::EntryType::Symlink,
+        tar::EntryType::Link,
+        tar::EntryType::Char,
+        tar::EntryType::Fifo,
+    ] {
+        let mut b = tar::Builder::new(Vec::new());
+        let mut h = tar::Header::new_gnu();
+        h.set_size(m.len() as u64);
+        h.set_mode(0o644);
+        h.set_path("pluxy-extension.json").unwrap();
+        h.set_cksum();
+        b.append(&h, m.as_slice()).unwrap();
+        let mut h = tar::Header::new_gnu();
+        h.set_entry_type(kind);
+        h.set_size(0);
+        h.set_path("pages/index.html").unwrap();
+        h.set_link_name("/etc/passwd").unwrap();
+        h.set_cksum();
+        b.append(&h, std::io::empty()).unwrap();
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        gz.write_all(&b.into_inner().unwrap()).unwrap();
+        let e = stage(&d, &gz.finish().unwrap(), local("l"), None).unwrap_err();
+        assert!(e.contains("not a regular file or folder"), "{kind:?}: {e}");
+    }
+    let dup = archive(&[
+        ("pluxy-extension.json", &m),
+        ("pages/index.html", b"a"),
+        ("pages/index.html", b"b"),
+    ]);
+    assert!(stage(&d, &dup, local("d"), None).is_err());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn changed_files_are_not_served_or_rolled_back_to() {
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false);
+    let v1 = package("example/notes", "1.0.0");
+    install(&mut c, &v1, local("n")).unwrap();
+    install(&mut c, &package("example/notes", "2.0.0"), local("n")).unwrap();
+    let file = d.store().join(digest(&v1)).join("pages/index.html");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(file.parent().unwrap(), fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    fs::write(&file, b"tampered").unwrap();
+    let e = c.rollback("example/notes").unwrap_err();
+    assert!(e.contains("changed since it was installed"), "{e}");
+    assert_eq!(c.get("example/notes").unwrap().active.version, "2.0.0");
+    // A file changed in the active release is not served.
+    c.remove("example/notes").unwrap();
+    install(&mut c, &v1, local("n")).unwrap();
+    assert!(c
+        .asset("example/notes", &digest(&v1), "index.html")
+        .is_some());
+    let file = d.store().join(digest(&v1)).join("pages/index.html");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(file.parent().unwrap(), fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    fs::write(&file, b"tampered").unwrap();
+    assert!(c
+        .asset("example/notes", &digest(&v1), "index.html")
+        .is_none());
+    assert!(c
+        .asset("example/notes", &digest(&v1), "pluxy-extension.json")
+        .is_none());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn safe_mode_lists_but_never_serves() {
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false);
+    let v1 = package("example/notes", "1.0.0");
+    install(&mut c, &v1, local("n")).unwrap();
+    let safe = Catalog::open(d, true);
+    let v = safe.view();
+    assert!(v.safe_mode && v.packages.len() == 1);
+    assert!(safe
+        .page("example/notes", "p")
+        .unwrap_err()
+        .contains("safe mode"));
+    assert!(safe
+        .asset("example/notes", &digest(&v1), "index.html")
+        .is_none());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_damaged_catalog_is_moved_aside() {
+    let root = temp();
+    let d = dirs(&root);
+    fs::create_dir_all(&d.root).unwrap();
+    fs::write(d.catalog(), b"{not json").unwrap();
+    let c = Catalog::open(d.clone(), false);
+    assert!(c.warning.as_deref().is_some_and(|w| w.contains("moved")));
+    assert!(c.view().packages.is_empty());
+    assert!(!d.catalog().exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn registry_pins_reserved_ids_and_paths() {
+    let root = temp();
+    let d = dirs(&root);
+    let reg = root.join("reg");
+    fs::create_dir_all(&reg).unwrap();
+    let v1 = package("example/notes", "1.0.0");
+    fs::write(reg.join("n1.tar.gz"), &v1).unwrap();
+    let p = platform();
+    let index = serde_json::json!({"registry_version": 0, "packages": {
+        "example/notes": {"releases": [
+            {"version": "2.0.0", "artifacts": {p.clone(): {"url": "n1.tar.gz", "sha256": digest(&v1), "size": v1.len()}}},
+            {"version": "1.0.0", "artifacts": {p.clone(): {"url": "n1.tar.gz", "sha256": digest(&v1), "size": v1.len()}}},
+            {"version": "0.9.0", "artifacts": {p.clone(): {"url": "n1.tar.gz", "sha256": "00", "size": v1.len()}}},
+            {"version": "0.8.0", "artifacts": {p.clone(): {"url": "../n1.tar.gz", "sha256": digest(&v1), "size": v1.len()}}}
+        ]},
+        "pluxy/notes": {"releases": [{"version": "1.0.0", "artifacts": {p.clone(): {"url": "missing.tar.gz", "sha256": "00", "size": 1}}}]}
+    }});
+    fs::write(reg.join("index.json"), serde_json::to_vec(&index).unwrap()).unwrap();
+    fs::write(
+        &d.registries,
+        serde_json::to_vec(&serde_json::json!({"version": 0, "registries": [
+            {"name": "fixture", "url": reg.join("index.json")}]}))
+        .unwrap(),
+    )
+    .unwrap();
+    let offers = offers(&d).unwrap();
+    assert_eq!(offers[0].packages.len(), 2);
+    assert!(offers[0]
+        .packages
+        .iter()
+        .any(|o| o.id == "pluxy/notes" && o.refused.is_some()));
+
+    let e = stage_from_registry(&d, "fixture", "pluxy/notes", None).unwrap_err();
+    assert!(e.contains("reserved"), "{e}");
+    // The archive holds 1.0.0, not the newest release the index lists.
+    let e = stage_from_registry(&d, "fixture", "example/notes", None).unwrap_err();
+    assert!(e.contains("not example/notes 2.0.0"), "{e}");
+    let e = stage_from_registry(&d, "fixture", "example/notes", Some("0.9.0")).unwrap_err();
+    assert!(e.contains("not the one the registry lists"), "{e}");
+    let e = stage_from_registry(&d, "fixture", "example/notes", Some("0.8.0")).unwrap_err();
+    assert!(e.contains("inside the index's folder"), "{e}");
+    let mut c = Catalog::open(d.clone(), false);
+    let cand = stage_from_registry(&d, "fixture", "example/notes", Some("1.0.0")).unwrap();
+    assert_eq!(cand.source.kind, "registry");
+    c.commit(cand).unwrap();
+    assert_eq!(c.get("example/notes").unwrap().active.sha256, digest(&v1));
+    let _ = fs::remove_dir_all(root);
+}

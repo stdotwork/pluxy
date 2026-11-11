@@ -26,6 +26,10 @@ addEventListener("message", (e) => {
       if (m && typeof m.id === "string" && m.result && !done.includes(m.id)) done.push(m.id);
     };
     port.postMessage({ v: 0, id: marker, method: "theme.get", params: null });
+  } else if (d && typeof d.deviceLoad === "string") {
+    // Asks the asset scheme for another file, as an image: no navigation, a plain request.
+    const img = new Image();
+    img.src = d.deviceLoad;
   } else if (d && typeof d.deviceProbe === "string" && port) {
     port.postMessage({ v: 0, id: marker + "-" + d.deviceProbe, method: "theme.get", params: null });
   }

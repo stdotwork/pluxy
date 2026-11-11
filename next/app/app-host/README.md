@@ -1,7 +1,9 @@
 # App package contract
 
 This reference defines the app contribution to a pluxy package and app program contract v0.
-The desktop installer, signature verifier and Rust program host are later implementation work.
+The desktop app installs page-only web packages on this device
+([extensions on this device](../README.md#extensions-on-this-device)); signature verification,
+resources, native admission and the Rust program host are later implementation work.
 Core recognizes app contributions to refuse app-only packages and use only the provider part of
 a mixed package. Start with the [tutorial](TUTORIAL.md).
 

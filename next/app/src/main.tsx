@@ -1,10 +1,11 @@
 // The desktop app's window: the kit's shell with core's pages, the same as the panel's and in the
-// same places, then the app's own Connection page. Extension pages open in webviews of their
+// same places, then the app's own Connection and Device extensions pages. Extension pages, from
+// core and from packages installed on this device (devicePage.tsx), open in webviews of their
 // own (nativePage.tsx).
 
 import { listen } from "@tauri-apps/api/event";
 import { render } from "preact";
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
 import { corePages } from "../../ui/kit/pages/core";
 import { type PageDef, Shell } from "../../ui/kit/shell";
 import { ThemeState } from "../../ui/kit/theme/state";
@@ -12,11 +13,42 @@ import defaultTheme from "../../ui/themes/default.json";
 import paper from "../../ui/themes/paper.json";
 import terminal from "../../ui/themes/terminal.json";
 import { ConnectionPage } from "./connection";
+import { type DeviceCatalog, device } from "./device";
+import { devicePage } from "./devicePage";
 import { appHost, type Connection, connectionGet } from "./host";
 import { NativeExtensionPage } from "./nativePage";
 
 function brand(c: Connection): string {
   return c.mode === "remote" && c.target ? `pluxy · ${new URL(c.target).host}` : "pluxy";
+}
+
+/** The pages of the enabled packages on this device; none in safe mode. */
+function devicePages(catalog?: DeviceCatalog): PageDef[] {
+  if (!catalog || catalog.safe_mode) return [];
+  return catalog.packages
+    .filter((p) => p.enabled)
+    .flatMap((p) =>
+      p.active.pages.map((page) => ({
+        id: `device/${p.id}/${page.id}`,
+        title: page.title,
+        short: page.short,
+        group: "extensions" as const,
+        tip: `${page.title} (on this device)`,
+        render: () => (
+          <NativeExtensionPage
+            device
+            ext={{
+              id: p.id,
+              version: p.active.version,
+              permissions: [],
+              pages: p.active.pages,
+              config: false,
+            }}
+            page={page}
+          />
+        ),
+      })),
+    );
 }
 
 function App(props: { initial: Connection }) {
@@ -27,6 +59,23 @@ function App(props: { initial: Connection }) {
     setGeneration((n) => n + 1);
   };
   const host = useMemo(() => appHost(conn, changed), [conn]);
+  // This device's catalog: reloaded when the native side says it changed.
+  const [catalog, setCatalog] = useState<DeviceCatalog>();
+  const loadDevice = useCallback(() => {
+    device.list().then((r) => {
+      if (r.body) setCatalog(r.body);
+    });
+  }, []);
+  useEffect(() => {
+    loadDevice();
+    const off = listen("pluxy-device", loadDevice);
+    return () => {
+      off.then(
+        (f) => f(),
+        () => {},
+      );
+    };
+  }, [loadDevice]);
   // The app's own core exited: show it.
   useEffect(() => {
     const off = listen("pluxy-connection", () => connectionGet().then(changed, () => {}));
@@ -48,8 +97,10 @@ function App(props: { initial: Connection }) {
         group: "control",
         render: () => <ConnectionPage connection={conn} onChange={changed} />,
       },
+      devicePage(loadDevice),
+      ...devicePages(catalog),
     ],
-    [conn],
+    [conn, catalog, loadDevice],
   );
 
   // Not connected or not signed in (or the app's own core did not start): only the Connection

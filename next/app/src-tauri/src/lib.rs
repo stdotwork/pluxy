@@ -4,13 +4,15 @@
 //!
 //! Every app command is declared in the app's command manifest (`build.rs`) and granted only to
 //! the window's webview, labelled `main` (`capabilities/main.json`). Extension pages run in
-//! webviews of their own (`pages.rs`), which no capability names.
+//! webviews of their own (`pages.rs`), which no capability names. Packages installed on this
+//! device (`device.rs`) serve their pages' files to those webviews over the `pluxy-app:` scheme.
 
 pub mod client;
 mod command_names;
 #[cfg(target_os = "linux")]
 pub mod confirmation;
 pub mod conn;
+pub mod device;
 pub mod managed;
 #[cfg(feature = "native-test")]
 mod native_test;
@@ -46,6 +48,9 @@ struct App {
     /// The page webviews' own web context's folder: nothing shared with the window's.
     pages_dir: std::path::PathBuf,
     pages: Mutex<Pages>,
+    /// This device's extension catalog. Installs check and stage a release without it.
+    device: Mutex<device::Catalog>,
+    device_dirs: device::Dirs,
     status: Mutex<Option<MenuItem<Wry>>>,
     has_tray: AtomicBool,
     quitting: AtomicBool,
@@ -287,7 +292,6 @@ impl Rect {
 #[allow(clippy::too_many_arguments)]
 fn page_open(
     webview: Webview,
-    state: tauri::State<App>,
     extension: String,
     page: String,
     title: String,
@@ -297,14 +301,51 @@ fn page_open(
 ) -> Result<String, String> {
     trusted(&webview)?;
     let url = pages::page_url(&url, &pages_origin)?;
-    let origin = url.origin();
-    let label = state.pages.lock().unwrap().bind(Binding {
-        extension,
-        page,
-        title,
-        url,
-        pages_origin,
-    })?;
+    open_page(
+        &webview,
+        Binding {
+            extension,
+            page,
+            title,
+            url,
+            pages_origin,
+            device: None,
+        },
+        rect,
+    )
+}
+
+/// Opens a webview for page of package id on this device, at the address its catalog gives.
+#[tauri::command]
+fn device_page_open(
+    webview: Webview,
+    state: tauri::State<App>,
+    id: String,
+    page: String,
+    rect: Rect,
+) -> Result<String, String> {
+    trusted(&webview)?;
+    let (url, folder, title) = state.device.lock().unwrap().page(&id, &page)?;
+    let url = Url::parse(&url).map_err(|e| e.to_string())?;
+    open_page(
+        &webview,
+        Binding {
+            // Its own budget: a core package with the same ID is another package.
+            extension: format!("device:{id}"),
+            page,
+            title,
+            url,
+            pages_origin: device::asset_base(),
+            device: Some(folder),
+        },
+        rect,
+    )
+}
+
+fn open_page(webview: &Webview, binding: Binding, rect: Rect) -> Result<String, String> {
+    let state = webview.state::<App>();
+    let site = binding.clone();
+    let label = state.pages.lock().unwrap().bind(binding)?;
     let app_doc = page_scheme_url();
     let navigation_app = webview.app_handle().clone();
     let navigation_label = label.clone();
@@ -329,7 +370,7 @@ fn page_open(
             {
                 return true;
             }
-            *u == app_doc || u.origin() == origin
+            *u == app_doc || site.on_site(u)
         })
         .on_new_window(|_, _| NewWindowResponse::Deny)
         .on_page_load(|wv, p| {
@@ -493,6 +534,244 @@ fn confirmation_settings(webview: Webview) -> Result<(), String> {
     }
 }
 
+/// This device's extension catalog, for the window.
+#[tauri::command]
+fn device_list(webview: Webview, state: tauri::State<App>) -> Result<device::View, String> {
+    trusted(&webview)?;
+    Ok(state.device.lock().unwrap().view())
+}
+
+/// What the registries in `device-registries.json` offer this computer.
+#[tauri::command]
+async fn device_registries(webview: Webview) -> Result<Vec<device::RegistryView>, String> {
+    trusted(&webview)?;
+    let dirs = webview.state::<App>().device_dirs.clone();
+    tauri::async_runtime::spawn_blocking(move || device::offers(&dirs))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Closes the open pages of package id on this device and tells the window its catalog
+/// changed. A page of a release that is no longer active never stays open, even hidden.
+fn device_changed(app: &AppHandle, id: &str) {
+    let labels = {
+        let st = app.state::<App>();
+        let mut pages = st.pages.lock().unwrap();
+        let labels = pages.device_labels(id);
+        for l in &labels {
+            pages.unbind(l);
+        }
+        labels
+    };
+    for l in labels {
+        place::forget(&l);
+        if let Some(w) = app.get_webview(&l) {
+            let _ = w.close();
+        }
+    }
+    let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-device", ());
+}
+
+/// Commits a staged candidate and closes the package's open pages.
+fn device_commit(app: &AppHandle, c: device::Candidate) -> Result<device::View, String> {
+    let id = c.id.clone();
+    let st = app.state::<App>();
+    st.device.lock().unwrap().commit(c)?;
+    device_changed(app, &id);
+    let view = st.device.lock().unwrap().view();
+    Ok(view)
+}
+
+/// Installs or updates package id from a registry: version, or its newest release.
+#[tauri::command]
+async fn device_install(
+    webview: Webview,
+    registry: String,
+    id: String,
+    version: Option<String>,
+) -> Result<device::View, String> {
+    trusted(&webview)?;
+    let app = webview.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let dirs = app.state::<App>().device_dirs.clone();
+        let c = device::stage_from_registry(&dirs, &registry, &id, version.as_deref())?;
+        device_commit(&app, c)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The native file chooser's title.
+pub const CHOOSER: &str = "Install an extension package on this device";
+
+/// Asks the person for a package archive in the native file chooser. None: they cancelled.
+#[cfg(target_os = "linux")]
+fn choose_archive(app: &AppHandle) -> Result<Option<std::path::PathBuf>, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        use gtk::prelude::*;
+        let d = gtk::FileChooserDialog::with_buttons(
+            Some(CHOOSER),
+            None::<&gtk::Window>,
+            gtk::FileChooserAction::Open,
+            &[
+                ("_Cancel", gtk::ResponseType::Cancel),
+                ("_Open", gtk::ResponseType::Accept),
+            ],
+        );
+        d.set_default_response(gtk::ResponseType::Accept);
+        d.set_local_only(true);
+        d.set_modal(true);
+        let f = gtk::FileFilter::new();
+        f.set_name(Some("Extension packages (.tar.gz)"));
+        f.add_pattern("*.tar.gz");
+        f.add_pattern("*.tgz");
+        d.add_filter(f);
+        let done = std::cell::Cell::new(false);
+        d.connect_response(move |d, r| {
+            if done.replace(true) {
+                return;
+            }
+            let chosen = (r == gtk::ResponseType::Accept)
+                .then(|| d.filename())
+                .flatten();
+            let _ = tx.send(chosen);
+            d.hide();
+            // No GTK state is queried after destroying this finished chooser.
+            unsafe {
+                d.destroy();
+            }
+        });
+        d.show_all();
+    })
+    .map_err(|e| e.to_string())?;
+    rx.recv().map_err(|_| "the file chooser closed".to_string())
+}
+
+/// Installs or updates a package from a local archive the person chooses in the native file
+/// chooser; the window names no path.
+#[tauri::command]
+async fn device_install_file(webview: Webview) -> Result<device::View, String> {
+    trusted(&webview)?;
+    let app = webview.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "linux")]
+        let path = choose_archive(&app)?.ok_or("no file chosen")?;
+        #[cfg(not(target_os = "linux"))]
+        let path: std::path::PathBuf =
+            return Err("installing from a file is supported on Linux only".into());
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let bytes = device::read_archive(&path)?;
+        let dirs = app.state::<App>().device_dirs.clone();
+        let c = device::stage(
+            &dirs,
+            &bytes,
+            device::Source {
+                kind: "local".into(),
+                name,
+                index: None,
+            },
+            None,
+        )?;
+        device_commit(&app, c)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn device_change(
+    webview: &Webview,
+    id: &str,
+    f: impl FnOnce(&mut device::Catalog) -> Result<(), String>,
+) -> Result<device::View, String> {
+    trusted(webview)?;
+    let app = webview.app_handle();
+    f(&mut app.state::<App>().device.lock().unwrap())?;
+    device_changed(app, id);
+    let view = app.state::<App>().device.lock().unwrap().view();
+    Ok(view)
+}
+
+#[tauri::command]
+fn device_enable(webview: Webview, id: String, enabled: bool) -> Result<device::View, String> {
+    device_change(&webview, &id, |c| c.set_enabled(&id, enabled))
+}
+
+#[tauri::command]
+fn device_remove(webview: Webview, id: String) -> Result<device::View, String> {
+    device_change(&webview, &id, |c| c.remove(&id))
+}
+
+/// Makes package id's last good release active again.
+#[tauri::command]
+fn device_rollback(webview: Webview, id: String) -> Result<device::View, String> {
+    device_change(&webview, &id, |c| c.rollback(&id))
+}
+
+/// The `pluxy-app:` scheme: a device page's files, served only to the page webview bound to
+/// that page's release folder, while the release is active and each file is unchanged.
+fn asset_scheme(
+    ctx: tauri::UriSchemeContext<'_, Wry>,
+    request: tauri::http::Request<Vec<u8>>,
+    responder: tauri::UriSchemeResponder,
+) {
+    let app = ctx.app_handle().clone();
+    let label = ctx.webview_label().to_string();
+    let path = request.uri().path().to_string();
+    let found = (request.method() == "GET")
+        .then(|| {
+            let folder = app
+                .state::<App>()
+                .pages
+                .lock()
+                .unwrap()
+                .get(&label)
+                .and_then(|b| b.device.clone())?;
+            // The folder's path part: /<publisher>/<name>/<sha256>/.
+            let folder = Url::parse(&folder).ok()?.path().to_string();
+            let file = path.strip_prefix(&folder)?;
+            let mut parts = folder.trim_matches('/').splitn(3, '/');
+            let id = format!("{}/{}", parts.next()?, parts.next()?);
+            let digest = parts.next()?;
+            app.state::<App>()
+                .device
+                .lock()
+                .unwrap()
+                .asset(&id, digest, file)
+        })
+        .flatten();
+    let status = if found.is_some() { 200 } else { 404 };
+    #[cfg(feature = "native-test")]
+    native_test::log(
+        "asset",
+        serde_json::json!({"label": label, "path": path, "status": status}),
+    );
+    let (body, kind) = found.unwrap_or((Vec::new(), "text/plain"));
+    // As core's pages site: sandboxed with scripts, loading only from the asset scheme (where
+    // this webview gets only its own folder), and no requests from script, frames or forms.
+    let s = device::ASSET_SCHEME;
+    let csp = if status == 200 {
+        format!("sandbox allow-scripts; default-src 'none'; script-src {s}:; style-src {s}:; img-src {s}: data: blob:; font-src {s}: data:; media-src {s}: data: blob:; connect-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'")
+    } else {
+        "sandbox; default-src 'none'".to_string()
+    };
+    let resp = Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, kind)
+        .header("Content-Security-Policy", csp)
+        // A sandboxed page has an opaque origin; its module scripts and fonts load with CORS.
+        .header("Access-Control-Allow-Origin", "*")
+        .header(header::CACHE_CONTROL, "no-store")
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Referrer-Policy", "no-referrer")
+        .body(body)
+        .expect("a response");
+    responder.respond(resp);
+}
+
 /// The `pluxy-page:` scheme: the page webviews' app document and their way to the window.
 fn page_scheme(
     ctx: tauri::UriSchemeContext<'_, Wry>,
@@ -567,13 +846,32 @@ pub fn run() {
             page_send,
             confirmation_request,
             confirmation_settings,
+            device_list,
+            device_registries,
+            device_install,
+            device_install_file,
+            device_enable,
+            device_remove,
+            device_rollback,
+            device_page_open,
         ])
         .register_asynchronous_uri_scheme_protocol(pages::SCHEME, page_scheme)
+        .register_asynchronous_uri_scheme_protocol(device::ASSET_SCHEME, asset_scheme)
         .setup(|app| {
             let config = app.path().app_config_dir()?;
             #[cfg(target_os = "linux")]
             let confirmations =
                 confirmation::Confirmations::open(config.join("remembered-launches.json"))?;
+            let device_dirs = device::Dirs {
+                root: app.path().app_data_dir()?.join("device-packages"),
+                registries: config.join("device-registries.json"),
+            };
+            // `--safe-mode`: no page of a package on this device is listed, opened or served.
+            let safe_mode = std::env::args().skip(1).any(|a| a == "--safe-mode");
+            let catalog = device::Catalog::open(device_dirs.clone(), safe_mode);
+            if let Some(w) = &catalog.warning {
+                eprintln!("pluxy-app: {w}");
+            }
             let core = app.path().app_data_dir()?.join("core");
             // When the app's core exits, the tray and the window show it. Off this thread: the
             // exit may come while a connection change holds the connection.
@@ -598,6 +896,8 @@ pub fn run() {
                 confirmations: Mutex::new(confirmations),
                 pages_dir,
                 pages: Mutex::new(Pages::default()),
+                device: Mutex::new(catalog),
+                device_dirs,
                 status: Mutex::new(None),
                 has_tray: AtomicBool::new(false),
                 quitting: AtomicBool::new(false),

@@ -20,6 +20,14 @@
     "allow-page-close",
     "allow-page-send",
     "allow-confirmation-request",
-    "allow-confirmation-settings"
+    "allow-confirmation-settings",
+    "allow-device-list",
+    "allow-device-registries",
+    "allow-device-install",
+    "allow-device-install-file",
+    "allow-device-enable",
+    "allow-device-remove",
+    "allow-device-rollback",
+    "allow-device-page-open"
   ]
 }
