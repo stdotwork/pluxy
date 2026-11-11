@@ -690,7 +690,7 @@ async function runApp(
         `the custom program is not pending adoption: ${JSON.stringify(steps.get("core_adopt"))}`,
       );
       check(
-        /^custom-[0-9a-f]{12}$/.test(String(steps.get("core_adopt")?.version)),
+        /^custom-[0-9a-f]{64}$/.test(String(steps.get("core_adopt")?.version)),
         "the adopted core has no app-owned version",
       );
     }

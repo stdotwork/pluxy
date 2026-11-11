@@ -67,10 +67,8 @@ fn alive(pid: u64) -> bool {
         .unwrap_or(false)
 }
 
-fn exe(pid: u64) -> String {
-    std::fs::read_link(format!("/proc/{pid}/exe"))
-        .map(|p| p.display().to_string())
-        .unwrap_or_default()
+fn exe(pid: u64) -> PathBuf {
+    std::fs::read_link(format!("/proc/{pid}/exe")).unwrap_or_default()
 }
 
 /// The processes running program, by their executable.
@@ -133,8 +131,11 @@ fn act(main: &Webview, cmd: &str, args: Value, keys: &str) -> Result<Value, Stri
 /// A refusal before any dialog: the command fails and no dialog opens.
 fn refused(main: &Webview, cmd: &str, args: Value) -> Result<String, String> {
     let r = invoke(main, cmd, args)?;
-    std::thread::sleep(Duration::from_millis(500));
-    require(window(DIALOG).is_none(), format!("{cmd} opened a dialog"))?;
+    // No dialog at any point for two seconds after the refusal.
+    for _ in 0..20 {
+        require(window(DIALOG).is_none(), format!("{cmd} opened a dialog"))?;
+        std::thread::sleep(Duration::from_millis(100));
+    }
     r.err().ok_or_else(|| format!("{cmd} was not refused"))
 }
 
@@ -187,7 +188,7 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
         "core_install",
         json!({"outcome": o["result"], "version": version, "connected": !view["target"].is_null(),
                "signed_in": view["signed_in"], "status": status, "reported": reported,
-               "exe_in_app": exe(pid1).starts_with(&cores.display().to_string()),
+               "exe_in_app": exe(pid1).starts_with(&cores),
                "installed": installed(&cores), "source": source}),
     );
 
@@ -254,14 +255,16 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
     let pid_custom = pid.unwrap_or_default();
     let (status, _) = status_version(app);
     let adopted_exe = exe(pid_custom);
+    // While the adopted copy runs, before anything else changes.
+    let custom_running = !running(&custom).is_empty();
     let o2 = act(main, "core_rollback", json!({"version": "1.0.0"}), "alt+o")?;
     let (back, _, _) = current(main)?;
     log(
         "core_adopt",
         json!({"pending": set["core"]["adopt"], "running_before": set["core"]["version"],
                "custom_not_run": not_run, "outcome": o["result"], "version": version,
-               "status": status, "exe_in_app": adopted_exe.starts_with(&cores.display().to_string()),
-               "custom_running": !running(&custom).is_empty(),
+               "status": status, "exe_in_app": adopted_exe.starts_with(&cores),
+               "custom_running": custom_running,
                "back": back, "back_outcome": o2["result"]}),
     );
     Ok(())

@@ -45,6 +45,17 @@ fn built() -> &'static Path {
         build_core(&d.join("1.0.0"), "1.0.0");
         build_core(&d.join("2.0.0"), "2.0.0");
         bad_core(&d.join("3.0.0"));
+        // Exits after making its config folder (its working folder) unwritable, so putting the
+        // config back fails.
+        script_core(
+            &d.join("3.1.0"),
+            "chmod 500 .\necho 'pluxy: candidate locked its config folder' >&2\nexit 3",
+        );
+        // Exits after making the app's core store unwritable, so recording the failure fails.
+        script_core(
+            &d.join("3.2.0"),
+            "chmod 500 ../cores\necho 'pluxy: candidate locked the store' >&2\nexit 3",
+        );
         d
     })
 }
@@ -80,6 +91,17 @@ fn fixture(name: &str) -> Fixture {
         release(&src, &keys, "2.1.0", &pack(&b.join("2.0.0")), false),
         // Signed as 2.5.0, but the program in it is 2.0.0.
         release(&src, &keys, "2.5.0", &pack(&b.join("2.0.0")), true),
+        release(&src, &keys, "3.1.0", &pack(&b.join("3.1.0")), true),
+        release(&src, &keys, "3.2.0", &pack(&b.join("3.2.0")), true),
+        // Release versions in the adopted programs' namespace, and one ending in .json.
+        release(
+            &src,
+            &keys,
+            "custom-0123456789ab",
+            &pack(&b.join("1.0.0")),
+            true,
+        ),
+        release(&src, &keys, "1.0.0.json", &pack(&b.join("1.0.0")), true),
     ];
     write_index(&index, &releases);
     let mut conn = Connection::open(dirs(&root), None);
@@ -364,6 +386,13 @@ fn a_changed_installed_core_does_not_start() {
         "{v:?}"
     );
     assert!(c.core_pid().is_none());
+    // A9: the same release installs again over it, through the same checks, and runs.
+    let staged = c.prepare_install(&f.keys, "1.0.0").unwrap();
+    c.apply(CoreChange::Install(staged)).unwrap();
+    assert_eq!(
+        c.caller().call("GET", "/status", None).body.unwrap()["version"],
+        "1.0.0"
+    );
 }
 
 /// An archive holding entry (a raw tar header) after a good program.
@@ -461,23 +490,28 @@ fn a_custom_program_runs_only_once_adopted() {
     );
 
     // Changed after the person confirmed it: refused, nothing installed.
-    let (path, sha, _) = f.conn.prepare_adopt().unwrap();
+    let (path, sha, size) = f.conn.prepare_adopt().unwrap();
     std::fs::copy(built().join("1.0.0/pluxy"), &custom).unwrap();
     let err = f
         .conn
-        .apply(CoreChange::Adopt { path, sha256: sha })
+        .apply(CoreChange::Adopt {
+            path,
+            sha256: sha,
+            size,
+        })
         .unwrap_err();
     assert!(err.contains("changed after you confirmed"), "{err}");
     assert!(f.installed().is_empty());
 
-    let (path, sha, _) = f.conn.prepare_adopt().unwrap();
+    let (path, sha, size) = f.conn.prepare_adopt().unwrap();
     f.conn
         .apply(CoreChange::Adopt {
             path,
             sha256: sha.clone(),
+            size,
         })
         .unwrap();
-    let id = format!("custom-{}", &sha[..12]);
+    let id = format!("custom-{sha}");
     let v = f.conn.view();
     assert_eq!(
         v.core.as_ref().unwrap().version.as_deref(),
@@ -488,4 +522,262 @@ fn a_custom_program_runs_only_once_adopted() {
     assert_eq!(exe(pid), f.root.join(format!("cores/versions/{id}/pluxy")));
     assert_eq!(running(&custom), 0);
     assert_eq!(f.reported(), (200, Some("1.0.0".into())));
+}
+
+/// The management key in the managed core's config.
+fn management_key(root: &Path) -> String {
+    let cfg: Value =
+        serde_json::from_slice(&std::fs::read(root.join("core/config.json")).unwrap()).unwrap();
+    cfg["management_key"].as_str().unwrap().to_string()
+}
+
+/// A listener on this computer that is not the app's core: it answers every request 200 with a
+/// version, and keeps what it was sent.
+fn impostor(listener: std::net::TcpListener) -> std::sync::Arc<std::sync::Mutex<Vec<u8>>> {
+    use std::io::{Read, Write};
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let keep = seen.clone();
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(mut c) = conn else { return };
+            let _ = c.set_read_timeout(Some(std::time::Duration::from_millis(500)));
+            let mut buf = [0u8; 4096];
+            if let Ok(n) = c.read(&mut buf) {
+                keep.lock().unwrap().extend_from_slice(&buf[..n]);
+            }
+            let body = r#"{"version":"1.0.0"}"#;
+            let _ = write!(
+                c,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    seen
+}
+
+/// B1-1: a program that says it listens where something else does is not ready, and the key
+/// never goes there.
+#[test]
+fn readiness_never_sends_the_key_to_a_listener_the_core_does_not_own() {
+    let mut f = fixture("impostor");
+    f.install("1.0.0").unwrap();
+    let key = management_key(&f.root);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let seen = impostor(listener);
+    let custom = script_core(
+        &f.root.join("liar"),
+        &format!("echo 'pluxy: listening on http://127.0.0.1:{port}' >&2\nexec sleep 30"),
+    );
+    f.conn
+        .change(Change {
+            mode: Some(Mode::Managed),
+            core_path: Some(custom.display().to_string()),
+            core_source: Some(f.index.display().to_string()),
+            ..Change::default()
+        })
+        .unwrap();
+    let (path, sha, size) = f.conn.prepare_adopt().unwrap();
+    let err = f
+        .conn
+        .apply(CoreChange::Adopt {
+            path,
+            sha256: sha,
+            size,
+        })
+        .unwrap_err();
+    assert!(err.contains("not listening"), "{err}");
+    let sent = String::from_utf8_lossy(&seen.lock().unwrap()).into_owned();
+    assert!(
+        !sent.contains(&key),
+        "the management key went to another listener: {sent}"
+    );
+    assert_eq!(f.reported(), (200, Some("1.0.0".into())));
+}
+
+/// B1-1: once the app's core has exited, calls do not go to whatever listens on its port next.
+#[test]
+fn calls_stop_when_the_core_is_gone() {
+    let mut f = fixture("gone");
+    f.install("1.0.0").unwrap();
+    assert_eq!(f.conn.caller().call("GET", "/status", None).status, 200);
+    let pid = f.conn.core_pid().unwrap();
+    let cfg: Value =
+        serde_json::from_slice(&std::fs::read(f.root.join("core/config.json")).unwrap()).unwrap();
+    let listen = cfg["listen"].as_str().unwrap().to_string();
+    unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+    for _ in 0..100 {
+        if f.conn.view().core.unwrap().state == "stopped" {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(f.conn.view().core.unwrap().state, "stopped");
+    let seen = impostor(std::net::TcpListener::bind(&listen).unwrap());
+    let r = f.conn.caller().call("GET", "/status", None);
+    assert_ne!(r.status, 200, "a call reached the new listener");
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "a call reached the new listener"
+    );
+}
+
+/// B1-3: when the config cannot be put back, no core runs and the next start tries again.
+#[test]
+fn a_failed_config_restore_keeps_the_core_stopped_and_retries_at_start() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut f = fixture("restore-fails");
+    f.install("1.0.0").unwrap();
+    let config = f.config();
+    let err = f.install("3.1.0").unwrap_err();
+    let core = f.root.join("core");
+    std::fs::set_permissions(&core, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(err.contains("could not put the config back"), "{err}");
+    assert!(
+        f.conn.core_pid().is_none(),
+        "a core runs on a config the app could not restore"
+    );
+    let store = Store::open(&f.root.join("cores")).unwrap();
+    assert_eq!(store.state().unwrap().candidate.as_deref(), Some("3.1.0"));
+    std::fs::write(core.join("config.json"), b"half written").unwrap();
+    // The next start puts the config back and runs 1.0.0.
+    let c = Connection::open(dirs(&f.root), None);
+    assert_eq!(std::fs::read(core.join("config.json")).unwrap(), config);
+    assert_eq!(
+        c.caller().call("GET", "/status", None).body.unwrap()["version"],
+        "1.0.0"
+    );
+}
+
+/// B1-4: when the failure cannot be recorded, the last good core still runs again.
+#[test]
+fn an_unrecordable_failure_still_runs_the_last_good_core() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut f = fixture("unrecordable");
+    f.install("1.0.0").unwrap();
+    let err = f.install("3.2.0").unwrap_err();
+    std::fs::set_permissions(f.root.join("cores"), std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(err.contains("candidate locked the store"), "{err}");
+    assert_eq!(f.reported(), (200, Some("1.0.0".into())), "{err}");
+}
+
+/// A8: an unreadable kept config is an error, not a reason to delete the config.
+#[test]
+fn an_unreadable_kept_config_never_deletes_the_config() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut f = fixture("unreadable-copy");
+    f.install("1.0.0").unwrap();
+    let config = f.config();
+    f.conn.stop_core();
+    let store = Store::open(&f.root.join("cores")).unwrap();
+    ConfigSnapshot::take(&store, &f.root.join("core/config.json")).unwrap();
+    let mut st = store.state().unwrap();
+    st.candidate = Some("2.0.0".into());
+    store.save_state(&st).unwrap();
+    let kept = f.root.join("cores/config-last-good.json");
+    std::fs::set_permissions(&kept, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let mut c = Connection::open(dirs(&f.root), None);
+    std::fs::set_permissions(&kept, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(f.config(), config, "the config was removed");
+    assert!(c.core_pid().is_none());
+    assert!(c.view().error.is_some());
+}
+
+/// A6: release versions cannot take an adopted program's name; adopted names use the whole
+/// SHA-256.
+#[test]
+fn adopted_and_released_names_stay_apart() {
+    let mut f = fixture("names");
+    let err = f
+        .conn
+        .prepare_install(&f.keys, "custom-0123456789ab")
+        .err()
+        .unwrap();
+    assert!(err.contains("reserved"), "{err}");
+    let custom = f.root.join("mine/pluxy");
+    std::fs::create_dir_all(custom.parent().unwrap()).unwrap();
+    std::fs::copy(built().join("1.0.0/pluxy"), &custom).unwrap();
+    f.conn
+        .change(Change {
+            mode: Some(Mode::Managed),
+            core_path: Some(custom.display().to_string()),
+            core_source: Some(f.index.display().to_string()),
+            ..Change::default()
+        })
+        .unwrap();
+    let (path, sha, size) = f.conn.prepare_adopt().unwrap();
+    f.conn
+        .apply(CoreChange::Adopt {
+            path,
+            sha256: sha.clone(),
+            size,
+        })
+        .unwrap();
+    assert_eq!(f.installed(), [format!("custom-{sha}")]);
+}
+
+/// A7: a FIFO named as the core program is refused without blocking.
+#[test]
+fn a_fifo_is_not_a_core_program() {
+    let root = temp("fifo");
+    let fifo = root.join("pluxy");
+    let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o755) }, 0);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(Store::inspect(&fifo));
+    });
+    let r = rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("inspecting a FIFO blocked");
+    assert!(r.unwrap_err().contains("not a regular"));
+}
+
+/// A10: a version named like another version's record is its own version.
+#[test]
+fn a_version_named_like_a_record_installs_beside_it() {
+    let f = fixture("json-name");
+    let store = Store::open(&f.root.join("cores")).unwrap();
+    let source = f.index.display().to_string();
+    for v in ["1.0.0", "1.0.0.json"] {
+        let staged = store.stage(&f.keys, &source, v).unwrap();
+        assert_eq!(store.install(staged).unwrap(), v);
+    }
+    store.program("1.0.0").unwrap();
+    store.program("1.0.0.json").unwrap();
+    assert_eq!(store.list().len(), 2);
+}
+
+/// A4: an installed version's recorded file paths must be plain paths beneath its folder.
+#[test]
+fn recorded_paths_that_leave_the_plain_layout_are_refused() {
+    let root = temp("record-paths");
+    let index = root.join("index.json");
+    let keys = Keys::new(&index);
+    let rel = release(
+        &root,
+        &keys,
+        "1.0.0",
+        &hostile(b"bundled/x", b'0', b"x"),
+        true,
+    );
+    write_index(&index, &[rel]);
+    let store = Store::open(&root.join("cores")).unwrap();
+    let staged = store
+        .stage(&keys, &index.display().to_string(), "1.0.0")
+        .unwrap();
+    store.install(staged).unwrap();
+    store.program("1.0.0").unwrap();
+    let record = root.join("cores/records/1.0.0.json");
+    let text = std::fs::read_to_string(&record).unwrap();
+    // The same file, reached another way.
+    std::fs::write(
+        &record,
+        text.replace("\"bundled/x\"", "\"bundled/../bundled/x\""),
+    )
+    .unwrap();
+    let err = store.program("1.0.0").unwrap_err();
+    assert!(err.contains("not installed properly"), "{err}");
 }

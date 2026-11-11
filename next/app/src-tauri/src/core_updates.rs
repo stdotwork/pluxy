@@ -105,9 +105,12 @@ fn ask(app: &AppHandle, ask: Ask) -> Result<(), String> {
                 let source = conn.core_source()?;
                 let store = conn.store()?;
                 drop(conn);
+                let again = store.installed(&version);
                 let staged = store.stage(&trust, &source, &version)?;
+
                 let what = format!(
-                    "Install core {} ({}) from {} and run it as the app's core. Signed by key {}; archive SHA-256 {}.",
+                    "{} core {} ({}) from {} and run it as the app's core. Signed by key {}; archive SHA-256 {}.",
+                    if again { "Install again (repair)" } else { "Install" },
                     staged.version(),
                     crate::cores::platform(),
                     staged.source(),
@@ -161,7 +164,12 @@ fn ask(app: &AppHandle, ask: Ask) -> Result<(), String> {
                     generation: 0,
                 };
                 let files = vec![path.clone()];
-                Ok((what, executor, files, CoreChange::Adopt { path, sha256 }))
+                Ok((
+                    what,
+                    executor,
+                    files,
+                    CoreChange::Adopt { path, sha256, size },
+                ))
             }
         }
     })();
@@ -230,9 +238,7 @@ fn settle(app: &AppHandle, id: &str, name: &'static str) {
     let version = match &pending {
         Some(CoreChange::Install(s)) => s.version().to_string(),
         Some(CoreChange::Rollback(v)) => v.clone(),
-        Some(CoreChange::Adopt { sha256, .. }) => {
-            format!("custom-{}", &sha256[..12.min(sha256.len())])
-        }
+        Some(CoreChange::Adopt { sha256, .. }) => crate::cores::Store::adopted_id(sha256),
         None => String::new(),
     };
     let mut conn = st.conn.lock().unwrap();

@@ -12,7 +12,7 @@
 use crate::artifact::PublisherKeys;
 use crate::client::{certificates, Client, Reply};
 use crate::cores::{self, ConfigSnapshot, Store};
-use crate::managed::{core_program, write_private, ManagedCore, OnExit};
+use crate::managed::{core_program, write_private, ExitFlag, ManagedCore, OnExit};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
@@ -168,7 +168,11 @@ pub enum CoreChange {
     /// An installed version.
     Rollback(String),
     /// A core program to copy in, with the SHA-256 the person confirmed.
-    Adopt { path: PathBuf, sha256: String },
+    Adopt {
+        path: PathBuf,
+        sha256: String,
+        size: u64,
+    },
 }
 
 const MISSING: &str =
@@ -255,6 +259,8 @@ pub struct Connection {
     managed: Option<ManagedCore>,
     /// The installed version the managed core runs.
     running: Option<String>,
+    /// Set once that core has exited: calls stop going to its address then.
+    exited: Option<ExitFlag>,
     on_core_exit: Option<OnExit>,
     error: Option<String>,
     outcome: Option<Outcome>,
@@ -273,10 +279,21 @@ pub(crate) struct KeyTarget {
 pub struct Caller {
     client: Option<Client>,
     key: Option<String>,
+    exited: Option<ExitFlag>,
 }
 
 impl Caller {
     pub fn call(&self, method: &str, path: &str, body: Option<&Value>) -> Reply {
+        // The app's own core has exited: whatever listens on its address now is not it.
+        // shortcut: a call that starts the moment the core exits can still go out; the window
+        // of a few microseconds closes only with a socket the app holds for the core.
+        if self
+            .exited
+            .as_ref()
+            .is_some_and(|e| e.lock().unwrap().is_some())
+        {
+            return Reply::failed(0, "unavailable", "the app's core has stopped");
+        }
         match (&self.client, &self.key) {
             (Some(c), Some(k)) => c.call(k, method, path, body),
             (None, _) => Reply::failed(0, "unavailable", "the app is not connected to a core"),
@@ -301,6 +318,7 @@ impl Connection {
             key: None,
             managed: None,
             running: None,
+            exited: None,
             on_core_exit,
             error,
             outcome: None,
@@ -373,7 +391,7 @@ impl Connection {
         let store = self.store()?;
         let mut st = store.state()?;
         if let Some(c) = st.candidate.take() {
-            ConfigSnapshot::kept(&store, &self.config_path()).restore()?;
+            ConfigSnapshot::kept(&store, &self.config_path())?.restore()?;
             st.failed = Some(cores::Failed {
                 version: c.clone(),
                 reason: format!("the app stopped while core {c} was starting"),
@@ -394,6 +412,7 @@ impl Connection {
         let name = store.folder(id).join(cores::PROGRAM);
         let core = ManagedCore::start(program, &name, &self.dirs.core, self.on_core_exit.clone())?;
         ready(&core, expected.as_deref())?;
+        self.exited = Some(core.exit_status());
         self.client = Some(Client::new(core.base(), None));
         self.key = Some(core.key().to_string());
         self.managed = Some(core);
@@ -407,6 +426,7 @@ impl Connection {
             core.stop();
         }
         self.running = None;
+        self.exited = None;
     }
 
     fn require_managed(&self) -> Result<(), String> {
@@ -471,8 +491,9 @@ impl Connection {
         let store = self.store()?;
         match change {
             CoreChange::Install(staged) => {
+                let fresh = !store.installed(staged.version());
                 let id = store.install(staged)?;
-                self.switch(&store, &id, true)
+                self.switch(&store, &id, fresh)
             }
             CoreChange::Rollback(id) => {
                 if !store.installed(&id) {
@@ -482,74 +503,122 @@ impl Connection {
                 }
                 self.switch(&store, &id, false)
             }
-            CoreChange::Adopt { path, sha256 } => {
-                let fresh =
-                    !store.installed(&format!("custom-{}", &sha256[..12.min(sha256.len())]));
-                let id = store.adopt(&path, &sha256)?;
-                self.switch(&store, &id, fresh)?;
-                self.settings.core_path = None;
-                self.settings.save(&self.dirs.settings())
+            CoreChange::Adopt { path, sha256, size } => {
+                let fresh = !store.installed(&Store::adopted_id(&sha256));
+                let id = store.adopt(&path, &sha256, size)?;
+                // The program is adopted before anything runs from it; a failed switch keeps
+                // it waiting for adoption again.
+                let pending = self.settings.core_path.take();
+                if let Err(e) = self.settings.save(&self.dirs.settings()) {
+                    self.settings.core_path = pending;
+                    if fresh {
+                        store.remove(&id);
+                    }
+                    return Err(e);
+                }
+                let r = self.switch(&store, &id, fresh);
+                if r.is_err() {
+                    self.settings.core_path = pending;
+                    let _ = self.settings.save(&self.dirs.settings());
+                }
+                r
             }
         }
     }
 
     /// Runs version id in place of the current core. fresh: id was installed for this switch, so
     /// a failure removes it again.
+    ///
+    /// The running core is stopped first, then the config is kept and the candidate recorded;
+    /// the switch counts only once the candidate answers and the new selection is saved. When
+    /// the candidate fails, the config is put back, and only then does the last good core start
+    /// again; if the config cannot be put back, no core runs and the candidate stays recorded,
+    /// so the next start tries again.
     fn switch(&mut self, store: &Store, id: &str, fresh: bool) -> Result<(), String> {
         self.revision += 1;
-        let mut st = store.state()?;
-        let snapshot = ConfigSnapshot::take(store, &self.config_path())?;
-        st.candidate = Some(id.to_string());
-        store.save_state(&st)?;
+        let st = store.state()?;
         self.stop_core();
         self.client = None;
         self.key = None;
         self.error = None;
-        match self.run_version(store, id) {
-            Ok(()) => {
-                if st.selected.as_deref() != Some(id) {
-                    st.previous = st.selected.take();
+        let back = |c: &mut Self, why: String| -> Result<(), String> {
+            let Some(last) = st.selected.clone() else {
+                c.error = Some(why.clone());
+                return Err(why);
+            };
+            match c.run_version(store, &last) {
+                Ok(()) => Err(format!("{why}; core {last} runs again")),
+                Err(e) => {
+                    let msg = format!("{why}; core {last} did not start either: {e}");
+                    c.error = Some(msg.clone());
+                    Err(msg)
                 }
-                st.selected = Some(id.to_string());
-                st.candidate = None;
-                st.failed = None;
-                store.save_state(&st)?;
-                let keep: Vec<&str> = [st.selected.as_deref(), st.previous.as_deref()]
+            }
+        };
+        let snapshot = match ConfigSnapshot::take(store, &self.config_path()) {
+            Ok(s) => s,
+            Err(e) => {
+                return back(
+                    self,
+                    format!("the app could not keep a copy of the config: {e}"),
+                )
+            }
+        };
+        let mut marked = st.clone();
+        marked.candidate = Some(id.to_string());
+        if let Err(e) = store.save_state(&marked) {
+            return back(self, format!("the app could not record the switch: {e}"));
+        }
+        let started = self.run_version(store, id).and_then(|()| {
+            let mut done = st.clone();
+            if done.selected.as_deref() != Some(id) {
+                done.previous = done.selected.take();
+            }
+            done.selected = Some(id.to_string());
+            done.candidate = None;
+            done.failed = None;
+            store
+                .save_state(&done)
+                .map(|()| done)
+                .map_err(|e| format!("the app could not record the switch: {e}"))
+        });
+        let why = match started {
+            Ok(done) => {
+                let keep: Vec<&str> = [done.selected.as_deref(), done.previous.as_deref()]
                     .into_iter()
                     .flatten()
                     .collect();
                 store.prune(&keep);
-                Ok(())
+                return Ok(());
             }
-            Err(why) => {
-                self.stop_core();
-                let restored = snapshot.restore();
-                if fresh {
-                    store.remove(id);
-                }
-                st.candidate = None;
-                st.failed = Some(cores::Failed {
-                    version: id.to_string(),
-                    reason: why.clone(),
-                });
-                store.save_state(&st)?;
-                let mut msg = format!("core {id} did not start: {why}");
-                match restored {
-                    Ok(()) => msg.push_str("; its config was put back as it was"),
-                    Err(e) => msg.push_str(&format!("; {e}")),
-                }
-                if let Some(last) = st.selected.clone() {
-                    match self.run_version(store, &last) {
-                        Ok(()) => msg.push_str(&format!(", and core {last} runs again")),
-                        Err(e) => {
-                            msg.push_str(&format!(", and core {last} did not start either: {e}"))
-                        }
-                    }
-                }
-                self.error = self.managed.is_none().then(|| msg.clone());
-                Err(msg)
-            }
+            Err(why) => why,
+        };
+        self.stop_core();
+        let mut msg = format!("core {id} did not start: {why}");
+        if let Err(e) = snapshot.restore() {
+            // The candidate stays recorded, with the kept copy, for the next start.
+            msg.push_str(&format!(
+                "; the app could not put the config back ({e}), so no core runs. Its copy is {}; the app tries again at its next start",
+                ConfigSnapshot::kept_at(store).display()
+            ));
+            self.error = Some(msg.clone());
+            return Err(msg);
         }
+        msg.push_str("; its config was put back as it was");
+        if fresh {
+            store.remove(id);
+        }
+        let mut failed = st.clone();
+        failed.candidate = None;
+        failed.failed = Some(cores::Failed {
+            version: id.to_string(),
+            reason: why,
+        });
+        if let Err(e) = store.save_state(&failed) {
+            // Still recorded as the candidate: the next start puts the same config back.
+            msg.push_str(&format!(" (the app could not record that: {e})"));
+        }
+        back(self, msg)
     }
 
     /// Records how a core change ended, for the window.
@@ -780,6 +849,7 @@ impl Connection {
         Caller {
             client: self.client.clone(),
             key: self.key.clone(),
+            exited: self.exited.clone(),
         }
     }
 
@@ -861,6 +931,8 @@ impl Connection {
 fn ready(core: &ManagedCore, expected: Option<&str>) -> Result<(), String> {
     let base = local_origin(core.base())
         .map_err(|e| format!("core said it listens on {}: {e}", core.base()))?;
+    // The key goes only to a listener that is the started process's own.
+    crate::managed::owns_listener(core, &base)?;
     let client = Client::new(&base, None);
     let deadline = Instant::now() + READY_TIMEOUT;
     loop {

@@ -71,7 +71,10 @@ app reads only releases with `product` `core`, their `version`, and their `artif
 
 The archive is a gzip tar file of the core's folder, as provider releases are packed: `pluxy` at
 the top, and anything beside it, such as `bundled/`. It may hold only regular files and folders,
-no links, devices or names that leave the folder, at most 10,000 entries and 512 MiB.
+no links, devices or names that leave the folder, at most 10,000 entries, and at most 512 MiB
+decompressed in all (headers and the data of folder entries count too). Each file is made from
+the folder before it, following no links. Release versions may not start with `custom-`, which
+adopted programs use.
 
 **Install** (or **Update to** a newer version): the app copies the archive into its own folder and
 checks it with the shared verifier (`src-tauri/src/artifact.rs`) and the app's trust
@@ -83,24 +86,33 @@ dialog, and nothing is installed. Release builds have no publisher keys yet, so 
 every release; test builds trust only a test runner's temporary roots (below).
 
 Once confirmed, the app unpacks the archive into a new version folder, records each file's
-SHA-256, and makes the files read-only. Before every start it checks every file against those
-digests and runs the core from the program file it just checked, not from its path again. A
-changed version does not start: install it again.
+SHA-256 (in `cores/records/`, apart from the folders), and makes the files read-only. Before
+every start it opens every file beneath the version's folder without following links, checks
+that it is a regular file of the recorded size, then its digest, and runs the core from the
+program file it just checked, not from its path again. A changed version does not start:
+**Install … again** installs the same release over it, through the same checks and confirmation.
 
 **Switching** to a version (an install, **Roll back to** an installed version, or an adoption)
-keeps a copy of `core/config.json`, stops the running core and starts the new one. It counts as
-started once it says where it listens, on this computer, and answers `GET /v0/management/status`
-with the app's management key and, for a release, reports the version it was signed as. If it
-does not, the app puts the config back as it was, removes a version it installed for this
-switch, and runs the version that worked before; the page says why the new one did not start.
-If the app stops while a version starts, it does the same at its next start. The app keeps the
+stops the running core, keeps a copy of `core/config.json` (or a mark that there was none) and
+records the new version as the candidate, then starts it. It counts as started once it says
+where it listens, on this computer, every socket listening on that port belongs to the process
+the app started (read from `/proc` on Linux, before the app sends anything there), it answers
+`GET /v0/management/status` with the app's management key and, for a release, reports the
+version it was signed as, and the app has saved the new selection. If not, the app puts the
+config back as it was, removes a version it installed for this switch, and runs the version that
+worked before; the page says why the new one did not start. If the config cannot be put back, no
+core runs: the candidate stays recorded with the copy, and the app tries again at its next start.
+If the app stops while a version starts, it does the same at its next start; a copy it cannot
+read is an error, and the config is left as it is. Once the app's core has exited, the app sends
+nothing more to its address. The app keeps the
 running version and the one before it, and removes older ones after a switch. Rolling back
 reaches only an installed version.
 
 A **core program** you name on the Connection page (or `pluxy` beside the app) is never run in
 place. **Adopt this core program** shows its path, size and SHA-256 in the native confirmation;
-once confirmed, the app copies it into a version of its own, `custom-<first 12 digits of its
-SHA-256>`, if it still has that digest, and runs the copy. An adopted program has no signature.
+once confirmed, the app copies it into a version of its own, `custom-<its SHA-256>`, if it is
+still a regular file of that size and digest (at most 512 MiB; a FIFO or device is refused
+without being read), and runs the copy. An adopted program has no signature.
 
 The app only ever stops the core process it started. A core it did not start, such as a system
 service or another core of yours on this computer, is never stopped or signalled.

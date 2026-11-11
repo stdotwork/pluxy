@@ -13,10 +13,15 @@ use crate::artifact::{self, PublisherKeys, Tier, VerifiedArchive};
 use crate::managed::{random_key, write_private};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::cell::Cell;
+use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
+use std::rc::Rc;
 
 /// The publisher and ID of core releases.
 pub const CORE_ID: &str = "pluxy/core";
@@ -203,6 +208,77 @@ fn private_dir(path: &Path) -> io::Result<()> {
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))
 }
 
+/// Makes a new private folder at path, failing if anything is already there.
+fn exclusive_dir(path: &Path) -> io::Result<()> {
+    fs::DirBuilder::new().mode(0o700).create(path)
+}
+
+fn c_string(bytes: &[u8]) -> io::Result<CString> {
+    CString::new(bytes).map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "a name holds NUL"))
+}
+
+fn owned(fd: libc::c_int) -> io::Result<OwnedFd> {
+    if fd < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+    }
+}
+
+/// Opens the folder at path; a link there is refused.
+fn open_dir(path: &Path) -> io::Result<OwnedFd> {
+    let c = c_string(path.as_os_str().as_bytes())?;
+    owned(unsafe {
+        libc::open(
+            c.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    })
+}
+
+/// Opens name in the folder dir, following no link.
+fn open_at(dir: &OwnedFd, name: &str, flags: libc::c_int, mode: u32) -> io::Result<OwnedFd> {
+    let c = c_string(name.as_bytes())?;
+    owned(unsafe {
+        libc::openat(
+            dir.as_raw_fd(),
+            c.as_ptr(),
+            flags | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            mode as libc::c_uint,
+        )
+    })
+}
+
+/// The folder holding rel's last part, beneath root, and that part's name: each folder on the
+/// way is opened from the one before it, following no link; with create, missing ones are made.
+fn parent_beneath(root: &OwnedFd, rel: &str, create: bool) -> io::Result<(OwnedFd, String)> {
+    let parts: Vec<&str> = rel.split('/').collect();
+    let (last, folders) = parts.split_last().expect("split gives one part");
+    let mut cur = root.try_clone()?;
+    for f in folders {
+        if create {
+            let c = c_string(f.as_bytes())?;
+            if unsafe { libc::mkdirat(cur.as_raw_fd(), c.as_ptr(), 0o700) } != 0 {
+                let e = io::Error::last_os_error();
+                if e.kind() != io::ErrorKind::AlreadyExists {
+                    return Err(e);
+                }
+            }
+        }
+        cur = open_at(&cur, f, libc::O_RDONLY | libc::O_DIRECTORY, 0)?;
+    }
+    Ok((cur, last.to_string()))
+}
+
+/// Whether path is a plain relative path, as unpacking writes them: `a/b`, no `.`, `..`, empty
+/// parts or leading `/`.
+fn plain_relative(path: &str) -> bool {
+    entry_path(Path::new(path)).ok().flatten().as_deref() == Some(path)
+}
+
+/// Adopted programs' IDs, `custom-<SHA-256>`; no release version may start with it.
+const ADOPTED: &str = "custom-";
+
 fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 80
@@ -256,6 +332,7 @@ impl Store {
     pub fn open(dir: &Path) -> Result<Store, String> {
         let s = Store { dir: dir.into() };
         private_dir(&s.versions()).map_err(|e| format!("{}: {e}", dir.display()))?;
+        private_dir(&s.records()).map_err(|e| format!("{}: {e}", dir.display()))?;
         private_dir(&s.staging()).map_err(|e| format!("{}: {e}", dir.display()))?;
         fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
             .map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -277,8 +354,13 @@ impl Store {
         self.dir.join("staging")
     }
 
+    /// Records live apart from the version folders, so no version's name can be another's record.
+    fn records(&self) -> PathBuf {
+        self.dir.join("records")
+    }
+
     fn record_path(&self, id: &str) -> PathBuf {
-        self.versions().join(format!("{id}.json"))
+        self.records().join(format!("{id}.json"))
     }
 
     /// A version's folder.
@@ -317,15 +399,26 @@ impl Store {
         };
         let r: Record =
             serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
-        if r.format != FORMAT || r.id != id || !self.folder(id).is_dir() {
-            return Err(format!("core {id} is not installed properly"));
+        let folder = fs::symlink_metadata(self.folder(id)).is_ok_and(|m| m.is_dir());
+        let mut paths = std::collections::HashSet::new();
+        if r.format != FORMAT
+            || r.id != id
+            || !folder
+            || !r
+                .files
+                .iter()
+                .all(|f| plain_relative(&f.path) && paths.insert(f.path.as_str()))
+        {
+            return Err(format!(
+                "core {id} is not installed properly: install it again"
+            ));
         }
         Ok(r)
     }
 
     /// The installed versions, by ID.
     pub fn list(&self) -> Vec<Installed> {
-        let mut ids: Vec<String> = fs::read_dir(self.versions())
+        let mut ids: Vec<String> = fs::read_dir(self.records())
             .into_iter()
             .flatten()
             .flatten()
@@ -360,23 +453,33 @@ impl Store {
     pub fn program(&self, id: &str) -> Result<File, String> {
         let r = self.record(id)?;
         let folder = self.folder(id);
+        let root = open_dir(&folder).map_err(|e| format!("core {id}: {e}"))?;
         let mut seen = 0usize;
         let mut program = None;
         for f in &r.files {
-            let path = folder.join(&f.path);
-            let file = OpenOptions::new()
-                .read(true)
-                .custom_flags(libc::O_NOFOLLOW)
-                .open(&path)
-                .map_err(|e| format!("core {id}: {}: {e}", f.path))?;
-            let (sha, size) = sha256_of(&file).map_err(|e| format!("core {id}: {e}"))?;
+            let changed = || {
+                format!(
+                    "core {id} changed since it was installed ({}): install it again",
+                    f.path
+                )
+            };
+            let (dir, name) = parent_beneath(&root, &f.path, false).map_err(|_| changed())?;
+            let file = File::from(
+                open_at(&dir, &name, libc::O_RDONLY | libc::O_NONBLOCK, 0)
+                    .map_err(|_| changed())?,
+            );
+            // Type and size first: never read a device or a FIFO, nor more than was installed.
             let m = file.metadata().map_err(|e| e.to_string())?;
             if !m.is_file()
-                || sha != f.sha256
-                || size != f.size
+                || m.len() != f.size
                 || (m.permissions().mode() & 0o100 != 0) != f.executable
                 || m.permissions().mode() & 0o222 != 0
             {
+                return Err(changed());
+            }
+            let (sha, size) =
+                sha256_of((&file).take(f.size + 1)).map_err(|e| format!("core {id}: {e}"))?;
+            if sha != f.sha256 || size != f.size {
                 return Err(format!(
                     "core {id} changed since it was installed ({}): install it again",
                     f.path
@@ -425,9 +528,9 @@ impl Store {
         source: &str,
         version: &str,
     ) -> Result<Staged, String> {
-        if self.installed(version) {
+        if version.starts_with(ADOPTED) {
             return Err(format!(
-                "core {version} is already installed: roll back to it instead"
+                "core versions named {ADOPTED}… are reserved for adopted core programs"
             ));
         }
         let platform = platform();
@@ -522,13 +625,13 @@ impl Store {
             .map_err(|_| "descriptor is not UTF-8")?;
         let signature = artifact::hex(verified.signature_bytes());
         let id = d.version.clone();
-        if !valid_id(&id) || self.installed(&id) {
-            return Err(format!("core {id} is already installed"));
+        if !valid_id(&id) || id.starts_with(ADOPTED) {
+            return Err(format!("core {id} cannot be installed under that name"));
         }
         let tmp = self.staging().join(random_key());
         let result = (|| {
-            private_dir(&tmp).map_err(|e| e.to_string())?;
-            let files = unpack(verified.into_archive(), &tmp)?;
+            exclusive_dir(&tmp).map_err(|e| e.to_string())?;
+            let files = unpack(verified.into_archive(), &tmp, MAX_UNPACKED)?;
             let program = files
                 .iter()
                 .find(|f| f.path == PROGRAM)
@@ -559,20 +662,44 @@ impl Store {
     }
 
     /// Moves a new version's unpacked folder into place, locks its files, and writes its record
-    /// last, so a version without a record is never used.
+    /// last, so a version without a record is never used. A version installed again replaces
+    /// its folder; until the new record is written, the old one no longer matches and the
+    /// version does not start.
     fn finish(&self, tmp: &Path, r: Record) -> Result<(), String> {
+        let fail = |e: String| format!("installing core {}: {e}", r.id);
+        lock(tmp).map_err(|e| fail(e.to_string()))?;
         let folder = self.folder(&r.id);
-        remove_tree(&folder);
-        fs::rename(tmp, &folder).map_err(|e| format!("installing core {}: {e}", r.id))?;
+        let old = match fs::symlink_metadata(&folder) {
+            Ok(_) => {
+                let aside = self.staging().join(random_key());
+                fs::rename(&folder, &aside).map_err(|e| fail(e.to_string()))?;
+                Some(aside)
+            }
+            Err(_) => None,
+        };
         let bytes = serde_json::to_vec_pretty(&r).expect("JSON");
-        let done = lock(&folder).map_err(|e| e.to_string()).and_then(|()| {
-            write_private(&self.record_path(&r.id), &bytes).map_err(|e| e.to_string())
-        });
-        if let Err(e) = done {
-            remove_tree(&folder);
-            return Err(format!("installing core {}: {e}", r.id));
+        let done = fs::rename(tmp, &folder)
+            .map_err(|e| e.to_string())
+            .and_then(|()| {
+                write_private(&self.record_path(&r.id), &bytes).map_err(|e| e.to_string())
+            });
+        match (done, old) {
+            (Ok(()), old) => {
+                if let Some(old) = old {
+                    remove_tree(&old);
+                }
+                Ok(())
+            }
+            (Err(e), old) => {
+                if fs::symlink_metadata(tmp).is_err() {
+                    remove_tree(&folder);
+                }
+                if let Some(old) = old {
+                    let _ = fs::rename(&old, &folder);
+                }
+                Err(fail(e))
+            }
         }
-        Ok(())
     }
 
     /// The core program at path, to adopt: its SHA-256 and size, for the person to confirm.
@@ -580,25 +707,45 @@ impl Store {
         if !path.is_absolute() {
             return Err("the core program must be given as a full path".into());
         }
-        let f = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let m = f.metadata().map_err(|e| e.to_string())?;
-        if !m.is_file() || m.permissions().mode() & 0o111 == 0 {
-            return Err(format!("{} is not an executable file", path.display()));
+        let f = open_program(path)?;
+        let size = f.metadata().map_err(|e| e.to_string())?.len();
+        let (sha, n) = sha256_of((&f).take(size + 1)).map_err(|e| e.to_string())?;
+        if n != size {
+            return Err(format!("{} changed while it was read", path.display()));
         }
-        sha256_of(f).map_err(|e| e.to_string())
+        Ok((sha, size))
     }
 
-    /// Copies the program at path into a version of its own, `custom-<first 12 digits of its
-    /// SHA-256>`, if it still has the SHA-256 the person confirmed.
-    pub fn adopt(&self, path: &Path, sha256: &str) -> Result<String, String> {
-        let id = format!("custom-{}", &sha256[..12.min(sha256.len())]);
-        if self.installed(&id) {
-            return Ok(id);
+    /// The ID an adopted program with this SHA-256 gets.
+    pub fn adopted_id(sha256: &str) -> String {
+        format!("{ADOPTED}{sha256}")
+    }
+
+    /// Copies the program at path into a version of its own, `custom-<its SHA-256>`, if it still
+    /// is the regular file of the size and SHA-256 the person confirmed.
+    pub fn adopt(&self, path: &Path, sha256: &str, size: u64) -> Result<String, String> {
+        artifact::decode_hex::<32>(sha256).map_err(|_| "not a SHA-256")?;
+        let id = Self::adopted_id(sha256);
+        if let Ok(r) = self.record(&id) {
+            return match r.files.as_slice() {
+                [f] if r.kind == Kind::Adopted && f.sha256 == sha256 => Ok(id),
+                _ => Err(format!("core {id} is installed, but not as this program")),
+            };
         }
+        let changed = || {
+            format!(
+                "{} changed after you confirmed it: adopt it again",
+                path.display()
+            )
+        };
         let tmp = self.staging().join(random_key());
         let result = (|| {
-            private_dir(&tmp).map_err(|e| e.to_string())?;
-            let mut src = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+            exclusive_dir(&tmp).map_err(|e| e.to_string())?;
+            let src = open_program(path).map_err(|_| changed())?;
+            if src.metadata().map_err(|e| e.to_string())?.len() != size {
+                return Err(changed());
+            }
+            let mut src = src.take(size + 1);
             let mut dst = OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -611,13 +758,10 @@ impl Store {
                 size: 0,
             };
             io::copy(&mut src, &mut h).map_err(|e| e.to_string())?;
-            let (got, size) = (artifact::hex(&h.hash.finalize()), h.size);
+            let (got, copied) = (artifact::hex(&h.hash.finalize()), h.size);
             dst.sync_all().map_err(|e| e.to_string())?;
-            if got != sha256 {
-                return Err(format!(
-                    "{} changed after you confirmed it: adopt it again",
-                    path.display()
-                ));
+            if got != sha256 || copied != size {
+                return Err(changed());
             }
             self.finish(
                 &tmp,
@@ -645,6 +789,27 @@ impl Store {
         }
         result.map(|()| id)
     }
+}
+
+/// Opens the program at path (the person's choice, so a link there is followed) without
+/// blocking, and checks it is a regular, executable file of at most 512 MiB.
+fn open_program(path: &Path) -> Result<File, String> {
+    let f = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
+        .open(path)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let m = f.metadata().map_err(|e| e.to_string())?;
+    if !m.is_file() {
+        return Err(format!("{} is not a regular file", path.display()));
+    }
+    if m.permissions().mode() & 0o111 == 0 {
+        return Err(format!("{} is not executable", path.display()));
+    }
+    if m.len() > MAX_ARCHIVE {
+        return Err(format!("{} is larger than 512 MiB", path.display()));
+    }
+    Ok(f)
 }
 
 struct HashingWriter<'a, W> {
@@ -729,31 +894,72 @@ fn entry_path(raw: &Path) -> Result<Option<String>, String> {
     Ok((!parts.is_empty()).then(|| parts.join("/")))
 }
 
-/// Unpacks a gzip tar archive into dir: regular files and folders only, no links, devices or
-/// names that leave the folder, at most 10,000 entries and 512 MiB, as provider releases are.
-fn unpack(archive: File, dir: &Path) -> Result<Vec<FileRecord>, String> {
-    let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(archive));
+/// Counts every byte the archive decompresses to, and fails past the limit.
+struct Bounded<R> {
+    inner: R,
+    count: u64,
+    limit: u64,
+    over: Rc<Cell<bool>>,
+}
+
+impl<R: Read> Read for Bounded<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.count += n as u64;
+        if self.count > self.limit {
+            self.over.set(true);
+            return Err(io::Error::other("the core archive is too large"));
+        }
+        Ok(n)
+    }
+}
+
+/// Unpacks a gzip tar archive into the new, empty folder dir: regular files and folders only,
+/// no links, devices or names that leave the folder, at most 10,000 entries, and at most limit
+/// bytes decompressed in all (headers and skipped data too), as provider releases are. Every
+/// file is made from the folder before it, following no links.
+fn unpack(archive: impl Read, dir: &Path, limit: u64) -> Result<Vec<FileRecord>, String> {
+    let over = Rc::new(Cell::new(false));
+    let bounded = Bounded {
+        inner: flate2::read::GzDecoder::new(archive),
+        count: 0,
+        limit,
+        over: over.clone(),
+    };
+    let too_large = || format!("the core archive unpacks to more than {} MiB", limit >> 20);
+    let read_err = |e: io::Error| {
+        if over.get() {
+            too_large()
+        } else {
+            format!("reading the core archive: {e}")
+        }
+    };
+    let root = open_dir(dir).map_err(|e| e.to_string())?;
+    let mut tar = tar::Archive::new(bounded);
     let mut files = Vec::new();
-    let mut total = 0u64;
-    let entries = tar
-        .entries()
-        .map_err(|e| format!("reading the core archive: {e}"))?;
+    let entries = tar.entries().map_err(read_err)?;
     for (n, entry) in entries.enumerate() {
         if n >= MAX_ENTRIES {
             return Err("the core archive has more than 10,000 entries".into());
         }
-        let mut entry = entry.map_err(|e| format!("reading the core archive: {e}"))?;
-        let raw = entry
-            .path()
-            .map_err(|e| format!("reading the core archive: {e}"))?
-            .into_owned();
+        let mut entry = entry.map_err(read_err)?;
+        let raw = entry.path().map_err(read_err)?.into_owned();
         let Some(path) = entry_path(&raw)? else {
             continue;
         };
-        let target = dir.join(&path);
         let kind = entry.header().entry_type();
         if kind.is_dir() {
-            private_dir(&target).map_err(|e| e.to_string())?;
+            let (parent, name) =
+                parent_beneath(&root, &path, true).map_err(|e| format!("unpacking {path}: {e}"))?;
+            let c = c_string(name.as_bytes()).map_err(|e| e.to_string())?;
+            if unsafe { libc::mkdirat(parent.as_raw_fd(), c.as_ptr(), 0o700) } != 0 {
+                let e = io::Error::last_os_error();
+                if e.kind() != io::ErrorKind::AlreadyExists {
+                    return Err(format!("unpacking {path}: {e}"));
+                }
+            }
+            open_at(&parent, &name, libc::O_RDONLY | libc::O_DIRECTORY, 0)
+                .map_err(|e| format!("unpacking {path}: {e}"))?;
             continue;
         }
         if !kind.is_file() {
@@ -763,28 +969,29 @@ fn unpack(archive: File, dir: &Path) -> Result<Vec<FileRecord>, String> {
         }
         let mode = entry.header().mode().map_err(|e| e.to_string())?;
         let executable = mode & 0o111 != 0;
-        if let Some(parent) = target.parent() {
-            private_dir(parent).map_err(|e| e.to_string())?;
-        }
-        let mut out = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .mode(if executable { 0o700 } else { 0o600 })
-            .open(&target)
-            .map_err(|e| format!("unpacking {path}: {e}"))?;
-        let left = MAX_UNPACKED - total;
+        let (parent, name) =
+            parent_beneath(&root, &path, true).map_err(|e| format!("unpacking {path}: {e}"))?;
+        let mut out = File::from(
+            open_at(
+                &parent,
+                &name,
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+                if executable { 0o700 } else { 0o600 },
+            )
+            .map_err(|e| format!("unpacking {path}: {e}"))?,
+        );
         let mut h = HashingWriter {
             inner: &mut out,
             hash: Sha256::new(),
             size: 0,
         };
-        let copied = io::copy(&mut (&mut entry).take(left + 1), &mut h)
-            .map_err(|e| format!("unpacking {path}: {e}"))?;
-        if copied > left {
-            return Err("the core archive unpacks to more than 512 MiB".into());
-        }
-        total += copied;
+        let copied = io::copy(&mut entry, &mut h).map_err(|e| {
+            if over.get() {
+                too_large()
+            } else {
+                format!("unpacking {path}: {e}")
+            }
+        })?;
         let sha256 = artifact::hex(&h.hash.finalize());
         out.sync_all().map_err(|e| e.to_string())?;
         files.push(FileRecord {
@@ -793,6 +1000,9 @@ fn unpack(archive: File, dir: &Path) -> Result<Vec<FileRecord>, String> {
             executable,
             sha256,
         });
+    }
+    if over.get() {
+        return Err(too_large());
     }
     Ok(files)
 }
@@ -804,33 +1014,74 @@ pub struct ConfigSnapshot {
 }
 
 impl ConfigSnapshot {
-    /// Takes the config at path, and keeps a copy beside the store's state, so a crash while the
-    /// candidate starts can still put it back.
+    fn kept_path(store: &Store) -> PathBuf {
+        store.dir.join("config-last-good.json")
+    }
+
+    /// Says the config did not exist; never both this and the kept copy.
+    fn absent_path(store: &Store) -> PathBuf {
+        store.dir.join("config-last-good.absent")
+    }
+
+    /// Takes the config at path, and keeps a record of it beside the store's state (a copy, or
+    /// a mark that there was none), so a crash while the candidate starts can still put it back.
+    /// The record that no longer holds is removed first: a crash in between leaves neither, and
+    /// nothing is put back then without the person.
     pub fn take(store: &Store, path: &Path) -> Result<ConfigSnapshot, String> {
         let bytes = match fs::read(path) {
             Ok(b) => Some(b),
             Err(e) if e.kind() == io::ErrorKind::NotFound => None,
             Err(e) => return Err(format!("{}: {e}", path.display())),
         };
-        let kept = store.dir.join("config-last-good.json");
-        match &bytes {
-            Some(b) => write_private(&kept, b).map_err(|e| format!("{}: {e}", kept.display()))?,
-            None => {
-                let _ = fs::remove_file(&kept);
+        let (keep, drop) = match bytes {
+            Some(_) => (Self::kept_path(store), Self::absent_path(store)),
+            None => (Self::absent_path(store), Self::kept_path(store)),
+        };
+        match fs::remove_file(&drop) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => {
+                return Err(format!("{}: {e}", drop.display()))
             }
+            _ => {}
         }
+        write_private(&keep, bytes.as_deref().unwrap_or_default())
+            .map_err(|e| format!("{}: {e}", keep.display()))?;
         Ok(ConfigSnapshot {
             path: path.into(),
             bytes,
         })
     }
 
-    /// The copy a crashed switch left, for path.
-    pub fn kept(store: &Store, path: &Path) -> ConfigSnapshot {
-        ConfigSnapshot {
+    /// The record a crashed switch left, for path. Any error reading it is an error, never a
+    /// config to delete.
+    pub fn kept(store: &Store, path: &Path) -> Result<ConfigSnapshot, String> {
+        let kept = Self::kept_path(store);
+        let bytes = match fs::read(&kept) {
+            Ok(b) => Some(b),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                let absent = Self::absent_path(store);
+                match fs::symlink_metadata(&absent) {
+                    Ok(_) => None,
+                    Err(e) => {
+                        return Err(format!(
+                            "the app was switching cores, and its copy of the config is missing ({}: {e}); check {} and remove the candidate from {}",
+                            kept.display(),
+                            path.display(),
+                            store.dir.join("state.json").display()
+                        ))
+                    }
+                }
+            }
+            Err(e) => return Err(format!("reading {}: {e}", kept.display())),
+        };
+        Ok(ConfigSnapshot {
             path: path.into(),
-            bytes: fs::read(store.dir.join("config-last-good.json")).ok(),
-        }
+            bytes,
+        })
+    }
+
+    /// Where the kept copy is.
+    pub fn kept_at(store: &Store) -> PathBuf {
+        Self::kept_path(store)
     }
 
     /// Puts the config back as it was.
@@ -843,5 +1094,56 @@ impl ConfigSnapshot {
             },
         }
         .map_err(|e| format!("restoring {}: {e}", self.path.display()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn gz_tar(entries: &[(&str, tar::EntryType, Vec<u8>)]) -> Vec<u8> {
+        let gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        let mut b = tar::Builder::new(gz);
+        for (name, kind, data) in entries {
+            let mut h = tar::Header::new_ustar();
+            h.as_old_mut().name[..name.len()].copy_from_slice(name.as_bytes());
+            h.set_entry_type(*kind);
+            h.set_size(data.len() as u64);
+            h.set_mode(0o755);
+            h.set_cksum();
+            b.append(&h, &data[..]).unwrap();
+        }
+        b.into_inner().unwrap().finish().unwrap()
+    }
+
+    /// A5: what an archive decompresses counts toward the limit, also the data of entries that
+    /// are not unpacked as files (the top folder, folders).
+    #[test]
+    fn every_decompressed_byte_counts_toward_the_limit() {
+        let limit = 1 << 20;
+        for (name, kind) in [
+            (".", tar::EntryType::Directory),
+            ("dir", tar::EntryType::Directory),
+        ] {
+            let dir = std::env::temp_dir().join(format!("pluxy-unpack-{}", random_key()));
+            fs::create_dir_all(&dir).unwrap();
+            let archive = gz_tar(&[
+                (name, kind, vec![0u8; 2 << 20]),
+                ("pluxy", tar::EntryType::Regular, b"x".to_vec()),
+            ]);
+            let r = unpack(&archive[..], &dir, limit);
+            fs::remove_dir_all(&dir).unwrap();
+            assert!(r.unwrap_err().contains("more than 1 MiB"), "{name}");
+        }
+        // Within the limit, the same layout unpacks.
+        let dir = std::env::temp_dir().join(format!("pluxy-unpack-{}", random_key()));
+        fs::create_dir_all(&dir).unwrap();
+        let archive = gz_tar(&[
+            (".", tar::EntryType::Directory, Vec::new()),
+            ("pluxy", tar::EntryType::Regular, b"x".to_vec()),
+        ]);
+        let files = unpack(&archive[..], &dir, limit).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(files.len(), 1);
     }
 }

@@ -81,6 +81,16 @@ pub fn bad_core(dir: &Path) {
     std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
+/// A shell script standing in for a core, with body after `#!/bin/sh`.
+pub fn script_core(dir: &Path, body: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(dir).unwrap();
+    let p = dir.join("pluxy");
+    std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    p
+}
+
 /// folder as a gzip tar archive, entries named `./...` as `tar -czf a.tar.gz -C folder .` does.
 pub fn pack(folder: &Path) -> Vec<u8> {
     let gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());

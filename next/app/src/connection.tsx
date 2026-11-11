@@ -5,7 +5,7 @@
 //   connects, and leaves it running;
 // - remote: a core on another computer, over https; shown with its address while connected.
 
-import { useEffect, useId, useState } from "preact/hooks";
+import { useEffect, useId, useRef, useState } from "preact/hooks";
 import { Badge, Button, Card, Choices, Empty, Facts, Notice, PageHead } from "../../ui/kit/ui";
 import {
   type Connection,
@@ -71,24 +71,40 @@ function CoreVersions(props: { connection: Connection }) {
   const c = props.connection;
   const [v, setV] = useState<Versions>();
   const [error, setError] = useState<string>();
-  const [asked, setAsked] = useState(false);
+  // The last outcome's number when a change was asked for: the change waits for its
+  // confirmation until a later outcome arrives.
+  const [waiting, setWaiting] = useState<number>();
+  const latest = useRef(0);
   // The connection changes when a change has ended (pluxy-connection): read the versions again.
+  // Only the latest read counts.
   useEffect(() => {
-    setAsked(false);
-    coreVersions().then(setV, (e) => setError(String(e)));
+    const n = ++latest.current;
+    coreVersions().then(
+      (next) => n === latest.current && setV(next),
+      (e) => n === latest.current && setError(String(e)),
+    );
   }, [c]);
+  const seq = v?.outcome?.seq ?? 0;
+  const asked = waiting !== undefined && seq <= waiting;
   async function ask(run: () => Promise<void>) {
     setError(undefined);
+    setWaiting(seq);
     try {
       await run();
-      setAsked(true);
     } catch (e) {
+      setWaiting(undefined);
       setError(String(e));
     }
   }
-  if (!v) return null;
-  const running = c.core?.version;
+  if (!v)
+    return error ? (
+      <Card title="Core versions">
+        <Notice tone="danger">{error}</Notice>
+      </Card>
+    ) : null;
+  const running = c.core?.state === "running" ? c.core.version : undefined;
   const installed = new Set(v.installed.map((i) => i.id));
+  const available = new Set(v.available.map((a) => a.version));
   const offered = v.available.filter((a) => !installed.has(a.version));
   const verb = running ? "Update to" : "Install";
   return (
@@ -123,6 +139,11 @@ function CoreVersions(props: { connection: Connection }) {
               {i.id !== running && (
                 <Button disabled={asked} onClick={() => ask(() => coreRollback(i.id))}>
                   Roll back to {i.id}
+                </Button>
+              )}{" "}
+              {i.kind === "signed" && available.has(i.id) && (
+                <Button disabled={asked} onClick={() => ask(() => coreInstall(i.id))}>
+                  Install {i.id} again
                 </Button>
               )}
             </span>,

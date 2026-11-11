@@ -148,6 +148,9 @@ pub fn core_program(chosen: Option<&str>) -> Result<PathBuf, String> {
 /// Called when the app's core exits, whatever the reason.
 pub type OnExit = Arc<dyn Fn() + Send + Sync>;
 
+/// Set once the app's core has exited, to how it exited.
+pub type ExitFlag = Arc<Mutex<Option<ExitStatus>>>;
+
 /// A running core of the app's own. A supervisor thread starts it and stays until it exits:
 /// on Linux the parent-death signal follows the thread that started the process, and the
 /// threads the app's commands run on end when idle.
@@ -328,6 +331,11 @@ impl ManagedCore {
         self.pid
     }
 
+    /// Set once this core has exited.
+    pub fn exit_status(&self) -> ExitFlag {
+        Arc::clone(&self.status)
+    }
+
     /// None while core runs; why it stopped once it has.
     pub fn exited(&self) -> Option<String> {
         let status = (*self.status.lock().unwrap())?;
@@ -384,6 +392,82 @@ impl ManagedCore {
             self.kill();
         }
     }
+}
+
+/// Checks that every socket listening on base's port is the started core's own, before anything
+/// is sent there: another program on this computer (another user's too) could listen on that
+/// port, and the app sends the management key there.
+#[cfg(target_os = "linux")]
+pub fn owns_listener(core: &ManagedCore, base: &str) -> Result<(), String> {
+    let not = || format!("the started core is not listening on {base} itself");
+    let port = url::Url::parse(base)
+        .ok()
+        .and_then(|u| u.port_or_known_default())
+        .ok_or_else(not)?;
+    let listening =
+        listening_inodes(port).map_err(|e| format!("reading this computer's sockets: {e}"))?;
+    // The core stays unreaped until it exits, so its process ID is not reused meanwhile.
+    let own =
+        socket_inodes(core.pid()).map_err(|e| format!("reading the core's open files: {e}"))?;
+    if core.exited().is_some() || listening.is_empty() || !listening.iter().all(|i| own.contains(i))
+    {
+        return Err(not());
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn owns_listener(_core: &ManagedCore, _base: &str) -> Result<(), String> {
+    Err("checking that the app's own core is what listens works on Linux only for now".into())
+}
+
+/// The inodes of the sockets listening on port, on any address.
+#[cfg(target_os = "linux")]
+fn listening_inodes(port: u16) -> io::Result<Vec<u64>> {
+    let mut found = Vec::new();
+    for table in ["/proc/net/tcp", "/proc/net/tcp6"] {
+        let text = match fs::read_to_string(table) {
+            Ok(t) => t,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
+        for line in text.lines().skip(1) {
+            let f: Vec<&str> = line.split_whitespace().collect();
+            // sl local_address rem_address st ... inode (the tenth field); 0A is LISTEN.
+            let (Some(local), Some(st), Some(inode)) = (f.get(1), f.get(3), f.get(9)) else {
+                continue;
+            };
+            let p = local
+                .rsplit_once(':')
+                .and_then(|(_, p)| u16::from_str_radix(p, 16).ok());
+            if *st == "0A" && p == Some(port) {
+                if let Ok(i) = inode.parse() {
+                    found.push(i);
+                }
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// The inodes of the sockets process pid has open.
+#[cfg(target_os = "linux")]
+fn socket_inodes(pid: u32) -> io::Result<std::collections::HashSet<u64>> {
+    let mut own = std::collections::HashSet::new();
+    for e in fs::read_dir(format!("/proc/{pid}/fd"))? {
+        let Ok(link) = fs::read_link(e?.path()) else {
+            continue;
+        };
+        let link = link.to_string_lossy();
+        if let Some(i) = link
+            .strip_prefix("socket:[")
+            .and_then(|r| r.strip_suffix(']'))
+            .and_then(|i| i.parse().ok())
+        {
+            own.insert(i);
+        }
+    }
+    Ok(own)
 }
 
 impl Drop for ManagedCore {
