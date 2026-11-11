@@ -11,6 +11,12 @@
 // - closing the window leaves no webview and no web process, with the app still in the tray;
 // - quitting stops the app's own core, and leaves a local or remote core running.
 //
+// The managed run starts with no core installed. Its core steps (src-tauri/src/native_core.rs)
+// install, update, roll back and adopt the app's own core through the real native confirmation,
+// from signed test artifacts made here with a key generated for the run (coreSource below); the
+// run's trust profile is written in its temporary HOME, and the private key never leaves memory.
+// A sentinel core this runner starts must still run, untouched, when the app has quit.
+//
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
 // own (dbus-run-session, xvfb-run), and random ports. Inside that session, before the app,
 // native/session.ts starts the desktop services later checks need (the portals and a tray
@@ -20,8 +26,19 @@
 // Go, cargo and those services).
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, generateKeyPairSync, type KeyObject, randomBytes, randomUUID, sign } from "node:crypto";
+import {
+  chmodSync,
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline";
@@ -175,8 +192,224 @@ async function managementStatus(base: string, key: string, ca?: string): Promise
   return r.status;
 }
 
+/** Signed test core releases for the managed run, in a folder of their own. */
+interface CoreSource {
+  /** The index file, which the app's connection names as its core source. */
+  index: string;
+  /** A core program of the runner's, which the app must adopt before it runs it. */
+  custom: string;
+  /** The trust profile's root for the run's key, bound to the index. */
+  root: object;
+}
+
+const CORE_ID = "pluxy/core";
+const PLATFORM = `${process.platform}/${process.arch === "x64" ? "amd64" : process.arch}`;
+const VERSION_FLAG = "-X github.com/stdotwork/pluxy/next/internal/buildinfo.Version=";
+
+function hex(b: Buffer | Uint8Array): string {
+  return Buffer.from(b).toString("hex");
+}
+
+/** One release in the index: the archive of folder, its descriptor and a signature by key. */
+function release(dir: string, version: string, folder: string, key: KeyObject, keyId: string, bad = false) {
+  const name = `pluxy-core-${version}-${PLATFORM.replace("/", "-")}.tar.gz`;
+  run("tar", ["-czf", join(dir, name), "-C", folder, "."], dir);
+  const bytes = readFileSync(join(dir, name));
+  const descriptor = JSON.stringify({
+    id: CORE_ID,
+    version,
+    tier: "native",
+    platform: PLATFORM,
+    size: bytes.length,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+  });
+  const signature = sign(null, Buffer.from(descriptor), key);
+  if (bad) signature[0] = (signature[0] ?? 0) ^ 0xff;
+  return {
+    product: "core",
+    version,
+    channel: "stable",
+    published: "2026-11-01T00:00:00Z",
+    artifacts: [{ platform: PLATFORM, url: name, descriptor, signature: hex(signature), key_id: keyId }],
+  };
+}
+
+/** Builds cores 1.0.0 and 2.0.0 (with the bundled test packages of prepared), a 3.0.0 that
+ * breaks its config and exits, and a 2.1.0 whose signature does not verify, signed by a key made
+ * for this run, with their index. */
+function coreSource(dir: string, prepared: string): CoreSource {
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  const keyId = `native-test-${randomUUID()}`;
+  const releases = [];
+  for (const version of ["1.0.0", "2.0.0"]) {
+    const folder = join(dir, `core-${version}`);
+    mkdirSync(folder);
+    run(
+      "go",
+      [
+        "build",
+        "-buildvcs=false",
+        "-ldflags",
+        `${VERSION_FLAG}${version}`,
+        "-o",
+        join(folder, "pluxy"),
+        "./cmd/pluxy",
+      ],
+      next,
+    );
+    cpSync(join(prepared, "bundled"), join(folder, "bundled"), { recursive: true });
+    releases.push(release(dir, version, folder, privateKey, keyId));
+  }
+  const broken = join(dir, "core-3.0.0");
+  mkdirSync(broken);
+  writeFileSync(
+    join(broken, "pluxy"),
+    "#!/bin/sh\nset -e\n# A bad candidate: it breaks its config (-config <path>) and exits.\nprintf 'not json' > \"$2\"\necho 'pluxy: bad candidate broke its config' >&2\nexit 3\n",
+  );
+  chmodSync(join(broken, "pluxy"), 0o755);
+  releases.push(release(dir, "3.0.0", broken, privateKey, keyId));
+  releases.push(release(dir, "2.1.0", join(dir, "core-2.0.0"), privateKey, keyId, true));
+  const index = join(dir, "index.json");
+  writeFileSync(index, JSON.stringify({ format: 1, releases }, null, 2));
+  const jwk = publicKey.export({ format: "jwk" });
+  return {
+    index,
+    custom: join(prepared, "pluxy"),
+    root: {
+      kind: "test",
+      publisher: "pluxy",
+      source: index,
+      key_id: keyId,
+      public_key: hex(Buffer.from(jwk.x ?? "", "base64url")),
+    },
+  };
+}
+
+/** The run's test trust profile in home: the marker with a fresh nonce, and roots. */
+function writeTrust(home: string, roots: object[]): string {
+  const nonce = hex(randomBytes(32));
+  const marker = { format: 1, home: realpathSync(home), purpose: "pluxy-artifact-test-trust", nonce };
+  writeFileSync(join(home, ".pluxy-test-trust-profile.json"), JSON.stringify(marker), { mode: 0o600 });
+  writeTrustRoots(home, roots);
+  return nonce;
+}
+
+function writeTrustRoots(home: string, roots: object[]) {
+  writeFileSync(join(home, ".pluxy-test-trust-roots.json"), JSON.stringify({ roots, updater: null }), {
+    mode: 0o600,
+  });
+}
+
+/** A core this runner starts, which the app never started: it must outlive the app's run. */
+async function startSentinel(dir: string, from: string) {
+  cpSync(from, dir, { recursive: true });
+  const key = hex(randomBytes(32));
+  const config = join(dir, "config.json");
+  writeFileSync(
+    config,
+    JSON.stringify({
+      listen: "127.0.0.1:0",
+      client_keys: [hex(randomBytes(32))],
+      management_key: key,
+      credentials_dir: join(dir, "credentials"),
+      packages: { dir: join(dir, "packages") },
+    }),
+    { mode: 0o600 },
+  );
+  const before = readFileSync(config);
+  const proc = spawn(join(dir, "pluxy"), ["-config", config], {
+    cwd: dir,
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  const base = await new Promise<string>((resolve, reject) => {
+    proc.once("exit", (code) => reject(new Error(`the sentinel core exited with ${code}`)));
+    if (proc.stderr)
+      createInterface({ input: proc.stderr }).on("line", (line) => {
+        const m = /^pluxy: listening on (\S+)$/.exec(line);
+        if (m?.[1]) resolve(m[1]);
+      });
+  });
+  return { proc, base, key, config, before, exe: statSync(join(dir, "pluxy")).ino };
+}
+
+/** What the managed run's core steps must report (native_core.rs). */
+const CORE_STEPS: [string, Record<string, unknown>][] = [
+  ["core_missing", { state: "missing", connected: false }],
+  ["core_no_roots", { refused: true, dialog: false }],
+  [
+    "core_install",
+    {
+      outcome: "done",
+      version: "1.0.0",
+      connected: true,
+      signed_in: true,
+      status: 200,
+      reported: "1.0.0",
+      exe_in_app: true,
+    },
+  ],
+  ["core_bad_signature", { refused: true, running: "1.0.0" }],
+  [
+    "core_update",
+    {
+      outcome: "done",
+      version: "2.0.0",
+      status: 200,
+      reported: "2.0.0",
+      old_alive: false,
+      new_pid: true,
+      config_kept: true,
+    },
+  ],
+  [
+    "core_bad_start",
+    {
+      outcome: "failed",
+      version: "2.0.0",
+      status: 200,
+      reported: "2.0.0",
+      old_alive: false,
+      running: true,
+      config_restored: true,
+      failed: "3.0.0",
+    },
+  ],
+  [
+    "core_rollback",
+    {
+      unknown_refused: true,
+      cancel: "cancelled",
+      cancel_kept: true,
+      outcome: "done",
+      version: "1.0.0",
+      status: 200,
+      reported: "1.0.0",
+      config_kept: true,
+    },
+  ],
+  [
+    "core_adopt",
+    {
+      custom_not_run: true,
+      running_before: "1.0.0",
+      outcome: "done",
+      status: 200,
+      exe_in_app: true,
+      custom_running: false,
+      back: "1.0.0",
+      back_outcome: "done",
+    },
+  ],
+];
+
 /** Runs the app once with connection as its saved connection, and checks what it reports. */
-async function runApp(mode: Mode, bin: string, connection: object, base?: string): Promise<string[]> {
+async function runApp(
+  mode: Mode,
+  bin: string,
+  connection: object,
+  base?: string,
+  core?: CoreSource,
+): Promise<string[]> {
   const root = mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
   const problems: string[] = [];
   const check = (ok: unknown, what: string) => {
@@ -216,6 +449,14 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
       PLUXY_APP_TEST_PAGE: PAGE,
       PLUXY_APP_TEST_QUIT: quit,
     };
+    const trustReady = join(root, "trust-ready");
+    if (core) {
+      // No roots at first: the first install must be refused for that.
+      env.PLUXY_TEST_TRUST_NONCE = writeTrust(dirs.home, []);
+      env.PLUXY_APP_TEST_CORE_SOURCE = core.index;
+      env.PLUXY_APP_TEST_CORE_CUSTOM = core.custom;
+      env.PLUXY_APP_TEST_TRUST_READY = trustReady;
+    }
     // The session script starts and checks the desktop services, then runs the app.
     const session = [
       process.execPath,
@@ -266,6 +507,11 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
         return;
       }
       steps.set(step, value);
+      if (step === "core_no_roots" && core) {
+        writeTrustRoots(dirs.home, [core.root]);
+        writeFileSync(trustReady, "");
+      }
+      if (step.startsWith("core_")) console.log(`  ${mode} | ${step} ${json}`);
       if (step === "confirmations") console.log(`  ${mode} | native confirmations: ${JSON.stringify(value)}`);
       if (step === "frame") before = webProcesses(pid);
       if (step === "closed") {
@@ -378,6 +624,53 @@ async function runApp(mode: Mode, bin: string, connection: object, base?: string
 
     check(steps.get("confirmations")?.passed === true, "native confirmation checks did not complete");
 
+    if (core) {
+      for (const [step, expected] of CORE_STEPS) {
+        const value = steps.get(step);
+        check(
+          value && Object.entries(expected).every(([key, want]) => value[key] === want),
+          `${step} evidence missing or wrong: ${JSON.stringify(value)} (want ${JSON.stringify(expected)})`,
+        );
+      }
+      const installed = (step: string) => JSON.stringify(steps.get(step)?.installed);
+      check(
+        installed("core_no_roots") === "[]",
+        `installed after the refused install: ${installed("core_no_roots")}`,
+      );
+      check(
+        installed("core_bad_signature") === '["1.0.0"]',
+        `installed after the bad signature: ${installed("core_bad_signature")}`,
+      );
+      check(
+        installed("core_bad_start") === '["1.0.0","2.0.0"]',
+        `installed after the bad start: ${installed("core_bad_start")}`,
+      );
+      check(
+        /trust not configured/.test(String(steps.get("core_no_roots")?.detail)),
+        "the no-roots refusal does not say why",
+      );
+      check(
+        /signature/.test(String(steps.get("core_bad_signature")?.detail)),
+        "the bad-signature refusal does not say why",
+      );
+      check(
+        /not installed/.test(String(steps.get("core_rollback")?.unknown_detail)),
+        "the unknown rollback refusal does not say why",
+      );
+      check(
+        /bad candidate broke its config/.test(String(steps.get("core_bad_start")?.detail)),
+        "the bad start's reason is missing",
+      );
+      check(
+        steps.get("core_adopt")?.pending === core.custom,
+        `the custom program is not pending adoption: ${JSON.stringify(steps.get("core_adopt"))}`,
+      );
+      check(
+        /^custom-[0-9a-f]{12}$/.test(String(steps.get("core_adopt")?.version)),
+        "the adopted core has no app-owned version",
+      );
+    }
+
     // Closing the window frees its webviews; the app stays in the tray.
     const closed = steps.get("closed") as
       | { webviews: string[]; tray: boolean; core_pid?: number }
@@ -433,7 +726,17 @@ run("bun", ["run", "build"], app);
 // The app, and the probe the session uses to check the desktop services (examples/session_probe.rs).
 run(
   "cargo",
-  ["build", "--locked", "--features", "native-test", "--bin", "pluxy-app", "--example", "session_probe"],
+  // artifact-test-trust: the managed run's core steps load the run's test roots.
+  [
+    "build",
+    "--locked",
+    "--features",
+    "native-test,artifact-test-trust",
+    "--bin",
+    "pluxy-app",
+    "--example",
+    "session_probe",
+  ],
   tauri,
 );
 const targetDir = resolvePath(tauri, process.env.CARGO_TARGET_DIR ?? "target");
@@ -448,9 +751,35 @@ try {
   appImage = await buildSmokeAppImage(appImageDir);
   const prepared = mkdtempSync(join(tmpdir(), "pluxy-app-native-core-"));
   try {
-    const { core } = JSON.parse(run("go", ["run", "./e2e/panelcore", "-probe", "-prepare", prepared], next));
-    const p = await runApp("managed", bin, { mode: "managed", core_path: core });
-    problems.push(...p.map((x) => `managed: ${x}`));
+    run("go", ["run", "./e2e/panelcore", "-probe", "-prepare", prepared], next);
+    const releases = join(prepared, "releases");
+    mkdirSync(releases);
+    const source = coreSource(releases, prepared);
+    const sentinel = await startSentinel(join(prepared, "sentinel"), join(releases, "core-1.0.0"));
+    try {
+      const p = await runApp(
+        "managed",
+        bin,
+        { mode: "managed", core_source: source.index },
+        undefined,
+        source,
+      );
+      // A core the app did not start: still running, its config and program untouched.
+      const status = await managementStatus(sentinel.base, sentinel.key);
+      const kept = readFileSync(sentinel.config).equals(sentinel.before);
+      console.log(
+        `managed sentinel ${JSON.stringify({ alive: alive(sentinel.proc.pid ?? 0), status, config_kept: kept })}`,
+      );
+      if (!alive(sentinel.proc.pid ?? 0) || status !== 200)
+        p.push("the sentinel core did not survive the app");
+      if (!kept) p.push("the sentinel core's config changed");
+      if (statSync(join(prepared, "sentinel", "pluxy")).ino !== sentinel.exe)
+        p.push("the sentinel core's program changed");
+      problems.push(...p.map((x) => `managed: ${x}`));
+    } finally {
+      sentinel.proc.kill("SIGTERM");
+      await new Promise((r) => sentinel.proc.once("exit", r));
+    }
   } finally {
     rmSync(prepared, { recursive: true, force: true });
   }

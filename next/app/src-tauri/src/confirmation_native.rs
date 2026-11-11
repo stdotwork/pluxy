@@ -25,12 +25,12 @@ fn x(args: &[&str]) -> Result<String, String> {
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().into())
 }
-fn window(title: &str) -> Option<String> {
+pub(crate) fn window(title: &str) -> Option<String> {
     x(&["search", "--onlyvisible", "--name", &format!("^{title}$")])
         .ok()
         .and_then(|s| s.lines().last().map(String::from))
 }
-fn key(title: &str, keys: &str) -> Result<(), String> {
+pub(crate) fn key(title: &str, keys: &str) -> Result<(), String> {
     let id = wait_for(title, || window(title))?;
     x(&["windowfocus", "--sync", &id])?;
     x(&["key", "--clearmodifiers", keys])?;

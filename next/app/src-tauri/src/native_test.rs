@@ -1,6 +1,7 @@
 //! For the native test only (`native/run.ts`, built with `--features native-test`). It drives the
 //! real app as the person would and probes what each webview can call:
 //!
+//! 0. in the managed run, the core steps (`native_core.rs`): install, update, rollback, adopt;
 //! 1. in the window's webview, calls each app command with no arguments, leaving out the two
 //!    that take none and would act: each must get past the command check (and the ones that
 //!    need arguments then fail on those); then gets core's status through the app;
@@ -19,6 +20,9 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Webview};
 
+#[cfg(target_os = "linux")]
+#[path = "native_core.rs"]
+mod core_updates;
 #[path = "native_ingress.rs"]
 mod ingress;
 pub use ingress::{
@@ -41,7 +45,12 @@ const PLUGINS: &[&str] = &[
 ];
 
 /// Commands the window's probe leaves out: they take no arguments and would act.
-const ACTING: &[&str] = &["sign_out", "core_restart", "confirmation_settings"];
+const ACTING: &[&str] = &[
+    "sign_out",
+    "core_restart",
+    "core_adopt",
+    "confirmation_settings",
+];
 
 pub(crate) fn log(step: &str, v: Value) {
     eprintln!("native-test: {step} {v}");
@@ -104,6 +113,19 @@ fn probe(w: &Webview, calls: &[&str]) -> Result<Value, String> {
 
 fn run(app: &AppHandle) -> Result<(), String> {
     let main = wait_for("the window", || app.get_webview(MAIN))?;
+    // The managed run's core steps come first: until a core is installed the window shows
+    // only the Connection page.
+    #[cfg(target_os = "linux")]
+    {
+        wait_for("the window's IPC", || {
+            eval(
+                &main,
+                "typeof window.__TAURI_INTERNALS__?.invoke === 'function'",
+            )
+            .filter(|v| v == true)
+        })?;
+        core_updates::run(app, &main)?;
+    }
     wait_for("the window's shell", || {
         eval(&main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true)
     })?;
