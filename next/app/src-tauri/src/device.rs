@@ -1225,13 +1225,19 @@ struct Artifact {
 
 /// Go's platform name for this computer, as registry artifacts are keyed.
 pub fn platform() -> String {
-    let arch = match std::env::consts::ARCH {
+    go_platform(std::env::consts::OS, std::env::consts::ARCH)
+}
+
+/// Go's name for Rust's operating system and architecture names.
+fn go_platform(os: &str, arch: &str) -> String {
+    let os = if os == "macos" { "darwin" } else { os };
+    let arch = match arch {
         "x86_64" => "amd64",
         "aarch64" => "arm64",
         "x86" => "386",
         a => a,
     };
-    format!("{}/{arch}", std::env::consts::OS)
+    format!("{os}/{arch}")
 }
 
 fn agent() -> ureq::Agent {

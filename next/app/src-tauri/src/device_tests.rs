@@ -481,6 +481,13 @@ fn names_with_a_drive_or_stream_never_reach_the_store() {
     let _ = fs::remove_dir_all(root);
 }
 
+#[test]
+fn go_platform_names() {
+    assert_eq!(go_platform("macos", "aarch64"), "darwin/arm64");
+    assert_eq!(go_platform("linux", "x86_64"), "linux/amd64");
+    assert_eq!(go_platform("windows", "x86"), "windows/386");
+}
+
 #[cfg(unix)]
 #[test]
 fn registry_files_must_be_regular_files_in_the_index_folder() {
