@@ -84,6 +84,23 @@ for (const theme of ["default", "terminal"]) {
     await expect(page.getByRole("heading", { level: 1, name: /Routing$/ })).toBeVisible();
     await expect(page.locator('[data-part="tier"]')).toHaveCount(3);
     await expect(page.getByText(/^Cooling /).first()).toBeVisible();
+    await expect
+      .soft(page.locator('[id="routing.retry.request-retry"]'))
+      .toHaveAttribute("placeholder", "Automatic");
+    for (const badge of await page.locator('[data-part="tier"] [data-part="badge"]').all()) {
+      expect
+        .soft(
+          await badge.evaluate((element) => {
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            return (
+              range.getBoundingClientRect().height <=
+              Number.parseFloat(getComputedStyle(element).lineHeight) + 1
+            );
+          }),
+        )
+        .toBe(true);
+    }
     if (process.env.ROUTING_SHOTS)
       await page.screenshot({ path: `${process.env.ROUTING_SHOTS}/${theme}.png`, fullPage: true });
   });

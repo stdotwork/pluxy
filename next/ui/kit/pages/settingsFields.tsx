@@ -1,6 +1,9 @@
 import type { CoreSettings, SettingsChange } from "../api/settings";
+import { strings } from "../strings";
 import { Switch } from "../ui";
 import { configText as t } from "./configStrings";
+
+const sharedText = strings("settingsFields", { automatic: "Automatic" });
 
 export type SettingsTab = "common" | "network" | "logging" | "advanced";
 export type Value = string | number | boolean | null;
@@ -9,6 +12,7 @@ export interface Field {
   label: string;
   kind: "switch" | "number" | "text" | "strategy" | "quota";
   hint?: string;
+  placeholder?: string;
   min?: number;
   step?: "any";
 }
@@ -18,7 +22,13 @@ export const fields = (): Record<SettingsTab, Field[]> => {
     common: [log],
     network: [
       { key: "routing.strategy", label: t("strategy"), kind: "strategy" },
-      { key: "routing.retry.request-retry", label: t("retry"), kind: "number", min: 0 },
+      {
+        key: "routing.retry.request-retry",
+        label: t("retry"),
+        kind: "number",
+        min: 0,
+        placeholder: sharedText("automatic"),
+      },
       { key: "routing.retry.max-retry-credentials", label: t("maxCredentials"), kind: "number", min: 0 },
       {
         key: "routing.retry.max-retry-interval",
@@ -127,6 +137,7 @@ export function SettingControl({
             <input
               id={field.key}
               type="number"
+              placeholder={field.placeholder}
               min={field.min}
               step={field.step ?? 1}
               required={field.key !== "routing.retry.request-retry" || value !== null}

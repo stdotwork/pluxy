@@ -31,6 +31,9 @@
   .routing-tiers .table {
     min-width: 0;
   }
+  .routing-tiers [data-part="badge"] {
+    white-space: nowrap;
+  }
   .routing-identity,
   .routing-state {
     display: block;
