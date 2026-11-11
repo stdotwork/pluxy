@@ -87,16 +87,21 @@ fn watch(w: &Webview) -> Result<(), String> {
 fn clean(app: &AppHandle, canaries: &[&str]) -> Result<(), String> {
     let mut count = 0;
     for w in app.webviews().values() {
-        let audit =
-            eval(w, "(window.__keySnapshot(), window.__keyAudit)").ok_or("missing secret audit")?;
-        let text = serde_json::to_string(&audit).map_err(|_| "invalid secret audit")?;
-        if canaries.iter().any(|key| text.contains(key)) {
-            return Err("a key reached a webview DOM, storage or callback/event".into());
-        }
+        clean_webview(w, canaries)?;
         count += 1;
     }
     if count < 2 {
         return Err("secret audit did not inspect main and page webviews".into());
+    }
+    Ok(())
+}
+
+fn clean_webview(w: &Webview, canaries: &[&str]) -> Result<(), String> {
+    let audit =
+        eval(w, "(window.__keySnapshot(), window.__keyAudit)").ok_or("missing secret audit")?;
+    let text = serde_json::to_string(&audit).map_err(|_| "invalid secret audit")?;
+    if canaries.iter().any(|key| text.contains(key)) {
+        return Err("a key reached a webview DOM, storage or callback/event".into());
     }
     Ok(())
 }
@@ -244,6 +249,8 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
     {
         return Err("sign-out exposed a webview key field".into());
     }
+
+    clean_webview(main, &[key, wrong])?;
 
     log(
         "keyentry",
