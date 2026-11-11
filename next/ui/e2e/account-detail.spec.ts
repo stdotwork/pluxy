@@ -20,7 +20,8 @@ async function addAccount(id: string, method = "api_key") {
     .toBe("done");
 }
 async function openAccount(page: Page, id: string) {
-  await goTo(page, "Accounts");
+  await page.locator('nav a[href="#/accounts"]').click();
+  await expect(page.getByRole("heading", { level: 1, name: "Accounts" })).toBeVisible();
   await page.getByRole("button", { name: id, exact: true }).click();
   return page.getByRole("complementary", { name: `Details: ${id}`, exact: true });
 }
@@ -51,7 +52,7 @@ test("account health, cooldown reset, models and a paid test", async ({ page }) 
   const shots = process.env.ACCOUNT_DETAIL_SHOTS;
   if (shots) mkdirSync(shots, { recursive: true });
   for (const theme of ["default", "terminal"]) {
-    await goTo(page, "Themes");
+    await page.locator('nav a[href="#/themes"]').click();
     await page
       .getByRole("radiogroup", { name: "Theme" })
       .getByRole("radio", { name: theme, exact: false })
