@@ -26,15 +26,32 @@ defaults:
 
 jobs:
   app:
-    runs-on: ubuntu-latest
+    # Pinned: the package names below are Ubuntu 24.04's, and so are the file paths the native
+    # test starts services from (next/app/native/services.ts).
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Install WebKitGTK, the tray library, Xvfb and D-Bus
+      - name: Check the runner is Ubuntu 24.04
+        working-directory: .
+        run: |
+          . /etc/os-release
+          if [ "$VERSION_ID" != "24.04" ]; then
+            echo "::error::the packages and paths here are Ubuntu 24.04's; this runner is $PRETTY_NAME"
+            exit 1
+          fi
+          echo "$PRETTY_NAME"
+      # The native test starts the portals and a tray watcher in each run's private session and
+      # checks them for real: xdg-desktop-portal ships the portal frontend, the document portal
+      # and the permission store; xdg-desktop-portal-gtk is the backend; ayatana-indicator-application's
+      # service owns org.kde.StatusNotifierWatcher. squashfs-tools builds the smoke AppImage.
+      # xdotool sends real input through the X server (XTEST), for native dialog checks.
+      - name: Install WebKitGTK, the tray library, Xvfb, D-Bus, the portals, a tray watcher, squashfs-tools and xdotool
         working-directory: .
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth dbus-daemon
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth dbus-daemon \
+            xdg-desktop-portal xdg-desktop-portal-gtk ayatana-indicator-application squashfs-tools xdotool
       - name: Set up Go
         uses: actions/setup-go@v5
         with:

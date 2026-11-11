@@ -38,6 +38,20 @@ export function browserHost(): Host {
   const local = store("localStorage");
   const session = store("sessionStorage");
   let key = read(session, KEY) ?? read(local, KEY);
+  let remember = read(session, KEY) === null && read(local, KEY) !== null;
+  let rejectedKey: string | undefined;
+  window.addEventListener("storage", (event) => {
+    if (remember && event.storageArea === local && event.key === KEY && event.newValue) {
+      key = event.newValue;
+    }
+  });
+
+  function keep(candidate: string) {
+    key = candidate;
+    rejectedKey = undefined;
+    write(remember ? local : session, KEY, candidate);
+    write(remember ? session : local, KEY, null);
+  }
 
   async function send<T>(method: Method, path: string, body: unknown, withKey: string): Promise<Reply<T>> {
     if (!path.startsWith("/") || path.split("/").includes("..")) {
@@ -59,7 +73,12 @@ export function browserHost(): Host {
     } catch {
       return { status: 0 };
     }
-    const text = await resp.text();
+    let text: string;
+    try {
+      text = await resp.text();
+    } catch {
+      return { status: 0 };
+    }
     let json: unknown;
     try {
       json = text ? JSON.parse(text) : undefined;
@@ -73,29 +92,41 @@ export function browserHost(): Host {
   const host: Host = {
     async call<T>(method: Method, path: string, body?: unknown) {
       if (!key) return { status: 401, error: { code: "unauthorized", message: "not signed in" } };
-      return send<T>(method, path, body, key);
+      let usedKey = key;
+      let reply = await send<T>(method, path, body, usedKey);
+      if (reply.status === 401 && key && key !== usedKey) {
+        usedKey = key;
+        reply = await send<T>(method, path, body, usedKey);
+      }
+      if (reply.status === 401) rejectedKey = usedKey;
+      if (method === "POST" && path === "/management-key/rotate" && reply.status === 200) {
+        const value = (reply.body as { value?: unknown } | undefined)?.value;
+        if (typeof value === "string" && value.length > 0) keep(value);
+      }
+      return reply;
     },
     signedIn: () => key !== null,
-    async signIn(candidate, remember) {
+    async signIn(candidate, keepOnDevice) {
       const r = await send("GET", "/status", undefined, candidate);
       if (r.status === 401) return "core refused this key";
       if (r.status === 404) return "core's management API is off: set management_key in its config";
       if (r.status !== 200) return r.status === 0 ? "core could not be reached" : `core answered ${r.status}`;
-      key = candidate;
-      write(remember ? local : session, KEY, candidate);
-      write(remember ? session : local, KEY, null);
+      remember = keepOnDevice;
+      keep(candidate);
       return undefined;
     },
     signOut() {
+      const failed = rejectedKey ?? key;
       key = null;
-      write(session, KEY, null);
-      write(local, KEY, null);
+      rejectedKey = undefined;
+      if (read(session, KEY) === failed) write(session, KEY, null);
+      if (read(local, KEY) === failed) write(local, KEY, null);
     },
     prefs: {
       get: (name) => read(local, PREFS + name),
       set: (name, value) => write(local, PREFS + name, value),
     },
-    features: new Set<Feature>(["signOut"]),
+    features: new Set<Feature>(["signOut", "rotateManagementKey"]),
   };
   return host;
 }
