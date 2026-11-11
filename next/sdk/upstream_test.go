@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -209,8 +210,37 @@ func TestUpstreamInfoHandlers(t *testing.T) {
 	waitCancelled(t, opening)
 }
 
-// An extension that has not wrapped any client in Upstream cannot send through a proxy, so a call
-// that carries one is answered with an error and never reaches its handler or the upstream; a
+// A call's headers replace every value the extension set for the same name, whatever its letter
+// case in the header map, keep its other headers, and leave the extension's request as it was.
+func TestUpstreamSetsCallHeaders(t *testing.T) {
+	base := &http.Transport{}
+	recorder := &recordUpstream{}
+	base.RegisterProtocol("record", recorder)
+	call := protocol.Call{Op: protocol.OpGenerate, Account: &protocol.Account{ID: "a",
+		Headers: map[string]string{"anthropic-version": "configured", "X-Gateway-Key": "fake-gw"}}}
+	ctx := withUpstreamInfo(context.Background(), call)
+	req, err := http.NewRequestWithContext(ctx, "POST", "record://upstream.test/v1/messages", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header = http.Header{"anthropic-version": {"own"}, "Anthropic-Version": {"own-too"}, "X-Own": {"kept"}}
+	header := req.Header.Clone()
+	resp, err := Upstream(base).RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	want := http.Header{"Anthropic-Version": {"configured"}, "X-Gateway-Key": {"fake-gw"}, "X-Own": {"kept"}}
+	if got := recorder.request.Header; !reflect.DeepEqual(got, want) {
+		t.Errorf("upstream got headers %v, want %v", got, want)
+	}
+	if !reflect.DeepEqual(req.Header, header) {
+		t.Errorf("the extension's request changed: %v", req.Header)
+	}
+}
+
+// An extension that has not wrapped any client in Upstream cannot send through a proxy or with an
+// account's headers, so a call that carries either is answered with an error and never reaches its handler or the upstream; a
 // call without a proxy still does, and once the process wraps a client the proxied call goes
 // through too.
 func TestProxiedCallRefusedWithoutUpstream(t *testing.T) {
@@ -290,7 +320,21 @@ func TestProxiedCallRefusedWithoutUpstream(t *testing.T) {
 	}
 
 	refused(t, generate(t, proxy))
+	// An account's headers take the same refusal, and the error holds none of their values.
+	const headerSecret = "Fake-Header-Secret-1"
 	conn := dial(t, socket)
+	hcall := protocol.Call{Type: protocol.TypeCall, ID: "h", Op: protocol.OpGenerate, Request: request,
+		Account: &protocol.Account{ID: "a", Headers: map[string]string{"X-Gateway-Key": headerSecret}}}
+	if err := protocol.WriteFrame(conn, hcall); err != nil {
+		t.Fatal(err)
+	}
+	hr := reply(t, conn)
+	refused(t, hr)
+	if strings.Contains(hr.Error.Message, headerSecret) {
+		t.Fatalf("the error shows a header value: %q", hr.Error.Message)
+	}
+	conn.Close()
+	conn = dial(t, socket)
 	if err := protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeCall, ID: "c", Op: protocol.OpCheck, Account: &protocol.Account{ID: "a", ProxyURL: proxy}}); err != nil {
 		t.Fatal(err)
 	}
@@ -436,5 +480,115 @@ func TestProxyTransportClosesIdleConnections(t *testing.T) {
 				t.Errorf("the base transport changed: IdleConnTimeout %v", base.IdleConnTimeout)
 			}
 		})
+	}
+}
+
+// A redirect that keeps the host but changes the scheme (https to http) is away from the first
+// request too: the account's secret headers would go out unencrypted.
+func TestRedirectedAwayOnSchemeChange(t *testing.T) {
+	first, _ := http.NewRequest(http.MethodGet, "https://api.example.test/start", nil)
+	for _, c := range []struct {
+		to   string
+		away bool
+	}{
+		{"https://api.example.test/next", false},
+		{"https://API.example.test/next", false},
+		{"http://api.example.test/next", true},
+		{"https://api.example.test:8443/next", true},
+		{"https://other.example.test/next", true},
+	} {
+		next, _ := http.NewRequest(http.MethodGet, c.to, nil)
+		next.Response = &http.Response{Request: first}
+		if got := redirectedAway(next); got != c.away {
+			t.Errorf("redirect to %s: away %v, want %v", c.to, got, c.away)
+		}
+	}
+}
+
+// A request that has no Header map (a RoundTripper may be given one) gets the call's headers
+// instead of panicking.
+func TestUpstreamHeadersOnRequestWithoutHeaderMap(t *testing.T) {
+	base := &http.Transport{}
+	recorder := &recordUpstream{}
+	base.RegisterProtocol("record", recorder)
+	call := protocol.Call{Op: protocol.OpGenerate, Account: &protocol.Account{ID: "a", Headers: map[string]string{"X-Title": "fake-title"}}}
+	u, _ := url.Parse("record://upstream.test/v1/messages")
+	req := (&http.Request{Method: "POST", URL: u, Body: http.NoBody}).WithContext(withUpstreamInfo(context.Background(), call))
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("RoundTrip panicked: %v", r)
+		}
+	}()
+	resp, err := Upstream(base).RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if got := recorder.request.Header.Get("X-Title"); got != "fake-title" {
+		t.Errorf("upstream got X-Title %q, want fake-title", got)
+	}
+}
+
+// A redirect to another host never carries the account's secret headers (net/http leaves
+// Authorization and Cookie out there, but the call's context still holds the configured ones), nor
+// does a later hop of the same chain, even when the extension set one of those names itself (net/http
+// copies other headers to the redirect); a header that is not secret does, and a redirect on the same
+// host carries all of them.
+func TestUpstreamRedirectKeepsSecretHeadersOnTheirHost(t *testing.T) {
+	type seen struct{ secret, key, title string }
+	var first, same, other, otherHop atomic.Pointer[seen]
+	record := func(dst *atomic.Pointer[seen], r *http.Request) {
+		dst.Store(&seen{r.Header.Get("Authorization"), r.Header.Get("X-Api-Key"), r.Header.Get("X-Title")})
+	}
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/hop" {
+			record(&other, r)
+			http.Redirect(w, r, "/final", http.StatusFound) // a second hop on the other host
+			return
+		}
+		record(&otherHop, r)
+	}))
+	defer target.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/away":
+			record(&first, r)
+			http.Redirect(w, r, target.URL+"/hop", http.StatusFound)
+		case "/along":
+			http.Redirect(w, r, "/landed", http.StatusFound)
+		case "/landed":
+			record(&same, r)
+		}
+	}))
+	defer origin.Close()
+	call := protocol.Call{Op: protocol.OpGenerate, Account: &protocol.Account{ID: "a", Headers: map[string]string{
+		"Authorization": "Bearer fake-token-1", "X-Api-Key": "fake-key-1", "X-Title": "fake-title"}}}
+	client := &http.Client{Transport: Upstream(&http.Transport{})}
+	get := func(path string) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(withUpstreamInfo(context.Background(), call), http.MethodGet, origin.URL+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header["x-api-key"] = []string{"fake-extension-key"} // the extension's own, not canonical
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+	}
+	all := seen{"Bearer fake-token-1", "fake-key-1", "fake-title"}
+	get("/away")
+	if got := first.Load(); got == nil || *got != all {
+		t.Errorf("the first request got %+v, want all the account's headers", got)
+	}
+	for name, got := range map[string]*seen{"redirect to another host": other.Load(), "its second hop": otherHop.Load()} {
+		if got == nil || *got != (seen{title: "fake-title"}) {
+			t.Errorf("%s got %+v, want only the header that is not secret", name, got)
+		}
+	}
+	get("/along")
+	if got := same.Load(); got == nil || *got != all {
+		t.Errorf("redirect on the same host got %+v, want all the account's headers", got)
 	}
 }

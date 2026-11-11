@@ -309,7 +309,7 @@ func (s *server) handle(conn net.Conn) {
 		return
 	}
 	if call.Op != protocol.OpDescribe {
-		if err := refuseProxy(call); err != nil {
+		if err := refuseUpstream(call); err != nil {
 			_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: llm.EventError, Error: err}})
 			return
 		}
@@ -485,7 +485,7 @@ func (s *server) session(conn net.Conn, call protocol.Call) {
 			c.Request = *f.Request
 		}
 		out := &Stream{w: conn}
-		if err := refuseProxy(f); err != nil {
+		if err := refuseUpstream(f); err != nil {
 			if out.send(llm.Event{Type: llm.EventError, Error: err}) != nil {
 				return
 			}

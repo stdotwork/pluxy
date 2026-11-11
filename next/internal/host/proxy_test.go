@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -18,15 +20,19 @@ import (
 )
 
 // echoProxy is an extension that writes the proxy each call carries to stderr and fails the
-// call with an error that holds it.
+// call with an error that holds it; with headers, also their values.
 func echoProxy() {
 	_ = sdk.Upstream(&http.Transport{}) // an extension that sends through a proxy wraps its clients
 	err := sdk.Serve(sdk.Extension{
 		ID:      "hosttest/echo-proxy",
 		Version: "0.0.0",
 		Generate: func(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
-			fmt.Fprintf(os.Stderr, "proxy is %q\nproxy done %s\n", call.Account.ProxyURL, call.Account.ID)
-			return &llm.Error{Code: llm.CodeUnavailable, Message: "cannot reach " + call.Account.ProxyURL}
+			msg := "cannot reach " + call.Account.ProxyURL
+			for _, k := range slices.Sorted(maps.Keys(call.Account.Headers)) {
+				msg += " " + k + "=" + call.Account.Headers[k]
+			}
+			fmt.Fprintf(os.Stderr, "proxy is %q\n%s\nproxy done %s\n", call.Account.ProxyURL, msg, call.Account.ID)
+			return &llm.Error{Code: llm.CodeUnavailable, Message: msg}
 		},
 	})
 	if err != nil {
@@ -218,23 +224,98 @@ func TestRefreshUnexpectedReplyHidesProxyPassword(t *testing.T) {
 	}
 }
 
-// The credential kept for an account's proxy has its own place: an account whose ID is that
-// account's ID and " proxy" does not push out the proxy's secret or lose its own replaced one.
-func TestHeldProxyDoesNotCollideWithAccountID(t *testing.T) {
+// The credential kept for an account's proxy and header secrets has its own place: an account whose
+// ID is that account's ID and " proxy" or " upstream" does not push out those secrets or lose its
+// own replaced one.
+func TestHeldOutboundDoesNotCollideWithAccountID(t *testing.T) {
 	const (
-		oldKey = "old-key-of-the-spaced-account-1"
-		newKey = "new-key-of-the-spaced-account-2"
 		pass   = "Held-Proxy-Secret-9"
+		header = "Held-Header-Secret-9"
 	)
 	e := &Extension{info: protocol.Info{ProtocolMinor: protocol.Minor}}
-	e.held.add("a proxy", &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: oldKey})
-	e.held.add("a proxy", &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: newKey})
-	if _, perr := e.proxied(&protocol.Account{ID: "a", ProxyURL: "http://alice:" + pass + "@127.0.0.1:3128"}); perr != nil {
+	secrets := []string{pass, header}
+	for _, id := range []string{"a proxy", "a upstream"} {
+		oldKey, newKey := "old-key-of-"+id+"-account-1", "new-key-of-"+id+"-account-2"
+		e.held.add(id, &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: oldKey})
+		e.held.add(id, &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: newKey})
+		secrets = append(secrets, oldKey, newKey)
+	}
+	if _, perr := e.outbound(&protocol.Account{ID: "a", ProxyURL: "http://alice:" + pass + "@127.0.0.1:3128", Headers: map[string]string{"X-Gateway-Key": header}}); perr != nil {
 		t.Fatal(perr)
 	}
-	for _, secret := range []string{oldKey, newKey, pass} {
+	for _, secret := range secrets {
 		if got := e.held.String("leak " + secret); got != "leak "+protocol.Redacted {
 			t.Errorf("held output %q still holds %q", got, secret)
 		}
+	}
+}
+
+const testHeaderSecret = "header-Secret-value-47"
+
+// A call carries the account's headers; the value of one about authentication never comes back
+// in the call's error or the extension's log, and another's does.
+func TestCallCarriesHeadersWithoutLeakingSecrets(t *testing.T) {
+	log := &syncBuffer{}
+	ext, err := Start(filepath.Join(fakePackage(t, "echo-proxy"), ManifestFile), Options{Log: log})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ext.Stop()
+	s := ext.Generate(context.Background(), protocol.Account{ID: "h", Headers: map[string]string{"X-Gateway-Key": testHeaderSecret, "X-Title": "plain-title"}}, llm.Request{Model: "m"})
+	ev := s.Next()
+	s.Close()
+	log.waitFor(t, "proxy done h")
+	if want := "cannot reach  " + protocol.Redacted + " X-Title=plain-title"; ev.Type != llm.EventError || ev.Error.Message != want {
+		t.Errorf("event %+v, want the error %q", ev, want)
+	}
+	if out := log.String(); strings.Contains(out, testHeaderSecret) || !strings.Contains(out, protocol.Redacted+" X-Title=plain-title") {
+		t.Errorf("the log holds the secret header value, or not the headers:\n%s", out)
+	}
+}
+
+// A secret header whose value is short ("1") is removed from a reply only next to its name
+// (here "Name=value"): its value alone would also scrub every other 1 in the reply.
+func TestShortSecretHeaderValueRemovedNextToItsName(t *testing.T) {
+	ext, err := Start(filepath.Join(fakePackage(t, "echo-proxy"), ManifestFile), Options{Log: &syncBuffer{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ext.Stop()
+	for _, c := range []struct {
+		name, value, want string
+	}{
+		{"short value", "1", "cannot reach  " + protocol.Redacted},
+		{"long value", testHeaderSecret, "cannot reach  " + protocol.Redacted},
+	} {
+		s := ext.Generate(context.Background(), protocol.Account{ID: "s", Headers: map[string]string{"X-Gateway-Key": c.value}}, llm.Request{Model: "m"})
+		ev := s.Next()
+		s.Close()
+		if ev.Type != llm.EventError || ev.Error.Message != c.want {
+			t.Errorf("%s: event %+v, want the error %q", c.name, ev, c.want)
+		}
+	}
+}
+
+// An extension older than protocol 0.12 cannot send an account's headers, so a call that has
+// some is refused before it reaches it, as unsupported for the account.
+func TestOldExtensionGetsNoCallWithHeaders(t *testing.T) {
+	ext, err := Start(filepath.Join(fakePackage(t, "session-bad-frame"), ManifestFile), Options{Log: &syncBuffer{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ext.Stop()
+	s := ext.Generate(context.Background(), protocol.Account{ID: "a", Headers: map[string]string{"X-Gateway-Key": testHeaderSecret}}, llm.Request{Model: "m"})
+	ev := s.Next()
+	s.Close()
+	if ev.Type != llm.EventError || ev.Error.Code != llm.CodeUnsupported || ev.Error.Scope != llm.ScopeCredential || !ev.Error.Retryable ||
+		!strings.Contains(ev.Error.Message, "headers") || strings.Contains(ev.Error.Message, testHeaderSecret) {
+		t.Fatalf("event %+v, want a retryable unsupported error for the account that names headers", ev)
+	}
+	// The fake extension hangs up on a generate call: one without headers reaches it.
+	s = ext.Generate(context.Background(), protocol.Account{ID: "a"}, llm.Request{Model: "m"})
+	ev = s.Next()
+	s.Close()
+	if ev.Type != llm.EventError || ev.Error.Code != llm.CodeExtensionCrashed {
+		t.Fatalf("call without headers: event %+v, want the extension's hang-up", ev)
 	}
 }
