@@ -131,9 +131,21 @@ func secrets(n *yaml.Node, strict bool) []*yaml.Node {
 		}
 	}
 	// all adds every scalar under v; with kind false, except the values of keys named "kind" (a
-	// credential's kind).
+	// credential's kind). Each node is read at most once in each way, so an alias back into its
+	// own anchor, or anchors that nest aliases many times over, cost no more than the document's
+	// size.
+	type allReading struct {
+		n    *yaml.Node
+		kind bool
+	}
+	allRead := map[allReading]bool{}
 	var all func(v *yaml.Node, kind bool)
 	all = func(v *yaml.Node, kind bool) {
+		k := allReading{v, kind}
+		if allRead[k] {
+			return
+		}
+		allRead[k] = true
 		switch v.Kind {
 		case yaml.ScalarNode:
 			add(v)

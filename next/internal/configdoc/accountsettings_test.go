@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // In the settings of a config file's accounts, everything below a key named like a secret is a
@@ -112,5 +113,35 @@ extension:
 	}
 	if got := d.Secrets(); !slices.Equal(got, []string{"fake-deep"}) {
 		t.Errorf("Secrets() of nested anchors = %q", got)
+	}
+}
+
+// An alias below a secret key that leads back into itself, or a chain of anchors that each use
+// the one before twice, is read once: Secrets returns, and quickly.
+func TestSecretsOfAliasLoopsAndChains(t *testing.T) {
+	var chain strings.Builder
+	chain.WriteString("a0: &a0 [fake-chain]\n")
+	for i := 1; i <= 40; i++ {
+		fmt.Fprintf(&chain, "a%d: &a%d [*a%d, *a%d]\n", i, i, i-1, i-1)
+	}
+	chain.WriteString("password: *a40\n")
+	for name, src := range map[string]string{
+		"loop":  "x: &a [*a, fake-loop]\npassword: *a\n",
+		"chain": chain.String(),
+	} {
+		d, err := Parse([]byte(src), true)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		done := make(chan []string, 1)
+		go func() { done <- d.Secrets() }()
+		select {
+		case got := <-done:
+			if len(got) != 1 {
+				t.Errorf("%s: Secrets() = %q, want the one value once", name, got)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s: Secrets() did not return in 2s", name)
+		}
 	}
 }
