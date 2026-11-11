@@ -23,6 +23,7 @@ const t = strings("accountTools", {
   cooling: "Cooling",
   noCooldown: "No active cooldowns.",
   scope: "Scope",
+  scopeModel: "{scope} · {model}",
   model: "Model",
   kind: "Kind",
   until: "Until",
@@ -125,34 +126,35 @@ export function AccountTools(props: { account: Account; onChanged(): void }) {
             <h3>
               <Badge tone="warn">{t("cooling")}</Badge>
             </h3>
-            <List
-              label={t("cooldown")}
-              items={cooldowns}
-              id={(c) => [c.scope, c.model, c.kind].join("/")}
-              columns={[
-                {
-                  label: t("scope"),
-                  value: (c) =>
-                    c.scope === "credential"
-                      ? t("credential")
-                      : c.scope === "model"
-                        ? t("modelScope")
-                        : c.scope === "endpoint"
-                          ? t("endpoint")
-                          : c.scope,
-                },
-                { label: t("model"), value: (c) => c.model, mono: true },
-                {
-                  label: t("kind"),
-                  value: (c) =>
-                    ["rate_limit", "quota", "cooldown"].includes(c.kind)
-                      ? t(c.kind as "rate_limit" | "quota" | "cooldown")
-                      : c.kind,
-                },
-                { label: t("until"), value: (c) => when(c.until) },
-                { label: t("error"), value: (c) => c.error && errorText(c.error) },
-              ]}
-            />
+            <ul class="cards account-tool-list" data-part="list" aria-label={t("cooldown")}>
+              {cooldowns.map((c) => {
+                const scope =
+                  c.scope === "credential"
+                    ? t("credential")
+                    : c.scope === "model"
+                      ? t("modelScope")
+                      : c.scope === "endpoint"
+                        ? t("endpoint")
+                        : c.scope;
+                return (
+                  <li key={[c.scope, c.model, c.kind].join("/")} class="item" data-part="item">
+                    <strong>{c.model ? t("scopeModel", { scope, model: c.model }) : scope}</strong>
+                    <Facts
+                      rows={[
+                        [
+                          t("kind"),
+                          ["rate_limit", "quota", "cooldown"].includes(c.kind)
+                            ? t(c.kind as "rate_limit" | "quota" | "cooldown")
+                            : c.kind,
+                        ],
+                        [t("until"), when(c.until)],
+                        [t("error"), c.error && errorText(c.error)],
+                      ]}
+                    />
+                  </li>
+                );
+              })}
+            </ul>
             <div>
               <Button disabled={busy} onClick={() => setConfirm(true)}>
                 {t("clear")}
@@ -299,23 +301,24 @@ function AccountModels(props: {
           {models.data.models.length === 0 ? (
             <p>{t("noModels")}</p>
           ) : (
-            <List
-              label={t("supported")}
-              items={models.data.models}
-              id={(m) => m.id}
-              columns={[
-                { label: t("upstream"), value: (m) => m.id, mono: true },
-                { label: t("names"), value: (m) => (m.names ?? []).join(", "), mono: true },
-                {
-                  label: t("status"),
-                  value: (m) => (
-                    <Badge tone={m.excluded ? "muted" : "ok"}>
-                      {t(m.excluded ? "excluded" : "included")}
-                    </Badge>
-                  ),
-                },
-              ]}
-            />
+            <ul class="cards account-tool-list" data-part="list" aria-label={t("supported")}>
+              {models.data.models.map((m) => (
+                <li key={m.id} class="item" data-part="item">
+                  <strong class="mono">{m.id}</strong>
+                  <Facts
+                    rows={[
+                      [t("names"), (m.names ?? []).join(", ")],
+                      [
+                        t("status"),
+                        <Badge tone={m.excluded ? "muted" : "ok"}>
+                          {t(m.excluded ? "excluded" : "included")}
+                        </Badge>,
+                      ],
+                    ]}
+                  />
+                </li>
+              ))}
+            </ul>
           )}
           <label class="field" data-part="field">
             <span class="label">{t("testModel")}</span>
