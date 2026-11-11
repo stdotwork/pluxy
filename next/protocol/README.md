@@ -723,7 +723,7 @@ Usage, in `finish.usage`; a field that is absent was not reported, which is diff
 | Field | Meaning |
 | --- | --- |
 | `code` | One of the codes below. |
-| `message` | Human-readable; safe to show to the client. Never include credentials. Core also removes the call's credential, and its JSON, URL and base64 forms, from `message`, `provider_code`, every `raw` field, every `opaque` `data`, the response's `id` and `model`, every item's `call_id` and the finish's `raw_reason` of every event before passing them on, in case an upstream echoes it. |
+| `message` | Human-readable; safe to show to the client. Never include credentials. Core also removes the call's credential, and its JSON, URL and base64 forms, from `message`, `provider_code`, every `raw` field, every `opaque` `data`, the response's `id`, `model` and `translation`, every item's `call_id` and the finish's `raw_reason` of every event before passing them on, in case an upstream echoes it. In the error's `code` and `scope`, the response's `format`, the finish's `reason` and an opaque's `format`, a value core defines is passed on as it is and any other that holds the credential is replaced whole with `[redacted]`, so a very short credential cannot turn a value core acts on into another. |
 | `status` | The upstream HTTP status, when there was one. |
 | `provider_code` | The upstream's own error code, when there was one. |
 | `retryable` | True only when the upstream certainly did not run the request (it was refused), so trying again, on this account later or on another account, is safe. For `login` and `refresh` calls, see [Errors in login and refresh calls](#errors-in-login-and-refresh-calls). |

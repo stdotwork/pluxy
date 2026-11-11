@@ -98,7 +98,9 @@ func (h *held) add(owner string, c *protocol.Credential) { h.record(&h.by, owner
 func (h *held) addProxy(account string, c *protocol.Credential) { h.record(&h.proxy, account, c, 2) }
 
 // addSettings records that the extension holds c, the secrets in account's settings, kept apart
-// in the same way, for as long as its program runs.
+// in the same way, for as long as its program runs. This keeps one entry for each settings an
+// account has had while the program runs; settings change only when an administrator changes
+// them (a reload, PATCH /accounts), so that is how far it grows, and it goes with the program.
 func (h *held) addSettings(account string, c *protocol.Credential) {
 	h.record(&h.settings, account, c, 0)
 }
