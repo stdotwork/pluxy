@@ -343,6 +343,7 @@ type replayCapture struct {
 	complete  bool
 	failed    bool // the stream had an error event
 	abandoned bool
+	kept      bool // the content was handed to the turn (replayDecoder)
 	size      int
 }
 
@@ -500,13 +501,23 @@ func (c *replayCapture) content() ([]byte, bool) {
 	return bytes.TrimRight(buf.Bytes(), "\n"), true
 }
 
-// replayDecoder passes a Messages stream's events to a capture on their way to the decoder.
+// replayDecoder passes a Messages stream's events to a capture on their way to the decoder, and
+// keeps the turn as soon as the capture is complete, before the decoder turns the stream's last
+// event into the finish that ends the reply: a client may send its next turn the moment it has the
+// reply, and that turn must find what was kept.
 type replayDecoder struct {
 	streamDecoder
 	capture *replayCapture
+	turn    *replayTurn
 }
 
 func (d replayDecoder) Decode(data []byte) ([]llm.Event, error) {
 	d.capture.observe(data)
+	if !d.capture.kept {
+		if content, ok := d.capture.content(); ok {
+			d.capture.kept = true
+			d.turn.keep(content)
+		}
+	}
 	return d.streamDecoder.Decode(data)
 }
