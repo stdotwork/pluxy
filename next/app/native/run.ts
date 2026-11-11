@@ -152,6 +152,7 @@ async function runApp(
   base?: string,
   startup = false,
   noTray = false,
+  key?: string,
 ): Promise<string[]> {
   const root = mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
   const problems: string[] = [];
@@ -173,6 +174,9 @@ async function runApp(
       mode: 0o600,
     });
     const quit = join(root, "quit");
+    const keyFile = join(root, "key-input");
+    const wrongKey = randomUUID();
+    if (key) writeFileSync(keyFile, JSON.stringify({ key, wrong: wrongKey }), { mode: 0o600 });
     // Only what the app needs: no display or session bus but the run's own.
     const env: Record<string, string> = {
       PATH: process.env.PATH ?? "/usr/bin:/bin",
@@ -193,6 +197,7 @@ async function runApp(
       PLUXY_APP_TEST_QUIT: quit,
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: identifier } : {}),
       ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
+      ...(key ? { PLUXY_APP_TEST_KEY_FILE: keyFile } : {}),
     };
     // The session script starts and checks the desktop services, then runs the app.
     const session = [
@@ -222,6 +227,10 @@ async function runApp(
     const log: string[] = []; // the app's last lines, shown when the run fails
     const setup: string[] = []; // session.ts's report of what failed at setup
     const onLine = (line: string) => {
+      if (key && [key, wrongKey].some((canary) => line.includes(canary))) {
+        problems.push("management key appeared on stdout/stderr");
+        return;
+      }
       // The session's service checks are always shown: they say what this run stood on.
       if (line.startsWith("native-prereq: ")) {
         console.log(`  ${mode} | ${line}`);
@@ -287,6 +296,21 @@ async function runApp(
       console.log(`${mode}: startup ${problems.length === 0 ? "ok" : "FAILED"}`);
       for (const line of log) console.log(line);
       return problems;
+    }
+
+    if (key) {
+      const entry = steps.get("keyentry");
+      for (const field of [
+        "good",
+        "bad_preserved",
+        "cancel_preserved",
+        "session",
+        "remember",
+        "webviews_clean",
+        "events_clean",
+      ])
+        check(entry?.[field] === true, `native key entry did not prove ${field}`);
+      console.log(`  ${mode} | native key entry: ${JSON.stringify(entry ?? {})}`);
     }
 
     // The window: connected in this mode, every command reached, core's status through the app.
@@ -449,7 +473,7 @@ try {
     const c = await startCore(mode === "remote");
     try {
       const conn = { mode, url: c.base, key: c.key, ...(c.ca ? { ca_file: c.ca } : {}) };
-      const p = await runApp(mode, bin, conn, c.base);
+      const p = await runApp(mode, bin, conn, c.base, false, false, c.key);
       p.push(...(await runApp(mode, bin, conn, c.base, true)));
       // The app only connected: its quitting leaves this core running.
       if ((await managementStatus(c.base, c.key, c.ca)) !== 200) p.push("the core stopped when the app quit");

@@ -7,7 +7,7 @@ pub const COMMANDS: &[&str] = &[
     "connection_set",
     "core_restart",
     "core_call",
-    "sign_in",
+    "key_entry",
     "sign_out",
     "page_open",
     "page_place",

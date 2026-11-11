@@ -15,7 +15,7 @@
     "allow-connection-set",
     "allow-core-restart",
     "allow-core-call",
-    "allow-sign-in",
+    "allow-key-entry",
     "allow-sign-out",
     "allow-page-open",
     "allow-page-place",
