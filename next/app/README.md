@@ -263,3 +263,66 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
 - Native admission bounds work after a scheme request reaches the handler. They do not bound
   memory used by the browser engine before that point. Frames can also post to WebKit's IPC
   handler; Tauri's capabilities refuse their commands before any app command runs.
+
+## Package signatures and trust
+
+The shared Rust verifier is `src-tauri/src/artifact.rs`. It verifies the exact descriptor bytes
+with Ed25519 before reading the archive, then checks its byte size and SHA-256 before extraction.
+The returned `VerifiedArchive<R>` retains the descriptor, signature and rewound archive reader.
+Consumers call `into_archive()` instead of reopening the pathname and prevent concurrent writes.
+After extraction, callers must
+check the manifest through that record before admitting a package. Installation, native admission,
+consent and installed-tree verification are separate consumers; this module does not extract or
+execute anything. See [the signed descriptor contract](app-host/README.md#signed-descriptor-bytes).
+
+Production publisher and updater roots are empty. The shared trust loader reports
+`not configured` for native-tier and updater trust and never substitutes test keys.
+The `artifact-test-trust` cargo feature permits a test runner to load public roots only from a
+private temporary HOME with a runner-created trust marker. A temporary HOME alone grants no trust.
+Private signing keys are generated at runtime and kept only in temporary fixture directories.
+Tauri updater signatures have their own format; descriptor signatures cannot replace them.
+
+The runner creates a private mode-0700 temporary HOME, calls `trust::write_test_marker(home)`,
+passes its returned per-run random nonce to the child as `PLUXY_TEST_TRUST_NONCE`, and writes
+`.pluxy-test-trust-roots.json` there. Both marker and nonce must match; TMPDIR grants no trust:
+
+```json
+{"roots":[{"kind":"test","publisher":"example","source":"https://example.invalid/index.json","key_id":"generated-key-id","public_key":"<64 lower-case hex digits>"}],"updater":null}
+```
+
+An optional `updater` object has `kind: "test"` and `public_key` in the updater verifier
+format. This loader checks profile isolation, not the updater signature. The updater consumer
+must check its compiled test marker, identifier, product name and profile before any updater
+plugin call. Publisher signatures and updater signatures remain separate.
+
+### Validate release inputs
+
+From `src-tauri/`, run this before packaging or publishing, with the final generated Tauri JSON
+(after all overrides), build snapshots from that app build, and the complete staged trust folder:
+
+```bash
+cargo run --locked --example validate-release-config -- \
+  /tmp/release/build/app-tauri-config.json \
+  /tmp/release/build/app-package-trust.json \
+  /tmp/release/stage/app-package-trust.json \
+  /tmp/release/build/app-cargo-features.json \
+  /tmp/release/stage/trust \
+  /tmp/release/pluxy.AppImage /tmp/release/pluxy-app
+```
+
+`build.rs` writes the config using tauri-utils' base/platform merge followed by `TAURI_CONFIG`,
+plus the trust and feature snapshots, in Cargo's `OUT_DIR`. A digest of all three is embedded in
+the app. The validator compares its own compiled inputs and requires the matching receipt in an
+artifact. Supply the actual app executable along with every compressed package: the validator
+streams each regular file for test markers; it cannot inspect compressed inner executables.
+The receipt checks consistency for trusted packaging tools, not a malicious packager rewriting
+the binary and its evidence. Every supplied artifact must exist.
+
+Test-feature and native-test apps retain `PLUXY_TEST_BUILD_DO_NOT_RELEASE`, referenced at startup
+even in optimized builds. Normal release builds omit the marker writer and validator code. Run
+the validator with a debug tooling build using the same config and features as the app.
+It rejects test roots/features, private trust material, updater keys, test identifiers/products,
+and test artifact basenames. Parent folders such as `.private` and `ci-test` are allowed.
+Referenced `bundle.resources` and staged trust files are checked too; resource paths must be
+expanded, without globs. Currently only empty trust JSON resources are allowed. Production key
+configuration needs an explicit policy change.
