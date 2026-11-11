@@ -289,7 +289,7 @@ func TestRequestLogJSON(t *testing.T) {
 		t.Fatalf("error logs: %+v", files)
 	}
 	name := files[0].Name
-	trace = strings.TrimSuffix(name[len(name)-37:], ".log")
+	trace = strings.TrimSuffix(name[len(name)-35:], ".log")
 	plain := c.download(t, "/request-error-logs/"+name)
 	for _, path := range []string{"/request-error-logs/" + name, "/request-log-by-id/" + trace} {
 		var got struct {
