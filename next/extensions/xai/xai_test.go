@@ -70,11 +70,13 @@ func TestStoreAndInclude(t *testing.T) {
 	sameJSON(t, "include once", got, `{"model":"grok-4.6","stream":false,"input":[],"store":false,"include":["reasoning.encrypted_content"]}`)
 }
 
+// A custom tool is sent as a function with one input argument, its format moved into the
+// description (customtools_test.go has the rest).
 func TestCustomToolBecomesFunction(t *testing.T) {
 	got := responsesBody(t, `{"model":"grok-4.6","input":[],"tools":[
 		{"type":"custom","name":"run_shell","description":"run","format":{"type":"grammar","syntax":"lark","definition":"x"}}]}`)
 	sameJSON(t, "custom tool", got, `{"model":"grok-4.6","store":false,"include":["reasoning.encrypted_content"],"stream":false,"input":[],"tools":[
-		{"type":"function","name":"run_shell","description":"run","format":{"type":"grammar","syntax":"lark","definition":"x"},"parameters":{"type":"object","properties":{}}}]}`)
+		{"type":"function","name":"run_shell","description":`+jsonString("run\n\n"+customInstructions+"\n\nThe input must follow this lark grammar:\nx")+`,"parameters":`+customParameters+`}]}`)
 }
 
 func TestFunctionSchemaInlined(t *testing.T) {

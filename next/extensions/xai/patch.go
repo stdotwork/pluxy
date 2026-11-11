@@ -21,7 +21,15 @@ import (
 //   - turns xAI's function call back into a custom tool call in the reply, with the patch text as
 //     the call's input and the events of a custom tool call (patchBridge).
 //
-// Only a Responses client declares a custom tool, so only its reply is turned back.
+// Every other custom tool the client declares gets the same treatment, which differs from today's
+// core on purpose: today's core sends such a tool as a function with no input field and returns a
+// function call, which a client that declared the tool custom cannot run (the Codex CLI ends the
+// turn with an "incompatible payload" error). Here the function has one required string argument,
+// input, the tool's format (grammar or text) is moved into its description, and the call comes back
+// as a custom tool call. apply_patch alone keeps its own description.
+//
+// Only a Responses client declares a custom tool, so only its reply is turned back. The calls
+// xAI's own search makes (x_search, xsearch.go) are not a client's tools and are left alone.
 
 const applyPatchName = "apply_patch"
 
@@ -52,9 +60,38 @@ func toolName(t map[string]any) string {
 	return strings.TrimSpace(name)
 }
 
-func isCustomApplyPatch(t map[string]any) bool {
-	name, _ := t["name"].(string)
-	return t["type"] == "custom" && strings.TrimSpace(name) == applyPatchName
+// customParameters is the parameters of the function a custom tool other than apply_patch is sent as.
+const customParameters = `{"type":"object","properties":{"input":{"type":"string","description":"The complete input text for the tool."}},"required":["input"],"additionalProperties":false}`
+
+const customInstructions = `Call this function with a JSON object whose input field contains the complete input text for the tool.`
+
+// isCustomTool reports whether t is a custom tool with a name.
+func isCustomTool(t map[string]any) bool {
+	return t["type"] == "custom" && strings.TrimSpace(str(t, "name")) != ""
+}
+
+// customDescription is the description of the function a custom tool other than apply_patch is
+// sent as: the client's own, then the instructions for the input field and the tool's format,
+// which the function has no field for. A text format adds nothing; a grammar is given as the
+// client wrote it.
+func customDescription(t map[string]any) string {
+	var b strings.Builder
+	if original := strings.TrimSpace(str(t, "description")); original != "" {
+		b.WriteString(original)
+		b.WriteString("\n\n")
+	}
+	b.WriteString(customInstructions)
+	if f, ok := t["format"].(map[string]any); ok {
+		if grammar := str(f, "definition"); grammar != "" {
+			b.WriteString("\n\nThe input must follow this")
+			if syntax := strings.TrimSpace(str(f, "syntax")); syntax != "" {
+				b.WriteString(" " + syntax)
+			}
+			b.WriteString(" grammar:\n")
+			b.WriteString(grammar)
+		}
+	}
+	return b.String()
 }
 
 // applyPatchDescription is the function's description: the client's own, minus its note that the
@@ -80,31 +117,66 @@ func applyPatchDescription(t map[string]any) string {
 	return b.String()
 }
 
-// patchTools says which declared apply_patch tools are the custom one the client will call, which
-// is when their calls have to be turned back: the top-level tool, and the tool of each namespace
-// that has one (a function called apply_patch in a namespace is another tool).
-type patchTools struct {
-	top        bool
-	namespaces map[string]bool
+// customTools says which declared tools are custom ones the client will call, which is when their
+// calls have to be turned back: the top-level ones, and those of each namespace by the name the
+// namespace declares (a function of the same name in a namespace is another tool).
+type customTools struct {
+	top        map[string]bool
+	namespaces map[string]map[string]bool
 }
 
-func (p patchTools) active() bool { return p.top || len(p.namespaces) > 0 }
+func (p customTools) active() bool { return len(p.top) > 0 || len(p.namespaces) > 0 }
 
-// names reports whether a tool, or a tool choice, with this namespace and name is a custom
-// apply_patch tool of the request.
-func (p patchTools) names(namespace, name string) bool {
-	if strings.TrimSpace(name) != applyPatchName {
-		return false
-	}
+// names reports whether a tool, or a tool choice, with this namespace and name is a custom tool
+// of the request.
+func (p customTools) names(namespace, name string) bool {
+	name = strings.TrimSpace(name)
 	if namespace = strings.TrimSpace(namespace); namespace != "" {
-		return p.namespaces[namespace]
+		return p.namespaces[namespace][name]
 	}
-	return p.top
+	return p.top[name]
+}
+
+// list returns the names of the custom tools, each once.
+func (p customTools) list() []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(set map[string]bool) {
+		for name := range set {
+			if !seen[name] {
+				seen[name] = true
+				out = append(out, name)
+			}
+		}
+	}
+	add(p.top)
+	for _, set := range p.namespaces {
+		add(set)
+	}
+	return out
+}
+
+func (p *customTools) add(namespace, name string) {
+	if namespace == "" {
+		if p.top == nil {
+			p.top = map[string]bool{}
+		}
+		p.top[name] = true
+		return
+	}
+	if p.namespaces == nil {
+		p.namespaces = map[string]map[string]bool{}
+	}
+	if p.namespaces[namespace] == nil {
+		p.namespaces[namespace] = map[string]bool{}
+	}
+	p.namespaces[namespace][name] = true
 }
 
 // patchDecl is one declaration of a tool: at the top level, or as the child of a namespace.
 type patchDecl struct {
 	key              string // the name xAI would be sent: the qualified name
+	name             string // the name the client declared
 	child            int    // index in the namespace's tools; -1 for a top-level tool
 	priority, order  int
 	direct, isCustom bool
@@ -122,13 +194,14 @@ func (d patchDecl) precedes(o patchDecl) bool {
 	return d.order < o.order
 }
 
-// rewriteApplyPatchTools sends the custom apply_patch tool as a function, at the top level and as a
-// child of a namespace. When the request declares a name more than once (a function and a custom
-// tool, say) only the winning declaration stays, as in today's core, since xAI takes one tool of a
-// name; names are compared as they are sent, so the namespace's child apply_patch is "ns__apply_patch".
-// It reports which tools the client will call as the custom one. topLevel is how many of tools came
-// from the request's own tools list, the rest being promoted from additional_tools items.
-func rewriteApplyPatchTools(tools []any, topLevel int) ([]any, patchTools) {
+// rewriteCustomTools sends each custom tool as a function with one input argument, at the top level
+// and as a child of a namespace. When the request declares the name of a custom tool more than once
+// (a function and a custom tool, say) only the winning declaration stays, as in today's core, since
+// xAI takes one tool of a name; names are compared as they are sent, so the namespace's child
+// apply_patch is "ns__apply_patch". It reports which tools the client will call as the custom
+// one. topLevel is how many of tools came from the request's own tools list, the rest being
+// promoted from additional_tools items.
+func rewriteCustomTools(tools []any, topLevel int) ([]any, customTools) {
 	decls := map[[2]int]patchDecl{}
 	affected := map[string]bool{}
 	winners := map[string]patchDecl{}
@@ -142,7 +215,7 @@ func rewriteApplyPatchTools(tools []any, topLevel int) ([]any, patchTools) {
 		if !direct {
 			key = qualifyName(namespace, name)
 		}
-		d := patchDecl{key: key, child: at[1], order: order, direct: direct, isCustom: isCustomApplyPatch(tm)}
+		d := patchDecl{key: key, name: name, child: at[1], order: order, direct: direct, isCustom: isCustomTool(tm)}
 		if at[0] >= topLevel {
 			d.priority = 1
 		}
@@ -169,7 +242,7 @@ func rewriteApplyPatchTools(tools []any, topLevel int) ([]any, patchTools) {
 		declare([2]int{i, -1}, tm, "", toolName(tm), true)
 	}
 	if len(affected) == 0 {
-		return tools, patchTools{}
+		return tools, customTools{}
 	}
 	for at, d := range decls {
 		if w, ok := winners[d.key]; affected[d.key] && (!ok || d.precedes(w)) {
@@ -180,19 +253,20 @@ func rewriteApplyPatchTools(tools []any, topLevel int) ([]any, patchTools) {
 		d, ok := decls[at]
 		return !ok || !affected[d.key] || winnerAt[d.key] == at
 	}
-	set := patchTools{namespaces: map[string]bool{}}
+	var set customTools
 	convert := func(at [2]int, tm map[string]any, namespace string) {
-		if d := decls[at]; !d.isCustom || winnerAt[d.key] != at {
+		d := decls[at]
+		if !d.isCustom || winnerAt[d.key] != at {
 			return
 		}
-		if namespace == "" {
-			set.top = true
-		} else {
-			set.namespaces[namespace] = true
+		set.add(namespace, d.name)
+		parameters, description := customParameters, customDescription(tm)
+		if d.name == applyPatchName {
+			parameters, description = applyPatchParameters, applyPatchDescription(tm)
 		}
 		var params any
-		_ = json.Unmarshal([]byte(applyPatchParameters), &params)
-		tm["type"], tm["name"], tm["description"], tm["parameters"] = "function", applyPatchName, applyPatchDescription(tm), params
+		_ = json.Unmarshal([]byte(parameters), &params)
+		tm["type"], tm["name"], tm["description"], tm["parameters"] = "function", d.name, description, params
 		delete(tm, "format")
 	}
 	out := make([]any, 0, len(tools))
@@ -227,9 +301,9 @@ func rewriteApplyPatchTools(tools []any, topLevel int) ([]any, patchTools) {
 	return out, set
 }
 
-// rewriteChoice makes a tool_choice that names a custom apply_patch tool name it as a
+// rewriteChoice makes a tool_choice that names a custom tool of the request name it as a
 // function, also inside the tools of an allowed_tools choice.
-func (p patchTools) rewriteChoice(v any) {
+func (p customTools) rewriteChoice(v any) {
 	m, ok := v.(map[string]any)
 	if !ok {
 		return
@@ -250,26 +324,37 @@ func wrapPatchInput(text string) string {
 	return string(b)
 }
 
-func patchArgumentsError() *llm.Error {
-	return &llm.Error{Code: llm.CodeUpstream, Scope: llm.ScopeEndpoint, Message: "invalid apply_patch tool arguments received from upstream"}
-}
-
-// patchError is the error that ends a reply whose apply_patch arguments broke a rule. It says
-// which kind of rule and never repeats the arguments.
-func patchError(err error) *llm.Error {
-	if errors.Is(err, errPatchTooLarge) {
-		return &llm.Error{Code: llm.CodeUpstream, Scope: llm.ScopeEndpoint, Message: "apply_patch tool arguments received from upstream are too large"}
+// toolRef names the tool of an error: the tool, or a custom tool when the call is not known yet.
+func toolRef(name string) string {
+	if name == "" {
+		return "a custom tool"
 	}
-	return patchArgumentsError()
+	return "custom tool " + name
 }
 
-// patchBridge turns the function calls to apply_patch in one xAI reply into custom tool calls. It
-// reads the events the Responses decoder made, each with the upstream event in Raw, and changes
-// what a Responses client is sent: the call's items, its input events, and the output of the
-// final response. Events that are not about an apply_patch call pass unchanged. Use one bridge
-// per reply.
+func patchArgumentsError(name string) *llm.Error {
+	return &llm.Error{Code: llm.CodeUpstream, Scope: llm.ScopeEndpoint, Message: "invalid arguments for " + toolRef(name) + " received from upstream"}
+}
+
+// patchError is the error that ends a reply whose custom tool arguments broke a rule. It says
+// which kind of rule and never repeats the arguments. name is the tool's, empty when not known.
+func patchError(err error, name string) *llm.Error {
+	if errors.Is(err, errPatchTooLarge) {
+		return &llm.Error{Code: llm.CodeUpstream, Scope: llm.ScopeEndpoint, Message: "arguments for " + toolRef(name) + " received from upstream are too large"}
+	}
+	return patchArgumentsError(name)
+}
+
+// patchBridge turns the function calls to custom tools of the request (apply_patch among them) in
+// one xAI reply into custom tool calls. It reads the events the Responses decoder made, each with
+// the upstream event in Raw, and changes what a Responses client is sent: the call's items, its
+// input events, and the output of the final response. Events that are not about a call to a custom
+// tool pass unchanged. Use one bridge per reply.
 type patchBridge struct {
-	tools   patchTools // which declared tools are custom ones
+	tools customTools // which declared tools are custom ones
+	// needles are the custom tools' names as they appear in an event, to tell the events that may
+	// be about a call to one from those that cannot.
+	needles [][]byte
 	calls   []*patchCall
 	byID    map[string]*patchCall // by item ID and by call ID
 	byIndex map[int]*patchCall    // by output_index
@@ -288,6 +373,7 @@ type patchBridge struct {
 
 type patchCall struct {
 	id, callID string
+	name       string // the tool's name as the client declared it
 	namespace  string // the namespace the call is in, empty for the top-level tool
 	index      int
 	dec        inputDecoder
@@ -297,8 +383,26 @@ type patchCall struct {
 	itemDone   bool // the client has the item's done event
 }
 
-func newPatchBridge(tools patchTools) *patchBridge {
-	return &patchBridge{tools: tools, byID: map[string]*patchCall{}, byIndex: map[int]*patchCall{}, open: map[int]*patchCall{}, budget: maxReplyArguments}
+func newPatchBridge(tools customTools) *patchBridge {
+	b := &patchBridge{tools: tools, byID: map[string]*patchCall{}, byIndex: map[int]*patchCall{}, open: map[int]*patchCall{}, budget: maxReplyArguments}
+	for _, name := range tools.list() {
+		b.needles = append(b.needles, []byte(name))
+		if quoted, err := json.Marshal(name); err == nil && string(quoted) != `"`+name+`"` {
+			b.needles = append(b.needles, quoted[1:len(quoted)-1])
+		}
+	}
+	return b
+}
+
+// mentions reports whether an event names a custom tool. A false positive costs only a look at the
+// event; the event is changed only when it is a call to a custom tool of the request.
+func (b *patchBridge) mentions(raw []byte) bool {
+	for _, n := range b.needles {
+		if bytes.Contains(raw, n) {
+			return true
+		}
+	}
+	return false
 }
 
 func str(m map[string]any, k string) string {
@@ -317,7 +421,7 @@ func intOf(m map[string]any, k string) (int, bool) {
 
 func (b *patchBridge) track(item map[string]any, index int) *patchCall {
 	id, callID := str(item, "id"), str(item, "call_id")
-	c := &patchCall{id: id, callID: callID, namespace: str(item, "namespace"), index: index}
+	c := &patchCall{id: id, callID: callID, name: strings.TrimSpace(str(item, "name")), namespace: str(item, "namespace"), index: index}
 	c.dec.shared = &b.budget
 	b.calls = append(b.calls, c)
 	if id != "" {
@@ -350,7 +454,7 @@ func (b *patchBridge) Transform(ev llm.Event) ([]llm.Event, error) {
 	case llm.EventResponseStart:
 		b.stream = len(ev.Raw) > 0
 		// A stream that does not open with response.created has its first event's raw here.
-		if bytes.Contains(ev.Raw, []byte(`"response.output_item.added"`)) && bytes.Contains(ev.Raw, []byte(applyPatchName)) {
+		if bytes.Contains(ev.Raw, []byte(`"response.output_item.added"`)) && b.mentions(ev.Raw) {
 			if raw, c := b.begin(ev.Raw); c != nil {
 				b.first = c
 				ev.Raw = raw
@@ -362,7 +466,7 @@ func (b *patchBridge) Transform(ev llm.Event) ([]llm.Event, error) {
 		// with the tool in the reply; the raw event, as the namespace restorer left it, has the name.
 		if ev.Item != nil && ev.Item.Kind == llm.ItemToolCall {
 			switch {
-			case len(ev.Raw) > 0 && bytes.Contains(ev.Raw, []byte(applyPatchName)):
+			case len(ev.Raw) > 0 && b.mentions(ev.Raw):
 				return b.start(ev)
 			case b.first != nil:
 				b.open[ev.Index], b.first = b.first, nil
@@ -384,11 +488,11 @@ func (b *patchBridge) Transform(ev llm.Event) ([]llm.Event, error) {
 		switch {
 		case bytes.Contains(ev.Raw, []byte(`"response.function_call_arguments.done"`)):
 			return b.argumentsDone(ev)
-		case bytes.Contains(ev.Raw, []byte(`"response.output_item.done"`)) && (len(b.calls) > 0 || bytes.Contains(ev.Raw, []byte(applyPatchName))):
+		case bytes.Contains(ev.Raw, []byte(`"response.output_item.done"`)) && (len(b.calls) > 0 || b.mentions(ev.Raw)):
 			return b.end(nil, ev)
 		}
 	case llm.EventFinish:
-		if len(b.calls) > 0 || bytes.Contains(ev.Raw, []byte(applyPatchName)) {
+		if len(b.calls) > 0 || b.mentions(ev.Raw) {
 			return b.finish(ev)
 		}
 	}
@@ -439,9 +543,9 @@ func (b *patchBridge) synth(trigger map[string]any, adds []map[string]any, repla
 	return out
 }
 
-// isPatchCall reports whether a function call item is a call to a custom apply_patch tool of the
-// request: the top-level tool, or the tool of a namespace that has a custom one. A function called
-// apply_patch in a namespace is another tool.
+// isPatchCall reports whether a function call item is a call to a custom tool of the request: a
+// top-level one, or one of a namespace that declares it. A function of the same name in another
+// namespace is another tool.
 func (b *patchBridge) isPatchCall(item map[string]any) bool {
 	return str(item, "type") == "function_call" && b.tools.names(str(item, "namespace"), str(item, "name"))
 }
@@ -454,7 +558,7 @@ func toCustomItem(item map[string]any, input string) {
 }
 
 // begin starts the call an added event opens and returns the event as the client is sent it, or
-// nil when the event is not the added event of a call to apply_patch.
+// nil when the event is not the added event of a call to a custom tool.
 func (b *patchBridge) begin(raw json.RawMessage) (json.RawMessage, *patchCall) {
 	m, err := decodeObject(raw)
 	if err != nil || str(m, "type") != "response.output_item.added" {
@@ -484,14 +588,14 @@ func (b *patchBridge) start(ev llm.Event) ([]llm.Event, error) {
 func (b *patchBridge) delta(c *patchCall, ev llm.Event) ([]llm.Event, error) {
 	m, err := decodeObject(ev.Raw)
 	if err != nil {
-		return nil, patchArgumentsError()
+		return nil, patchArgumentsError(c.name)
 	}
 	text, err := c.dec.Push(str(m, "delta"))
 	if err != nil {
-		return nil, patchError(err)
+		return nil, patchError(err, c.name)
 	}
 	if text == "" {
-		ev.Raw = nil // the fragment holds no patch text yet; the client gets no event
+		ev.Raw = nil // the fragment holds no text yet; the client gets no event
 		return []llm.Event{ev}, nil
 	}
 	ev.Raw = b.encode(b.inputEvent("delta", c, m, "delta", text))
@@ -538,11 +642,11 @@ func (b *patchBridge) settleInput(c *patchCall, arguments string, has bool) ([]m
 	}
 	input, tail, err := c.dec.Finish(arguments, has)
 	if err != nil {
-		return nil, patchError(err)
+		return nil, patchError(err, c.name)
 	}
 	if c.inputDone {
 		if input != c.input {
-			return nil, patchArgumentsError() // the call's text changed after it was completed
+			return nil, patchArgumentsError(c.name) // the call's text changed after it was completed
 		}
 		return nil, nil
 	}
@@ -555,7 +659,7 @@ func (b *patchBridge) settleInput(c *patchCall, arguments string, has bool) ([]m
 }
 
 // end handles the done event of an item, which may be one the stream never opened (c is nil then
-// and the item says whether it is a call to apply_patch).
+// and the item says whether it is a call to a custom tool).
 func (b *patchBridge) end(c *patchCall, ev llm.Event) ([]llm.Event, error) {
 	m, err := decodeObject(ev.Raw)
 	if err != nil || str(m, "type") != "response.output_item.done" {
@@ -589,7 +693,7 @@ func (b *patchBridge) end(c *patchCall, ev llm.Event) ([]llm.Event, error) {
 // input events.
 func (b *patchBridge) settle(c *patchCall, item map[string]any) ([]map[string]any, error) {
 	if str(item, "type") != "function_call" {
-		return nil, patchArgumentsError()
+		return nil, patchArgumentsError(c.name)
 	}
 	arguments, has := item["arguments"].(string)
 	adds, err := b.settleInput(c, arguments, has)
@@ -641,7 +745,7 @@ func (b *patchBridge) finish(ev llm.Event) ([]llm.Event, error) {
 		if listed[c] {
 			continue
 		}
-		stub := map[string]any{"type": "function_call", "status": "completed", "name": applyPatchName, "id": c.id, "call_id": c.callID}
+		stub := map[string]any{"type": "function_call", "status": "completed", "name": c.name, "id": c.id, "call_id": c.callID}
 		if c.namespace != "" {
 			stub["namespace"] = c.namespace
 		}
@@ -678,7 +782,7 @@ func (b *patchBridge) finish(ev llm.Event) ([]llm.Event, error) {
 	}
 	for _, c := range b.calls {
 		if !c.inputDone {
-			return nil, patchArgumentsError() // a call that never got its arguments
+			return nil, patchArgumentsError(c.name) // a call that never got its arguments
 		}
 	}
 	if !b.stream {
@@ -690,17 +794,17 @@ func (b *patchBridge) finish(ev llm.Event) ([]llm.Event, error) {
 }
 
 // A folded namespace is one function, so xAI's call to it names the child only in its arguments.
-// For a namespace that has a custom apply_patch tool, the call to the dispatcher may be a call to
-// that tool, which the client must not see as a function call at all: not its added item, not its
-// argument fragments (they are the dispatcher's wrapper, not patch text), not its done item.
+// For a namespace that has a custom tool, the call to the dispatcher may be a call to that tool,
+// which the client must not see as a function call at all: not its added item, not its argument
+// fragments (they are the dispatcher's wrapper, not the tool's text), not its done item.
 // dispatchHold keeps the events of such a call from its added event until its arguments name the
 // child, then sends them on: the added item and the end of the arguments, without the fragments, for
-// a patch call, and all of them, as xAI sent them, for any other child. The events keep their
+// a custom tool call, and all of them, as xAI sent them, for any other child. The events keep their
 // sequence numbers, so those of the fragments left out are skipped, as when a fragment holds no
-// patch text. Other folded namespaces are not held.
+// text yet. Other folded namespaces are not held.
 type dispatchHold struct {
-	dispatchers map[string]bool // sent names of folded namespaces that have a custom apply_patch, as the namespace's name
-	patch       patchTools
+	dispatchers map[string]bool // sent names of folded namespaces that have a custom tool, as the namespace's name
+	patch       customTools
 	refs        map[string]*nsRef
 	ns          *nsRestorer // told the child of each call, so its added item names it
 	byIndex     map[int]*heldCall
@@ -712,12 +816,13 @@ type heldCall struct {
 	id, callID string
 	namespace  string
 	events     []llm.Event
-	bytes      int  // of the fragments held
-	decided    bool // the child is known and the held events are sent
-	patch      bool // the child is the custom apply_patch tool
+	bytes      int    // of the fragments held
+	decided    bool   // the child is known and the held events are sent
+	patch      bool   // the child is a custom tool
+	name       string // the child's name when it is
 }
 
-func newDispatchHold(dispatchers map[string]bool, patch patchTools, refs map[string]*nsRef, ns *nsRestorer) *dispatchHold {
+func newDispatchHold(dispatchers map[string]bool, patch customTools, refs map[string]*nsRef, ns *nsRestorer) *dispatchHold {
 	return &dispatchHold{dispatchers: dispatchers, patch: patch, refs: refs, ns: ns, byIndex: map[int]*heldCall{}, byID: map[string]*heldCall{}}
 }
 
@@ -754,7 +859,10 @@ func (h *dispatchHold) decide(c *heldCall, arguments string) []llm.Event {
 			}
 		}
 	}
-	c.patch = ok && child == applyPatchName && h.patch.names(c.namespace, child)
+	c.patch = ok && h.patch.names(c.namespace, child)
+	if c.patch {
+		c.name = child
+	}
 	events := c.events
 	c.events = nil
 	if c.patch {
@@ -776,7 +884,7 @@ func (h *dispatchHold) Transform(ev llm.Event) ([]llm.Event, error) {
 		if bytes.Contains(ev.Raw, []byte(`"response.output_item.added"`)) {
 			if _, item := h.dispatcherItem(ev.Raw); item != nil {
 				// The event that opens the stream cannot be held: it is the stream's first event.
-				return nil, &llm.Error{Code: llm.CodeUpstream, Scope: llm.ScopeEndpoint, Message: "upstream opened with a call to a namespace that has an apply_patch tool, before response.created"}
+				return nil, &llm.Error{Code: llm.CodeUpstream, Scope: llm.ScopeEndpoint, Message: "upstream opened with a call to a namespace that has a custom tool, before response.created"}
 			}
 		}
 	case llm.EventItemStart:
@@ -800,13 +908,13 @@ func (h *dispatchHold) Transform(ev llm.Event) ([]llm.Event, error) {
 		case c == nil:
 		case !c.decided:
 			if c.bytes += len(ev.Delta); c.bytes > maxCallArguments {
-				return nil, patchError(errPatchTooLarge)
+				return nil, patchError(errPatchTooLarge, "")
 			}
 			c.events = append(c.events, ev)
 			return nil, nil
 		case c.patch:
 			if ev.Delta != "" {
-				return nil, patchArgumentsError() // the arguments grew after they were complete
+				return nil, patchArgumentsError(c.name) // the arguments grew after they were complete
 			}
 			return nil, nil
 		}
@@ -827,7 +935,7 @@ func (h *dispatchHold) Transform(ev llm.Event) ([]llm.Event, error) {
 		delete(h.byIndex, ev.Index)
 		m, err := decodeObject(ev.Raw)
 		if err != nil {
-			return nil, patchArgumentsError()
+			return nil, patchArgumentsError("")
 		}
 		item, _ := m["item"].(map[string]any)
 		return append(h.decide(c, str(item, "arguments")), ev), nil
@@ -874,8 +982,8 @@ func (h *dispatchHold) Transform(ev llm.Event) ([]llm.Event, error) {
 }
 
 // replyBridge changes the events of one reply for the client: the hold of a folded namespace's
-// patch calls, then the namespace restorer, which changes events one for one, then the apply_patch
-// bridge. Each may be nil.
+// custom tool calls, then the namespace restorer, which changes events one for one, then the
+// custom tool bridge. Each may be nil.
 type replyBridge struct {
 	hold  *dispatchHold
 	patch *patchBridge

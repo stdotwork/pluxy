@@ -848,14 +848,29 @@ What changes in a request:
   `"stream": false`, and its reply is read as one response.
 - `stop`, `previous_response_id`, `prompt_cache_retention`, `safety_identifier` and
   `stream_options` are removed. Today's core removes them on this path too; it does not record why.
-- A custom tool is sent as a function tool, keeping its other fields. A function's local `$ref`
-  references are inlined and its `$defs` and `definitions` are removed. A function without
-  parameters gets an empty object schema. A request with more than 200 tools keeps the first 200,
-  the most xAI accepts in one request.
+- A function's local `$ref` references are inlined and its `$defs` and `definitions` are removed.
+  A function without parameters gets an empty object schema. A request with more than 200 tools
+  keeps the first 200, the most xAI accepts in one request.
 - A custom tool call and its output are sent as a function call and a function call output.
-- Codex's `apply_patch` custom tool is sent as a function whose one argument, `input`, holds the
-  patch text: its description tells the model so and keeps the client's grammar, its history calls
-  carry the text in `input` (a call whose input is not a string is an invalid request), and a
+- Every custom (freeform) tool the client declares, at the top level, in a namespace or in an
+  `additional_tools` item, is sent as a function whose one required string argument, `input`, holds
+  the tool's text, and xAI's function call to it goes back to a Responses client as a
+  `custom_tool_call` with that text as its `input`, in the same events as `apply_patch` below.
+  A custom tool's `format` is dropped and put in the function's description (a grammar, as the
+  client wrote it; a text format adds nothing), after the tool's own description and a line that
+  tells the model to put the text in `input`. A history call to such a tool carries its text in
+  `input`, also when the text is itself a JSON object, and a `tool_choice` or an `allowed_tools`
+  entry of type `custom` that names it names the function. When a name is declared more than once
+  the first declaration stays, as for `apply_patch`. This differs from today's core, which sends
+  a custom tool other than `apply_patch` as a function with an empty-object schema and returns a
+  `function_call`: a client cannot run that call for a tool it declared custom (the Codex CLI ends
+  the turn with an "incompatible payload" error), and the schema gives the model no field for the
+  text. A function tool the client declared stays a function, and xAI's own `x_search` calls,
+  which come back as custom tool calls, are left as they are.
+- Codex's `apply_patch` custom tool is one such tool with its own description. It is sent as a
+  function whose one argument, `input`, holds the patch text: its description tells the model so
+  and keeps the client's grammar, its history calls carry the text in `input` (a call whose input
+  is not a string is an invalid request, as for any custom tool), and a
   `tool_choice` that names it names a function. A request that declares `apply_patch` more than
   once keeps the first declaration. xAI's function call to it goes back to a Responses client as
   the custom tool call it expects: an added item, input events carrying the patch text as it
@@ -885,21 +900,22 @@ What changes in a request:
   An `apply_patch` function in a namespace is an ordinary function, not the patch tool.
   A custom `apply_patch` in a namespace, declared in the tools or in an `additional_tools` item, is
   the patch tool of that namespace: it is sent as the patch function (`ns__apply_patch`, or as a
-  child described in the folded namespace's function), its history calls carry the text in
-  `input`, a `tool_choice` or an `allowed_tools` entry that names it names that function, and
-  xAI's call to it goes back as a `custom_tool_call` named `apply_patch` in its namespace, with
-  the same events as the top-level tool. A name belongs to its namespace, so a top-level
-  `apply_patch` and a namespace's are two tools. When one name is declared more than once, as
-  `ns__apply_patch` is for the child `apply_patch` of `ns`, the winner is the first, and a tool of
-  the tools list beats one of an `additional_tools` item, and a top-level tool beats a child, as in
-  today's core. For a folded namespace the child is known only from the call's arguments, so the
-  events of a call to that namespace are held until they name it, only for a namespace that has a
-  custom `apply_patch`. A call to the patch tool then shows the added item and the whole input
-  at the end of the arguments, with no input fragments, because the fragments are the wrapper's, not
-  patch text, and the client is never sent a `function_call` event for it. A call to another child
-  shows the same events as before, a little later, with the child's name in its added item. A
-  stream that opens with such a call, before `response.created`, ends with an upstream error,
-  since its first event cannot be held.
+  child described in the folded namespace's function), its history calls carry the text in `input`,
+  a `tool_choice` or an `allowed_tools` entry that names it names that function, and xAI's call to
+  it goes back as a `custom_tool_call` named `apply_patch` in its namespace, with the same events as
+  the top-level tool. Any other custom tool in a namespace is handled the same way: it is sent as a
+  function and comes back as a `custom_tool_call` in its namespace. A name belongs to its namespace,
+  so a top-level `apply_patch` and a namespace's are two tools. When one name is declared more than
+  once, as `ns__apply_patch` is for the child `apply_patch` of `ns`, the winner is the first, and a
+  tool of the tools list beats one of an `additional_tools` item, and a top-level tool beats a
+  child, as in today's core. For a folded namespace the child is known only from the call's
+  arguments, so the events of a call to that namespace are held until they name it, only for a
+  namespace that has a custom tool. A call to a custom tool then shows the added item and the whole
+  input at the end of the arguments, with no input fragments, because the fragments are the
+  wrapper's, not the tool's text, and the client is never sent a `function_call` event for it. A
+  call to another child shows the same events as before, a little later, with the child's name in
+  its added item. A stream that opens with such a call, before `response.created`, ends with an
+  upstream error, since its first event cannot be held.
 - The tools of an `additional_tools` input item (how a Responses Lite client, the Codex app,
   declares tools) are moved to the end of the tools list and the item is removed, because xAI does
   not take that item. This happens before the rules above, so a namespace in an item is flattened
@@ -949,8 +965,6 @@ Not built, and why:
 - The root-union schema rule of today's core (a function whose schema is a `oneOf` or `anyOf` with
   `$ref` or non-object branches gets the permissive schema, and a union branch without a type gets
   `object`) is built only for the Codex app's `automation_update`, which is what hangs xAI.
-- A custom tool other than `apply_patch` is sent as a function with no input field, and its call
-  comes back as a function call, as today's core does it; a client cannot run it from that call.
 - Today's core sends an empty `instructions`, a string input as a list, and tool defaults
   (`tool_choice`, `parallel_tool_calls`, `strict`, `additionalProperties`) on every Responses
   request, through its Codex translator. These are not rules about xAI, so this extension does not
