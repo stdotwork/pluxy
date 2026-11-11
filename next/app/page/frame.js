@@ -12,6 +12,7 @@ let port;
 const queue = [];
 let pumping = false;
 let generation;
+let nativeFrameNavigation = false;
 
 // One FIFO preserves mutation/read order. Only calls consume its bounded capacity;
 // the single hello and closed lifecycle messages always reach native admission.
@@ -112,14 +113,15 @@ window.addEventListener("message", (e) => {
 
 frame.addEventListener("load", () => {
   loads++;
-  if (loads === 2) {
+  if (loads === 2 && !nativeFrameNavigation) {
     closePort();
     send("closed");
   }
 });
 
 const r = await fetch("/frame");
-const { url, title, generation: documentGeneration } = await r.json();
+const { url, title, generation: documentGeneration, native_frame_navigation } = await r.json();
+nativeFrameNavigation = native_frame_navigation === true;
 generation = documentGeneration;
 frame.title = title;
 frame.sandbox = "allow-scripts";

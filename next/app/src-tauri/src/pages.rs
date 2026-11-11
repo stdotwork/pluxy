@@ -312,7 +312,20 @@ impl Pages {
         let msg = self.refusal(label, sent, now)?;
         let w = self.open.get_mut(label).unwrap();
         match msg.kind.as_str() {
-            "hello" => w.document.hello = true,
+            "hello" => {
+                w.document.hello = true;
+                if w.document.frame_url.is_none() {
+                    #[cfg(feature = "native-test")]
+                    let url = if self.ingress_fixture {
+                        Url::parse("pluxy-page://localhost/ingress-test").unwrap()
+                    } else {
+                        w.binding.url.clone()
+                    };
+                    #[cfg(not(feature = "native-test"))]
+                    let url = w.binding.url.clone();
+                    w.document.frame_url = Some(url);
+                }
+            }
             "call" => {
                 expire(&mut w.document.recent, now);
                 w.document.recent.push_back(now);
@@ -652,10 +665,10 @@ fn serve_at(
         ),
         ("GET", "/frame.css") => (served(200, "text/css; charset=utf-8", STYLE, csp), None),
         ("GET", "/frame") => {
-            let info = json!({"url": w.binding.url.as_str(), "title": w.binding.title, "generation": w.document.generation});
+            let info = json!({"url": w.binding.url.as_str(), "title": w.binding.title, "generation": w.document.generation, "native_frame_navigation": cfg!(target_os = "linux")});
             #[cfg(feature = "native-test")]
             let info = if pages.ingress_fixture {
-                json!({"url":"pluxy-page://localhost/ingress-test", "title":w.binding.title, "generation":w.document.generation})
+                json!({"url":"pluxy-page://localhost/ingress-test", "title":w.binding.title, "generation":w.document.generation, "native_frame_navigation": cfg!(target_os = "linux")})
             } else {
                 info
             };
