@@ -1630,7 +1630,10 @@ func headers(v any, path string) (map[string]string, []string, error) {
 		}
 		text[k] = s
 	}
-	h, dynamic := upheader.Import(text)
+	h, dynamic, err := upheader.Import(text)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%s: %w", path, err)
+	}
 	return h, dynamic, nil
 }
 

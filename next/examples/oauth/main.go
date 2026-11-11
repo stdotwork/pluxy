@@ -33,6 +33,11 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
+// upstream sends every request to the provider. sdk.Upstream makes it honour the account's proxy
+// (sdk.Info.ProxyURL); a client that is not wrapped in it sends the call direct, so core's SDK
+// refuses a proxied call to an extension that wraps none.
+var upstream = &http.Client{Transport: sdk.Upstream(http.DefaultTransport.(*http.Transport).Clone())}
+
 // clientID is the OAuth client this extension identifies as.
 const clientID = "example-client"
 
@@ -174,7 +179,7 @@ func chat(ctx context.Context, base, token, model string, stream, login bool) (*
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	req, sent := sdk.TrackSend(req)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := upstream.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -200,7 +205,7 @@ func check(ctx context.Context, call sdk.CheckCall) (*protocol.CheckResult, erro
 		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "the base_url is not a valid URL", Scope: llm.ScopeCredential}
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := upstream.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -472,7 +477,7 @@ func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "the base_url is not a valid URL", Scope: llm.ScopeCredential}
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := upstream.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -534,7 +539,7 @@ func oauthPost(ctx context.Context, endpoint string, form url.Values, out any) *
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 	req, sent := sdk.TrackSend(req)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := upstream.Do(req)
 	if err != nil {
 		return &oauthFailure{err: err, sent: sent()}
 	}

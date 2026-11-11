@@ -533,7 +533,12 @@ whose describe reports `protocol_minor` 11 or more; for any other it fails the c
 proxy.
 
 In Go, `sdk.Upstream` does all of this for each client it wraps: requests made with the
-handler's context go through the call's proxy.
+handler's context go through the call's proxy. A proxy is honoured only by clients wrapped in
+`sdk.Upstream`; a client that is not, such as `http.DefaultClient`, sends direct. So the SDK
+answers a call that carries a proxy with `unsupported` (scope `credential`, retryable) and never
+runs the handler when the extension process has not created any `sdk.Upstream` transport. An
+extension that wraps some of its clients and not others still sends the others direct: wrap them
+all.
 
 ### Headers
 
@@ -549,14 +554,23 @@ or a value with a line break or another control character: its config load refus
 The value of a header whose name is about authentication (its name holds `auth`, `key`,
 `token`, `secret`, `cookie`, `session`, `password` or `signature`, letter case aside) is a
 secret: an extension never logs or shows it, and core removes it from everything a call sends
-back, as it does a credential's strings. Other values are not removed.
+back, as it does a credential's strings; a value shorter than 8 bytes is removed only next to
+its name, as text shows a header (`Name: value`, `Name=value`, JSON's `"Name":"value"`, with the
+name as configured, in canonical form or in lower case), so it does not scrub unrelated text.
+Other values are not removed.
 
 Core sends a call that has headers only to an extension whose describe reports
 `protocol_minor` 12 or more; for any other it fails the call itself with `unsupported` (scope
 `credential`), so routing moves on, and the traffic never leaves without them. A `login` that
 adds a new account carries the `headers` the request to add it named.
 
-In Go, `sdk.Upstream` sets them on each request made with the handler's context.
+In Go, `sdk.Upstream` sets them on each request made with the handler's context. On a redirect
+to another host or scheme (`https` to `http`) than the first request's it removes the headers
+whose names are secret, including a value the extension set itself under such a name, as
+`net/http` leaves out `Authorization` and `Cookie` there, so the redirect target never gets
+them; the other headers stay. As with a proxy, the SDK answers a call that carries headers with
+`unsupported` (scope `credential`, retryable) and never runs the handler when the extension
+process has not created any `sdk.Upstream` transport.
 
 ## The request
 
@@ -1133,8 +1147,9 @@ terminal event (`finish` or `error`):
 | exchange `response` | What came back. Absent when no response came, with `error` saying why. |
 | exchange `error` | Why the request got no response, such as a connection that was refused. |
 | `time_ms` | When the request was sent, or the response's headers arrived, in Unix milliseconds. |
-| request `method`, `url` | The HTTP method and the whole URL, without its user name and password and with the values of secret query parameters (below) replaced by `[redacted]`. |
-| `headers` | The headers, an object of name to a list of values, as sent or received. |
+| request `method`, `url` | The HTTP method and the whole URL, without its user name and password and with the values of secret query parameters (below) replaced by `[redacted]`. A query that does not parse (a bad percent escape, a `;`) is replaced whole by `[redacted]`. |
+| `headers` | The headers, an object of name to a list of values, as sent or received: at most 16 KiB of them (below). |
+| `headers_left_out` | How many header lines did not fit in `headers`. Absent: none. |
 | response `status` | The HTTP status. |
 | `body` | The body as text (bytes that are not UTF-8 arrive as U+FFFD): all of it, or, when it is longer than 128 KiB, its first 32 KiB. |
 | `body_end` | When the body is longer than 128 KiB: its last 96 KiB. Absent otherwise. |
@@ -1147,9 +1162,14 @@ Rules:
   authorization scheme such as `Bearer [redacted]`. Core also removes the call's credential, its
   proxy's password and its secret header values from everything in the frame, in all the forms
   listed under [Errors](#errors), as from every event.
-- Record a response body as the extension reads it, keeping only its start and its end: never hold
-  a whole stream or delay a piece of it to record it. What the extension had not read when it sent
-  the frame is not in it.
+- Keep at most 16 KiB of header lines per request and per response: each line (one value of one
+  header) counts its name, its value and 3 bytes, so a header list has a count bound too (at
+  most 5,461 lines). Take the names in sorted order; a line that does not fit is left out, and
+  `headers_left_out` counts the lines left out.
+- Record a request body as it is sent and a response body as the extension reads it, keeping only
+  its start and its end: never hold a whole stream, delay the request to read its body first, or
+  delay a piece of a reply to record it. What the extension had not read when it sent the frame is
+  not in it.
 - A WebSocket handshake is an exchange: the `GET` request and the `101` response's status and
   headers, with no body. The messages on the socket are not captured. A turn that uses a socket an
   earlier turn opened makes no exchange, and a socket opened by the `session` call itself, before
@@ -1159,8 +1179,11 @@ Rules:
 
 Core writes each exchange into the request's log, between the client's request and its reply. It
 ignores a `diagnostic` frame on a call it did not ask to capture, keeps at most two exchanges per
-request log (the first and the last, across every account a request tried), and cuts any body or
-header list longer than the bounds above itself.
+request log (the first and the last, across every account a request tried), and holds what an
+extension sends to the bounds above whatever it sent: a body longer than 128 KiB is cut to its
+start and end, and at most 16 KiB of header lines are logged, with a line counting the rest. Where
+a body is cut, it also drops the bytes beside the cut that could be the start or the end of a
+credential cut in two.
 
 In Go, `sdk.Upstream` does all of this for each client it wraps, for requests made with the
 handler's context.

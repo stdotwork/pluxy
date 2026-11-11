@@ -12,10 +12,24 @@ import (
 )
 
 // Keep production provider traffic behind the SDK seam, including login and WebSocket
-// handshakes. Fake providers and test-only clients deliberately need no wrapper.
+// handshakes, in the extensions and in the examples extension authors copy. Fake providers and
+// test-only clients deliberately need no wrapper.
 func TestExtensionUpstreamClients(t *testing.T) {
-	root := filepath.Join("..", "extensions")
 	files, clients := 0, 0
+	for _, root := range []string{filepath.Join("..", "extensions"), filepath.Join("..", "examples")} {
+		f, c := checkUpstreamClients(t, root)
+		files, clients = files+f, clients+c
+		if f == 0 || c == 0 {
+			t.Errorf("%s: checked %d files and %d clients; expected production extensions", root, f, c)
+		}
+	}
+	t.Logf("checked %d production files and %d clients", files, clients)
+}
+
+// checkUpstreamClients reports each http client under root that is not wrapped in sdk.Upstream,
+// and returns how many files and clients it checked.
+func checkUpstreamClients(t *testing.T, root string) (files, clients int) {
+	t.Helper()
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -118,8 +132,5 @@ func TestExtensionUpstreamClients(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if files == 0 || clients == 0 {
-		t.Fatalf("checked %d files and %d clients; expected production extensions", files, clients)
-	}
-	t.Logf("checked %d production files and %d clients", files, clients)
+	return files, clients
 }

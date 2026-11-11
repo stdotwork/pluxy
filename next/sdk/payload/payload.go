@@ -198,7 +198,7 @@ func (e *engine) run(r *Rules) {
 			continue
 		}
 		for _, p := range sortedKeys(rule.Params) {
-			for _, comps := range e.resolve(e.fullPath(p)) {
+			for _, comps := range e.resolveParam(p) {
 				e.override(comps, rule.Params[p])
 			}
 		}
@@ -213,7 +213,7 @@ func (e *engine) run(r *Rules) {
 			if !ok {
 				continue
 			}
-			for _, comps := range e.resolve(e.fullPath(p)) {
+			for _, comps := range e.resolveParam(p) {
 				e.overrideRaw(comps, raw)
 			}
 		}
@@ -224,7 +224,7 @@ func (e *engine) run(r *Rules) {
 			continue
 		}
 		for _, p := range rule.Params {
-			resolved := e.resolve(e.fullPath(p))
+			resolved := e.resolveParam(p)
 			// Last first, so removing an array element leaves the earlier indexes valid.
 			for k := len(resolved) - 1; k >= 0; k-- {
 				if out, ok := deleteValue(e.body, resolved[k]); ok {
@@ -246,13 +246,19 @@ func sortedKeys(m map[string]any) []string {
 
 func (e *engine) fullPath(path string) string {
 	root, path := strings.TrimSpace(e.in.Root), strings.TrimSpace(path)
-	switch {
-	case root == "":
+	if root == "" {
 		return path
-	case path == "":
-		return root
 	}
 	return root + "." + strings.TrimPrefix(path, ".")
+}
+
+// resolveParam resolves a rule's param path. A blank one names nothing: it must not name the
+// root, which would replace or delete the whole wrapped request.
+func (e *engine) resolveParam(path string) [][]string {
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	return e.resolve(e.fullPath(path))
 }
 
 func (e *engine) write(comps []string, raw []byte) bool {
@@ -269,7 +275,7 @@ func pathKey(comps []string) string { return strings.Join(comps, "\x00") }
 // writeDefault sets the field of each path the param resolves to when the source has no such
 // field and no earlier default wrote it.
 func (e *engine) writeDefault(path string, v any, raw bool) {
-	for _, comps := range e.resolve(e.fullPath(path)) {
+	for _, comps := range e.resolveParam(path) {
 		if e.sourceHas(comps) {
 			continue
 		}
@@ -441,12 +447,13 @@ func (e *engine) resolve(path string) [][]string {
 }
 
 // modelCandidates lists the names a rule's model name is tried against: the upstream model, the
-// requested model without a thinking suffix `(...)`, and the requested model as asked.
+// requested model without a thinking suffix `(...)`, and the requested model as asked. Names are
+// compared exactly, as rule names are, so a name that differs in case is kept.
 func modelCandidates(model, requested string) []string {
 	var out []string
 	add := func(s string) {
 		s = strings.TrimSpace(s)
-		if s == "" || slices.ContainsFunc(out, func(o string) bool { return strings.EqualFold(o, s) }) {
+		if s == "" || slices.Contains(out, s) {
 			return
 		}
 		out = append(out, s)
@@ -598,33 +605,33 @@ func headersMatch(h http.Header, rules map[string]string) bool {
 }
 
 // matchPattern is a glob where `*` matches any run of characters (including none) and every
-// other character stands for itself. Both sides are trimmed, and an empty pattern matches nothing.
+// other character stands for itself, so a `*` in the pattern is always a wildcard, also when the
+// value has a `*` there. Both sides are trimmed, and an empty pattern matches nothing.
+//
+// The pattern is split at its stars: the first piece must start the value, the last must end it,
+// and the pieces between are found in order, so the work stays linear in the two lengths.
 func matchPattern(pattern, s string) bool {
 	pattern, s = strings.TrimSpace(pattern), strings.TrimSpace(s)
 	if pattern == "" {
 		return false
 	}
-	pi, si, star, mark := 0, 0, -1, 0
-	for si < len(s) {
-		switch {
-		case pi < len(pattern) && pattern[pi] == s[si]:
-			pi++
-			si++
-		case pi < len(pattern) && pattern[pi] == '*':
-			star, mark = pi, si
-			pi++
-		case star >= 0:
-			pi = star + 1
-			mark++
-			si = mark
-		default:
+	pieces := strings.Split(pattern, "*")
+	if len(pieces) == 1 {
+		return pattern == s
+	}
+	first, last := pieces[0], pieces[len(pieces)-1]
+	if len(s) < len(first)+len(last) || !strings.HasPrefix(s, first) || !strings.HasSuffix(s, last) {
+		return false
+	}
+	s = s[len(first) : len(s)-len(last)]
+	for _, piece := range pieces[1 : len(pieces)-1] {
+		at := strings.Index(s, piece)
+		if at < 0 {
 			return false
 		}
+		s = s[at+len(piece):]
 	}
-	for pi < len(pattern) && pattern[pi] == '*' {
-		pi++
-	}
-	return pi == len(pattern)
+	return true
 }
 
 // Validate checks the rules the way a config loader should before it keeps them: every path
@@ -645,7 +652,7 @@ func Validate(r *Rules) error {
 			where := fmt.Sprintf("payload.%s[%d]", s.name, i)
 			errs = append(errs, validateModels(where, rule.Models)...)
 			for _, p := range sortedKeys(rule.Params) {
-				errs = append(errs, validatePath(where+".params", p)...)
+				errs = append(errs, validateParamPath(where+".params", p)...)
 				if !s.raw {
 					continue
 				}
@@ -659,7 +666,7 @@ func Validate(r *Rules) error {
 		where := fmt.Sprintf("payload.filter[%d]", i)
 		errs = append(errs, validateModels(where, rule.Models)...)
 		for _, p := range rule.Params {
-			errs = append(errs, validatePath(where+".params", p)...)
+			errs = append(errs, validateParamPath(where+".params", p)...)
 		}
 	}
 	return errors.Join(errs...)
@@ -685,7 +692,16 @@ func validateModels(where string, models []Model) []error {
 	return errs
 }
 
-// validatePath checks one rule path. A blank path is skipped, as Apply skips it.
+// validateParamPath checks the path of a rule's param, which may not be blank.
+func validateParamPath(where, path string) []error {
+	if strings.TrimSpace(path) == "" {
+		return []error{fmt.Errorf("%s: path %q: the path is blank", where, path)}
+	}
+	return validatePath(where, path)
+}
+
+// validatePath checks one rule path of a model's conditions. A blank path is skipped, as Apply
+// skips it.
 func validatePath(where, path string) []error {
 	path = strings.TrimSpace(path)
 	if path == "" {

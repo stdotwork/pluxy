@@ -79,6 +79,7 @@ type Extension struct {
 type held struct {
 	mu     sync.Mutex
 	by     map[string][]heldCredential
+	out    map[string][]heldCredential // the proxy and header secrets of each account, apart from by so no account ID can name them
 	redact *protocol.Redactor
 }
 
@@ -88,27 +89,35 @@ type heldCredential struct {
 }
 
 // add records that the extension holds c for owner (an account ID).
-func (h *held) add(owner string, c *protocol.Credential) {
+func (h *held) add(owner string, c *protocol.Credential) { h.record(&h.by, owner, c) }
+
+// addOutbound records that the extension holds c, the proxy and header secrets of account, kept
+// apart from the credentials add records so that no account ID can name the same entry.
+func (h *held) addOutbound(account string, c *protocol.Credential) { h.record(&h.out, account, c) }
+
+func (h *held) record(m *map[string][]heldCredential, owner string, c *protocol.Credential) {
 	if c == nil {
 		return
 	}
 	b, _ := json.Marshal(c)
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	list := h.by[owner]
+	list := (*m)[owner]
 	if len(list) > 0 && list[len(list)-1].key == string(b) {
 		return
 	}
-	if h.by == nil {
-		h.by = map[string][]heldCredential{}
+	if *m == nil {
+		*m = map[string][]heldCredential{}
 	}
 	cc := *c
 	list = append(list, heldCredential{string(b), &cc})
-	h.by[owner] = list[max(0, len(list)-2):]
+	(*m)[owner] = list[max(0, len(list)-2):]
 	var all []*protocol.Credential
-	for _, l := range h.by {
-		for _, hc := range l {
-			all = append(all, hc.c)
+	for _, by := range []map[string][]heldCredential{h.by, h.out} {
+		for _, l := range by {
+			for _, hc := range l {
+				all = append(all, hc.c)
+			}
 		}
 	}
 	h.redact = protocol.NewRedactor(all...)

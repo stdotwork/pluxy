@@ -76,6 +76,12 @@ func (u *headerUpstream) posts(prefix string) []headerRequest {
 // pinned sends a chat request for model to account id and returns the reply's status and body.
 func pinned(t *testing.T, base, id, model string) (int, string) {
 	t.Helper()
+	return pinnedWith(t, base, id, model, nil)
+}
+
+// pinnedWith is pinned with extra headers on the client's request.
+func pinnedWith(t *testing.T, base, id, model string, extra map[string]string) (int, string) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/chat/completions",
@@ -83,6 +89,9 @@ func pinned(t *testing.T, base, id, model string) (int, string) {
 	req.Header.Set("Authorization", "Bearer "+clientKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Pluxy-Account", id)
+	for k, v := range extra {
+		req.Header.Set(k, v)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -318,10 +327,15 @@ func TestUpstreamHeadersImportedAndSecret(t *testing.T) {
 		claudeKey = "fake-claude-gateway-e2e-11"
 		groupKey  = "fake-group-token-e2e-22"
 		kimiKey   = "fake-kimi-gateway-e2e-33"
+		kimi2Key  = "fake-kimi-two-gateway-e2e-44"
+		// What the client's requests send as X-Client-Header: kimi-1's "X-Copy": "$X-Client-Header"
+		// must not copy it.
+		clientHeader = "fake-client-header-e2e-5d1c"
 	)
 	up := newHeaderUpstream(t)
 	kimi := kimitest.New(t)
 	kimiAccess, kimiRefresh := kimi.Grant()
+	kimi2Access, kimi2Refresh := kimi.Grant()
 	work := t.TempDir()
 	authDir := filepath.Join(work, "old-auths")
 	if err := os.Mkdir(authDir, 0o700); err != nil {
@@ -332,6 +346,14 @@ func TestUpstreamHeadersImportedAndSecret(t *testing.T) {
 		"expired": time.Now().Add(10 * 24 * time.Hour).UTC().Format(time.RFC3339),
 		"headers": map[string]any{"X-Gateway-Key": kimiKey, "X-Copy": "$X-Client-Header", "X-Number": 7}})
 	if err := os.WriteFile(filepath.Join(authDir, "kimi-1.json"), file, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A second stored account with its own secret header: PATCH of one may not take the other's.
+	file2, _ := json.Marshal(map[string]any{"type": "kimi", "access_token": kimi2Access, "refresh_token": kimi2Refresh,
+		"token_type": "Bearer", "device_id": "device-e2e-2", "base_url": kimi.URL + "/coding",
+		"expired": time.Now().Add(10 * 24 * time.Hour).UTC().Format(time.RFC3339),
+		"headers": map[string]any{"X-Gateway-Key": kimi2Key}})
+	if err := os.WriteFile(filepath.Join(authDir, "kimi-2.json"), file2, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg := `config-version: 8
@@ -380,7 +402,7 @@ api-keys:
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"imported kimi-1.json as account kimi-1 (pluxy/kimi)", "headers.X-Copy (a value taken from the client's request)"} {
+	for _, want := range []string{"imported kimi-1.json as account kimi-1 (pluxy/kimi)", "imported kimi-2.json as account kimi-2 (pluxy/kimi)", "headers.X-Copy (a value taken from the client's request)"} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("import output lacks %q", want)
 		}
@@ -395,7 +417,7 @@ api-keys:
 
 	var replies []string
 	for _, r := range []struct{ id, model string }{{"gw-1", "m-headers"}, {"gw-2", "m-headers"}, {"compat", "m-compat"}, {"kimi-1", "kimi-k2.8"}} {
-		_, body := pinned(t, base, r.id, r.model)
+		_, body := pinnedWith(t, base, r.id, r.model, map[string]string{"X-Client-Header": clientHeader})
 		replies = append(replies, body)
 	}
 	check := func(what string, got []string, want string) {
@@ -429,7 +451,17 @@ api-keys:
 	for _, r := range compat {
 		check("compat X-Group-Token", r.header.Values("X-Group-Token"), groupKey)
 	}
-	kreqs := kimi.Requests()
+	// The requests of one Kimi account, told apart by its token.
+	kimiRequests := func(access string) []kimitest.Request {
+		var out []kimitest.Request
+		for _, r := range kimi.Requests() {
+			if r.Header.Get("Authorization") == "Bearer "+access {
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+	kreqs := kimiRequests(kimiAccess)
 	if len(kreqs) == 0 {
 		t.Fatal("fake Kimi saw no request")
 	}
@@ -484,9 +516,28 @@ api-keys:
 	if code := manage(t, base, "PATCH", "/accounts/kimi-1", map[string]any{"headers": map[string]string{"X-Gateway-Key": "pluxy-redacted-000000000000000000000000"}}, nil); code != http.StatusBadRequest {
 		t.Errorf("PATCH with a placeholder that stands for nothing: status %d, want 400", code)
 	}
+	// A placeholder of another account's value is no placeholder of this one: refused, and the
+	// account keeps its own headers.
+	if code := manage(t, base, "PATCH", "/accounts/kimi-2", map[string]any{"headers": map[string]string{"X-Gateway-Key": kimiShown}}, nil); code != http.StatusBadRequest {
+		t.Errorf("PATCH kimi-2 with kimi-1's placeholder: status %d, want 400", code)
+	}
+	kimi2Shown := list["kimi-2"].Headers["X-Gateway-Key"]
+	if now := accounts()["kimi-2"].Headers; !placeholderRE.MatchString(kimi2Shown) || kimi2Shown == kimiShown || now["X-Gateway-Key"] != kimi2Shown || len(now) != 1 {
+		t.Errorf("kimi-2 headers before %q, after the refused PATCH %v; want its own placeholder, unchanged", kimi2Shown, now)
+	}
+	if _, body := pinned(t, base, "kimi-2", "kimi-k2.8"); body == "" {
+		t.Error("kimi-2 got no reply")
+	}
+	k2 := kimiRequests(kimi2Access)
+	if len(k2) == 0 {
+		t.Fatal("fake Kimi saw no request for kimi-2")
+	}
+	for _, r := range k2 {
+		check("kimi-2 X-Gateway-Key after the refused PATCH", r.Header.Values("X-Gateway-Key"), kimi2Key)
+	}
 	_, body := pinned(t, base, "kimi-1", "kimi-k2.8")
 	replies = append(replies, body)
-	kreqs = kimi.Requests()
+	kreqs = kimiRequests(kimiAccess)
 	if len(kreqs) <= before {
 		t.Fatal("fake Kimi saw no request after the PATCH")
 	}
@@ -514,7 +565,7 @@ api-keys:
 		t.Error("the logs folder holds no request log to check")
 	}
 	for w, s := range where {
-		for _, secret := range []string{claudeKey, groupKey, kimiKey} {
+		for _, secret := range []string{claudeKey, groupKey, kimiKey, kimi2Key} {
 			if strings.Contains(s, secret) {
 				t.Errorf("%s holds %q:\n%s", w, secret, s)
 			}
