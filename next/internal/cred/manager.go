@@ -9,6 +9,7 @@ import (
 	"log"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -596,6 +597,38 @@ func (m *Manager) SetAccount(id string, change func(*route.Account) error, disab
 		}
 		return next, err
 	}
+}
+
+// Create adds account r, made elsewhere than by a login (an imported credential file), and
+// routes to it at once, as a finished login does. Like a login, it may not take an ID core's
+// config uses, nor, whatever its case, one a login still running will take. Its routing fields
+// are checked as SetAccount checks them: one that routing refuses would stop every account
+// routing.
+func (m *Manager) Create(r Record) (Record, error) {
+	if m.reserved(r.ID) {
+		return Record{}, fmt.Errorf("%w: account %q is set in core's config", ErrConflict, r.ID)
+	}
+	a := r.Account
+	a.ID, a.Credential = r.ID, nil
+	if err := a.Check(); err != nil {
+		return Record{}, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	// m.mu is held across the create, so a login cannot start for the ID in between.
+	m.mu.Lock()
+	for _, l := range m.logins {
+		if l.state == LoginPending && strings.EqualFold(l.account, r.ID) {
+			m.mu.Unlock()
+			return Record{}, fmt.Errorf("%w: a login for account %q is running (%s)", ErrConflict, l.account, l.id)
+		}
+	}
+	rec, err := m.store.Create(r)
+	m.mu.Unlock()
+	if err != nil {
+		return Record{}, err
+	}
+	log.Printf("credentials: account %q added", rec.ID)
+	m.changed()
+	return rec, nil
 }
 
 // Remove removes account id and cancels a login running for it. A renewal still running for
