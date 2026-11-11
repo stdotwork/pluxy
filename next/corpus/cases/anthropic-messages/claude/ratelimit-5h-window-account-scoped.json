@@ -77,7 +77,8 @@
   },
   "volatile": [
     "client.headers.Retry-After",
-    "then[*].headers.Retry-After"
+    "then[*].headers.Retry-After",
+    "then[*].body.error.message"
   ],
   "exceptions": [
     {
@@ -108,15 +109,6 @@
       "kind": "intended",
       "reason": "The Claude extension sends an API key in x-api-key, as Anthropic's API defines it; today's core sends it as a bearer token whenever the base URL is not api.anthropic.com (it uses x-api-key only there).",
       "want": "sk-corpus-upstream"
-    },
-    {
-      "path": "then[0].body.error",
-      "kind": "gap",
-      "reason": "When every account is cooling, today's core names the model, provider and last upstream error in its own message; the new core says the model and the wait in its message and gives the wait as Retry-After.",
-      "want": {
-        "message": "every account for model \"claude-test-2\" is cooling down; try again in 1m0s",
-        "type": "rate_limit_error"
-      }
     }
   ],
   "recorded_old_core": {
