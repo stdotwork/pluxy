@@ -4,12 +4,13 @@ import { goTo, openPanel, signIn, useCore } from "./support";
 const core = useCore();
 
 let trace: string;
+let account = 0;
 test.beforeEach(async () => {
   expect(
     (await core.mgmt("PATCH", "/settings", { observability: { logs: { "logging-to-file": true } } })).status,
   ).toBe(200);
   const started = await core.mgmt<{ login: { id: string } }>("POST", "/accounts", {
-    id: "logs-account",
+    id: `logs-account-${++account}`,
     extension: "test/alpha",
     method: "api_key",
     input: { api_key: "logs-test" },
