@@ -39,7 +39,7 @@ const t = strings("logs", {
   errors: "Error Request Logs",
   noErrors: "No error request log files found",
   size: "Size",
-  bytes: "{size} bytes",
+  bytes: { one: "{count} byte", other: "{count} bytes" },
   modified: "Last modified",
   name: "Name",
   actions: "Actions",
@@ -233,7 +233,7 @@ export function LogsPage() {
           </Button>
         }
       />
-      <Card title={t("core")}>
+      <Card title={t("content")}>
         {error && <Notice tone="danger">{error}</Notice>}
         {off && (
           <Notice tone="warn">
@@ -312,7 +312,7 @@ export function LogsPage() {
                 selected={selected}
                 columns={[
                   { label: t("name"), value: (file) => file.name, mono: true },
-                  { label: t("size"), value: (file) => t("bytes", { size: file.size.toLocaleString() }) },
+                  { label: t("size"), value: (file) => t("bytes", { count: file.size }) },
                   { label: t("modified"), value: (file) => when(file.modified) },
                   {
                     label: t("actions"),

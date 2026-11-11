@@ -62,6 +62,21 @@ test("logs show failures, trace lookup, continuous reading and clearing", async 
   expect((await core.mgmt("POST", "/reload")).status).toBe(200);
   await expect.poll(() => coreLog.textContent()).not.toBe(before);
   await expect(coreLog).toContainText("config revision");
+  await page.clock.install();
+  await page.evaluate(() =>
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" }),
+  );
+  const reads: string[] = [];
+  page.on("request", (r) => {
+    if (r.url().includes("/management/logs?after=")) reads.push(r.url());
+  });
+  await page.clock.fastForward(6000);
+  expect(reads).toEqual([]);
+  await page.evaluate(() =>
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" }),
+  );
+  await page.clock.fastForward(2000);
+  await expect.poll(() => reads.length).toBeGreaterThan(0);
   await page.getByRole("switch", { name: "Continuous reading", exact: true }).uncheck();
   await page.getByRole("button", { name: "Clear Logs", exact: true }).click();
   await expect(
