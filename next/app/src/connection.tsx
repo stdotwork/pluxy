@@ -9,6 +9,8 @@ import { useId, useState } from "preact/hooks";
 import { Button, Card, Choices, Facts, Notice, PageHead, Switch } from "../../ui/kit/ui";
 import { type Connection, type ConnectionChange, connectionSet, coreRestart, type Mode } from "./host";
 
+import { StartupSettings } from "./startup";
+
 const MODES = [
   { value: "managed" as const, label: "Run core here", note: "the app starts and stops it" },
   { value: "local" as const, label: "Core on this computer", note: "already running" },
@@ -160,6 +162,7 @@ export function ConnectionPage(props: { connection: Connection; onChange: (c: Co
           </Button>
         </form>
       </Card>
+      <StartupSettings />
     </>
   );
 }

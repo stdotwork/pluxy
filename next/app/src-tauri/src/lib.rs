@@ -14,6 +14,7 @@ pub mod managed;
 mod native_test;
 pub mod pages;
 mod place;
+mod startup;
 
 pub use command_names::COMMANDS;
 
@@ -38,6 +39,7 @@ pub const WINDOW: &str = "main-window";
 pub const MAIN: &str = "main";
 
 struct App {
+    startup: Mutex<(startup::Store, startup::Preferences)>,
     conn: Mutex<Connection>,
     /// The page webviews' own web context's folder: nothing shared with the window's.
     pages_dir: std::path::PathBuf,
@@ -183,6 +185,25 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 fn connection_get(webview: Webview, state: tauri::State<App>) -> Result<View, String> {
     trusted(&webview)?;
     Ok(state.conn.lock().unwrap().view())
+}
+
+#[tauri::command]
+fn startup_get(webview: Webview, state: tauri::State<App>) -> Result<startup::Preferences, String> {
+    trusted(&webview)?;
+    Ok(state.startup.lock().unwrap().1)
+}
+
+#[tauri::command]
+fn startup_set(
+    webview: Webview,
+    state: tauri::State<App>,
+    preferences: startup::Preferences,
+) -> Result<startup::Preferences, String> {
+    trusted(&webview)?;
+    let mut startup = state.startup.lock().unwrap();
+    startup.0.save(preferences)?;
+    startup.1 = preferences;
+    Ok(preferences)
 }
 
 /// Runs f on the connection away from the window's thread, which starting a core would block,
@@ -393,6 +414,8 @@ fn page_scheme(
 pub fn run() {
     let app = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
+            startup_get,
+            startup_set,
             connection_get,
             connection_set,
             core_restart,
@@ -407,6 +430,13 @@ pub fn run() {
         .register_asynchronous_uri_scheme_protocol(pages::SCHEME, page_scheme)
         .setup(|app| {
             let config = app.path().app_config_dir()?;
+            let startup_store = startup::Store::new(
+                config.clone(),
+                app.path().config_dir()?,
+                app.config().identifier.clone(),
+                std::env::current_exe()?,
+            );
+            let preferences = startup_store.load();
             let core = app.path().app_data_dir()?.join("core");
             // When the app's core exits, the tray and the window show it. Off this thread: the
             // exit may come while a connection change holds the connection.
@@ -421,11 +451,16 @@ pub fn run() {
                     let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-connection", ());
                 });
             });
-            let conn = Connection::open(Dirs { config, core }, Some(on_exit));
+            let conn = Connection::open_at_startup(
+                Dirs { config, core },
+                Some(on_exit),
+                preferences.start_core_on_launch,
+            );
             // The page webviews keep nothing from one run to the next.
             let pages_dir = app.path().app_cache_dir()?.join("pages");
             let _ = std::fs::remove_dir_all(&pages_dir);
             app.manage(App {
+                startup: Mutex::new((startup_store, preferences)),
                 conn: Mutex::new(conn),
                 pages_dir,
                 pages: Mutex::new(Pages::default()),
@@ -444,7 +479,12 @@ pub fn run() {
             if let Some(pid) = handle.state::<App>().conn.lock().unwrap().core_pid() {
                 eprintln!("pluxy-app: core started, pid {pid}");
             }
-            open_window(&handle)?;
+            let silent = preferences.silent_start_enabled
+                || std::env::args_os().any(|a| a == "--silent-start");
+            // If tray creation fails, show the window so the app remains reachable.
+            if !silent || !handle.state::<App>().has_tray.load(Ordering::SeqCst) {
+                open_window(&handle)?;
+            }
             #[cfg(feature = "native-test")]
             native_test::start(handle);
             Ok(())

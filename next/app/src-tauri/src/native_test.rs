@@ -230,12 +230,18 @@ fn startup(app: &AppHandle, stage: &str) -> Result<(), String> {
     log(
         "startup",
         json!({
+            "app_pid": std::process::id(),
             "windows": app.windows().len(),
             "webviews": app.webviews().len(),
             "tray": app.state::<App>().has_tray.load(std::sync::atomic::Ordering::SeqCst),
             "core_pid": connection.core.and_then(|c| c.pid),
         }),
     );
+    if let Ok(file) = std::env::var("PLUXY_APP_TEST_STARTUP_CONTINUE") {
+        wait_for("startup process and tray inspection", || {
+            std::path::Path::new(&file).exists().then_some(())
+        })?;
+    }
     crate::quit(app);
     Ok(())
 }

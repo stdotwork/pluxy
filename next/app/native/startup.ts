@@ -1,10 +1,10 @@
 // Runs inside session.ts's disposable D-Bus/Xvfb/HOME. Each launch is a fresh app process.
-import { spawn } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 
-const [bin, identifier] = process.argv.slice(2);
+const [bin, identifier, probe] = process.argv.slice(2);
 if (!bin || !identifier) throw new Error("startup test needs app and identifier");
 const config = process.env.XDG_CONFIG_HOME as string;
 const entry = join(config, "autostart", identifier + ".desktop");
@@ -14,8 +14,9 @@ function check(ok: unknown, message: string): asserts ok {
   if (!ok) throw new Error(message);
 }
 async function launch(stage: string, argv: string[] = [bin as string]) {
+  const proceed = join(config, "startup-continue-" + stage + "-" + Date.now());
   const child = spawn(argv[0] as string, argv.slice(1), {
-    env: { ...process.env, PLUXY_APP_TEST_STARTUP: stage },
+    env: { ...process.env, PLUXY_APP_TEST_STARTUP: stage, PLUXY_APP_TEST_STARTUP_CONTINUE: proceed },
     stdio: ["ignore", "pipe", "pipe"],
   });
   const lines: string[] = [];
@@ -23,6 +24,27 @@ async function launch(stage: string, argv: string[] = [bin as string]) {
     createInterface({ input: stream }).on("line", (line) => {
       lines.push(line);
       console.log(line);
+      if (line.startsWith("native-test: startup ")) {
+        const report = JSON.parse(line.slice("native-test: startup ".length));
+        if (stage === "silent") {
+          const tray = spawnSync(probe as string, ["tray-pid", String(report.app_pid)], { encoding: "utf8" });
+          if (tray.status !== 0) lines.push("native-test: failed tray watcher: " + tray.stderr);
+          else console.log("startup tray registered: " + tray.stdout.trim());
+          // No renderer may exist, including an accidentally hidden page.
+          for (const pid of readdirSync("/proc").filter((p) => /^\d+$/.test(p))) {
+            try {
+              const stat = readFileSync("/proc/" + pid + "/stat", "utf8");
+              const tail = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+              if (Number(tail[1]) === report.app_pid && stat.includes("WebKitWebProces")) {
+                lines.push("native-test: failed silent renderer exists");
+              }
+            } catch {
+              /* process exited */
+            }
+          }
+        }
+        writeFileSync(proceed, "");
+      }
     });
   }
   const code = await new Promise((resolve, reject) => {

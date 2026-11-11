@@ -251,7 +251,7 @@ try {
     appProc = process.env.PLUXY_APP_TEST_STARTUP_SUITE
       ? spawn(
           process.execPath,
-          [join(import.meta.dir, "startup.ts"), app, process.env.PLUXY_APP_TEST_STARTUP_SUITE],
+          [join(import.meta.dir, "startup.ts"), app, process.env.PLUXY_APP_TEST_STARTUP_SUITE, probe],
           { stdio: "inherit" },
         )
       : spawn(app, [], { stdio: "inherit" });

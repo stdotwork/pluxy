@@ -42,6 +42,29 @@ Closing the window destroys it and its webviews, so they hold no memory while th
 the tray. The tray menu shows what the app is connected to, and has "Open pluxy" (a new window)
 and "Quit pluxy". If the app cannot make its tray icon, closing the window quits the app.
 
+## Startup preferences
+
+The Connection page has three independent startup choices:
+
+- **Launch at startup** registers pluxy for your Linux login. Saving it writes
+  `$XDG_CONFIG_HOME/autostart/dev.pluxy.desktop.desktop` (or
+  `~/.config/autostart/dev.pluxy.desktop.desktop`). Its Exec command names the app by absolute
+  path with `--silent-start`, so login launches enter the native tray. Turning this off and
+  saving removes the entry. Merely opening the app does not register it.
+- **Silent Launch** starts the app in the native tray without creating a window or webview.
+  Open pluxy from the tray when needed. The explicit `--silent-start` flag also selects this
+  mode. If creating the tray fails, the app opens a window so it remains reachable.
+- **Start Core on Launch** starts the app's own core in managed mode. Turning it off leaves
+  the saved managed connection stopped until you press Start core. Local and remote modes
+  only connect; their core processes are never started or stopped by these choices.
+
+The defaults are login registration off, Silent Launch off, and Start Core on Launch on.
+Preferences live in `startup.json` beside `connection.json`, readable only by your user.
+A malformed file is moved to `startup.damaged-<random>.json` and defaults are used; failure to
+read or keep it aside is logged and still does not prevent startup. Saving preferences does
+not restart or change the current connection. No system service or second core supervisor is
+created. Login registration is implemented on Linux only.
+
 ## Commands
 
 The window's webview, labelled `main`, is the only webview any capability names
@@ -54,6 +77,8 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 
 | Command | What it does |
 | --- | --- |
+| `startup_get` | Reads the native startup preferences |
+| `startup_set` | Saves the startup choices and explicitly writes/removes Linux login registration |
 | `connection_get` | The connection, without the key |
 | `connection_set` | Changes the mode, address, key, certificate file or core program |
 | `core_restart` | Starts the app's own core again (managed mode) |
@@ -113,8 +138,12 @@ reaches every command, that at the top of an extension page's webview Tauri refu
 command and the plugin commands tried, that the app reaches no command from that webview, that
 nothing reaches the app from the page's frame, that the page webview covers the page area, that
 closing the window leaves no webview and
-no web process, and that quitting stops only the app's own core. The `native-test` feature is
-for that test alone; release builds never have it.
+no web process, and that quitting stops only the app's own core. The startup sequence then enables login registration through the main webview command,
+checks the entry in its temporary XDG config folder, launches the entry's Exec command, checks
+zero windows/webviews and no web process, and verifies that the app's real tray item belongs to
+its PID in the tray watcher's registered item list. It checks managed-core startup, saved Silent
+Launch with core startup off, local/remote ownership, and disabling registration. The
+`native-test` feature is for that test alone; release builds never have it.
 
 Before the app, each run's session starts desktop services (`native/session.ts`, with the
 packages and paths in `native/services.ts`) and checks them for real; a missing or broken one

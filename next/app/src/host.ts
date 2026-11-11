@@ -96,3 +96,12 @@ export function appHost(conn: Connection, changed: (c: Connection) => void): Hos
     features,
   };
 }
+
+export interface StartupPreferences {
+  autostart_enabled: boolean;
+  silent_start_enabled: boolean;
+  start_core_on_launch: boolean;
+}
+export const startupGet = () => invoke<StartupPreferences>("startup_get");
+export const startupSet = (preferences: StartupPreferences) =>
+  invoke<StartupPreferences>("startup_set", { preferences });
