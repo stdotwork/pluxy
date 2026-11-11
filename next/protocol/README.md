@@ -548,7 +548,8 @@ or a value with a line break or another control character: its config load refus
 The value of a header whose name is about authentication (its name holds `auth`, `key`,
 `token`, `secret`, `cookie`, `session`, `password` or `signature`, letter case aside) is a
 secret: an extension never logs or shows it, and core removes it from everything a call sends
-back, as it does a credential's strings. Other values are not removed.
+back, as it does a credential's strings; a value shorter than 8 bytes is removed only as part
+of its `Name: value` pair, so it does not scrub unrelated text. Other values are not removed.
 
 Core sends a call that has headers only to an extension whose describe reports
 `protocol_minor` 12 or more; for any other it fails the call itself with `unsupported` (scope

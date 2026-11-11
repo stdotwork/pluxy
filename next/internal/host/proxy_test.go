@@ -273,6 +273,29 @@ func TestCallCarriesHeadersWithoutLeakingSecrets(t *testing.T) {
 	}
 }
 
+// A secret header whose value is short ("1") is removed from a reply only inside its whole
+// "Name: value" pair: its value alone would also scrub every other 1 in the reply.
+func TestShortSecretHeaderValueLeavesReplyUnchanged(t *testing.T) {
+	ext, err := Start(filepath.Join(fakePackage(t, "echo-proxy"), ManifestFile), Options{Log: &syncBuffer{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ext.Stop()
+	for _, c := range []struct {
+		name, value, want string
+	}{
+		{"short value", "1", "cannot reach  X-Gateway-Key=1"},
+		{"long value", testHeaderSecret, "cannot reach  X-Gateway-Key=" + protocol.Redacted},
+	} {
+		s := ext.Generate(context.Background(), protocol.Account{ID: "s", Headers: map[string]string{"X-Gateway-Key": c.value}}, llm.Request{Model: "m"})
+		ev := s.Next()
+		s.Close()
+		if ev.Type != llm.EventError || ev.Error.Message != c.want {
+			t.Errorf("%s: event %+v, want the error %q", c.name, ev, c.want)
+		}
+	}
+}
+
 // An extension older than protocol 0.12 cannot send an account's headers, so a call that has
 // some is refused before it reaches it, as unsupported for the account.
 func TestOldExtensionGetsNoCallWithHeaders(t *testing.T) {

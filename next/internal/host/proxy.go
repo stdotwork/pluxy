@@ -40,7 +40,7 @@ func (e *Extension) outbound(account *protocol.Account) (*protocol.Credential, *
 	}
 	var d outboundForms
 	d.Proxy = proxyurl.Password(account.ProxyURL)
-	d.Headers = upheader.Secrets(account.Headers)
+	d.Headers = upheader.Forms(account.Headers)
 	if len(d.Proxy) == 0 && len(d.Headers) == 0 {
 		return nil, nil
 	}

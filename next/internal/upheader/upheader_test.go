@@ -91,3 +91,13 @@ func TestImportRefusesSameHeaderTwice(t *testing.T) {
 		t.Errorf("Import with one empty value = %v, %v; want %v", out, err, want)
 	}
 }
+
+// A secret header's value alone is removed from text only from 8 bytes, as a proxy's password is: a
+// shorter one ("1") would also scrub unrelated text. Its whole "Name: value" pair is always removed.
+func TestForms(t *testing.T) {
+	got := Forms(map[string]string{"X-Api-Key": "1", "Authorization": "Bearer abcdefgh", "X-Title": "plain-title", "Cookie": "sid=12345", "X-Token": "12345678"})
+	want := []string{"Authorization: Bearer abcdefgh", "Bearer abcdefgh", "Cookie: sid=12345", "sid=12345", "X-Api-Key: 1", "X-Token: 12345678", "12345678"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Forms = %q, want %q", got, want)
+	}
+}
