@@ -323,13 +323,18 @@ Core reads no environment variables, so everything is set in `config.json`, and 
 keeps is in one folder: `/config`, a volume. It holds `config.json` and, beside it, the
 `credentials`, `packages` and `logs` folders core makes. Make a folder with a config file
 before the first start; `listen` must be `0.0.0.0:8400`, since the container's own `127.0.0.1`
-is not reachable from outside it, and the image's health check asks port 8400:
+is not reachable from outside it, and the image's health check asks port 8400. Inside a container,
+requests through a published port come from Docker's network address, not from `127.0.0.1`, so
+the management API refuses them unless `management_allow_remote` is `true` (it still needs the
+management key). Publish the port on `127.0.0.1` only, as below, unless you want other machines
+to reach it:
 
 ```json
 {
   "listen": "0.0.0.0:8400",
   "client_keys": ["choose-a-client-key"],
-  "management_key": "choose-a-management-key"
+  "management_key": "choose-a-management-key",
+  "management_allow_remote": true
 }
 ```
 

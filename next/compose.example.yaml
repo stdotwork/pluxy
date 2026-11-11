@@ -3,7 +3,8 @@
 #
 #   docker compose up -d
 #
-# ./config must hold config.json with "listen": "0.0.0.0:8400" and be writable by user 65532,
+# ./config must hold config.json with "listen": "0.0.0.0:8400" and "management_allow_remote": true
+# (see the README), and be writable by user 65532,
 # the user the image runs as: chown -R 65532:65532 config
 services:
   pluxy:

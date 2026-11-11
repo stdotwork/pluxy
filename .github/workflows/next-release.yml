@@ -59,7 +59,8 @@ jobs:
           management_key="ci-$(openssl rand -hex 16)"
           echo "::add-mask::$client_key"
           echo "::add-mask::$management_key"
-          printf '{"listen": "0.0.0.0:8400", "client_keys": ["%s"], "management_key": "%s"}\n' \
+          # management_allow_remote: a published port reaches core from Docker's address, not loopback.
+          printf '{"listen": "0.0.0.0:8400", "client_keys": ["%s"], "management_key": "%s", "management_allow_remote": true}\n' \
             "$client_key" "$management_key" > "$config_dir/config.json"
           chmod 0644 "$config_dir/config.json"
           echo "MANAGEMENT_KEY=$management_key" >> "$GITHUB_ENV"
