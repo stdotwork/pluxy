@@ -313,13 +313,47 @@ func (s *State) Retain(prevRouter, nextRouter *Router, same func(old, cur *Accou
 	}
 }
 
-// stale reports whether an outcome on key seen by a router of generation gen is about an
-// account as it was before Retain dropped key's state. s.mu is held.
-func (s *State) stale(key scopeKey, gen uint64) bool {
+// stale reports whether an outcome on key seen on copy a is about an account as it was before
+// Retain or restart dropped key's state: a is a copy SetAccounts replaced, or its router's
+// generation is older than the drop. s.mu is held.
+func (s *State) stale(key scopeKey, a *Account) bool {
+	if a.replaced() {
+		return true
+	}
 	if key.kind == scopeModel {
 		key = scopeKey{kind: scopeCredential, id: key.id}
 	}
-	return gen < s.since[key]
+	return a.gen < s.since[key]
+}
+
+// restart drops the state of the accounts Router.SetAccounts replaced with changed ones of the
+// same IDs (their old copies): blocks on their credentials and models, their last errors,
+// their session bindings, and blocks on their endpoints that no endpoint in kept names. Each
+// old copy is marked first, so an outcome an attempt on it sees afterwards records nothing
+// and binds no session. Running attempts stay counted until they end.
+func (s *State) restart(old []*Account, kept map[string]bool) {
+	if len(old) == 0 {
+		return
+	}
+	ids, endpoints := map[string]bool{}, map[string]bool{}
+	for _, a := range old {
+		a.retired.Store(true)
+		ids[a.ID] = true
+		if !kept[a.endpoint()] {
+			endpoints[a.endpoint()] = true
+		}
+	}
+	s.mu.Lock()
+	for k := range s.scopes {
+		if k.kind == scopeEndpoint && endpoints[k.id] || k.kind != scopeEndpoint && ids[k.id] {
+			s.drop(k)
+		}
+	}
+	for id := range ids {
+		delete(s.last, id)
+	}
+	s.mu.Unlock()
+	s.affinity.unbind(ids)
 }
 
 // end releases the reservation reserve made for the attempt with sequence number seq on
@@ -422,7 +456,7 @@ func (s *State) failure(a *Account, model string, seq uint64, e *llm.Error, now 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.stale(key, a.gen) {
+	if s.stale(key, a) {
 		return
 	}
 	st := s.scopes[key]
@@ -544,13 +578,13 @@ func (s *State) quotaLast(keys []scopeKey, now time.Time) (last block, ok bool) 
 func (s *State) success(a *Account, model string, seq uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if l, ok := s.last[a.ID]; ok && l.mark < seq && !s.stale(scopeKey{kind: scopeCredential, id: a.ID}, a.gen) {
+	if l, ok := s.last[a.ID]; ok && l.mark < seq && !s.stale(scopeKey{kind: scopeCredential, id: a.ID}, a) {
 		delete(s.last, a.ID)
 	}
 	o := s.oldest()
 	older := o != 0 && o < seq // an attempt that started before this one is still running
 	for _, k := range keysFor(a, model) {
-		if s.stale(k, a.gen) {
+		if s.stale(k, a) {
 			continue
 		}
 		st := s.scopes[k]

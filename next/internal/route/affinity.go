@@ -47,11 +47,11 @@ func (f *affinity) lookup(k affinityKey, now time.Time) (string, bool) {
 }
 
 // bind binds the session to account a until ttl from now, unless a is a copy of an account
-// from before retain dropped it.
+// from before retain dropped it, or one SetAccounts replaced.
 func (f *affinity) bind(k affinityKey, a *Account, now time.Time, ttl time.Duration) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if a.gen < f.since[a.ID] {
+	if a.gen < f.since[a.ID] || a.replaced() {
 		return
 	}
 	account := a.ID
@@ -78,6 +78,17 @@ func (f *affinity) retain(keep, changed map[string]bool, gen uint64) {
 	}
 	for k, b := range f.bindings {
 		if !keep[b.account] {
+			delete(f.bindings, k)
+		}
+	}
+}
+
+// unbind drops the bindings to the accounts in ids.
+func (f *affinity) unbind(ids map[string]bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for k, b := range f.bindings {
+		if ids[b.account] {
 			delete(f.bindings, k)
 		}
 	}

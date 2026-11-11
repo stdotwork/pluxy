@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/internal/configdoc"
 	"github.com/stdotwork/pluxy/next/internal/cred"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/llm"
@@ -59,6 +60,9 @@ type AccountView struct {
 	ExcludedModels []string           `json:"excluded_models,omitempty"`
 	ModelAlias     []route.ModelAlias `json:"model_alias,omitempty"`
 	Endpoint       string             `json:"endpoint,omitempty"`
+	// Settings are an account added by login's settings, with a placeholder in place of each
+	// secret (configdoc.Redactor), as GET /config shows the config file.
+	Settings json.RawMessage `json:"settings,omitempty"`
 
 	// What routing knows about the account now (route.Runtime). An account that receives no
 	// requests (disabled, or waiting for a new login) has none of it.
@@ -124,12 +128,16 @@ type Management struct {
 	state *route.State
 	// lockout blocks a client that keeps sending a wrong key.
 	lockout *lockout
+	// redactor hides the secrets in accounts' settings, and puts them back in settings sent
+	// with a placeholder.
+	redactor *configdoc.Redactor
 }
 
 // NewManagement returns the management API with its account and login calls. cfg returns the
 // active config; state is the routing state accounts' cooldowns are read from (nil: none).
 func NewManagement(cfg func() *Config, creds *cred.Manager, state *route.State) *Management {
-	m := &Management{mux: http.NewServeMux(), cfg: cfg, creds: creds, state: state, lockout: newLockout()}
+	m := &Management{mux: http.NewServeMux(), cfg: cfg, creds: creds, state: state, lockout: newLockout(),
+		redactor: configdoc.NewRedactor()}
 	m.Handle("GET /accounts", m.list)
 	m.Handle("POST /accounts", m.add)
 	m.Handle("PATCH /accounts/{id}", m.patch)
@@ -213,6 +221,15 @@ func (m *Management) view(r cred.Record) AccountView {
 	a := r.Account
 	a.ID = r.ID
 	v.fields(a, m.state)
+	if len(a.Settings) > 0 {
+		s, err := m.redactor.Redact(a.Settings, false)
+		if err != nil {
+			// Never shown unredacted; the settings are then left out of the view.
+			log.Printf("management: account %q: its settings cannot be shown with their secrets hidden", r.ID)
+		} else {
+			v.Settings = s
+		}
+	}
 	v.Check = m.check(r.ID)
 	return v
 }
@@ -417,6 +434,7 @@ func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var disabled *bool
+	var settings json.RawMessage
 	var changes []func(*route.Account) error
 	for name, raw := range req {
 		if name == "disabled" {
@@ -426,9 +444,18 @@ func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
+		if name == "settings" {
+			var obj map[string]json.RawMessage
+			if string(raw) != "null" && (json.Unmarshal(raw, &obj) != nil || obj == nil) {
+				writeManagementError(w, http.StatusBadRequest, "invalid_request", "settings must be an object, or null for none")
+				return
+			}
+			settings = raw
+			continue
+		}
 		set, ok := patchFields[name]
 		if !ok {
-			writeManagementError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("%q cannot be changed here: send disabled or any of %s",
+			writeManagementError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("%q cannot be changed here: send disabled, settings or any of %s",
 				name, strings.Join(slices.Sorted(maps.Keys(patchFields)), ", ")))
 			return
 		}
@@ -439,8 +466,8 @@ func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 			return nil
 		})
 	}
-	if disabled == nil && len(changes) == 0 {
-		writeManagementError(w, http.StatusBadRequest, "invalid_request", "nothing to change: send disabled or a routing field")
+	if disabled == nil && settings == nil && len(changes) == 0 {
+		writeManagementError(w, http.StatusBadRequest, "invalid_request", "nothing to change: send disabled, settings or a routing field")
 		return
 	}
 	// Decode every field before changing anything, so a bad one changes nothing.
@@ -451,12 +478,16 @@ func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	var change func(*route.Account)
-	if len(changes) > 0 {
-		change = func(a *route.Account) {
+	var change func(*route.Account) error
+	if len(changes) > 0 || settings != nil {
+		change = func(a *route.Account) error {
 			for _, c := range changes {
 				_ = c(a) // each decoded above
 			}
+			if settings == nil {
+				return nil
+			}
+			return m.restoreSettings(a, settings)
 		}
 	}
 	rec, err := m.creds.SetAccount(id, change, disabled)
@@ -465,6 +496,24 @@ func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"account": m.view(rec)})
+}
+
+// restoreSettings sets a's settings to sent, with each placeholder replaced by the secret it
+// stands for in a's settings as they are now; null removes them.
+func (m *Management) restoreSettings(a *route.Account, sent json.RawMessage) error {
+	if string(sent) == "null" {
+		a.Settings = nil
+		return nil
+	}
+	b, err := m.redactor.Restore(sent, a.Settings, false)
+	switch {
+	case errors.Is(err, configdoc.ErrStale):
+		return fmt.Errorf("%w: settings: a redacted value matches no secret the account's settings hold now; read the account again", cred.ErrConflict)
+	case err != nil:
+		return fmt.Errorf("%w: settings: a redacted value is where no secret goes; write the value itself there", cred.ErrInvalid)
+	}
+	a.Settings = b
+	return nil
 }
 
 func (m *Management) remove(w http.ResponseWriter, r *http.Request) {

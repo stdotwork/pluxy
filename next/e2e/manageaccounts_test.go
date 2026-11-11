@@ -1,9 +1,11 @@
 package e2e
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -32,6 +34,7 @@ type accountView struct {
 	Cooldowns         []cooldownView
 	LastError         *struct{ Code, Message string } `json:"last_error"`
 	LastErrorAt       *time.Time                      `json:"last_error_at"`
+	Settings          json.RawMessage
 }
 
 // startAccountsCore runs core with the example OAuth provider and two accounts in its config
@@ -170,7 +173,6 @@ func TestManageAccountFields(t *testing.T) {
 		{"request_retry": -1},
 		{"request_retry": "2"},
 		{"priority": "high"},
-		{"settings": map[string]string{"base_url": "https://elsewhere.example"}},
 		{"disabled": nil},
 		{},
 	} {
@@ -188,6 +190,156 @@ func TestManageAccountFields(t *testing.T) {
 	}
 	if a := cleared.Account; a.Weight != nil || a.Prefix != "" || a.DisableCooling != nil || a.RequestRetry != nil || a.Disabled || a.Priority != 3 {
 		t.Fatalf("after nulls: %+v", a)
+	}
+}
+
+// PATCH /accounts/{id} replaces a login account's settings. GET /accounts shows them with a
+// placeholder in place of each secret, never the secret, and a placeholder sent back keeps the
+// secret it stands for. An account whose settings change starts with fresh routing state; one
+// sent its settings unchanged keeps it.
+func TestManageAccountSettings(t *testing.T) {
+	pkg := testPackage(t, "0.1.0")
+	base := runCore(t, map[string]any{
+		"listen": "127.0.0.1:0", "client_keys": []string{clientKey}, "management_key": managementKey,
+		"credentials_dir": filepath.Join(t.TempDir(), "credentials"),
+		"extension":       map[string]any{"manifest": filepath.Join(pkg, "pluxy-extension.json"), "accounts": []any{}},
+	})
+	const secret = "sk-account-settings-e2e"
+	var l loginReply
+	if code := manage(t, base, "POST", "/accounts", map[string]any{"id": "keyed", "method": "settings",
+		"input": map[string]string{"settings": `{"base_url":"https://one.example/v1","api_key":"` + secret + `"}`}}, &l); code != http.StatusAccepted {
+		t.Fatalf("login: %d", code)
+	}
+	for deadline := time.Now().Add(10 * time.Second); l.Login.State == "pending" && time.Now().Before(deadline); {
+		time.Sleep(20 * time.Millisecond)
+		manage(t, base, "GET", "/logins/"+l.Login.ID, nil, &l)
+	}
+	if l.Login.State != "done" {
+		t.Fatalf("login: %+v", l.Login)
+	}
+
+	placeholder := regexp.MustCompile(`^pluxy-redacted-[0-9a-f]{24}$`)
+	// listed returns the account's settings as GET /accounts shows them, checking that no reply
+	// of the management API holds the secret.
+	listed := func(reply []byte) map[string]any {
+		t.Helper()
+		if strings.Contains(string(reply), secret) {
+			t.Fatalf("the management API showed the secret: %s", reply)
+		}
+		var list struct{ Accounts []accountView }
+		var raw json.RawMessage
+		if code := manage(t, base, "GET", "/accounts", nil, &raw); code != http.StatusOK {
+			t.Fatalf("GET /accounts: %d", code)
+		}
+		if strings.Contains(string(raw), secret) {
+			t.Fatalf("GET /accounts showed the secret: %s", raw)
+		}
+		_ = json.Unmarshal(raw, &list)
+		for _, a := range list.Accounts {
+			if a.ID == "keyed" {
+				var s map[string]any
+				if err := json.Unmarshal(a.Settings, &s); err != nil {
+					t.Fatalf("settings %s: %v", a.Settings, err)
+				}
+				return s
+			}
+		}
+		t.Fatal("the account is not listed")
+		return nil
+	}
+	// received returns the settings the extension receives with a request.
+	received := func() map[string]any {
+		t.Helper()
+		var reply struct {
+			Choices []struct{ Message struct{ Content string } }
+		}
+		if err := json.Unmarshal([]byte(askOK(t, base, "account-settings")), &reply); err != nil || len(reply.Choices) != 1 {
+			t.Fatalf("reply: %v", err)
+		}
+		var s map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimSuffix(reply.Choices[0].Message.Content, " done")), &s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	patch := func(settings any) (int, []byte) {
+		t.Helper()
+		var raw json.RawMessage
+		code := manage(t, base, "PATCH", "/accounts/keyed", map[string]any{"settings": settings}, &raw)
+		return code, raw
+	}
+	cooldowns := func() int { t.Helper(); return len(getAccount(t, base, "keyed").Cooldowns) }
+
+	s := listed(nil)
+	key, _ := s["api_key"].(string)
+	if !placeholder.MatchString(key) || s["base_url"] != "https://one.example/v1" {
+		t.Fatalf("listed settings = %v, want base_url as set and api_key as a placeholder", s)
+	}
+	if code, body := ask(t, base, "rate-limited"); code != http.StatusTooManyRequests {
+		t.Fatalf("rate-limited model: %d %s", code, body)
+	}
+	if cooldowns() == 0 {
+		t.Fatal("no cooldown after the rate-limited request")
+	}
+
+	// The settings sent back as listed: the secret stays and so does the routing state.
+	code, reply := patch(s)
+	if code != http.StatusOK {
+		t.Fatalf("PATCH with the listed settings: %d %s", code, reply)
+	}
+	if got := listed(reply); got["api_key"] != key {
+		t.Fatalf("after PATCH: %v, want the same placeholder", got)
+	}
+	if got := received(); got["api_key"] != secret || got["base_url"] != "https://one.example/v1" {
+		t.Fatalf("the extension received %v after PATCH, want the secret kept", got)
+	}
+	if cooldowns() == 0 {
+		t.Fatal("unchanged settings dropped the account's cooldown")
+	}
+
+	// A refused change changes nothing.
+	for _, bad := range []struct {
+		settings any
+		code     int
+	}{
+		{"text", http.StatusBadRequest},
+		{[]string{"a"}, http.StatusBadRequest},
+		{map[string]any{"base_url": key, "api_key": key}, http.StatusBadRequest},                    // a placeholder where no secret goes
+		{map[string]any{"api_key": "pluxy-redacted-000000000000000000000000"}, http.StatusConflict}, // matches no secret the account holds
+	} {
+		if code, reply := patch(bad.settings); code != bad.code {
+			t.Errorf("PATCH settings %v: %d %s, want %d", bad.settings, code, reply, bad.code)
+		}
+	}
+	if got := received(); got["api_key"] != secret || got["base_url"] != "https://one.example/v1" || cooldowns() == 0 {
+		t.Fatalf("a refused PATCH changed the account: %v", got)
+	}
+
+	// Changed settings, with the secret kept by its placeholder: the account starts fresh.
+	if code, reply := patch(map[string]any{"base_url": "https://two.example/v1", "api_key": key, "websockets": true}); code != http.StatusOK {
+		t.Fatalf("PATCH with new settings: %d %s", code, reply)
+	} else if got := listed(reply); got["base_url"] != "https://two.example/v1" || got["api_key"] != key || got["websockets"] != true {
+		t.Fatalf("after PATCH: %v", got)
+	}
+	if got := received(); got["api_key"] != secret || got["base_url"] != "https://two.example/v1" {
+		t.Fatalf("the extension received %v, want the new base_url and the kept secret", got)
+	}
+	if n := cooldowns(); n != 0 {
+		t.Fatalf("%d cooldowns after the settings changed, want none", n)
+	}
+
+	// A new secret replaces the old one; null removes the settings.
+	if code, reply := patch(map[string]any{"api_key": "sk-new"}); code != http.StatusOK || strings.Contains(string(reply), "sk-new") {
+		t.Fatalf("PATCH with a new secret: %d %s", code, reply)
+	}
+	if got := received(); got["api_key"] != "sk-new" || got["base_url"] != nil {
+		t.Fatalf("the extension received %v, want only the new secret", got)
+	}
+	if code, reply := patch(nil); code != http.StatusOK {
+		t.Fatalf("PATCH settings null: %d %s", code, reply)
+	}
+	if a := getAccount(t, base, "keyed"); len(a.Settings) != 0 {
+		t.Fatalf("settings after null: %s", a.Settings)
 	}
 }
 

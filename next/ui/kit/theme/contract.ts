@@ -107,6 +107,10 @@ export const PARTS = [
   "account-test-result",
   "account-test-reply",
   "account-sign-in",
+  "account-settings",
+  "account-edit",
+  "account-edit-row",
+  "account-edit-discard",
 ] as const;
 
 export type Part = (typeof PARTS)[number];

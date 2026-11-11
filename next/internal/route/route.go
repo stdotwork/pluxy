@@ -27,6 +27,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/stdotwork/pluxy/next/llm"
@@ -241,7 +242,7 @@ func accountList(accounts []Account, gen uint64) ([]*Account, error) {
 			return nil, fmt.Errorf("account %q: %w", a.ID, err)
 		}
 		seen[a.ID] = true
-		a.gen = gen
+		a.gen, a.retired = gen, new(atomic.Bool)
 		out = append(out, &a)
 	}
 	return out, nil
@@ -249,14 +250,33 @@ func accountList(accounts []Account, gen uint64) ([]*Account, error) {
 
 // SetAccounts replaces the accounts requests are routed over. Requests already routing keep
 // the set they started with. Routing state of an account that leaves the set is dropped, so an
-// account added again later under the same ID starts clean.
-func (r *Router) SetAccounts(accounts []Account) error {
+// account added again later under the same ID starts clean. So is the state of an account that
+// stays but that same (as in State.Retain; nil: every account that stays is the same) reports
+// changed, as on a reload: its blocks, last error and session bindings, and blocks on an
+// endpoint that no unchanged account names. Outcomes that requests already routing see on its
+// old copy record nothing and bind no session.
+func (r *Router) SetAccounts(accounts []Account, same func(old, cur *Account) bool) error {
 	list, err := accountList(accounts, r.gen)
 	if err != nil {
 		return err
 	}
 	r.mu.Lock()
 	old := r.accounts
+	var changed []*Account
+	kept := map[string]bool{} // the endpoints of the accounts that stay unchanged
+	for _, a := range old {
+		i := slices.IndexFunc(list, func(b *Account) bool { return b.ID == a.ID })
+		switch {
+		case i < 0:
+		case same != nil && !same(a, list[i]):
+			changed = append(changed, a)
+		default:
+			kept[a.endpoint()] = true
+		}
+	}
+	// Before the new copies serve: a request that picks the old copy meanwhile records
+	// nothing on it.
+	r.state.restart(changed, kept)
 	r.accounts = list
 	r.picker.setOrder(list)
 	r.lists.clear()

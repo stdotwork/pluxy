@@ -952,6 +952,52 @@ func TestOldWeightsDoNotDisturbNewRotation(t *testing.T) {
 	h.wantAttempts("a", "b", "a", "b")
 }
 
+// setAccounts sets the router's accounts in place, as core does when an account added by login
+// changes, with "same" meaning same settings.
+func (h *harness) setAccounts(accounts ...Account) {
+	h.t.Helper()
+	if err := h.r.SetAccounts(accounts, func(old, cur *Account) bool { return string(old.Settings) == string(cur.Settings) }); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// An account whose settings change in place starts clean, as on a reload: its blocks go, and an
+// attempt that began on it before the change records nothing. An unchanged account keeps its
+// blocks.
+func TestSetAccountsRestartsChangedAccounts(t *testing.T) {
+	h := newHarness(t, Config{Strategy: StrategyFillFirst}, accts("a", "b", "c")...)
+	h.on("a", rateLimited(time.Hour))
+	h.on("b", rateLimited(time.Hour))
+	h.on("c", script{start(), rateLimited(time.Hour)[0]}) // a 429 after the reply started
+	older := h.r.Generate(context.Background(), h.req("m"))
+	older.Next() // a and b fail and are blocked; the attempt on c starts its reply
+	h.wantAttempts("a", "b", "c")
+	h.setAccounts(Account{ID: "a"}, withSettings(Account{ID: "b"}, `{"x":1}`), withSettings(Account{ID: "c"}, `{"x":1}`))
+	older.Next() // the attempt on the old c now fails with a 429
+	older.Close()
+	h.on("b", rateLimited(time.Hour))
+	h.on("c", ok())
+	h.attempts = nil
+	h.runOK("m")
+	h.wantAttempts("b", "c") // a is still blocked; b's block went, and c's late failure set none
+}
+
+// An account whose settings change in place loses its session bindings; one whose settings stay
+// keeps them.
+func TestSetAccountsUnbindsChangedAccounts(t *testing.T) {
+	h := newHarness(t, Config{SessionAffinity: &AffinityConfig{}}, accts("a", "b")...)
+	s1 := Request{LLM: llm.Request{Model: "m"}, Tenant: "t", Session: "s1"}
+	h.run(s1) // a, bound
+	h.setAccounts(Account{ID: "a"}, Account{ID: "b", Priority: 1})
+	h.attempts = nil
+	h.run(s1)
+	h.wantAttempts("a")
+	h.setAccounts(withSettings(Account{ID: "a"}, `{"x":1}`), Account{ID: "b", Priority: 1})
+	h.attempts = nil
+	h.run(s1)
+	h.wantAttempts("b")
+}
+
 // A request's own attempt function runs its attempts in place of the router's, with the
 // same retries and account state.
 func TestRequestAttempt(t *testing.T) {

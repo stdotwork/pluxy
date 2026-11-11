@@ -26,12 +26,51 @@ export interface Account {
   created_at?: string;
   updated_at?: string;
   priority?: number;
+  weight?: number;
+  disable_cooling?: boolean;
+  max_concurrency?: number;
+  request_retry?: number;
+  prefix?: string;
+  models?: AccountModelEntry[];
+  excluded_models?: string[];
+  model_alias?: AccountModelAlias[];
+  endpoint?: string;
+  /** An account added by login's settings, each secret replaced by a placeholder. */
+  settings?: Record<string, unknown>;
   check?: { state: string; detail?: string; error?: AccountError; at?: string };
   cooldown_until?: string;
   cooldowns?: AccountCooldown[];
   last_error?: AccountError;
   last_error_at?: string;
   active_requests?: number;
+}
+
+export interface AccountModelEntry {
+  name: string;
+  alias?: string;
+}
+
+export interface AccountModelAlias {
+  name: string;
+  alias: string;
+  fork?: boolean;
+  display_name?: string;
+}
+
+/** The fields PATCH /accounts/{id} changes; null sets one back to its default. */
+export interface AccountChange {
+  disabled?: boolean;
+  prefix?: string | null;
+  priority?: number | null;
+  weight?: number | null;
+  disable_cooling?: boolean | null;
+  max_concurrency?: number | null;
+  request_retry?: number | null;
+  models?: AccountModelEntry[] | null;
+  excluded_models?: string[] | null;
+  model_alias?: AccountModelAlias[] | null;
+  /** Replaces the settings as a whole; a placeholder from the account keeps its secret. */
+  settings?: Record<string, unknown> | null;
 }
 
 export interface AccountCooldown {
@@ -63,6 +102,8 @@ export const accountsApi = (host: Host) => ({
   accounts: () => host.call<{ accounts: Account[] }>("GET", "/accounts"),
   setDisabled: (id: string, disabled: boolean) =>
     host.call<{ account: Account }>("PATCH", `/accounts/${one(id)}`, { disabled }),
+  setAccount: (id: string, change: AccountChange) =>
+    host.call<{ account: Account }>("PATCH", `/accounts/${one(id)}`, change),
   refresh: (id: string) => host.call<{ account: Account }>("POST", `/accounts/${one(id)}/refresh`),
   accountModels: (id: string) => host.call<{ models: AccountModel[] }>("GET", `/accounts/${one(id)}/models`),
   testAccount: (id: string, model?: string) =>
