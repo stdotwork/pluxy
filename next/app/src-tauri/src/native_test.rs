@@ -214,8 +214,7 @@ fn run(app: &AppHandle) -> Result<(), String> {
 }
 
 fn startup(app: &AppHandle, stage: &str) -> Result<(), String> {
-    let silent = stage == "silent";
-    if !silent {
+    if stage == "enable" || stage == "disable" {
         let main = wait_for("the startup settings window", || app.get_webview(MAIN))?;
         let enabled = stage == "enable";
         main.eval(format!(
@@ -227,6 +226,9 @@ fn startup(app: &AppHandle, stage: &str) -> Result<(), String> {
         if result["ok"] != true {
             return Err(format!("startup settings command failed: {result}"));
         }
+    }
+    if let Some(main) = app.get_webview(MAIN) {
+        wait_for("startup window shell", || eval(&main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true))?;
     }
     let connection = app.state::<App>().conn.lock().unwrap().view();
     log(
