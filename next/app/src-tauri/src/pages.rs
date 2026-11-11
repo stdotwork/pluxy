@@ -145,6 +145,8 @@ pub fn serve(
     #[cfg(feature = "native-test")]
     let csp = if pages.ingress_fixture {
         csp.replace("frame-src ", "frame-src pluxy-page: ")
+            .replace("script-src 'self'", "script-src pluxy-page:")
+            .replace("connect-src 'self'", "connect-src pluxy-page:")
     } else {
         csp
     };
@@ -180,7 +182,7 @@ pub fn serve(
             served(
                 200,
                 "text/html",
-                "<script type=module src=ingress-test.js></script>",
+                "<script defer src=ingress-test.js></script>",
                 csp,
             ),
             None,
