@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -21,17 +22,46 @@ func apiKeyCall(base, key string) sdk.LoginCall {
 }
 
 func TestAPIKeyLoginHost(t *testing.T) {
-	var leaked atomic.Int32
-	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { leaked.Add(1) }))
-	defer other.Close()
-	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, other.URL, http.StatusTemporaryRedirect)
-	}))
-	defer redirect.Close()
-	_, err := login(context.Background(), apiKeyCall(redirect.URL, "made-up-login-key"), nil)
-	if err == nil || leaked.Load() != 0 {
-		t.Fatalf("redirect: error %v, forwarded requests %d", err, leaked.Load())
+	for _, wire := range []string{"chat", "messages", "gemini"} {
+		t.Run(wire, func(t *testing.T) {
+			var requests, keys atomic.Int32
+			other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				if r.Header.Get("Authorization") != "" || r.Header.Get("X-Api-Key") != "" || r.Header.Get("X-Goog-Api-Key") != "" {
+					keys.Add(1)
+				}
+			}))
+			defer other.Close()
+			redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, other.URL, http.StatusTemporaryRedirect)
+			}))
+			defer redirect.Close()
+			call := apiKeyCall(redirect.URL, "made-up-login-key")
+			call.Input["wire_api"] = wire
+			_, err := login(context.Background(), call, nil)
+			if err == nil || requests.Load() != 0 || keys.Load() != 0 {
+				t.Fatalf("cross-port redirect: error %v, requests %d, keys %d", err, requests.Load(), keys.Load())
+			}
+		})
 	}
+	t.Run("same origin", func(t *testing.T) {
+		var calls atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			if !strings.HasSuffix(r.URL.Path, "/") {
+				http.Redirect(w, r, r.URL.Path+"/", http.StatusTemporaryRedirect)
+				return
+			}
+			if r.Header.Get("Authorization") != "Bearer made-up-login-key" {
+				t.Error("redirect lost key")
+			}
+		}))
+		defer srv.Close()
+		_, err := login(context.Background(), apiKeyCall(srv.URL, "made-up-login-key"), nil)
+		if err != nil || calls.Load() != 2 {
+			t.Fatalf("same-origin redirect: error %v, requests %d", err, calls.Load())
+		}
+	})
 }
 
 func TestAPIKeyLoginError(t *testing.T) {
@@ -114,15 +144,52 @@ func TestAPIKeyLoginWireAPI(t *testing.T) {
 			}
 		})
 	}
-	for _, base := range []string{"", "file:///tmp/fake", "https://user:password@example.com/v1", "https://example.com/v1?key=value", "https://example.com/v1#fragment"} {
-		call := sdk.LoginCall{Method: "api_key", Input: map[string]string{"api_key": "made-up-key", "base_url": base}}
-		if _, err := login(context.Background(), call, nil); err == nil {
-			t.Fatalf("accepted base_url %q", base)
-		}
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
+	defer srv.Close()
+	for _, kind := range []string{"missing", "scheme", "userinfo", "query", "fragment"} {
+		t.Run(kind, func(t *testing.T) {
+			u, _ := url.Parse(srv.URL + "/v1")
+			switch kind {
+			case "missing":
+				u = &url.URL{}
+			case "scheme":
+				u.Scheme = "file"
+			case "userinfo":
+				u.User = url.UserPassword("user", "made-up-password")
+			case "query":
+				u.RawQuery = "key=value"
+			case "fragment":
+				u.Fragment = "fragment"
+			}
+			call := sdk.LoginCall{Method: "api_key", Input: map[string]string{"api_key": "made-up-key", "base_url": u.String()}}
+			_, err := login(context.Background(), call, nil)
+			if err == nil || calls.Load() != 0 {
+				t.Fatalf("unsafe URL: error %v, requests %d", err, calls.Load())
+			}
+		})
 	}
+
 	call := apiKeyCall("https://example.com/v1", "made-up-key")
 	call.Input["wire_api"] = "invalid"
 	if _, err := login(context.Background(), call, nil); err == nil {
 		t.Fatal("accepted invalid wire_api")
+	}
+}
+
+func TestAPIKeyLoginNullSettings(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
+	defer srv.Close()
+	for _, field := range []string{"base_url", "wire_api"} {
+		t.Run(field, func(t *testing.T) {
+			settings, _ := json.Marshal(map[string]any{field: nil})
+			call := sdk.LoginCall{Method: "api_key", Account: protocol.Account{Settings: settings}, Input: map[string]string{"base_url": srv.URL, "wire_api": "chat", "api_key": "made-up-key"}}
+			_, err := login(context.Background(), call, nil)
+			var e *llm.Error
+			if !errors.As(err, &e) || e.Code != llm.CodeInvalidRequest || calls.Load() != 0 {
+				t.Fatalf("null %s: error %v, requests %d", field, err, calls.Load())
+			}
+		})
 	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -30,6 +31,13 @@ func login(ctx context.Context, call sdk.LoginCall, _ *sdk.LoginSession) (*proto
 	if len(call.Account.Settings) > 0 && string(call.Account.Settings) != "null" {
 		if json.Unmarshal(call.Account.Settings, &set) != nil {
 			return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "account settings are not valid JSON", Scope: llm.ScopeCredential}
+		}
+	}
+	var explicit map[string]json.RawMessage
+	_ = json.Unmarshal(call.Account.Settings, &explicit)
+	for _, name := range []string{"base_url", "wire_api"} {
+		if raw, ok := explicit[name]; ok && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: name + " must be a string, not null", Scope: llm.ScopeRequest}
 		}
 	}
 	// Explicit account settings win over login inputs, just as they win over grant defaults.
@@ -81,9 +89,7 @@ func login(ctx context.Context, call sdk.LoginCall, _ *sdk.LoginSession) (*proto
 	setKey(req, wire, key, nil)
 	req.Header.Set("Accept", "application/json")
 	req, sent := sdk.TrackSend(req)
-	loginClient := *client
-	loginClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	resp, err := loginClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()

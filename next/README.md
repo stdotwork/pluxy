@@ -101,8 +101,9 @@ selected API's authentication header, and returns the URL and wire API as non-se
 settings. Each key is a separate account; several keys for one upstream use the same URL.
 The key is kept only in core's credential store, never written to `config.yaml` or shown in
 management replies. A re-login needs only `api_key` and uses the account's existing settings.
-A refused key keeps the upstream's reason with secrets removed; an upstream without a model
-list cannot be added by this login. Configured accounts continue to work as before.
+A refused key keeps the upstream's reason with secrets removed. The check accepts any 2xx
+reply from the model-list URL, so a wrong URL that answers 2xx is accepted too, as with Claude
+and Gemini key checks. Configured accounts continue to work as before.
 
 An account's `settings` may set `"wire_api": "responses"` for an upstream that speaks OpenAI
 Responses (`POST {base_url}/responses`), or `"wire_api": "messages"` for one that speaks Anthropic

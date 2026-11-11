@@ -21,17 +21,46 @@ func apiKeyCall(base, key string) sdk.LoginCall {
 }
 
 func TestAPIKeyLoginHost(t *testing.T) {
-	var leaked atomic.Int32
-	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { leaked.Add(1) }))
-	defer other.Close()
-	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, other.URL, http.StatusTemporaryRedirect)
-	}))
-	defer redirect.Close()
-	_, err := login(context.Background(), apiKeyCall(redirect.URL, "made-up-login-key"), nil)
-	if err == nil || leaked.Load() != 0 {
-		t.Fatalf("redirect: error %v, forwarded requests %d", err, leaked.Load())
+	for _, wire := range []string{"chat", "messages", "gemini"} {
+		t.Run(wire, func(t *testing.T) {
+			var requests, keys atomic.Int32
+			other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				if r.Header.Get("Authorization") != "" || r.Header.Get("X-Api-Key") != "" || r.Header.Get("X-Goog-Api-Key") != "" {
+					keys.Add(1)
+				}
+			}))
+			defer other.Close()
+			redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, other.URL, http.StatusTemporaryRedirect)
+			}))
+			defer redirect.Close()
+			call := apiKeyCall(redirect.URL, "made-up-login-key")
+			call.Input["wire_api"] = wire
+			_, err := login(context.Background(), call, nil)
+			if err == nil || requests.Load() != 0 || keys.Load() != 0 {
+				t.Fatalf("cross-port redirect: error %v, requests %d, keys %d", err, requests.Load(), keys.Load())
+			}
+		})
 	}
+	t.Run("same origin", func(t *testing.T) {
+		var calls atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			if !strings.HasSuffix(r.URL.Path, "/") {
+				http.Redirect(w, r, r.URL.Path+"/", http.StatusTemporaryRedirect)
+				return
+			}
+			if r.Header.Get("Authorization") != "Bearer made-up-login-key" {
+				t.Error("redirect lost key")
+			}
+		}))
+		defer srv.Close()
+		_, err := login(context.Background(), apiKeyCall(srv.URL, "made-up-login-key"), nil)
+		if err != nil || calls.Load() != 2 {
+			t.Fatalf("same-origin redirect: error %v, requests %d", err, calls.Load())
+		}
+	})
 }
 
 func TestAPIKeyLoginError(t *testing.T) {

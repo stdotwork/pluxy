@@ -454,10 +454,7 @@ func apiKeyLogin(ctx context.Context, set settings, key string) (*protocol.Grant
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Accept", "application/json")
 	req, sent := sdk.TrackSend(req)
-	// Use the generation transport, but follow no redirects during sign-in.
-	loginClient := *client
-	loginClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	resp, err := loginClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()

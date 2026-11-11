@@ -2,8 +2,10 @@ package e2e
 
 import (
 	"encoding/json"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -54,7 +56,7 @@ func TestProviderAPIKeyLogin(t *testing.T) {
 				reason = "Incorrect API key provided"
 				verify = func() {
 					if calls.Load() != 2 || models.Load() < 3 {
-						t.Errorf("upstream: %d chats, %d model reads; want 2 chats and at least 3 model reads (login plus background checks)", calls.Load(), models.Load())
+						t.Errorf("upstream: %d chats, %d model reads; want 2 chats and at least 3 model reads (two successful logins and one refusal)", calls.Load(), models.Load())
 					}
 				}
 			case "xai":
@@ -79,7 +81,7 @@ func TestProviderAPIKeyLogin(t *testing.T) {
 			if provider == "openai-compatible" {
 				manifest = filepath.Join(binDir, "pluxy-extension.json")
 			}
-			base, logs := runCoreLogged(t, map[string]any{
+			base, configPath, logs := runCoreArgs(t, map[string]any{
 				"listen": "127.0.0.1:0", "client_keys": []string{clientKey}, "management_key": managementKey,
 				"credentials_dir": filepath.Join(t.TempDir(), "credentials"),
 				"extension":       map[string]any{"manifest": manifest, "accounts": []any{}},
@@ -92,7 +94,7 @@ func TestProviderAPIKeyLogin(t *testing.T) {
 			}
 			var raw json.RawMessage
 			code := manage(t, base, "GET", "/login-methods", nil, &raw)
-			// Keep this assertion independent of the account-creation check: the old core must refuse it.
+			// Check discovery independently of account creation: the method was absent before this change.
 			if code != 200 {
 				t.Fatalf("login methods: %d", code)
 			}
@@ -180,6 +182,30 @@ func TestProviderAPIKeyLogin(t *testing.T) {
 			json.Unmarshal(raw, &accounts)
 			if len(accounts.Accounts) != 1 || accounts.Accounts[0].ID != "good" {
 				t.Fatalf("accounts: %s", raw)
+			}
+			// The credential store is outside this config folder. Nothing written beside the
+			// config, including config.json or any config.yaml, may contain the account's key.
+			files := 0
+			err := filepath.WalkDir(filepath.Dir(configPath), func(path string, entry fs.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				if entry.IsDir() {
+					return nil
+				}
+				raw, err := os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				files++
+				secretFree(raw)
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if files == 0 {
+				t.Fatal("no config files inspected")
 			}
 			verify()
 			logs.mu.Lock()
