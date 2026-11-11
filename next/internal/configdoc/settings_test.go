@@ -2,6 +2,7 @@ package configdoc
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -48,5 +49,30 @@ func TestRedactSettings(t *testing.T) {
 	_ = json.Unmarshal([]byte(src), &b)
 	if !reflect.DeepEqual(a, b) {
 		t.Errorf("restored = %s, want %s", back, src)
+	}
+}
+
+// In settings, a placeholder goes back only where its secret is: in its own place, or within its
+// own list in any order. A config document's placeholder may still move between secret keys.
+func TestRestoreSettingsKeepsSecretsInPlace(t *testing.T) {
+	r := NewRedactor()
+	cur := []byte(`{"api_key":"fake-a","password":"fake-b","api_keys":["fake-c","fake-d"]}`)
+	a, b, c, d := r.Placeholder("fake-a"), r.Placeholder("fake-b"), r.Placeholder("fake-c"), r.Placeholder("fake-d")
+	swapped := []byte(`{"api_key":"` + b + `","password":"` + a + `"}`)
+	if _, err := r.RestoreSettings(swapped, cur); !errors.Is(err, ErrInvalid) || errors.Is(err, ErrStale) {
+		t.Errorf("swapped placeholders: err = %v, want ErrInvalid only", err)
+	}
+	if _, err := r.RestoreSettings([]byte(`{"api_keys":"`+c+`"}`), cur); !errors.Is(err, ErrInvalid) {
+		t.Errorf("a list item's placeholder outside its list: err = %v, want ErrInvalid", err)
+	}
+	out, err := r.RestoreSettings([]byte(`{"api_keys":["`+d+`","`+c+`"],"api_key":"`+a+`"}`), cur)
+	if err != nil || string(out) != `{"api_keys":["fake-d","fake-c"],"api_key":"fake-a"}` {
+		t.Errorf("reordered list = %s, %v", out, err)
+	}
+	if _, err := r.RestoreSettings([]byte(`{"api_key":"pluxy-redacted-000000000000000000000000"}`), cur); !errors.Is(err, ErrStale) {
+		t.Errorf("unknown placeholder at a secret key: err = %v, want ErrStale", err)
+	}
+	if out, err := r.Restore(swapped, cur, false); err != nil || string(out) != `{"api_key":"fake-b","password":"fake-a"}` {
+		t.Errorf("config restore of moved placeholders = %s, %v; want them accepted", out, err)
 	}
 }

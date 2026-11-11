@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -305,27 +306,44 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 		return edited, nil
 	}
 	// Each placeholder goes back as the secret's text in current, so it keeps its quotes, or
-	// in JSON its type.
-	type secret struct{ value, tag, text string }
+	// in JSON its type. In settings, it goes back only where the secret is in current (paths).
+	type secret struct {
+		value, tag, text string
+		paths            map[string]bool
+	}
 	values := map[string]secret{}
 	if cur, err := Parse(current, isYAML); err == nil {
+		where := paths(cur.root)
 		for _, n := range secrets(cur.root, settings) {
-			s := secret{value: n.Value, tag: n.Tag}
-			if sp, ok := cur.span(n); ok {
-				s.text = string(cur.src[sp.start:sp.end])
+			p := r.Placeholder(n.Value)
+			s, seen := values[p]
+			if !seen {
+				s = secret{value: n.Value, tag: n.Tag, paths: map[string]bool{}}
+				if sp, ok := cur.span(n); ok {
+					s.text = string(cur.src[sp.start:sp.end])
+				}
 			}
-			values[r.Placeholder(n.Value)] = s
+			s.paths[where[n]] = true
+			values[p] = s
 		}
 	}
 	allowed := secrets(d.root, settings)
+	var where map[*yaml.Node]string
+	if settings {
+		where = paths(d.root)
+	}
 	repl := map[*yaml.Node]secret{}
 	for _, n := range held {
 		s, ok := values[n.Value]
-		// A URL that is a secret is one wherever it is, so its placeholder may go anywhere.
-		if !slices.Contains(allowed, n) && !(ok && secretURL(s.value)) {
+		switch {
+		case settings && ok && !s.paths[where[n]]:
+			return nil, fmt.Errorf("%w: line %d: a redacted value is not where its secret is; write the value itself there", ErrInvalid, d.line(n))
+		case settings && !slices.Contains(allowed, n),
+			// A URL that is a secret is one wherever it is, so in a config file its placeholder
+			// may go anywhere.
+			!settings && !slices.Contains(allowed, n) && !(ok && secretURL(s.value)):
 			return nil, fmt.Errorf("%w: line %d: a redacted value is where no secret goes; write the value itself there", ErrInvalid, d.line(n))
-		}
-		if !ok {
+		case !ok:
 			return nil, fmt.Errorf("line %d: %w", d.line(n), ErrStale)
 		}
 		repl[n] = s
@@ -361,6 +379,28 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 		return nil, fmt.Errorf("%w: could not put the redacted secrets back", ErrInvalid)
 	}
 	return out, nil
+}
+
+// paths returns where each node under root is: the keys leading to it, with [] for a list item
+// (any index, so items may be reordered within their list).
+func paths(root *yaml.Node) map[*yaml.Node]string {
+	out := map[*yaml.Node]string{}
+	var walk func(n *yaml.Node, at string)
+	walk = func(n *yaml.Node, at string) {
+		out[n] = at
+		switch n.Kind {
+		case yaml.MappingNode:
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				walk(n.Content[i+1], at+"."+strconv.Quote(n.Content[i].Value))
+			}
+		case yaml.SequenceNode:
+			for _, c := range n.Content {
+				walk(c, at+"[]")
+			}
+		}
+	}
+	walk(root, "")
+	return out
 }
 
 // restored reports whether a document holds no placeholder and holds each wanted secret value

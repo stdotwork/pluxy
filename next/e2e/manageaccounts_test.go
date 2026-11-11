@@ -3,8 +3,10 @@ package e2e
 import (
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -206,11 +208,12 @@ func TestManageAccountSettings(t *testing.T) {
 	})
 	const secret = "sk-account-settings-e2e"
 	// Every value below a key named like a secret is one too, however deep.
-	hidden := []string{secret, "sk-nested-object-e2e", "sk-nested-list-e2e"}
+	hidden := []string{secret, "sk-nested-object-e2e", "sk-nested-list-e2e", "sk-other-e2e", "sk-first-e2e", "sk-second-e2e"}
 	var l loginReply
 	if code := manage(t, base, "POST", "/accounts", map[string]any{"id": "keyed", "method": "settings",
 		"input": map[string]string{"settings": `{"base_url":"https://one.example/v1","api_key":"` + secret +
-			`","password":{"primary":"sk-nested-object-e2e"},"api_keys":[["sk-nested-list-e2e"]]}`}}, &l); code != http.StatusAccepted {
+			`","password":{"primary":"sk-nested-object-e2e"},"api_keys":[["sk-nested-list-e2e"]],"secret_key":"sk-other-e2e",` +
+			`"client_keys":["sk-first-e2e","sk-second-e2e"]}`}}, &l); code != http.StatusAccepted {
 		t.Fatalf("login: %d", code)
 	}
 	for deadline := time.Now().Add(10 * time.Second); l.Login.State == "pending" && time.Now().Before(deadline); {
@@ -313,13 +316,28 @@ func TestManageAccountSettings(t *testing.T) {
 		{[]string{"a"}, http.StatusBadRequest},
 		{map[string]any{"base_url": key, "api_key": key}, http.StatusBadRequest},                    // a placeholder where no secret goes
 		{map[string]any{"api_key": "pluxy-redacted-000000000000000000000000"}, http.StatusConflict}, // matches no secret the account holds
+		{map[string]any{"api_key": s["secret_key"], "secret_key": key}, http.StatusBadRequest},      // another secret's placeholder
 	} {
 		if code, reply := patch(bad.settings); code != bad.code {
 			t.Errorf("PATCH settings %v: %d %s, want %d", bad.settings, code, reply, bad.code)
 		}
 	}
-	if got := received(); got["api_key"] != secret || got["base_url"] != "https://one.example/v1" || cooldowns() == 0 {
+	if got := received(); got["api_key"] != secret || got["secret_key"] != "sk-other-e2e" || got["base_url"] != "https://one.example/v1" || cooldowns() == 0 {
 		t.Fatalf("a refused PATCH changed the account: %v", got)
+	}
+
+	// Within a list, placeholders may move: the secrets move with them.
+	order, _ := s["client_keys"].([]any)
+	if len(order) != 2 {
+		t.Fatalf("client_keys listed as %v", s["client_keys"])
+	}
+	moved := maps.Clone(s)
+	moved["client_keys"] = []any{order[1], order[0]}
+	if code, reply := patch(moved); code != http.StatusOK {
+		t.Fatalf("PATCH with the list reordered: %d %s", code, reply)
+	}
+	if got := received(); !reflect.DeepEqual(got["client_keys"], []any{"sk-second-e2e", "sk-first-e2e"}) || got["api_key"] != secret {
+		t.Fatalf("the extension received %v, want client_keys reordered", got)
 	}
 
 	// Changed settings, with the secret kept by its placeholder: the account starts fresh.
