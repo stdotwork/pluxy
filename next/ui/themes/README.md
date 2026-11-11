@@ -230,6 +230,17 @@ These stay stable within a theme contract version:
 | `data-part="flow"` | A reusable account sign-in flow: inputs, prompts, waiting and terminal states. |
 | `data-part="device-code"` | The user code to enter on a device sign-in page. |
 | `data-part="tier"` | A Routing priority tier, containing its heading and account list. |
+| `data-part="account-tools"` | Account detail health and tools. |
+| `data-part="account-check"` | Account check and recent request health. |
+| `data-part="account-cooldowns"` | Account routing cooldown list. |
+| `data-part="account-cooldown-confirm"` | Explanation of the local cooldown reset. |
+| `data-part="account-tool-actions"` | Account tool buttons. |
+| `data-part="account-config-link"` | Link to edit a config account. |
+| `data-part="account-test-hint"` | Account test cost and behavior. |
+| `data-part="account-models"` | Supported models and test model choice. |
+| `data-part="account-test-result"` | The last explicit account test result. |
+| `data-part="account-test-reply"` | The start of the test reply. |
+| `data-part="account-sign-in"` | Sign in to an existing account again. |
 
 Every other class name, element and attribute can change in any release.
 

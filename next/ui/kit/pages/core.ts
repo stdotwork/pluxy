@@ -11,6 +11,7 @@ import { quotaPage } from "./quota";
 import { routingPage } from "./routing";
 import { statusPage } from "./status";
 import { themesPage } from "./themes";
+import { usagePage } from "./usage";
 
 export const corePages = (): PageDef[] => [
   statusPage(),
@@ -18,6 +19,7 @@ export const corePages = (): PageDef[] => [
   addAccountPage(),
   routingPage(),
   quotaPage(),
+  usagePage(),
   configPage(),
   extensionsPage(),
   themesPage(),
