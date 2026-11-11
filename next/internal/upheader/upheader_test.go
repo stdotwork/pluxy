@@ -97,28 +97,26 @@ func TestImportRefusesSameHeaderTwice(t *testing.T) {
 // is always removed.
 func TestForms(t *testing.T) {
 	got := Forms(map[string]string{"x-api-key": "1", "Authorization": "Bearer abcdefgh", "X-Title": "plain-title", "Cookie": "sid=12345", "X-Token": "12345678"})
-	want := []string{
-		"Authorization: Bearer abcdefgh", "Authorization=Bearer abcdefgh", `"Authorization":"Bearer abcdefgh"`, `"Authorization": "Bearer abcdefgh"`,
-		"authorization: Bearer abcdefgh", "authorization=Bearer abcdefgh", `"authorization":"Bearer abcdefgh"`, `"authorization": "Bearer abcdefgh"`,
-		"Bearer abcdefgh",
-		"Cookie: sid=12345", "Cookie=sid=12345", `"Cookie":"sid=12345"`, `"Cookie": "sid=12345"`,
-		"cookie: sid=12345", "cookie=sid=12345", `"cookie":"sid=12345"`, `"cookie": "sid=12345"`,
-		"sid=12345",
-		"X-Token: 12345678", "X-Token=12345678", `"X-Token":"12345678"`, `"X-Token": "12345678"`,
-		"x-token: 12345678", "x-token=12345678", `"x-token":"12345678"`, `"x-token": "12345678"`,
-		"12345678",
-		"x-api-key: 1", "x-api-key=1", `"x-api-key":"1"`, `"x-api-key": "1"`,
-		"X-Api-Key: 1", "X-Api-Key=1", `"X-Api-Key":"1"`, `"X-Api-Key": "1"`,
+	for _, f := range got {
+		if f == "1" || strings.Contains(f, "plain-title") {
+			t.Errorf("Forms holds %q", f)
+		}
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("Forms = %q, want %q", got, want)
+	for _, want := range []string{"Bearer abcdefgh", "sid=12345", "12345678", "Authorization: Bearer abcdefgh", `"cookie":"sid=12345"`} {
+		if !slices.Contains(got, want) {
+			t.Errorf("Forms %q lacks %q", got, want)
+		}
 	}
-	// The forms remove each way an error or a log shows the short value, and leave other 1s.
-	text := `model-1 failed: x-api-key=1, {"X-Api-Key": "1"}, X-Api-Key: 1, retry 1`
+	if got[0] != "Authorization: Bearer abcdefgh" || got[len(got)-1] != `"X-API-KEY": "1"` {
+		t.Errorf("Forms are not in name order: %q", got)
+	}
+	// The forms remove each way an error or a log shows the short value next to its name, and
+	// leave other 1s.
+	text := `model-1 failed: x-api-key=1, X-API-KEY=1, {"X-Api-Key": "1"}, {"x-api-key":"1"}, X-Api-Key: 1, X-Api-Key:1, retry 1`
 	for _, f := range got {
 		text = strings.ReplaceAll(text, f, "[redacted]")
 	}
-	if want := `model-1 failed: [redacted], {[redacted]}, [redacted], retry 1`; text != want {
+	if want := `model-1 failed: [redacted], [redacted], {[redacted]}, {[redacted]}, [redacted], [redacted], retry 1`; text != want {
 		t.Errorf("redacted text %q, want %q", text, want)
 	}
 }

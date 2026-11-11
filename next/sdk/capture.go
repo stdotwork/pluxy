@@ -213,16 +213,15 @@ func (b teeBody) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// sentBody is one copy of a request body the transport sends: its first read makes it the copy
-// recorded.
+// sentBody is one copy of a request body the transport sends: each read makes it the copy
+// recorded, so the one read last is.
 type sentBody struct {
 	teeBody
-	once sync.Once
-	use  func()
+	use func()
 }
 
 func (b *sentBody) Read(p []byte) (int, error) {
-	b.once.Do(b.use)
+	b.use()
 	return b.teeBody.Read(p)
 }
 
