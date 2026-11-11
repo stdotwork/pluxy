@@ -2,12 +2,15 @@
 use tauri::AppHandle;
 
 pub(crate) struct Input {
+    #[cfg(target_os = "linux")]
+    pub key: gtk::glib::GString,
+    #[cfg(not(target_os = "linux"))]
     pub key: String,
     pub remember: bool,
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) fn request(app: &AppHandle) -> Result<Option<Input>, &'static str> {
+pub(crate) fn request(app: &AppHandle, summary: String) -> Result<Option<Input>, &'static str> {
     use gtk::prelude::*;
     use std::{cell::RefCell, rc::Rc, sync::mpsc};
     use tauri::Manager;
@@ -34,7 +37,7 @@ pub(crate) fn request(app: &AppHandle) -> Result<Option<Input>, &'static str> {
         let content = dialog.content_area();
         content.set_border_width(16);
         content.set_spacing(12);
-        let label = gtk::Label::new(Some("Management key"));
+        let label = gtk::Label::new(Some(&summary));
         label.set_xalign(0.0);
         content.add(&label);
         let entry = gtk::Entry::new();
@@ -54,7 +57,7 @@ pub(crate) fn request(app: &AppHandle) -> Result<Option<Input>, &'static str> {
                 return;
             };
             let input = (response == gtk::ResponseType::Accept).then(|| Input {
-                key: secret.text().to_string(),
+                key: secret.text(),
                 remember: keep.is_active(),
             });
             secret.set_text("");
@@ -78,6 +81,6 @@ pub(crate) fn request(app: &AppHandle) -> Result<Option<Input>, &'static str> {
 }
 
 #[cfg(not(target_os = "linux"))]
-pub(crate) fn request(_: &AppHandle) -> Result<Option<Input>, &'static str> {
+pub(crate) fn request(_: &AppHandle, _: String) -> Result<Option<Input>, &'static str> {
     Err("native key entry is currently supported on Linux only")
 }

@@ -185,6 +185,14 @@ pub struct Connection {
     error: Option<String>,
 }
 
+/// Validated native destination, frozen before asking for a secret.
+pub(crate) struct KeyTarget {
+    settings: Settings,
+    client: Client,
+    revision: u64,
+    pub summary: String,
+}
+
 /// What a call needs, taken out of the connection so no lock is held while it runs.
 #[derive(Clone)]
 pub struct Caller {
@@ -295,30 +303,86 @@ impl Connection {
         self.error.clone().map_or(Ok(()), Err)
     }
 
-    /// Native-only authenticated connection change. Cancel never calls this method.
+    pub(crate) fn prepare_key(&self, change: Option<Change>) -> Result<KeyTarget, String> {
+        let ch = change.unwrap_or_else(|| Change {
+            mode: self.settings.mode,
+            url: self.settings.url.clone(),
+            ca_file: self.settings.ca_file.clone(),
+            core_path: None,
+        });
+        let mode = ch.mode.ok_or("choose a local or remote core")?;
+        let url = ch.url.as_deref().unwrap_or("");
+        let base = match mode {
+            Mode::Local => local_origin(url)?,
+            Mode::Remote => remote_origin(url)?,
+            Mode::Managed => return Err("the app signs in to its own core by itself".into()),
+        };
+        let ca_file = ch.ca_file.filter(|f| !f.is_empty() && mode == Mode::Remote);
+        let certs = match &ca_file {
+            Some(f) => Some(certificates(
+                &fs::read(f).map_err(|e| format!("certificate authority {f}: {e}"))?,
+            )?),
+            None => None,
+        };
+        let mut summary = format!("Key for {base}");
+        if let Some(ca) = &ca_file {
+            summary.push_str(&format!("\nCertificate authority: {ca}"));
+        }
+        let previous = self.client.as_ref().map(|c| c.base());
+        if previous != Some(base.as_str()) {
+            summary.push_str(&format!(
+                "\nSwitches from {} to {base}",
+                previous.unwrap_or("not connected")
+            ));
+        }
+        Ok(KeyTarget {
+            client: Client::new(&base, certs),
+            revision: self.revision,
+            summary,
+            settings: Settings {
+                mode: Some(mode),
+                url: Some(base),
+                ca_file,
+                ..Settings::default()
+            },
+        })
+    }
+
+    pub(crate) fn finish_key(
+        &mut self,
+        mut target: KeyTarget,
+        key: &str,
+        remember: bool,
+    ) -> Result<(), String> {
+        if self.revision != target.revision {
+            return Err("The connection changed. Open key entry again.".into());
+        }
+        check_key(&target.client, key)?;
+        target.settings.key = remember.then(|| key.to_owned());
+        target.settings.save(&self.dirs.settings())?;
+        self.stop_core();
+        self.revision += 1;
+        self.settings = target.settings;
+        self.client = Some(target.client);
+        self.key = Some(key.to_owned());
+        self.error = None;
+        Ok(())
+    }
+
+    #[cfg(test)]
     pub(crate) fn enter_key(
         &mut self,
         ch: Option<Change>,
         key: &str,
         remember: bool,
     ) -> Result<(), String> {
-        if let Some(ch) = ch {
-            if !matches!(ch.mode, Some(Mode::Local | Mode::Remote)) {
-                return Err("choose a local or remote core".into());
-            }
-            self.apply_change(ch, Some((key, remember)))
-        } else {
-            self.sign_in(key, remember)
-        }
+        let target = self.prepare_key(ch)?;
+        self.finish_key(target, key, remember)
     }
 
     /// Applies what the person set, after checking it; saves it once it is accepted. On a refused
     /// change, the connection stays as it was.
     pub fn change(&mut self, ch: Change) -> Result<(), String> {
-        self.apply_change(ch, None)
-    }
-
-    fn apply_change(&mut self, ch: Change, entry: Option<(&str, bool)>) -> Result<(), String> {
         let mode = ch.mode.ok_or("choose a mode")?;
         let mut next = Settings {
             mode: Some(mode),
@@ -347,21 +411,14 @@ impl Connection {
                 let same = self.settings.mode == Some(mode)
                     && self.settings.url == next.url
                     && self.settings.ca_file == next.ca_file;
-                let key = entry.map(|(key, _)| key.to_string());
                 let client = Client::new(&base, certs);
-                // Reuse the validated client rather than rereading TLS files after committing.
-                if let Some(k) = &key {
-                    check_key(&client, k)?;
-                }
-                let session = match &key {
-                    Some(k) => Some(k.clone()),
-                    None if same => self.key.clone(),
-                    None => None,
+                // A metadata-only change preserves an existing key only for this same target.
+                let session = if same { self.key.clone() } else { None };
+                next.key = if same {
+                    self.settings.key.clone()
+                } else {
+                    None
                 };
-                // The key the app will have, kept only when the person asks.
-                next.key = session.clone().filter(|_| {
-                    entry.map_or(same && self.settings.key.is_some(), |(_, keep)| keep)
-                });
                 next.save(&self.dirs.settings())?;
                 self.stop_core();
                 self.revision += 1;
@@ -382,21 +439,8 @@ impl Connection {
     /// Checks key against the connected core and keeps it when core accepts it; remember keeps
     /// it in the settings too. Managed mode needs no key from the person.
     pub fn sign_in(&mut self, key: &str, remember: bool) -> Result<(), String> {
-        let client = self
-            .client
-            .clone()
-            .ok_or("the app is not connected to a core")?;
-        if self.settings.mode == Some(Mode::Managed) {
-            return Err("the app signs in to its own core by itself".into());
-        }
-        check_key(&client, key)?;
-        let mut next = self.settings.clone();
-        next.key = remember.then(|| key.to_string());
-        next.save(&self.dirs.settings())?;
-        self.revision += 1;
-        self.settings = next;
-        self.key = Some(key.to_string());
-        Ok(())
+        let target = self.prepare_key(None)?;
+        self.finish_key(target, key, remember)
     }
 
     /// Forgets the key, also the kept one. Managed mode keeps its own.
@@ -426,10 +470,6 @@ impl Connection {
     #[cfg(feature = "native-test")]
     pub(crate) fn test_settings_path(&self) -> PathBuf {
         self.dirs.settings()
-    }
-
-    pub(crate) fn revision(&self) -> u64 {
-        self.revision
     }
 
     pub fn mode(&self) -> Option<Mode> {
@@ -486,7 +526,15 @@ fn check_key(client: &Client, key: &str) -> Result<(), String> {
         200 => Ok(()),
         401 => Err("core refused this key".into()),
         404 => Err("core's management API is off: set management_key in its config".into()),
-        0 => Err("core could not be reached or its reply could not be read".into()),
+        0 => Err(match r.error.as_ref().map(|e| e.code.as_str()) {
+            Some("tls") => "TLS verification or handshake failed; check the certificate authority",
+            Some("timeout") => "the connection to core timed out",
+            Some("dns") => "core's host name could not be resolved",
+            Some("io") => "the connection to core failed (I/O)",
+            Some("protocol") => "core returned an invalid HTTP response",
+            _ => "core could not be reached or its reply could not be read",
+        }
+        .into()),
         s => Err(format!("core answered {s}")),
     }
 }
@@ -622,6 +670,64 @@ mod tests {
         assert!(!serde_json::to_string(&c.view()).unwrap().contains(&key));
         server.join().unwrap();
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn key_preparation_validates_and_describes_the_destination_without_changing_state() {
+        let dir =
+            std::env::temp_dir().join(format!("pluxy-prepare-{}", crate::managed::random_key()));
+        let dirs = Dirs {
+            config: dir.join("config"),
+            core: dir.join("core"),
+        };
+        Settings {
+            mode: Some(Mode::Local),
+            url: Some("http://127.0.0.1:1234".into()),
+            ..Settings::default()
+        }
+        .save(&dirs.settings())
+        .unwrap();
+        let mut c = Connection::open(dirs.clone(), None);
+        let before = c.view();
+        let saved = fs::read(dirs.settings()).unwrap();
+        let prepared = c
+            .prepare_key(Some(Change {
+                mode: Some(Mode::Remote),
+                url: Some("https://example.com:9443".into()),
+                ..Change::default()
+            }))
+            .unwrap();
+        assert_eq!(prepared.summary, "Key for https://example.com:9443\nSwitches from http://127.0.0.1:1234 to https://example.com:9443");
+        assert_eq!(c.view(), before);
+        assert_eq!(fs::read(dirs.settings()).unwrap(), saved);
+        for (mode, url, ca) in [
+            (Mode::Managed, "", None),
+            (Mode::Local, "http://example.com", None),
+            (Mode::Remote, "http://example.com", None),
+            (Mode::Remote, "https://example.com/path", None),
+            (
+                Mode::Remote,
+                "https://example.com",
+                Some(dir.join("missing.pem").to_string_lossy().into_owned()),
+            ),
+        ] {
+            assert!(c
+                .prepare_key(Some(Change {
+                    mode: Some(mode),
+                    url: Some(url.into()),
+                    ca_file: ca,
+                    ..Change::default()
+                }))
+                .is_err());
+        }
+        let prepared = c.prepare_key(None).unwrap();
+        c.sign_out().unwrap();
+        assert_eq!(
+            c.finish_key(prepared, &crate::managed::random_key(), false)
+                .unwrap_err(),
+            "The connection changed. Open key entry again."
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

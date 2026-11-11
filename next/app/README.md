@@ -28,8 +28,13 @@ when you tick "Keep the key on this device"; otherwise it lasts until the app qu
 
 The native side holds the management key. On Linux, "Enter management key" on the Connection
 page opens a GTK dialog with a hidden entry, "Keep the key on this device", and OK/Cancel.
+Before opening it, native code validates the mode, origin and certificate authority file. The
+dialog identifies the target origin, any custom certificate authority, and an origin switch.
+Reopening after Cancel waits one second.
 The key goes directly from that dialog to native connection state; no webview receives it.
-Cancel, a refused key or a persistence failure preserves the old connection and saved settings.
+Cancel, a refused key or a failed settings write preserves the old connection. Settings use a
+unique exclusive temporary file at mode 0600, followed by file sync, rename and directory sync
+on Unix. Validation and transport failures report specific reasons without request or key text.
 The window calls core through the
 `core_call` command, and the native side adds the key and sends the call to
 `<core>/v0/management/...` only, following no redirects and, for a core on this computer, no

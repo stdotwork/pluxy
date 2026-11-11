@@ -47,6 +47,7 @@ struct App {
     has_tray: AtomicBool,
     quitting: AtomicBool,
     key_entry_open: AtomicBool,
+    key_entry_after: Mutex<Option<std::time::Instant>>,
 }
 
 /// Every command checks its caller too: the capability already allows only the window.
@@ -248,41 +249,65 @@ async fn key_entry(webview: Webview, change: Option<Change>) -> Result<KeyEntryR
         struct Pending(AppHandle);
         impl Drop for Pending {
             fn drop(&mut self) {
-                self.0.state::<App>().key_entry_open.store(false, Ordering::SeqCst);
+                self.0
+                    .state::<App>()
+                    .key_entry_open
+                    .store(false, Ordering::SeqCst);
             }
         }
         let _pending = Pending(app.clone());
         let st = app.state::<App>();
-        let revision = st.conn.lock().unwrap().revision();
+        let prepared = st.conn.lock().unwrap().prepare_key(change);
+        let target = match prepared {
+            Ok(target) => target,
+            Err(reason) => {
+                let mut connection = st.conn.lock().unwrap().view();
+                connection.error = Some(reason);
+                return KeyEntryResult {
+                    status: "error",
+                    connection,
+                };
+            }
+        };
+        if let Some(after) = *st.key_entry_after.lock().unwrap() {
+            std::thread::sleep(after.saturating_duration_since(std::time::Instant::now()));
+        }
         // GTK must remain free to handle IPC/window close while the dialog is open.
-        let input = key_entry::request(&app);
+        let input = key_entry::request(&app, target.summary.clone());
         let mut c = st.conn.lock().unwrap();
         let mut error = None;
         let status = match input {
-            Ok(None) => "cancelled",
-            Ok(Some(_)) if c.revision() != revision => {
-                error = Some("The connection changed. Open key entry again.".into());
-                "error"
+            Ok(None) => {
+                *st.key_entry_after.lock().unwrap() =
+                    Some(std::time::Instant::now() + std::time::Duration::from_secs(1));
+                "cancelled"
             }
-            Ok(Some(input)) => match c.enter_key(change, &input.key, input.remember) {
+            Ok(Some(input)) => match c.finish_key(target, &input.key, input.remember) {
                 Ok(()) => "signed_in",
                 Err(e) if e == "core refused this key" => {
                     error = Some(e);
                     "wrong_key"
                 }
-                Err(_) => {
-                    error = Some("Could not sign in. Check the core address, certificate and connection settings file.".into());
+                Err(reason) => {
+                    error = Some(reason);
                     "error"
                 }
             },
-            Err(e) => { error = Some(e.into()); "error" }
+            Err(e) => {
+                error = Some(e.into());
+                "error"
+            }
         };
         let mut connection = c.view();
-        if error.is_some() { connection.error = error; }
+        if error.is_some() {
+            connection.error = error;
+        }
         drop(c);
         show_status(&app, &connection);
         KeyEntryResult { status, connection }
-    }).await.map_err(|_| "native key entry failed".into())
+    })
+    .await
+    .map_err(|_| "native key entry failed".into())
 }
 
 #[tauri::command]
@@ -494,6 +519,7 @@ pub fn run() {
                 has_tray: AtomicBool::new(false),
                 quitting: AtomicBool::new(false),
                 key_entry_open: AtomicBool::new(false),
+                key_entry_after: Mutex::new(None),
             });
             let handle = app.handle().clone();
             match build_tray(&handle) {

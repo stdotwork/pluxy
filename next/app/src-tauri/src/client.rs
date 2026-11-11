@@ -94,6 +94,28 @@ pub fn certificates(pem: &[u8]) -> Result<Vec<Certificate<'static>>, String> {
     Ok(certs)
 }
 
+// Classify transport failures without formatting library errors: those may include request data.
+fn transport_kind(error: &ureq::Error) -> &'static str {
+    match error {
+        ureq::Error::Tls(_) | ureq::Error::Rustls(_) | ureq::Error::TlsRequired => "tls",
+        ureq::Error::Timeout(_) => "timeout",
+        ureq::Error::HostNotFound => "dns",
+        ureq::Error::Io(e) => {
+            // Rustls can surface through an I/O wrapper; inspect its type, never its text.
+            if let Some(inner) = e.get_ref().and_then(|e| e.downcast_ref::<ureq::Error>()) {
+                return transport_kind(inner);
+            }
+            if e.kind() == std::io::ErrorKind::InvalidData {
+                "tls"
+            } else {
+                "io"
+            }
+        }
+        ureq::Error::Protocol(_) => "protocol",
+        _ => "unavailable",
+    }
+}
+
 impl Client {
     /// A client for the core at base (an origin, such as `http://127.0.0.1:8400`). With certs,
     /// https replies are checked against those certificates only; otherwise against the usual
@@ -179,9 +201,7 @@ impl Client {
         };
         let mut resp = match result {
             Ok(r) => r,
-            Err(e) => {
-                return Reply::failed(0, "unavailable", format!("core could not be reached: {e}"))
-            }
+            Err(e) => return Reply::failed(0, transport_kind(&e), "core transport failed"),
         };
         let status = resp.status().as_u16();
         let bytes = match resp.body_mut().with_config().limit(MAX_REPLY).read_to_vec() {

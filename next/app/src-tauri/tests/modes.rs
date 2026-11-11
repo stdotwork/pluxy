@@ -241,7 +241,9 @@ fn remote_needs_https_and_trusts_the_given_authority_only() {
         ..Change::default()
     })
     .unwrap();
-    assert!(c.sign_in(&core.key, false).is_err());
+    let error = c.sign_in(&core.key, false).unwrap_err();
+    assert!(error.contains("TLS"), "{error}");
+    assert!(!error.contains(&core.key));
     c.change(Change {
         mode: Some(Mode::Remote),
         url: Some(core.base.clone()),
