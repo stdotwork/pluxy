@@ -269,16 +269,7 @@ fn run(app: &AppHandle) -> Result<(), String> {
         // The session's tray and recovery checks run now, through crash-loop delays.
         let deadline = Instant::now() + Duration::from_secs(300);
         loop {
-            if let Ok(path) = std::env::var("PLUXY_APP_TEST_STATE") {
-                let view = app.state::<App>().conn.lock().unwrap().view();
-                let snapshot = json!({"app_pid": std::process::id(), "view": view,
-                    "webviews": app.webviews().len(), "window": app.get_window(WINDOW).is_some()});
-                crate::managed::write_private(
-                    std::path::Path::new(&path),
-                    &serde_json::to_vec(&snapshot).unwrap(),
-                )
-                .expect("write test state");
-            }
+            write_state(app);
             if std::path::Path::new(&f).exists() {
                 break;
             }
@@ -324,12 +315,30 @@ fn startup(app: &AppHandle, stage: &str) -> Result<(), String> {
         }),
     );
     if let Ok(file) = std::env::var("PLUXY_APP_TEST_STARTUP_CONTINUE") {
+        // The startup suite reads the connection from the state file meanwhile.
         wait_for("startup process and tray inspection", || {
+            write_state(app);
             std::path::Path::new(&file).exists().then_some(())
         })?;
     }
     crate::quit(app);
     Ok(())
+}
+
+/// Writes the app's connection, webviews and window to `PLUXY_APP_TEST_STATE`, for the session's
+/// tray and recovery checks.
+fn write_state(app: &AppHandle) {
+    let Ok(path) = std::env::var("PLUXY_APP_TEST_STATE") else {
+        return;
+    };
+    let view = app.state::<App>().conn.lock().unwrap().view();
+    let snapshot = json!({"app_pid": std::process::id(), "view": view,
+        "webviews": app.webviews().len(), "window": app.get_window(WINDOW).is_some()});
+    crate::managed::write_private(
+        std::path::Path::new(&path),
+        &serde_json::to_vec(&snapshot).unwrap(),
+    )
+    .expect("write test state");
 }
 
 /// Holds a tray action while the session's hold file exists, so the test can see the tray

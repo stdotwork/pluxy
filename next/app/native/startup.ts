@@ -21,7 +21,19 @@ function prefs(silent: boolean, core = true) {
     JSON.stringify({ autostart_enabled: true, silent_start_enabled: silent, start_core_on_launch: core }),
   );
 }
-async function launch(stage: string, desktop = false) {
+interface Report {
+  app_pid: number;
+  windows: number;
+  webviews: number;
+  tray: boolean;
+  core_pid: number | null;
+}
+/** during runs once the launch has reported, before it may quit; lines grows meanwhile. */
+async function launch(
+  stage: string,
+  desktop = false,
+  during?: (report: Report, lines: string[]) => Promise<void>,
+) {
   const proceed = join(config, `startup-continue-${stage}-${Date.now()}`);
   const child = spawn(desktop ? "gio" : (bin as string), desktop ? ["launch", entry] : [], {
     env: { ...process.env, PLUXY_APP_TEST_STARTUP: stage, PLUXY_APP_TEST_STARTUP_CONTINUE: proceed },
@@ -47,7 +59,14 @@ async function launch(stage: string, desktop = false) {
         console.log(
           `startup real consumer: ${desktop ? "gio launch" : "app menu"}; windows=${report.windows}, webviews=${report.webviews}, renderers=${renderers}, core=${report.core_pid}`,
         );
-        writeFileSync(proceed, "");
+        void (async () => {
+          try {
+            await during?.(report, lines);
+          } catch (e) {
+            lines.push(`native-test: failed ${String(e)}`);
+          }
+          writeFileSync(proceed, "");
+        })();
       }
     });
   }
@@ -62,14 +81,64 @@ async function launch(stage: string, desktop = false) {
       resolve(c);
     });
   });
-  check(
-    code === 0 && !lines.some((l) => l.startsWith("native-test: failed")),
-    `startup stage failed: ${stage}`,
-  );
+  const failed = lines.filter((l) => l.startsWith("native-test: failed"));
+  check(code === 0 && failed.length === 0, `startup stage failed: ${stage} ${failed.join("; ")}`);
   const line = lines.find((l) => l.startsWith("native-test: startup "));
   check(line, `no startup report: ${stage}`);
   return JSON.parse(line.slice("native-test: startup ".length));
 }
+/** The parent pid of a live process, or undefined once it has exited. */
+function liveParent(pid: number): number | undefined {
+  try {
+    const s = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const [state, ppid] = s.slice(s.lastIndexOf(")") + 2).split(" ");
+    return state === "Z" ? undefined : Number(ppid);
+  } catch {
+    return undefined; // exited
+  }
+}
+let offCore: number | undefined; // the core coreOff left running, which quitting must stop
+/** With Start Core on Launch off the app starts no core and recovers none. Positive controls on
+ * the same launch: the tray's Start core starts one, and that core is recovered after a crash. */
+async function coreOff(report: Report, lines: string[]) {
+  const stateFile = process.env.PLUXY_APP_TEST_STATE as string;
+  type Core = { state?: string; pid?: number; detail?: string };
+  const core = (): Core | undefined => JSON.parse(readFileSync(stateFile, "utf8")).view?.core;
+  const attempts = () => lines.filter((l) => l.startsWith("native-test: recovery-attempt ")).length;
+  const wait = async (what: string, ok: (c?: Core) => boolean) => {
+    const deadline = Date.now() + 20_000;
+    for (;;) {
+      const c = core();
+      if (ok(c)) return c as Core;
+      if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}: ${JSON.stringify(c)}`);
+      await Bun.sleep(100);
+    }
+  };
+  const running = (c?: Core) => c?.state === "running" && !!c.pid;
+  // Past the first recovery delay, 2 seconds.
+  await Bun.sleep(3000);
+  const idle = core();
+  check(
+    idle?.state === "stopped" && !idle.pid && attempts() === 0,
+    `Start Core on Launch off: a core started or was recovered: ${JSON.stringify(idle)}, ${attempts()} recovery attempts`,
+  );
+  const click = spawnSync(probe as string, ["tray", String(report.app_pid), "Start core"], {
+    encoding: "utf8",
+    timeout: 15_000,
+  });
+  check(click.status === 0, `tray Start core: ${click.stderr}`);
+  const started = (await wait("tray Start core", running)).pid as number;
+  // Test-only crash fixture, as in recovery.ts: only the app's own live child is signalled.
+  check(liveParent(started) === report.app_pid, `core pid ${started} is not a live child of the app`);
+  process.kill(started, "SIGKILL");
+  offCore = (await wait("recovery of the core the tray started", (c) => running(c) && c?.pid !== started))
+    .pid;
+  check(attempts() === 1, `${attempts()} recovery attempts after one crash, want 1`);
+  console.log(
+    "native-recovery: Start Core on Launch off: no core started or recovered; tray Start core started one, and it was recovered after a crash",
+  );
+}
+
 await launch("enable");
 check(existsSync(entry), "enabling did not write the XDG autostart entry");
 prefs(true);
@@ -105,7 +174,12 @@ if (noTray) {
   const visible = await launch("observe", true);
   check(visible.windows === 1 && visible.webviews === 1, "login with Silent Launch off must show one window");
   prefs(true, false);
-  const stopped = await launch("observe", true);
+  const stopped = await launch("observe", true, hidden ? coreOff : undefined);
+  if (hidden) {
+    check(offCore, "the core-off launch left no recovered core");
+    await Bun.sleep(1000);
+    check(liveParent(offCore) === undefined, `the recovered core ${offCore} still runs after the app quit`);
+  }
   check(
     stopped.windows === (hidden ? 0 : 1) &&
       stopped.webviews === (hidden ? 0 : 1) &&

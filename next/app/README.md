@@ -59,7 +59,8 @@ that budget, so a core that keeps crashing still stops being restarted. After th
 recovery or another crash within that window, the tray shows "Core recovery paused" and the
 Connection page shows the reason. An explicit Start, Stop or Restart, from the tray or the
 window, or a mode change, cancels any scheduled recovery and clears the budget. A core you
-stopped stays stopped. If the app cannot make its tray icon, closing the window quits the app.
+stopped stays stopped, and so does one that Start Core on Launch left unstarted. If the app
+cannot make its tray icon, closing the window quits the app.
 
 ## Startup preferences
 
@@ -264,7 +265,9 @@ checks the entry in its temporary XDG config folder, launches it with the real D
 zero windows/webviews and no web process, and verifies that the app's real tray item belongs to
 its PID in the tray watcher's registered item list. It checks login with Silent Launch on and
 off, an app-menu launch with Silent Launch on, managed-core startup, core startup off, foreign
-core ownership, and removal. A separate session with no watcher verifies that a silent login
+core ownership, and removal. In the core-startup-off launch it waits past the first recovery
+delay and checks that no core started and no recovery ran, then starts the core with the
+tray's Start core and crashes it: that core is recovered. A separate session with no watcher verifies that a silent login
 opens exactly one window and webview. Visible launches are positive controls for the same
 renderer-process count used by silent launches. The
 `native-test` feature is for that test alone; release builds never have it.
