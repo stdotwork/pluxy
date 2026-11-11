@@ -254,9 +254,15 @@ identifier `dev.pluxy.desktop.test`, product name `pluxy Test`, binary `pluxy-ap
 AppImage bundle, and a temporary updater public key made for that build (its private key is never
 written). It checks that the result is an AppImage of type 2 (an ELF file with `AI\x02` at
 offset 8) and writes `<out-dir>/pluxy-test_<version>_amd64.AppImage` and `test-package.json`
-(the AppImage's path and the key). Tauri's AppImage bundler downloads its tools when it runs
-(linuxdeploy, its AppImage plugin and AppRun, from GitHub, not pinned by digest) into
-`~/.cache/tauri`, so the type is checked on the output instead of assumed.
+(the AppImage's path and the key). Tauri's AppImage bundler would download the tools it runs
+(linuxdeploy, its AppImage plugin and AppRun) into its tools folder when they are missing there,
+unpinned. The test command puts pinned copies there first, each checked against its SHA-256
+(`BUNDLER_TOOLS` in `package.ts`), and gives the AppImage plugin the pinned AppImage runtime
+(`LDAI_RUNTIME_FILE`), which it would otherwise download too. The build runs with a temporary
+HOME and cache folder, none of the caller's other environment, Cargo offline after `cargo fetch
+--locked`, and every proxy variable pointing at a closed port, so any download still tried fails
+the build. Afterwards the tools folder must hold only the pinned tools and the bundler's own two
+plugin scripts. The AppImage's type is still checked on the output.
 
 `package:release` turns on no bundle format: release formats are not chosen yet. It builds the
 release app with no features and no overlay (`tauri build --no-bundle`), finds that build's
@@ -348,11 +354,18 @@ cargo run --locked --example validate-release-config -- \
 plus the trust and feature snapshots, in Cargo's `OUT_DIR`. A digest of all three is embedded in
 the app. The validator compares its own compiled inputs and requires the matching receipt in an
 artifact. Supply the actual app executable along with every package. The validator streams each
-regular file for test markers, test identifiers and Tauri updater keys or signatures. An AppImage
-of type 2 (found by its header, never run) is checked by its runtime's bytes and by every file in
-its squashfs image, which `unsquashfs` (package `squashfs-tools`) unpacks into a private
-temporary folder: names, link targets and contents, and trust JSON inside must be empty. Other
-AppImage types are refused; other compressed packages are not looked inside.
+regular file for test markers, test identifiers and Tauri updater keys or signatures. Each
+artifact must be an ELF executable or a type-2 AppImage, and carry the build's receipt itself;
+anything else is refused, since it cannot be looked inside. An AppImage (found by its header,
+never run) must have its squashfs image where its runtime's header ends, with nothing after it
+but zero padding under 4 KiB. `unsquashfs` (package `squashfs-tools`) first lists the image
+(only folders, regular files and links; at most 100,000 entries, 32 folders deep and 2 GiB
+unpacked), then unpacks it into a private temporary folder, each within 10 minutes. Every name,
+link and file inside is checked: links must lead to an entry inside the package; compressed and
+archive files are refused; JSON (named `.json`, or starting with `{`) is decoded before it is
+checked, trust-shaped JSON must be empty trust whatever its name, and JSON over 1 MiB or invalid
+is refused; the receipt must be in an ELF file inside. Then every byte of the AppImage is
+scanned as well. The unpacked folder is removed, and a failure to remove it is an error.
 The receipt checks consistency for trusted packaging tools, not a malicious packager rewriting
 the binary and its evidence. Every supplied artifact must exist.
 
