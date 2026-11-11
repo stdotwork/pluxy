@@ -238,6 +238,38 @@ func (r *Router) Models(ctx context.Context) []protocol.Model {
 	return out
 }
 
+// ModelNames returns public and upstream names served by extension's accounts, using
+// Models' cached catalogs and naming rules. Repeated names keep the first mapping.
+func (r *Router) ModelNames(ctx context.Context, extension string) []Name {
+	accounts, creds := r.snapshot()
+	r.mu.RLock()
+	catalog := r.catalog
+	r.mu.RUnlock()
+	var out []Name
+	seen := map[string]bool{}
+	for _, a := range accounts {
+		if a.Extension != extension {
+			continue
+		}
+		list := r.listOf(ctx, a, creds, catalog, r.now())
+		var ids []string
+		if list != nil {
+			ids = modelIDs(list)
+		}
+		for _, n := range a.names(ids, r.cfg.ForceModelPrefix) {
+			if n.DisplayName == "" && len(a.Models) > 0 {
+				n.DisplayName = n.Upstream
+			}
+			if !seen[n.Public] {
+				seen[n.Public] = true
+				out = append(out, n)
+			}
+		}
+	}
+	slices.SortFunc(out, func(a, b Name) int { return strings.Compare(a.Public, b.Public) })
+	return out
+}
+
 // renameResource renames a model's resource name (Gemini's "models/<id>") from the model's old
 // name to its new one, as today's core does for an alias or a prefix.
 func renameResource(name, old, cur string) string {

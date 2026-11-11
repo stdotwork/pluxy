@@ -413,24 +413,28 @@ removes the account's credential from every string and from `raw`, as from every
 ### `endpoint`
 
 Version 0.7. A client request to one of the provider's endpoints beyond generation, which core
-passes to an account's extension whole: core reads nothing of it but the model, and the extension
-writes the reply's body. Core sends it only to an extension whose describe reports
+passes to an account's extension. Except for core-built bodies below, core reads nothing of it
+but the model, and the extension writes the reply's body. Core sends it only to an extension whose describe reports
 `protocol_minor` 7 or more and lists `endpoint` in `operations`; for any other, core treats the
 account as one that does not serve the endpoint.
 
 The call carries `account` and `request` as `generate` does. The request has no items: `model`
 is the body's `model` (renamed for the account and without its thinking suffix, which is in
 `options.thinking_suffix`, as for `generate`; empty for an endpoint that takes no model, when the
-body names none), and `native` holds the client's body and headers,
+body names none), and `native` holds the body (the client's, or core-built as below) and headers,
 with `native.format` naming the endpoint:
 
 | `native.format` | Client route | Body |
 | --- | --- | --- |
 | `openai.responses.compact` | `POST /v1/responses/compact` (and `/backend-api/codex/responses/compact`) | A Responses request; the reply is one JSON object. Core refuses `"stream": true` itself. |
+| `codex.models` | `GET /v1/models?client_version=<version>` | Core builds `{"client_version":"<version>","models":[{"name":"team/coding","upstream":"gpt-6.1-sol","display_name":"Coding"}]}`. Presence of the query key selects this endpoint, even with an empty value. Core resolves only accounts of `pluxy/codex`, applies their normal aliases, exclusions and prefixes, keeps the first mapping of a repeated public name, and sorts by public name. `display_name` is optional. The GET body is ignored. `request.model` is empty; one account receives the call, with normal retry of `unsupported` replies. The extension replies with one JSON object, `{"models":[...]}`, using its embedded Codex catalog, omitting unknown upstream names and replacing each template slug with `name`. No remote catalog refresh or upstream call is made. |
 | `codex.alpha_search` | `POST /v1/alpha/search` (and `/backend-api/codex/alpha/search`) | Codex's search request, in Codex's own shape; the reply is one JSON object. Its `model` is optional: a request without one is sent to any account, with `request.model` empty. |
 | `openai.images.generations` | `POST /v1/images/generations` | An Images API request; the reply is one JSON object, or server-sent events when it asks for `"stream": true`. Core refuses a request without a `prompt` and names `gpt-image-2` as the model when it names none. |
 | `openai.images.edits` | `POST /v1/images/edits` | As for generations. A `multipart/form-data` edit arrives in its JSON form: each field a member (`n`, `output_compression` and `partial_images` as numbers, `stream` as a boolean, `mask[file_id]` and `mask[image_url]` inside `mask`), the image files (`image[]`, else `image`) added to `images` as `{"image_url": "data:..."}` and the mask file as `mask.image_url`. Core refuses a form without an image file. |
 | `gemini.interactions` | `POST /v1beta/interactions` | Gemini's Interactions API request, in Google's own shape; the reply is one JSON object, or server-sent events when it asks for `"stream": true`, which the extension sends with each event's name. The request names a model or an agent: core refuses one that names both or neither, a `stream` that is not a boolean, and a body that is not JSON, removes a `models/` prefix from the model, and sends a request with an agent and no model to any account, with `request.model` empty. The client's `Api-Revision` header is in `native.headers` (`api-revision`). Google's clients may send the client key in `x-goog-api-key` or `?key=`. |
+
+Adding an endpoint format uses the existing version 0.7 operation and frames; it does not
+require a new protocol minor version (as with `codex.alpha_search` and `gemini.interactions`).
 
 The reply is a stream of events as for `generate`, without items: `response.start`, whose
 `response.format` is the endpoint's format and whose `response.raw` says how to send the body,

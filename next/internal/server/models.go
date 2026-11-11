@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"cmp"
 	"encoding/json"
+	"io"
 	"net/http"
 	"slices"
 	"strings"
@@ -32,6 +34,10 @@ func serveModels(mux *http.ServeMux, src Source) {
 					f = geminiFormat
 				}
 				f.writeError(w, e)
+				return
+			}
+			if !google && r.URL.Path == "/v1/models" && r.URL.Query().Has("client_version") {
+				serveCodexModels(w, r, g)
 				return
 			}
 			write(w, r, g.Router.Models(r.Context()))
@@ -86,6 +92,20 @@ func serveModels(mux *http.ServeMux, src Source) {
 		}
 		writeList(w, http.StatusNotFound, map[string]any{"error": map[string]string{"message": "Not Found", "type": "not_found"}})
 	})))
+}
+
+// serveCodexModels sends names and the client version to the extension that holds the catalog.
+func serveCodexModels(w http.ResponseWriter, r *http.Request, g *Generation) {
+	models := make([]map[string]string, 0)
+	for _, n := range g.Router.ModelNames(r.Context(), "pluxy/codex") {
+		models = append(models, map[string]string{"name": n.Public, "upstream": n.Upstream, "display_name": n.DisplayName})
+	}
+	body, _ := json.Marshal(map[string]any{"client_version": r.URL.Query().Get("client_version"), "models": models})
+	// This GET's endpoint body is made by core; preserve its context and headers.
+	req := r.Clone(r.Context())
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	req.ContentLength = int64(len(body))
+	serveEndpoint(w, req, g, endpoint{format: "codex.models", modelOptional: true})
 }
 
 // anthropicClient reports whether a model list request comes from an Anthropic client: it sends

@@ -328,3 +328,12 @@ A new provider needs an entry in `Providers` (`cores.go`): how each core's confi
 provider at the fake upstream (for the old core, its `api-keys` block, or auth files with
 `OldCoreAuthFiles`, and `Intercept` for a fixed upstream host). A new extension also goes in
 `NewCoreExtensions`.
+
+### Codex client catalog
+
+The cases in `codex-models/codex/` send `GET /v1/models?client_version=...` to both
+cores with the same configured account models. The runner already preserves the query string.
+The recorded replies cover the current and legacy reasoning levels. An unknown model is omitted
+by the new catalog, while the old core synthesizes it from a default template; that intended
+exception pins an empty catalog to avoid claiming capabilities for an unknown model. Catalog
+replies also use endpoint tracing here, so their trace header is an intended exception.

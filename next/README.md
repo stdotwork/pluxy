@@ -1229,6 +1229,40 @@ later. Core asks an
 extension once per account and keeps the answer until the accounts change: a reload, or an
 account added, removed or signed in again.
 
+### Codex client catalog
+
+`GET /v1/models?client_version=0.153.0` returns the Codex client's catalog,
+`{"models": [...]}`, instead of the normal model list. The presence of `client_version`, even
+with an empty value, selects this reply before the Anthropic client check. Without that query
+parameter the lists above keep their usual shape.
+
+Core resolves the models served by accounts of `pluxy/codex` with the same exclusions, aliases
+and prefixes as the normal list. It sends one `codex.models` endpoint call containing the client
+version and each model's public and upstream names. The Codex extension loads its embedded
+catalog on the first such call, preserves its fields, selects templates by upstream name and
+sets each `slug` to the public name. The catalog keeps `minimal_client_version` from the template;
+clients below 0.144.0 receive reasoning levels only through `xhigh`, while empty or unparseable
+versions keep modern levels. Models without a template are omitted: a routing entry alone
+does not establish the capabilities the Codex client needs. The extension filters reasoning
+levels for older clients as today's core does. Catalog data stays in the extension program;
+core neither embeds it nor keeps a copy per account. No upstream request or remote refresh is
+made for this list.
+
+To refresh the catalog by hand, from the repository root copy the reviewed catalog and rebuild
+the extension:
+
+```bash
+cp core/internal/registry/models/codex_client_models.json next/extensions/codex/client_models.json
+cd next
+go build -o extensions/codex/codex ./extensions/codex
+```
+
+Review the source and its changes before copying it, run the Codex catalog corpus and e2e tests,
+and reload core after replacing the extension program. The routing list in
+`extensions/codex/models.json` remains separate from this client metadata.
+
+### Account model names
+
 An account names its models with these fields, applied in this order:
 
 ```json

@@ -1,0 +1,141 @@
+{
+  "description": "An unknown routing model is omitted from the Codex catalog instead of receiving invented capabilities.",
+  "source": ["core/internal/client/codex/models/models.go"],
+  "client": {"method":"GET","path":"/v1/models?client_version=0.153.0"},
+  "account_models": ["unknown-model"],
+  "upstream": [],
+  "exceptions": [
+    {
+      "path": "client.body.models",
+      "kind": "intended",
+      "reason": "Only models with a Codex client catalog template are advertised; synthesizing unknown capabilities from a default model would mislead the client.",
+      "want": []
+    },
+    {
+      "path": "client.headers.X-Cpa-Trace-Id",
+      "kind": "intended",
+      "reason": "Catalog replies use the same endpoint tracing as other provider endpoints; the old core serves this list without a trace header.",
+      "want": "(volatile)"
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "models": [
+          {
+            "additional_speed_tiers": ["fast"],
+            "allow_only_chatgpt_workspace_executor": false,
+            "allow_only_codex_cloud_agent_orchestrator": false,
+            "apply_patch_tool_type": null,
+            "auto_compact_token_limit": null,
+            "auto_review_model_override": null,
+            "availability_nux": null,
+            "available_access_programs": {"cyber":["standard"]},
+            "available_in_plans": [
+              "business",
+              "edu",
+              "edu_plus",
+              "edu_pro",
+              "education",
+              "ent26",
+              "enterprise",
+              "enterprise_cbp_automation",
+              "enterprise_cbp_trial",
+              "enterprise_cbp_usage_based",
+              "finserv",
+              "free",
+              "free_workspace",
+              "go",
+              "hc",
+              "hc_consumption",
+              "k12",
+              "law",
+              "plus",
+              "pro",
+              "prolite",
+              "promax",
+              "quorum",
+              "rosalind_academic",
+              "sci",
+              "self_serve_business_prolite",
+              "self_serve_business_usage_based",
+              "team"
+            ],
+            "base_instructions": "You are Codex, a coding agent. You and the user share one workspace.",
+            "comp_hash": "3000",
+            "context_window": 500000,
+            "default_reasoning_level": "low",
+            "default_reasoning_summary": "none",
+            "default_service_tier": null,
+            "default_verbosity": "low",
+            "description": "unknown-model",
+            "display_name": "unknown-model",
+            "experimental_supported_tools": ["send_user_message_async","clock"],
+            "guardian": null,
+            "include_apps_usage_instructions": false,
+            "include_plugin_usage_instructions": false,
+            "include_skills_usage_instructions": false,
+            "input_modalities": ["text","image"],
+            "max_context_window": 872000,
+            "minimal_client_version": "0.153.0",
+            "model_messages": {
+              "approvals": null,
+              "auto_review": null,
+              "collaboration_modes": null,
+              "instructions_template": "You are Codex, a coding agent. You and the user share one workspace.",
+              "instructions_variables": null,
+              "multi_agent": null,
+              "permissions": null
+            },
+            "model_specialty": null,
+            "multi_agent_reasoning_effort": "xhigh",
+            "multi_agent_version": "v2",
+            "node_repl_auto_review_required": true,
+            "node_repl_disabled": false,
+            "prefer_websockets": false,
+            "priority": 143,
+            "requires_sandboxed_review": false,
+            "service_tiers": [],
+            "shell_type": "shell_command",
+            "slug": "unknown-model",
+            "support_verbosity": true,
+            "supported_in_api": true,
+            "supported_reasoning_levels": [
+              {"description":"Fast responses with lighter reasoning","effort":"low"},
+              {
+                "description": "Balances speed and reasoning depth for everyday tasks",
+                "effort": "medium"
+              },
+              {"description":"Greater reasoning depth for complex problems","effort":"high"},
+              {"description":"Extra high reasoning depth for complex problems","effort":"xhigh"},
+              {"description":"Maximum reasoning depth for the hardest problems","effort":"max"},
+              {"description":"Maximum reasoning with automatic task delegation","effort":"ultra"}
+            ],
+            "supports_experimental_context": false,
+            "supports_image_detail_original": false,
+            "supports_parallel_tool_calls": true,
+            "supports_reasoning_effort_updates": false,
+            "supports_reasoning_summaries": true,
+            "supports_reasoning_summary_parameter": true,
+            "supports_search_tool": false,
+            "tool_mode": "direct",
+            "truncation_policy": {"limit":10000,"mode":"tokens"},
+            "upgrade": null,
+            "use_responses_lite": false,
+            "visibility": "list",
+            "web_search_tool_type": "text_and_image"
+          }
+        ]
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8"
+      },
+      "status": 200
+    },
+    "upstream": []
+  }
+}
