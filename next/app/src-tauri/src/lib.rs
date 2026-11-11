@@ -583,6 +583,8 @@ pub fn run() {
         ])
         .register_asynchronous_uri_scheme_protocol(pages::SCHEME, page_scheme)
         .setup(|app| {
+            #[cfg(feature = "native-test")]
+            native_test::updater_gate(app.handle());
             let config = app.path().app_config_dir()?;
             #[cfg(target_os = "linux")]
             let confirmations =

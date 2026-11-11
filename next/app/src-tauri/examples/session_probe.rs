@@ -8,6 +8,8 @@
 //! session_probe watcher            register a status notifier item with the watcher and see it listed
 //! session_probe portal             the portal frontend answers, with the gtk backend behind it
 //! session_probe owner <name>       prints pid=<process that owns the bus name>
+//! session_probe trust-marker <home> writes the test trust marker (trust::write_test_marker) in
+//!                                  a run's private HOME; prints nonce=<its nonce>
 //! ```
 //!
 //! Each prints `key=value` lines and exits 0, or prints what is wrong on stderr and exits 1.
@@ -27,7 +29,12 @@ fn main() {
         ["watcher"] => linux::watcher(),
         ["portal"] => linux::portal(),
         ["owner", name] => linux::owner(name),
-        _ => Err("usage: session_probe documents <file> | watcher | portal | owner <name>".into()),
+        ["trust-marker", home] => pluxy_app::trust::write_test_marker(std::path::Path::new(home))
+            .map(|nonce| vec![format!("nonce={nonce}")]),
+        _ => Err(
+            "usage: session_probe documents <file> | watcher | portal | owner <name> | trust-marker <home>"
+                .into(),
+        ),
     };
     match result {
         Ok(lines) => lines.iter().for_each(|line| println!("{line}")),

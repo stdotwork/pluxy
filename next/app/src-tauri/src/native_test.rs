@@ -11,6 +11,8 @@
 //! 4. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!
+//! Before these, as the app starts, it reports its updater gate (`updater_gate`).
+//!
 //! Each step prints one line on stderr: `native-test: <step> <JSON>`.
 
 use crate::{App, COMMANDS, MAIN, WINDOW};
@@ -42,6 +44,24 @@ const PLUGINS: &[&str] = &[
 
 /// Commands the window's probe leaves out: they take no arguments and would act.
 const ACTING: &[&str] = &["sign_out", "core_restart", "confirmation_settings"];
+
+/// Reports the updater gate (`trust::updater_gate`) with what it read: the compiled test marker,
+/// identifier and product name. The app calls this first, before any other step.
+pub fn updater_gate(app: &AppHandle) {
+    let config = app.config();
+    let home = std::env::var_os("HOME").unwrap_or_default();
+    let result = crate::trust::updater_gate(config, std::path::Path::new(&home));
+    log(
+        "updater_gate",
+        json!({
+            "passed": result.is_ok(),
+            "marker": cfg!(any(feature = "native-test", feature = "artifact-test-trust")),
+            "identifier": config.identifier,
+            "product": config.product_name,
+            "error": result.err(),
+        }),
+    );
+}
 
 pub(crate) fn log(step: &str, v: Value) {
     eprintln!("native-test: {step} {v}");

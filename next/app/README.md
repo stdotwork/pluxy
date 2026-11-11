@@ -10,6 +10,7 @@ panel, then adds its own Connection page. Extension pages open in webviews of th
 | `page/` | The small document an extension page's webview loads, which holds the page's sandboxed frame |
 | `src-tauri/` | The native side: commands, the connection to core, the app's own core, extension page webviews, the tray |
 | `native/` | The native test (`run.ts`) |
+| `package.ts` | The test-package and release-package commands ([Packages](#packages)) |
 
 ## How the app reaches core
 
@@ -179,8 +180,8 @@ cargo build --release  # target/release/pluxy-app
 `cargo test` runs `tests/modes.rs`: each mode against a real core with fake extensions,
 started by `go run ./e2e/panelcore` from `next/`, on random loopback ports in temporary folders.
 
-`bun run test:native` runs the native test: it builds the app with the `native-test` feature
-and runs it on a private X server (`xvfb-run`) with a private session bus (`dbus-run-session`),
+`bun run test:native` runs the native test: it builds the app with the `native-test` and
+`artifact-test-trust` features and runs it on a private X server (`xvfb-run`) with a private session bus (`dbus-run-session`),
 a fresh HOME and XDG folders, once in each mode. In each it checks that the window's webview
 reaches every command, that at the top of an extension page's webview Tauri refuses every app
 command and the plugin commands tried, and that no app command is reached from that webview
@@ -194,6 +195,14 @@ It checks that the page webview covers the page area, that
 closing the window leaves no webview and
 no web process, and that quitting stops only the app's own core. The `native-test` feature is
 for that test alone; release builds never have it.
+
+The native run also builds the [test package](#packages) and runs the AppImage itself through the
+same checks in local mode. Every run's app first reports its updater gate, with the same test
+trust profile in its HOME each time: the test package passes it, and the dev binary, whose
+compiled identifier is the normal one, is refused. It then runs the release command on a clean
+release build, on an AppImage packed around that build, on an AppImage packed the same way
+around the test-feature dev binary, and on the test package under a neutral name and under its
+own: the first two pass and the rest are refused.
 
 The same native run uses fixture actions (compiled only with `native-test`) and real X input
 from `xdotool` to confirm, cancel, opt into remembering, click a native Start button and revoke
@@ -229,11 +238,49 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
 `ayatana-indicator-application`, `squashfs-tools` and `xdotool`; the document portal also needs FUSE
 (`/dev/fuse`, `fusermount3`). CI installs them on a pinned `ubuntu-24.04` runner.
 
+## Packages
+
+The base `tauri.conf.json` keeps bundling off. Two commands build packages, from this folder,
+after `bun run build`; both use the Tauri CLI pinned in `package.json`:
+
+```bash
+bun run package:test <out-dir>          # the test package: a disposable AppImage for checks
+bun run package:release [AppImage...]   # the release gate: builds and checks; uploads nothing
+```
+
+`package:test` is for checks only, never for release. It builds a debug app with the
+`native-test` and `artifact-test-trust` features and a config overlay given with `--config`:
+identifier `dev.pluxy.desktop.test`, product name `pluxy Test`, binary `pluxy-app-test`, the
+AppImage bundle, and a temporary updater public key made for that build (its private key is never
+written). It checks that the result is an AppImage of type 2 (an ELF file with `AI\x02` at
+offset 8) and writes `<out-dir>/pluxy-test_<version>_amd64.AppImage` and `test-package.json`
+(the AppImage's path and the key). Tauri's AppImage bundler downloads its tools when it runs
+(linuxdeploy, its AppImage plugin and AppRun, from GitHub, not pinned by digest) into
+`~/.cache/tauri`, so the type is checked on the output instead of assumed.
+
+`package:release` turns on no bundle format: release formats are not chosen yet. It builds the
+release app with no features and no overlay (`tauri build --no-bundle`), finds that build's
+snapshots by its receipt, and runs the [release validator](#validate-release-inputs) on them,
+the staged trust folder (`src-tauri/trust`), the built binary and each AppImage given. Its last
+line says `release-package: valid`, `release-package: refused: <reason>` or, when it could not
+check, `release-package: failed: <reason>`.
+
+### The updater gate
+
+`trust::updater_gate` is what an updater must call, and pass, before any updater plugin call,
+and the only place it gets its key. A build without the `artifact-test-trust` feature has only
+production updater trust, which is not configured, so it is refused. A test build passes only
+when its compiled identifier and product name are the test package's, the runner's trust
+profile in HOME loads ([test trust](#package-signatures-and-trust)), and the profile's updater
+key equals the compiled `plugins.updater.pubkey`. With the `native-test` feature the app reports
+the gate's result, with the marker, identifier and product name it read, as its first step.
+There is no updater yet; the signed-update slice calls this gate.
+
 ## Limits
 
 - Tested on Linux only. On Windows the page document's address is
   `http://pluxy-page.localhost/`; neither Windows nor macOS has been run.
-- No installer or bundled core yet (`bundle.active` is off).
+- No installer or bundled core yet: the only package is the test AppImage, which is not for release.
 - In managed mode the app does not restart a core that stops; the tray and the Connection page
   show that it stopped and why, and the page offers to start it. A supervisor thread starts the
   core and stays until it exits, since on Linux the parent-death signal follows the thread that
@@ -300,8 +347,12 @@ cargo run --locked --example validate-release-config -- \
 `build.rs` writes the config using tauri-utils' base/platform merge followed by `TAURI_CONFIG`,
 plus the trust and feature snapshots, in Cargo's `OUT_DIR`. A digest of all three is embedded in
 the app. The validator compares its own compiled inputs and requires the matching receipt in an
-artifact. Supply the actual app executable along with every compressed package: the validator
-streams each regular file for test markers; it cannot inspect compressed inner executables.
+artifact. Supply the actual app executable along with every package. The validator streams each
+regular file for test markers, test identifiers and Tauri updater keys or signatures. An AppImage
+of type 2 (found by its header, never run) is checked by its runtime's bytes and by every file in
+its squashfs image, which `unsquashfs` (package `squashfs-tools`) unpacks into a private
+temporary folder: names, link targets and contents, and trust JSON inside must be empty. Other
+AppImage types are refused; other compressed packages are not looked inside.
 The receipt checks consistency for trusted packaging tools, not a malicious packager rewriting
 the binary and its evidence. Every supplied artifact must exist.
 

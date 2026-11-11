@@ -1,7 +1,7 @@
 //! Validate final release inputs, not a source config before Tauri merges overrides.
 use crate::trust::{read_bounded, TrustConfig, COMPILED_TEST_TRUST, PRODUCTION_TRUST};
 use serde_json::Value;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -227,42 +227,233 @@ fn scan_trust(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-// Stream with overlap so markers split across chunks are still detected; no artifact-sized alloc.
+/// Bytes no release artifact may hold, in a file given or in any file inside an AppImage given.
+const FORBIDDEN: [(&[u8], &str); 4] = [
+    (
+        b"PLUXY_TEST_BUILD_DO_NOT_RELEASE",
+        "test build marker/identity in artifact",
+    ),
+    (
+        b"dev.pluxy.desktop.test",
+        "test build marker/identity in artifact",
+    ),
+    (b"pluxy Test", "test build marker/identity in artifact"),
+    // Tauri updater keys and signatures are base64 of minisign text that starts
+    // "untrusted comment:"; production updater trust is not configured, so any one is a test key.
+    (
+        b"dW50cnVzdGVkIGNvbW1lbnQ6",
+        "updater key or signature in artifact",
+    ),
+];
+
+/// Checks one artifact: its bytes and, for an AppImage, every file inside it. Says whether it
+/// holds this build's receipt.
 fn scan_artifact(path: &Path) -> Result<bool, String> {
     let meta =
         fs::symlink_metadata(path).map_err(|e| format!("artifact missing/unreadable: {e}"))?;
     if !meta.is_file() {
         return Err("artifact must be a regular file".into());
     }
-    let forbidden: [&[u8]; 3] = [
-        b"PLUXY_TEST_BUILD_DO_NOT_RELEASE",
-        b"dev.pluxy.desktop.test",
-        b"pluxy Test",
-    ];
+    let what = path.display().to_string();
+    let file = fs::File::open(path).map_err(|e| format!("{what}: {e}"))?;
+    match appimage_offset(path)? {
+        None => scan_stream(file, &what),
+        // The runtime part as bytes; the squashfs image by the files in it.
+        Some(offset) => Ok(scan_stream(file.take(offset), &what)? | scan_appimage(path, offset)?),
+    }
+}
+
+/// Streams reader with overlap, so markers split across reads are still found; no
+/// artifact-sized allocation. Says whether the build's receipt is in it.
+fn scan_stream(mut reader: impl Read, what: &str) -> Result<bool, String> {
     let receipt = env!("PLUXY_BUILD_RECEIPT").as_bytes();
-    let overlap = receipt
-        .len()
-        .max(forbidden.iter().map(|m| m.len()).max().unwrap())
+    let forbidden: Vec<&[u8]> = FORBIDDEN.iter().map(|(m, _)| *m).collect();
+    let overlap = FORBIDDEN
+        .iter()
+        .map(|(m, _)| m.len())
+        .chain([receipt.len()])
+        .max()
+        .unwrap()
         - 1;
-    let mut file = fs::File::open(path).map_err(|e| e.to_string())?;
-    let mut window = Vec::new();
-    let mut buffer = [0; 64 * 1024];
+    let mut buffer = vec![0; 64 * 1024 + overlap];
+    let mut kept = 0;
     let mut found = false;
     loop {
-        let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
+        let n = reader
+            .read(&mut buffer[kept..])
+            .map_err(|e| format!("{what}: {e}"))?;
         if n == 0 {
             break;
         }
-        window.extend_from_slice(&buffer[..n]);
-        if forbidden
-            .iter()
-            .any(|m| window.windows(m.len()).any(|w| w == *m))
-        {
-            return Err("test build marker/identity in artifact".into());
+        let window = &buffer[..kept + n];
+        if let Some(i) = first_of(window, &forbidden) {
+            return Err(format!("{what}: {}", FORBIDDEN[i].1));
         }
-        found |= window.windows(receipt.len()).any(|w| w == receipt);
-        if window.len() > overlap {
-            window.drain(..window.len() - overlap);
+        found = found || first_of(window, &[receipt]).is_some();
+        kept = overlap.min(window.len());
+        let end = window.len();
+        buffer.copy_within(end - kept..end, 0);
+    }
+    Ok(found)
+}
+
+/// The index of a needle found in hay. One pass, comparing only where a needle's first byte is:
+/// the validator is a debug build, and an AppImage holds hundreds of megabytes.
+fn first_of(hay: &[u8], needles: &[&[u8]]) -> Option<usize> {
+    let mut starts = [false; 256];
+    for needle in needles {
+        starts[needle[0] as usize] = true;
+    }
+    for (i, b) in hay.iter().enumerate() {
+        if starts[*b as usize] {
+            if let Some(k) = needles.iter().position(|n| hay[i..].starts_with(n)) {
+                return Some(k);
+            }
+        }
+    }
+    None
+}
+
+/// Where an AppImage's squashfs image starts, read from its ELF header, never by running it.
+/// None for a file that is not an AppImage (such as the app executable). Refuses an AppImage
+/// that is not of type 2, or whose image is not where the header ends.
+fn appimage_offset(path: &Path) -> Result<Option<u64>, String> {
+    let what = path.display();
+    let mut file = fs::File::open(path).map_err(|e| format!("{what}: {e}"))?;
+    let mut header = Vec::new();
+    file.by_ref()
+        .take(64)
+        .read_to_end(&mut header)
+        .map_err(|e| format!("{what}: {e}"))?;
+    // The AppImage specification's magic: an ELF file with "AI" and the type at offset 8.
+    if header.len() < 16 || header[..4] != *b"\x7fELF" || header[8..10] != *b"AI" {
+        return Ok(None);
+    }
+    if header[10] != 2 {
+        return Err(format!(
+            "{what}: AppImage type {} cannot be checked, only type 2",
+            header[10]
+        ));
+    }
+    let field = |at: usize, len: usize| -> Result<u64, String> {
+        let bytes = header
+            .get(at..at + len)
+            .ok_or_else(|| format!("{what}: short ELF header"))?;
+        let mut value = 0u64;
+        for (i, b) in bytes.iter().enumerate() {
+            let shift = if header[5] == 1 { i } else { len - 1 - i };
+            value |= u64::from(*b) << (8 * shift);
+        }
+        Ok(value)
+    };
+    if header[5] != 1 && header[5] != 2 {
+        return Err(format!("{what}: unknown ELF byte order"));
+    }
+    // The runtime's own size: its section header table ends it (e_shoff + e_shentsize * e_shnum).
+    let (shoff, shentsize, shnum) = match header[4] {
+        1 => (field(0x20, 4)?, field(0x2e, 2)?, field(0x30, 2)?),
+        2 => (field(0x28, 8)?, field(0x3a, 2)?, field(0x3c, 2)?),
+        _ => return Err(format!("{what}: unknown ELF class")),
+    };
+    let offset = shentsize
+        .checked_mul(shnum)
+        .and_then(|n| n.checked_add(shoff))
+        .ok_or_else(|| format!("{what}: ELF header out of range"))?;
+    let mut magic = [0; 4];
+    file.seek(SeekFrom::Start(offset))
+        .and_then(|_| file.read_exact(&mut magic))
+        .map_err(|_| format!("{what}: no squashfs image where its runtime ends"))?;
+    if magic != *b"hsqs" {
+        return Err(format!("{what}: no squashfs image where its runtime ends"));
+    }
+    Ok(Some(offset))
+}
+
+/// Unpacks an AppImage's squashfs image (unsquashfs, from offset) into a private temporary
+/// folder and checks every file in it; the folder is removed after.
+fn scan_appimage(path: &Path, offset: u64) -> Result<bool, String> {
+    let what = path.display().to_string();
+    let mut random = [0; 12];
+    getrandom::fill(&mut random).map_err(|e| e.to_string())?;
+    let dir = std::env::temp_dir().join(format!(
+        "pluxy-release-scan-{}",
+        crate::artifact::hex(&random)
+    ));
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder
+        .create(&dir)
+        .map_err(|e| format!("{}: {e}", dir.display()))?;
+    let result = unpack_and_scan(path, offset, &dir.join("root"), &what);
+    let _ = fs::remove_dir_all(&dir);
+    result
+}
+
+fn unpack_and_scan(path: &Path, offset: u64, root: &Path, what: &str) -> Result<bool, String> {
+    let out = std::process::Command::new("unsquashfs")
+        .args([
+            "-no-progress",
+            "-no-xattrs",
+            "-offset",
+            &offset.to_string(),
+            "-dest",
+        ])
+        .arg(root)
+        .arg(path)
+        .output()
+        .map_err(|e| {
+            format!("{what}: unsquashfs (package squashfs-tools) checks AppImages: {e}")
+        })?;
+    if !out.status.success() {
+        return Err(format!(
+            "{what}: unsquashfs could not unpack it: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    scan_tree(root, root, what)
+}
+
+/// Checks a folder unpacked from an AppImage: names, link targets and contents, and trust JSON.
+fn scan_tree(root: &Path, dir: &Path, appimage: &str) -> Result<bool, String> {
+    let mut found = false;
+    for entry in fs::read_dir(dir).map_err(|e| format!("{appimage}: {e}"))? {
+        let path = entry.map_err(|e| format!("{appimage}: {e}"))?.path();
+        let what = format!(
+            "{appimage}!{}",
+            path.strip_prefix(root).unwrap_or(&path).display()
+        );
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_ascii_lowercase();
+        // Only pluxy's own test names: bundled system libraries may say "secret" or "-test".
+        if name.contains("pluxy") && name.contains("test") {
+            return Err(format!("{what}: test file name in package"));
+        }
+        let meta = fs::symlink_metadata(&path).map_err(|e| format!("{what}: {e}"))?;
+        if meta.is_dir() {
+            found |= scan_tree(root, &path, appimage)?;
+        } else if meta.is_symlink() {
+            // Never followed: its target is checked as text.
+            let target = fs::read_link(&path).map_err(|e| format!("{what}: {e}"))?;
+            let target = target.to_string_lossy().to_ascii_lowercase();
+            if target.contains("pluxy") && target.contains("test") {
+                return Err(format!("{what}: link to a test file name in package"));
+            }
+        } else if meta.is_file() {
+            let file = fs::File::open(&path).map_err(|e| format!("{what}: {e}"))?;
+            found |= scan_stream(file, &what)?;
+            if name.ends_with(".json") && meta.len() <= 64 * 1024 {
+                let bytes = fs::read(&path).map_err(|e| format!("{what}: {e}"))?;
+                // Only trust-shaped JSON parses (closed schema); it must be empty.
+                if serde_json::from_slice::<TrustConfig>(&bytes).is_ok() {
+                    empty_trust(&bytes).map_err(|e| format!("{what}: {e}"))?;
+                }
+            }
+        } else {
+            return Err(format!("{what}: not a regular file, folder or link"));
         }
     }
     Ok(found)
