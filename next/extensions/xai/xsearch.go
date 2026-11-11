@@ -26,20 +26,7 @@ func hasSearch(tools []any) bool {
 }
 func requestHasSearch(m map[string]any) bool {
 	tools, _ := m["tools"].([]any)
-	if hasSearch(tools) {
-		return true
-	}
-	input, _ := m["input"].([]any)
-	for _, v := range input {
-		if toolType(v) == "additional_tools" {
-			item, _ := v.(map[string]any)
-			tools, _ := item["tools"].([]any)
-			if hasSearch(tools) {
-				return true
-			}
-		}
-	}
-	return false
+	return hasSearch(tools)
 }
 
 // Match today's core: a forced hosted tool must not compete with injected search.
@@ -47,16 +34,7 @@ func requestHasSearch(m map[string]any) bool {
 func injectSearch(m map[string]any) {
 	tools, _ := m["tools"].([]any)
 	// A choice with no original tools must not force the optional injected search.
-	originalTools := len(tools)
-	input, _ := m["input"].([]any)
-	for _, v := range input {
-		if toolType(v) == "additional_tools" {
-			item, _ := v.(map[string]any)
-			additional, _ := item["tools"].([]any)
-			originalTools += len(additional)
-		}
-	}
-	if originalTools == 0 {
+	if len(tools) == 0 {
 		delete(m, "tool_choice")
 		delete(m, "parallel_tool_calls")
 	}
@@ -135,7 +113,7 @@ func injectSearch(m map[string]any) {
 	}
 	if choice != nil && textField(choice, "type") == "allowed_tools" {
 		sentTools, _ := m["tools"].([]any)
-		if !hasSearch(sentTools[:min(len(sentTools), maxTools)]) && !requestHasSearch(map[string]any{"input": m["input"]}) {
+		if !hasSearch(sentTools[:min(len(sentTools), maxTools)]) {
 			return
 		}
 		allowed, _ := choice["tools"].([]any)
@@ -165,14 +143,6 @@ func newSearchFilter(body []byte) *searchFilter {
 	}
 	tools, _ := m["tools"].([]any)
 	collect(tools)
-	input, _ := m["input"].([]any)
-	for _, v := range input {
-		if toolType(v) == "additional_tools" {
-			item, _ := v.(map[string]any)
-			tools, _ := item["tools"].([]any)
-			collect(tools)
-		}
-	}
 	return f
 }
 

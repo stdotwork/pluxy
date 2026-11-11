@@ -8,23 +8,30 @@ import { accountsApi } from "./accounts";
 import { configApi } from "./config";
 import { extensionsApi } from "./extensions";
 import { loginsApi } from "./logins";
+import { logsApi } from "./logs";
 import { packagesApi } from "./packages";
 import { quotaApi } from "./quota";
 import { settingsApi } from "./settings";
 import { statusApi } from "./status";
+import { systemApi } from "./system";
+import { usageApi } from "./usage";
 import { usageEventsApi } from "./usageEvents";
 
 export * from "./accounts";
 export * from "./config";
 export * from "./extensions";
 export * from "./logins";
+export * from "./logs";
 export * from "./packages";
 export * from "./quota";
 export * from "./settings";
 export * from "./status";
+export * from "./system";
+export * from "./usage";
 export * from "./usageEvents";
 
 export const api = (host: Host) => ({
+  ...logsApi(host),
   ...configApi(host),
   ...statusApi(host),
   ...accountsApi(host),
@@ -33,6 +40,8 @@ export const api = (host: Host) => ({
   ...extensionsApi(host),
   ...loginsApi(host),
   ...settingsApi(host),
+  ...systemApi(host),
+  ...usageApi(host),
   ...usageEventsApi(host),
 });
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"reflect"
 	"runtime"
 	"slices"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/stdotwork/pluxy/next/format/openaichat"
+	"github.com/stdotwork/pluxy/next/format/sse"
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
@@ -405,9 +407,9 @@ func TestDecodeResponseJoinsTextPartsInLinearBytes(t *testing.T) {
 	}
 }
 
-// writeNative runs an upstream Responses stream through the decoder and a stream writer and
-// returns the data of each event the client got.
-func writeNative(t *testing.T, stream []string) []string {
+// writeStream runs an upstream Responses stream through the decoder and a stream writer and
+// returns what the client got.
+func writeStream(t *testing.T, stream []string) string {
 	t.Helper()
 	req, _ := ParseRequest([]byte(`{"model":"m","input":"hi","stream":true}`))
 	var out strings.Builder
@@ -427,8 +429,15 @@ func writeNative(t *testing.T, stream []string) []string {
 			}
 		}
 	}
+	return out.String()
+}
+
+// writeNative runs an upstream Responses stream through writeStream and returns the data of each
+// event the client got.
+func writeNative(t *testing.T, stream []string) []string {
+	t.Helper()
 	var datas []string
-	for _, line := range strings.Split(out.String(), "\n") {
+	for _, line := range strings.Split(writeStream(t, stream), "\n") {
 		if d, ok := strings.CutPrefix(line, "data: "); ok {
 			datas = append(datas, d)
 		}
@@ -478,6 +487,102 @@ func TestNativeStreamRepairsEmptyOutput(t *testing.T) {
 			_ = json.Unmarshal([]byte(c.want), &wantOut)
 			if !reflect.DeepEqual(gotOut, wantOut) {
 				t.Errorf("output = %s, want %s", ev.Response.Output, c.want)
+			}
+		})
+	}
+}
+
+// An upstream Codex stream can carry a keepalive frame, with an event name or without one, between
+// its deltas or before response.created. No client event or data line carries keepalive: the reply's
+// events still arrive, in order, with its text intact.
+func TestUpstreamKeepaliveNeverReachesResponsesClient(t *testing.T) {
+	events := []string{
+		`{"type":"response.created","sequence_number":0,"response":{"id":"resp_1","object":"response","created_at":7,"status":"in_progress","model":"up","output":[]}}`,
+		`{"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","content":[]}}`,
+		`{"type":"response.output_text.delta","sequence_number":2,"output_index":0,"item_id":"msg_1","content_index":0,"delta":"Hel"}`,
+		`{"type":"response.output_text.delta","sequence_number":3,"output_index":0,"item_id":"msg_1","content_index":0,"delta":"lo"}`,
+		`{"type":"response.output_item.done","sequence_number":4,"output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello"}]}}`,
+		`{"type":"response.completed","sequence_number":6,"response":{"id":"resp_1","object":"response","status":"completed","model":"up","output":[{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello"}]}]}}`,
+	}
+	const keepalive = `{"type":"keepalive","sequence_number":5}`
+	// upstream is the SSE text Codex receives: the events, with the keepalive frame before
+	// events[at], named as "event: keepalive" when named is set.
+	upstream := func(at int, named bool) string {
+		var b strings.Builder
+		frame := func(name, data string) {
+			if name != "" {
+				b.WriteString("event: " + name + "\n")
+			}
+			b.WriteString("data: " + data + "\n\n")
+		}
+		for i := 0; i <= len(events); i++ {
+			if i == at {
+				name := ""
+				if named {
+					name = "keepalive"
+				}
+				frame(name, keepalive)
+			}
+			if i < len(events) {
+				var e struct {
+					Type string `json:"type"`
+				}
+				_ = json.Unmarshal([]byte(events[i]), &e)
+				frame(e.Type, events[i])
+			}
+		}
+		return b.String()
+	}
+	for _, c := range []struct {
+		name  string
+		at    int
+		named bool
+	}{
+		{"named, between deltas", 3, true},
+		{"data only, between deltas", 3, false},
+		{"first frame, before response.created", 0, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := sse.NewReader(strings.NewReader(upstream(c.at, c.named)))
+			var stream []string
+			for {
+				ev, err := r.Next()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				stream = append(stream, ev.Data)
+			}
+			if len(stream) != len(events)+1 {
+				t.Fatalf("the upstream stream has %d frames, want %d: the keepalive frame did not come through the reader", len(stream), len(events)+1)
+			}
+			out := writeStream(t, stream)
+			var types []string
+			var text strings.Builder
+			for _, line := range strings.Split(out, "\n") {
+				if strings.Contains(line, "keepalive") {
+					t.Errorf("client line carries keepalive: %s", line)
+				}
+				if typ, ok := strings.CutPrefix(line, "event: "); ok {
+					types = append(types, typ)
+				}
+				if d, ok := strings.CutPrefix(line, "data: "); ok {
+					var e struct {
+						Type  string `json:"type"`
+						Delta string `json:"delta"`
+					}
+					if json.Unmarshal([]byte(d), &e) == nil && e.Type == "response.output_text.delta" {
+						text.WriteString(e.Delta)
+					}
+				}
+			}
+			if len(types) == 0 || types[0] != "response.created" || types[len(types)-1] != "response.completed" {
+				t.Errorf("client events %q, want response.created first and response.completed last", types)
+			}
+			if got := text.String(); got != "Hello" {
+				t.Errorf("client text %q, want %q", got, "Hello")
 			}
 		})
 	}
