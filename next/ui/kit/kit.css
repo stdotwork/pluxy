@@ -10,7 +10,9 @@
 @import "./pages/themes.css";
 @import "./extensions/page.css";
 @import "./pages/quota.css";
+@import "./pages/usage.css";
 
 @import "./pages/config.css";
 @import "./pages/accounts.css";
 @import "./pages/addAccount.css";
+@import "./pages/accountTools.css";
