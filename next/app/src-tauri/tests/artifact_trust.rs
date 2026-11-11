@@ -1,10 +1,11 @@
+#![cfg(debug_assertions)]
 use ed25519_dalek::{Signer, SigningKey};
 use pluxy_app::{
     artifact,
     trust::{self, TrustStore},
 };
 use serde_json::json;
-use sha2::{Digest, Sha256};
+
 use std::{fs, io::Cursor, path::PathBuf};
 
 // Isolate HOME in a child instead of mutating the parallel test runner environment.
@@ -64,7 +65,7 @@ impl Fixture {
             .unwrap()
             .success());
         let archive = fs::read(dir.join("package.tar.gz")).unwrap();
-        let descriptor = serde_json::to_vec(&json!({"id":"example/notes", "version":"0.1.0", "tier":"native", "platform":"linux/amd64", "size":archive.len(), "sha256":artifact::hex(&Sha256::digest(&archive))})).unwrap();
+        let descriptor = serde_json::to_vec(&json!({"id":"example/notes", "version":"0.1.0", "tier":"native", "platform":"linux/amd64", "size":archive.len(), "sha256":String::from_utf8(std::process::Command::new("sha256sum").arg(dir.join("package.tar.gz")).output().unwrap().stdout).unwrap().split_whitespace().next().unwrap()})).unwrap();
         Self {
             dir,
             key,
@@ -93,28 +94,29 @@ impl Fixture {
             .unwrap();
         }
         let _ = fs::remove_file(self.dir.join(trust::MARKER_FILE));
-        trust::write_test_marker(&self.dir).unwrap();
+        let nonce = trust::write_test_marker(&self.dir).unwrap();
+        std::env::set_var("PLUXY_TEST_TRUST_NONCE", nonce);
     }
     fn signature(&self, descriptor: &[u8]) -> Vec<u8> {
         self.key.sign(descriptor).to_bytes().to_vec()
     }
     fn verify(
         &self,
-        store: &TrustStore,
+        store: &impl artifact::PublisherKeys,
         descriptor: &[u8],
         signature: &[u8],
         archive: &[u8],
         source: &str,
         platform: &str,
-    ) -> Result<artifact::VerifiedArchive, String> {
-        artifact::verify_archive(
+    ) -> Result<artifact::VerifiedArchive<Cursor<Vec<u8>>>, String> {
+        artifact::verify_trusted_archive(
             store,
             source,
             "fixture",
             descriptor,
             signature,
             platform,
-            Cursor::new(archive),
+            Cursor::new(archive.to_vec()),
         )
     }
 }
@@ -183,15 +185,13 @@ fn artifact_trust_feature_and_marker_are_both_required() {
     assert!(without_marker.updater_key().is_err());
 }
 
-#[cfg(feature = "artifact-test-trust")]
 #[test]
 fn artifact_trust_signed_package_and_denial_controls() {
     if isolated("artifact_trust_signed_package_and_denial_controls") {
         return;
     }
     let f = Fixture::new();
-    f.profile();
-    let store = TrustStore::load(&f.dir).unwrap();
+    let store = Approved(f.key.verifying_key());
     let source = "https://example.invalid/index.json";
     let verify = |d: &[u8], s: &[u8], a: &[u8], src: &str, platform: &str| {
         f.verify(&store, d, s, a, src, platform)
@@ -210,6 +210,10 @@ fn artifact_trust_signed_package_and_denial_controls() {
         .unwrap();
     assert!(extracted.status.success());
     let manifest = extracted.stdout;
+    // Consume the retained, rewound handle; no pathname reopen is needed for extraction.
+    let retained = positive().into_archive();
+    assert_eq!(retained.position(), 0);
+    assert_eq!(retained.into_inner(), f.archive.as_slice());
     valid.check_manifest(&manifest).unwrap();
     let mut changed = f.descriptor.clone();
     changed.push(b' ');
@@ -263,7 +267,7 @@ fn artifact_trust_signed_package_and_denial_controls() {
     let unknown = SigningKey::from_bytes(&seed).sign(&f.descriptor).to_bytes();
     assert!(verify(&f.descriptor, &unknown, &f.archive, source, "linux/amd64").is_err());
     positive();
-    assert!(artifact::verify_archive(
+    assert!(artifact::verify_trusted_archive(
         &store,
         source,
         "unknown",
@@ -284,6 +288,25 @@ fn artifact_trust_signed_package_and_denial_controls() {
         "linux/amd64"
     )
     .is_err());
+    positive();
+    // Add the group order L to a valid S. Its top bits remain clear; bit masking alone fails.
+    let mut plus_l = signature.clone();
+    let order = artifact::decode_hex::<32>(
+        "edd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010",
+    )
+    .unwrap();
+    let mut carry = 0u16;
+    for i in 0..32 {
+        let sum = plus_l[32 + i] as u16 + order[i] as u16 + carry;
+        plus_l[32 + i] = sum as u8;
+        carry = sum >> 8;
+    }
+    assert_eq!(plus_l[63] & 0xe0, 0);
+    assert!(
+        verify(&f.descriptor, &plus_l, &f.archive, source, "linux/amd64")
+            .unwrap_err()
+            .contains("signature")
+    );
     positive();
     let mut spaced = f.descriptor.clone();
     spaced.push(10);
@@ -348,9 +371,23 @@ fn artifact_trust_marker_mismatch_and_weak_key_refuse() {
     let f = Fixture::new();
     f.profile();
     TrustStore::load(&f.dir).unwrap().require_native().unwrap();
+    let nonce = std::env::var("PLUXY_TEST_TRUST_NONCE").unwrap();
+    std::env::set_var("TMPDIR", f.dir.parent().unwrap());
+    std::env::remove_var("PLUXY_TEST_TRUST_NONCE");
+    assert!(TrustStore::load(&f.dir)
+        .err()
+        .unwrap()
+        .contains("marker mismatch"));
+    std::env::set_var("PLUXY_TEST_TRUST_NONCE", "wrong");
+    assert!(TrustStore::load(&f.dir)
+        .err()
+        .unwrap()
+        .contains("marker mismatch"));
+    std::env::set_var("PLUXY_TEST_TRUST_NONCE", nonce);
+    TrustStore::load(&f.dir).unwrap().require_native().unwrap();
     fs::write(
         f.dir.join(trust::MARKER_FILE),
-        br#"{"format":1,"home":"/other","purpose":"pluxy-artifact-test-trust"}"#,
+        br#"{"format":1,"home":"/other","purpose":"pluxy-artifact-test-trust","nonce":"invalid"}"#,
     )
     .unwrap();
     assert!(TrustStore::load(&f.dir).is_err());
@@ -365,4 +402,69 @@ fn artifact_trust_marker_mismatch_and_weak_key_refuse() {
     assert!(TrustStore::load(&f.dir).is_err());
     f.profile();
     TrustStore::load(&f.dir).unwrap().require_native().unwrap();
+}
+
+// Native settings/curated lookup is separate from signature verification. This implementation
+// holds only a runtime-generated approved public key; it performs the real source/ID checks.
+struct Approved(ed25519_dalek::VerifyingKey);
+impl artifact::PublisherKeys for Approved {
+    fn publisher_key(
+        &self,
+        source: &str,
+        key_id: &str,
+        publisher: &str,
+    ) -> Result<ed25519_dalek::VerifyingKey, String> {
+        if source != "https://example.invalid/index.json"
+            || key_id != "fixture"
+            || publisher != "example"
+        {
+            return Err("unknown publisher key or changed source".into());
+        }
+        Ok(self.0)
+    }
+}
+
+#[test]
+fn independent_archive_digest() {
+    let mut seed = [0; 32];
+    getrandom::fill(&mut seed).unwrap();
+    let key = SigningKey::from_bytes(&seed);
+    // NIST/FIPS SHA-256 'abc' known answer: size 3, hash fixed independently of sha2.
+    let bytes = br#"{"id":"example/notes","version":"1","tier":"web","platform":"linux/amd64","size":3,"sha256":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}"#;
+    let signature = key.sign(bytes).to_bytes();
+    let valid = artifact::verify_archive(
+        &key.verifying_key(),
+        bytes,
+        &signature,
+        "linux/amd64",
+        Cursor::new(b"abc"),
+    )
+    .unwrap();
+    assert_eq!(valid.into_archive().into_inner(), b"abc");
+    assert!(artifact::verify_archive(
+        &key.verifying_key(),
+        bytes,
+        &signature,
+        "linux/amd64",
+        Cursor::new(b"abd")
+    )
+    .unwrap_err()
+    .contains("SHA-256"));
+}
+
+#[test]
+fn rfc8032_public_known_answers() {
+    // RFC 8032 section 7.1 tests 1 and 2, public inputs only.
+    for (public, message, signature) in [
+        ("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a", "", "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b"),
+        ("3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c", "72", "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00")
+    ] {
+        let key = ed25519_dalek::VerifyingKey::from_bytes(&artifact::decode_hex::<32>(public).unwrap()).unwrap();
+        let signature = artifact::decode_hex::<64>(signature).unwrap();
+        let message: Vec<u8> = message.as_bytes().chunks(2).map(|c| u8::from_str_radix(std::str::from_utf8(c).unwrap(),16).unwrap()).collect();
+        artifact::verify_signature(&key, &message, &signature).unwrap();
+        let mut bad = signature; bad[0] ^= 1;
+        assert!(artifact::verify_signature(&key, &message, &bad).unwrap_err().contains("signature"));
+        artifact::verify_signature(&key, &message, &signature).unwrap();
+    }
 }

@@ -92,7 +92,10 @@ impl TrustStore {
             .map(|u| u.public_key.as_str())
             .ok_or_else(|| "updater trust not configured".into())
     }
-    pub(crate) fn publisher_key(
+}
+
+impl crate::artifact::PublisherKeys for TrustStore {
+    fn publisher_key(
         &self,
         source: &str,
         key_id: &str,
@@ -115,22 +118,29 @@ impl TrustStore {
     }
 }
 
+#[cfg(any(debug_assertions, feature = "artifact-test-trust"))]
 #[derive(Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 struct Marker {
     format: u32,
     home: String,
     purpose: String,
+    nonce: String,
 }
 
 /// Runner utility: writes only a marker, never roots or private keys. Available in normal test
 /// builds so the normal-build refusal control can present an otherwise valid marker.
-pub fn write_test_marker(home: &Path) -> Result<(), String> {
+#[cfg(debug_assertions)]
+pub fn write_test_marker(home: &Path) -> Result<String, String> {
     use std::io::Write;
     #[cfg(unix)]
     use std::os::unix::fs::OpenOptionsExt;
     let home = home.canonicalize().map_err(|e| e.to_string())?;
+    let mut random = [0; 32];
+    getrandom::fill(&mut random).map_err(|e| e.to_string())?;
+    let nonce = crate::artifact::hex(&random);
     let marker = Marker {
+        nonce: nonce.clone(),
         format: 1,
         home: home.to_string_lossy().into(),
         purpose: "pluxy-artifact-test-trust".into(),
@@ -143,7 +153,8 @@ pub fn write_test_marker(home: &Path) -> Result<(), String> {
         .open(home.join(MARKER_FILE))
         .map_err(|e| e.to_string())?;
     file.write_all(&serde_json::to_vec(&marker).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    Ok(nonce)
 }
 #[cfg(feature = "artifact-test-trust")]
 fn check_profile(home: &Path) -> Result<(), String> {
@@ -156,12 +167,6 @@ fn check_profile(home: &Path) -> Result<(), String> {
         != real
     {
         return Err("test trust profile must be the process HOME".into());
-    }
-    let temp = std::env::temp_dir()
-        .canonicalize()
-        .map_err(|e| e.to_string())?;
-    if real == temp || !real.starts_with(&temp) {
-        return Err("test trust requires a temporary HOME".into());
     }
     let meta = fs::symlink_metadata(home).map_err(|e| e.to_string())?;
     if !meta.is_dir() || meta.uid() != unsafe { libc::geteuid() } || meta.mode() & 0o077 != 0 {
@@ -180,6 +185,8 @@ fn check_profile(home: &Path) -> Result<(), String> {
     if marker.format != 1
         || marker.home != real.to_string_lossy()
         || marker.purpose != "pluxy-artifact-test-trust"
+        || crate::artifact::decode_hex::<32>(&marker.nonce).is_err()
+        || std::env::var("PLUXY_TEST_TRUST_NONCE").as_deref() != Ok(marker.nonce.as_str())
     {
         return Err("test trust profile marker mismatch".into());
     }

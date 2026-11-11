@@ -72,7 +72,7 @@ jobs:
         run: cargo fmt --check
       - name: Clippy
         working-directory: next/app/src-tauri
-        run: cargo clippy --locked --all-targets --features native-test -- -D warnings
+        run: cargo clippy --locked --all-targets --features native-test,artifact-test-trust -- -D warnings
       # Unit tests, and each connection mode against a real core with fake extensions, with an
       # empty HOME and XDG folders.
       - name: Rust tests
@@ -84,6 +84,9 @@ jobs:
           export HOME="$test_env/home" XDG_CONFIG_HOME="$test_env/config" XDG_DATA_HOME="$test_env/data" XDG_CACHE_HOME="$test_env/cache"
           mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME"
           cargo test --locked
+      - name: Artifact signature and test trust controls
+        working-directory: next/app/src-tauri
+        run: cargo test --locked --features artifact-test-trust --test artifact_trust --test release_config
       # The real app on Xvfb in each mode: extension page webviews cannot call app commands.
       - name: Native test
         timeout-minutes: 20

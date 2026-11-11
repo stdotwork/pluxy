@@ -6,6 +6,12 @@
 //! the window's webview, labelled `main` (`capabilities/main.json`). Extension pages run in
 //! webviews of their own (`pages.rs`), which no capability names.
 
+include!(concat!(env!("OUT_DIR"), "/build_receipt.rs"));
+#[cfg(any(feature = "native-test", feature = "artifact-test-trust"))]
+#[used]
+#[no_mangle]
+pub static PLUXY_TEST_BUILD: [u8; 31] = *b"PLUXY_TEST_BUILD_DO_NOT_RELEASE";
+
 pub mod artifact;
 pub mod client;
 mod command_names;
@@ -15,6 +21,7 @@ pub mod managed;
 mod native_test;
 pub mod pages;
 mod place;
+#[cfg(debug_assertions)]
 pub mod release_config;
 pub mod trust;
 
@@ -394,6 +401,9 @@ fn page_scheme(
 }
 
 pub fn run() {
+    std::hint::black_box(&PLUXY_BUILD_RECEIPT);
+    #[cfg(any(feature = "native-test", feature = "artifact-test-trust"))]
+    std::hint::black_box(&PLUXY_TEST_BUILD);
     let app = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             connection_get,

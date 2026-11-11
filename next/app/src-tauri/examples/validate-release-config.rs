@@ -1,6 +1,9 @@
 //! Run on the final merged Tauri config and staged package inputs before packaging/publishing.
+#[cfg(debug_assertions)]
 use pluxy_app::release_config::{validate, ReleaseInputs};
+#[cfg(debug_assertions)]
 use std::path::PathBuf;
+#[cfg(debug_assertions)]
 fn main() {
     let args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
     if args.len() < 6 {
@@ -24,4 +27,10 @@ fn main() {
             std::process::exit(1);
         }
     }
+}
+
+#[cfg(not(debug_assertions))]
+fn main() {
+    eprintln!("run release validation with the debug tooling build");
+    std::process::exit(2);
 }

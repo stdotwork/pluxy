@@ -85,7 +85,17 @@ The index pins size, digest, key identity and signature. Detached signature file
 Public keys are 32 bytes, encoded as 64 lower-case hexadecimal digits. Verification uses pinned
 `ed25519-dalek` 2.2.0 with `VerifyingKey::verify_strict` and default features disabled. This is
 separate from Tauri updater signatures. Trust binds the publisher, key identity and exact source
-trust domain; a changed source needs fresh trust.
+trust domain; a changed source needs fresh trust. The feature-free `verify_descriptor` accepts
+an approved key from native settings for web resources or curated native admission; both use
+the same verifier. `PublisherKeys` supplies publisher/source/key lookup separately.
+`VerifiedArchive<R>` retains the rewound checked reader. Consumers e3/na/d use `into_archive()`
+instead of reopening a path, prevent concurrent writes, and check manifest identity after extraction.
+
+Version 2.2.0 is retained over stable 3.0.0 to avoid its curve25519-dalek 5, ed25519/signature 3
+and sha2 0.11 dependency transition. The app already uses sha2 0.10; both Dalek versions expose
+strict verification. This pin enables no optional features and makes no independent audit claim.
+Public RFC 8032 vectors, noncanonical S + L refusal and generated-package signature controls
+run in plain cargo tests.
 
 Schema-0 provider packages retain digest-only trust. This contract adds no signature claim to
 them. Production keys and feeds are release configuration. Generate test keys at runtime in

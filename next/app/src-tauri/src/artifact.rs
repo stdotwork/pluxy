@@ -1,7 +1,7 @@
 //! Publisher authentication before extraction. Consumers must use the checked archive handle,
 //! check the extracted manifest, and enforce their own admission/consent and tree integrity rules.
-use crate::trust::TrustStore;
 use ed25519_dalek::Signature;
+use ed25519_dalek::VerifyingKey;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::io::{Read, Seek, SeekFrom};
@@ -26,14 +26,12 @@ pub struct Descriptor {
 
 /// Only constructed by verify_archive. Exact bytes, source and signer are retained for storage.
 #[derive(Debug)]
-pub struct VerifiedArchive {
+pub struct VerifiedDescriptor {
     descriptor: Descriptor,
     bytes: Vec<u8>,
     signature: Vec<u8>,
-    source: String,
-    key_id: String,
 }
-impl VerifiedArchive {
+impl VerifiedDescriptor {
     pub fn descriptor(&self) -> &Descriptor {
         &self.descriptor
     }
@@ -42,12 +40,6 @@ impl VerifiedArchive {
     }
     pub fn signature_bytes(&self) -> &[u8] {
         &self.signature
-    }
-    pub fn source(&self) -> &str {
-        &self.source
-    }
-    pub fn key_id(&self) -> &str {
-        &self.key_id
     }
     /// Compare identity after safe extraction; this is not full manifest schema validation.
     pub fn check_manifest(&self, bytes: &[u8]) -> Result<(), String> {
@@ -74,18 +66,25 @@ impl VerifiedArchive {
     }
 }
 
-/// Verify signature first, then stream/hash the archive from its beginning and rewind it.
-/// Retain the same private immutable archive handle through extraction; reopening a path or
-/// allowing concurrent writes would discard this check's guarantee. This function never extracts.
-pub fn verify_archive<R: Read + Seek>(
-    store: &TrustStore,
-    source: &str,
-    key_id: &str,
+/// Resolve an approved signer separately from cryptographic verification. Implementations bind
+/// publisher, key ID and source to native settings or the curated index, never page claims.
+pub trait PublisherKeys {
+    fn publisher_key(
+        &self,
+        source: &str,
+        key_id: &str,
+        publisher: &str,
+    ) -> Result<VerifyingKey, String>;
+}
+
+/// Verify exact descriptor bytes with an already approved key. Web resource signers from native
+/// settings and curated native packages use this same implementation.
+pub fn verify_descriptor(
+    key: &VerifyingKey,
     bytes: &[u8],
     signature: &[u8],
     platform: &str,
-    mut archive: R,
-) -> Result<VerifiedArchive, String> {
+) -> Result<VerifiedDescriptor, String> {
     if bytes.len() > 16 * 1024 {
         return Err("descriptor exceeds 16 KiB".into());
     }
@@ -98,13 +97,53 @@ pub fn verify_archive<R: Read + Seek>(
     {
         return Err("invalid descriptor identity, platform or SHA-256".into());
     }
-    let key = store.publisher_key(source, key_id, d.id.split('/').next().unwrap())?;
-    let sig = Signature::from_slice(signature).map_err(|_| "signature must be 64 raw bytes")?;
-    key.verify_strict(bytes, &sig)
-        .map_err(|_| "invalid descriptor signature")?;
+    verify_signature(key, bytes, signature)?;
     if d.platform != platform {
         return Err("descriptor platform does not match selected artifact".into());
     }
+    Ok(VerifiedDescriptor {
+        descriptor: d,
+        bytes: bytes.to_vec(),
+        signature: signature.to_vec(),
+    })
+}
+
+/// Strict detached Ed25519 byte verification, also exercised by RFC 8032 public vectors.
+pub fn verify_signature(key: &VerifyingKey, bytes: &[u8], signature: &[u8]) -> Result<(), String> {
+    let sig = Signature::from_slice(signature).map_err(|_| "signature must be 64 raw bytes")?;
+    key.verify_strict(bytes, &sig)
+        .map_err(|_| "invalid descriptor signature".into())
+}
+
+/// Owns the checked archive handle, rewound for extraction. Prevent concurrent writes, use
+/// into_archive instead of reopening a path, and check the manifest before admission.
+#[derive(Debug)]
+pub struct VerifiedArchive<R> {
+    signed: VerifiedDescriptor,
+    archive: R,
+}
+impl<R> std::ops::Deref for VerifiedArchive<R> {
+    type Target = VerifiedDescriptor;
+    fn deref(&self) -> &Self::Target {
+        &self.signed
+    }
+}
+impl<R> VerifiedArchive<R> {
+    pub fn into_archive(self) -> R {
+        self.archive
+    }
+}
+
+/// Authenticate before reading archive bytes, stream size/hash checks, and retain the handle.
+pub fn verify_archive<R: Read + Seek>(
+    key: &VerifyingKey,
+    bytes: &[u8],
+    signature: &[u8],
+    platform: &str,
+    mut archive: R,
+) -> Result<VerifiedArchive<R>, String> {
+    let signed = verify_descriptor(key, bytes, signature, platform)?;
+    let d = &signed.descriptor;
     archive
         .seek(SeekFrom::Start(0))
         .map_err(|e| e.to_string())?;
@@ -131,13 +170,26 @@ pub fn verify_archive<R: Read + Seek>(
     archive
         .seek(SeekFrom::Start(0))
         .map_err(|e| e.to_string())?;
-    Ok(VerifiedArchive {
-        descriptor: d,
-        bytes: bytes.to_vec(),
-        signature: signature.to_vec(),
-        source: source.into(),
-        key_id: key_id.into(),
-    })
+    Ok(VerifiedArchive { signed, archive })
+}
+
+/// Curated/source-bound lookup followed by the same feature-free verifier.
+pub fn verify_trusted_archive<R: Read + Seek>(
+    store: &impl PublisherKeys,
+    source: &str,
+    key_id: &str,
+    bytes: &[u8],
+    signature: &[u8],
+    platform: &str,
+    archive: R,
+) -> Result<VerifiedArchive<R>, String> {
+    if bytes.len() > 16 * 1024 {
+        return Err("descriptor exceeds 16 KiB".into());
+    }
+    let d: Descriptor =
+        serde_json::from_slice(bytes).map_err(|_| "invalid UTF-8 descriptor JSON")?;
+    let key = store.publisher_key(source, key_id, d.id.split('/').next().unwrap_or_default())?;
+    verify_archive(&key, bytes, signature, platform, archive)
 }
 
 pub fn hex(bytes: &[u8]) -> String {
