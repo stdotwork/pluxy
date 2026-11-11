@@ -7,6 +7,8 @@
     "main"
   ],
   "permissions": [
+    "allow-startup-get",
+    "allow-startup-set",
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "allow-connection-get",

@@ -15,6 +15,7 @@ import {
   keyEntry,
   type Mode,
 } from "./host";
+import { StartupSettings } from "./startup";
 import { WindowSettings } from "./window";
 
 const MODES = [
@@ -154,6 +155,7 @@ export function ConnectionPage(props: { connection: Connection; onChange: (c: Co
           </Button>
         </form>
       </Card>
+      <StartupSettings />
       <WindowSettings />
     </>
   );

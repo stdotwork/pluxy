@@ -258,7 +258,13 @@ let code = SETUP_FAILED;
 try {
   await setup();
   code = await new Promise<number>((resolve, reject) => {
-    appProc = spawn(app, [], { stdio: "inherit" });
+    appProc = process.env.PLUXY_APP_TEST_STARTUP_SUITE
+      ? spawn(
+          process.execPath,
+          [join(import.meta.dir, "startup.ts"), app, process.env.PLUXY_APP_TEST_STARTUP_SUITE, probe],
+          { stdio: "inherit" },
+        )
+      : spawn(app, [], { stdio: "inherit" });
     appProc.once("error", reject);
     appProc.once("exit", (c) => resolve(c ?? 1));
   });

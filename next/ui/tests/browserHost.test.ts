@@ -23,7 +23,11 @@ afterEach(() => {
 const response = (status: number, body?: unknown) =>
   new Response(body === undefined ? null : JSON.stringify(body), { status });
 function tab(localStorage = new MemoryStorage()) {
-  const window = Object.assign(new EventTarget(), { localStorage, sessionStorage: new MemoryStorage() });
+  const window = Object.assign(new EventTarget(), {
+    localStorage,
+    sessionStorage: new MemoryStorage(),
+    location: { origin: "http://core.test:8400" },
+  });
   Object.defineProperty(globalThis, "window", { configurable: true, value: window });
   return { window, host: browserHost() };
 }
@@ -32,6 +36,10 @@ function storageEvent(window: EventTarget, storage: MemoryStorage, oldValue: str
     Object.assign(new Event("storage"), { key: "pluxy.key", storageArea: storage, oldValue, newValue }),
   );
 }
+
+test("its address is the origin that served the panel", () => {
+  expect(tab().host.address).toBe("http://core.test:8400");
+});
 
 test("an old-key 401 after rotation retries with the new key", async () => {
   const old = crypto.randomUUID();

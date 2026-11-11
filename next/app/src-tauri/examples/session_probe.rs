@@ -25,6 +25,7 @@ fn main() {
     let result = match args.as_slice() {
         ["documents", file] => linux::documents(file),
         ["watcher"] => linux::watcher(),
+        ["tray-pid", pid] => linux::tray_pid(pid),
         ["portal"] => linux::portal(),
         ["owner", name] => linux::owner(name),
         ["tray", pid, action] => linux::tray(pid, action),
@@ -376,6 +377,27 @@ mod linux {
         value
             .get::<Vec<String>>()
             .ok_or_else(|| "RegisteredStatusNotifierItems is not a list of names".into())
+    }
+
+    /// Check a real application's tray item rather than this probe's fixture item.
+    pub fn tray_pid(pid: &str) -> Lines {
+        let pid: u32 = pid.parse().map_err(|_| "invalid app pid")?;
+        let conn = session()?;
+        MainContext::default().block_on(async {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                for item in registered_items(&conn).await? {
+                    let name = item.split('/').next().unwrap_or("");
+                    if owner_pid(&conn, name).ok() == Some(pid) {
+                        return Ok(vec![format!("app_tray_pid={pid}"), format!("item={item}")]);
+                    }
+                }
+                if Instant::now() >= deadline {
+                    return Err(format!("no registered tray item belongs to app pid {pid}"));
+                }
+                timeout_future(Duration::from_millis(100)).await;
+            }
+        })
     }
 
     /// Owns a status notifier item, registers it with the watcher and waits until the watcher

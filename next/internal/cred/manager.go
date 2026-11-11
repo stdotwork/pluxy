@@ -421,7 +421,7 @@ func (m *Manager) runRenewal(seen Record, f *flight) {
 			rec, e = cur, credentialError(llm.CodeExtensionUnavailable, fmt.Sprintf("account %q: extension %s does not run", cur.ID, cur.Extension))
 			break
 		}
-		acct := protocol.Account{ID: cur.ID, Settings: cur.Account.Settings, Credential: &cur.Credential}
+		acct := protocol.Account{ID: cur.ID, Settings: cur.Account.Settings, Credential: &cur.Credential, ProxyURL: cur.Account.ProxyURL, Headers: cur.Account.Headers}
 		cred, perr := p.Refresh(m.ctx, acct)
 		rec, e = m.apply(cur, cred, perr)
 	}
