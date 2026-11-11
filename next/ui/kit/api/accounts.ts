@@ -112,6 +112,8 @@ export interface AuthImport {
 
 export const accountsApi = (host: Host) => ({
   accounts: () => host.call<{ accounts: Account[] }>("GET", "/accounts"),
+  changeAccountRouting: (id: string, change: { priority?: number; weight?: number | null }) =>
+    host.call<{ account: Account }>("PATCH", `/accounts/${one(id)}`, change),
   setDisabled: (id: string, disabled: boolean) =>
     host.call<{ account: Account }>("PATCH", `/accounts/${one(id)}`, { disabled }),
   setAccount: (id: string, change: AccountChange) =>
