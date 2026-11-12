@@ -47,6 +47,7 @@ sha2 = "=0.10.9"
 semver = "1"
 # Release notes: Markdown to HTML, with raw HTML and images dropped (src/notes.rs).
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+pulldown-cmark-escape = "0.11"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

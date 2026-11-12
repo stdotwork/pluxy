@@ -39,10 +39,10 @@ pub fn render(markdown: &str) -> (String, Vec<String>) {
             dest_url,
             title,
             id,
-        }) => match https_url(&dest_url) {
-            Ok(u) => {
+        }) => match https_url(&dest_url).and_then(|u| navigated(&u).map(|n| (u, n))) {
+            Ok((u, n)) => {
                 open.push(true);
-                links.push(u.clone());
+                links.push(n);
                 Some(Event::Start(Tag::Link {
                     link_type,
                     dest_url: u.into(),
@@ -63,6 +63,15 @@ pub fn render(markdown: &str) -> (String, Vec<String>) {
     let mut out = String::new();
     html::push_html(&mut out, events);
     (out, links)
+}
+
+/// The address a browser navigates to for a link to u: the renderer percent-encodes some
+/// characters (`[ ] { } | \` and backquote among them) in what it writes, so a link is
+/// matched in that form. An IPv6 host's brackets do not survive that: such a link is dropped.
+fn navigated(u: &str) -> Result<String, String> {
+    let mut href = String::new();
+    pulldown_cmark_escape::escape_href(&mut href, u).map_err(|e| e.to_string())?;
+    https_url(&href.replace("&#x27;", "'").replace("&amp;", "&"))
 }
 
 /// The window's theme, for the notes' style sheet: each value as the theme sets it.
@@ -271,6 +280,40 @@ mod tests {
             links,
             ["https://example.com/a?b=1&c=2", "https://example.com/auto"]
         );
+    }
+
+    /// The addresses a browser navigates to for the links in html: each href as written,
+    /// with its HTML escapes undone, parsed as a URL.
+    fn hrefs(html: &str) -> Vec<Url> {
+        html.split("href=\"")
+            .skip(1)
+            .map(|rest| {
+                let raw = &rest[..rest.find('"').unwrap()];
+                Url::parse(&raw.replace("&#x27;", "'").replace("&amp;", "&")).unwrap()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_rendered_link_opens_as_it_is_navigated() {
+        let md = "[a](https://example.com/a[1]?q=x|y) [b](<https://example.com/{b}\\c`d>) \
+                  [c](https://example.com/it's?x=1&y=2) [v6](https://[::1]/notes)";
+        let (html, _) = render(md);
+        let navigated = hrefs(&html);
+        assert_eq!(navigated.len(), 3, "{html}");
+        for u in navigated {
+            let mut n = Notes::default();
+            let label = n
+                .bind(Doc::new(Product::App, md, &Style::default()))
+                .unwrap();
+            assert_eq!(
+                n.external(&label, &u).as_deref(),
+                Some(u.as_str()),
+                "{html}"
+            );
+        }
+        // An IPv6 host cannot survive the renderer's escaping of its brackets: no link.
+        assert!(!html.contains("::1"), "{html}");
     }
 
     #[test]
