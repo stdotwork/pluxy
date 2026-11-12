@@ -56,6 +56,13 @@ The pages core offers, in navigation order, and the page of the old panel
 (`#/<id>`) and its theme hook `data-page`. Why the pages have these names, and the other
 decisions behind them, is in [docs/panel.md](../../docs/panel.md).
 
+Two pages add to their address. `#/logs/<trace ID>` opens that request's log in the Logs Viewer.
+`#/config/<tab>` opens a tab of the Config Panel: `common` (what `#/config` opens),
+`connectivity`, `network`, `logging`, `advanced` or `source`. `#/config/source?account=<id>`
+opens the Source tab with that account's ID selected; an account's "Edit in Config Panel" leads
+there. An account from a provider key section of `config.yaml` opens the Source tab with nothing
+selected, because the file does not hold its ID: core makes the ID when it reads the file.
+
 | Page (ID) | Group | Replaces (old route) |
 | --- | --- | --- |
 | Dashboard (`status`) | Operate | Dashboard (`/`) |
@@ -78,7 +85,8 @@ lists below do not cover them.
 ### What each page leaves out, and why
 
 These are the old panel's features that the new pages leave out on purpose. Where a page keeps a
-feature, it keeps the old label, unless the label named something this core does differently.
+feature, it keeps the old label, unless the label named something this core does differently or
+[docs/terms.md](../../docs/terms.md) gives another word for it.
 
 **Dashboard**
 
@@ -115,6 +123,10 @@ feature, it keeps the old label, unless the label named something this core does
   (`request-scoped-errors`): core does not run them yet.
 - The OAuth excluded models and OAuth model alias pages: these rules are now an extension's
   `excluded_models` and `model_alias` settings, written in the Config Panel's Source tab.
+- The OAuth model alias page's "Diagram", which drew each provider's models and their aliases
+  joined by lines: the System page's "Available Models" lists each extension's models with their
+  aliases and the accounts that serve them. A sign-in's own aliases are changed in "Account model
+  aliases" on its Edit form.
 
 **Add Account**
 
@@ -160,12 +172,18 @@ feature, it keeps the old label, unless the label named something this core does
 - Settings core does not run (marked Later or Dropped in the config.yaml table in
   [`next/README.md`](../README.md#what-each-setting-does-here)): "Debug Mode", "Commercial Mode",
   "Redis Usage Queue Retention (seconds)", "Auth Auto-refresh Workers", "Pass Through Upstream
-  Headers", "WebSocket Authentication", "Subagent session affinity", every Streaming field (so
-  there is no Streaming tab), every payload rule (so there is no Payload tab), Claude's and Codex's
-  cloaking and header defaults, Codex's response steering and live media relay, the Antigravity
-  and Devin fields, the plugin settings, "Disable Control Panel", and the panel update settings
-  ("Disable Panel Auto Updates", "Panel Repository", "Global GitHub Token"). Any of them can still
-  be written in the Source tab.
+  Headers", "WebSocket Authentication", "Subagent session affinity", "Persist cooldown status"
+  (core keeps cooldowns in memory, where they last through a config reload), "GPT Image 2 Base
+  Model", "Video result credential cache TTL", the "LAN discovery" section, every Streaming field
+  (so there is no Streaming tab), every payload rule (so there is no Payload tab), Claude's and
+  Codex's cloaking and header defaults, Codex's response steering and live media relay, the
+  Antigravity and Devin fields, the plugin settings, "Disable Control Panel", and the panel update
+  settings ("Disable Panel Auto Updates", "Panel Repository", "Global GitHub Token"). Any of them
+  can still be written in the Source tab.
+- "Disable Image Generation": core has no switch for every account. Each Codex account has its own
+  `image_generation_tool` and `images` settings (see [Codex](../README.md#codex)), changed in
+  "Settings (settings)" on a sign-in's Edit form, or in the Source tab. The old key still works in
+  `config.yaml`, where it sets both on the file's Codex accounts.
 - "Host Address", "Port", "OAuth Credential Directory", "Enable TLS" and its paths, "Trusted
   proxies" and "Allow Remote Access": core runs them, but they set where core listens, who may
   reach it, or the folder `-import-auth` reads, and core's settings call does not change them.
