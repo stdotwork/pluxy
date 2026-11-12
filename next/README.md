@@ -1697,7 +1697,7 @@ its keys and its indent. `PUT /config` writes the document as sent.
 | --- | --- |
 | `GET /v0/management/config` | The config file: `format` (`json` or `yaml`), `hash` (as in status) and `content`, the file as written with each secret replaced by a placeholder such as `pluxy-redacted-4f1c...`. Secrets are found by key name, in both layouts of a `config.yaml` and in the JSON config: client keys, the management key, every `api-key` and `api_key`, everything in an account's `credential` except its `kind`, passwords, tokens and secrets, header values about authentication (`Authorization`, `X-Api-Key`, cookies), and any URL with a user name, password or query. Everything below a key named like a secret is a secret, however deep, also when given through a YAML alias, as `GET /accounts` shows a login account's settings, except in today's core's provider sections at the top of a `config.yaml` (the v8 `api-keys` mapping and the older lists such as `codex-api-key`), whose entries are read by these rules; `true`, `false`, `null` and the empty string never are, as they carry no secret. Comments are shown as written. 422 when the file does not parse. Today's core returns its config, the management key's hash and provider keys included, as they are. |
 | `POST /v0/management/config/validate` | `{"content": "..."}`: checks a document as a reload would, without starting extensions or writing anything. 200 with `valid: true` and the `notices` a `config.yaml` load logs, or `valid: false` and `error`. |
-| `PUT /v0/management/config` | `{"content": "...", "base_hash": "..."}`: replaces the file with the document and applies it. 200 with the file as `GET /config` shows it; 409 when `base_hash` is set and the file has changed since; 422 with `error` when core refuses the document. |
+| `PUT /v0/management/config` | `{"content": "...", "base_hash": "..."}`: replaces the file with the document and applies it. 200 with the file as `GET /config` shows it, or, should it not be shown with its secrets hidden, 200 with its `hash` and a `notice` saying the document was written and applied; 409 when `base_hash` is set and the file has changed since; 422 with `error` when core refuses the document. |
 | `GET /v0/management/client-keys` | The client keys: each one's `id` and `masked` form (first and last two characters, as today's panel shows them; a key shorter than 8 characters is hidden whole). |
 | `POST /v0/management/client-keys` | Adds a new random client key (`sk-` and 26 random characters). 201 with the key's `id` and `masked` form and its `value`, which no later call shows. |
 | `DELETE /v0/management/client-keys/{id}` | Removes the client key. 204; 404 when no key has the ID; 409 for the last key, since core refuses a config without client keys. |
@@ -1713,7 +1713,9 @@ string `"1234"` have different placeholders and each goes back as it was written
 moved. To change a secret, write the new value in its place. A placeholder is accepted only where a
 secret goes, and only while the file still holds that secret and core has not restarted (the
 placeholders are keyed hashes with a key core picks at start); otherwise the call answers 409
-(read the config again) or refuses the document. Messages in replies never show a secret either.
+(read the config again) or refuses the document. Messages in replies never show a secret either,
+except one shorter than 8 bytes, which is left in text as everywhere else: replacing every
+occurrence of so short a value would garble the message.
 
 A `config.yaml` keeps each setting under the name it already has there: the v8 name, or the
 older spelling when only that is in the file. New client keys go to `access.api-keys`, or to the

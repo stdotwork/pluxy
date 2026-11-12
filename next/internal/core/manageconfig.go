@@ -110,6 +110,9 @@ type configView struct {
 	Hash string `json:"hash"`
 	// Content is the file's contents with a placeholder in place of each secret.
 	Content string `json:"content"`
+	// Notice says why Content is empty after a write that was applied: the file could not be
+	// shown with its secrets hidden.
+	Notice string `json:"notice,omitempty"`
 }
 
 func (c *Core) configView() (configView, error) {
@@ -409,8 +412,15 @@ func (c *Core) handleConfig(m *server.Management) {
 		}
 		v, err := c.configView()
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal", err.Error())
-			return
+			// The document is written and applied: say so, never that the write failed.
+			v = configView{Format: "json", Hash: fileHash(written),
+				Notice: "the config file was written and applied, but it cannot be shown with its secrets hidden: " + c.scrub(err.Error(), current, written)}
+			if c.isYAML() {
+				v.Format = "yaml"
+			}
+			if b, rerr := os.ReadFile(c.opts.ConfigPath); rerr == nil {
+				v.Hash = fileHash(b)
+			}
 		}
 		writeJSON(w, http.StatusOK, v)
 	})

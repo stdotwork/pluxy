@@ -428,11 +428,19 @@ func (r *Redactor) redact(b []byte, isYAML, strict bool) ([]byte, error) {
 		}
 		repl[n] = p
 	}
-	var values []string
+	// A secret value may also be written where it is no secret (a 3 below a secret key and a
+	// retry count of 3): the redacted document may show it as many times as it is written so.
+	values := map[string]bool{}
 	for _, n := range nodes {
-		values = append(values, n.Value)
+		values[n.Value] = true
 	}
-	if out, ok := d.replace(repl); ok && redacted(out, isYAML, strict, values) {
+	shown := map[string]int{}
+	eachScalar(d.root, func(n *yaml.Node) {
+		if _, secret := repl[n]; !secret && values[n.Value] {
+			shown[n.Value]++
+		}
+	})
+	if out, ok := d.replace(repl); ok && redacted(out, isYAML, strict, values, shown) {
 		return out, nil
 	}
 	for _, n := range nodes {
@@ -442,7 +450,7 @@ func (r *Redactor) redact(b []byte, isYAML, strict bool) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !redacted(out, isYAML, strict, values) {
+	if !redacted(out, isYAML, strict, values, shown) {
 		return nil, errors.New("config: could not redact the config file's secrets")
 	}
 	return out, nil
@@ -455,9 +463,10 @@ func setScalar(n *yaml.Node, tag, value string, style yaml.Style) {
 		HeadComment: n.HeadComment, LineComment: n.LineComment, FootComment: n.FootComment}
 }
 
-// redacted reports whether a document holds none of the secret values, as a value, and every
-// value in it that the rules call a secret is a placeholder.
-func redacted(b []byte, isYAML, strict bool, values []string) bool {
+// redacted reports whether every value in a document that the rules call a secret is a
+// placeholder, and it holds each of the secret values as a value no more times than shown says
+// the value is written where it is no secret.
+func redacted(b []byte, isYAML, strict bool, values map[string]bool, shown map[string]int) bool {
 	d, err := Parse(b, isYAML)
 	if err != nil {
 		return false
@@ -467,18 +476,29 @@ func redacted(b []byte, isYAML, strict bool, values []string) bool {
 			return false
 		}
 	}
-	clean := true
-	var walk func(n *yaml.Node)
-	walk = func(n *yaml.Node) {
-		if n.Kind == yaml.ScalarNode && slices.Contains(values, n.Value) {
-			clean = false
+	seen := map[string]int{}
+	eachScalar(d.root, func(n *yaml.Node) {
+		if values[n.Value] {
+			seen[n.Value]++
 		}
-		for _, c := range n.Content {
-			walk(c)
+	})
+	for v, n := range seen {
+		if n > shown[v] {
+			return false
 		}
 	}
-	walk(d.root)
-	return clean
+	return true
+}
+
+// eachScalar calls f with each scalar node of the tree under n, once each (an alias's anchor is
+// where it is written).
+func eachScalar(n *yaml.Node, f func(*yaml.Node)) {
+	if n.Kind == yaml.ScalarNode {
+		f(n)
+	}
+	for _, c := range n.Content {
+		eachScalar(c, f)
+	}
 }
 
 // Restore returns an edited document with each placeholder replaced by the secret it stands
@@ -763,11 +783,12 @@ func (d *Doc) line(n *yaml.Node) int {
 }
 
 // Scrub returns msg with each of the secrets in it replaced by its placeholder, longest
-// first. A very short secret may garble the message; showing it would be worse. Secrets are
-// looked for in msg as it was given, never in a placeholder put in it, so a short secret
-// (such as "red" or "abc") cannot alter the placeholder of another.
+// first. A secret shorter than MinTextSecret is left in msg, as substring redaction leaves it:
+// replacing every occurrence of so short a string would garble the message (a retry count of 3
+// in "out of range 1-3"). Secrets are looked for in msg as it was given, never in a placeholder
+// put in it, so one secret cannot alter the placeholder of another.
 func (r *Redactor) Scrub(msg string, secrets []string) string {
-	secrets = slices.DeleteFunc(slices.Clone(secrets), func(s string) bool { return s == "" })
+	secrets = slices.DeleteFunc(slices.Clone(secrets), func(s string) bool { return len(s) < MinTextSecret })
 	slices.SortFunc(secrets, func(a, b string) int { return cmp.Or(len(b)-len(a), strings.Compare(a, b)) })
 	secrets = slices.Compact(secrets)
 	type found struct {
