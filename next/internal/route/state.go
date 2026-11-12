@@ -117,6 +117,9 @@ type State struct {
 	// generation of the router Retain carried the state to: an outcome seen by an older router
 	// is about the account as it was, so it records nothing.
 	since map[scopeKey]uint64
+	// revs holds, per account ID, how many times SetAccounts changed the account in place: its
+	// revision (see restart).
+	revs map[string]uint64
 	// last holds, per account ID, the latest failure an attempt on the account recorded a
 	// block for, until an attempt that started after it was recorded succeeds (block.mark's rule).
 	last map[string]lastFailure
@@ -238,7 +241,7 @@ func (s *State) reserve(a *Account, model string, now time.Time) (uint64, bool) 
 // NewState returns empty state.
 func NewState() *State {
 	return &State{scopes: map[scopeKey]*scopeState{}, active: map[string]int{}, affinity: newAffinity(), rotation: newRotation(),
-		since: map[scopeKey]uint64{}, last: map[string]lastFailure{}, running: map[uint64]struct{}{}, rand: rand.Float64}
+		since: map[scopeKey]uint64{}, revs: map[string]uint64{}, last: map[string]lastFailure{}, running: map[uint64]struct{}{}, rand: rand.Float64}
 }
 
 // nextGen returns the generation for a new router.
@@ -313,13 +316,58 @@ func (s *State) Retain(prevRouter, nextRouter *Router, same func(old, cur *Accou
 	}
 }
 
-// stale reports whether an outcome on key seen by a router of generation gen is about an
-// account as it was before Retain dropped key's state. s.mu is held.
-func (s *State) stale(key scopeKey, gen uint64) bool {
+// stale reports whether an outcome on key seen on copy a is about an account as it was before
+// Retain or restart dropped key's state: a is of an older revision than the account's, or its
+// router's generation is older than the drop. s.mu is held.
+func (s *State) stale(key scopeKey, a *Account) bool {
+	if a.rev < s.revs[a.ID] {
+		return true
+	}
 	if key.kind == scopeModel {
 		key = scopeKey{kind: scopeCredential, id: key.id}
 	}
-	return gen < s.since[key]
+	return a.gen < s.since[key]
+}
+
+// revision returns account id's revision, for a new copy of it.
+func (s *State) revision(id string) uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.revs[id]
+}
+
+// restart drops the state of the accounts Router.SetAccounts changed in place (old, their
+// copies until now, and fresh, the copies that replace them): blocks on their credentials and
+// models, their last errors, their session bindings, and blocks on their endpoints that no
+// endpoint in kept names. Each account gets a new revision, which fresh takes, so an outcome an
+// attempt on any older copy sees afterwards, from any router, records nothing and binds no
+// session. Running attempts stay counted until they end.
+func (s *State) restart(old, fresh []*Account, kept map[string]bool) {
+	if len(old) == 0 {
+		return
+	}
+	revs, endpoints := map[string]uint64{}, map[string]bool{}
+	s.mu.Lock()
+	for _, a := range old {
+		s.revs[a.ID]++
+		revs[a.ID] = s.revs[a.ID]
+		if !kept[a.endpoint()] {
+			endpoints[a.endpoint()] = true
+		}
+	}
+	for k := range s.scopes {
+		if _, ok := revs[k.id]; k.kind == scopeEndpoint && endpoints[k.id] || k.kind != scopeEndpoint && ok {
+			s.drop(k)
+		}
+	}
+	for id := range revs {
+		delete(s.last, id)
+	}
+	s.mu.Unlock()
+	for _, a := range fresh {
+		a.rev = revs[a.ID]
+	}
+	s.affinity.unbind(revs)
 }
 
 // end releases the reservation reserve made for the attempt with sequence number seq on
@@ -422,7 +470,7 @@ func (s *State) failure(a *Account, model string, seq uint64, e *llm.Error, now 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.stale(key, a.gen) {
+	if s.stale(key, a) {
 		return
 	}
 	st := s.scopes[key]
@@ -544,13 +592,13 @@ func (s *State) quotaLast(keys []scopeKey, now time.Time) (last block, ok bool) 
 func (s *State) success(a *Account, model string, seq uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if l, ok := s.last[a.ID]; ok && l.mark < seq && !s.stale(scopeKey{kind: scopeCredential, id: a.ID}, a.gen) {
+	if l, ok := s.last[a.ID]; ok && l.mark < seq && !s.stale(scopeKey{kind: scopeCredential, id: a.ID}, a) {
 		delete(s.last, a.ID)
 	}
 	o := s.oldest()
 	older := o != 0 && o < seq // an attempt that started before this one is still running
 	for _, k := range keysFor(a, model) {
-		if s.stale(k, a.gen) {
+		if s.stale(k, a) {
 			continue
 		}
 		st := s.scopes[k]

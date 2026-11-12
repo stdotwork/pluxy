@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf16"
@@ -87,6 +88,36 @@ func NewRedactor(cs ...*Credential) *Redactor {
 	return red
 }
 
+// minCutFragment is the shortest part of a secret, at the cut of a body kept in two pieces,
+// that TrimCut removes; shorter runs would match unrelated text.
+const minCutFragment = 4
+
+// TrimCut returns head and tail, the start and the end of a body with the middle cut out, without
+// the bytes beside the cut that could be the two parts of a secret cut in two, which String
+// cannot recognise: a run at the end of head that is the start of a form of the credential, and a
+// run at the start of tail that is the end of one, each of at least 4 bytes.
+func (r *Redactor) TrimCut(head, tail string) (string, string) {
+	if r == nil || r.r == nil {
+		return head, tail
+	}
+	h, t := 0, 0
+	for _, f := range r.forms {
+		for k := min(len(f)-1, len(head)); k >= max(minCutFragment, h+1); k-- {
+			if strings.HasSuffix(head, f[:k]) {
+				h = k
+				break
+			}
+		}
+		for k := min(len(f)-1, len(tail)); k >= max(minCutFragment, t+1); k-- {
+			if strings.HasPrefix(tail, f[len(f)-k:]) {
+				t = k
+				break
+			}
+		}
+	}
+	return head[:len(head)-h], tail[t:]
+}
+
 // numberChars are the bytes a JSON number is made of.
 const numberChars = "+-.eE0123456789"
 
@@ -113,9 +144,11 @@ func collectStrings(v any, out []string) []string {
 const minFragment = 8
 
 // encodings returns s and the forms it commonly takes in error text and logs: escaped in JSON,
-// escaped in a URL, and base64 (alone, or inside a longer value such as HTTP Basic "user:key").
+// quoted as Go's %q writes it (a message core builds, such as an event check's), escaped in a
+// URL, and base64 (alone, or inside a longer value such as HTTP Basic "user:key").
 func encodings(s string) []string {
-	out := []string{s, url.QueryEscape(s), url.PathEscape(s)}
+	q := strconv.Quote(s)
+	out := []string{s, q[1 : len(q)-1], url.QueryEscape(s), url.PathEscape(s)}
 	if j, err := json.Marshal(s); err == nil {
 		inner := string(j[1 : len(j)-1])
 		out = append(out, inner, strings.ReplaceAll(inner, "/", `\/`))
@@ -586,9 +619,42 @@ func encodeString(s string) []byte {
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 }
 
+// Values core acts on exactly, as routing does on an error's code and scope. A credential that
+// is part of one of these does not change it; any other value that holds a credential is
+// replaced whole (field), so a very short credential cannot turn a value core knows into one it
+// does not. A value added to llm later and missing here is still passed on unless it holds a
+// credential.
+var (
+	codes = set(llm.CodeInvalidRequest, llm.CodeAuth, llm.CodePermission, llm.CodeNotFound, llm.CodeRateLimit,
+		llm.CodeQuota, llm.CodeUnsupported, llm.CodeUpstream, llm.CodeUnavailable, llm.CodeCancelled, llm.CodeInternal,
+		llm.CodeExtensionCrashed, llm.CodeExtensionProtocol, llm.CodeExtensionUnavailable)
+	scopes   = set(llm.ScopeRequest, llm.ScopeCredential, llm.ScopeModel, llm.ScopeEndpoint)
+	finishes = set(llm.FinishStop, llm.FinishLength, llm.FinishToolCalls, llm.FinishContentFilter, llm.FinishOther)
+	formats  = set(llm.FormatOpenAIChat, llm.FormatOpenAIResponses, llm.FormatAnthropicMessages, llm.FormatGeminiGenerate,
+		llm.FormatOpenAIResponsesCompact, llm.FormatCodexAlphaSearch, llm.FormatGeminiInteractions,
+		llm.FormatOpenAIImagesGenerations, llm.FormatOpenAIImagesEdits, llm.OpaqueDevin)
+)
+
+func set(values ...string) map[string]bool {
+	m := map[string]bool{"": true}
+	for _, v := range values {
+		m[v] = true
+	}
+	return m
+}
+
+// field returns s as it is when known holds it or it holds no credential, and Redacted otherwise.
+func (r *Redactor) field(s string, known map[string]bool) string {
+	if known[s] || r.String(s) == s {
+		return s
+	}
+	return Redacted
+}
+
 // Event returns ev with the credential removed from the text and upstream data it carries:
-// error messages and codes, every raw field, reasoning's opaque data, and the identifiers the
-// upstream names the reply with (its id and model, tool call IDs, the raw finish reason).
+// error messages, codes and scopes, every raw field, reasoning's opaque data and its format, the
+// translation report, the reply's format and finish reason, and the identifiers the upstream
+// names the reply with (its id and model, tool call IDs, the raw finish reason).
 // Generated content (deltas, tool names) is the reply itself and is left alone.
 func (r *Redactor) Event(ev llm.Event) llm.Event {
 	if r == nil || r.r == nil {
@@ -600,6 +666,16 @@ func (r *Redactor) Event(ev llm.Event) llm.Event {
 		resp.ID = r.String(resp.ID)
 		resp.Model = r.String(resp.Model)
 		resp.Raw = r.raw(resp.Raw)
+		resp.Format = r.field(resp.Format, formats)
+		if t := resp.Translation; t != nil {
+			tr := *t
+			tr.From, tr.To = r.String(tr.From), r.String(tr.To)
+			tr.Losses = slices.Clone(tr.Losses)
+			for i, l := range tr.Losses {
+				tr.Losses[i] = llm.Loss{Kind: r.String(l.Kind), Path: r.String(l.Path), Detail: r.String(l.Detail)}
+			}
+			resp.Translation = &tr
+		}
 		ev.Response = &resp
 	}
 	if ev.Item != nil {
@@ -609,17 +685,18 @@ func (r *Redactor) Event(ev llm.Event) llm.Event {
 	}
 	if ev.Finish != nil {
 		f := *ev.Finish
-		f.RawReason = r.String(f.RawReason)
+		f.Reason, f.RawReason = r.field(f.Reason, finishes), r.String(f.RawReason)
 		ev.Finish = &f
 	}
 	ev.Usage = r.usage(ev.Usage)
 	if ev.Opaque != nil {
 		o := *ev.Opaque
-		o.Data = r.String(o.Data)
+		o.Format, o.Data = r.field(o.Format, formats), r.String(o.Data)
 		ev.Opaque = &o
 	}
 	if ev.Error != nil {
 		e := *ev.Error
+		e.Code, e.Scope = r.field(e.Code, codes), r.field(e.Scope, scopes)
 		e.Message = r.String(e.Message)
 		e.ProviderCode = r.String(e.ProviderCode)
 		e.Raw = r.raw(e.Raw)
@@ -627,6 +704,95 @@ func (r *Redactor) Event(ev llm.Event) llm.Event {
 		ev.Error = &e
 	}
 	return ev
+}
+
+// Body returns a BodyRedactor for a body r's call sends in pieces, such as an endpoint reply's.
+func (r *Redactor) Body() *BodyRedactor {
+	b := &BodyRedactor{r: r}
+	if r != nil {
+		for _, f := range r.forms {
+			b.byFirst[f[0]] = append(b.byFirst[f[0]], f)
+		}
+	}
+	return b
+}
+
+// BodyRedactor removes the credential from a body that arrives in pieces, where a form of it may
+// be cut between two pieces or more. Write takes each piece in turn and returns what may be sent
+// on now; Flush returns the rest once the body ends (a body that breaks off can drop it instead).
+// Joined, what they return is what String returns for the whole body, wherever it was cut, for
+// every form of the credential the body holds as it is: String replaces the longest form at the
+// leftmost position first, and Write returns the text up to the first position where more text
+// could change what is replaced, holding back the rest, which is shorter than the longest form.
+// That is all it holds, so a body of any length passes through in bounded memory and a stream is
+// not delayed except where a piece ends with what could be the start of a form.
+//
+// It is never worse than redacting each piece on its own: where holding back would cut what
+// String finds in the text whole, such as a credential spelled with escapes outside its listed
+// forms that ends like the start of one, Write holds nothing back and returns all of it.
+//
+// shortcut: String also decodes escapes (\u0073, %73) that could spell the credential, and reads
+// a body that is JSON as JSON; Write does both within the text it has, so a credential spelled
+// with escapes outside its listed forms (encodings) that a piece cuts in two, or a number holding
+// it, is removed as String would remove it only when it lies within one returned text, as when
+// each piece is redacted on its own. Holding back for those would need far more than the longest
+// form; do so if an upstream is seen to escape credentials in a streamed body.
+type BodyRedactor struct {
+	r       *Redactor
+	byFirst [256][]string // the forms by their first byte, longest first
+	held    string        // the end of the body so far, which more text could still change
+}
+
+// Write returns the redacted text of the body so far that more text cannot change.
+func (b *BodyRedactor) Write(piece string) string {
+	if b.r == nil || b.r.r == nil {
+		return piece
+	}
+	s := b.held + piece
+	cut := b.decided(s)
+	out := b.r.String(s[:cut])
+	if cut < len(s) {
+		if whole := b.r.String(s); whole != out+b.r.String(s[cut:]) {
+			// The cut would split something String finds in s whole: send all of s.
+			b.held = ""
+			return whole
+		}
+	}
+	b.held = strings.Clone(s[cut:]) // not keeping all of a large piece alive
+	return out
+}
+
+// Flush returns the redacted text the BodyRedactor still holds, for the end of the body.
+func (b *BodyRedactor) Flush() string {
+	if b == nil {
+		return ""
+	}
+	s := b.held
+	b.held = ""
+	return b.r.String(s)
+}
+
+// decided returns how much of s more text after it cannot change once redacted. It follows the
+// forms as String's replacer does: at each position the longest form that starts there is
+// replaced, and the search goes on after it. A position at which a form longer than the rest of
+// s starts with that rest is undecided, since more text could complete it; so is everything
+// after. Forms are longest first, so the first that matches is the longest.
+func (b *BodyRedactor) decided(s string) int {
+	for i := 0; i < len(s); {
+		rest, n := s[i:], 0
+		for _, f := range b.byFirst[s[i]] {
+			if len(f) > len(rest) {
+				if strings.HasPrefix(f, rest) {
+					return i
+				}
+			} else if strings.HasPrefix(rest, f) {
+				n = len(f)
+				break
+			}
+		}
+		i += max(n, 1)
+	}
+	return len(s)
 }
 
 func (r *Redactor) usage(u *llm.Usage) *llm.Usage {

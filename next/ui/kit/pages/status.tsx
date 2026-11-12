@@ -49,6 +49,8 @@ const t = strings("dashboard", {
   successHint: "Across {total} requests in the window",
   credentials: "Credentials",
   credentialsHint: "{active} active · {disabled} not serving",
+  models: "Models",
+  modelsHint: "Served through the proxy endpoint",
   trafficEyebrow: "Live traffic",
   trafficTitle: "Throughput, ten minutes at a time",
   trafficText: "Success and failure counts per 10-minute bucket across the last {window}.",
@@ -185,13 +187,15 @@ export function StatusPage() {
   const usage = useLoad(() => api.usage(usageQuery()));
   const accounts = useLoad(api.accounts);
   const settings = useLoad(api.coreSettings);
+  const served = useLoad(api.servedModels);
   const reload = useAction(status.reload);
   const [updatedAt, setUpdatedAt] = useState<Date>();
 
   const last = useRef(Date.now());
   const refresh = () => {
     last.current = Date.now();
-    for (const reloadOne of [status.reload, usage.reload, accounts.reload, settings.reload]) reloadOne();
+    for (const reloadOne of [status.reload, usage.reload, accounts.reload, settings.reload, served.reload])
+      reloadOne();
   };
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;
@@ -220,6 +224,7 @@ export function StatusPage() {
   const u = usage.data;
   const list = accounts.data?.accounts;
   const settingsData = settings.data;
+  const modelList = served.data?.models;
 
   const requests = u && { success: u.success_count, total: u.total_requests };
   const verdict = verdictOf(requests);
@@ -253,6 +258,7 @@ export function StatusPage() {
       />
       {status.error && <Notice tone="danger">{status.error}</Notice>}
       {usage.error && <Notice tone="danger">{usage.error}</Notice>}
+      {served.error && <Notice tone="danger">{served.error}</Notice>}
       {reload.error && <Notice tone="danger">{t("reloadRefused", { error: reload.error })}</Notice>}
       {s?.safe_mode && <Notice tone="warn">{t("safeMode")}</Notice>}
       {u && !u.enabled && <Notice tone="warn">{t("usageOff")}</Notice>}
@@ -289,6 +295,11 @@ export function StatusPage() {
             label={t("credentials")}
             value={list ? list.length.toLocaleString() : dash}
             hint={list && t("credentialsHint", { active, disabled: list.length - active })}
+          />
+          <Stat
+            label={t("models")}
+            value={modelList ? modelList.length.toLocaleString() : dash}
+            hint={t("modelsHint")}
           />
         </section>
 

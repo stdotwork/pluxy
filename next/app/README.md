@@ -46,9 +46,59 @@ address or key can always be fixed there.
 
 ## The window and the tray
 
-Closing the window destroys it and its webviews, so they hold no memory while the app sits in
-the tray. The tray menu shows what the app is connected to, and has "Open pluxy" (a new window)
-and "Quit pluxy". If the app cannot make its tray icon, closing the window quits the app.
+What closing the window does is the Connection page's **Close behavior**: **Ask every time**
+(the default), **Minimize to Tray** or **Exit App**. Ask every time shows "What would you like to
+do?" with Minimize to Tray, Exit App, Cancel and **Remember this choice**. Exit App quits as the
+tray's Quit does. Minimize to Tray destroys the window and its webviews, so they hold no memory
+while the app sits in the tray. A window that does not answer the question within three seconds
+(its page still loading, or busy) closes to the tray.
+
+The tray menu shows what the app is connected to, and has "Open pluxy" (a new window) and "Quit
+pluxy". Closing the window quits the app, whatever the choice, when there is no usable tray: the
+app made no tray icon, or the session's `org.kde.StatusNotifierWatcher` is missing or has no
+registered host (asked at each close, since GTK makes an icon even with no desktop to show it).
+The setting then says so.
+
+The window opens at the size and place it last had, kept when it closes and when the app quits:
+the size in logical pixels, the place in physical ones, never noted while minimized, maximized
+or full screen. On opening, the size is kept between 640×480 and the monitor's work area, and
+the window is moved into the work area of the monitor holding its place (or the primary one).
+The first window is 1100×760, where the desktop puts it. The choice and the geometry are in
+`window.json` beside `connection.json`, readable only by your user; a damaged file is kept aside
+as `window.damaged-<random>.json` and the defaults used.
+
+A minimized window's pages are hidden (`document.visibilityState`), so the kit's polling, which
+runs only while its page is visible, stops until the window is restored.
+
+## Startup preferences
+
+The Connection page has three startup choices:
+
+- **Launch at startup** registers pluxy for your Linux login. Saving it writes
+  `$XDG_CONFIG_HOME/autostart/dev.pluxy.desktop.desktop` (or
+  `~/.config/autostart/dev.pluxy.desktop.desktop`). Its Exec command names the app by absolute
+  path with `--autostart`. Silent Launch controls whether a login launch shows a window.
+  Turning Launch at startup off and saving removes pluxy's entry. Merely opening the app does
+  not register it. The displayed choice is read from that entry, including desktop disable flags.
+  A file without pluxy's ownership marker is shown as a conflict and left alone.
+- **Silent Launch** suppresses the window only for an autostart launch in managed mode when
+  the session has a StatusNotifier watcher and a registered tray host. Local and remote modes
+  host no core, so they open normally. In that case no window or webview is
+  created. Without a host the app logs why and opens a window. Opening the app from its menu
+  or shortcut always shows the window.
+- **Start Core on Launch** starts the app's own core in managed mode. Turning it off leaves
+  the saved managed connection stopped until you press Start core. Local and remote modes
+  only connect; their core processes are never started or stopped by these choices.
+
+The defaults are login registration off, Silent Launch off, and Start Core on Launch on.
+Preferences live in `startup.json` beside `connection.json`, readable only by your user.
+A malformed file is moved to `startup.damaged-<random>.json` and defaults are used; failure to
+read or keep it aside is logged and still does not prevent startup. Saving preferences does
+not restart or change the current connection. No system service or second core supervisor is
+created. Login registration is implemented on Linux only. Registration resolves the executable
+when you enable it: the AppImage path if present, otherwise the running executable. It must be
+an existing regular file; paths containing percent or backslash are refused. Saving unrelated
+choices leaves the entry unchanged.
 
 ## Commands
 
@@ -62,6 +112,8 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 
 | Command | What it does |
 | --- | --- |
+| `startup_get` | Reads the native startup preferences |
+| `startup_set` | Saves the startup choices and explicitly writes/removes Linux login registration |
 | `connection_get` | The connection, without the key |
 | `connection_set` | Changes connection settings without accepting a key |
 | `key_entry` | Opens native key entry, checks the key against core, and returns only signed-in, wrong-key, cancelled or error status plus the connection without its key |
@@ -72,6 +124,8 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `page_send` | Passes the window's channel messages to a page's webview |
 | `confirmation_request` | Opens native review for an opaque action ID already prepared by native code; returns no approval or token |
 | `confirmation_settings` | Opens native settings to inspect and revoke exact remembered launches (Linux) |
+| `window_get`, `window_set` | Reads or saves the Close behavior, and whether there is a usable tray |
+| `window_close` | Answers the close prompt: Exit App or Minimize to Tray, and whether to remember it |
 
 The window may also listen to the app's events. To add a command: add it to
 `command_names.rs`, to `generate_handler!` in `lib.rs`, and its `allow-<name>` permission to
@@ -201,8 +255,26 @@ that frame can reach the scheme, and navigation of that real frame closes native
 admissions, forwarding and real core settings operations, with a successful call on the same page.
 It checks that the page webview covers the page area, that
 closing the window leaves no webview and
-no web process, and that quitting stops only the app's own core. The `native-test` feature is
-for that test alone; release builds never have it.
+no web process, and that quitting stops only the app's own core. The startup sequence then enables login registration through the main webview command,
+checks the entry in its temporary XDG config folder, launches it with the real Desktop Entry consumer (gio launch), checks
+zero windows/webviews and no web process, and verifies that the app's real tray item belongs to
+its PID in the tray watcher's registered item list. It checks login with Silent Launch on and
+off, an app-menu launch with Silent Launch on, managed-core startup, core startup off, foreign
+core ownership, and removal. A separate session with no watcher verifies that a silent login
+opens exactly one window and webview. Visible launches are positive controls for the same
+renderer-process count used by silent launches.
+
+In managed mode, two more sessions run the window checks (`native/window.ts`, which launches
+the app through the stages in `src-tauri/src/native_window.rs`), one with a tray watcher and
+one without. They close the window as its window manager would (a GTK delete event) and answer
+the prompt in the window: Cancel keeps it, Minimize to Tray and the remembered choices close it
+with no webview or web process left, and the app's own tray item (through the watcher and its
+menu, `session_probe tray`) opens it again at the size and place it had; Exit App, from the
+prompt or the setting, quits and stops the app's own core; the next launch opens where the
+window was. A pending test sign-in's polls are counted while the window shows, while it is
+unmapped (as a window manager minimizes it; GDK then reports it minimized) and once it is mapped
+again. Without a tray watcher, closing quits without asking, with Minimize to Tray or Ask saved.
+The `native-test` feature is for that test alone; release builds never have it.
 
 In local and remote modes, the test also drives the real GTK dialog with `xdotool`: good keys
 authenticate, bad keys and Cancel preserve the connection and saved settings, and the native
@@ -312,10 +384,10 @@ There is no updater yet; the signed-update slice calls this gate.
   process with the same user's operating-system access, and transient native buffers are not
   guaranteed to be erased from memory.
 - A kept key is stored in `connection.json`, not in the system keyring.
-- Whether a desktop shows the tray icon is not checked: on a desktop with no tray host, closing
-  the window leaves the app running with no way back to it but quitting it. The native test's
-  session has a real tray watcher, but only a probe item is registered with it, not the app's own
-  icon.
+- The Linux native suite checks the app's own tray item in the watcher's registration list and
+  startup without a watcher. It does not check every desktop's tray UI.
+- The tray host is asked about only when the window closes: if it goes away while the app sits
+  in the tray, the app stays there with no way back to it but stopping it.
 - The native test needs the desktop services above, and the pinned AppImage runtime from
   github.com (or a copy in its cache folder), so it does not run offline on a bare machine.
 - Native admission bounds work after a scheme request reaches the handler. They do not bound

@@ -52,12 +52,13 @@ func importAuthFile(t *testing.T, base, key, name, content string) (int, string,
 }
 
 // An auth file of today's core sent to the running core becomes an account at once: listed, and
-// serving a request through its extension. A file that is not JSON, of a type the importer does
+// serving a request through its extension and the file's proxy. A file that is not JSON, of a type the importer does
 // not take, too large, or badly named adds nothing and says why; one whose ID the store or the
 // config already uses is skipped; of several imports of one new file at once, one adds it. No
 // reply and no line of core's log holds the file's tokens.
 func TestImportAuthFile(t *testing.T) {
 	kimi := kimitest.New(t)
+	proxy := newHTTPProxy(t, false)
 	access, refresh := kimi.Grant()
 	base, logs := runCoreLogged(t, map[string]any{
 		"listen": "127.0.0.1:0", "client_keys": []string{clientKey}, "management_key": managementKey,
@@ -69,7 +70,7 @@ func TestImportAuthFile(t *testing.T) {
 	})
 	file, _ := json.Marshal(map[string]any{"type": "kimi", "access_token": access, "refresh_token": refresh,
 		"device_id": "device-upload-e2e", "base_url": kimi.URL + "/coding", "email": "user@example.com",
-		"expired": time.Now().Add(10 * 24 * time.Hour).UTC().Format(time.RFC3339), "proxy_url": "http://proxy.example:8080"})
+		"expired": time.Now().Add(10 * 24 * time.Hour).UTC().Format(time.RFC3339), "proxy_url": proxy.URL("http")})
 	secrets := []string{access, refresh, "device-upload-e2e"}
 	noSecret := func(where, s string) {
 		t.Helper()
@@ -84,15 +85,15 @@ func TestImportAuthFile(t *testing.T) {
 	if code != http.StatusOK || len(reply.Imported) != 1 || len(reply.Skipped) != 0 {
 		t.Fatalf("import: %d %s, want 200 with one account", code, raw)
 	}
-	if a := reply.Imported[0]; a.ID != "kimi-upload-example.com" || a.Extension != "pluxy/kimi" || !slices.Equal(a.Ignored, []string{"proxy_url"}) {
-		t.Errorf("imported %+v, want kimi-upload-example.com (pluxy/kimi) with proxy_url ignored", a)
+	if a := reply.Imported[0]; a.ID != "kimi-upload-example.com" || a.Extension != "pluxy/kimi" || len(a.Ignored) != 0 {
+		t.Errorf("imported %+v, want kimi-upload-example.com (pluxy/kimi) with nothing ignored", a)
 	}
 	noSecret("the import reply", raw)
 	if a := getAccount(t, base, "kimi-upload-example.com"); a.Source != "login" || a.State != "active" || a.Disabled {
 		t.Errorf("listed as %+v, want an active login account", a)
 	}
 
-	// It serves at once, with the file's token and device.
+	// It serves at once, with the file's token and device, through the file's proxy.
 	req, _ := http.NewRequest(http.MethodPost, base+"/v1/chat/completions",
 		strings.NewReader(`{"model":"kimi-k2.8","messages":[{"role":"user","content":"hi"}]}`))
 	req.Header.Set("Authorization", "Bearer "+clientKey)
@@ -111,6 +112,9 @@ func TestImportAuthFile(t *testing.T) {
 	if len(reqs) == 0 || reqs[len(reqs)-1].Header.Get("Authorization") != "Bearer "+access ||
 		reqs[len(reqs)-1].Header.Get("X-Msh-Device-Id") != "device-upload-e2e" {
 		t.Errorf("fake Kimi saw %d requests, the last not with the file's token and device", len(reqs))
+	}
+	if seen, _ := proxy.seen(); !slices.ContainsFunc(seen, func(r string) bool { return strings.Contains(r, "/coding/v1/chat/completions") }) {
+		t.Errorf("the file's proxy saw %q, not the chat request", seen)
 	}
 
 	for _, c := range []struct {

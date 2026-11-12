@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/stdotwork/pluxy/next/internal/configdoc"
 	"github.com/stdotwork/pluxy/next/internal/packages"
 	"github.com/stdotwork/pluxy/next/internal/server"
 )
@@ -20,7 +21,7 @@ const maxManagementBody = 1 << 20
 // server.NewManagement) and
 //
 //	GET    /v0/management/status    core's live state: desired and active config revision,
-//	                                and each extension generation's state
+//	                                each extension generation's state, and core's build
 //	POST   /v0/management/reload    reload the config file now; 200 with the status when the
 //	                                new revision is active, 422 with the status (desired.error
 //	                                says why) when it was refused and the active revision stays
@@ -39,6 +40,8 @@ const maxManagementBody = 1 << 20
 //	POST   /v0/management/client-keys  add a new random client key; the reply shows it once
 //	DELETE /v0/management/client-keys/{id}  remove a client key
 //	POST   /v0/management/management-key/rotate  replace the management key with a new one
+//	GET    /v0/management/models    the models served, as GET /v1/models lists them, each with its
+//	                                extension, upstream name and the IDs of the accounts that serve it
 //	GET    /v0/management/settings  the basic and routing settings, by today's core's names
 //	PATCH  /v0/management/settings  change them
 //	GET    /v0/management/login-methods  each extension's login methods (handleAccounts)
@@ -57,6 +60,7 @@ const maxManagementBody = 1 << 20
 func (c *Core) Management() http.Handler {
 	m := server.NewManagement(c.Config, c.creds, c.state)
 	m.Check = c.checks.result
+	m.Redactor = accountRedactor{c.redactor}
 	m.Handle("GET /status", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, c.Status())
 	})
@@ -93,6 +97,11 @@ func (c *Core) Management() http.Handler {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	})
+	m.Handle("GET /models", func(w http.ResponseWriter, r *http.Request) {
+		s, release := c.acquire()
+		defer release()
+		writeJSON(w, http.StatusOK, map[string]any{"models": s.Router.ServedModels(r.Context())})
 	})
 	c.handleUI(m)
 	c.handleAccounts(m)
@@ -145,4 +154,18 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// accountRedactor is the config redactor as the management API uses it for accounts' headers
+// and settings (server.AccountRedactor), so they show the placeholders GET /config shows. It
+// only turns a stale settings placeholder into server.ErrStaleSecret, which the server package
+// can match: it cannot import configdoc, whose tests import it.
+type accountRedactor struct{ *configdoc.Redactor }
+
+func (r accountRedactor) RestoreSettings(sent, current []byte) ([]byte, error) {
+	b, err := r.Redactor.RestoreSettings(sent, current)
+	if errors.Is(err, configdoc.ErrStale) {
+		return nil, server.ErrStaleSecret
+	}
+	return b, err
 }

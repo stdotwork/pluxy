@@ -33,7 +33,7 @@ type Session struct {
 	writeMu sync.Mutex // turn and interrupt frames
 
 	mu         sync.Mutex
-	creds      []*protocol.Credential // every credential the session has carried, for redaction
+	creds      []*protocol.Credential // every credential and settings' secrets the session has carried, for redaction
 	running    bool                   // a turn has been sent and its terminal event not read
 	closeAfter bool                   // close once the running turn ends
 	closed     bool
@@ -57,7 +57,11 @@ func (e *Extension) OpenSession(ctx context.Context, account protocol.Account, i
 		return nil, &llm.Error{Code: llm.CodeExtensionUnavailable, Message: fmt.Sprintf("extension %s is not running", e.manifest.ID)}
 	default:
 	}
-	e.held.add(account.ID, account.Credential)
+	proxy, perr := e.outbound(&account)
+	if perr != nil {
+		return nil, perr
+	}
+	creds := append(e.holdAccount(account), proxy)
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", e.socket)
 	if err != nil {
@@ -71,12 +75,12 @@ func (e *Extension) OpenSession(ctx context.Context, account protocol.Account, i
 	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: protocol.OpSession, Account: &account, Session: &info}
 	if err := protocol.WriteFrame(conn, call); err != nil {
 		conn.Close()
-		return nil, e.sessionReadError(ctx, err)
+		return nil, e.sessionReadError(ctx, protocol.NewRedactor(creds...), err)
 	}
 	var reply protocol.Reply
 	if err := protocol.ReadFrame(conn, &reply); err != nil {
 		conn.Close()
-		return nil, e.sessionReadError(ctx, err)
+		return nil, e.sessionReadError(ctx, protocol.NewRedactor(creds...), err)
 	}
 	switch reply.Type {
 	case protocol.TypeSessionReady:
@@ -85,19 +89,21 @@ func (e *Extension) OpenSession(ctx context.Context, account protocol.Account, i
 		if reply.Error == nil {
 			return nil, e.protocolError("an error frame without an error")
 		}
-		ev := protocol.NewRedactor(account.Credential).Event(reply.Event)
+		ev := protocol.NewRedactor(creds...).Event(reply.Event)
 		return nil, ev.Error
 	default:
 		conn.Close()
-		return nil, redacted(protocol.NewRedactor(account.Credential), e.protocolError(fmt.Sprintf("a session call was answered with %q", reply.Type)))
+		return nil, e.protocolError(fmt.Sprintf("a session call was answered with %q", protocol.NewRedactor(creds...).String(reply.Type)))
 	}
 	if !stop() {
 		// ctx ended just as the session opened; its conn is closed.
 		return nil, &llm.Error{Code: llm.CodeCancelled, Message: "the request was cancelled"}
 	}
 	s := &Session{ext: e, conn: conn, accountID: account.ID, frames: make(chan sessionFrame), done: make(chan struct{}), closing: make(chan struct{})}
-	if account.Credential != nil {
-		s.creds = append(s.creds, account.Credential)
+	for _, c := range creds {
+		if c != nil {
+			s.creds = append(s.creds, c)
+		}
 	}
 	go s.read()
 	return s, nil
@@ -107,15 +113,15 @@ func (e *Extension) protocolError(what string) *llm.Error {
 	return &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s broke the protocol: %s", e.manifest.ID, what)}
 }
 
-// redacted removes credentials from an error core builds from what the extension sent, such as
-// a protocol error that quotes a frame's type.
+// redacted removes credentials and settings secrets from an error core builds from what the
+// extension sent, such as a protocol error that quotes a frame's type.
 func redacted(r *protocol.Redactor, e *llm.Error) *llm.Error {
 	e.Message = r.String(e.Message)
 	return e
 }
 
-func (e *Extension) sessionReadError(ctx context.Context, err error) *llm.Error {
-	s := &Stream{ctx: ctx, ext: e}
+func (e *Extension) sessionReadError(ctx context.Context, redact *protocol.Redactor, err error) *llm.Error {
+	s := &Stream{ctx: ctx, ext: e, redact: redact}
 	return s.readError(err)
 }
 
@@ -164,7 +170,7 @@ func (s *Session) Ended() bool {
 // may be newer than the one the session opened with. Cancelling ctx, or closing the stream
 // before its terminal event, cancels the turn, which ends the session.
 func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Request) *SessionStream {
-	t := &SessionStream{s: s, ctx: ctx}
+	t := &SessionStream{s: s, ctx: ctx, capture: capture(ctx, s.ext.info), account: account.ID}
 	// A turn refused here was never sent: closing its stream leaves the session alone.
 	refuse := func(e *llm.Error) *SessionStream {
 		t.ended = true
@@ -173,6 +179,10 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 	}
 	if account.ID != s.accountID {
 		return refuse(&llm.Error{Code: llm.CodeInternal, Message: fmt.Sprintf("session of account %q got a turn for account %q", s.accountID, account.ID)})
+	}
+	proxy, perr := s.ext.outbound(&account)
+	if perr != nil {
+		return refuse(perr)
 	}
 	s.mu.Lock()
 	switch {
@@ -183,9 +193,13 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 		s.mu.Unlock()
 		return refuse(&llm.Error{Code: llm.CodeInternal, Message: "a turn is already running on this session"})
 	}
-	if c := account.Credential; c != nil && !slices.ContainsFunc(s.creds, func(o *protocol.Credential) bool { return sameCredential(o, c) }) {
-		s.creds = append(s.creds, c)
-		s.ext.held.add(account.ID, c)
+	for _, c := range s.ext.holdAccount(account) {
+		if c != nil && !slices.ContainsFunc(s.creds, func(o *protocol.Credential) bool { return sameCredential(o, c) }) {
+			s.creds = append(s.creds, c)
+		}
+	}
+	if proxy != nil && !slices.ContainsFunc(s.creds, func(o *protocol.Credential) bool { return sameCredential(o, proxy) }) {
+		s.creds = append(s.creds, proxy)
 	}
 	s.running = true
 	t.redact = protocol.NewRedactor(s.creds...)
@@ -197,13 +211,13 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 	case f := <-s.frames:
 		s.Close()
 		t.end()
-		t.fail(redacted(t.redact, s.ext.protocolError(fmt.Sprintf("a %q frame between turns", f.reply.Type))))
+		t.fail(s.ext.protocolError(fmt.Sprintf("a %q frame between turns", t.redact.String(f.reply.Type))))
 		return t
 	default:
 	}
 	t.stop = context.AfterFunc(ctx, s.Close)
 	s.writeMu.Lock()
-	err := protocol.WriteFrame(s.conn, protocol.Call{Type: protocol.TypeSessionTurn, Account: &account, Request: &req})
+	err := protocol.WriteFrame(s.conn, protocol.Call{Type: protocol.TypeSessionTurn, Account: &account, Request: &req, Capture: t.capture != nil})
 	s.writeMu.Unlock()
 	if err != nil {
 		if errors.Is(err, protocol.ErrFrameTooLarge) {
@@ -214,7 +228,7 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 			return t
 		}
 		s.Close()
-		t.fail((&Stream{ctx: ctx, ext: s.ext}).readError(err))
+		t.fail((&Stream{ctx: ctx, ext: s.ext, redact: t.redact}).readError(err))
 	}
 	return t
 }
@@ -288,6 +302,9 @@ type SessionStream struct {
 	stop   func() bool
 	final  *llm.Event
 	ended  bool
+	// capture receives the turn's diagnostic frames; nil when the turn is not captured.
+	capture CaptureFunc
+	account string
 }
 
 func (t *SessionStream) fail(e *llm.Error) {
@@ -321,14 +338,22 @@ func (t *SessionStream) Next() llm.Event {
 	}
 	s := t.s
 	var f sessionFrame
-	select {
-	case f = <-s.frames:
-	case <-s.done:
-		// The connection ended before the turn's terminal event: core cancelled the turn, or
-		// the extension closed the connection or stopped.
-		t.end()
-		t.fail((&Stream{ctx: t.ctx, ext: s.ext}).readError(net.ErrClosed))
-		return *t.final
+	for {
+		select {
+		case f = <-s.frames:
+		case <-s.done:
+			// The connection ended before the turn's terminal event: core cancelled the turn, or
+			// the extension closed the connection or stopped.
+			t.end()
+			t.fail((&Stream{ctx: t.ctx, ext: s.ext}).readError(net.ErrClosed))
+			return *t.final
+		}
+		if f.reply.Type != protocol.TypeDiagnostic {
+			break
+		}
+		if t.capture != nil && f.reply.Diagnostic != nil {
+			t.capture(t.account, redactDiagnostic(t.redact, *f.reply.Diagnostic))
+		}
 	}
 	if err := t.seq.Check(f.reply.Event); err != nil {
 		s.Close()

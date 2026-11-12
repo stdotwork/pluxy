@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/internal/configdoc"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
@@ -23,7 +24,7 @@ func prepareFake(t *testing.T, mode string, idle time.Duration) (*Managed, strin
 	dir := fakePackage(t, mode)
 	p := DefaultPolicy()
 	p.IdleStop = idle
-	g, err := Prepare(filepath.Join(dir, ManifestFile), 1, p, Options{Log: io.Discard})
+	g, err := Prepare(filepath.Join(dir, ManifestFile), 1, p, Options{Log: io.Discard, SettingsSecrets: configdoc.SettingsSecrets})
 	if err != nil {
 		t.Fatal(err)
 	}

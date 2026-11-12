@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.10
+# pluxy extension protocol, version 0.14
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -17,10 +17,15 @@ provider's endpoints beyond generation, such as Responses compaction, whose repl
 writes. Version 0.8 adds the request's [`caller`](#the-request): a value that stands for the
 client key a request came with, so an extension can keep what it learns from replies per client.
 Version 0.9 adds optional non-secret account settings to a login grant. Version 0.10 adds the
-optional quota `plan_ends_at`, the end of the subscription in Unix seconds.
-It is deliberately small; later versions add capabilities and more operations without changing
-what is described here. An extension written for version 0 works unchanged with a core that
-speaks 0.10 (see [Versioning](#versioning)).
+optional quota `plan_ends_at`, the end of the subscription in Unix seconds. Version 0.11 adds
+the account's [`proxy_url`](#accounts): the proxy the call's upstream traffic goes through.
+Version 0.12 adds the account's [`headers`](#headers): extra HTTP headers on that traffic.
+Version 0.13 adds [upstream capture](#upstream-capture): what the extension sent upstream and got
+back, for core's request logs. Version 0.14 adds [payload rules](#payload-rules): fields of the
+upstream JSON body that the config sets, fills in or removes. It is deliberately small; later
+versions add capabilities and more operations without changing what is described here. An
+extension written for version 0 works unchanged with a core that speaks 0.14 (see
+[Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
 the details. A Go SDK (`github.com/stdotwork/pluxy/next/sdk`) implements the extension side of
@@ -220,10 +225,12 @@ Core opens a connection and writes one call frame:
 | --- | --- |
 | `id` | Call ID for logs and traces. Unique per core process. |
 | `op` | The operation. Version 0 has `describe`, `generate`, `login` and `refresh`; version 0.1 adds `session`; version 0.2 adds `count_tokens`; version 0.3 adds `models`; version 0.4 adds `check`; version 0.5 adds `quota`; version 0.7 adds `endpoint`. |
-| `account` | For `generate`, `count_tokens`, `endpoint`, `refresh`, `session`, `models`, `check` and `quota`: the account to use (below). For `login`: the account being signed in to, with its `id` and `settings` but no `credential`. |
+| `account` | For `generate`, `count_tokens`, `endpoint`, `refresh`, `session`, `models`, `check` and `quota`: the account to use (below). For `login`: the account being signed in to, with its `id`, `settings`, `proxy_url` and `headers` but no `credential`. |
 | `request` | For `generate`, `count_tokens` and `endpoint`: the model request (below). |
 | `login` | For `login`: what to sign in with (see [Login and refresh](#login-and-refresh)). |
 | `session` | For `session`: what kind of session to open (see [Sessions](#sessions)). |
+| `capture` | Since 0.13, for `generate`, `count_tokens` and `endpoint`: true when core asks for the call's [upstream capture](#upstream-capture). Absent: false. |
+| `payload` | Since 0.14, for `generate`, `count_tokens` and `endpoint`: the [payload rules](#payload-rules) that apply to the call. Absent: none. |
 
 An extension that gets an `op` it does not know replies with an `error` event whose code is
 `unsupported`.
@@ -455,10 +462,17 @@ order, then `finish`, with `usage` when the upstream reported it.
 
 | `response.raw` field | Meaning |
 | --- | --- |
-| `content_type` | The body's media type, which core sends as the reply's `Content-Type`. Required. With `text/event-stream`, core sends each piece to the client as soon as it arrives. |
+| `content_type` | The body's media type, which core sends as the reply's `Content-Type`. Required. With `text/event-stream`, core sends each piece to the client as soon as it arrives, less any end it holds back (below). |
 
-The body is text: send it as it should reach the client. Except for the direct `codex.models`
-call above, an `error` before `response.start` is
+The body is text: send it as it should reach the client. Core removes the account's secrets from it
+(its credential and the secrets in its `settings`, `proxy_url` and `headers`; see
+[Accounts](#accounts)) as from `raw` fields, also where one piece ends partway through a secret and
+the next goes on with it. To do so, core holds back the end of a piece that could be the start of a
+secret in one of the forms it removes, always fewer bytes than the longest of those forms, until
+the next piece shows whether it is one. It sends what it holds once the body ends with `finish`,
+and drops it when the body breaks off with an error or is cancelled: the body is broken there
+anyway, and what it held could be part of a secret. Except for the direct `codex.models` call
+above, an `error` before `response.start` is
 routed as for `generate`: core tries another account when it is retryable, and otherwise answers
 the client with an error in OpenAI's shape. An `error` after `response.start` ends the body where
 it is; a `text/event-stream` body then gets a last `error` event. An account that does not serve
@@ -480,6 +494,8 @@ the endpoint (or does not serve it for this account's credential) answers with c
 | `id` | The account's ID in core's configuration. |
 | `settings` | Extension-specific settings, passed through as configured. |
 | `credential` | The credential for this call (below). |
+| `proxy_url` | Since 0.11, optional: the proxy every upstream request of this call goes through (below). Absent: no proxy. |
+| `headers` | Since 0.12, optional: extra HTTP headers every upstream request of this call carries, an object of header name to value (below). Absent: none. |
 
 An extension only ever receives its own accounts: core stores each credential with the ID of the
 extension that created it and never sends it to another.
@@ -496,8 +512,82 @@ A credential has a `kind` and the fields that kind uses:
 | `data` | A JSON object of anything else the provider needs (an ID token, a service-account key, an account ID). Core stores it and passes it on without reading it. |
 
 Every string in a credential except `kind` counts as secret: core removes each of them, in their
-JSON, URL and base64 forms, from everything a call sends back. Keep values that are not secret,
-especially short ones, out of the credential.
+JSON, URL and base64 forms and as quoted in core's own messages, from everything a call sends
+back. Keep values that are not secret,
+especially short ones, out of the credential. Core removes the secrets in the account's
+`settings` the same way: every value below a key named like a secret (such as `api_key`,
+`password` or `*_token`), header values about authentication in a `headers` object, and any URL
+with a user name, password or query (a `base_url` with a token in it), as its management API
+hides them. Below a key named like a secret, `true`, `false`, `null` and the empty string are
+not secrets: they carry none. Unlike a credential's strings, a settings secret shorter than 8
+bytes is left in text, since removing every occurrence of so short a string would mangle
+unrelated text; the management API still shows it as a placeholder. When the settings change,
+core keeps removing the secrets of every earlier settings from the extension's stderr and stdout
+until the program exits, for calls that still run with them.
+
+### Proxy
+
+From version 0.11 an account may carry `proxy_url`, an `http://`, `https://`, `socks5://` or
+`socks5h://` URL: `scheme://[user:password@]host[:port]`. The extension sends every upstream
+request and connection of the call through it: model requests, WebSocket handshakes, token
+renewals in `refresh`, and everything a `login` sends (token exchange, device polling). An
+`http` or `https` proxy gets plain HTTP requests in absolute form and a `CONNECT` tunnel for
+TLS; a SOCKS5 proxy gets a `CONNECT` to the target, and with `socks5h` it resolves the
+target's host name (Go's `net/http` lets the proxy resolve it for `socks5` too). The user name and password, when present, authenticate to the proxy
+(HTTP Basic in `Proxy-Authorization`, or SOCKS5 user/password) and are secret: an extension never
+logs or shows them, and core removes them from everything a call sends back, as it does a
+credential's strings. An extension that cannot use the proxy fails the call rather than send
+it without one.
+
+Core decides the proxy; the extension never chooses one. It sends the account's own
+`proxy_url` setting, else core's global `proxy_url`; an account set to `direct` or `none` gets
+none even when the global one is set, and then `proxy_url` is absent. A `login` that adds a new
+account carries the `proxy_url` the request to add it named, else the global one, so even a
+first sign-in goes through the proxy. Core sends a call that has a proxy only to an extension
+whose describe reports `protocol_minor` 11 or more; for any other it fails the call itself with
+`unsupported` (scope `credential`), so routing moves on, and the traffic never leaves without the
+proxy.
+
+In Go, `sdk.Upstream` does all of this for each client it wraps: requests made with the
+handler's context go through the call's proxy. A proxy is honoured only by clients wrapped in
+`sdk.Upstream`; a client that is not, such as `http.DefaultClient`, sends direct. So the SDK
+answers a call that carries a proxy with `unsupported` (scope `credential`, retryable) and never
+runs the handler when the extension process has not created any `sdk.Upstream` transport. An
+extension that wraps some of its clients and not others still sends the others direct: wrap them
+all.
+
+### Headers
+
+From version 0.12 an account may carry `headers`, an object of header name to value, such as
+`{"X-Gateway-Key": "..."}` for a gateway in front of the provider. The extension sends each of
+them on every upstream request and connection of the call, the same set `proxy_url` covers:
+model requests, WebSocket handshakes, token renewals in `refresh`, and everything a `login`
+sends. A configured header replaces the extension's own value for that name, letter case aside;
+the extension's other headers stay. Core never sends `Host`, `Content-Length`,
+`Transfer-Encoding` or `Connection`, two names that differ only in letter case, an empty value,
+or a value with a line break or another control character: its config load refuses them.
+
+The value of a header whose name is about authentication (its name holds `auth`, `key`,
+`token`, `secret`, `cookie`, `session`, `password` or `signature`, letter case aside) is a
+secret: an extension never logs or shows it, and core removes it from everything a call sends
+back, as it does a credential's strings; a value shorter than 8 bytes is removed only next to
+its name, as text shows a header (`Name: value`, `Name:value`, `Name=value`, JSON's
+`"Name":"value"`, with the name as configured, in canonical form, in lower case or in upper case),
+so it does not scrub unrelated text; in another spelling a value that short stays.
+Other values are not removed.
+
+Core sends a call that has headers only to an extension whose describe reports
+`protocol_minor` 12 or more; for any other it fails the call itself with `unsupported` (scope
+`credential`), so routing moves on, and the traffic never leaves without them. A `login` that
+adds a new account carries the `headers` the request to add it named.
+
+In Go, `sdk.Upstream` sets them on each request made with the handler's context. On a redirect
+to another host or scheme (`https` to `http`) than the first request's it removes the headers
+whose names are secret, including a value the extension set itself under such a name, as
+`net/http` leaves out `Authorization` and `Cookie` there, so the redirect target never gets
+them; the other headers stay. As with a proxy, the SDK answers a call that carries headers with
+`unsupported` (scope `credential`, retryable) and never runs the handler when the extension
+process has not created any `sdk.Upstream` transport.
 
 ## The request
 
@@ -680,7 +770,7 @@ Usage, in `finish.usage`; a field that is absent was not reported, which is diff
 | Field | Meaning |
 | --- | --- |
 | `code` | One of the codes below. |
-| `message` | Human-readable; safe to show to the client. Never include credentials. Core also removes the call's credential, and its JSON, URL and base64 forms, from `message`, `provider_code`, every `raw` field, every `opaque` `data`, the response's `id` and `model`, every item's `call_id` and the finish's `raw_reason` of every event before passing them on, in case an upstream echoes it. |
+| `message` | Human-readable; safe to show to the client. Never include credentials. Core also removes the call's credential, and its JSON, URL and base64 forms, from `message`, `provider_code`, every `raw` field, every `opaque` `data`, the response's `id`, `model` and `translation`, every item's `call_id` and the finish's `raw_reason` of every event before passing them on, in case an upstream echoes it. In the error's `code` and `scope`, the response's `format`, the finish's `reason` and an opaque's `format`, a value core defines is passed on as it is and any other that holds the credential is replaced whole with `[redacted]`, so a very short credential cannot turn a value core acts on into another. |
 | `status` | The upstream HTTP status, when there was one. |
 | `provider_code` | The upstream's own error code, when there was one. |
 | `retryable` | True only when the upstream certainly did not run the request (it was refused), so trying again, on this account later or on another account, is safe. For `login` and `refresh` calls, see [Errors in login and refresh calls](#errors-in-login-and-refresh-calls). |
@@ -902,6 +992,7 @@ terminal event. A turn's `error` ends that turn, not the session.
 | --- | --- |
 | `account` | Always the account the session opened with (the same `id`). Its `credential` is the newest one core holds, which may have been renewed since the session opened: use it for any new upstream connection. A connection already open stays as it is. |
 | `request` | A model request, as for `generate`. A turn may continue the session's previous response; for `openai.responses`, `native.body.previous_response_id` names it and `items` hold only the new input. A turn that continues nothing carries the whole conversation. |
+| `capture` | Since 0.13: true when core asks for the turn's [upstream capture](#upstream-capture), as for `generate`. |
 
 Core removes every credential the session has carried, in all the forms listed under
 [Errors](#errors), from every event of every turn.
@@ -968,12 +1059,151 @@ socket to one session. Turns on an account that takes no sessions go out as sepa
 calls, each carrying the whole conversation so far: core keeps the earlier input and output and
 removes `previous_response_id`.
 
+## Payload rules
+
+Version 0.14. Core's config may hold payload rules (see [the README](../README.md#payload-rules)):
+fields to set, fill in or remove in the JSON body an extension sends upstream, for the requests
+they name. Core works out which rules apply to a `generate`, `count_tokens` or `endpoint` call and
+sends them, and only them, in the call frame's `payload`:
+
+```json
+"payload": {
+  "override": [{"models": [{}], "params": {"service_tier": "priority", "reasoning.effort": "high"}}],
+  "filter": [{"models": [{"exist": ["tools"]}], "params": ["tools.#(name==\"apply_patch\")"]}]
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `default`, `default-raw` | Rules that write each of their `params` where the body has no value yet. |
+| `override`, `override-raw` | Rules that write each of their `params` over what the body has. |
+| `filter` | Rules that remove each path in their `params`, a list. |
+| rule `params` | For the first four lists, an object of path to value. In the `-raw` lists a value is JSON text (a string), written as the JSON it holds. |
+| rule `models` | When the rule applies: when the conditions of any entry hold on the body. Core has already matched each rule's model names, `protocol`, `from-protocol` and `headers` to the call, so an entry holds only conditions on the body, and `{}` always holds. |
+| model `match` | A list of objects of path to value: each path's value must equal its value (as decoded JSON, so `1` equals `1.0`). |
+| model `not-match` | The same, but no path may equal its value. |
+| model `exist`, `not-exist` | Lists of paths that must hold a value that is not `null`, or must not. |
+
+A path is a list of parts joined by dots: a key (`\.` for a dot in it), an array index, or a
+query that picks the first element of the array before it that matches (`#(name=="apply_patch")`)
+or every one (`#(type=="message")#`). A query is terms `key==value` or `key!=value`, joined by
+`&&` and `||` (`&&` binds tighter), where key is a dotted path of plain keys and value is a JSON
+string, number, `true` or `false`. Core refuses at config load every path outside this and every
+raw value that is not JSON, so an extension may skip any it cannot apply.
+
+Rules:
+
+- Apply them to the body of each upstream HTTP request the call makes whose `Content-Type` is
+  `application/json` or a `+json` type and which has no `Content-Encoding`, after everything the
+  extension does to the body, and once: a request the extension sends again is built afresh and
+  gets them again; a body that has had them never gets them twice. Leave every other body as it
+  is (protobuf, forms), and a body that is not a JSON object or array.
+- Paths are relative to the model request. An extension whose body carries the request inside
+  another object applies them inside it: the Antigravity extension's body is
+  `{"project": ..., "request": {...}}`, and its rules apply inside `request`, as in today's core.
+- In this order, checking each rule's conditions on the body as it is when the rule's turn comes:
+  `default`, then `default-raw`, each rule in order, each of its params in sorted path order,
+  writing a value only where the body has none and no earlier default wrote one (the first
+  default wins); then `override`, then `override-raw` (the last write wins); then `filter`. A
+  default writes where the body the extension built has no value: a field the extension filled
+  in itself counts as present.
+- A query that matches nothing names nothing to write or remove. Writing a path creates what it
+  needs, as today's core does: the objects on the way that are missing (in place of a value on
+  the way that is neither an object nor an array) and, for an index past an array's end, `null`
+  elements up to it.
+
+Core sends `payload` only to an extension whose describe reports `protocol_minor` 14 or more; a
+call that rules apply to on an older extension it fails itself with `unsupported` (scope
+`credential`), so routing moves on and the request never leaves without them. Session turns carry
+no `payload` in this version.
+
+In Go, `sdk.Upstream` applies them to each request made with the handler's context, with the
+engine in `github.com/stdotwork/pluxy/next/sdk/payload`; `sdk.WithPayloadRoot` on a request's
+context names the object that holds the request. As with a proxy, the SDK answers a call that
+carries rules with `unsupported` (scope `credential`, retryable) and never runs the handler when
+the extension process has not created any `sdk.Upstream` transport.
+
+## Upstream capture
+
+Version 0.13. Core writes request logs (see [the README](../README.md#request-logs)), and for a
+provider that rebuilds a request in another format, what it sent upstream and what came back is
+the first thing to look at. Core asks for it with `"capture": true` on a `generate`,
+`count_tokens` or `endpoint` call frame, or on a `session.turn` frame, only while its config
+writes every request to a request log (`logs.request_log`), and only to an extension whose
+describe reports `protocol_minor` 13 or more. A call without it records nothing and sends nothing
+more. Other operations (`login`, `refresh`, `models`, `check`, `quota`, and the `session` call that
+opens a session) never carry it.
+
+For a call with `capture`, the extension records each upstream HTTP request the call makes, and
+each WebSocket handshake, with what came back, and sends one `diagnostic` frame before the call's
+terminal event (`finish` or `error`):
+
+```json
+{"type": "diagnostic", "diagnostic": {"upstream": [
+  {"request": {"time_ms": 1794268800123, "method": "POST", "url": "https://api.openai.com/v1/chat/completions",
+     "headers": {"Authorization": ["Bearer [redacted]"], "Content-Type": ["application/json"]},
+     "body": "{\"model\":\"gpt-4.1-mini\",\"stream\":true,...}", "body_size": 312},
+   "response": {"time_ms": 1794268800456, "status": 200, "headers": {"Content-Type": ["text/event-stream"]},
+     "body": "data: {...}\n\n...", "body_end": "...data: [DONE]\n\n", "body_size": 412345}}
+]}}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `upstream` | The call's upstream exchanges, in the order their requests were sent. At most 2: when the call made more, its first and its last. |
+| `upstream_left_out` | How many exchanges between those two were left out. Absent: none. |
+| exchange `request` | The request as it was sent: after everything the extension, the account's [`headers`](#headers) and the call's [payload rules](#payload-rules) did to it. |
+| exchange `response` | What came back. Absent when no response came, with `error` saying why. |
+| exchange `error` | Why the request got no response, such as a connection that was refused. |
+| `time_ms` | When the request was sent, or the response's headers arrived, in Unix milliseconds. |
+| request `method`, `url` | The HTTP method and the whole URL, without its user name and password and with the values of secret query parameters (below) replaced by `[redacted]`. A query that does not parse (a bad percent escape, a `;`) is replaced whole by `[redacted]`. |
+| `headers` | The headers, an object of name to a list of values, as sent or received: at most 16 KiB of them (below). |
+| `headers_left_out` | How many header lines did not fit in `headers`. Absent: none. |
+| response `status` | The HTTP status. |
+| `body` | The body as text (bytes that are not UTF-8 arrive as U+FFFD): all of it, or, when it is longer than 128 KiB, its first 32 KiB. |
+| `body_end` | When the body is longer than 128 KiB: its last 96 KiB. Absent otherwise. |
+| `body_size` | The body's full length in bytes. For a response: how much of it the extension had read when it sent the frame. |
+
+Rules:
+
+- Remove secrets before sending them: the value of every header and query parameter whose name
+  is about authentication (the rule under [Headers](#headers)) becomes `[redacted]`, keeping an
+  authorization scheme such as `Bearer [redacted]`. Core also removes the call's credential, its
+  proxy's password and its secret header values from everything in the frame, in all the forms
+  listed under [Errors](#errors), as from every event.
+- Keep at most 16 KiB of header lines per request and per response: each line (one value of one
+  header) counts its name, its value and 3 bytes, so a header list has a count bound too (at
+  most 5,461 lines). Take the names in sorted order; a line that does not fit is left out, and
+  `headers_left_out` counts the lines left out.
+- Record a request body as it is sent and a response body as the extension reads it, keeping only
+  its start and its end: never hold a whole stream, delay the request to read its body first, or
+  delay a piece of a reply to record it. What the extension had not read when it sent the frame is
+  not in it.
+- A WebSocket handshake is an exchange: the `GET` request and the `101` response's status and
+  headers, with no body. The messages on the socket are not captured. A turn that uses a socket an
+  earlier turn opened makes no exchange, and a socket opened by the `session` call itself, before
+  any turn, is not captured.
+- A `diagnostic` frame is not an event and takes no part in the ordering rules. Send at most one
+  per call or turn, at any point before its terminal event.
+
+Core writes each exchange into the request's log, between the client's request and its reply. It
+ignores a `diagnostic` frame on a call it did not ask to capture, keeps at most two exchanges per
+request log (the first and the last, across every account a request tried), and holds what an
+extension sends to the bounds above whatever it sent: a body longer than 128 KiB is cut to its
+start and end, and at most 16 KiB of header lines are logged, with a line counting the rest. Where
+a body is cut, it also drops the bytes beside the cut that could be the start or the end of a
+credential cut in two; a `body` and `body_end` with nothing left out between them are one text,
+and a credential cut between them is removed whole.
+
+In Go, `sdk.Upstream` does all of this for each client it wraps, for requests made with the
+handler's context.
+
 ## Versioning
 
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.10. An extension reports the minor version it
+raise the minor version: this document is version 0.14. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -991,8 +1221,12 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.8 | The request's `caller`. |
 | 0.9 | A login grant's optional `settings` object. |
 | 0.10 | Quota's optional `plan_ends_at`. |
+| 0.11 | The account's optional [`proxy_url`](#proxy). |
+| 0.12 | The account's optional [`headers`](#headers). |
+| 0.13 | [Upstream capture](#upstream-capture): the call's optional `capture` and the `diagnostic` frame. |
+| 0.14 | [Payload rules](#payload-rules): the call's optional `payload`. |
 
-## What version 0.10 leaves out
+## What version 0.14 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

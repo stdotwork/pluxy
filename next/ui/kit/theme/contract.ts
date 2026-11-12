@@ -101,6 +101,9 @@ export const PARTS = [
   "method",
   "flow",
   "device-code",
+  "tier",
+  "tile",
+  "model-group",
   "stat",
   "chart",
   "account-tools",
@@ -114,6 +117,11 @@ export const PARTS = [
   "account-test-result",
   "account-test-reply",
   "account-sign-in",
+  "account-settings",
+  "account-edit",
+  "account-edit-row",
+  "account-edit-discard",
+  "subscription-end",
 ] as const;
 
 export type Part = (typeof PARTS)[number];
