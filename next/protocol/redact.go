@@ -676,6 +676,83 @@ func (r *Redactor) Event(ev llm.Event) llm.Event {
 	return ev
 }
 
+// Body returns a BodyRedactor for a body r's call sends in pieces, such as an endpoint reply's.
+func (r *Redactor) Body() *BodyRedactor {
+	b := &BodyRedactor{r: r}
+	if r != nil {
+		for _, f := range r.forms {
+			b.byFirst[f[0]] = append(b.byFirst[f[0]], f)
+		}
+	}
+	return b
+}
+
+// BodyRedactor removes the credential from a body that arrives in pieces, where a form of it may
+// be cut between two pieces or more. Write takes each piece in turn and returns what may be sent
+// on now; Flush returns the rest once the body ends, breaks off or is cancelled. Joined, what
+// they return is what String returns for the whole body, wherever it was cut, for every form of
+// the credential the body holds as it is: String replaces the longest form at the leftmost
+// position first, and Write returns the text up to the first position where more text could
+// change what is replaced, holding back the rest, which is shorter than the longest form. That
+// is all it holds, so a body of any length passes through in bounded memory and a stream is not
+// delayed except where a piece ends with what could be the start of a form.
+//
+// shortcut: String also decodes escapes (\u0073, %73) that could spell the credential, and reads
+// a body that is JSON as JSON; Write does both within each text it returns, so a credential
+// spelled with escapes outside its listed forms (encodings), or a number holding it, is removed
+// as String would remove it only when it lies within one returned text. Holding back for those
+// would need far more than the longest form; do so if an upstream is seen to escape credentials
+// in a streamed body.
+type BodyRedactor struct {
+	r       *Redactor
+	byFirst [256][]string // the forms by their first byte, longest first
+	held    string        // the end of the body so far, which more text could still change
+}
+
+// Write returns the redacted text of the body so far that more text cannot change.
+func (b *BodyRedactor) Write(piece string) string {
+	if b.r == nil || b.r.r == nil {
+		return piece
+	}
+	s := b.held + piece
+	cut := b.decided(s)
+	b.held = strings.Clone(s[cut:]) // not keeping all of a large piece alive
+	return b.r.String(s[:cut])
+}
+
+// Flush returns the redacted text the BodyRedactor still holds, for the end of the body.
+func (b *BodyRedactor) Flush() string {
+	if b == nil {
+		return ""
+	}
+	s := b.held
+	b.held = ""
+	return b.r.String(s)
+}
+
+// decided returns how much of s more text after it cannot change once redacted. It follows the
+// forms as String's replacer does: at each position the longest form that starts there is
+// replaced, and the search goes on after it. A position at which a form longer than the rest of
+// s starts with that rest is undecided, since more text could complete it; so is everything
+// after. Forms are longest first, so the first that matches is the longest.
+func (b *BodyRedactor) decided(s string) int {
+	for i := 0; i < len(s); {
+		rest, n := s[i:], 0
+		for _, f := range b.byFirst[s[i]] {
+			if len(f) > len(rest) {
+				if strings.HasPrefix(f, rest) {
+					return i
+				}
+			} else if strings.HasPrefix(rest, f) {
+				n = len(f)
+				break
+			}
+		}
+		i += max(n, 1)
+	}
+	return len(s)
+}
+
 func (r *Redactor) usage(u *llm.Usage) *llm.Usage {
 	if u == nil {
 		return nil

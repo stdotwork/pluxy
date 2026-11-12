@@ -420,9 +420,10 @@ func ServesEndpoints(info protocol.Info) bool {
 	return info.ProtocolMinor >= 7 && slices.Contains(info.Operations, protocol.OpEndpoint)
 }
 
-// Endpoint starts an endpoint call, answered as a generate call is (see Generate). An extension
-// that serves no endpoints answers at once with an unsupported error about the account, so
-// routing moves on to another account.
+// Endpoint starts an endpoint call, answered as a generate call is (see Generate). The reply's
+// body is redacted as one text, also where a secret is cut between its pieces
+// (protocol.BodyRedactor). An extension that serves no endpoints answers at once with an
+// unsupported error about the account, so routing moves on to another account.
 func (e *Extension) Endpoint(ctx context.Context, account protocol.Account, req llm.Request) *Stream {
 	if !ServesEndpoints(e.info) {
 		return servesNoEndpoints(e.manifest.ID, req)
@@ -473,6 +474,9 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 		return failed(llm.CodeExtensionUnavailable, fmt.Sprintf("extension %s is not reachable: %v", e.manifest.ID, err))
 	}
 	s := &Stream{conn: conn, ctx: ctx, ext: e, redact: redact}
+	if op == protocol.OpEndpoint {
+		s.body = redact.Body()
+	}
 	s.stop = context.AfterFunc(ctx, func() { conn.Close() })
 	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: op, Account: &account, Request: &req}
 	if err := protocol.WriteFrame(conn, call); err != nil {
@@ -495,9 +499,14 @@ type Stream struct {
 	ctx    context.Context
 	ext    *Extension
 	redact *protocol.Redactor
-	stop   func() bool
-	seq    llm.Sequence
-	final  *llm.Event
+	// body is an endpoint call's: it redacts the reply's body across its pieces, holding back
+	// the end of a piece that could be the start of a secret (protocol.BodyRedactor). Its secrets
+	// are redact's, those the call was sent with; a refresh or a settings change while the reply
+	// runs reaches later calls, not this one, so they do not change mid-body.
+	body  *protocol.BodyRedactor
+	stop  func() bool
+	seq   llm.Sequence
+	final *llm.Event
 	// onClose ends the call on its managed generation; safe to call more than once.
 	onClose func()
 }
@@ -517,23 +526,55 @@ func (s *Stream) fail(e *llm.Error) {
 // Next returns the next event.
 func (s *Stream) Next() llm.Event {
 	if s.final != nil {
-		return *s.final
+		return s.last()
 	}
 	var reply protocol.Reply
 	if err := protocol.ReadFrame(s.conn, &reply); err != nil {
 		s.fail(s.readError(err))
-		return *s.final
+		return s.last()
 	}
 	if err := s.seq.Check(reply.Event); err != nil {
 		s.fail(redacted(s.redact, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s broke the protocol: %v", s.ext.manifest.ID, err)}))
-		return *s.final
+		return s.last()
+	}
+	var piece string
+	if s.body != nil && reply.Event.Type == llm.EventNative && json.Unmarshal(reply.Event.Raw, &piece) == nil {
+		// A piece of an endpoint reply's body, redacted with what came before it. A piece that is
+		// not a JSON string is redacted on its own below, for the server to refuse.
+		ev := reply.Event
+		ev.Raw = nil
+		ev = s.redact.Event(ev)
+		if out := s.body.Write(piece); out != piece {
+			ev.Raw = bodyPiece(out)
+		} else {
+			ev.Raw = reply.Event.Raw
+		}
+		return ev
 	}
 	ev := s.redact.Event(reply.Event)
 	if ev.Terminal() {
 		s.final = &ev
 		s.Close()
+		return s.last()
 	}
 	return ev
+}
+
+// last returns what Next returns once the call has ended: first the end of an endpoint reply's
+// body that was held back, if any, then the terminal event, again and again.
+func (s *Stream) last() llm.Event {
+	if rest := s.body.Flush(); rest != "" {
+		return llm.Event{Type: llm.EventNative, Raw: bodyPiece(rest)}
+	}
+	return *s.final
+}
+
+// bodyPiece returns a body piece as the JSON string a native event carries. BodyRedactor cuts
+// a body only where a form of a secret starts, which is where a character starts, so the piece
+// is valid UTF-8 as the decoded string it came from was, and encodes exactly.
+func bodyPiece(text string) json.RawMessage {
+	b, _ := json.Marshal(text)
+	return b
 }
 
 func (s *Stream) readError(err error) *llm.Error {

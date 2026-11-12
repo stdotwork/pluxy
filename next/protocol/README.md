@@ -457,10 +457,16 @@ order, then `finish`, with `usage` when the upstream reported it.
 
 | `response.raw` field | Meaning |
 | --- | --- |
-| `content_type` | The body's media type, which core sends as the reply's `Content-Type`. Required. With `text/event-stream`, core sends each piece to the client as soon as it arrives. |
+| `content_type` | The body's media type, which core sends as the reply's `Content-Type`. Required. With `text/event-stream`, core sends each piece to the client as soon as it arrives, less any end it holds back (below). |
 
-The body is text: send it as it should reach the client. Except for the direct `codex.models`
-call above, an `error` before `response.start` is
+The body is text: send it as it should reach the client. Core removes the account's secrets from it
+(its credential and the secrets in its `settings`, `proxy_url` and `headers`; see
+[Accounts](#accounts)) as from `raw` fields, also where one piece ends partway through a secret and
+the next goes on with it. To do so, core holds back the end of a piece that could be the start of a
+secret in one of the forms it removes, always fewer bytes than the longest of those forms, until
+the next piece shows whether it is one; it sends what it holds once the body ends, breaks off with
+an error or is cancelled. Except for the direct `codex.models` call above, an `error` before
+`response.start` is
 routed as for `generate`: core tries another account when it is retryable, and otherwise answers
 the client with an error in OpenAI's shape. An `error` after `response.start` ends the body where
 it is; a `text/event-stream` body then gets a last `error` event. An account that does not serve
