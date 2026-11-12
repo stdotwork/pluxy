@@ -218,7 +218,7 @@ func TestUpstreamSetsCallHeaders(t *testing.T) {
 	base.RegisterProtocol("record", recorder)
 	call := protocol.Call{Op: protocol.OpGenerate, Account: &protocol.Account{ID: "a",
 		Headers: map[string]string{"anthropic-version": "configured", "X-Gateway-Key": "fake-gw"}}}
-	ctx := withUpstreamInfo(context.Background(), call)
+	ctx, _ := withUpstreamInfo(context.Background(), call)
 	req, err := http.NewRequestWithContext(ctx, "POST", "record://upstream.test/v1/messages", strings.NewReader(`{}`))
 	if err != nil {
 		t.Fatal(err)
@@ -513,7 +513,8 @@ func TestUpstreamHeadersOnRequestWithoutHeaderMap(t *testing.T) {
 	base.RegisterProtocol("record", recorder)
 	call := protocol.Call{Op: protocol.OpGenerate, Account: &protocol.Account{ID: "a", Headers: map[string]string{"X-Title": "fake-title"}}}
 	u, _ := url.Parse("record://upstream.test/v1/messages")
-	req := (&http.Request{Method: "POST", URL: u, Body: http.NoBody}).WithContext(withUpstreamInfo(context.Background(), call))
+	ctx, _ := withUpstreamInfo(context.Background(), call)
+	req := (&http.Request{Method: "POST", URL: u, Body: http.NoBody}).WithContext(ctx)
 	defer func() {
 		if r := recover(); r != nil {
 			t.Fatalf("RoundTrip panicked: %v", r)
@@ -566,7 +567,8 @@ func TestUpstreamRedirectKeepsSecretHeadersOnTheirHost(t *testing.T) {
 	client := &http.Client{Transport: Upstream(&http.Transport{})}
 	get := func(path string) {
 		t.Helper()
-		req, err := http.NewRequestWithContext(withUpstreamInfo(context.Background(), call), http.MethodGet, origin.URL+path, nil)
+		ctx, _ := withUpstreamInfo(context.Background(), call)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, origin.URL+path, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

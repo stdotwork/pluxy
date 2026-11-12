@@ -170,7 +170,7 @@ func (s *Session) Ended() bool {
 // may be newer than the one the session opened with. Cancelling ctx, or closing the stream
 // before its terminal event, cancels the turn, which ends the session.
 func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Request) *SessionStream {
-	t := &SessionStream{s: s, ctx: ctx}
+	t := &SessionStream{s: s, ctx: ctx, capture: capture(ctx, s.ext.info), account: account.ID}
 	// A turn refused here was never sent: closing its stream leaves the session alone.
 	refuse := func(e *llm.Error) *SessionStream {
 		t.ended = true
@@ -217,7 +217,7 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 	}
 	t.stop = context.AfterFunc(ctx, s.Close)
 	s.writeMu.Lock()
-	err := protocol.WriteFrame(s.conn, protocol.Call{Type: protocol.TypeSessionTurn, Account: &account, Request: &req})
+	err := protocol.WriteFrame(s.conn, protocol.Call{Type: protocol.TypeSessionTurn, Account: &account, Request: &req, Capture: t.capture != nil})
 	s.writeMu.Unlock()
 	if err != nil {
 		if errors.Is(err, protocol.ErrFrameTooLarge) {
@@ -302,6 +302,9 @@ type SessionStream struct {
 	stop   func() bool
 	final  *llm.Event
 	ended  bool
+	// capture receives the turn's diagnostic frames; nil when the turn is not captured.
+	capture CaptureFunc
+	account string
 }
 
 func (t *SessionStream) fail(e *llm.Error) {
@@ -335,14 +338,22 @@ func (t *SessionStream) Next() llm.Event {
 	}
 	s := t.s
 	var f sessionFrame
-	select {
-	case f = <-s.frames:
-	case <-s.done:
-		// The connection ended before the turn's terminal event: core cancelled the turn, or
-		// the extension closed the connection or stopped.
-		t.end()
-		t.fail((&Stream{ctx: t.ctx, ext: s.ext}).readError(net.ErrClosed))
-		return *t.final
+	for {
+		select {
+		case f = <-s.frames:
+		case <-s.done:
+			// The connection ended before the turn's terminal event: core cancelled the turn, or
+			// the extension closed the connection or stopped.
+			t.end()
+			t.fail((&Stream{ctx: t.ctx, ext: s.ext}).readError(net.ErrClosed))
+			return *t.final
+		}
+		if f.reply.Type != protocol.TypeDiagnostic {
+			break
+		}
+		if t.capture != nil && f.reply.Diagnostic != nil {
+			t.capture(t.account, redactDiagnostic(t.redact, *f.reply.Diagnostic))
+		}
 	}
 	if err := t.seq.Check(f.reply.Event); err != nil {
 		s.Close()

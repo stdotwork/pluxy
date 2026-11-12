@@ -60,6 +60,7 @@ func build(dir string) error {
 		{filepath.Join("devin", "devin"), "../extensions/devin"},
 		{filepath.Join("meta", "meta"), "../extensions/meta"},
 		{"testext", "./testext"},
+		{"frametap", "./frametap"},
 	} {
 		cmd := exec.Command("go", "build", "-buildvcs=false", "-o", filepath.Join(dir, b.out), b.pkg)
 		cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr

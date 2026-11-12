@@ -88,6 +88,36 @@ func NewRedactor(cs ...*Credential) *Redactor {
 	return red
 }
 
+// minCutFragment is the shortest part of a secret, at the cut of a body kept in two pieces,
+// that TrimCut removes; shorter runs would match unrelated text.
+const minCutFragment = 4
+
+// TrimCut returns head and tail, the start and the end of a body with the middle cut out, without
+// the bytes beside the cut that could be the two parts of a secret cut in two, which String
+// cannot recognise: a run at the end of head that is the start of a form of the credential, and a
+// run at the start of tail that is the end of one, each of at least 4 bytes.
+func (r *Redactor) TrimCut(head, tail string) (string, string) {
+	if r == nil || r.r == nil {
+		return head, tail
+	}
+	h, t := 0, 0
+	for _, f := range r.forms {
+		for k := min(len(f)-1, len(head)); k >= max(minCutFragment, h+1); k-- {
+			if strings.HasSuffix(head, f[:k]) {
+				h = k
+				break
+			}
+		}
+		for k := min(len(f)-1, len(tail)); k >= max(minCutFragment, t+1); k-- {
+			if strings.HasPrefix(tail, f[len(f)-k:]) {
+				t = k
+				break
+			}
+		}
+	}
+	return head[:len(head)-h], tail[t:]
+}
+
 // numberChars are the bytes a JSON number is made of.
 const numberChars = "+-.eE0123456789"
 

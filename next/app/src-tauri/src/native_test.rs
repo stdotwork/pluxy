@@ -24,6 +24,23 @@ mod ingress;
 pub use ingress::{
     count as ingress_count, forwarded as ingress_forwarded, operation as ingress_operation,
 };
+#[cfg(target_os = "linux")]
+#[path = "native_window.rs"]
+pub mod window;
+
+/// The app asked the window what closing should do.
+pub fn window_prompted() {
+    #[cfg(target_os = "linux")]
+    window::prompted();
+}
+
+/// A management call from the window, for the window checks' count of polls.
+pub fn window_call(method: &str, path: &str) {
+    #[cfg(target_os = "linux")]
+    window::core_call(method, path);
+    #[cfg(not(target_os = "linux"))]
+    let _ = (method, path);
+}
 
 const WAIT: Duration = Duration::from_secs(60);
 
@@ -111,6 +128,10 @@ fn probe(w: &Webview, calls: &[&str]) -> Result<Value, String> {
 }
 
 fn run(app: &AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    if let Ok(stage) = std::env::var("PLUXY_APP_TEST_WINDOW") {
+        return window::run(app, &stage);
+    }
     if let Ok(stage) = std::env::var("PLUXY_APP_TEST_STARTUP") {
         return startup(app, &stage);
     }

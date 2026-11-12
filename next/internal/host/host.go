@@ -473,12 +473,12 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 		}
 		return failed(llm.CodeExtensionUnavailable, fmt.Sprintf("extension %s is not reachable: %v", e.manifest.ID, err))
 	}
-	s := &Stream{conn: conn, ctx: ctx, ext: e, redact: redact}
+	s := &Stream{conn: conn, ctx: ctx, ext: e, redact: redact, capture: capture(ctx, e.info), account: account.ID}
 	if op == protocol.OpEndpoint {
 		s.body = redact.Body()
 	}
 	s.stop = context.AfterFunc(ctx, func() { conn.Close() })
-	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: op, Account: &account, Request: &req}
+	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: op, Account: &account, Request: &req, Capture: s.capture != nil}
 	if err := protocol.WriteFrame(conn, call); err != nil {
 		if errors.Is(err, protocol.ErrFrameTooLarge) {
 			// The request is valid but too big to pass on in one frame; only a smaller request
@@ -509,6 +509,9 @@ type Stream struct {
 	final *llm.Event
 	// onClose ends the call on its managed generation; safe to call more than once.
 	onClose func()
+	// capture receives the call's diagnostic frames; nil when the call is not captured.
+	capture CaptureFunc
+	account string
 }
 
 func failed(code, msg string) *Stream {
@@ -532,6 +535,16 @@ func (s *Stream) Next() llm.Event {
 	if err := protocol.ReadFrame(s.conn, &reply); err != nil {
 		s.fail(s.readError(err))
 		return s.last()
+	}
+	for reply.Type == protocol.TypeDiagnostic {
+		if s.capture != nil && reply.Diagnostic != nil {
+			s.capture(s.account, redactDiagnostic(s.redact, *reply.Diagnostic))
+		}
+		reply = protocol.Reply{}
+		if err := protocol.ReadFrame(s.conn, &reply); err != nil {
+			s.fail(s.readError(err))
+			return s.last()
+		}
 	}
 	if err := s.seq.Check(reply.Event); err != nil {
 		s.fail(redacted(s.redact, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s broke the protocol: %v", s.ext.manifest.ID, err)}))
