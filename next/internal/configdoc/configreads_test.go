@@ -87,27 +87,40 @@ func TestRedactAliasKeys(t *testing.T) {
 }
 
 // A secret with an explicit tag is shown as a placeholder and goes back with its tag, so core
-// reads the same value: !!int 0x1F2E3D4C stays the number 523124044.
+// reads the same value: !!int 0x1F2E3D4C stays the number 523124044. A file without anchors is
+// restored in place, byte for byte; one with an anchored secret is written out again.
 func TestRestoreKeepsExplicitTags(t *testing.T) {
-	src := "api-key: !!int 0x1F2E3D4C\nsecret-key: !!binary c2stbGl2ZS1zZWNyZXQ=\nkept: 1\n"
-	r := NewRedactor()
-	red, err := r.Redact([]byte(src), true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(red), "0x1F2E3D4C") || strings.Contains(string(red), "c2stbGl2ZS1zZWNyZXQ=") {
-		t.Fatalf("the redacted document shows a secret:\n%s", red)
-	}
-	back, err := r.Restore(red, []byte(src), true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got map[string]any
-	if err := yaml.Unmarshal(back, &got); err != nil {
-		t.Fatal(err)
-	}
-	if got["api-key"] != 523124044 || got["secret-key"] != "sk-live-secret" {
-		t.Errorf("restored values %#v, want 523124044 and \"sk-live-secret\":\n%s", got, back)
+	for _, tc := range []struct {
+		name, src string
+		exact     bool
+	}{
+		{"in place", "api-key: !!int 0x1F2E3D4C\nsecret-key: !!binary c2stbGl2ZS1zZWNyZXQ=\nkept: 1\n", true},
+		{"written out again", "api-key: !!int 0x1F2E3D4C\nsecret-key: !!binary c2stbGl2ZS1zZWNyZXQ=\nprivate-key: &p !!int 0x7FFFFFFF\nkept: 1\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := NewRedactor()
+			red, err := r.Redact([]byte(tc.src), true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(red), "0x1F2E3D4C") || strings.Contains(string(red), "c2stbGl2ZS1zZWNyZXQ=") || strings.Contains(string(red), "0x7FFFFFFF") {
+				t.Fatalf("the redacted document shows a secret:\n%s", red)
+			}
+			back, err := r.Restore(red, []byte(tc.src), true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.exact && string(back) != tc.src {
+				t.Errorf("not restored byte for byte:\n%s", back)
+			}
+			var got map[string]any
+			if err := yaml.Unmarshal(back, &got); err != nil {
+				t.Fatal(err)
+			}
+			if got["api-key"] != 523124044 || got["secret-key"] != "sk-live-secret" || !tc.exact && got["private-key"] != 2147483647 {
+				t.Errorf("restored values %#v, want 523124044, \"sk-live-secret\" and 2147483647:\n%s", got, back)
+			}
+		})
 	}
 }
 

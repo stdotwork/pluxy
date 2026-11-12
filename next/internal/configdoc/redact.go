@@ -404,8 +404,8 @@ func SettingsSecrets(b []byte) []string {
 
 // Redact returns a config file's contents with a placeholder in place of each secret. The
 // rest stays as written, comments included. Where a secret's text cannot be found exactly (a
-// block scalar, an anchor or tag before it), the document is written out again with the
-// placeholders, as Doc.Bytes writes it.
+// block scalar, an anchor before it), the document is written out again with the placeholders,
+// as Doc.Bytes writes it.
 func (r *Redactor) Redact(b []byte, isYAML bool) ([]byte, error) {
 	return r.redact(b, isYAML, false)
 }
@@ -544,6 +544,7 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 	// header text): a placeholder goes back as the one where it is, else as the first.
 	type secret struct {
 		value, tag, text string
+		tagged           bool               // written with an explicit tag, which must go back with it
 		paths            map[string]*secret // where the placeholder's secrets are, and which is there
 	}
 	values := map[string]*secret{}
@@ -552,7 +553,7 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 		nodes, texts := found(cur.root, settings)
 		for _, n := range nodes {
 			p := r.placeholderOf(n, texts)
-			this := &secret{value: n.Value, tag: n.Tag}
+			this := &secret{value: n.Value, tag: n.Tag, tagged: n.Style&yaml.TaggedStyle != 0}
 			if sp, ok := cur.span(n); ok {
 				this.text = string(cur.src[sp.start:sp.end])
 			}
@@ -590,23 +591,32 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 	}
 	want := map[string]int{}
 	texts := map[*yaml.Node]string{}
+	inPlace := true
 	for n, s := range repl {
 		want[s.value]++
 		switch {
 		case s.text != "":
 			texts[n] = s.text
+		case s.tagged:
+			// Only writing the document out again keeps a tag whose text was not found.
+			inPlace = false
 		case isYAML && plain(s.value):
 			texts[n] = s.value
 		default:
 			texts[n] = jsonString(s.value)
 		}
 	}
-	if out, ok := d.replace(texts); ok && restored(out, isYAML, settings, want) {
-		return out, nil
+	if inPlace {
+		if out, ok := d.replace(texts); ok && restored(out, isYAML, settings, want) {
+			return out, nil
+		}
 	}
 	for n, s := range repl {
 		style := yaml.Style(0)
-		if isYAML && s.tag == "!!str" && !plain(s.value) {
+		switch {
+		case s.tagged:
+			style = yaml.TaggedStyle
+		case isYAML && s.tag == "!!str" && !plain(s.value):
 			style = yaml.DoubleQuotedStyle
 		}
 		setScalar(n, s.tag, s.value, style)
@@ -706,7 +716,8 @@ func (d *Doc) replace(repl map[*yaml.Node]string) ([]byte, bool) {
 	return out, true
 }
 
-// span returns where a scalar's text is in the source, quotes included.
+// span returns where a scalar's text is in the source, quotes included, and an explicit tag
+// before it (!!int 0x1F) too.
 func (d *Doc) span(n *yaml.Node) (span, bool) {
 	if !d.YAML {
 		s, ok := d.spans[n]
@@ -720,7 +731,33 @@ func (d *Doc) span(n *yaml.Node) (span, bool) {
 		return span{}, false
 	}
 	src := d.src
-	switch n.Style {
+	style := n.Style
+	if style&yaml.TaggedStyle != 0 {
+		// The node's place is its tag's: the value follows it on the same line.
+		style &^= yaml.TaggedStyle
+		i := start
+		for i < len(src) && src[i] != ' ' && src[i] != '\t' && src[i] != '\n' {
+			i++
+		}
+		if src[start] != '!' || i == len(src) || src[i] == '\n' {
+			return span{}, false
+		}
+		for i < len(src) && (src[i] == ' ' || src[i] == '\t') {
+			i++
+		}
+		v, ok := valueSpan(src, i, n.Value, style)
+		return span{start, v.end}, ok
+	}
+	return valueSpan(src, start, n.Value, style)
+}
+
+// valueSpan returns where the text of a scalar of the given value and style that starts at start
+// ends in src.
+func valueSpan(src []byte, start int, value string, style yaml.Style) (span, bool) {
+	if start >= len(src) {
+		return span{}, false
+	}
+	switch style {
 	case yaml.DoubleQuotedStyle:
 		if src[start] != '"' {
 			return span{}, false
@@ -747,8 +784,8 @@ func (d *Doc) span(n *yaml.Node) (span, bool) {
 			}
 		}
 	case 0:
-		if !strings.Contains(n.Value, "\n") && bytes.HasPrefix(src[start:], []byte(n.Value)) {
-			return span{start, start + len(n.Value)}, true
+		if !strings.Contains(value, "\n") && bytes.HasPrefix(src[start:], []byte(value)) {
+			return span{start, start + len(value)}, true
 		}
 	}
 	return span{}, false
