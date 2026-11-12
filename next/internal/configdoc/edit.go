@@ -1,6 +1,8 @@
 package configdoc
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -9,6 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/stdotwork/pluxy/next/internal/proxyurl"
+	"github.com/stdotwork/pluxy/next/sdk/payload"
 )
 
 // place returns where a setting is in the document: the JSON path in a JSON config; in a
@@ -127,6 +130,9 @@ type SettingsPatch struct {
 	// ProxyURL is the proxy of every account without one of its own: an http, https, socks5 or
 	// socks5h URL, direct or none; empty removes it (no proxy).
 	ProxyURL *string `json:"proxy-url"`
+	// Payload replaces the payload rules: an object with today's core's lists (default,
+	// default-raw, override, override-raw, filter); null or {} removes them.
+	Payload json.RawMessage `json:"payload"`
 }
 
 // ObservabilityPatch is a change to the usage and log settings.
@@ -206,7 +212,57 @@ func (d *Doc) ApplySettings(p SettingsPatch) error {
 			return err
 		}
 	}
+	if p.Payload != nil {
+		if err := d.applyPayload(p.Payload); err != nil {
+			return err
+		}
+	}
 	return d.applyObservability(p.Observability)
+}
+
+// applyPayload writes the payload rules, refusing a field they do not have and what
+// payload.Validate refuses; null or no rules remove them, in both spellings of a config.yaml.
+func (d *Doc) applyPayload(raw json.RawMessage) error {
+	var r *payload.Rules
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	dec.UseNumber() // a number is written as it was sent
+	if err := dec.Decode(&r); err != nil {
+		return fmt.Errorf("%w: payload: %v", ErrInvalid, err)
+	}
+	if err := payload.Validate(r); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	if r == nil || (len(r.Default) == 0 && len(r.DefaultRaw) == 0 && len(r.Override) == 0 && len(r.OverrideRaw) == 0 && len(r.Filter) == 0) {
+		if d.YAML {
+			d.Delete("requests", "payload")
+			d.Delete("payload")
+		} else {
+			d.Delete("payload")
+		}
+		return nil
+	}
+	b, err := json.Marshal(r)
+	if err != nil {
+		return fmt.Errorf("%w: payload: %v", ErrInvalid, err)
+	}
+	// JSON is YAML: its nodes carry each value's type, which the JSON writer needs. In a
+	// config.yaml they are written in block style.
+	var n yaml.Node
+	if err := yaml.Unmarshal(b, &n); err != nil || n.Kind != yaml.DocumentNode || len(n.Content) != 1 {
+		return fmt.Errorf("%w: payload: %v", ErrInvalid, err)
+	}
+	blockStyle(n.Content[0])
+	return d.Set(n.Content[0], d.place("payload", "requests.payload", "payload")...)
+}
+
+// blockStyle clears the flow and quoting styles of n and everything in it, so the YAML writer
+// chooses them.
+func blockStyle(n *yaml.Node) {
+	n.Style = 0
+	for _, c := range n.Content {
+		blockStyle(c)
+	}
 }
 
 // applyProxyURL writes the global proxy setting; "" removes it, in both spellings of a

@@ -108,6 +108,73 @@ func TestApplyMatchesOldEngine(t *testing.T) {
 	}
 }
 
+// Select, sent as JSON (the call frame's form), and Apply with Selected and nothing else about
+// the call give what the old engine returned (but for deliberateDifferences): core matches the
+// call, the extension only the body.
+func TestSelectThenApplyMatchesOldEngine(t *testing.T) {
+	selected := 0
+	for _, c := range loadCases(t) {
+		t.Run(c.Name, func(t *testing.T) {
+			in := Input{
+				Model: c.Input.Model, RequestedModel: c.Input.RequestedModel, Protocol: c.Input.Protocol,
+				FromProtocol: c.Input.FromProtocol, Headers: http.Header{},
+			}
+			for k, vs := range c.Input.Headers {
+				for _, v := range vs {
+					in.Headers.Add(k, v)
+				}
+			}
+			sel := Select(&c.Rules, in)
+			var wire *Rules
+			if sel != nil {
+				selected++
+				b, err := json.Marshal(sel)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := json.Unmarshal(b, &wire); err != nil {
+					t.Fatal(err)
+				}
+			}
+			seam := Input{Root: c.Input.Root, Selected: true}
+			if c.Input.Original != nil {
+				seam.Original = []byte(*c.Input.Original)
+			}
+			want := c.Old
+			if d, ok := deliberateDifferences[c.Name]; ok {
+				want = d.want
+			}
+			if got, _ := Apply(wire, []byte(c.Body), seam); string(got) != want {
+				t.Errorf("body\n got: %s\nwant: %s", got, want)
+			}
+		})
+	}
+	if selected < 100 {
+		t.Fatalf("only %d cases selected a rule", selected)
+	}
+}
+
+// Select keeps only the models that match the call, without what core alone can check.
+func TestSelectKeepsBodyConditionsOnly(t *testing.T) {
+	r := &Rules{Override: []Rule{
+		{Models: []Model{{Name: "gpt-*", Protocol: "codex", Headers: map[string]string{"X-Tier": "gold"}, Exist: []string{"tools"}},
+			{Name: "gpt-*", Protocol: "claude"}}, Params: map[string]any{"a": 1}},
+		{Models: []Model{{Name: "other"}}, Params: map[string]any{"b": 2}},
+	}}
+	h := http.Header{}
+	h.Set("x-tier", "gold")
+	got, _ := json.Marshal(Select(r, Input{Model: "gpt-5", Protocol: "codex", Headers: h}))
+	if want := `{"override":[{"models":[{"exist":["tools"]}],"params":{"a":1}}]}`; string(got) != want {
+		t.Errorf("Select = %s, want %s", got, want)
+	}
+	if s := Select(r, Input{Model: "gpt-5", Protocol: "codex"}); s != nil {
+		t.Errorf("without the header Select = %+v, want nil", s)
+	}
+	if s := Select(r, Input{Protocol: "codex", Headers: h}); s != nil {
+		t.Errorf("without a model Select = %+v, want nil", s)
+	}
+}
+
 func TestValidateAcceptsTheConfigExamples(t *testing.T) {
 	n := 0
 	for _, c := range loadCases(t) {
