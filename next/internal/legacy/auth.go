@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/stdotwork/pluxy/next/internal/cred"
+	"github.com/stdotwork/pluxy/next/internal/proxyurl"
 	"github.com/stdotwork/pluxy/next/internal/route"
+	"github.com/stdotwork/pluxy/next/internal/upheader"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
@@ -329,9 +331,40 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 	}
 	r.Account.ExcludedModels = authExcluded(m)
 	r.Account.ModelAlias = authAliases(m)
-	for _, k := range []string{"proxy_url", "proxy-url", "headers"} {
+	// proxy_url (or proxy-url), as today's core reads it: the first that is set counts. A value
+	// this core cannot use skips the file rather than sending its traffic without the proxy.
+	for _, k := range []string{"proxy_url", "proxy-url"} {
 		if v, ok := m[k]; ok && !isZero(v) {
-			f.Ignored = append(f.Ignored, strings.ReplaceAll(k, "-", "_"))
+			p, isText := v.(string)
+			if !isText {
+				return f, nil, k + " is not text"
+			}
+			if err := proxyurl.Check(k, p); err != nil {
+				return f, nil, err.Error()
+			}
+			r.Account.ProxyURL = strings.TrimSpace(p)
+			break
+		}
+	}
+	// headers, as today's core reads them: text values only, trimmed, empty ones dropped. A
+	// header this core refuses skips the file rather than sending its traffic without it.
+	if raw, ok := m["headers"].(map[string]any); ok {
+		text := map[string]string{}
+		for k, v := range raw {
+			if s, isText := v.(string); isText {
+				text[k] = s
+			}
+		}
+		h, dynamic, err := upheader.Import(text)
+		if err != nil {
+			return f, nil, err.Error()
+		}
+		if err := upheader.Check("headers", h); err != nil {
+			return f, nil, err.Error()
+		}
+		r.Account.Headers = h
+		for _, k := range dynamic {
+			f.Ignored = append(f.Ignored, "headers."+k+" (a value taken from the client's request)")
 		}
 	}
 	f.Record = r

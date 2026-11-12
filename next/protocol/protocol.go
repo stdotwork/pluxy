@@ -9,10 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"strconv"
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/llm"
+	"github.com/stdotwork/pluxy/next/sdk/payload"
 )
 
 // Version is the protocol version this package implements: the major version, which the
@@ -25,8 +27,10 @@ const Version = 0
 // suffix; minor 3 adds model listing; minor 4 adds account checks; minor 5 adds quota and the
 // identity of a login's grant; minor 6 adds an error's quota window; minor 7 adds endpoint calls;
 // minor 8 adds the request's caller; minor 9 adds a login grant's account settings;
-// minor 10 adds the subscription's end time to quota.
-const Minor = 10
+// minor 10 adds the subscription's end time to quota; minor 11 adds the account's proxy_url;
+// minor 12 adds the account's headers; minor 13 adds upstream capture (Call.Capture and the
+// diagnostic frame); minor 14 adds payload rules (Call.Payload).
+const Minor = 14
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
@@ -96,6 +100,9 @@ const (
 	TypeCheckResult = "check.result"
 	// TypeQuotaResult answers a quota call.
 	TypeQuotaResult = "quota.result"
+	// TypeDiagnostic is a frame an extension sends before a captured call's terminal event: its
+	// upstream exchanges (minor version 13). It is not an event.
+	TypeDiagnostic = "diagnostic"
 )
 
 // Session kinds (SessionInfo.Format).
@@ -126,6 +133,14 @@ type Call struct {
 	Session *SessionInfo `json:"session,omitempty"`
 	// Raw is the client's control message, in a session.interrupt frame.
 	Raw json.RawMessage `json:"raw,omitempty"`
+	// Capture asks a generate, count_tokens or endpoint call, or a session.turn, to report its
+	// upstream exchanges in a diagnostic frame before its terminal event (minor version 13).
+	Capture bool `json:"capture,omitempty"`
+	// Payload is the config's payload rules that apply to a generate, count_tokens or endpoint
+	// call (minor version 14), for the extension to apply to each JSON body it sends upstream:
+	// core matched their models to the call already, so each model holds only its body
+	// conditions (payload.Select). Nil: none.
+	Payload *payload.Rules `json:"payload,omitempty"`
 }
 
 // Login is the subject of a login call.
@@ -142,6 +157,50 @@ type Account struct {
 	ID         string          `json:"id"`
 	Settings   json.RawMessage `json:"settings,omitempty"`
 	Credential *Credential     `json:"credential,omitempty"`
+	// ProxyURL is the proxy every upstream request of the call goes through (minor version 11):
+	// an http, https, socks5 or socks5h URL (ParseProxyURL). Empty: no proxy. Its user name and
+	// password are secret.
+	ProxyURL string `json:"proxy_url,omitempty"`
+	// Headers are extra HTTP headers every upstream request of the call carries (minor version
+	// 12), set over the extension's own headers of the same names. Values of headers whose names
+	// are about authentication are secret.
+	Headers map[string]string `json:"headers,omitempty"`
+}
+
+// ParseProxyURL parses an account's ProxyURL: an http, https, socks5 or socks5h URL with a
+// host and nothing after it but an optional "/". Its error never quotes the URL, which may
+// hold a password.
+func ParseProxyURL(s string) (*url.URL, error) {
+	u, err := url.Parse(s)
+	if err != nil {
+		return nil, errors.New("is not a valid URL")
+	}
+	switch u.Scheme {
+	case "http", "https", "socks5", "socks5h":
+	default:
+		return nil, errors.New("must use http://, https://, socks5:// or socks5h://")
+	}
+	if u.Hostname() == "" || u.Opaque != "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return nil, errors.New("must be scheme://[user:password@]host[:port], with nothing after the port")
+	}
+	if p := u.Port(); p != "" {
+		if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
+			return nil, errors.New("has a port that is not a number from 1 to 65535")
+		}
+	}
+	return u, nil
+}
+
+// SecretName reports whether a header or query parameter name is about authentication
+// (Authorization, X-Api-Key, Cookie, key, ...), so its value is a secret.
+func SecretName(name string) bool {
+	n := strings.ToLower(name)
+	for _, part := range []string{"auth", "key", "token", "secret", "cookie", "session", "password", "signature"} {
+		if strings.Contains(n, part) {
+			return true
+		}
+	}
+	return false
 }
 
 // Credential kinds core knows. Extensions may use other kinds; core stores them as they are.
@@ -356,16 +415,85 @@ type QuotaLimit struct {
 	Models []string `json:"models,omitempty"`
 }
 
+// Diagnostic is what a captured call reports about its upstream exchanges (minor version 13),
+// for core's request log. Secrets are removed from it before it is sent.
+type Diagnostic struct {
+	// Upstream holds the call's exchanges in the order their requests were sent: at most
+	// MaxDiagnosticExchanges, the first and the last when the call made more.
+	Upstream []UpstreamExchange `json:"upstream,omitempty"`
+	// UpstreamLeftOut counts the exchanges left out between them.
+	UpstreamLeftOut int `json:"upstream_left_out,omitempty"`
+}
+
+// MaxDiagnosticExchanges is how many exchanges a diagnostic frame holds at most.
+const MaxDiagnosticExchanges = 2
+
+// Bounds on a captured body: one longer than CapturedHead+CapturedEnd bytes keeps its first
+// CapturedHead bytes in Body and its last CapturedEnd bytes in BodyEnd.
+const (
+	CapturedHead = 32 << 10
+	CapturedEnd  = 96 << 10
+)
+
+// CapturedHeaderBytes bounds the header lines of one captured request or response: each line
+// counts its name, its value and 3 bytes (the ": " and the line end). Lines are taken in name
+// order; one that does not fit is left out and counted in HeadersLeftOut.
+const CapturedHeaderBytes = 16 << 10
+
+// UpstreamExchange is one upstream request and what came back.
+type UpstreamExchange struct {
+	Request UpstreamRequest `json:"request"`
+	// Response is absent when none came; Error then says why.
+	Response *UpstreamResponse `json:"response,omitempty"`
+	Error    string            `json:"error,omitempty"`
+}
+
+// UpstreamRequest is an upstream request as it was sent.
+type UpstreamRequest struct {
+	// TimeMs is when it was sent, in Unix milliseconds.
+	TimeMs int64  `json:"time_ms,omitempty"`
+	Method string `json:"method"`
+	// URL is the whole URL, without user name and password, secret query values redacted.
+	URL     string              `json:"url"`
+	Headers map[string][]string `json:"headers,omitempty"`
+	// HeadersLeftOut counts the header lines left out of Headers (CapturedHeaderBytes).
+	HeadersLeftOut int `json:"headers_left_out,omitempty"`
+	CapturedBody
+}
+
+// UpstreamResponse is what an upstream request got back.
+type UpstreamResponse struct {
+	// TimeMs is when its headers arrived, in Unix milliseconds.
+	TimeMs  int64               `json:"time_ms,omitempty"`
+	Status  int                 `json:"status"`
+	Headers map[string][]string `json:"headers,omitempty"`
+	// HeadersLeftOut counts the header lines left out of Headers (CapturedHeaderBytes).
+	HeadersLeftOut int `json:"headers_left_out,omitempty"`
+	CapturedBody
+}
+
+// CapturedBody is a body as text, bounded to its start and its end.
+type CapturedBody struct {
+	// Body is all of the body, or its first CapturedHead bytes when it is longer than
+	// CapturedHead+CapturedEnd.
+	Body string `json:"body,omitempty"`
+	// BodyEnd is the body's last CapturedEnd bytes when Body holds only its start.
+	BodyEnd string `json:"body_end,omitempty"`
+	// BodySize is the body's full length in bytes; for a response, as much as had been read.
+	BodySize int64 `json:"body_size,omitempty"`
+}
+
 // Reply is a frame an extension sends: an event, the result of describe, models, check or quota,
-// or a login or refresh frame.
+// a login or refresh frame, or a diagnostic frame.
 type Reply struct {
 	llm.Event
-	Info   *Info        `json:"info,omitempty"`
-	Prompt *Prompt      `json:"prompt,omitempty"`
-	Grant  *Grant       `json:"grant,omitempty"`
-	Models *ModelList   `json:"models,omitempty"`
-	Check  *CheckResult `json:"check,omitempty"`
-	Quota  *Quota       `json:"quota,omitempty"`
+	Info       *Info        `json:"info,omitempty"`
+	Prompt     *Prompt      `json:"prompt,omitempty"`
+	Grant      *Grant       `json:"grant,omitempty"`
+	Models     *ModelList   `json:"models,omitempty"`
+	Check      *CheckResult `json:"check,omitempty"`
+	Quota      *Quota       `json:"quota,omitempty"`
+	Diagnostic *Diagnostic  `json:"diagnostic,omitempty"`
 }
 
 // ErrFrameTooLarge is returned for a frame longer than MaxFrame.

@@ -1,6 +1,7 @@
 //! The pluxy desktop app: one window showing the UI kit (`../src`), a native tray icon, and the
-//! connection to core in one of three modes (`conn.rs`). Closing the window destroys it and its
-//! webviews, so they hold no memory while the app sits in the tray; the tray opens a new one.
+//! connection to core in one of three modes (`conn.rs`). Closing the window asks, quits or
+//! destroys it and its webviews, as the person chose (`window.rs`), so they hold no memory while
+//! the app sits in the tray; the tray opens a new one.
 //!
 //! Every app command is declared in the app's command manifest (`build.rs`) and granted only to
 //! the window's webview, labelled `main` (`capabilities/main.json`). Extension pages run in
@@ -28,7 +29,9 @@ pub mod pages;
 mod place;
 #[cfg(debug_assertions)]
 pub mod release_config;
+mod startup;
 pub mod trust;
+pub mod window;
 
 pub use command_names::COMMANDS;
 
@@ -54,6 +57,7 @@ pub const WINDOW: &str = "main-window";
 pub const MAIN: &str = "main";
 
 struct App {
+    startup: Mutex<(startup::Store, startup::Preferences)>,
     conn: Mutex<Connection>,
     /// A change of the app's own core waiting for its native confirmation (`core_updates.rs`).
     core_change: Mutex<Option<core_updates::Pending>>,
@@ -63,6 +67,8 @@ struct App {
     pages_dir: std::path::PathBuf,
     pages: Mutex<Pages>,
     status: Mutex<Option<MenuItem<Wry>>>,
+    /// What closing the window does, and its size and place (`window.rs`).
+    window: Mutex<window::Store>,
     has_tray: AtomicBool,
     quitting: AtomicBool,
     key_entry_open: AtomicBool,
@@ -124,11 +130,16 @@ fn open_window(app: &AppHandle) -> tauri::Result<()> {
         w.show()?;
         return w.set_focus();
     }
-    let w = WindowBuilder::new(app, WINDOW)
+    let saved = app.state::<App>().window.lock().unwrap().prefs.geometry;
+    let (width, height, place) = window::opening(app, saved);
+    let mut builder = WindowBuilder::new(app, WINDOW)
         .title("pluxy")
-        .inner_size(1100.0, 760.0)
-        .min_inner_size(640.0, 480.0)
-        .build()?;
+        .inner_size(width, height)
+        .min_inner_size(window::MIN_SIZE.0, window::MIN_SIZE.1);
+    if let Some((x, y)) = place {
+        builder = builder.position(x, y);
+    }
+    let w = builder.build()?;
     let size = w.inner_size()?.to_logical::<f64>(w.scale_factor()?);
     let main = WebviewBuilder::new(MAIN, WebviewUrl::App("index.html".into()))
         .auto_resize()
@@ -164,10 +175,84 @@ fn close_pages(app: &AppHandle) {
 fn quit(app: &AppHandle) {
     let st = app.state::<App>();
     st.quitting.store(true, Ordering::SeqCst);
+    remember_window(app);
     #[cfg(target_os = "linux")]
     st.confirmations.lock().unwrap().invalidate();
     st.conn.lock().unwrap().stop_core();
     app.exit(0);
+}
+
+/// Saves the window's size and place, as it is now if it is open.
+fn remember_window(app: &AppHandle) {
+    let now = app.get_window(WINDOW).and_then(|w| window::current(&w));
+    let st = app.state::<App>();
+    let mut store = st.window.lock().unwrap();
+    if now.is_some() {
+        store.prefs.geometry = now;
+    }
+    if let Err(e) = store.save() {
+        eprintln!("pluxy-app: {e}");
+    }
+}
+
+/// Whether closing the window can leave the app in the tray: it has a tray icon, and the desktop
+/// a host that shows it.
+fn usable_tray(app: &AppHandle) -> Result<(), String> {
+    if !app.state::<App>().has_tray.load(Ordering::SeqCst) {
+        return Err("the app has no tray icon".into());
+    }
+    window::tray_host()
+}
+
+/// Closes the window to the tray: the window and its webviews are destroyed, not hidden.
+fn close_to_tray(app: &AppHandle) {
+    remember_window(app);
+    if let Some(w) = app.get_window(WINDOW) {
+        let _ = w.destroy();
+    }
+}
+
+/// The person closed the window: do what they chose. Off the window's thread, since asking the
+/// desktop about its tray waits on D-Bus.
+fn close_requested(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let choice = app
+            .state::<App>()
+            .window
+            .lock()
+            .unwrap()
+            .prefs
+            .close_behavior;
+        match (usable_tray(&app), choice) {
+            (Err(e), _) => {
+                eprintln!("pluxy-app: no usable tray ({e}): closing the window quits");
+                quit(&app);
+            }
+            (Ok(()), window::Close::Exit) => quit(&app),
+            (Ok(()), window::Close::MinimizeToTray) => close_to_tray(&app),
+            (Ok(()), window::Close::Ask) => ask_on_close(&app),
+        }
+    });
+}
+
+/// Asks the window what closing should do (src/window.tsx answers with `window_close`). A
+/// window that cannot answer (its page is still loading, or busy) closes to the tray, from where
+/// it can be opened again.
+fn ask_on_close(app: &AppHandle) {
+    #[cfg(feature = "native-test")]
+    native_test::window_prompted();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let asked = app.get_webview(MAIN).is_some_and(|main| {
+        main.eval_with_callback("window.__pluxyClosePrompt?.() === true", move |r| {
+            let _ = tx.send(r == "true");
+        })
+        .is_ok()
+    }) && rx.recv_timeout(std::time::Duration::from_secs(3)) == Ok(true);
+    if !asked {
+        eprintln!("pluxy-app: the window did not answer the close request: closing to the tray");
+        close_to_tray(app);
+    }
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
@@ -215,10 +300,111 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+fn window_view(app: &AppHandle) -> window::View {
+    window::View {
+        close_behavior: app
+            .state::<App>()
+            .window
+            .lock()
+            .unwrap()
+            .prefs
+            .close_behavior,
+        tray: usable_tray(app).is_ok(),
+    }
+}
+
+#[tauri::command]
+async fn window_get(webview: Webview) -> Result<window::View, String> {
+    trusted(&webview)?;
+    Ok(window_view(webview.app_handle()))
+}
+
+#[tauri::command]
+async fn window_set(
+    webview: Webview,
+    close_behavior: window::Close,
+) -> Result<window::View, String> {
+    trusted(&webview)?;
+    let app = webview.app_handle();
+    {
+        let st = app.state::<App>();
+        let mut store = st.window.lock().unwrap();
+        let before = store.prefs.close_behavior;
+        store.prefs.close_behavior = close_behavior;
+        if let Err(e) = store.save() {
+            store.prefs.close_behavior = before;
+            return Err(e);
+        }
+    }
+    Ok(window_view(app))
+}
+
+/// The window's answer to "What would you like to do?": Exit App or Minimize to Tray, and
+/// whether to remember it.
+#[tauri::command]
+async fn window_close(
+    webview: Webview,
+    action: window::Close,
+    remember: bool,
+) -> Result<(), String> {
+    trusted(&webview)?;
+    let app = webview.app_handle().clone();
+    match action {
+        window::Close::Ask => return Err("choose Exit App or Minimize to Tray".into()),
+        window::Close::MinimizeToTray => usable_tray(&app).map_err(|e| {
+            format!("The system tray is unavailable ({e}); keep the window open or exit the app")
+        })?,
+        window::Close::Exit => {}
+    }
+    if remember {
+        let st = app.state::<App>();
+        let mut store = st.window.lock().unwrap();
+        let before = store.prefs.close_behavior;
+        store.prefs.close_behavior = action;
+        if let Err(e) = store.save() {
+            store.prefs.close_behavior = before;
+            return Err(e);
+        }
+    }
+    if action == window::Close::Exit {
+        std::thread::spawn(move || quit(&app));
+    } else {
+        close_to_tray(&app);
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn connection_get(webview: Webview, state: tauri::State<App>) -> Result<View, String> {
     trusted(&webview)?;
     Ok(state.conn.lock().unwrap().view())
+}
+
+#[tauri::command]
+fn startup_get(webview: Webview, state: tauri::State<App>) -> Result<startup::View, String> {
+    trusted(&webview)?;
+    let startup = state.startup.lock().unwrap();
+    startup.0.view(startup.1)
+}
+
+#[tauri::command]
+fn startup_set(
+    webview: Webview,
+    state: tauri::State<App>,
+    preferences: startup::Input,
+) -> Result<startup::View, String> {
+    trusted(&webview)?;
+    let mut startup = state.startup.lock().unwrap();
+    let preferences = preferences.into();
+    let view = startup.0.save(preferences, || {
+        #[cfg(target_os = "linux")]
+        let appimage = webview.app_handle().env().appimage;
+        #[cfg(not(target_os = "linux"))]
+        let appimage = None;
+        startup::executable(appimage, std::env::current_exe)
+    })?;
+    startup.1 = view.preferences;
+    Ok(view)
 }
 
 /// Runs f on the connection away from the window's thread, which starting a core would block,
@@ -359,6 +545,8 @@ async fn core_call(
     trusted(&webview)?;
     #[cfg(feature = "native-test")]
     native_test::ingress_operation(&method, &path);
+    #[cfg(feature = "native-test")]
+    native_test::window_call(&method, &path);
     let caller = state.conn.lock().unwrap().caller();
     tauri::async_runtime::spawn_blocking(move || caller.call(&method, &path, body.as_ref()))
         .await
@@ -660,6 +848,8 @@ pub fn run() {
     std::hint::black_box(&PLUXY_TEST_BUILD);
     let app = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
+            startup_get,
+            startup_set,
             connection_get,
             connection_set,
             core_restart,
@@ -676,10 +866,19 @@ pub fn run() {
             page_send,
             confirmation_request,
             confirmation_settings,
+            window_get,
+            window_set,
+            window_close,
         ])
         .register_asynchronous_uri_scheme_protocol(pages::SCHEME, page_scheme)
         .setup(|app| {
             let config = app.path().app_config_dir()?;
+            let startup_store = startup::Store::new(
+                config.clone(),
+                app.path().config_dir()?,
+                app.config().identifier.clone(),
+            );
+            let preferences = startup_store.load();
             #[cfg(target_os = "linux")]
             let confirmations =
                 confirmation::Confirmations::open(config.join("remembered-launches.json"))?;
@@ -699,18 +898,21 @@ pub fn run() {
                     let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-connection", ());
                 });
             });
-            let conn = Connection::open(
+            let window_prefs = window::Store::open(config.join("window.json"));
+            let conn = Connection::open_at_startup(
                 Dirs {
                     config,
                     core,
                     cores,
                 },
                 Some(on_exit),
+                preferences.start_core_on_launch,
             );
             // The page webviews keep nothing from one run to the next.
             let pages_dir = app.path().app_cache_dir()?.join("pages");
             let _ = std::fs::remove_dir_all(&pages_dir);
             app.manage(App {
+                startup: Mutex::new((startup_store, preferences)),
                 conn: Mutex::new(conn),
                 core_change: Mutex::new(None),
                 #[cfg(target_os = "linux")]
@@ -718,6 +920,7 @@ pub fn run() {
                 pages_dir,
                 pages: Mutex::new(Pages::default()),
                 status: Mutex::new(None),
+                window: Mutex::new(window_prefs),
                 has_tray: AtomicBool::new(false),
                 quitting: AtomicBool::new(false),
                 key_entry_open: AtomicBool::new(false),
@@ -745,7 +948,24 @@ pub fn run() {
             if let Some(pid) = handle.state::<App>().conn.lock().unwrap().core_pid() {
                 eprintln!("pluxy-app: core started, pid {pid}");
             }
-            open_window(&handle)?;
+            let managed = handle.state::<App>().conn.lock().unwrap().mode() == Some(Mode::Managed);
+            let silent = startup::wants_silent(
+                preferences,
+                std::env::args_os().any(|a| a == "--autostart"),
+                managed,
+            );
+            let usable_tray = silent
+                && handle.state::<App>().has_tray.load(Ordering::SeqCst)
+                && match startup::tray_host() {
+                    Ok(()) => true,
+                    Err(e) => {
+                        eprintln!("pluxy-app: opening startup window: {e}");
+                        false
+                    }
+                };
+            if !silent || !usable_tray {
+                open_window(&handle)?;
+            }
             #[cfg(feature = "native-test")]
             native_test::start(handle);
             Ok(())
@@ -756,10 +976,16 @@ pub fn run() {
             }
             let app = window.app_handle();
             match event {
-                WindowEvent::CloseRequested { .. }
-                    if !app.state::<App>().has_tray.load(Ordering::SeqCst) =>
+                WindowEvent::CloseRequested { api, .. }
+                    if !app.state::<App>().quitting.load(Ordering::SeqCst) =>
                 {
-                    quit(app);
+                    api.prevent_close();
+                    close_requested(app);
+                }
+                WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
+                    if let Some(g) = window::current(window) {
+                        app.state::<App>().window.lock().unwrap().prefs.geometry = Some(g);
+                    }
                 }
                 WindowEvent::Destroyed => {
                     #[cfg(target_os = "linux")]

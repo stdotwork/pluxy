@@ -56,7 +56,11 @@ func build(dir string) error {
 		{filepath.Join("kimi", "kimi"), "../extensions/kimi"},
 		{filepath.Join("xai", "xai"), "../extensions/xai"},
 		{filepath.Join("gemini", "gemini"), "../extensions/gemini"},
+		{filepath.Join("antigravity", "antigravity"), "../extensions/antigravity"},
+		{filepath.Join("devin", "devin"), "../extensions/devin"},
+		{filepath.Join("meta", "meta"), "../extensions/meta"},
 		{"testext", "./testext"},
+		{"frametap", "./frametap"},
 	} {
 		cmd := exec.Command("go", "build", "-buildvcs=false", "-o", filepath.Join(dir, b.out), b.pkg)
 		cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
@@ -75,7 +79,8 @@ func build(dir string) error {
 	if err := os.WriteFile(filepath.Join(dir, "pluxy-extension.json"), b, 0o644); err != nil {
 		return err
 	}
-	for id, name := range map[string]string{"example/oauth": "oauth", "pluxy/codex": "codex", "pluxy/claude": "claude", "pluxy/gemini": "gemini", "pluxy/kimi": "kimi", "pluxy/xai": "xai"} {
+	for id, name := range map[string]string{"example/oauth": "oauth", "pluxy/codex": "codex", "pluxy/claude": "claude", "pluxy/gemini": "gemini", "pluxy/kimi": "kimi", "pluxy/xai": "xai",
+		"pluxy/antigravity": "antigravity", "pluxy/devin": "devin", "pluxy/meta": "meta"} {
 		manifest["id"] = id
 		manifest["programs"] = map[string]string{runtime.GOOS + "/" + runtime.GOARCH: name}
 		b, _ = json.Marshal(manifest)

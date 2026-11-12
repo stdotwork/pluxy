@@ -17,10 +17,18 @@ import (
 // The call is cancelled when ctx ends or the call is closed.
 func (e *Extension) Login(ctx context.Context, account protocol.Account, login protocol.Login) *LoginCall {
 	account.Credential = nil
-	// What the user entered (an API key, a pasted redirect URL with its code) counts as secret
-	// in everything the call sends back.
-	l := &LoginCall{ext: e, ctx: ctx, account: account.ID}
+	// What the user entered (an API key, a pasted redirect URL with its code) and the secrets in
+	// the account's settings count as secret in everything the call sends back.
+	l := &LoginCall{ext: e, ctx: ctx, account: account.ID, settings: e.holdSettings(account)}
 	l.addSecrets(login.Input)
+	proxy, perr := e.outbound(&account)
+	if perr != nil {
+		l.fail(perr)
+		return l
+	}
+	if proxy != nil {
+		l.addSecrets(outboundSecrets(proxy))
+	}
 	conn, lerr := e.dial(ctx)
 	if lerr != nil {
 		l.fail(lerr)
@@ -44,11 +52,12 @@ type LoginCall struct {
 	conn    net.Conn
 	stop    func() bool
 
-	wmu     sync.Mutex // guards writes, secrets and redact
-	secrets map[string]string
-	redact  *protocol.Redactor
-	final   *protocol.Reply
-	onClose func() // ends the call on its managed generation; safe to call more than once
+	wmu      sync.Mutex // guards writes, secrets and redact
+	secrets  map[string]string
+	settings *protocol.Credential // the secrets in the account's settings
+	redact   *protocol.Redactor
+	final    *protocol.Reply
+	onClose  func() // ends the call on its managed generation; safe to call more than once
 }
 
 // addSecrets adds what the user entered to what is removed from the frames the call returns.
@@ -59,7 +68,7 @@ func (l *LoginCall) addSecrets(input map[string]string) {
 		}
 		l.secrets[fmt.Sprintf("%s.%d", k, len(l.secrets))] = v
 	}
-	l.redact = inputRedactor(l.secrets)
+	l.redact = protocol.NewRedactor(inputCredential(l.secrets), l.settings)
 	l.ext.held.add(l.account+" login input", inputCredential(l.secrets))
 }
 
@@ -85,7 +94,11 @@ func (l *LoginCall) Next() protocol.Reply {
 		return protocol.Reply{Event: llm.Event{Type: protocol.TypeLoginPrompt}, Prompt: &p}
 	case r.Type == protocol.TypeLoginDone && validGrant(r.Grant):
 		l.ext.held.add(l.account, r.Grant.Credential)
-		if err := validIdentity(r.Grant.Identity); err != "" {
+		// What the user entered, the account's settings secrets and the grant's own credential
+		// are left out of a field name the error quotes.
+		grant := protocol.NewRedactor(r.Grant.Credential)
+		redact := func(s string) string { return l.redactor().String(grant.String(s)) }
+		if err := validIdentity(r.Grant.Identity, redact); err != "" {
 			l.fail(&llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s sent a grant whose identity %s", l.ext.manifest.ID, err)})
 			return *l.final
 		}
@@ -108,7 +121,7 @@ func (l *LoginCall) Next() protocol.Reply {
 		l.Close()
 		return *l.final
 	}
-	l.fail(&llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s sent %q during a login", l.ext.manifest.ID, r.Type)})
+	l.fail(&llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s sent %q during a login", l.ext.manifest.ID, l.redactor().String(r.Type))})
 	return *l.final
 }
 
@@ -142,13 +155,18 @@ func (l *LoginCall) fail(e *llm.Error) {
 }
 
 func (l *LoginCall) readError(err error) *llm.Error {
-	return callError(l.ctx, l.ext, err)
+	return callError(l.ctx, l.ext, l.redactor(), err)
 }
 
 // Refresh runs a refresh call: the extension renews account's credential and returns the new
-// one. Errors have the sent credential removed from them.
+// one. Errors have the sent credential and the secrets in the account's settings removed from
+// them.
 func (e *Extension) Refresh(ctx context.Context, account protocol.Account) (*protocol.Credential, *llm.Error) {
-	e.held.add(account.ID, account.Credential)
+	proxy, perr := e.outbound(&account)
+	if perr != nil {
+		return nil, perr
+	}
+	redact := protocol.NewRedactor(append(e.holdAccount(account), proxy)...)
 	conn, lerr := e.dial(ctx)
 	if lerr != nil {
 		return nil, lerr
@@ -158,25 +176,25 @@ func (e *Extension) Refresh(ctx context.Context, account protocol.Account) (*pro
 	defer stop()
 	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: protocol.OpRefresh, Account: &account}
 	if err := protocol.WriteFrame(conn, call); err != nil {
-		return nil, callError(ctx, e, err)
+		return nil, callError(ctx, e, redact, err)
 	}
 	var r protocol.Reply
 	if err := protocol.ReadFrame(conn, &r); err != nil {
-		return nil, callError(ctx, e, err)
+		return nil, callError(ctx, e, redact, err)
 	}
 	switch {
 	case r.Type == protocol.TypeRefreshDone && validGrant(r.Grant):
 		e.held.add(account.ID, r.Grant.Credential)
 		return r.Grant.Credential, nil
 	case r.Type == llm.EventError && r.Error != nil:
-		redact := protocol.NewRedactor(account.Credential)
 		return nil, redact.Event(r.Event).Error
 	}
-	return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a refresh", e.manifest.ID, r.Type)}
+	return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a refresh", e.manifest.ID, redact.String(r.Type))}
 }
 
-// validIdentity says what is wrong with a grant's identity, or "" when nothing is.
-func validIdentity(id map[string]string) string {
+// validIdentity says what is wrong with a grant's identity, or "" when nothing is; a field name
+// it quotes goes through redact first.
+func validIdentity(id map[string]string, redact func(string) string) string {
 	if len(id) > protocol.MaxIdentityFields {
 		return fmt.Sprintf("has more than %d fields", protocol.MaxIdentityFields)
 	}
@@ -185,7 +203,7 @@ func validIdentity(id map[string]string) string {
 		case k == "" || len(k) > protocol.MaxIdentityKey:
 			return fmt.Sprintf("has a field name that is empty or longer than %d bytes", protocol.MaxIdentityKey)
 		case v == "" || len(v) > protocol.MaxIdentityValue:
-			return fmt.Sprintf("field %q is empty or longer than %d bytes", k, protocol.MaxIdentityValue)
+			return fmt.Sprintf("field %q is empty or longer than %d bytes", redact(k), protocol.MaxIdentityValue)
 		}
 	}
 	return ""
@@ -213,25 +231,17 @@ func (e *Extension) dial(ctx context.Context) (net.Conn, *llm.Error) {
 	return conn, nil
 }
 
-// callError says why a login or refresh call's connection failed.
-func callError(ctx context.Context, e *Extension, err error) *llm.Error {
+// callError says why a call's connection failed, with redact applied to what the extension sent.
+func callError(ctx context.Context, e *Extension, redact *protocol.Redactor, err error) *llm.Error {
 	if ctx != nil && ctx.Err() != nil {
 		return &llm.Error{Code: llm.CodeCancelled, Message: "the call was cancelled"}
 	}
 	var se *json.SyntaxError
 	var te *json.UnmarshalTypeError
 	if errors.Is(err, protocol.ErrFrameTooLarge) || errors.As(err, &se) || errors.As(err, &te) {
-		return &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s sent a bad frame: %v", e.manifest.ID, err)}
+		return redacted(redact, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s sent a bad frame: %v", e.manifest.ID, err)})
 	}
 	return &llm.Error{Code: llm.CodeExtensionCrashed, Message: fmt.Sprintf("extension %s ended the call without finishing it", e.manifest.ID)}
-}
-
-// inputRedactor returns the Redactor for what a user entered.
-func inputRedactor(input map[string]string) *protocol.Redactor {
-	if len(input) == 0 {
-		return nil
-	}
-	return protocol.NewRedactor(inputCredential(input))
 }
 
 // inputCredential holds what a user entered as a credential, so all of it counts as secret.
@@ -241,6 +251,16 @@ func inputCredential(input map[string]string) *protocol.Credential {
 	}
 	data, _ := json.Marshal(input)
 	return &protocol.Credential{Kind: "input", Data: data}
+}
+
+// secretsCredential holds secrets found in an account's settings as a credential, so all of them
+// count as secret.
+func secretsCredential(secrets []string) *protocol.Credential {
+	if len(secrets) == 0 {
+		return nil
+	}
+	data, _ := json.Marshal(secrets)
+	return &protocol.Credential{Kind: "settings", Data: data}
 }
 
 // redactPrompt removes what the user entered from every text a prompt shows, in case the

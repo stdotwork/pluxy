@@ -17,7 +17,7 @@ import (
 
 var loginMethods = []protocol.LoginMethod{
 	{Method: "api_key", Kind: protocol.LoginAPIKey, Label: "OpenAI-compatible API key", Inputs: []protocol.LoginInput{
-		{Name: "base_url", Label: "Base URL (including /v1, or /v1beta for Gemini)", Optional: true},
+		{Name: "base_url", Label: "Base URL (including /v1, or /v1beta for Gemini)"},
 		{Name: "api_key", Label: "API key", Secret: true},
 		{Name: "wire_api", Label: "Wire API: chat, responses, messages or gemini (default chat)", Optional: true},
 	}},

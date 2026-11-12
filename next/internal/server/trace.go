@@ -19,6 +19,9 @@ type trace struct {
 	account string
 	failed  bool   // a failure was logged: the request counts as failed for its request log
 	body    []byte // the request's body, once read, for its request log
+	// upstream holds what the request's extensions sent upstream and got back, while every
+	// request is logged; nil otherwise.
+	upstream *upstreamLog
 }
 
 type traceKey struct{}

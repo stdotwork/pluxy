@@ -308,6 +308,12 @@ func (s *server) handle(conn net.Conn) {
 	if err := protocol.ReadFrame(conn, &call); err != nil {
 		return
 	}
+	if call.Op != protocol.OpDescribe {
+		if err := refuseUpstream(call); err != nil {
+			_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: llm.EventError, Error: err}})
+			return
+		}
+	}
 	switch call.Op {
 	case protocol.OpDescribe:
 		_ = protocol.WriteFrame(conn, protocol.Reply{
@@ -350,7 +356,7 @@ func (s *server) generate(conn net.Conn, call protocol.Call, h Handler, none str
 		return
 	}
 	defer cancel()
-	ctx = withUpstreamInfo(ctx, call)
+	ctx, capture := withUpstreamInfo(ctx, call)
 
 	// Core sends nothing after the call frame; the read ends when core closes the connection,
 	// which is how it cancels.
@@ -359,7 +365,7 @@ func (s *server) generate(conn net.Conn, call protocol.Call, h Handler, none str
 		cancel()
 	}()
 
-	out := &Stream{w: conn}
+	out := &Stream{w: conn, capture: capture}
 	c := Call{ID: call.ID}
 	if call.Account != nil {
 		c.Account = *call.Account
@@ -391,7 +397,7 @@ func (s *server) session(conn net.Conn, call protocol.Call) {
 		return
 	}
 	defer cancel()
-	ctx = withUpstreamInfo(ctx, call)
+	ctx, _ = withUpstreamInfo(ctx, call)
 	refuse := func(err error) {
 		_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: llm.EventError, Error: asError(ctx, err)}})
 	}
@@ -479,10 +485,18 @@ func (s *server) session(conn net.Conn, call protocol.Call) {
 			c.Request = *f.Request
 		}
 		out := &Stream{w: conn}
+		if err := refuseUpstream(f); err != nil {
+			if out.send(llm.Event{Type: llm.EventError, Error: err}) != nil {
+				return
+			}
+			continue
+		}
+		turnCtx, capture := withUpstreamInfo(ctx, f)
+		out.capture = capture
 		mu.Lock()
 		running = true
 		mu.Unlock()
-		err := runTurn(withUpstreamInfo(ctx, f), sess, c, out)
+		err := runTurn(turnCtx, sess, c, out)
 		mu.Lock()
 		running = false
 		mu.Unlock()
@@ -558,7 +572,7 @@ func (s *server) login(conn net.Conn, call protocol.Call) {
 		return
 	}
 	defer cancel()
-	ctx = withUpstreamInfo(ctx, call)
+	ctx, _ = withUpstreamInfo(ctx, call)
 	sess := &LoginSession{inputs: make(chan map[string]string, 1), w: conn}
 	// After the call frame core sends only login.input frames; the read ends when core closes
 	// the connection, which is how it cancels.
@@ -622,7 +636,7 @@ func (s *server) refresh(conn net.Conn, call protocol.Call) {
 		return
 	}
 	defer cancel()
-	ctx = withUpstreamInfo(ctx, call)
+	ctx, _ = withUpstreamInfo(ctx, call)
 	go func() {
 		_, _ = io.Copy(io.Discard, conn)
 		cancel()
@@ -654,7 +668,7 @@ func (s *server) models(conn net.Conn, call protocol.Call) {
 		return
 	}
 	defer cancel()
-	ctx = withUpstreamInfo(ctx, call)
+	ctx, _ = withUpstreamInfo(ctx, call)
 	go func() {
 		_, _ = io.Copy(io.Discard, conn)
 		cancel()
@@ -690,7 +704,7 @@ func (s *server) check(conn net.Conn, call protocol.Call) {
 		return
 	}
 	defer cancel()
-	ctx = withUpstreamInfo(ctx, call)
+	ctx, _ = withUpstreamInfo(ctx, call)
 	go func() {
 		_, _ = io.Copy(io.Discard, conn)
 		cancel()
@@ -732,7 +746,7 @@ func (s *server) quota(conn net.Conn, call protocol.Call) {
 		return
 	}
 	defer cancel()
-	ctx = withUpstreamInfo(ctx, call)
+	ctx, _ = withUpstreamInfo(ctx, call)
 	go func() {
 		_, _ = io.Copy(io.Discard, conn)
 		cancel()
@@ -841,6 +855,9 @@ type Stream struct {
 	w      io.Writer
 	seq    llm.Sequence
 	broken bool
+	// capture is the call's, sent as a diagnostic frame before the terminal event; nil when core
+	// asked for none.
+	capture *captureLog
 }
 
 // Send writes one event after checking it against the ordering rules.
@@ -861,6 +878,14 @@ func (s *Stream) send(ev llm.Event) error {
 func (s *Stream) write(ev llm.Event) error {
 	if s.broken {
 		return errors.New("sdk: connection to core is closed")
+	}
+	if ev.Terminal() && s.capture != nil {
+		if d := s.capture.take(); d != nil {
+			if err := protocol.WriteFrame(s.w, protocol.Reply{Event: llm.Event{Type: protocol.TypeDiagnostic}, Diagnostic: d}); err != nil {
+				s.broken = true
+				return err
+			}
+		}
 	}
 	if err := protocol.WriteFrame(s.w, protocol.Reply{Event: ev}); err != nil {
 		s.broken = true

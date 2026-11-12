@@ -7,6 +7,8 @@
     "main"
   ],
   "permissions": [
+    "allow-startup-get",
+    "allow-startup-set",
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "allow-connection-get",
@@ -24,6 +26,9 @@
     "allow-page-close",
     "allow-page-send",
     "allow-confirmation-request",
-    "allow-confirmation-settings"
+    "allow-confirmation-settings",
+    "allow-window-get",
+    "allow-window-set",
+    "allow-window-close"
   ]
 }

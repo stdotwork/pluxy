@@ -213,7 +213,7 @@ func New(cfg Config, accounts []Account, attempt AttemptFunc, state *State) (*Ro
 	}
 	r := &Router{cfg: cfg, attempt: attempt, state: state, gen: state.nextGen(), created: time.Now(), now: time.Now, sleep: sleepCtx, rand: rand.Float64}
 	var err error
-	if r.accounts, err = accountList(accounts, r.gen); err != nil {
+	if r.accounts, err = accountList(accounts, r.gen, state); err != nil {
 		return nil, err
 	}
 	if r.picker, err = newPicker(cfg.Strategy, r.accounts, state.rotation, r.gen); err != nil {
@@ -229,7 +229,7 @@ func New(cfg Config, accounts []Account, attempt AttemptFunc, state *State) (*Ro
 	return r, nil
 }
 
-func accountList(accounts []Account, gen uint64) ([]*Account, error) {
+func accountList(accounts []Account, gen uint64, state *State) ([]*Account, error) {
 	var out []*Account
 	seen := map[string]bool{}
 	for i := range accounts {
@@ -241,7 +241,7 @@ func accountList(accounts []Account, gen uint64) ([]*Account, error) {
 			return nil, fmt.Errorf("account %q: %w", a.ID, err)
 		}
 		seen[a.ID] = true
-		a.gen = gen
+		a.gen, a.rev = gen, state.revision(a.ID)
 		out = append(out, &a)
 	}
 	return out, nil
@@ -249,14 +249,33 @@ func accountList(accounts []Account, gen uint64) ([]*Account, error) {
 
 // SetAccounts replaces the accounts requests are routed over. Requests already routing keep
 // the set they started with. Routing state of an account that leaves the set is dropped, so an
-// account added again later under the same ID starts clean.
-func (r *Router) SetAccounts(accounts []Account) error {
-	list, err := accountList(accounts, r.gen)
+// account added again later under the same ID starts clean. So is the state of an account that
+// stays but that same (as in State.Retain; nil: every account that stays is the same) reports
+// changed, as on a reload: its blocks, last error and session bindings, and blocks on an
+// endpoint that no unchanged account names. Outcomes that requests already routing see on its
+// old copy record nothing and bind no session.
+func (r *Router) SetAccounts(accounts []Account, same func(old, cur *Account) bool) error {
+	list, err := accountList(accounts, r.gen, r.state)
 	if err != nil {
 		return err
 	}
 	r.mu.Lock()
 	old := r.accounts
+	var changed, fresh []*Account
+	kept := map[string]bool{} // the endpoints of the accounts that stay unchanged
+	for _, a := range old {
+		i := slices.IndexFunc(list, func(b *Account) bool { return b.ID == a.ID })
+		switch {
+		case i < 0:
+		case same != nil && !same(a, list[i]):
+			changed, fresh = append(changed, a), append(fresh, list[i])
+		default:
+			kept[a.endpoint()] = true
+		}
+	}
+	// Before the new copies serve: a request that picks an old copy meanwhile records nothing
+	// on it.
+	r.state.restart(changed, fresh, kept)
 	r.accounts = list
 	r.picker.setOrder(list)
 	r.lists.clear()

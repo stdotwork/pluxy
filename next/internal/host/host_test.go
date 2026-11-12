@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/internal/configdoc"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 	"github.com/stdotwork/pluxy/next/sdk"
@@ -45,6 +46,26 @@ func fakeExtension(mode string) {
 	}
 	if mode == "session-bad-frame" {
 		sessionBadFrame()
+		return
+	}
+	if mode == "echo-proxy" {
+		echoProxy()
+		return
+	}
+	if mode == "echo-secrets" {
+		echoSecrets()
+		return
+	}
+	if mode == "refresh-odd-reply" {
+		refreshOddReply()
+		return
+	}
+	if mode == "split-body" {
+		splitBody()
+		return
+	}
+	if mode == "capture-settings" {
+		captureSettings()
 		return
 	}
 	if mode != "sleep-child" { // the child shares its parent's folder
@@ -217,19 +238,42 @@ func killFromFile(path string) {
 
 // echoCredential is an extension that writes the credentials it gets to stderr and stdout, as a
 // careless provider's debug output would. A generate call without a credential writes the access
-// token its last refresh returned.
+// token its last refresh returned. A call on an account with settings also writes them with the
+// settings the account's first and previous calls had, as calls still running with them would;
+// and every call on
+// such an account fails with an error that quotes its settings, as an unreachable upstream's
+// error quotes a URL from them.
 func echoCredential() {
 	var mu sync.Mutex
 	var refreshed string
+	before := map[string]string{} // the settings of each account's previous generate call
+	first := map[string]string{}  // and of its first
+	quote := func(a protocol.Account) error {
+		if len(a.Settings) == 0 {
+			return nil
+		}
+		return &llm.Error{Code: llm.CodeUnavailable, Message: "unreachable: " + string(a.Settings)}
+	}
 	err := sdk.Serve(sdk.Extension{
 		ID:      "hosttest/echo-credential",
 		Version: "0.0.0",
 		Generate: func(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 			mu.Lock()
 			secret := refreshed
+			was, firstWas := before[call.Account.ID], first[call.Account.ID]
+			before[call.Account.ID] = string(call.Account.Settings)
+			if firstWas == "" {
+				first[call.Account.ID] = string(call.Account.Settings)
+			}
 			mu.Unlock()
 			if c := call.Account.Credential; c != nil {
 				secret = c.APIKey + c.AccessToken
+			}
+			if len(call.Account.Settings) > 0 {
+				fmt.Fprintf(os.Stderr, "settings first %s before %s now %s\n", firstWas, was, call.Account.Settings)
+			}
+			if call.Request.Model == "fail" {
+				return quote(call.Account)
 			}
 			fmt.Fprintf(os.Stderr, "stderr holds %s\nstderr done %s\n", secret, call.Account.ID)
 			fmt.Fprintf(os.Stdout, "stdout holds %s\nstdout done %s\n", secret, call.Account.ID)
@@ -238,7 +282,23 @@ func echoCredential() {
 			}
 			return out.Finish(llm.Finish{Reason: llm.FinishStop}, nil)
 		},
+		LoginMethods: []protocol.LoginMethod{{Method: "fail", Kind: protocol.LoginAPIKey, Label: "Fail"}},
+		Login: func(_ context.Context, call sdk.LoginCall, _ *sdk.LoginSession) (*protocol.Grant, error) {
+			return nil, quote(call.Account)
+		},
+		Check: func(_ context.Context, call sdk.CheckCall) (*protocol.CheckResult, error) {
+			return nil, quote(call.Account)
+		},
+		Quota: func(_ context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
+			return nil, quote(call.Account)
+		},
+		Models: func(_ context.Context, call sdk.ModelsCall) (*protocol.ModelList, error) {
+			return nil, quote(call.Account)
+		},
 		Refresh: func(ctx context.Context, call sdk.RefreshCall) (*protocol.Credential, error) {
+			if err := quote(call.Account); err != nil {
+				return nil, err
+			}
 			fmt.Fprintf(os.Stderr, "refreshing with %s\n", call.Account.Credential.RefreshToken)
 			mu.Lock()
 			refreshed = "new-access-token-5678"
@@ -253,15 +313,19 @@ func echoCredential() {
 }
 
 // What an extension writes to stderr and stdout is logged without the credentials core gave it
-// or got back from it, including one a refresh replaced.
+// or got back from it, including one a refresh replaced, and without the secrets in the
+// accounts' settings, including those of every settings since changed.
 func TestExtensionOutputIsRedacted(t *testing.T) {
 	const (
 		apiKey     = "sk-log-secret-1234"
 		oldRefresh = "old-refresh-token-1234"
 		newAccess  = "new-access-token-5678"
+		urlToken   = "sk-settings-url-1234"
+		settingKey = "sk-settings-key-5678"
+		password   = "sk-settings-pass-9012"
 	)
 	log := &syncBuffer{}
-	ext, err := Start(filepath.Join(fakePackage(t, "echo-credential"), ManifestFile), Options{Log: log})
+	ext, err := Start(filepath.Join(fakePackage(t, "echo-credential"), ManifestFile), Options{Log: log, SettingsSecrets: configdoc.SettingsSecrets})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,19 +339,83 @@ func TestExtensionOutputIsRedacted(t *testing.T) {
 		log.waitFor(t, "stderr done "+a.ID, "stdout done "+a.ID)
 	}
 	generate(protocol.Account{ID: "key", Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: apiKey}})
+	// Each later call's output quotes the settings earlier calls had: the third, the first's,
+	// two changes back.
+	generate(protocol.Account{ID: "set", Settings: json.RawMessage(`{"base_url":"https://up.example/v1?token=` + urlToken + `"}`)})
+	generate(protocol.Account{ID: "set", Settings: json.RawMessage(`{"base_url":"https://up.example/v1","api_key":"` + settingKey + `"}`)})
+	generate(protocol.Account{ID: "set", Settings: json.RawMessage(`{"password":"` + password + `"}`)})
 	if _, e := ext.Refresh(ctx, protocol.Account{ID: "oauth", Credential: &protocol.Credential{
 		Kind: protocol.CredentialOAuth, AccessToken: "old-access-token-1234", RefreshToken: oldRefresh}}); e != nil {
 		t.Fatal(e)
 	}
 	generate(protocol.Account{ID: "oauth"})
 	out := log.String()
-	for _, secret := range []string{apiKey, oldRefresh, newAccess} {
+	for _, secret := range []string{apiKey, oldRefresh, newAccess, urlToken, settingKey, password} {
 		if strings.Contains(out, secret) {
 			t.Errorf("the log holds %q:\n%s", secret, out)
 		}
 	}
-	if n := strings.Count(out, protocol.Redacted); n != 5 {
-		t.Errorf("want 5 redacted credentials in the log, got %d:\n%s", n, out)
+	const r1, r2, r3 = `{"base_url":"[redacted]"}`, `{"base_url":"https://up.example/v1","api_key":"[redacted]"}`, `{"password":"[redacted]"}`
+	for _, line := range []string{
+		"settings first  before  now " + r1,
+		"settings first " + r1 + " before " + r1 + " now " + r2,
+		"settings first " + r1 + " before " + r2 + " now " + r3,
+	} {
+		if !strings.Contains(out, line) {
+			t.Errorf("the log lacks %q:\n%s", line, out)
+		}
+	}
+	if n := strings.Count(out, protocol.Redacted); n != 12 {
+		t.Errorf("want 12 redacted secrets in the log (5 credentials, 7 settings), got %d:\n%s", n, out)
+	}
+}
+
+// A settings secret shorter than 8 bytes is left in what a call sends back: removing every
+// occurrence of a short string would mangle unrelated text. One of 8 bytes or more is removed.
+func TestShortSettingsSecretIsLeftInText(t *testing.T) {
+	ext, err := Start(filepath.Join(fakePackage(t, "echo-credential"), ManifestFile), Options{Log: io.Discard, SettingsSecrets: configdoc.SettingsSecrets})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ext.Stop()
+	account := protocol.Account{ID: "short", Settings: json.RawMessage(`{"api_key":"a","password":"seven77","token":"eight888"}`)}
+	_, e := ext.Check(context.Background(), account)
+	if want := `unreachable: {"api_key":"a","password":"seven77","token":"[redacted]"}`; e == nil || e.Message != want {
+		t.Errorf("check error = %+v; want message %q", e, want)
+	}
+}
+
+// Every call's error has the secrets in the account's settings removed, as well as its
+// credential: here a URL with a query and a value under a key named like a secret.
+func TestCallErrorsHoldNoSettingsSecret(t *testing.T) {
+	ext, err := Start(filepath.Join(fakePackage(t, "echo-credential"), ManifestFile), Options{Log: io.Discard, SettingsSecrets: configdoc.SettingsSecrets})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ext.Stop()
+	ctx := context.Background()
+	account := protocol.Account{ID: "set",
+		Settings:   json.RawMessage(`{"base_url":"https://up.example/v1?token=sk-url-secret-1234","api_key":"sk-settings-key-1234","wire_api":"chat"}`),
+		Credential: &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: "access-1234", RefreshToken: "refresh-1234"}}
+	errs := map[string]*llm.Error{}
+	_, errs["check"] = ext.Check(ctx, account)
+	_, errs["quota"] = ext.Quota(ctx, account)
+	_, errs["models"] = ext.Models(ctx, account)
+	_, errs["refresh"] = ext.Refresh(ctx, account)
+	login := ext.Login(ctx, account, protocol.Login{Method: "fail"})
+	errs["login"] = login.Next().Error
+	login.Close()
+	s := ext.Generate(ctx, account, llm.Request{Model: "fail"})
+	ev := s.Next()
+	for ; !ev.Terminal(); ev = s.Next() {
+	}
+	s.Close()
+	errs["generate"] = ev.Error
+	const want = `unreachable: {"base_url":"[redacted]","api_key":"[redacted]","wire_api":"chat"}`
+	for op, e := range errs {
+		if e == nil || e.Message != want {
+			t.Errorf("%s error = %+v; want message %q", op, e, want)
+		}
 	}
 }
 

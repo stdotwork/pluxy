@@ -172,7 +172,9 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if stream {
 		endpoint = s.BaseURL + "/v1internal:streamGenerateContent?alt=sse"
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	// The envelope carries the Gemini request in "request": payload rule paths are relative to
+	// it, as in today's core.
+	req, err := http.NewRequestWithContext(sdk.WithPayloadRoot(ctx, "request"), http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
 	}
