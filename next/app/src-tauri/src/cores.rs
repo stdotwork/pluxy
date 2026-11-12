@@ -1090,9 +1090,12 @@ impl ConfigSnapshot {
         }))
     }
 
-    /// Where the kept copy is.
-    pub fn kept_at(store: &Store) -> PathBuf {
-        Self::kept_path(store)
+    /// Where this snapshot's record is kept: the copy, or the mark that there was no config.
+    pub fn kept_at(&self, store: &Store) -> PathBuf {
+        match self.bytes {
+            Some(_) => Self::kept_path(store),
+            None => Self::absent_path(store),
+        }
     }
 
     /// Puts the config back as it was, and marks it put back: when the switch's end cannot be
@@ -1115,6 +1118,29 @@ impl ConfigSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// N5: a config that did not exist is recorded by the absent mark, and that is what a
+    /// failed restore names.
+    #[test]
+    fn the_kept_record_named_is_the_one_kept() {
+        let dir = std::env::temp_dir().join(format!("pluxy-kept-{}", random_key()));
+        let store = Store::open(&dir.join("cores")).unwrap();
+        let config = dir.join("config.json");
+        let none = ConfigSnapshot::take(&store, &config).unwrap();
+        assert_eq!(
+            none.kept_at(&store),
+            dir.join("cores/config-last-good.absent")
+        );
+        assert!(none.kept_at(&store).exists());
+        fs::write(&config, b"{}").unwrap();
+        let some = ConfigSnapshot::take(&store, &config).unwrap();
+        assert_eq!(
+            some.kept_at(&store),
+            dir.join("cores/config-last-good.json")
+        );
+        assert!(some.kept_at(&store).exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     fn gz_tar(entries: &[(&str, tar::EntryType, Vec<u8>)]) -> Vec<u8> {
         let gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());

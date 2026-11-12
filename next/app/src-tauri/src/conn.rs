@@ -618,8 +618,8 @@ impl Connection {
         if let Err(e) = snapshot.restore() {
             // The candidate stays recorded, with the kept copy, for the next start.
             msg.push_str(&format!(
-                "; the app could not put the config back ({e}), so no core runs. Its copy is {}; the app tries again at its next start",
-                ConfigSnapshot::kept_at(store).display()
+                "; the app could not put the config back ({e}), so no core runs. What to put back is kept in {}; the app tries again at its next start",
+                snapshot.kept_at(store).display()
             ));
             self.error = Some(msg.clone());
             return Err(msg);
