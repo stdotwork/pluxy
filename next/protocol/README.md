@@ -502,8 +502,18 @@ A credential has a `kind` and the fields that kind uses:
 | `data` | A JSON object of anything else the provider needs (an ID token, a service-account key, an account ID). Core stores it and passes it on without reading it. |
 
 Every string in a credential except `kind` counts as secret: core removes each of them, in their
-JSON, URL and base64 forms, from everything a call sends back. Keep values that are not secret,
-especially short ones, out of the credential.
+JSON, URL and base64 forms and as quoted in core's own messages, from everything a call sends
+back. Keep values that are not secret,
+especially short ones, out of the credential. Core removes the secrets in the account's
+`settings` the same way: every value below a key named like a secret (such as `api_key`,
+`password` or `*_token`), header values about authentication in a `headers` object, and any URL
+with a user name, password or query (a `base_url` with a token in it), as its management API
+hides them. Below a key named like a secret, `true`, `false`, `null` and the empty string are
+not secrets: they carry none. Unlike a credential's strings, a settings secret shorter than 8
+bytes is left in text, since removing every occurrence of so short a string would mangle
+unrelated text; the management API still shows it as a placeholder. When the settings change,
+core keeps removing the secrets of every earlier settings from the extension's stderr and stdout
+until the program exits, for calls that still run with them.
 
 ### Proxy
 
@@ -750,7 +760,7 @@ Usage, in `finish.usage`; a field that is absent was not reported, which is diff
 | Field | Meaning |
 | --- | --- |
 | `code` | One of the codes below. |
-| `message` | Human-readable; safe to show to the client. Never include credentials. Core also removes the call's credential, and its JSON, URL and base64 forms, from `message`, `provider_code`, every `raw` field, every `opaque` `data`, the response's `id` and `model`, every item's `call_id` and the finish's `raw_reason` of every event before passing them on, in case an upstream echoes it. |
+| `message` | Human-readable; safe to show to the client. Never include credentials. Core also removes the call's credential, and its JSON, URL and base64 forms, from `message`, `provider_code`, every `raw` field, every `opaque` `data`, the response's `id`, `model` and `translation`, every item's `call_id` and the finish's `raw_reason` of every event before passing them on, in case an upstream echoes it. In the error's `code` and `scope`, the response's `format`, the finish's `reason` and an opaque's `format`, a value core defines is passed on as it is and any other that holds the credential is replaced whole with `[redacted]`, so a very short credential cannot turn a value core acts on into another. |
 | `status` | The upstream HTTP status, when there was one. |
 | `provider_code` | The upstream's own error code, when there was one. |
 | `retryable` | True only when the upstream certainly did not run the request (it was refused), so trying again, on this account later or on another account, is safe. For `login` and `refresh` calls, see [Errors in login and refresh calls](#errors-in-login-and-refresh-calls). |
