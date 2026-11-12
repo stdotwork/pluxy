@@ -31,6 +31,8 @@ export interface Account {
   max_concurrency?: number;
   request_retry?: number;
   prefix?: string;
+  /** The account's own proxy, with `redacted` in place of a user name and password. */
+  proxy_url?: string;
   /** Each model by its upstream name, or with the alias clients use for it. */
   models?: (string | AccountModelEntry)[];
   excluded_models?: string[];
@@ -67,6 +69,8 @@ export interface AccountModelAlias {
 export interface AccountChange {
   disabled?: boolean;
   prefix?: string | null;
+  /** A proxy URL, `direct` or `none`; the URL as the account shows it keeps its password. */
+  proxy_url?: string | null;
   priority?: number | null;
   weight?: number | null;
   disable_cooling?: boolean | null;

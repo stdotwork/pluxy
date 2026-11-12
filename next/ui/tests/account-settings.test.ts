@@ -59,3 +59,42 @@ test("settings holding a number the browser did not keep cannot be edited here",
     change: { settings: { websockets: true, big: 9007199254740994 } },
   });
 });
+
+// An account added by login, with the proxy_url core shows: "redacted" in place of the user name
+// and password.
+const proxied = (proxy?: string): Account => ({
+  id: "a",
+  source: "login",
+  state: "active",
+  refreshable: false,
+  ...(proxy === undefined ? {} : { proxy_url: proxy }),
+});
+
+test("the proxy URL as core shows it is not sent back, so the stored password stays", () => {
+  const a = proxied("socks5://redacted@proxy.example:1080");
+  expect(draftOf(a).proxyUrl).toBe("socks5://redacted@proxy.example:1080");
+  // Untouched, and with another field changed: no proxy_url in the PATCH.
+  expect(accountChange(a, draftOf(a))).toEqual({ change: {} });
+  expect(accountChange(a, { ...draftOf(a), priority: "5" })).toEqual({ change: { priority: 5 } });
+  // Spaces around the shown value are not a change either.
+  expect(accountChange(a, { ...draftOf(a), proxyUrl: "  socks5://redacted@proxy.example:1080 " })).toEqual({
+    change: {},
+  });
+});
+
+test("a typed proxy URL is sent trimmed, and clearing the field sets the default", () => {
+  const none = proxied();
+  expect(draftOf(none).proxyUrl).toBe("");
+  expect(accountChange(none, { ...draftOf(none), proxyUrl: " http://u:p@proxy.example:3128 " })).toEqual({
+    change: { proxy_url: "http://u:p@proxy.example:3128" },
+  });
+  // direct and none are values core stores, not the default.
+  expect(accountChange(none, { ...draftOf(none), proxyUrl: "direct" })).toEqual({
+    change: { proxy_url: "direct" },
+  });
+  const set = proxied("http://redacted@proxy.example:3128");
+  expect(accountChange(set, { ...draftOf(set), proxyUrl: "" })).toEqual({ change: { proxy_url: null } });
+  expect(accountChange(set, { ...draftOf(set), proxyUrl: "   " })).toEqual({ change: { proxy_url: null } });
+  // Clearing a field that was empty is no change.
+  expect(accountChange(none, { ...draftOf(none), proxyUrl: "  " })).toEqual({ change: {} });
+});
