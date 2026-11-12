@@ -15,6 +15,8 @@ export interface SettingsDraft {
   models: { name: string; alias: string }[];
   /** One excluded-model rule per line. */
   excluded: string;
+  /** The account's headers as JSON text, secret values as core's placeholders; empty for none. */
+  headers: string;
   aliases: { name: string; alias: string; display_name: string; fork: boolean }[];
   /** The extension's settings as JSON text, secrets as core's placeholders; empty for none. */
   settings: string;
@@ -28,6 +30,9 @@ export type InvalidField =
   | "retryCount"
   | "models"
   | "aliases"
+  | "headersJson"
+  | "headersObject"
+  | "headersValue"
   | "settings"
   | "settingsNumber";
 
@@ -48,6 +53,7 @@ export function draftOf(a: Account): SettingsDraft {
     retryCount: a.request_retry === undefined ? "" : String(a.request_retry),
     models: (a.models ?? []).map(modelRow),
     excluded: (a.excluded_models ?? []).join("\n"),
+    headers: a.headers && Object.keys(a.headers).length ? JSON.stringify(a.headers, null, 2) : "",
     aliases: (a.model_alias ?? []).map((r) => ({
       name: r.name,
       alias: r.alias,
@@ -116,6 +122,28 @@ export function settingsObject(text: string): Record<string, unknown> | null | u
     return undefined;
   }
 }
+
+/**
+ * The headers text as a map: null when empty or `{}`, a field name when it is not a JSON object
+ * whose values are all text.
+ */
+function headerMap(text: string): Record<string, string> | null | Extract<InvalidField, `headers${string}`> {
+  if (text.trim() === "") return null;
+  let v: unknown;
+  try {
+    v = JSON.parse(text);
+  } catch {
+    return "headersJson";
+  }
+  if (v === null || typeof v !== "object" || Array.isArray(v)) return "headersObject";
+  const out = v as Record<string, unknown>;
+  if (!Object.values(out).every((x) => typeof x === "string")) return "headersValue";
+  return Object.keys(out).length ? (out as Record<string, string>) : null;
+}
+
+/** Headers as a list of name and value in name order, so two spellings of one map compare equal. */
+const headerList = (h: Record<string, string> | null | undefined) =>
+  Object.entries(h ?? {}).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0));
 
 /** A decimal number's value as digits and an exponent, so two spellings can be compared. */
 function decimal(text: string): string | undefined {
@@ -203,6 +231,14 @@ export function accountChange(
   const excludedNext = excluded.length ? excluded : null;
   if (differs(excludedNext, a.excluded_models?.length ? a.excluded_models : null))
     change.excluded_models = excludedNext;
+
+  // Headers go only when their text changed, and then all of them: core keeps the value a
+  // placeholder stands for, so a secret the person did not touch goes back as it was shown.
+  if (d.headers !== draftOf(a).headers) {
+    const headers = headerMap(d.headers);
+    if (typeof headers === "string") return { invalid: headers };
+    if (differs(headerList(headers), headerList(a.headers))) change.headers = headers;
+  }
 
   const aliases = aliasRules(d.aliases);
   if (aliases === undefined) return { invalid: "aliases" };
