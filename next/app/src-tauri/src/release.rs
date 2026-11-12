@@ -28,7 +28,8 @@ pub const MAX_URL: usize = 2048;
 const MAX_VERSION: usize = 64;
 /// The most of release.json the app reads; it holds an address and a channel.
 const MAX_SETTINGS: u64 = 64 << 10;
-/// The most of the kept feed the app reads: a feed it accepted, written again.
+/// The most of the kept feed the app reads: a feed it accepted, written again. Normalising can
+/// grow each notes address to at most MAX_URL bytes, about 350 KB over a 1 MiB feed in all.
 const MAX_CACHE: u64 = 2 * MAX_FEED;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -136,10 +137,17 @@ fn utc_time(s: &str) -> bool {
     (1..=days).contains(&n(8..10)) && n(11..13) < 24 && n(14..16) < 60 && n(17..19) < 60
 }
 
+/// A feed as the network sent it: at most MAX_FEED bytes, then every other check.
 pub fn parse_feed(bytes: &[u8]) -> Result<Feed, String> {
     if bytes.len() as u64 > MAX_FEED {
         return Err("the feed is larger than 1 MiB".into());
     }
+    check_feed(bytes)
+}
+
+/// Every check but the network size limit. The kept copy goes through this alone: written again
+/// with normalised addresses it can be larger than the feed was, within MAX_CACHE.
+fn check_feed(bytes: &[u8]) -> Result<Feed, String> {
     let raw: RawFeed =
         serde_json::from_slice(bytes).map_err(|e| format!("the feed is not valid: {e}"))?;
     if raw.format != FORMAT {
@@ -428,7 +436,7 @@ impl Releases {
         if &c.source != source {
             return None;
         }
-        let feed = parse_feed(&serde_json::to_vec(&c.feed).ok()?).ok()?;
+        let feed = check_feed(&serde_json::to_vec(&c.feed).ok()?).ok()?;
         Some(Cached {
             source: c.source,
             checked_at: c.checked_at,
@@ -833,6 +841,41 @@ mod tests {
         r3.apply_source(other, r3.revision()).unwrap();
         assert_eq!(r3.view("0.1.0", None).checked_at, None);
         assert_eq!(open().view("0.1.0", None).checked_at, None);
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn a_kept_feed_reloads_when_normalising_made_it_larger_than_a_network_feed() {
+        // 256 notes addresses of 696 bytes that become 2,048 once normalised (é is %C3%A9), and
+        // notes that bring the feed just under 1 MiB as sent.
+        let url = format!("https://example.com/{}", "é".repeat(338));
+        let release = |i: usize, notes: &str| {
+            serde_json::json!({"product": "app", "version": format!("1.0.{i}"), "channel": "stable",
+                "published": "2026-11-01T12:00:00Z", "notes": notes, "notes_url": url})
+        };
+        let feed = |notes: &str| {
+            serde_json::to_vec(&serde_json::json!({"format": 1,
+                "releases": (0..MAX_RELEASES).map(|i| release(i, notes)).collect::<Vec<_>>()}))
+            .unwrap()
+        };
+        let room = (MAX_FEED as usize - feed("").len()) / MAX_RELEASES - 8;
+        let raw = feed(&"n".repeat(room));
+        assert!(raw.len() as u64 <= MAX_FEED && raw.len() as u64 > MAX_FEED - 4096);
+        let d = dir();
+        let open = || Releases::open(d.join("release.json"), d.join("release-feed.json"));
+        let mut r = open();
+        let src = r
+            .check_source(Some("https://feed.example/feed.json"))
+            .unwrap();
+        r.apply_source(src, r.revision()).unwrap();
+        let check = r.begin_check().unwrap();
+        r.checked(&check, Ok(raw));
+        assert_eq!(r.view("0.1.0", None).problem, None);
+        let kept = fs::metadata(d.join("release-feed.json")).unwrap().len();
+        assert!(kept > MAX_FEED && kept <= MAX_CACHE, "{kept}");
+        let v = open().view("0.1.0", None);
+        assert!(v.checked_at.is_some(), "the kept feed did not reload");
+        assert_eq!(v.app.latest.unwrap().version, "1.0.255");
         fs::remove_dir_all(d).unwrap();
     }
 
