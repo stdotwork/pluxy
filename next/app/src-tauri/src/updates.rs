@@ -191,8 +191,16 @@ fn notes_url() -> Url {
     Url::parse(&s).expect("the notes scheme's URL")
 }
 
-/// Opens an https address in the person's browser.
+/// Opens an https address in the person's browser; any other address is refused here too,
+/// whatever its caller checked.
 fn open_external(app: &AppHandle, url: String) {
+    let url = match release::https_url(&url) {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("pluxy-app: not opening {url:?}: {e}");
+            return;
+        }
+    };
     #[cfg(target_os = "linux")]
     {
         let _ = app.run_on_main_thread(move || {
