@@ -764,18 +764,30 @@ fn check_link(root: &Path, link: &Path, what: &str) -> Result<(), String> {
     use std::collections::VecDeque;
     use std::ffi::OsString;
     use std::path::Component;
-    /// A link's target, as names to walk; None stands for `..`.
-    fn parts(target: &Path, what: &str) -> Result<Vec<Option<OsString>>, String> {
+    /// One step of a link's target.
+    enum Part {
+        Name(OsString),
+        /// `..`
+        Parent,
+        /// A trailing `/` or `/.`, which components() drops: what comes before must be a folder.
+        Folder,
+    }
+    /// A link's target, as steps to walk.
+    fn parts(target: &Path, what: &str) -> Result<Vec<Part>, String> {
         let mut out = Vec::new();
         for part in target.components() {
             match part {
-                Component::Normal(p) => out.push(Some(p.to_os_string())),
+                Component::Normal(p) => out.push(Part::Name(p.to_os_string())),
                 Component::CurDir => {}
-                Component::ParentDir => out.push(None),
+                Component::ParentDir => out.push(Part::Parent),
                 Component::RootDir | Component::Prefix(_) => {
                     return Err(format!("{what}: link to an absolute path"));
                 }
             }
+        }
+        let text = target.to_string_lossy();
+        if text.ends_with('/') || text.ends_with("/.") {
+            out.push(Part::Folder);
         }
         Ok(out)
     }
@@ -790,11 +802,16 @@ fn check_link(root: &Path, link: &Path, what: &str) -> Result<(), String> {
     let mut todo: VecDeque<_> = parts(&read(link)?, what)?.into();
     let mut expanded = 1;
     while let Some(part) = todo.pop_front() {
-        let Some(name) = part else {
-            if here.pop().is_none() {
-                return Err(format!("{what}: link leads outside the package"));
+        let name = match part {
+            Part::Name(name) => name,
+            Part::Parent => {
+                if here.pop().is_none() {
+                    return Err(format!("{what}: link leads outside the package"));
+                }
+                continue;
             }
-            continue;
+            // The name before it was checked as a folder, since this followed it.
+            Part::Folder => continue,
         };
         let next = here
             .iter()

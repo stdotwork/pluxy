@@ -808,6 +808,31 @@ fn release_config_refuses_escaping_or_missing_links() {
         ),
         Some("through a file"),
     );
+    // Third re-check: a trailing "/" or "/." asks for a folder too, also through another link.
+    for (what, links) in [
+        ("AppRun/", &[("slash", "AppRun/")][..]),
+        ("AppRun/.", &[("dot", "AppRun/.")][..]),
+        (
+            "slash/ to AppRun/",
+            &[("slash", "AppRun/"), ("chain", "slash/")][..],
+        ),
+    ] {
+        let entries: Vec<_> = links.iter().map(|(n, t)| (*n, Entry::Link(t))).collect();
+        expect(
+            &mut wrong,
+            what,
+            t.check(&entries, b"runtime", 2),
+            Some("through a file"),
+        );
+    }
+    for target in ["usr/", "usr/."] {
+        expect(
+            &mut wrong,
+            &format!("{target} to a folder"),
+            t.check(&[("folder", Entry::Link(target))], b"runtime", 2),
+            None,
+        );
+    }
     expect(
         &mut wrong,
         "the clean AppImage",
