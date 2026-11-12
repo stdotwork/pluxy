@@ -4,7 +4,7 @@
 // the answer goes back through window_close. Minimize to Tray destroys the window and its
 // webviews; the tray opens a new one.
 
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { Button, Card, Choices, Notice, Switch } from "../../ui/kit/ui";
 import { type CloseBehavior, type WindowPreferences, windowClose, windowGet, windowSet } from "./host";
 
@@ -105,7 +105,10 @@ export function ClosePrompt() {
   const [remember, setRemember] = useState(false);
   const [busy, setBusy] = useState<CloseBehavior>();
   const [error, setError] = useState<string>();
-  useEffect(() => {
+  // A layout effect runs in the same task as the first render, so the window never shows its
+  // shell without being able to ask. A plain effect runs after a paint, and a close in between
+  // went to the tray without asking.
+  useLayoutEffect(() => {
     window.__pluxyClosePrompt = () => {
       setOpen(true);
       return true;
