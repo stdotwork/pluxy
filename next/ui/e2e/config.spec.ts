@@ -216,6 +216,50 @@ test("review: Source search starts at the first occurrence and repeated Enter ke
   await expect(page.locator('.config-source-search[data-part="field"]')).toHaveCount(0);
 });
 
+test("leaving with unsaved settings asks on Back and on a typed address, and Stay keeps the edit", async ({
+  page,
+}) => {
+  await openPanel(page, core, "/panel/#/status");
+  await signIn(page, core);
+  await goTo(page, "Config Panel");
+  const logToFile = page.getByRole("switch", { name: "Log to File", exact: true });
+  const before = await logToFile.isChecked();
+  await logToFile.setChecked(!before);
+  const question = page.getByRole("dialog", { name: "Unsaved changes", exact: true });
+
+  // Back is a change of the address's hash, like a typed #/… address.
+  await page.goBack();
+  await expect(question).toBeVisible();
+  await expect(page).toHaveURL(/#\/config$/);
+  await question.getByRole("button", { name: "Stay", exact: true }).click();
+  await expect(question).toHaveCount(0);
+  await expect(page.getByRole("heading", { level: 1, name: "Config Panel" })).toBeVisible();
+  await expect(logToFile).toBeChecked({ checked: !before });
+
+  await page.evaluate(() => {
+    location.hash = "#/themes";
+  });
+  await expect(question).toBeVisible();
+  await expect(page).toHaveURL(/#\/config$/);
+  await question.getByRole("button", { name: "Stay", exact: true }).click();
+  await expect(logToFile).toBeChecked({ checked: !before });
+
+  // Leave follows the address the person asked for.
+  await page.evaluate(() => {
+    location.hash = "#/themes";
+  });
+  await question.getByRole("button", { name: "Leave", exact: true }).click();
+  await expect(page.getByRole("heading", { name: /Themes$/, level: 1 })).toBeVisible();
+  await expect(page).toHaveURL(/#\/themes$/);
+
+  // With nothing unsaved, Back leaves without asking.
+  await goTo(page, "Config Panel");
+  await expect(logToFile).toBeChecked({ checked: before });
+  await page.goBack();
+  await expect(page.getByRole("heading", { name: /Themes$/, level: 1 })).toBeVisible();
+  await expect(question).toHaveCount(0);
+});
+
 test("review: unavailable config source leaves settings usable and shows its error only in Source", async ({
   page,
 }) => {

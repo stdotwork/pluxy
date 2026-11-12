@@ -22,6 +22,9 @@
     "allow-page-close",
     "allow-page-send",
     "allow-confirmation-request",
-    "allow-confirmation-settings"
+    "allow-confirmation-settings",
+    "allow-window-get",
+    "allow-window-set",
+    "allow-window-close"
   ]
 }
