@@ -55,6 +55,10 @@ const t = strings("accountSettings", {
   removeModel: "Remove model",
   excluded: "Excluded models (excluded_models)",
   excludedHint: "One rule per line. * matches any text, as in gpt-* or *-preview; case does not count.",
+  headers: "Custom Headers (headers)",
+  headersPlaceholder: '{\n  "Header-Name": "value"\n}',
+  headersHint:
+    'Enter custom HTTP headers as a JSON object, e.g., {"X-My-Header": "value"}. A secret value, such as an Authorization header\'s, shows as a pluxy-redacted- placeholder that keeps it; type a new value to replace it. Empty removes all headers.',
   aliases: "Account model aliases",
   aliasName: "Alias",
   aliasDisplay: "Display name",
@@ -79,6 +83,9 @@ const t = strings("accountSettings", {
   invalid_retryCount: "Enter a non-negative safe integer, or select Inherit.",
   invalid_models: "Enter a model name for each model with an alias.",
   invalid_aliases: "Enter a non-empty model name and alias for each new or edited row.",
+  invalid_headersJson: "Custom headers must be valid JSON.",
+  invalid_headersObject: "Custom headers must be a JSON object.",
+  invalid_headersValue: "Each custom header value must be a string.",
   invalid_settings: "Settings must be a JSON object.",
   invalid_settingsNumber:
     "The settings hold a number the browser cannot keep exactly, so they cannot be changed here; change them through the management API.",
@@ -332,6 +339,19 @@ function EditForm(props: { account: Account; close: () => void; saved: () => voi
               onInput={(e) => set("excluded", e.currentTarget.value)}
             />
             <small class="hint">{t("excludedHint")}</small>
+          </label>
+          <label class="field" data-part="field">
+            <span class="label">{t("headers")}</span>
+            <textarea
+              class="mono"
+              rows={4}
+              spellcheck={false}
+              autocomplete="off"
+              placeholder={t("headersPlaceholder")}
+              value={draft.headers}
+              onInput={(e) => set("headers", e.currentTarget.value)}
+            />
+            <small class="hint">{t("headersHint")}</small>
           </label>
           <fieldset class="field account-edit-rows" data-part="field">
             <legend class="label">{t("aliases")}</legend>
