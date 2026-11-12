@@ -87,9 +87,10 @@ func (r *Redactor) placeholderOf(n *yaml.Node, texts map[*yaml.Node]string) stri
 //   - a URL with a user name, password or query, anywhere.
 //
 // Everything below a key named like a secret is a secret too, however deep, except in the provider
-// sections today's core reads at the top of a config.yaml: the v8 api-keys mapping and the older
-// lists of entries (codex-api-key and the rest, legacy.SectionLists), whose entries are read by
-// the rules above. Account settings have no such sections, on their own (RedactSettings) or as
+// sections today's core reads at the top of a config.yaml: the sections of the v8 api-keys
+// mapping (legacy.SectionNames; any other key there is read as a secret key) and the older lists
+// of entries (codex-api-key and the rest, legacy.SectionLists), whose entries are read by the
+// rules above. Account settings have no such sections, on their own (RedactSettings) or as
 // the "settings" of each item of an "accounts" list in a config file. Everywhere, true, false,
 // null and the empty string are never secrets: they carry none, and hiding them would hide what a
 // setting is.
@@ -166,8 +167,9 @@ func secretURL(s string) bool {
 	return err == nil && u.Host != "" && (u.User != nil || u.RawQuery != "")
 }
 
-// sectionLists are the top-level keys of a config.yaml whose value is a list of provider entries.
-var sectionLists = legacy.SectionLists()
+// sectionLists are the top-level keys of a config.yaml whose value is a list of provider entries,
+// and sectionNames the keys of its v8 api-keys mapping that are.
+var sectionLists, sectionNames = legacy.SectionLists(), legacy.SectionNames()
 
 // ctx is how secrets reads a node: what the place it is in makes it, and whether it is in a
 // provider section.
@@ -301,8 +303,15 @@ func found(n *yaml.Node, strict bool) (out []*yaml.Node, texts map[*yaml.Node]st
 			all(v, true)
 			return
 		case c.role == roleSections && v.Kind == yaml.MappingNode:
-			// Each section is a list of provider entries, read by the rules.
-			pairs(v, c, func(_ string, val *yaml.Node) { walk(val, ctx{section: true}) })
+			// Each section is a list of provider entries, read by the rules; any other key is
+			// no section core reads, so its values are secrets, as below any secret key.
+			pairs(v, c, func(name string, val *yaml.Node) {
+				if slices.Contains(sectionNames, name) {
+					walk(val, ctx{section: true})
+				} else {
+					all(val, true)
+				}
+			})
 			return
 		case c.role == roleEntries && v.Kind == yaml.SequenceNode:
 			// An entry is read by the rules; anything else in the list is a key.
