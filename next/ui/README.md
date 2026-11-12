@@ -111,8 +111,9 @@ feature, it keeps the old label, unless the label named something this core does
 - "Use SIWC": a Sign in with ChatGPT account is added with the Codex extension's own sign-in
   method for it.
 - "Note" and tags: core keeps no note or tags on an account.
-- "Rewrite response model to the alias" (`force-mapping`) and "Account error rules"
-  (`request-scoped-errors`): core does not run them yet.
+- "Rewrite response model to the alias" (`force-mapping`): core does not run it yet. "Account
+  error rules" (`request-scoped-errors`): dropped, core already treats a request-scoped error as
+  not the account's fault.
 - The OAuth excluded models and OAuth model alias pages: these rules are now an extension's
   `excluded_models` and `model_alias` settings, written in the Config Panel's Source tab.
 
