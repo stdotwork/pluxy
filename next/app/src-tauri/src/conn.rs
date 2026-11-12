@@ -562,12 +562,28 @@ impl Connection {
         self.key = None;
         self.error = None;
         let back = |c: &mut Self, why: String| -> Result<(), String> {
-            let Some(last) = st.selected.clone() else {
+            // The version that worked before; when this switch repaired that very version, the
+            // one before it, which then stays selected.
+            let last = st
+                .selected
+                .clone()
+                .filter(|s| s != id)
+                .or_else(|| st.previous.clone());
+            let Some(last) = last else {
                 c.error = Some(why.clone());
                 return Err(why);
             };
             match c.run_version(store, &last) {
-                Ok(()) => Err(format!("{why}; core {last} runs again")),
+                Ok(()) => {
+                    if st.selected.as_deref() != Some(last.as_str()) {
+                        if let Ok(mut now) = store.state() {
+                            now.previous = now.selected.take();
+                            now.selected = Some(last.clone());
+                            let _ = store.save_state(&now);
+                        }
+                    }
+                    Err(format!("{why}; core {last} runs again"))
+                }
                 Err(e) => {
                     let msg = format!("{why}; core {last} did not start either: {e}");
                     c.error = Some(msg.clone());

@@ -681,6 +681,50 @@ fn calls_after_a_stop_go_nowhere() {
     );
 }
 
+/// N4: a failed repair of the running version runs the version before it, also at the next
+/// start.
+#[test]
+fn a_failed_repair_of_the_selected_version_runs_the_one_before() {
+    let mut f = fixture("repair-fails");
+    f.install("1.0.0").unwrap();
+    f.install("2.0.0").unwrap();
+    // A source whose 2.0.0 breaks its config and exits.
+    let src = f.root.join("bad-source");
+    std::fs::create_dir_all(&src).unwrap();
+    let index = src.join("index.json");
+    let keys = Keys::new(&index);
+    write_index(
+        &index,
+        &[release(
+            &src,
+            &keys,
+            "2.0.0",
+            &pack(&built().join("3.0.0")),
+            true,
+        )],
+    );
+    f.conn
+        .change(Change {
+            mode: Some(Mode::Managed),
+            core_source: Some(index.display().to_string()),
+            ..Change::default()
+        })
+        .unwrap();
+    assert_eq!(f.reported(), (200, Some("2.0.0".into())));
+    let config = f.config();
+    let staged = f.conn.prepare_install(&keys, "2.0.0").unwrap();
+    let err = f.conn.apply(CoreChange::Install(staged)).unwrap_err();
+    assert!(err.contains("core 1.0.0 runs again"), "{err}");
+    assert_eq!(f.reported(), (200, Some("1.0.0".into())));
+    assert_eq!(f.config(), config);
+    f.conn.stop_core();
+    let c = Connection::open(dirs(&f.root), None);
+    assert_eq!(
+        c.caller().call("GET", "/status", None).body.unwrap()["version"],
+        "1.0.0"
+    );
+}
+
 /// B1-3: when the config cannot be put back, no core runs and the next start tries again.
 #[test]
 fn a_failed_config_restore_keeps_the_core_stopped_and_retries_at_start() {
