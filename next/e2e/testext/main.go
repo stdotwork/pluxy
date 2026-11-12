@@ -11,6 +11,10 @@
 //	"account-proxy" answers with the SHA-256 (hex) of the proxy URL the account was given, or
 //	                "none": core removes a proxy's password from what an extension says, so only a
 //	                digest shows the extension got the whole URL
+//	"account-headers" answers with each header the account was given as "Name=<SHA-256 (hex) of
+//	                the value>", in name order and joined by ",", or "none": core removes a secret
+//	                header value from what an extension says, so only a digest shows the extension
+//	                got the real one
 //	other           answers at once
 //
 // It signs in with three login methods, one of each kind:
@@ -35,9 +39,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -123,7 +129,7 @@ func main() {
 	}
 	reply := fmt.Sprintf("v=%s pid=%d", m.Version, os.Getpid())
 	// An extension that never wraps a client in sdk.Upstream is not sent an account that has a
-	// proxy; this one makes no upstream request, but the page tests give accounts a proxy.
+	// proxy or headers; this one makes no upstream request, but the page tests give accounts both.
 	_ = sdk.Upstream(&http.Transport{})
 	err = sdk.Serve(sdk.Extension{
 		ID:      os.Getenv(protocol.EnvExtensionID),
@@ -153,6 +159,17 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream, reply string)
 		if call.Account.ProxyURL != "" {
 			sum := sha256.Sum256([]byte(call.Account.ProxyURL))
 			reply = hex.EncodeToString(sum[:])
+		}
+	}
+	if call.Request.Model == "account-headers" {
+		var lines []string
+		for _, name := range slices.Sorted(maps.Keys(call.Account.Headers)) {
+			sum := sha256.Sum256([]byte(call.Account.Headers[name]))
+			lines = append(lines, name+"="+hex.EncodeToString(sum[:]))
+		}
+		reply = "none"
+		if len(lines) > 0 {
+			reply = strings.Join(lines, ",")
 		}
 	}
 	var s settings

@@ -33,6 +33,8 @@ export interface Account {
   prefix?: string;
   /** The account's own proxy, with `redacted` in place of a user name and password. */
   proxy_url?: string;
+  /** Extra HTTP headers on the account's upstream requests, a placeholder in place of each secret value. */
+  headers?: Record<string, string>;
   /** Each model by its upstream name, or with the alias clients use for it. */
   models?: (string | AccountModelEntry)[];
   excluded_models?: string[];
@@ -71,6 +73,8 @@ export interface AccountChange {
   prefix?: string | null;
   /** A proxy URL, `direct` or `none`; the URL as the account shows it keeps its password. */
   proxy_url?: string | null;
+  /** All the account's headers (one left out is removed); a placeholder from the account keeps its value. */
+  headers?: Record<string, string> | null;
   priority?: number | null;
   weight?: number | null;
   disable_cooling?: boolean | null;
