@@ -15,4 +15,7 @@ pub const COMMANDS: &[&str] = &[
     "page_send",
     "confirmation_request",
     "confirmation_settings",
+    "window_get",
+    "window_set",
+    "window_close",
 ];

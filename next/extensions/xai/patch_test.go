@@ -52,8 +52,8 @@ func TestApplyPatchDeclaration(t *testing.T) {
 }
 
 // A call to apply_patch in the history carries its text in the input argument, also when the text
-// is itself a JSON object, and its output goes as a function call output. A custom tool of
-// another name keeps the rule it had.
+// is itself a JSON object, and its output goes as a function call output. A call to a custom tool
+// the request does not declare keeps the rule it had.
 func TestApplyPatchHistory(t *testing.T) {
 	got := responsesBody(t, `{"model":"grok-4.6","input":[
 		{"type":"custom_tool_call","call_id":"c1","name":"apply_patch","input":"{\"input\":\"raw\"}"},
@@ -102,7 +102,7 @@ func TestApplyPatchDuplicates(t *testing.T) {
 		{"function first", `[{"type":"function","name":"apply_patch","parameters":{"type":"object"}},{"type":"custom","name":"apply_patch"}]`,
 			false, []string{"apply_patch"}},
 		{"function only", `[{"type":"function","name":"apply_patch","parameters":{"type":"object"}}]`, false, []string{"apply_patch"}},
-		{"another custom tool", `[{"type":"custom","name":"run_shell"}]`, false, []string{"run_shell"}},
+		{"another custom tool", `[{"type":"custom","name":"run_shell"}]`, true, []string{"run_shell"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			req, err := openairesponses.ParseRequest([]byte(`{"model":"grok-4.6","input":[],"tools":` + c.tools + `}`))
