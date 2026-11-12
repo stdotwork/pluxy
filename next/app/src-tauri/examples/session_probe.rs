@@ -25,9 +25,14 @@ fn main() {
     let result = match args.as_slice() {
         ["documents", file] => linux::documents(file),
         ["watcher"] => linux::watcher(),
+        ["tray-pid", pid] => linux::tray_pid(pid),
         ["portal"] => linux::portal(),
         ["owner", name] => linux::owner(name),
-        _ => Err("usage: session_probe documents <file> | watcher | portal | owner <name>".into()),
+        ["tray", pid, action] => linux::tray(pid, action),
+        _ => Err(
+            "usage: session_probe documents <file> | watcher | portal | owner <name> | tray <pid> <action>"
+                .into(),
+        ),
     };
     match result {
         Ok(lines) => lines.iter().for_each(|line| println!("{line}")),
@@ -265,6 +270,93 @@ mod linux {
         ])
     }
 
+    /// Follow the real watcher's app item to its dbusmenu, as a desktop tray host does.
+    pub fn tray(pid: &str, action: &str) -> Lines {
+        use std::collections::HashMap;
+        let pid: u32 = pid.parse().map_err(|_| "invalid app pid")?;
+        let conn = session()?;
+        let entries = MainContext::default().block_on(registered_items(&conn))?;
+        let mut item = None;
+        for entry in entries {
+            let Some((name, suffix)) = entry.split_once('/') else {
+                continue;
+            };
+            if owner_pid(&conn, name).ok() == Some(pid) {
+                item = Some((name.to_string(), format!("/{suffix}")));
+                break;
+            }
+        }
+        let (name, path) = item.ok_or("the watcher lists no item owned by the app")?;
+        let (menu,) = call(
+            &conn,
+            &name,
+            &path,
+            "org.freedesktop.DBus.Properties",
+            "Get",
+            Some(&(ITEM, "Menu").to_variant()),
+            "(v)",
+        )?
+        .get::<(Variant,)>()
+        .ok_or("Menu is not a variant")?;
+        let menu = menu
+            .get::<ObjectPath>()
+            .ok_or("Menu is not an object path")?;
+        let interface = "com.canonical.dbusmenu";
+        let layout = call(
+            &conn,
+            &name,
+            menu.as_str(),
+            interface,
+            "GetLayout",
+            Some(&(0i32, -1i32, Vec::<String>::new()).to_variant()),
+            "(u(ia{sv}av))",
+        )?;
+        fn walk(node: Variant, rows: &mut Vec<(i32, String, bool)>) -> Result<(), String> {
+            let (id, props, children) = node
+                .get::<(i32, HashMap<String, Variant>, Vec<Variant>)>()
+                .ok_or("invalid dbusmenu layout")?;
+            let label = props
+                .get("label")
+                .and_then(|v| v.get::<String>())
+                .unwrap_or_default();
+            let enabled = props
+                .get("enabled")
+                .and_then(|v| v.get::<bool>())
+                .unwrap_or(true);
+            rows.push((id, label, enabled));
+            for child in children {
+                walk(child, rows)?;
+            }
+            Ok(())
+        }
+        let mut rows = Vec::new();
+        walk(layout.child_value(1), &mut rows)?;
+        let mut out = vec![format!("item={name}{path}")];
+        for (_, label, enabled) in &rows {
+            if !label.is_empty() {
+                out.push(format!("{label}={enabled}"));
+            }
+        }
+        if action != "inspect" {
+            let (id, _, _) = rows
+                .iter()
+                .find(|(_, label, _)| label == action)
+                .ok_or_else(|| format!("tray has no {action:?} item: {rows:?}"))?;
+            // Send even if disabled: the native action must refuse foreign-process control too.
+            call(
+                &conn,
+                &name,
+                menu.as_str(),
+                interface,
+                "Event",
+                Some(&(*id, "clicked", 0i32.to_variant(), 0u32).to_variant()),
+                "()",
+            )?;
+            out.push(format!("clicked={action}"));
+        }
+        Ok(out)
+    }
+
     async fn registered_items(conn: &DBusConnection) -> Result<Vec<String>, String> {
         let reply = conn
             .call_future(
@@ -285,6 +377,27 @@ mod linux {
         value
             .get::<Vec<String>>()
             .ok_or_else(|| "RegisteredStatusNotifierItems is not a list of names".into())
+    }
+
+    /// Check a real application's tray item rather than this probe's fixture item.
+    pub fn tray_pid(pid: &str) -> Lines {
+        let pid: u32 = pid.parse().map_err(|_| "invalid app pid")?;
+        let conn = session()?;
+        MainContext::default().block_on(async {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                for item in registered_items(&conn).await? {
+                    let name = item.split('/').next().unwrap_or("");
+                    if owner_pid(&conn, name).ok() == Some(pid) {
+                        return Ok(vec![format!("app_tray_pid={pid}"), format!("item={item}")]);
+                    }
+                }
+                if Instant::now() >= deadline {
+                    return Err(format!("no registered tray item belongs to app pid {pid}"));
+                }
+                timeout_future(Duration::from_millis(100)).await;
+            }
+        })
     }
 
     /// Owns a status notifier item, registers it with the watcher and waits until the watcher

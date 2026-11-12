@@ -7,6 +7,8 @@
     "main"
   ],
   "permissions": [
+    "allow-startup-get",
+    "allow-startup-set",
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "allow-connection-get",
@@ -28,6 +30,9 @@
     "allow-device-enable",
     "allow-device-remove",
     "allow-device-rollback",
-    "allow-device-page-open"
+    "allow-device-page-open",
+    "allow-window-get",
+    "allow-window-set",
+    "allow-window-close"
   ]
 }

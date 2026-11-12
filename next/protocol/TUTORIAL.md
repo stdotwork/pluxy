@@ -91,7 +91,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 }
 ```
 
-For upstream HTTP clients, wrap the configured transport with `sdk.Upstream(base)`, including clients for login, token refresh and WebSocket handshakes.
+For upstream HTTP clients, wrap the configured transport with `sdk.Upstream(base)`, including clients for login, token refresh and WebSocket handshakes. An account's proxy is honoured only by clients wrapped this way: a client that is not (`http.DefaultClient` is one) sends direct, so wrap every client. An extension that wraps none gets an error reply, not a call, when an account carries a proxy. Create each wrapped client before `Serve` runs, for example as a package-level variable: the SDK refuses a proxied call while no `sdk.Upstream` transport exists in the process, so a client first created inside a handler never gets its first call.
 
 The rules the SDK holds you to:
 

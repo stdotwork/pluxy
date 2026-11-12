@@ -66,6 +66,13 @@ test("the Dashboard sums up the requests core recorded and the accounts it holds
   await expect(credentials.locator("strong")).toHaveText(String(accounts.length));
   await expect(credentials).toContainText(`${active} active · ${accounts.length - active} not serving`);
 
+  // Models: the count GET /v0/management/models reports for the models core serves.
+  const served = (await core.mgmt<{ models: unknown[] }>("GET", "/models")).body.models;
+  expect(served.length).toBeGreaterThan(0);
+  const models = stat(page, "Models");
+  await expect(models.locator("strong")).toHaveText(String(served.length));
+  await expect(models).toContainText("Served through the proxy endpoint");
+
   // Fleet: requests and success rate per extension; Health and Runtime link on.
   await expect(
     page.getByRole("table", { name: "Every provider, side by side" }).locator("tbody tr"),

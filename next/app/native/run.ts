@@ -14,6 +14,9 @@
 // - closing the window leaves no webview and no web process, with the app still in the tray;
 // - quitting stops the app's own core, and leaves a local or remote core running.
 //
+// In managed mode it then runs the window checks (window.ts, native_window.rs) in two more
+// sessions, one with a tray watcher and one without.
+//
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
 // own (dbus-run-session, xvfb-run), and random ports. Inside that session, before the app,
 // native/session.ts starts the desktop services later checks need (the portals and a tray
@@ -39,6 +42,7 @@ import { join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline";
 import { buildSmokeAppImage } from "./appimage";
 import { buildDeviceFixtures } from "./device";
+import { descendants, webProcesses } from "./processes";
 import { missingPrerequisites } from "./services";
 
 const app = join(import.meta.dir, "..");
@@ -96,38 +100,6 @@ async function startCore(
     if (proc.stdout) createInterface({ input: proc.stdout }).once("line", resolve);
   });
   return { proc, ...JSON.parse(line) };
-}
-
-/** The processes among pid's descendants, with their names. */
-function descendants(pid: number): Map<number, string> {
-  const parent = new Map<number, number>();
-  const name = new Map<number, string>();
-  for (const d of readdirSync("/proc")) {
-    if (!/^\d+$/.test(d)) continue;
-    try {
-      const stat = readFileSync(`/proc/${d}/stat`, "utf8");
-      const close = stat.lastIndexOf(")");
-      name.set(Number(d), stat.slice(stat.indexOf("(") + 1, close));
-      parent.set(Number(d), Number(stat.slice(close + 2).split(" ")[1]));
-    } catch {
-      // gone already
-    }
-  }
-  const found = new Map<number, string>();
-  for (const [p, comm] of name) {
-    for (let q = parent.get(p); q !== undefined && q > 1; q = parent.get(q)) {
-      if (q === pid) {
-        found.set(p, comm);
-        break;
-      }
-    }
-  }
-  return found;
-}
-
-/** The web processes among pid's descendants. */
-function webProcesses(pid: number): number {
-  return [...descendants(pid).values()].filter((comm) => comm.startsWith("WebKitWebProces")).length;
 }
 
 /** Sends signal to the process group pid leads (each session runs in a group of its own). */
@@ -188,13 +160,20 @@ async function managementStatus(base: string, key: string, ca?: string): Promise
   return r.status;
 }
 
-/** Runs the app once with connection as its saved connection, and checks what it reports. */
+/** The window checks (window.ts), with or without a tray watcher in the session. */
+type Suite = "window" | "window-no-tray";
+
+/** Runs the app once with connection as its saved connection, and checks what it reports. With
+ * suite, the session runs window.ts, which runs the app through the window checks' stages. */
 async function runApp(
   mode: Mode,
   bin: string,
   connection: object,
   base?: string,
+  startup = false,
+  noTray = false,
   key?: string,
+  suite?: Suite,
 ): Promise<string[]> {
   const root = mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
   const problems: string[] = [];
@@ -215,6 +194,13 @@ async function runApp(
     writeFileSync(join(dirs.config, identifier, "connection.json"), JSON.stringify(connection), {
       mode: 0o600,
     });
+    // The main checks close the window to the tray; the window suite starts with Ask every time.
+    if (!suite)
+      writeFileSync(
+        join(dirs.config, identifier, "window.json"),
+        JSON.stringify({ close_behavior: "minimize-to-tray" }),
+        { mode: 0o600 },
+      );
     const quit = join(root, "quit");
     // This device's extension catalog is the same in every mode: check it once, in managed mode.
     const device = mode === "managed" ? join(root, "device") : undefined;
@@ -247,7 +233,16 @@ async function runApp(
       PLUXY_APP_TEST_PAGE: PAGE,
       PLUXY_APP_TEST_QUIT: quit,
       ...(device ? { PLUXY_APP_TEST_DEVICE: device } : {}),
+      ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: identifier } : {}),
+      ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
       ...(key ? { PLUXY_APP_TEST_KEY_FILE: keyFile } : {}),
+      ...(suite
+        ? {
+            PLUXY_APP_TEST_WINDOW_BIN: bin,
+            PLUXY_APP_TEST_PROBE: probe,
+            PLUXY_APP_TEST_IDENTIFIER: identifier,
+          }
+        : {}),
     };
     // The session script starts and checks the desktop services, then runs the app.
     const session = [
@@ -256,7 +251,7 @@ async function runApp(
       probe,
       appImage,
       randomUUID(),
-      bin,
+      suite ? join(import.meta.dir, "window.ts") : bin,
     ];
     const xvfb = ["xvfb-run", "-a", "-s", "-screen 0 1280x800x24 -nolisten tcp", ...session];
     const proc = spawn("dbus-run-session", ["--", ...xvfb], {
@@ -277,9 +272,16 @@ async function runApp(
     if (!proc.stderr || !proc.stdout) throw new Error("the app's output is not piped");
     const log: string[] = []; // the app's last lines, shown when the run fails
     const setup: string[] = []; // session.ts's report of what failed at setup
+    let suitePassed = false;
     const onLine = (line: string) => {
       if (key && [key, wrongKey].some((canary) => line.includes(canary))) {
         problems.push("management key appeared on stdout/stderr");
+        return;
+      }
+      // window.ts's checks, each shown.
+      if (line.startsWith("window: ")) {
+        console.log(`  ${mode} | ${line}`);
+        if (line.startsWith("window: suite passed")) suitePassed = true;
         return;
       }
       // The session's service checks are always shown: they say what this run stood on.
@@ -341,7 +343,23 @@ async function runApp(
       );
     }
     check(code === 0, `the app exited with ${code}`);
+    if (suite) {
+      check(suitePassed, `the ${suite} checks failed`);
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode}: ${suite} ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
     check(!steps.has("failed"), `the app's test steps failed: ${JSON.stringify(steps.get("failed"))}`);
+
+    if (startup) {
+      check(
+        log.some((l) => l.startsWith("startup preferences passed:")),
+        "startup suite gave no success report",
+      );
+      console.log(`${mode}: startup ${problems.length === 0 ? "ok" : "FAILED"}`);
+      for (const line of log) console.log(line);
+      return problems;
+    }
 
     if (key) {
       const entry = steps.get("keyentry");
@@ -560,6 +578,21 @@ try {
   try {
     const { core } = JSON.parse(run("go", ["run", "./e2e/panelcore", "-probe", "-prepare", prepared], next));
     const p = await runApp("managed", bin, { mode: "managed", core_path: core });
+    p.push(...(await runApp("managed", bin, { mode: "managed", core_path: core }, undefined, true)));
+    p.push(...(await runApp("managed", bin, { mode: "managed", core_path: core }, undefined, true, true)));
+    for (const suite of ["window", "window-no-tray"] as const)
+      p.push(
+        ...(await runApp(
+          "managed",
+          bin,
+          { mode: "managed", core_path: core },
+          undefined,
+          false,
+          suite === "window-no-tray",
+          undefined,
+          suite,
+        )),
+      );
     problems.push(...p.map((x) => `managed: ${x}`));
   } finally {
     rmSync(prepared, { recursive: true, force: true });
@@ -569,7 +602,8 @@ try {
     const c = await startCore(mode === "remote");
     try {
       const conn = { mode, url: c.base, key: c.key, ...(c.ca ? { ca_file: c.ca } : {}) };
-      const p = await runApp(mode, bin, conn, c.base, c.key);
+      const p = await runApp(mode, bin, conn, c.base, false, false, c.key);
+      p.push(...(await runApp(mode, bin, conn, c.base, true)));
       // The app only connected: its quitting leaves this core running.
       if ((await managementStatus(c.base, c.key, c.ca)) !== 200) p.push("the core stopped when the app quit");
       problems.push(...p.map((x) => `${mode}: ${x}`));

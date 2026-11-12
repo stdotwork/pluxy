@@ -15,6 +15,7 @@ import {
   useKit,
   when,
 } from "../ui";
+import { AccountEdit, AccountSettings } from "./accountSettings";
 import { AccountTools } from "./accountTools";
 
 const t = strings("accountDetail", {
@@ -83,6 +84,7 @@ export function AccountDetail(props: AccountDetailProps) {
         <p class="muted">{t("setInConfig")}</p>
       ) : (
         <div class="actions">
+          <AccountEdit account={a} onChanged={props.onChanged} disabled={act.busy || remove.busy} />
           <Button disabled={act.busy} onClick={() => act.run(() => api.setDisabled(a.id, !a.disabled))}>
             {a.disabled ? t("enable") : t("disable")}
           </Button>
@@ -94,6 +96,7 @@ export function AccountDetail(props: AccountDetailProps) {
           </ConfirmButton>
         </div>
       )}
+      <AccountSettings account={a} />
       <AccountTools key={a.id} account={a} onChanged={props.onChanged} />
     </Detail>
   );

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { type Account, problem, type Quota, type QuotaLimit, type QuotaReply } from "../api";
 import { Meter } from "../meter";
 import type { PageDef } from "../shell";
-import { strings } from "../strings";
+import { rich, strings } from "../strings";
 import { Button, Empty, Facts, List, Notice, PageHead, useKit, useLoad, when } from "../ui";
 
 const t = strings("quota", {
@@ -22,9 +22,7 @@ const t = strings("quota", {
   idle: "Click here to refresh quota",
   loading: "Loading quota...",
   plan: "Plan",
-  renewal: "Renewal time",
-  renewsIn: "renews in {hint}",
-  endedAgo: "ended {hint} ago",
+  ends: "Subscription ends {time}",
   manualResets: "Manual resets",
   fetched: "Last updated",
   noLimits: "No quota data available",
@@ -122,27 +120,20 @@ function QuotaLimitBody({ limit }: { limit: QuotaLimit }) {
 
 function QuotaSummary({ data }: { data: QuotaReply }) {
   const end = data.quota.plan_ends_at;
-  const remaining = end ? end - Date.now() / 1000 : 0;
   const resets = data.quota.limits.find((limit) => limit.id === "reset_credits");
   return (
-    <Facts
-      rows={[
-        [t("plan"), data.quota.plan],
-        [
-          t("renewal"),
-          end ? (
-            <>
-              <Timestamp value={end} />{" "}
-              <span class="muted">
-                {t(remaining >= 0 ? "renewsIn" : "endedAgo", { hint: duration(Math.abs(remaining)) })}
-              </span>
-            </>
-          ) : undefined,
-        ],
-        [t("manualResets"), resets?.remaining?.toLocaleString()],
-        [t("fetched"), <Timestamp value={data.fetched_at} />],
-      ]}
-    />
+    <>
+      {end ? (
+        <p data-part="subscription-end">{rich(t("ends"), { time: <Timestamp value={end} /> })}</p>
+      ) : null}
+      <Facts
+        rows={[
+          [t("plan"), data.quota.plan],
+          [t("manualResets"), resets?.remaining?.toLocaleString()],
+          [t("fetched"), <Timestamp value={data.fetched_at} />],
+        ]}
+      />
+    </>
   );
 }
 

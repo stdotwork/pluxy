@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -199,6 +200,72 @@ func TestStartupAccountCheck(t *testing.T) {
 	lists, _ := u.counts()
 	if lists["sk-good"] != 2 || lists["sk-slow"] != 1 || lists["sk-revoked"] != 1 {
 		t.Errorf("model list calls by key = %v; want sk-good 2 (good at start, bad after the reload), sk-slow 1, sk-revoked 1", lists)
+	}
+}
+
+// TestSettingsSecretIsRedacted shows core removing a secret held in an account's settings, a
+// token in its base_url's query, from the errors of a check and of a request that quote it: the
+// check result, the client's reply, core's log and its error log hold [redacted] instead.
+func TestSettingsSecretIsRedacted(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := ln.Addr().String() // nothing listens there once it is closed
+	ln.Close()
+	const secret = "sk-settings-token-e2e"
+	cfg := map[string]any{
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "pluxy-extension.json"),
+			"accounts": []any{map[string]any{
+				"id":         "tokened",
+				"models":     []string{"gpt-test"},
+				"settings":   map[string]any{"base_url": "http://" + closed + "/v1?token=" + secret},
+				"credential": map[string]any{"kind": "api_key", "api_key": "sk-good"},
+			}},
+		},
+	}
+	base, path, logs := runCoreArgs(t, cfg)
+
+	list := waitChecks(t, base, func(s map[string]string) bool { return s["tokened"] == "failed" })
+	if e := list.Accounts[0].Check.Error; e == nil || !strings.Contains(e.Message, "upstream unreachable") ||
+		strings.Contains(e.Message, secret) || !strings.Contains(e.Message, "[redacted]") {
+		t.Errorf("check error = %+v; want the unreachable upstream with the URL redacted", e)
+	}
+	var raw json.RawMessage
+	manage(t, base, "GET", "/accounts", nil, &raw)
+	if strings.Contains(string(raw), secret) {
+		t.Errorf("GET /accounts holds the settings secret: %s", raw)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	resp := post(t, ctx, base, clientKey, `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusOK || !strings.Contains(string(body), "upstream unreachable") ||
+		strings.Contains(string(body), secret) || !strings.Contains(string(body), "[redacted]") {
+		t.Errorf("reply %d %s; want the unreachable upstream with the URL redacted", resp.StatusCode, body)
+	}
+
+	if all := logs.waitFor(t, `account "tokened": check failed: unavailable: upstream unreachable`); strings.Contains(all, secret) {
+		t.Errorf("core logged the settings secret; log:\n%s", all)
+	}
+	files := 0
+	_ = filepath.WalkDir(filepath.Join(filepath.Dir(path), "logs"), func(p string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			files++
+			if b, _ := os.ReadFile(p); strings.Contains(string(b), secret) {
+				t.Errorf("%s holds the settings secret:\n%s", filepath.Base(p), b)
+			}
+		}
+		return nil
+	})
+	if files == 0 {
+		t.Error("core wrote no error log for the failed request")
 	}
 }
 

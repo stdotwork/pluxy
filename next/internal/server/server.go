@@ -19,6 +19,7 @@ import (
 	"github.com/stdotwork/pluxy/next/format/geminigenerate"
 	"github.com/stdotwork/pluxy/next/format/openaichat"
 	"github.com/stdotwork/pluxy/next/format/openairesponses"
+	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/internal/usage"
 	"github.com/stdotwork/pluxy/next/llm"
@@ -314,7 +315,7 @@ func serve(w http.ResponseWriter, r *http.Request, g *Generation, f clientFormat
 		t.account = a.Account
 		m.attempt(a, t.id)
 	}
-	stream := meterStream(g.Router.Generate(r.Context(), rr), m)
+	stream := meterStream(g.Router.Generate(host.WithPayloadClient(r.Context(), req.Model, r.Header), rr), m)
 	defer stream.Close()
 	fail := func(e *llm.Error) {
 		logFailure(r, e)

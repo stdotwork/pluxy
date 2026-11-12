@@ -1,6 +1,8 @@
 // Every app command, for the app's command manifest (build.rs) and the tests. A command missing
 // here cannot be called at all; capabilities/main.json grants each to the app's window only.
 pub const COMMANDS: &[&str] = &[
+    "startup_get",
+    "startup_set",
     "connection_get",
     "connection_set",
     "core_restart",
@@ -21,4 +23,7 @@ pub const COMMANDS: &[&str] = &[
     "device_remove",
     "device_rollback",
     "device_page_open",
+    "window_get",
+    "window_set",
+    "window_close",
 ];
