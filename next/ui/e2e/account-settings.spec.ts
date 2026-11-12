@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
@@ -10,6 +11,7 @@ interface Listed {
   id: string;
   priority?: number;
   excluded_models?: string[];
+  proxy_url?: string;
   settings?: Record<string, unknown>;
 }
 
@@ -167,4 +169,86 @@ test("a config account's settings are read-only", async ({ page }) => {
   await expect(detail.locator('[data-part="account-settings"]')).toContainText("alpha-model");
   await expect(detail.getByRole("button", { name: "Edit", exact: true })).toHaveCount(0);
   await expect(detail.getByRole("link", { name: "Edit in Config Panel" })).toBeVisible();
+});
+
+test("Proxy URL shows without its password, and saving another field keeps the password", async ({
+  page,
+}) => {
+  const password = "proxy-pass-7731";
+  const full = `socks5://proxy-user:${password}@proxy.example:1080`;
+  // The extension says the SHA-256 of the proxy URL it got: core removes the password from any
+  // text an extension sends back.
+  const digest = (url: string) => createHash("sha256").update(url).digest("hex");
+  await addAccount("settings-proxy", "api_key", { api_key: "account-settings-test-input" });
+  // Only this account serves the model that makes the extension say which proxy it was given.
+  expect(
+    (await core.mgmt("PATCH", "/accounts/settings-proxy", { models: [{ name: "account-proxy" }] })).status,
+  ).toBe(200);
+  await openPanel(page, core);
+  await signIn(page, core);
+  const detail = await openAccount(page, "settings-proxy");
+  await detail.getByRole("button", { name: "Edit", exact: true }).click();
+  const form = page.getByRole("dialog", { name: "Edit settings-proxy", exact: true });
+  const proxy = form.getByLabel("Proxy URL (proxy_url)");
+  await expect(proxy).toHaveValue("");
+
+  // A bad URL is core's 400, shown in the form like any other field's error; nothing is saved.
+  await proxy.fill("ftp://proxy.example:21");
+  await form.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(form.getByRole("alert")).toContainText("proxy_url: value");
+  await expect(form.getByRole("alert")).toContainText("must use http://, https://, socks5:// or socks5h://");
+  await expect(form).toBeVisible();
+  expect((await listed("settings-proxy"))?.proxy_url).toBeUndefined();
+
+  await proxy.fill(full);
+  await form.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(form).toHaveCount(0);
+
+  const shown = async () => {
+    const r = await core.mgmt<{ accounts: Listed[] }>("GET", "/accounts");
+    expect(JSON.stringify(r.body)).not.toContain(password);
+    return r.body.accounts.find((a) => a.id === "settings-proxy")?.proxy_url;
+  };
+  expect(await shown()).toBe("socks5://redacted@proxy.example:1080");
+  const asked = async () => {
+    const r = await fetch(`${core.base}/v1/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${core.clientKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "account-proxy", messages: [{ role: "user", content: "Hi" }] }),
+    });
+    expect(r.status).toBe(200);
+    const reply = (await r.json()) as { choices: { message: { content: string } }[] };
+    return (reply.choices[0]?.message.content ?? "").replace(/ done$/, "");
+  };
+  // The extension got the whole URL, password included.
+  expect(await asked()).toBe(digest(full));
+
+  // Reopened, the field shows the redacted URL; saving another field sends no proxy_url, and the
+  // password stays.
+  await detail.getByRole("button", { name: "Edit", exact: true }).click();
+  await expect(proxy).toHaveValue("socks5://redacted@proxy.example:1080");
+  const shots = process.env.ACCOUNT_SETTINGS_SHOTS;
+  if (shots) {
+    mkdirSync(shots, { recursive: true });
+    await page.setViewportSize({ width: 1280, height: 2000 });
+    await form.screenshot({ path: join(shots, "edit-form-proxy.png"), animations: "disabled" });
+    await page.setViewportSize({ width: 1280, height: 800 });
+  }
+  await form.getByLabel("Priority (priority)").fill("3");
+  const patch = page.waitForRequest(
+    (r) => r.method() === "PATCH" && r.url().endsWith("/accounts/settings-proxy"),
+  );
+  await form.getByRole("button", { name: "Save", exact: true }).click();
+  expect((await patch).postDataJSON()).toEqual({ priority: 3 });
+  await expect(form).toHaveCount(0);
+  expect(await shown()).toBe("socks5://redacted@proxy.example:1080");
+  expect(await asked()).toBe(digest(full));
+
+  // Clearing the field sets the default: no proxy.
+  await detail.getByRole("button", { name: "Edit", exact: true }).click();
+  await proxy.fill("");
+  await form.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(form).toHaveCount(0);
+  expect(await shown()).toBeUndefined();
+  expect(await asked()).toBe("none");
 });
