@@ -237,12 +237,24 @@ fn ask_on_close(app: &AppHandle) {
     #[cfg(feature = "native-test")]
     native_test::window_prompted();
     let (tx, rx) = std::sync::mpsc::channel();
-    let asked = app.get_webview(MAIN).is_some_and(|main| {
+    let started = std::time::Instant::now(); // TEMPORARY (flake loop)
+    let sent = app.get_webview(MAIN).is_some_and(|main| {
         main.eval_with_callback("window.__pluxyClosePrompt?.() === true", move |r| {
-            let _ = tx.send(r == "true");
+            let _ = tx.send(r);
         })
         .is_ok()
-    }) && rx.recv_timeout(std::time::Duration::from_secs(3)) == Ok(true);
+    });
+    let got = if sent {
+        rx.recv_timeout(std::time::Duration::from_secs(3))
+            .map_err(|e| e.to_string())
+    } else {
+        Err("no webview or eval failed".into())
+    };
+    eprintln!(
+        "pluxy-app: [diag] the close prompt answered {got:?} after {:?}",
+        started.elapsed()
+    );
+    let asked = got.as_deref() == Ok("true");
     if !asked {
         eprintln!("pluxy-app: the window did not answer the close request: closing to the tray");
         close_to_tray(app);

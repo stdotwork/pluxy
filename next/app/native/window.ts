@@ -52,11 +52,15 @@ async function stage(name: string): Promise<Stage> {
     stdio: ["ignore", "pipe", "pipe"],
   });
   child = proc;
+  const t0 = performance.now();
   const result: Stage = { code: null, prompts: 0 };
   const lines: string[] = [];
   const onLine = (line: string) => {
     lines.push(line);
     if (lines.length > 80) lines.shift();
+    // TEMPORARY (flake loop): the app's own lines and diagnostics, as they come.
+    if (/^(pluxy-app:|native-test: (diag|window_prompt))/.test(line))
+      console.log(`window: [app ${name} +${((performance.now() - t0) / 1000).toFixed(3)}s] ${line}`);
     const m = /^native-test: (window_\w+) (.*)$/.exec(line);
     if (!m) return;
     const value = JSON.parse(m[2] as string);

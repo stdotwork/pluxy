@@ -295,6 +295,11 @@ fn save_choice(app: &AppHandle, choice: &str) -> bool {
 
 /// Closes the window and answers the prompt: whether it was asked.
 fn answer(app: &AppHandle, choice: &str, remember: bool) -> bool {
+    // TEMPORARY (flake loop): is the prompt's handler there when the window is asked to close?
+    log(
+        "diag",
+        json!({"before_close": main_eval(app, "({handler: typeof window.__pluxyClosePrompt, nav: document.querySelector('[data-part=nav]') !== null, since_load_ms: Math.round(performance.now())})")}),
+    );
     request_close(app);
     if within(5, || prompt_open(app).then_some(())).is_none() {
         return false;
@@ -328,11 +333,22 @@ fn ensure_open(c: &mut Checks, app: &AppHandle) {
 /// A pending login polls while the window shows, not while it is minimized.
 fn polling(c: &mut Checks, app: &AppHandle) {
     let tile = "[...document.querySelectorAll('[data-part=method]')].find((t) => t.textContent.includes('test/alpha') && t.textContent.includes('Test browser'))";
-    let started = goto(app, "add-account", "[data-part=method]")
+    // TEMPORARY (flake loop): which step of starting the sign-in fails.
+    let page = |app: &AppHandle, at: &str| {
+        log(
+            "diag",
+            json!({"signin": at, "page": main_eval(app, &format!("({{hash: location.hash, tile: !!({tile}), button: (() => {{ const b = [...({tile})?.querySelectorAll('button') ?? []].find((b) => b.textContent.trim() === 'Test browser'); return b ? {{disabled: b.disabled}} : null; }})(), text: document.querySelector('[data-part=main]')?.innerText.slice(0, 600)}})"))}),
+        );
+    };
+    let went = goto(app, "add-account", "[data-part=method]");
+    page(app, &format!("after goto: {went}"));
+    let clicked = went
         && main_eval(
             app,
             &format!("(() => {{ const b = [...({tile})?.querySelectorAll('button') ?? []].find((b) => b.textContent.trim() === 'Test browser'); if (!b) return false; b.click(); return true; }})()"),
-        ) == Some(json!(true))
+        ) == Some(json!(true));
+    page(app, &format!("after click: {clicked}"));
+    let started = clicked
         && within(10, || {
             (main_eval(
                 app,
@@ -341,6 +357,7 @@ fn polling(c: &mut Checks, app: &AppHandle) {
             .then_some(())
         })
         .is_some();
+    page(app, &format!("after waiting for Open Link: {started}"));
     if !c.check(started, "a test/alpha browser sign-in is pending") {
         return;
     }

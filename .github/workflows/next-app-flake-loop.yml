@@ -1,0 +1,52 @@
+# TEMPORARY: loops the native tray window suite to measure its flake; removed before review.
+name: Next app window loop
+
+on:
+  push:
+    branches:
+      - next/p8-native-window-flake
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: next/app
+
+jobs:
+  loop:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install packages
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth dbus-daemon \
+            xdg-desktop-portal xdg-desktop-portal-gtk ayatana-indicator-application squashfs-tools xdotool
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: next/go.mod
+          cache: true
+          cache-dependency-path: next/go.mod
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.3'
+      - uses: dtolnay/rust-toolchain@1.97.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: next/app/src-tauri -> target
+      - name: UI kit install
+        working-directory: next/ui
+        run: bun install --frozen-lockfile
+      - name: Install
+        run: bun install --frozen-lockfile
+      - name: Window suite loop
+        timeout-minutes: 45
+        env:
+          PLUXY_APP_TEST_WINDOW_LOOP: '15'
+        run: bun run test:native

@@ -496,6 +496,19 @@ try {
   const prepared = mkdtempSync(join(tmpdir(), "pluxy-app-native-core-"));
   try {
     const { core } = JSON.parse(run("go", ["run", "./e2e/panelcore", "-probe", "-prepare", prepared], next));
+    // TEMPORARY (flake loop): only the tray window suite, N times.
+    const loop = Number(process.env.PLUXY_APP_TEST_WINDOW_LOOP ?? 0);
+    if (loop > 0) {
+      let bad = 0;
+      for (let i = 1; i <= loop; i++) {
+        console.log(`loop: iteration ${i}/${loop}`);
+        const p = await runApp("managed", bin, { mode: "managed", core_path: core }, undefined, false, false, undefined, "window");
+        if (p.length > 0) bad++;
+        console.log(`loop: iteration ${i}/${loop} ${p.length === 0 ? "passed" : "FAILED"}`);
+      }
+      console.log(`loop: ${bad} of ${loop} iterations failed`);
+      process.exit(bad === 0 ? 0 : 1);
+    }
     const p = await runApp("managed", bin, { mode: "managed", core_path: core });
     p.push(...(await runApp("managed", bin, { mode: "managed", core_path: core }, undefined, true)));
     p.push(...(await runApp("managed", bin, { mode: "managed", core_path: core }, undefined, true, true)));
