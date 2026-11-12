@@ -82,7 +82,11 @@ function CoreVersions(props: { connection: Connection }) {
   useEffect(() => {
     const n = ++latest.current;
     coreVersions().then(
-      (next) => n === latest.current && setV(next),
+      (next) => {
+        if (n !== latest.current) return;
+        setV(next);
+        setError(undefined);
+      },
       (e) => n === latest.current && setError(String(e)),
     );
   }, [c]);
