@@ -574,9 +574,11 @@ func (s *Stream) Next() llm.Event {
 }
 
 // last returns what Next returns once the call has ended: first the end of an endpoint reply's
-// body that was held back, if any, then the terminal event, again and again.
+// body that was held back, if any, when the body ended with finish, then the terminal event,
+// again and again. A body that breaks off (an error, a cancel) drops what was held back: it was
+// held only because it could be the start of a secret, and the body is broken there anyway.
 func (s *Stream) last() llm.Event {
-	if rest := s.body.Flush(); rest != "" {
+	if rest := s.body.Flush(); rest != "" && s.final.Type == llm.EventFinish {
 		return llm.Event{Type: llm.EventNative, Raw: bodyPiece(rest)}
 	}
 	return *s.final

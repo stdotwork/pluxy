@@ -118,8 +118,8 @@ func splitRequest(model string) llm.Request {
 
 // An endpoint reply's body has the account's credential and the secrets in its settings removed
 // even where the extension cuts one between body pieces: the client gets [redacted] in its place,
-// never the secret. The end of the body is not lost: a body that ends with only the start of a
-// secret gets it as it was sent, and so does one that breaks off with an error.
+// never the secret. A body that ends with only the start of a secret gets it as it was sent; one
+// that breaks off with an error does not, since what core held back could be part of a secret.
 func TestEndpointBodySecretSplitAcrossPieces(t *testing.T) {
 	ext := startSplitBody(t)
 	for _, c := range []struct {
@@ -130,7 +130,7 @@ func TestEndpointBodySecretSplitAcrossPieces(t *testing.T) {
 		{"three", "key [redacted] done", llm.EventFinish},
 		{"end", "setting [redacted]", llm.EventFinish},
 		{"prefix", "cut sk-spli", llm.EventFinish},
-		{"error", "cut sk-spli", llm.EventError},
+		{"error", "cut ", llm.EventError},
 	} {
 		t.Run(c.model, func(t *testing.T) {
 			s := ext.Endpoint(context.Background(), splitAccount, splitRequest(c.model))
@@ -150,8 +150,8 @@ func TestEndpointBodySecretSplitAcrossPieces(t *testing.T) {
 }
 
 // A call cancelled while core holds back the end of a body piece, which could be the start of a
-// secret, still gets that end before the cancelled error.
-func TestEndpointBodyHeldEndOnCancel(t *testing.T) {
+// secret, ends with the cancelled error without that end: the body is broken there anyway.
+func TestEndpointBodyHeldEndDroppedOnCancel(t *testing.T) {
 	ext := startSplitBody(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -167,7 +167,7 @@ func TestEndpointBodyHeldEndOnCancel(t *testing.T) {
 	}
 	cancel()
 	rest, last := readBody(t, s)
-	if body := first + rest; body != "cut sk-spli" || last.Type != llm.EventError || last.Error.Code != llm.CodeCancelled {
-		t.Errorf("body %q ending with %+v; want %q ending with a cancelled error", body, last, "cut sk-spli")
+	if body := first + rest; body != "cut " || last.Type != llm.EventError || last.Error.Code != llm.CodeCancelled {
+		t.Errorf("body %q ending with %+v; want %q ending with a cancelled error", body, last, "cut ")
 	}
 }

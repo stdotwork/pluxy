@@ -466,9 +466,10 @@ The body is text: send it as it should reach the client. Core removes the accoun
 [Accounts](#accounts)) as from `raw` fields, also where one piece ends partway through a secret and
 the next goes on with it. To do so, core holds back the end of a piece that could be the start of a
 secret in one of the forms it removes, always fewer bytes than the longest of those forms, until
-the next piece shows whether it is one; it sends what it holds once the body ends, breaks off with
-an error or is cancelled. Except for the direct `codex.models` call above, an `error` before
-`response.start` is
+the next piece shows whether it is one. It sends what it holds once the body ends with `finish`,
+and drops it when the body breaks off with an error or is cancelled: the body is broken there
+anyway, and what it held could be part of a secret. Except for the direct `codex.models` call
+above, an `error` before `response.start` is
 routed as for `generate`: core tries another account when it is retryable, and otherwise answers
 the client with an error in OpenAI's shape. An `error` after `response.start` ends the body where
 it is; a `text/event-stream` body then gets a last `error` event. An account that does not serve
