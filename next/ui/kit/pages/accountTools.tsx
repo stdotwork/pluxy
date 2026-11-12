@@ -22,7 +22,6 @@ const t = strings("accountTools", {
   active: "Requests now",
   cooling: "Cooling",
   noCooldown: "No active cooldowns.",
-  scope: "Scope",
   scopeModel: "{scope} · {model}",
   model: "Model",
   kind: "Kind",
@@ -34,13 +33,13 @@ const t = strings("accountTools", {
   quota: "Quota restriction",
   cooldown: "Cooldown",
   clear: "Clear cooldown",
+  clearTitle: "Clear credential cooldown?",
   clearConfirm:
     "Clear the local routing cooldown for “{name}”? This may make the credential eligible for another request immediately. It does not restore upstream quota.",
   cleared: "Cooldown cleared for {name}.",
   cancel: "Cancel",
   models: "Models",
   supported: "Supported models",
-  upstream: "Upstream ID",
   names: "Client names",
   status: "Status",
   excluded: "Excluded",
@@ -166,7 +165,7 @@ export function AccountTools(props: { account: Account; onChanged(): void }) {
         )}
       </section>
       {confirm && (
-        <ConfigDialog title={t("clear")} close={() => !busy && setConfirm(false)}>
+        <ConfigDialog title={t("clearTitle")} close={() => !busy && setConfirm(false)}>
           <p data-part="account-cooldown-confirm">{t("clearConfirm", { name: a.label || a.id })}</p>
           <div class="actions">
             <ConfirmButton
@@ -381,6 +380,7 @@ function AccountSignIn(props: { account: Account; onChanged(): void }) {
                     extension={props.account.extension ?? ""}
                     method={method}
                     existingAccountId={props.account.id}
+                    keptInputs={Object.keys(props.account.settings ?? {})}
                     onSuccess={props.onChanged}
                     onReset={() => {
                       setSelected(undefined);
