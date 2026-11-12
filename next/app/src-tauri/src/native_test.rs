@@ -65,6 +65,7 @@ const PLUGINS: &[&str] = &[
 /// Commands the window's probe leaves out: they take no arguments and would act.
 const ACTING: &[&str] = &[
     "sign_out",
+    "core_start",
     "core_restart",
     "key_entry",
     "confirmation_settings",

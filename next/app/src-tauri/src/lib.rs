@@ -606,6 +606,13 @@ async fn connection_set(webview: Webview, change: Change) -> Result<View, String
     with_conn(&webview, move |c| c.change(change)).await
 }
 
+/// Starts the app's own core only if it is not running, as the tray's Start does: a click that
+/// races a recovery leaves the recovered core alone.
+#[tauri::command]
+async fn core_start(webview: Webview) -> Result<View, String> {
+    with_conn(&webview, |c| c.resume_core()).await
+}
+
 #[tauri::command]
 async fn core_restart(webview: Webview) -> Result<View, String> {
     with_conn(&webview, |c| c.restart_core()).await
@@ -1017,6 +1024,7 @@ pub fn run() {
             startup_set,
             connection_get,
             connection_set,
+            core_start,
             core_restart,
             core_call,
             key_entry,

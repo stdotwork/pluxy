@@ -11,7 +11,7 @@ import {
   type Connection,
   type ConnectionChange,
   connectionSet,
-  coreRestart,
+  coreAction,
   keyEntry,
   type Mode,
 } from "./host";
@@ -100,7 +100,7 @@ export function ConnectionPage(props: { connection: Connection; onChange: (c: Co
           )}
           {c.mode === "managed" && (
             <div class="actions">
-              <Button disabled={busy} onClick={() => apply(coreRestart)}>
+              <Button disabled={busy} onClick={() => apply(coreAction(c))}>
                 {c.core?.state === "running" ? "Restart core" : "Start core"}
               </Button>
             </div>

@@ -1022,6 +1022,46 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    /// Start leaves a running core alone and Restart replaces it. The window's Start and the
+    /// tray's use Start, so a click that races a recovery keeps the recovered core.
+    #[cfg(unix)]
+    #[test]
+    fn start_leaves_a_live_core_alone_and_restart_replaces_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir =
+            std::env::temp_dir().join(format!("pluxy-app-start-{}", crate::managed::random_key()));
+        fs::create_dir_all(&dir).unwrap();
+        let dirs = Dirs {
+            config: dir.join("config"),
+            core: dir.join("core"),
+        };
+        let program = dir.join("core.sh");
+        fs::write(
+            &program,
+            "#!/bin/sh\necho 'pluxy: listening on http://127.0.0.1:1' >&2\nexec sleep 30\n",
+        )
+        .unwrap();
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        Settings {
+            mode: Some(Mode::Managed),
+            core_path: Some(program.display().to_string()),
+            ..Settings::default()
+        }
+        .save(&dirs.settings())
+        .unwrap();
+        let mut c = Connection::open(dirs, None);
+        let first = c.core_pid().expect("the fixture core runs");
+        c.resume_core().unwrap();
+        assert_eq!(c.core_pid(), Some(first), "Start replaced a running core");
+        // The same measure sees a replaced core.
+        c.restart_core().unwrap();
+        let second = c.core_pid().expect("Restart runs a core");
+        assert_ne!(second, first, "Restart kept the old core");
+        c.stop_core();
+        assert_eq!(c.core_pid(), None);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     /// A core can exit while the app is still starting, before anything can act on its exit
     /// callback. Asking the connection afterwards, as the app's setup does, schedules recovery.
     #[cfg(unix)]
