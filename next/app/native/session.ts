@@ -259,14 +259,17 @@ let code = SETUP_FAILED;
 try {
   await setup();
   code = await new Promise<number>((resolve, reject) => {
-    // The startup suite launches the app itself, several times; otherwise the app runs once here.
+    // The startup and window suites launch the app themselves, several times and reading its
+    // output; otherwise the app runs once here, and the tray checks read its output.
     appProc = process.env.PLUXY_APP_TEST_STARTUP_SUITE
       ? spawn(
           process.execPath,
           [join(import.meta.dir, "startup.ts"), app, process.env.PLUXY_APP_TEST_STARTUP_SUITE, probe],
           { stdio: "inherit" },
         )
-      : spawn(app, [], { stdio: ["ignore", "pipe", "pipe"] });
+      : process.env.PLUXY_APP_TEST_WINDOW_BIN
+        ? spawn(app, [], { stdio: "inherit" })
+        : spawn(app, [], { stdio: ["ignore", "pipe", "pipe"] });
     const lines: string[] = []; // the app's output so far, which the tray checks read
     for (const stream of [appProc.stdout, appProc.stderr]) {
       if (!stream) continue;

@@ -17,6 +17,9 @@ type affinity struct {
 	// since holds, per account ID retain dropped, the oldest router generation that may bind
 	// sessions to it (see State.Retain).
 	since map[string]uint64
+	// revs holds, per account ID restart dropped, the oldest account revision that may bind
+	// sessions to it (see State.restart).
+	revs map[string]uint64
 }
 
 type affinityKey struct{ tenant, model, session string }
@@ -32,7 +35,7 @@ type binding struct {
 const maxBindings = 100_000
 
 func newAffinity() *affinity {
-	return &affinity{bindings: map[affinityKey]binding{}, since: map[string]uint64{}}
+	return &affinity{bindings: map[affinityKey]binding{}, since: map[string]uint64{}, revs: map[string]uint64{}}
 }
 
 // lookup returns the account bound to the session, if any.
@@ -47,11 +50,11 @@ func (f *affinity) lookup(k affinityKey, now time.Time) (string, bool) {
 }
 
 // bind binds the session to account a until ttl from now, unless a is a copy of an account
-// from before retain dropped it.
+// from before retain or restart dropped it.
 func (f *affinity) bind(k affinityKey, a *Account, now time.Time, ttl time.Duration) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if a.gen < f.since[a.ID] {
+	if a.gen < f.since[a.ID] || a.rev < f.revs[a.ID] {
 		return
 	}
 	account := a.ID
@@ -78,6 +81,21 @@ func (f *affinity) retain(keep, changed map[string]bool, gen uint64) {
 	}
 	for k, b := range f.bindings {
 		if !keep[b.account] {
+			delete(f.bindings, k)
+		}
+	}
+}
+
+// unbind drops the bindings to the accounts in revs, which copies of an older revision than the
+// one given may no longer make.
+func (f *affinity) unbind(revs map[string]uint64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for id, rev := range revs {
+		f.revs[id] = rev
+	}
+	for k, b := range f.bindings {
+		if _, ok := revs[b.account]; ok {
 			delete(f.bindings, k)
 		}
 	}

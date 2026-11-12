@@ -176,6 +176,24 @@
       "want": "pluxy-xai/0.1.0"
     },
     {
+      "path": "upstream[0].body.tools[0].description",
+      "kind": "intended",
+      "reason": "The extension sends every custom tool the client declares as a function with one input string, because a client cannot run a function call for a tool it declared custom (the Codex CLI ends the turn with an incompatible payload error). The description tells xAI to put the tool's text in input and carries the grammar that the format field held. Today's core sends the client's description unchanged and gives a custom tool other than apply_patch no input field.",
+      "want": "run a shell command\n\nCall this function with a JSON object whose input field contains the complete input text for the tool.\n\nThe input must follow this lark grammar:\nstart: /.+/"
+    },
+    {
+      "path": "upstream[0].body.tools[0].format",
+      "kind": "intended",
+      "reason": "A function tool has no format field, so the extension moves the custom tool's lark grammar into its description. Today's core sends the format field as it came on the function it makes for a custom tool other than apply_patch.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.tools[0].parameters",
+      "kind": "intended",
+      "reason": "The extension sends every custom tool the client declares as a function with one required string argument, input, because a client cannot run a function call for a tool it declared custom (the Codex CLI ends the turn with an incompatible payload error). Today's core sends an empty-object schema for a custom tool other than apply_patch.",
+      "want": {"additionalProperties": false, "properties": {"input": {"description": "The complete input text for the tool.", "type": "string"}}, "required": ["input"], "type": "object"}
+    },
+    {
       "path": "client.events[*].data.response.usage.input_tokens_details",
       "kind": "gap",
       "reason": "Today's core fills in zero cached and reasoning token counts when the upstream reports usage without them (EnsureResponsesUsageDetails); the new core reports xAI's usage as it comes. Whether to keep it is open.",

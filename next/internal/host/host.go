@@ -22,6 +22,7 @@ import (
 
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
+	"github.com/stdotwork/pluxy/next/sdk/payload"
 )
 
 // waitDelay bounds how long collecting an exited program waits for a child process of it that
@@ -46,6 +47,13 @@ type Options struct {
 	// ProxyURL returns core's global proxy_url setting, read at each call: the proxy of every
 	// account without one of its own (proxyurl.Resolve). Nil: none.
 	ProxyURL func() string
+	// Payload returns core's payload rules, read at each generate, count_tokens and endpoint
+	// call: the call carries those that match it (protocol minor version 14). Nil: none.
+	Payload func() *payload.Rules
+	// SettingsSecrets returns the secret values in an account's settings, a JSON object. They
+	// are removed from what every call on the account sends back and from the program's
+	// output, as its credential is. Core passes configdoc.SettingsSecrets. Default: none.
+	SettingsSecrets func(settings []byte) []string
 }
 
 // Extension is a running extension program.
@@ -66,16 +74,19 @@ type Extension struct {
 
 // held are the credentials core has given the extension or got back from it, so that its output
 // is logged without them: for each account the latest two (after a refresh the extension may
-// still write the one it replaced), and what a user entered during a login. Accounts are not
-// forgotten while the extension runs, so this grows only with the accounts it has served.
+// still write the one it replaced), the secrets of every settings it has had (a call still
+// running after changes has old ones), and what a user entered during a login. Nothing is
+// forgotten while the extension's program runs, so this grows only with the accounts it has
+// served and their settings changes, and goes with the program.
 //
 // shortcut: a credential the extension creates (a refresh or login result) and writes out before
 // core has it is logged as written; the redaction catches it only once the result arrives.
 type held struct {
-	mu     sync.Mutex
-	by     map[string][]heldCredential
-	proxy  map[string][]heldCredential // the proxy secrets of each account, apart from by so no account ID can name them
-	redact *protocol.Redactor
+	mu       sync.Mutex
+	by       map[string][]heldCredential
+	out      map[string][]heldCredential // the proxy and header secrets of each account, apart from by so no account ID can name them
+	settings map[string][]heldCredential // the secrets in each account's settings, apart in the same way
+	redact   *protocol.Redactor
 }
 
 type heldCredential struct {
@@ -83,14 +94,23 @@ type heldCredential struct {
 	c   *protocol.Credential
 }
 
-// add records that the extension holds c for owner (an account ID).
-func (h *held) add(owner string, c *protocol.Credential) { h.record(&h.by, owner, c) }
+// add records that the extension holds c for owner (an account ID), with the one before it.
+func (h *held) add(owner string, c *protocol.Credential) { h.record(&h.by, owner, c, 2) }
 
-// addProxy records that the extension holds c, the proxy secrets of account, kept apart from the
-// credentials add records so that no account ID can name the same entry.
-func (h *held) addProxy(account string, c *protocol.Credential) { h.record(&h.proxy, account, c) }
+// addOutbound records that the extension holds c, the proxy and header secrets of account, kept
+// apart from the credentials add records so that no account ID can name the same entry.
+func (h *held) addOutbound(account string, c *protocol.Credential) { h.record(&h.out, account, c, 2) }
 
-func (h *held) record(m *map[string][]heldCredential, owner string, c *protocol.Credential) {
+// addSettings records that the extension holds c, the secrets in account's settings, kept apart
+// in the same way, for as long as its program runs. This keeps one entry for each settings an
+// account has had while the program runs; settings change only when an administrator changes
+// them (a reload, PATCH /accounts), so that is how far it grows, and it goes with the program.
+func (h *held) addSettings(account string, c *protocol.Credential) {
+	h.record(&h.settings, account, c, 0)
+}
+
+// record records c for owner in m, keeping the latest n for owner, or all when n is 0.
+func (h *held) record(m *map[string][]heldCredential, owner string, c *protocol.Credential, n int) {
 	if c == nil {
 		return
 	}
@@ -98,7 +118,8 @@ func (h *held) record(m *map[string][]heldCredential, owner string, c *protocol.
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	list := (*m)[owner]
-	if len(list) > 0 && list[len(list)-1].key == string(b) {
+	if n == 0 && slices.ContainsFunc(list, func(hc heldCredential) bool { return hc.key == string(b) }) ||
+		len(list) > 0 && list[len(list)-1].key == string(b) {
 		return
 	}
 	if *m == nil {
@@ -106,9 +127,12 @@ func (h *held) record(m *map[string][]heldCredential, owner string, c *protocol.
 	}
 	cc := *c
 	list = append(list, heldCredential{string(b), &cc})
-	(*m)[owner] = list[max(0, len(list)-2):]
+	if n > 0 {
+		list = list[max(0, len(list)-n):]
+	}
+	(*m)[owner] = list
 	var all []*protocol.Credential
-	for _, by := range []map[string][]heldCredential{h.by, h.proxy} {
+	for _, by := range []map[string][]heldCredential{h.by, h.out, h.settings} {
 		for _, l := range by {
 			for _, hc := range l {
 				all = append(all, hc.c)
@@ -116,6 +140,24 @@ func (h *held) record(m *map[string][]heldCredential, owner string, c *protocol.
 		}
 	}
 	h.redact = protocol.NewRedactor(all...)
+}
+
+// holdAccount records that the extension holds a's credential and the secrets in a's settings,
+// and returns both as credentials, for the Redactor of a call on a.
+func (e *Extension) holdAccount(a protocol.Account) []*protocol.Credential {
+	e.held.add(a.ID, a.Credential)
+	return []*protocol.Credential{a.Credential, e.holdSettings(a)}
+}
+
+// holdSettings records that the extension holds the secrets in a's settings
+// (Options.SettingsSecrets), and returns them as a credential.
+func (e *Extension) holdSettings(a protocol.Account) *protocol.Credential {
+	if e.opts.SettingsSecrets == nil || len(a.Settings) == 0 {
+		return nil
+	}
+	c := secretsCredential(e.opts.SettingsSecrets(a.Settings))
+	e.held.addSettings(a.ID, c)
+	return c
 }
 
 // String returns s without the credentials the extension holds.
@@ -353,8 +395,9 @@ func (e *Extension) Stop() {
 }
 
 // Generate starts a generate call. The call is cancelled when ctx ends or the stream is closed.
-// Every event the call returns has the account's credential removed (protocol.Redactor), so
-// nothing the extension or its upstream echoes reaches a client or a log with it.
+// Every event the call returns has the account's credential and the secrets in its settings
+// removed (protocol.Redactor, Options.SettingsSecrets), so nothing the extension or its upstream
+// echoes reaches a client or a log with them.
 func (e *Extension) Generate(ctx context.Context, account protocol.Account, req llm.Request) *Stream {
 	return e.call(ctx, protocol.OpGenerate, account, req)
 }
@@ -381,9 +424,10 @@ func ServesEndpoints(info protocol.Info) bool {
 	return info.ProtocolMinor >= 7 && slices.Contains(info.Operations, protocol.OpEndpoint)
 }
 
-// Endpoint starts an endpoint call, answered as a generate call is (see Generate). An extension
-// that serves no endpoints answers at once with an unsupported error about the account, so
-// routing moves on to another account.
+// Endpoint starts an endpoint call, answered as a generate call is (see Generate). The reply's
+// body is redacted as one text, also where a secret is cut between its pieces
+// (protocol.BodyRedactor). An extension that serves no endpoints answers at once with an
+// unsupported error about the account, so routing moves on to another account.
 func (e *Extension) Endpoint(ctx context.Context, account protocol.Account, req llm.Request) *Stream {
 	if !ServesEndpoints(e.info) {
 		return servesNoEndpoints(e.manifest.ID, req)
@@ -418,13 +462,19 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 		return failed(llm.CodeExtensionUnavailable, fmt.Sprintf("extension %s is not running", e.manifest.ID))
 	default:
 	}
-	proxy, perr := e.proxied(&account)
+	proxy, perr := e.outbound(&account)
 	if perr != nil {
 		s := &Stream{}
 		s.fail(perr)
 		return s
 	}
-	e.held.add(account.ID, account.Credential)
+	rules, perr := e.payload(ctx, account.ID, req)
+	if perr != nil {
+		s := &Stream{}
+		s.fail(perr)
+		return s
+	}
+	redact := protocol.NewRedactor(append(e.holdAccount(account), proxy)...)
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", e.socket)
 	if err != nil {
@@ -433,9 +483,12 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 		}
 		return failed(llm.CodeExtensionUnavailable, fmt.Sprintf("extension %s is not reachable: %v", e.manifest.ID, err))
 	}
-	s := &Stream{conn: conn, ctx: ctx, ext: e, redact: protocol.NewRedactor(account.Credential, proxy)}
+	s := &Stream{conn: conn, ctx: ctx, ext: e, redact: redact, capture: capture(ctx, e.info), account: account.ID}
+	if op == protocol.OpEndpoint {
+		s.body = redact.Body()
+	}
 	s.stop = context.AfterFunc(ctx, func() { conn.Close() })
-	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: op, Account: &account, Request: &req}
+	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: op, Account: &account, Request: &req, Capture: s.capture != nil, Payload: rules}
 	if err := protocol.WriteFrame(conn, call); err != nil {
 		if errors.Is(err, protocol.ErrFrameTooLarge) {
 			// The request is valid but too big to pass on in one frame; only a smaller request
@@ -456,11 +509,19 @@ type Stream struct {
 	ctx    context.Context
 	ext    *Extension
 	redact *protocol.Redactor
-	stop   func() bool
-	seq    llm.Sequence
-	final  *llm.Event
+	// body is an endpoint call's: it redacts the reply's body across its pieces, holding back
+	// the end of a piece that could be the start of a secret (protocol.BodyRedactor). Its secrets
+	// are redact's, those the call was sent with; a refresh or a settings change while the reply
+	// runs reaches later calls, not this one, so they do not change mid-body.
+	body  *protocol.BodyRedactor
+	stop  func() bool
+	seq   llm.Sequence
+	final *llm.Event
 	// onClose ends the call on its managed generation; safe to call more than once.
 	onClose func()
+	// capture receives the call's diagnostic frames; nil when the call is not captured.
+	capture CaptureFunc
+	account string
 }
 
 func failed(code, msg string) *Stream {
@@ -478,23 +539,67 @@ func (s *Stream) fail(e *llm.Error) {
 // Next returns the next event.
 func (s *Stream) Next() llm.Event {
 	if s.final != nil {
-		return *s.final
+		return s.last()
 	}
 	var reply protocol.Reply
 	if err := protocol.ReadFrame(s.conn, &reply); err != nil {
 		s.fail(s.readError(err))
-		return *s.final
+		return s.last()
+	}
+	for reply.Type == protocol.TypeDiagnostic {
+		if s.capture != nil && reply.Diagnostic != nil {
+			s.capture(s.account, redactDiagnostic(s.redact, *reply.Diagnostic))
+		}
+		reply = protocol.Reply{}
+		if err := protocol.ReadFrame(s.conn, &reply); err != nil {
+			s.fail(s.readError(err))
+			return s.last()
+		}
 	}
 	if err := s.seq.Check(reply.Event); err != nil {
-		s.fail(&llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s broke the protocol: %v", s.ext.manifest.ID, err)})
-		return *s.final
+		s.fail(redacted(s.redact, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s broke the protocol: %v", s.ext.manifest.ID, err)}))
+		return s.last()
+	}
+	var piece string
+	if s.body != nil && reply.Event.Type == llm.EventNative && json.Unmarshal(reply.Event.Raw, &piece) == nil {
+		// A piece of an endpoint reply's body, redacted with what came before it. A piece that is
+		// not a JSON string is redacted on its own below, for the server to refuse.
+		ev := reply.Event
+		ev.Raw = nil
+		ev = s.redact.Event(ev)
+		if out := s.body.Write(piece); out != piece {
+			ev.Raw = bodyPiece(out)
+		} else {
+			ev.Raw = reply.Event.Raw
+		}
+		return ev
 	}
 	ev := s.redact.Event(reply.Event)
 	if ev.Terminal() {
 		s.final = &ev
 		s.Close()
+		return s.last()
 	}
 	return ev
+}
+
+// last returns what Next returns once the call has ended: first the end of an endpoint reply's
+// body that was held back, if any, when the body ended with finish, then the terminal event,
+// again and again. A body that breaks off (an error, a cancel) drops what was held back: it was
+// held only because it could be the start of a secret, and the body is broken there anyway.
+func (s *Stream) last() llm.Event {
+	if rest := s.body.Flush(); rest != "" && s.final.Type == llm.EventFinish {
+		return llm.Event{Type: llm.EventNative, Raw: bodyPiece(rest)}
+	}
+	return *s.final
+}
+
+// bodyPiece returns a body piece as the JSON string a native event carries. BodyRedactor cuts
+// a body only where a form of a secret starts, which is where a character starts, so the piece
+// is valid UTF-8 as the decoded string it came from was, and encodes exactly.
+func bodyPiece(text string) json.RawMessage {
+	b, _ := json.Marshal(text)
+	return b
 }
 
 func (s *Stream) readError(err error) *llm.Error {
@@ -504,7 +609,7 @@ func (s *Stream) readError(err error) *llm.Error {
 	var se *json.SyntaxError
 	var te *json.UnmarshalTypeError
 	if errors.Is(err, protocol.ErrFrameTooLarge) || errors.As(err, &se) || errors.As(err, &te) {
-		return &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s sent a bad frame: %v", s.ext.manifest.ID, err)}
+		return redacted(s.redact, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s sent a bad frame: %v", s.ext.manifest.ID, err)})
 	}
 	return &llm.Error{Code: llm.CodeExtensionCrashed, Message: fmt.Sprintf("extension %s ended the call without finishing it", s.ext.manifest.ID)}
 }

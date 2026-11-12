@@ -250,6 +250,11 @@ These stay stable within a theme contract version:
 | `data-part="account-test-result"` | The last explicit account test result. |
 | `data-part="account-test-reply"` | The start of the test reply. |
 | `data-part="account-sign-in"` | Sign in to an existing account again. |
+| `data-part="account-settings"` | An account's routing fields and settings, read-only. |
+| `data-part="account-edit"` | The Edit form of an account added by login. |
+| `data-part="account-edit-row"` | One model or model alias row in the Edit form. |
+| `data-part="account-edit-discard"` | The Edit form's question before unsaved changes are discarded. |
+| `data-part="subscription-end"` | The Quota card's line with the day a subscription ends. |
 
 Every other class name, element and attribute can change in any release.
 

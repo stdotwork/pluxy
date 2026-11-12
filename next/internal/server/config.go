@@ -22,9 +22,11 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/packages"
 	"github.com/stdotwork/pluxy/next/internal/proxyurl"
 	"github.com/stdotwork/pluxy/next/internal/route"
+	"github.com/stdotwork/pluxy/next/internal/upheader"
 	"github.com/stdotwork/pluxy/next/internal/usage"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
+	"github.com/stdotwork/pluxy/next/sdk/payload"
 )
 
 // Config is core's configuration file, version 0.
@@ -79,6 +81,10 @@ type Config struct {
 	// socks5h URL, or direct or none for no proxy. Default: none. Its user name and password are
 	// secret (package proxyurl).
 	ProxyURL string `json:"proxy_url,omitempty"`
+	// Payload is the payload rules (today's payload): fields each extension sets, fills in or
+	// removes in the JSON bodies it sends upstream, for the requests the rules match. Default:
+	// none.
+	Payload *payload.Rules `json:"payload,omitempty"`
 	// keyDigests are the SHA-256 digests of ClientKeys, made when the config is loaded so that a
 	// request's check does not hash a key (prepareClientKeys).
 	keyDigests [][sha256.Size]byte
@@ -356,6 +362,9 @@ func (x ExtensionConfig) validate(name string, seen map[string]bool) error {
 		if err := proxyurl.Check(fmt.Sprintf("%s.accounts[%d].proxy_url", name, i), a.ProxyURL); err != nil {
 			return fmt.Errorf("config: %w", err)
 		}
+		if err := upheader.Check(fmt.Sprintf("%s.accounts[%d].headers", name, i), a.Headers); err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
 	}
 	for _, ms := range []*int64{x.IdleStopMS, x.DrainTimeoutMS, &x.Restart.BackoffMS, &x.Restart.MaxBackoffMS, &x.Restart.StableMS} {
 		if ms != nil && (*ms < 0 || *ms > maxTimingMS) {
@@ -518,6 +527,9 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 		return nil, err
 	}
 	if err := proxyurl.Check("proxy_url", c.ProxyURL); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	if err := payload.Validate(c.Payload); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	trusted, err := parseTrustedProxies(c.TrustedProxies)

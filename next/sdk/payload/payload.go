@@ -22,42 +22,42 @@ import (
 // (the first matching rule wins); Override and OverrideRaw always write it (the last wins); the
 // Raw lists take JSON text as the value; Filter removes fields.
 type Rules struct {
-	Default     []Rule       `json:"default"`
-	DefaultRaw  []Rule       `json:"default-raw"`
-	Override    []Rule       `json:"override"`
-	OverrideRaw []Rule       `json:"override-raw"`
-	Filter      []FilterRule `json:"filter"`
+	Default     []Rule       `json:"default,omitempty"`
+	DefaultRaw  []Rule       `json:"default-raw,omitempty"`
+	Override    []Rule       `json:"override,omitempty"`
+	OverrideRaw []Rule       `json:"override-raw,omitempty"`
+	Filter      []FilterRule `json:"filter,omitempty"`
 }
 
 // Rule writes Params, a path-to-value map, into bodies of the models it names. In the Raw
 // lists a string value is JSON text, written as it is.
 type Rule struct {
-	Models []Model        `json:"models"`
-	Params map[string]any `json:"params"`
+	Models []Model        `json:"models,omitempty"`
+	Params map[string]any `json:"params,omitempty"`
 }
 
 // FilterRule removes the Params paths from bodies of the models it names.
 type FilterRule struct {
-	Models []Model  `json:"models"`
-	Params []string `json:"params"`
+	Models []Model  `json:"models,omitempty"`
+	Params []string `json:"params,omitempty"`
 }
 
 // Model selects the requests a rule applies to. A rule applies when any of its models does.
 type Model struct {
 	// Name is the model name; `*` matches any run of characters.
-	Name string `json:"name"`
+	Name string `json:"name,omitempty"`
 	// Protocol restricts the rule to one extension channel (case-insensitive).
-	Protocol string `json:"protocol"`
+	Protocol string `json:"protocol,omitempty"`
 	// Headers requires every named client header to have a value matching its pattern.
-	Headers map[string]string `json:"headers"`
+	Headers map[string]string `json:"headers,omitempty"`
 	// FromProtocol restricts the rule to one client format.
-	FromProtocol string `json:"from-protocol"`
+	FromProtocol string `json:"from-protocol,omitempty"`
 	// Match requires each path to equal its value; NotMatch requires that none does.
-	Match    []map[string]any `json:"match"`
-	NotMatch []map[string]any `json:"not-match"`
+	Match    []map[string]any `json:"match,omitempty"`
+	NotMatch []map[string]any `json:"not-match,omitempty"`
 	// Exist requires each path to exist and not be null; NotExist, that none does.
-	Exist    []string `json:"exist"`
-	NotExist []string `json:"not-exist"`
+	Exist    []string `json:"exist,omitempty"`
+	NotExist []string `json:"not-exist,omitempty"`
 }
 
 // Input is what a call knows besides the rules and the body.
@@ -79,6 +79,55 @@ type Input struct {
 	// built, for whether a field is missing, so a field the pipeline added is still defaulted.
 	// Without it they check the body.
 	Original []byte
+	// Selected says the rules are what Select returned for this call: their models were matched
+	// to the call already, so Apply checks only each model's body conditions (match, not-match,
+	// exist, not-exist) and ignores Model, RequestedModel, Protocol, FromProtocol and Headers.
+	Selected bool
+}
+
+// Select returns the rules that apply to the call in (its model names, protocol, client format
+// and client headers), for a caller that knows the call but not the final body: each rule keeps
+// only the models that match the call, each reduced to its body conditions, and a rule with none
+// left is dropped. Apply with Selected then gives the same body as Apply with r and in. It
+// returns nil when no rule applies.
+func Select(r *Rules, in Input) *Rules {
+	if r == nil || r.empty() {
+		return nil
+	}
+	model, requested := strings.TrimSpace(in.Model), strings.TrimSpace(in.RequestedModel)
+	if model == "" && requested == "" {
+		return nil
+	}
+	e := &engine{in: in, candidates: modelCandidates(model, requested)}
+	keep := func(models []Model) []Model {
+		var out []Model
+		for i := range models {
+			if e.callMatches(&models[i]) {
+				m := models[i]
+				out = append(out, Model{Match: m.Match, NotMatch: m.NotMatch, Exist: m.Exist, NotExist: m.NotExist})
+			}
+		}
+		return out
+	}
+	rules := func(list []Rule) []Rule {
+		var out []Rule
+		for _, rule := range list {
+			if models := keep(rule.Models); len(models) > 0 {
+				out = append(out, Rule{Models: models, Params: rule.Params})
+			}
+		}
+		return out
+	}
+	s := &Rules{Default: rules(r.Default), DefaultRaw: rules(r.DefaultRaw), Override: rules(r.Override), OverrideRaw: rules(r.OverrideRaw)}
+	for _, rule := range r.Filter {
+		if models := keep(rule.Models); len(models) > 0 {
+			s.Filter = append(s.Filter, FilterRule{Models: models, Params: rule.Params})
+		}
+	}
+	if s.empty() {
+		return nil
+	}
+	return s
 }
 
 // Apply returns the body with the rules applied, and whether it changed. A body that is not a
@@ -89,7 +138,7 @@ func Apply(r *Rules, body []byte, in Input) ([]byte, bool) {
 		return body, false
 	}
 	model, requested := strings.TrimSpace(in.Model), strings.TrimSpace(in.RequestedModel)
-	if model == "" && requested == "" {
+	if model == "" && requested == "" && !in.Selected {
 		return body, false
 	}
 	if i := skipSpace(body, 0); i >= len(body) || (body[i] != '{' && body[i] != '[') || !json.Valid(body) {
@@ -425,25 +474,32 @@ func modelCandidates(model, requested string) []string {
 
 // matches reports whether any model entry applies to this call and to the body as it is now.
 func (e *engine) matches(models []Model) bool {
-	if len(models) == 0 {
+	for i := range models {
+		m := &models[i]
+		if (e.in.Selected || e.callMatches(m)) && e.conditionsMatch(m) {
+			return true
+		}
+	}
+	return false
+}
+
+// callMatches reports whether a model entry applies to this call, before its body conditions:
+// its name matches one of the call's model names, and its protocol, from-protocol and headers
+// hold.
+func (e *engine) callMatches(m *Model) bool {
+	pattern := strings.TrimSpace(m.Name)
+	if pattern == "" {
+		return false
+	}
+	if p := strings.TrimSpace(m.Protocol); p != "" && e.in.Protocol != "" && !strings.EqualFold(p, e.in.Protocol) {
+		return false
+	}
+	if !fromProtocolMatches(m.FromProtocol, e.in.FromProtocol) || !headersMatch(e.in.Headers, m.Headers) {
 		return false
 	}
 	for _, name := range e.candidates {
-		for i := range models {
-			m := &models[i]
-			pattern := strings.TrimSpace(m.Name)
-			if pattern == "" {
-				continue
-			}
-			if p := strings.TrimSpace(m.Protocol); p != "" && e.in.Protocol != "" && !strings.EqualFold(p, e.in.Protocol) {
-				continue
-			}
-			if !fromProtocolMatches(m.FromProtocol, e.in.FromProtocol) || !headersMatch(e.in.Headers, m.Headers) {
-				continue
-			}
-			if matchPattern(pattern, name) && e.conditionsMatch(m) {
-				return true
-			}
+		if matchPattern(pattern, name) {
+			return true
 		}
 	}
 	return false

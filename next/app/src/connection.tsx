@@ -15,8 +15,8 @@ import {
   keyEntry,
   type Mode,
 } from "./host";
-
 import { StartupSettings } from "./startup";
+import { WindowSettings } from "./window";
 
 const MODES = [
   { value: "managed" as const, label: "Run core here", note: "the app starts and stops it" },
@@ -156,6 +156,7 @@ export function ConnectionPage(props: { connection: Connection; onChange: (c: Co
         </form>
       </Card>
       <StartupSettings />
+      <WindowSettings />
     </>
   );
 }

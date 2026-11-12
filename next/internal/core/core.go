@@ -45,9 +45,11 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/packages"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/internal/server"
+	"github.com/stdotwork/pluxy/next/internal/upheader"
 	"github.com/stdotwork/pluxy/next/internal/usage"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
+	"github.com/stdotwork/pluxy/next/sdk/payload"
 )
 
 // Options configure a Core.
@@ -131,6 +133,9 @@ type Core struct {
 // Start loads the config file and publishes it as revision 1. Unless in safe mode, it starts
 // each extension's program to check it; the program then runs only while it is needed.
 func Start(opts Options) (*Core, error) {
+	// What a call on an account sends back, and the extension's output, leave out the secrets in
+	// the account's settings: the values the management API shows as placeholders.
+	opts.Host.SettingsSecrets = configdoc.SettingsSecrets
 	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor(), checks: newChecks(), usage: usage.NewStore()}
 	// Every extension call carries the proxy of the config active when it is sent.
 	c.opts.Host.ProxyURL = func() string {
@@ -138,6 +143,13 @@ func Start(opts Options) (*Core, error) {
 			return s.Config.ProxyURL
 		}
 		return ""
+	}
+	// ... and the payload rules of that config.
+	c.opts.Host.Payload = func() *payload.Rules {
+		if s := c.cur.Load(); s != nil {
+			return s.Config.Payload
+		}
+		return nil
 	}
 	cfg, err := server.LoadConfig(opts.ConfigPath)
 	if err != nil {
@@ -164,7 +176,8 @@ func Start(opts Options) (*Core, error) {
 }
 
 // configSecrets returns the redactor of every secret the config holds: the client keys, the
-// management key and the accounts' credentials.
+// management key, the accounts' credentials, their secret header values (upheader.Forms) and the
+// secrets in their settings.
 func configSecrets(cfg *server.Config) *protocol.Redactor {
 	cs := []*protocol.Credential{{Kind: protocol.CredentialAPIKey, APIKey: cfg.ManagementKey}}
 	for _, k := range cfg.ClientKeys {
@@ -172,6 +185,12 @@ func configSecrets(cfg *server.Config) *protocol.Redactor {
 	}
 	for _, a := range cfg.Accounts() {
 		cs = append(cs, a.Credential)
+		for _, v := range upheader.Forms(a.Headers) {
+			cs = append(cs, &protocol.Credential{Kind: "header", APIKey: v})
+		}
+		for _, s := range configdoc.SettingsSecrets(a.Settings) {
+			cs = append(cs, &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: s})
+		}
 	}
 	return protocol.NewRedactor(cs...)
 }
@@ -608,7 +627,7 @@ func (c *Core) publish(next, prev *snapshot, hash string) {
 	c.accounts.Lock()
 	defer c.accounts.Unlock()
 	accounts := c.routed(next)
-	if err := next.Router.SetAccounts(accounts); err != nil {
+	if err := next.Router.SetAccounts(accounts, sameAccount); err != nil {
 		log.Printf("updating accounts: %v", err)
 	}
 	if prev != nil {
@@ -699,7 +718,7 @@ func (c *Core) accountsChanged() {
 	defer c.accounts.Unlock()
 	s := c.cur.Load()
 	accounts := c.routed(s)
-	if err := s.Router.SetAccounts(accounts); err != nil {
+	if err := s.Router.SetAccounts(accounts, sameAccount); err != nil {
 		log.Printf("updating accounts: %v", err)
 	}
 	c.checkAccounts(s, accounts)

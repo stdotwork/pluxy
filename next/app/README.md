@@ -45,13 +45,23 @@ address or key can always be fixed there.
 
 ## The window and the tray
 
-Closing the window destroys it and its webviews, so they hold no memory while the app sits in
-the tray. The tray menu shows what the app is connected to, and has "Open pluxy" (a new window)
-and "Quit pluxy". In managed mode, "Start core", "Stop core" and "Restart core" control only the
-core the app started. They work with the window closed and no renderer running. "Restart core"
-is enabled only while the core runs. While one of them runs, the tray says "Core working…",
+What closing the window does is the Connection page's **Close behavior**: **Ask every time**
+(the default), **Minimize to Tray** or **Exit App**. Ask every time shows "What would you like to
+do?" with Minimize to Tray, Exit App, Cancel and **Remember this choice**. Exit App quits as the
+tray's Quit does. Minimize to Tray destroys the window and its webviews, so they hold no memory
+while the app sits in the tray. A window that does not answer the question within three seconds
+(its page still loading, or busy) closes to the tray.
+
+The tray menu shows what the app is connected to, and has "Open pluxy" (a new window) and "Quit
+pluxy". In managed mode, "Start core", "Stop core" and "Restart core" control only the core the
+app started. They work with the window closed and no renderer running. "Restart core" is
+enabled only while the core runs. While one of them runs, the tray says "Core working…",
 disables all three and refuses another click. They are disabled in local and remote modes, and
 the native side refuses them there too, even if a desktop delivers a click on a disabled item.
+Closing the window quits the app, whatever the choice, when there is no usable tray: the
+app made no tray icon, or the session's `org.kde.StatusNotifierWatcher` is missing or has no
+registered host (asked at each close, since GTK makes an icon even with no desktop to show it).
+The setting then says so.
 
 When an owned core exits unexpectedly, the app retries after 2, 5 and 15 seconds, with at most
 three automatic recovery attempts in a rolling five-minute window. A successful recovery keeps
@@ -59,8 +69,18 @@ that budget, so a core that keeps crashing still stops being restarted. After th
 recovery or another crash within that window, the tray shows "Core recovery paused" and the
 Connection page shows the reason. An explicit Start, Stop or Restart, from the tray or the
 window, or a mode change, cancels any scheduled recovery and clears the budget. A core you
-stopped stays stopped, and so does one that Start Core on Launch left unstarted. If the app
-cannot make its tray icon, closing the window quits the app.
+stopped stays stopped, and so does one that Start Core on Launch left unstarted.
+
+The window opens at the size and place it last had, kept when it closes and when the app quits:
+the size in logical pixels, the place in physical ones, never noted while minimized, maximized
+or full screen. On opening, the size is kept between 640×480 and the monitor's work area, and
+the window is moved into the work area of the monitor holding its place (or the primary one).
+The first window is 1100×760, where the desktop puts it. The choice and the geometry are in
+`window.json` beside `connection.json`, readable only by your user; a damaged file is kept aside
+as `window.damaged-<random>.json` and the defaults used.
+
+A minimized window's pages are hidden (`document.visibilityState`), so the kit's polling, which
+runs only while its page is visible, stops until the window is restored.
 
 ## Startup preferences
 
@@ -116,6 +136,8 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `page_send` | Passes the window's channel messages to a page's webview |
 | `confirmation_request` | Opens native review for an opaque action ID already prepared by native code; returns no approval or token |
 | `confirmation_settings` | Opens native settings to inspect and revoke exact remembered launches (Linux) |
+| `window_get`, `window_set` | Reads or saves the Close behavior, and whether there is a usable tray |
+| `window_close` | Answers the close prompt: Exit App or Minimize to Tray, and whether to remember it |
 
 The window may also listen to the app's events. To add a command: add it to
 `command_names.rs`, to `generate_handler!` in `lib.rs`, and its `allow-<name>` permission to
@@ -269,8 +291,19 @@ core ownership, and removal. In the core-startup-off launch it waits past the fi
 delay and checks that no core started and no recovery ran, then starts the core with the
 tray's Start core and crashes it: that core is recovered. A separate session with no watcher verifies that a silent login
 opens exactly one window and webview. Visible launches are positive controls for the same
-renderer-process count used by silent launches. The
-`native-test` feature is for that test alone; release builds never have it.
+renderer-process count used by silent launches.
+
+In managed mode, two more sessions run the window checks (`native/window.ts`, which launches
+the app through the stages in `src-tauri/src/native_window.rs`), one with a tray watcher and
+one without. They close the window as its window manager would (a GTK delete event) and answer
+the prompt in the window: Cancel keeps it, Minimize to Tray and the remembered choices close it
+with no webview or web process left, and the app's own tray item (through the watcher and its
+menu, `session_probe tray`) opens it again at the size and place it had; Exit App, from the
+prompt or the setting, quits and stops the app's own core; the next launch opens where the
+window was. A pending test sign-in's polls are counted while the window shows, while it is
+unmapped (as a window manager minimizes it; GDK then reports it minimized) and once it is mapped
+again. Without a tray watcher, closing quits without asking, with Minimize to Tray or Ask saved.
+The `native-test` feature is for that test alone; release builds never have it.
 
 In local and remote modes, the test also drives the real GTK dialog with `xdotool`: good keys
 authenticate, bad keys and Cancel preserve the connection and saved settings, and the native
@@ -328,9 +361,9 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
 - A kept key is stored in `connection.json`, not in the system keyring.
 - The Linux native suite checks the app's own tray item in the watcher's registration list,
   drives its Start, Stop and Restart through the item's D-Bus menu, and checks startup without a
-  watcher. It does not check every desktop's tray UI or later loss of its host.
-- Only a silent launch checks for a tray host: on a desktop with no tray host, closing the window
-  leaves the app running with no way back to it but quitting it.
+  watcher. It does not check every desktop's tray UI.
+- The tray host is asked about only when the window closes: if it goes away while the app sits
+  in the tray, the app stays there with no way back to it but stopping it.
 - The native test needs the desktop services above, and the pinned AppImage runtime from
   github.com (or a copy in its cache folder), so it does not run offline on a bare machine.
 - Native admission bounds work after a scheme request reaches the handler. They do not bound

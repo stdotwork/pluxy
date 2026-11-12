@@ -12,6 +12,9 @@
 // - quitting stops the app's own core, and leaves a local or remote core running;
 // - in a second managed run, a core that exits before the app state exists is recovered.
 //
+// In managed mode it then runs the window checks (window.ts, native_window.rs) in two more
+// sessions, one with a tray watcher and one without.
+//
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
 // own (dbus-run-session, xvfb-run), and random ports. Inside that session, before the app,
 // native/session.ts starts the desktop services later checks need (the portals and a tray
@@ -145,7 +148,11 @@ async function managementStatus(base: string, key: string, ca?: string): Promise
   return r.status;
 }
 
-/** Runs the app once with connection as its saved connection, and checks what it reports.
+/** The window checks (window.ts), with or without a tray watcher in the session. */
+type Suite = "window" | "window-no-tray";
+
+/** Runs the app once with connection as its saved connection, and checks what it reports. With
+ * suite, the session runs window.ts, which runs the app through the window checks' stages.
  * earlyExit: the app's setup waits for its core's exit callback before the app state exists
  * (PLUXY_APP_TEST_EARLY_EXIT), and only the recovery of that core is checked. */
 async function runApp(
@@ -156,6 +163,7 @@ async function runApp(
   startup = false,
   noTray = false,
   key?: string,
+  suite?: Suite,
   earlyExit = false,
 ): Promise<string[]> {
   const root = mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
@@ -177,6 +185,13 @@ async function runApp(
     writeFileSync(join(dirs.config, identifier, "connection.json"), JSON.stringify(connection), {
       mode: 0o600,
     });
+    // The main checks close the window to the tray; the window suite starts with Ask every time.
+    if (!suite)
+      writeFileSync(
+        join(dirs.config, identifier, "window.json"),
+        JSON.stringify({ close_behavior: "minimize-to-tray" }),
+        { mode: 0o600 },
+      );
     const quit = join(root, "quit");
     const keyFile = join(root, "key-input");
     const wrongKey = randomUUID();
@@ -204,6 +219,13 @@ async function runApp(
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: identifier } : {}),
       ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
       ...(key ? { PLUXY_APP_TEST_KEY_FILE: keyFile } : {}),
+      ...(suite
+        ? {
+            PLUXY_APP_TEST_WINDOW_BIN: bin,
+            PLUXY_APP_TEST_PROBE: probe,
+            PLUXY_APP_TEST_IDENTIFIER: identifier,
+          }
+        : {}),
       ...(earlyExit ? { PLUXY_APP_TEST_EARLY_EXIT: "1" } : {}),
     };
     // The session script starts and checks the desktop services, then runs the app.
@@ -213,7 +235,7 @@ async function runApp(
       probe,
       appImage,
       randomUUID(),
-      bin,
+      suite ? join(import.meta.dir, "window.ts") : bin,
     ];
     const xvfb = ["xvfb-run", "-a", "-s", "-screen 0 1280x800x24 -nolisten tcp", ...session];
     const proc = spawn("dbus-run-session", ["--", ...xvfb], {
@@ -234,9 +256,16 @@ async function runApp(
     if (!proc.stderr || !proc.stdout) throw new Error("the app's output is not piped");
     const log: string[] = []; // the app's last lines, shown when the run fails
     const setup: string[] = []; // session.ts's report of what failed at setup
+    let suitePassed = false;
     const onLine = (line: string) => {
       if (key && [key, wrongKey].some((canary) => line.includes(canary))) {
         problems.push("management key appeared on stdout/stderr");
+        return;
+      }
+      // window.ts's checks, each shown.
+      if (line.startsWith("window: ")) {
+        console.log(`  ${mode} | ${line}`);
+        if (line.startsWith("window: suite passed")) suitePassed = true;
         return;
       }
       // The session's service checks are always shown: they say what this run stood on.
@@ -298,6 +327,12 @@ async function runApp(
       );
     }
     check(code === 0, `the app exited with ${code}`);
+    if (suite) {
+      check(suitePassed, `the ${suite} checks failed`);
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode}: ${suite} ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
     check(!steps.has("failed"), `the app's test steps failed: ${JSON.stringify(steps.get("failed"))}`);
     if (earlyExit) {
       // Without this the run would not test the early exit: the callback could have found the state.
@@ -511,6 +546,19 @@ try {
     const p = await runApp("managed", bin, { mode: "managed", core_path: core });
     p.push(...(await runApp("managed", bin, { mode: "managed", core_path: core }, undefined, true)));
     p.push(...(await runApp("managed", bin, { mode: "managed", core_path: core }, undefined, true, true)));
+    for (const suite of ["window", "window-no-tray"] as const)
+      p.push(
+        ...(await runApp(
+          "managed",
+          bin,
+          { mode: "managed", core_path: core },
+          undefined,
+          false,
+          suite === "window-no-tray",
+          undefined,
+          suite,
+        )),
+      );
     problems.push(...p.map((x) => `managed: ${x}`));
     // The first start runs a stand-in that says where it listens and exits at once; the next
     // start, recovery's, runs the real core.
@@ -527,6 +575,7 @@ try {
       undefined,
       false,
       false,
+      undefined,
       undefined,
       true,
     );
