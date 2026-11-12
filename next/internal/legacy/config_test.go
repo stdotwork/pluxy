@@ -931,3 +931,33 @@ openai-compatibility:
 		t.Errorf("notices name the headers setting or a value:\n%s", n)
 	}
 }
+
+// Payload rules go across with today's names, from either spelling, and no notice names them.
+func TestPayload(t *testing.T) {
+	rules := `
+    override:
+      - models:
+          - name: "gpt-5.4-fast"
+            protocol: "codex"
+        params:
+          service_tier: priority
+    filter:
+      - models:
+          - name: "gpt-*"
+            protocol: "codex"
+        params:
+          - 'tools.#(name=="apply_patch")'
+`
+	want := `{"override": [{"models": [{"name": "gpt-5.4-fast", "protocol": "codex"}], "params": {"service_tier": "priority"}}],
+		"filter": [{"models": [{"name": "gpt-*", "protocol": "codex"}], "params": ["tools.#(name==\"apply_patch\")"]}]}`
+	for _, doc := range []string{"requests:\n  payload:" + strings.ReplaceAll(rules, "\n    ", "\n      "), "payload:" + rules} {
+		r := translate(t, doc)
+		equalJSON(t, r.Config["payload"], want)
+		if n := notices(r); strings.Contains(n, "payload") {
+			t.Errorf("notices name payload:\n%s", n)
+		}
+	}
+	if _, err := Translate([]byte("requests:\n  payload: [1]\n")); err == nil || !strings.Contains(err.Error(), "requests.payload must be a mapping") {
+		t.Errorf("a payload list: err = %v", err)
+	}
+}

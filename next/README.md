@@ -1344,6 +1344,53 @@ and send back. Core writes no header value in its own logs or errors. An extensi
 protocol 0.12 cannot send headers, so core does not send it the accounts that have them: their
 requests go to other accounts, and the error says why.
 
+### Payload rules
+
+`payload` sets, fills in or removes fields of the JSON body an extension sends upstream (today's
+`payload`), for the requests its rules name. The five lists and every rule field keep today's
+names, so a `config.yaml`'s `payload` (or `requests.payload`) works as written:
+
+```json
+{"payload": {
+  "override": [{"models": [{"name": "gpt-5.4-fast", "protocol": "codex"}], "params": {"service_tier": "priority"}}],
+  "filter": [{"models": [{"name": "gpt-*", "protocol": "codex"}], "params": ["tools.#(name==\"apply_patch\")"]}]
+}}
+```
+
+`default` and `default-raw` write a field the body does not have (the first rule that writes it
+wins), `override` and `override-raw` write it over what is there (the last wins), the `-raw`
+lists take JSON text, and `filter` removes fields. They run in that order on the body as the
+extension finally sends it, once per upstream request: a request tried again on another account
+gets them again on its new body, never twice on one. Each extension applies them as it sends;
+core sends it only the rules that apply to the request.
+
+A rule applies when any entry of its `models` does:
+
+| Field | Matches |
+| --- | --- |
+| `name` | The model the request reaches the upstream as, or the one the client asked for (before an alias or prefix, with its thinking suffix or without it). `*` matches any text. |
+| `protocol` | The extension: `openai` (`pluxy/openai-compatible`), `claude`, `codex`, `gemini` (Gemini API keys and Vertex), `kimi`, `xai`, `meta`, `antigravity`; for another package the last part of its ID. Today's core used the upstream's API format here, so its `openai` also covered Kimi, which is `kimi` here. |
+| `from-protocol` | The API the client called: `openai` (Chat Completions, legacy Completions), `responses` (also compaction), `claude`, `gemini`, `interactions`, `codex-alpha-search`, `openai-image`. |
+| `headers` | The client's request headers, each value a pattern with `*`. Core checks them; they are not sent to the extension. |
+| `match`, `not-match`, `exist`, `not-exist` | The body about to go upstream. |
+
+Paths are dotted keys (`\.` for a dot in a key), array indexes and the queries `#(...)` (the first
+match) and `#(...)#` (every match), the parts today's example config uses. A path with anything
+else (wildcards, `|`, `@`, `#` counts, `-1`) or a raw value that is not JSON fails the load, a
+reload or a settings change, with a message that names the rule and the path. The Antigravity
+extension's body carries the request inside `request`, and its rules apply there, as in today's
+core.
+
+A default checks the body the extension built, where today's core checked the client's request
+translated to the upstream's format: a field the extension fills in itself counts as present, such
+as the Claude extension's `max_tokens` of 32000 for a client that sets none. To replace such a
+value, use `override`, as today's example config does for `max_tokens`.
+
+Rules do not reach Devin, whose upstream body is protobuf, nor turns on an upstream WebSocket
+session (a Codex Responses WebSocket); a client WebSocket turn that goes upstream as an HTTP
+request gets them. An extension older than protocol 0.14 cannot apply rules, so a request that
+rules apply to is not sent to it: it goes to other accounts, and the error says why.
+
 ### Account checks
 
 When core starts, and when a reload adds or changes an account (its settings, its credential or
@@ -1692,6 +1739,7 @@ to `management.secret-key`, or `remote-management.secret-key` when only that is 
 | `observability.usage.usage-statistics-enabled` | `usage.enabled` | `true` or `false`: whether core keeps the [usage record](#usage-statistics). On unless the config turns it off. |
 | `token_count_estimate` (top level) | `token_count_estimate` (top level, in a `config.yaml` too) | `true` (the default) or `false`: whether a token count no account can give is answered with core's estimate or with an error. |
 | `proxy-url` (top level) | `proxy_url` | The [outbound proxy](#outbound-proxy) of every account without its own, shown with `redacted` in place of a user name and password; `""` removes it. Sending back the value as shown keeps the password. |
+| `payload` (top level) | `payload` (`requests.payload` in a `config.yaml`, or `payload` where the file has only that) | The [payload rules](#payload-rules), all five lists at once; absent when there are none. A change replaces them, `null` or `{}` removes them, and a field the rules do not have or a path outside the supported syntax is refused. |
 
 The settings shown are those of the running config. Today's other basic setting `ws-auth` does
 not exist in this core yet, and `debug` is dropped (this
@@ -2053,7 +2101,7 @@ are accepted silently.
 | `quota-exceeded.switch-project`, `quota-exceeded.switch-preview-model` | | Dead |
 | `requests.proxy-url` (`proxy-url`) | `proxy_url`: the [outbound proxy](#outbound-proxy) of every account. A value that is not an `http`, `https`, `socks5` or `socks5h` URL, `direct` or `none` fails the load, where today's core logs it and goes without the proxy. | Supported |
 | Every `proxy-url` on a group or key | The account's `proxy_url`: a key's own, else its group's. | Supported |
-| `requests.payload.*` (`payload`) | | Later |
+| `requests.payload.*` (`payload`) | `payload`: the [payload rules](#payload-rules), with today's lists and fields. A path outside the parts today's example config uses, or a raw value that is not JSON, fails the load. Today's `protocol` named the upstream's API format; here it names the extension. | Supported |
 | `requests.tls-handshake-timeout-seconds`, `requests.passthrough-headers`, `requests.nonstream-keepalive-interval`, `requests.streaming.*` (each also at the top level) | A request is retried on another account until its reply starts. | Dropped: off by default and no need found |
 | `client.codex.enable-apply-patch`, `client.codex.optimize-multi-agent-v2` (`codex.optimize-multi-agent-v2`) | | Later |
 | `client.codex.web-search-result-cache.*`, `client.claude.show-codex-commentary` | | Dropped: off by default and no need found |

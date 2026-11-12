@@ -24,6 +24,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/stdotwork/pluxy/next/format/openaichat"
 	"github.com/stdotwork/pluxy/next/format/openairesponses"
+	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/internal/legacy"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/llm"
@@ -501,7 +502,8 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 			turnTrace.account = a.Account
 		}
 	}
-	stream := meterStream(g.Router.Generate(ctx, rr), m)
+	// Rules reach a turn that goes out as an HTTP call; a turn on an upstream session gets none.
+	stream := meterStream(g.Router.Generate(host.WithPayloadClient(ctx, sessReq.Model, s.r.Header), rr), m)
 	defer stream.Close()
 	ev := stream.Next()
 	// The session the turn ran on is the socket's from now on, whatever the outcome; the

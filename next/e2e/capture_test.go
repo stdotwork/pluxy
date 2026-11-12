@@ -80,12 +80,13 @@ func newCaptureUpstream(t *testing.T, refuse bool) *captureUpstream {
 			}
 			io.WriteString(w, event("first-event "+key+" visible", "null"))
 			w.(http.Flusher).Flush()
-			// No timer lets the rest go: a reply held back until it ends would never reach the
-			// client, so a test cannot pass on it.
+			// The rest goes only once the test has read the first event, or after 30 seconds, well
+			// past the test's own limit, so a reply held back until it ends fails the test. The
+			// request's context is not watched: a stream ended early on it would break the reply
+			// for a reason the test is not about.
 			select {
 			case <-u.gate:
-			case <-r.Context().Done():
-				return
+			case <-time.After(30 * time.Second):
 			}
 			io.WriteString(w, event("second-event", "null")+event("", `"stop"`)+"data: [DONE]\n\n")
 		case strings.Contains(string(b), `"stream":true`):
