@@ -259,7 +259,7 @@ func TestModelListsAreKept(t *testing.T) {
 	if calls != 2 {
 		t.Errorf("%d reads, want the kept list used", calls)
 	}
-	if err := h.r.SetAccounts([]Account{{ID: "a"}}); err != nil {
+	if err := h.r.SetAccounts([]Account{{ID: "a"}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	h.runOK("m")
@@ -299,7 +299,7 @@ func TestOldAccountsLeaveNoModelList(t *testing.T) {
 		return &protocol.ModelList{Models: []protocol.Model{{ID: "m" + string(a.Settings[5])}}}, nil
 	})
 	accounts, creds := h.r.snapshot()
-	if err := h.r.SetAccounts([]Account{{ID: "a", Settings: json.RawMessage(`{"v":2}`)}}); err != nil {
+	if err := h.r.SetAccounts([]Account{{ID: "a", Settings: json.RawMessage(`{"v":2}`)}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	// The old account's list is read after the change, as by a request that started before it.

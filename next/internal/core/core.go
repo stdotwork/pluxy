@@ -612,7 +612,7 @@ func (c *Core) publish(next, prev *snapshot, hash string) {
 	c.accounts.Lock()
 	defer c.accounts.Unlock()
 	accounts := c.routed(next)
-	if err := next.Router.SetAccounts(accounts); err != nil {
+	if err := next.Router.SetAccounts(accounts, sameAccount); err != nil {
 		log.Printf("updating accounts: %v", err)
 	}
 	if prev != nil {
@@ -703,7 +703,7 @@ func (c *Core) accountsChanged() {
 	defer c.accounts.Unlock()
 	s := c.cur.Load()
 	accounts := c.routed(s)
-	if err := s.Router.SetAccounts(accounts); err != nil {
+	if err := s.Router.SetAccounts(accounts, sameAccount); err != nil {
 		log.Printf("updating accounts: %v", err)
 	}
 	c.checkAccounts(s, accounts)

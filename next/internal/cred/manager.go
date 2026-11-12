@@ -1,7 +1,9 @@
 package cred
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -105,10 +107,12 @@ type flight struct {
 }
 
 // renewal is what the last renewal of an account left behind. It is about one credential
-// (reg, cred): once the account holds another, it no longer applies.
+// (reg, cred) under one set of settings: once the account holds another credential, or its
+// settings change, it no longer applies.
 type renewal struct {
-	reg  string
-	cred protocol.Credential
+	reg      string
+	cred     protocol.Credential
+	settings json.RawMessage
 	// refused: the provider refused this credential's grant, and recording that failed.
 	refused bool
 	at      time.Time  // when it ended
@@ -197,7 +201,7 @@ func (m *Manager) LastRenewalError(r Record) *llm.Error {
 // Call with m.mu held.
 func (m *Manager) renewalFor(r Record) *renewal {
 	rn := m.renewals[r.ID]
-	if rn == nil || rn.reg != r.Registration || !sameCredential(rn.cred, r.Credential) {
+	if rn == nil || rn.reg != r.Registration || !sameCredential(rn.cred, r.Credential) || !bytes.Equal(rn.settings, r.Account.Settings) {
 		return nil
 	}
 	return rn
@@ -445,7 +449,9 @@ func (m *Manager) apply(cur Record, cred *protocol.Credential, perr *llm.Error) 
 	now := m.now()
 	switch {
 	case perr == nil:
-		next, err := m.updateRenewed(cur, func(r *Record) {
+		// Kept even when the settings changed meanwhile: the provider may have rotated the
+		// refresh token, and the credential is the account's, whatever its settings.
+		next, err := m.updateRenewed(cur, false, func(r *Record) {
 			r.Credential = *cred
 			r.State, r.Reason = StateActive, ""
 		})
@@ -468,14 +474,15 @@ func (m *Manager) apply(cur Record, cred *protocol.Credential, perr *llm.Error) 
 		m.setRenewal(next, rn)
 		return next, nil
 	case rejectedGrant(perr):
-		next, err := m.updateRenewed(cur, func(r *Record) {
+		next, err := m.updateRenewed(cur, true, func(r *Record) {
 			r.State, r.Reason = StateReauth, perr.Message
 		})
 		switch {
 		case errors.Is(err, ErrNotFound):
 			return Record{}, credentialError(llm.CodeUnavailable, fmt.Sprintf("account %q was removed", cur.ID))
 		case errors.Is(err, ErrStale):
-			// The credential was replaced meanwhile (a new login): the refusal was about the old one.
+			// The credential was replaced meanwhile (a new login), or the settings changed: the
+			// refusal was about the account as it was.
 			return next, nil
 		case err != nil:
 			log.Printf("credentials: account %q: the provider refused the grant, and saving that failed: %v", cur.ID, err)
@@ -491,9 +498,10 @@ func (m *Manager) apply(cur Record, cred *protocol.Credential, perr *llm.Error) 
 	default:
 		if latest, ok := m.store.Get(cur.ID); !ok {
 			return Record{}, credentialError(llm.CodeUnavailable, fmt.Sprintf("account %q was removed", cur.ID))
-		} else if latest.Registration != cur.Registration || !sameCredential(latest.Credential, cur.Credential) {
-			// The failure was about a credential that has since been replaced: it says
-			// nothing about the new one.
+		} else if latest.Registration != cur.Registration || !sameCredential(latest.Credential, cur.Credential) ||
+			!bytes.Equal(latest.Account.Settings, cur.Account.Settings) {
+			// The failure was about a credential that has since been replaced, or about the
+			// account's old settings: it says nothing about the account now.
 			return latest, nil
 		}
 		wait := failedBackoff
@@ -507,17 +515,19 @@ func (m *Manager) apply(cur Record, cred *protocol.Credential, perr *llm.Error) 
 }
 
 // updateRenewed applies change to the account renewed from cur, if the account still holds
-// cur's credential under cur's registration. Changes to anything else made meanwhile (a
-// disable, a label) do not refuse it: change is applied on top of them. A replaced credential
-// returns ErrStale with the current record; a removed account, ErrNotFound.
-func (m *Manager) updateRenewed(cur Record, change func(*Record)) (Record, error) {
+// cur's credential under cur's registration, and, when sameSettings is set, cur's settings.
+// Changes to anything else made meanwhile (a disable, a label) do not refuse it: change is
+// applied on top of them. A replaced credential (or changed settings) returns ErrStale with the
+// current record; a removed account, ErrNotFound.
+func (m *Manager) updateRenewed(cur Record, sameSettings bool, change func(*Record)) (Record, error) {
 	base := cur
 	for {
 		next, err := m.store.Update(base.ID, base.Registration, base.Version, change)
 		if !errors.Is(err, ErrStale) {
 			return next, err
 		}
-		if next.Registration != cur.Registration || !sameCredential(next.Credential, cur.Credential) {
+		if next.Registration != cur.Registration || !sameCredential(next.Credential, cur.Credential) ||
+			sameSettings && !bytes.Equal(next.Account.Settings, cur.Account.Settings) {
 			return next, ErrStale
 		}
 		base = next
@@ -529,9 +539,9 @@ func sameCredential(a, b protocol.Credential) bool {
 	return reflect.DeepEqual(a, b)
 }
 
-// setRenewal records what a renewal left behind for r's credential.
+// setRenewal records what a renewal left behind for r's credential and settings.
 func (m *Manager) setRenewal(r Record, rn *renewal) {
-	rn.reg, rn.cred = r.Registration, r.Credential
+	rn.reg, rn.cred, rn.settings = r.Registration, r.Credential, r.Account.Settings
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.renewals[r.ID] = rn
@@ -552,10 +562,12 @@ func (m *Manager) SetDisabled(id string, disabled bool) (Record, error) {
 	return m.SetAccount(id, nil, &disabled)
 }
 
-// SetAccount changes the routing fields of account id (its route.Account) with change, which
-// may be nil, then checks them, and sets its disabled flag when disabled is not nil, in one
-// update. The account's ID, settings and credential stay as they are.
-func (m *Manager) SetAccount(id string, change func(*route.Account), disabled *bool) (Record, error) {
+// SetAccount changes the routing fields and settings of account id (its route.Account) with
+// change, which may be nil, then checks them, and sets its disabled flag when disabled is not
+// nil, in one update. change is given the account as it is now, each time the update is tried
+// again, and an error from it changes nothing and is returned as it is. The account's ID and
+// credential stay as they are.
+func (m *Manager) SetAccount(id string, change func(*route.Account) error, disabled *bool) (Record, error) {
 	for {
 		cur, ok := m.store.Get(id)
 		if !ok {
@@ -563,8 +575,10 @@ func (m *Manager) SetAccount(id string, change func(*route.Account), disabled *b
 		}
 		a := cur.Account
 		if change != nil {
-			change(&a)
-			a.ID, a.Settings, a.Credential = cur.Account.ID, cur.Account.Settings, nil
+			if err := change(&a); err != nil {
+				return Record{}, err
+			}
+			a.ID, a.Credential = cur.Account.ID, nil
 			if err := a.Check(); err != nil {
 				return Record{}, fmt.Errorf("%w: %v", ErrInvalid, err)
 			}

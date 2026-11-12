@@ -63,6 +63,9 @@ type Account struct {
 
 	// gen is the generation of the router that holds this copy (see State.Retain).
 	gen uint64
+	// rev is the account's revision in State when this copy was made: a copy of an older
+	// revision is about the account as it was before SetAccounts changed it (see State.restart).
+	rev uint64
 }
 
 // Check checks the account's routing and naming fields, as a config's accounts are checked.
