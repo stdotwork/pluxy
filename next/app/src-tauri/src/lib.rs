@@ -489,7 +489,7 @@ fn page_open(
             LogicalSize::new(b.width.max(1.0), b.height.max(1.0)),
         )
         .map_err(|e| e.to_string())
-        .and_then(|_| place::adopt(&window, &label, b));
+        .and_then(|_| place::adopt(&window, &label, Some(b)));
     if let Err(e) = placed {
         state.pages.lock().unwrap().unbind(&label);
         if let Some(w) = webview.app_handle().get_webview(&label) {
@@ -519,7 +519,10 @@ fn page_webview(app: &AppHandle, label: &str) -> Result<Webview, String> {
 #[tauri::command]
 fn page_place(webview: Webview, label: String, rect: Rect) -> Result<(), String> {
     trusted(&webview)?;
-    place::place(&page_webview(webview.app_handle(), &label)?, rect.bounds())
+    place::place(
+        &page_webview(webview.app_handle(), &label)?,
+        Some(rect.bounds()),
+    )
 }
 
 #[tauri::command]

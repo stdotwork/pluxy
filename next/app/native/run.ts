@@ -505,6 +505,18 @@ function checkRelease(
     ex.first_follows === true && ex.collapse_closed === true && ex.expand_follows === true,
     `Expand/Collapse: ${JSON.stringify(ex)}`,
   );
+  const sc = release.scrolled ?? {};
+  const g = (step: string) => sc[step]?.geometry ?? {};
+  check(
+    sc.unscrolled?.placed &&
+      sc.back?.placed &&
+      sc.partly?.placed &&
+      g("partly").top < g("partly").nav &&
+      Math.abs(sc.partly.placed.y - g("partly").nav) <= 2 &&
+      sc.hidden?.want === null &&
+      sc.hidden?.placed === null,
+    `the notes webview on a scrolled page: ${JSON.stringify(sc)}`,
+  );
   const off = release.offline ?? {};
   check(
     off.kept === true && off.same_time === true && /Could not reach the release feed/.test(off.message ?? ""),

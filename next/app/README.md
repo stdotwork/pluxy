@@ -180,8 +180,9 @@ started before a feed change (even back to the same address), is ignored.
 
 The window gets only versions, channels, dates and whether a release has notes or a notes
 address; never notes text or a notes address. Each release's notes open in a webview of their
-own (`notes-<n>`, at most two), placed over the notes area like an extension page, with a web
-context of its own cleared at each start. No capability names it. It loads one document from the
+own (`notes-<n>`, at most two), placed over the part of the notes area that shows: below a
+navigation bar pinned at the top, and hidden when none of it shows, so it never covers the rest
+of the window. It has a web context of its own, cleared at each start. No capability names it. It loads one document from the
 `pluxy-notes:` scheme, which serves each notes webview only its own document and style sheet:
 the notes' Markdown (CommonMark, with tables and strikethrough) as HTML, rendered natively
 (`src-tauri/src/notes.rs`). Raw HTML in the notes is left out, comments included, as the old
@@ -365,7 +366,9 @@ raw HTML left out; probes every app and plugin command from the notes webview (e
 with the window's `release_get` as control; navigates the notes webview to an address the notes
 do not link to (nothing opens) and follows the rendered link and "View full release notes" (the
 stand-in browser gets exactly those); collapses the notes (their webview closes) and expands
-them again (a new one, over the notes area); stops the feed and finds the offline error with the last good copy and its time; and
+them again (a new one, over the notes area); scrolls the page with the navigation bar on top and
+finds the notes webview over only the part of its area below that bar, hidden once the area is
+out of sight, and back over it unscrolled; stops the feed and finds the offline error with the last good copy and its time; and
 leaves the page, closing the notes webviews. The runner checks the feed server saw exactly one
 feed read and nothing else, so the hostile image and frame were never loaded.
 

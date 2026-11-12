@@ -26,17 +26,23 @@ mod gtk_overlay {
         static PLACED: RefCell<HashMap<String, gtk::Widget>> = RefCell::new(HashMap::new());
     }
 
-    fn put(w: &gtk::Widget, b: Bounds) {
+    /// Puts w at b, or hides it when there is no b.
+    fn put(w: &gtk::Widget, b: Option<Bounds>) {
+        let Some(b) = b else {
+            w.hide();
+            return;
+        };
         w.set_margin_start(b.x.max(0.0).round() as i32);
         w.set_margin_top(b.y.max(0.0).round() as i32);
         w.set_size_request(
             b.width.max(1.0).round() as i32,
             b.height.max(1.0).round() as i32,
         );
+        w.show();
     }
 
     /// Moves the page webview just added to window's box over the window's webview.
-    pub fn adopt(window: &tauri::Window, label: &str, b: Bounds) -> Result<(), String> {
+    pub fn adopt(window: &tauri::Window, label: &str, b: Option<Bounds>) -> Result<(), String> {
         let vbox = window.default_vbox().map_err(|e| e.to_string())?;
         let children = vbox.children();
         let overlay = match children
@@ -64,14 +70,13 @@ mod gtk_overlay {
         vbox.remove(&page);
         page.set_halign(gtk::Align::Start);
         page.set_valign(gtk::Align::Start);
-        put(&page, b);
         overlay.add_overlay(&page);
-        page.show();
+        put(&page, b);
         PLACED.with(|p| p.borrow_mut().insert(label.to_string(), page));
         Ok(())
     }
 
-    pub fn place(label: &str, b: Bounds) -> Result<(), String> {
+    pub fn place(label: &str, b: Option<Bounds>) -> Result<(), String> {
         PLACED.with(|p| match p.borrow().get(label) {
             Some(w) => {
                 put(w, b);
@@ -89,7 +94,7 @@ mod gtk_overlay {
     pub fn allocation(label: &str) -> Option<Bounds> {
         PLACED.with(|p| {
             let p = p.borrow();
-            let w = p.get(label)?;
+            let w = p.get(label).filter(|w| w.is_visible())?;
             let a = w.allocation();
             // Relative to the window, as the page area is.
             let (x, y) = w.translate_coordinates(&w.toplevel()?, 0, 0)?;
@@ -107,28 +112,37 @@ mod gtk_overlay {
     }
 }
 
-/// Puts the page webview labelled label, just added to window, at b.
-pub fn adopt(window: &Window, label: &str, b: Bounds) -> Result<(), String> {
+/// Puts the page webview labelled label, just added to window, at b; none hides it.
+pub fn adopt(window: &Window, label: &str, b: Option<Bounds>) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     return gtk_overlay::adopt(window, label, b);
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (window, label, b);
-        Ok(())
+        use tauri::Manager as _;
+        match (b, window.get_webview(label)) {
+            (None, Some(w)) => w.hide().map_err(|e| e.to_string()),
+            _ => Ok(()),
+        }
     }
 }
 
-/// Moves the page webview to b.
-pub fn place(webview: &Webview, b: Bounds) -> Result<(), String> {
+/// Moves the page webview to b; none hides it until it is placed again.
+pub fn place(webview: &Webview, b: Option<Bounds>) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     return gtk_overlay::place(webview.label(), b);
     #[cfg(not(target_os = "linux"))]
-    webview
-        .set_bounds(tauri::Rect {
-            position: tauri::LogicalPosition::new(b.x.max(0.0), b.y.max(0.0)).into(),
-            size: tauri::LogicalSize::new(b.width.max(1.0), b.height.max(1.0)).into(),
-        })
-        .map_err(|e| e.to_string())
+    {
+        let Some(b) = b else {
+            return webview.hide().map_err(|e| e.to_string());
+        };
+        webview
+            .set_bounds(tauri::Rect {
+                position: tauri::LogicalPosition::new(b.x.max(0.0), b.y.max(0.0)).into(),
+                size: tauri::LogicalSize::new(b.width.max(1.0), b.height.max(1.0)).into(),
+            })
+            .and_then(|_| webview.show())
+            .map_err(|e| e.to_string())
+    }
 }
 
 /// Drops what the app holds of a page webview that closed.
@@ -139,7 +153,8 @@ pub fn forget(label: &str) {
     let _ = label;
 }
 
-/// Where the page webview labelled label actually is, in the window's overlay (Linux only).
+/// Where the page webview labelled label actually is, in the window's overlay, if it shows
+/// (Linux only).
 #[cfg(feature = "native-test")]
 pub fn allocation(label: &str) -> Option<Bounds> {
     #[cfg(target_os = "linux")]

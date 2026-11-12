@@ -466,6 +466,63 @@ pub(crate) fn run(
         "area": first,
     });
 
+    // Scrolled: the notes webview covers only the part of its area that shows, below the
+    // navigation bar pinned at the top, and hides once none of it does. The page gets room to
+    // scroll, and the top navigation; unscrolled, the webview sits over its area (control).
+    main.eval("window.__navWas = document.documentElement.dataset.nav; document.documentElement.dataset.nav = 'top'; document.querySelector('[data-part=main]').style.paddingBottom = '3000px'; window.scrollTo(0, 0)")
+        .map_err(|e| e.to_string())?;
+    let geometry = "(() => { const r = document.querySelector('[data-part=release-notes][data-product=app]').getBoundingClientRect(); \
+        const n = document.querySelector('[data-part=nav]').getBoundingClientRect(); const v = document.documentElement; \
+        return {left: r.left, top: r.top, right: r.right, bottom: r.bottom, nav: n.bottom, nav_top: n.top, \
+        position: getComputedStyle(document.querySelector('[data-part=nav]')).position, \
+        view_width: v.clientWidth, view_height: v.clientHeight, scroll: window.scrollY}; })()";
+    // What should show of the area, from the page's own numbers.
+    let shows = |g: &Value| -> Value {
+        let f = |k: &str| g[k].as_f64().unwrap_or(f64::NAN);
+        let (x, y) = (f("left").max(0.0), f("top").max(f("nav")));
+        let (w, h) = (
+            f("right").min(f("view_width")) - x,
+            f("bottom").min(f("view_height")) - y,
+        );
+        if w >= 1.0 && h >= 1.0 {
+            json!({"x": x, "y": y, "width": w, "height": h})
+        } else {
+            Value::Null
+        }
+    };
+    // Scrolls the page to y, then waits until the webview is where the area shows (or hidden).
+    let scrolled = |y: f64| -> Result<Value, String> {
+        main.eval(format!("window.scrollTo(0, {y})"))
+            .map_err(|e| e.to_string())?;
+        std::thread::sleep(Duration::from_millis(300));
+        let mut last = json!(null);
+        wait_for(&format!("the notes webview placed at scroll {y}"), || {
+            let g = eval(main, geometry)?;
+            let want = shows(&g);
+            let got = placed(app, &again).ok()?;
+            let ok = if want.is_null() {
+                got.is_null()
+            } else {
+                near(&want, &got)
+            };
+            last = json!({"geometry": g, "want": want, "placed": got});
+            ok.then(|| last.clone())
+        })
+        .map_err(|e| format!("{e}: {last}"))
+    };
+    let unscrolled = scrolled(0.0)?;
+    let top = unscrolled["geometry"]["top"].as_f64().unwrap_or(0.0);
+    let nav = unscrolled["geometry"]["nav"].as_f64().unwrap_or(0.0);
+    // Partly above the navigation bar, then wholly out of sight, then back.
+    let partly = scrolled((top - nav + 100.0).max(0.0))?;
+    let hidden = scrolled(top + 1000.0)?;
+    let back = scrolled(0.0)?;
+    main.eval("document.documentElement.dataset.nav = window.__navWas; document.querySelector('[data-part=main]').style.paddingBottom = ''; window.scrollTo(0, 0)")
+        .map_err(|e| e.to_string())?;
+    evidence["scrolled"] = json!({
+        "unscrolled": unscrolled, "partly": partly, "hidden": hidden, "back": back,
+    });
+
     // Offline: the runner stops the feed; the last good copy stays, with its time and an error.
     fs::write(&offline, b"").map_err(|e| e.to_string())?;
     wait_for("the feed to go offline", || {

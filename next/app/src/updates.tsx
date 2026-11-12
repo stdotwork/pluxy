@@ -55,9 +55,24 @@ interface Rect {
   height: number;
 }
 
-function rectOf(el: Element): Rect {
+/** The part of el the person can see: inside the viewport and below a navigation bar pinned at
+ * its top. None when nothing of el shows, so its notes webview hides rather than cover the rest. */
+function visibleRect(el: Element): Rect | null {
   const r = el.getBoundingClientRect();
-  return { x: r.left, y: r.top, width: Math.max(r.width, 1), height: Math.max(r.height, 1) };
+  let top = 0;
+  const nav = document.querySelector("[data-part=nav]");
+  if (nav) {
+    const n = nav.getBoundingClientRect();
+    const position = getComputedStyle(nav).position;
+    const pinned = (position === "sticky" || position === "fixed") && n.top <= 0.5;
+    if (pinned && n.left < r.right && n.right > r.left) top = Math.max(top, n.bottom);
+  }
+  const view = document.documentElement;
+  const x = Math.max(r.left, 0);
+  const y = Math.max(r.top, top);
+  const width = Math.min(r.right, view.clientWidth) - x;
+  const height = Math.min(r.bottom, view.clientHeight) - y;
+  return width >= 1 && height >= 1 ? { x, y, width, height } : null;
 }
 
 /** The theme's values for the notes' style sheet; the native side checks each again. */
@@ -97,12 +112,12 @@ function NotesView(props: {
     setError(undefined);
     const place = () => {
       if (opened && area.current)
-        invoke("release_notes_place", { label: opened, rect: rectOf(area.current) }).catch(() => {});
+        invoke("release_notes_place", { label: opened, rect: visibleRect(area.current) }).catch(() => {});
     };
     const resize = new ResizeObserver(place);
     invoke<string>("release_notes_open", {
       product: props.product,
-      rect: rectOf(el),
+      rect: visibleRect(el),
       style: notesStyle(el),
     }).then(
       (l) => {

@@ -222,14 +222,14 @@ fn open_external(app: &AppHandle, url: String) {
     }
 }
 
-/// Opens a webview over rect of the window, showing product's release notes on the current
-/// channel, and returns its label.
+/// Opens a webview over rect of the window (the part of the notes area that shows; none: hidden),
+/// showing product's release notes on the current channel, and returns its label.
 #[tauri::command]
 pub fn release_notes_open(
     webview: Webview,
     state: tauri::State<App>,
     product: Product,
-    rect: Rect,
+    rect: Option<Rect>,
     style: Style,
 ) -> Result<String, String> {
     trusted(&webview)?;
@@ -282,12 +282,19 @@ pub fn release_notes_open(
             false
         });
     let window: Window = webview.window();
-    let b = rect.bounds();
+    // No rect: none of the notes area shows, so the webview starts hidden.
+    let b = rect.map(Rect::bounds);
+    let at = b.unwrap_or(crate::place::Bounds {
+        x: 0.0,
+        y: 0.0,
+        width: 1.0,
+        height: 1.0,
+    });
     let placed = window
         .add_child(
             builder,
-            LogicalPosition::new(b.x.max(0.0), b.y.max(0.0)),
-            LogicalSize::new(b.width.max(1.0), b.height.max(1.0)),
+            LogicalPosition::new(at.x.max(0.0), at.y.max(0.0)),
+            LogicalSize::new(at.width.max(1.0), at.height.max(1.0)),
         )
         .map_err(|e| e.to_string())
         .and_then(|_| crate::place::adopt(&window, &label, b))
@@ -339,9 +346,16 @@ fn notes_webview(app: &AppHandle, label: &str) -> Result<Webview, String> {
 }
 
 #[tauri::command]
-pub fn release_notes_place(webview: Webview, label: String, rect: Rect) -> Result<(), String> {
+pub fn release_notes_place(
+    webview: Webview,
+    label: String,
+    rect: Option<Rect>,
+) -> Result<(), String> {
     trusted(&webview)?;
-    crate::place::place(&notes_webview(webview.app_handle(), &label)?, rect.bounds())
+    crate::place::place(
+        &notes_webview(webview.app_handle(), &label)?,
+        rect.map(Rect::bounds),
+    )
 }
 
 #[tauri::command]
