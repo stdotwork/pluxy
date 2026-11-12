@@ -22,15 +22,22 @@ func bodyRedactor() *Redactor {
 }
 
 // redactPieces runs pieces through a BodyRedactor and returns what it sent on, joined. It fails
-// the test when the BodyRedactor holds back as much as the longest form or more.
+// the test when the BodyRedactor holds back as much as the longest form or more, or, when a form
+// could be part of a number, twice that and maxNumberHold.
 func redactPieces(t *testing.T, r *Redactor, pieces []string) string {
 	t.Helper()
 	b := r.Body()
 	var out strings.Builder
 	for _, p := range pieces {
 		out.WriteString(b.Write(p))
-		if len(r.forms) > 0 && len(b.held) >= len(r.forms[0]) {
-			t.Fatalf("holding back %d bytes, as long as the longest form (%d): %q", len(b.held), len(r.forms[0]), b.held)
+		if len(r.forms) > 0 {
+			limit := len(r.forms[0])
+			if r.numeric {
+				limit = 2*limit + maxNumberHold
+			}
+			if len(b.held) >= limit {
+				t.Fatalf("holding back %d bytes, %d or more: %q", len(b.held), limit, b.held)
+			}
 		}
 	}
 	out.WriteString(b.Flush())
@@ -199,6 +206,133 @@ func TestBodyRedactorNeverWorseThanEachPiece(t *testing.T) {
 				rest = rest[k:]
 			}
 			check(whole, pieces)
+		}
+	}
+}
+
+// collapsing is text with more than maxDecodings decodings, which String replaces whole with
+// [redacted]: a model can be led to write such escapes in a reply.
+var collapsing = "model said " + strings.Repeat("\\", 16) + "%25252525 ; upstream: invalid key "
+
+// formsIn returns the forms of r's secrets that x holds as they are.
+func formsIn(r *Redactor, x string) []string {
+	var found []string
+	for _, f := range r.forms {
+		if strings.Contains(x, f) {
+			found = append(found, f)
+		}
+	}
+	return found
+}
+
+// A secret cut between pieces is removed also where the text before the cut makes String give up
+// and replace it whole: the rest of the secret in the next piece is not sent either.
+func TestBodyRedactorCutSecretAfterCollapse(t *testing.T) {
+	r := bodyRedactor()
+	const key = "sk-body-key-0123456789"
+	if r.String(collapsing+"sk-") != Redacted {
+		t.Fatalf("the test text does not collapse: %q", r.String(collapsing+"sk-"))
+	}
+	for _, k := range []int{3, 4, 8} {
+		got := redactPieces(t, r, []string{collapsing + key[:k], key[k:] + " rejected"})
+		if strings.Contains(got, key[k:]) || len(formsIn(r, got)) > 0 || !strings.HasSuffix(got, " rejected") {
+			t.Errorf("cut after %d bytes: got %q, which holds the rest of the secret or loses the text after it", k, got)
+		}
+	}
+}
+
+// Numbers that hold a numeric secret become 0, as String makes them in JSON, wherever a piece
+// ends inside one or between it and what comes before it.
+func TestBodyRedactorNumericSecret(t *testing.T) {
+	r := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: "12345678"})
+	for _, c := range []struct {
+		pieces []string
+		want   string
+	}{
+		{[]string{`{"a":12345678`, `9}`}, `{"a":0}`},
+		{[]string{`{"a":9123`, `45678}`}, `{"a":0}`},
+		{[]string{`{"a":`, `12345678}`}, `{"a":0}`},
+		{[]string{`{"a": `, `912345678, "b":1}`}, `{"a": 0, "b":1}`},
+	} {
+		if got := redactPieces(t, r, c.pieces); got != c.want {
+			t.Errorf("%q: got %q, want %q", c.pieces, got, c.want)
+		}
+	}
+}
+
+// Wherever a body that holds a numeric secret is cut, what the client gets joined is what String
+// returns for the whole body.
+func TestBodyRedactorNumericMatchesStringAtEveryCut(t *testing.T) {
+	r := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: "12345678"})
+	frags := []string{"12345678", "9", "1234", `{"a":`, `{"a": `, ", ", `"b":`, "[", "]", "}", "-", ".5", "e3", "x", " ", `"n 12345678"`}
+	rng := rand.New(rand.NewPCG(5, 6))
+	for range 300 {
+		var b strings.Builder
+		for range 1 + rng.IntN(6) {
+			b.WriteString(frags[rng.IntN(len(frags))])
+		}
+		whole := b.String()
+		for i := 0; i <= len(whole); i++ {
+			if got, want := redactPieces(t, r, []string{whole[:i], whole[i:]}), r.String(whole); got != want {
+				t.Fatalf("body %q cut at %d: got %q, want %q", whole, i, got, want)
+			}
+		}
+	}
+}
+
+// cutTail returns the part after a cut of a form that whole holds across a cut between pieces,
+// when got holds it and it is long enough (6 bytes) not to be there by chance; else "".
+func cutTail(r *Redactor, whole string, pieces []string, got string) string {
+	var cuts []int
+	at := 0
+	for _, p := range pieces[:len(pieces)-1] {
+		at += len(p)
+		cuts = append(cuts, at)
+	}
+	for _, f := range r.forms {
+		for off := 0; ; {
+			k := strings.Index(whole[off:], f)
+			if k < 0 {
+				break
+			}
+			start := off + k
+			for _, c := range cuts {
+				if c <= start || c >= start+len(f) {
+					continue
+				}
+				if tail := whole[c : start+len(f)]; len(tail) >= 6 && strings.Contains(got, tail) {
+					return tail
+				}
+			}
+			off = start + 1
+		}
+	}
+	return ""
+}
+
+// Wherever a body is cut after text that makes String give up, no listed form of a secret reaches
+// the client, nor the rest of one cut there.
+func TestBodyRedactorCollapseAtEveryCut(t *testing.T) {
+	r := bodyRedactor()
+	frags := []string{"sk-body-key-0123456789", "pre-secret-1-longer", "abcd1234efgh5678", " rejected", "sk-", "x", " "}
+	rng := rand.New(rand.NewPCG(7, 8))
+	for range 200 {
+		var b strings.Builder
+		b.WriteString(collapsing)
+		for range 1 + rng.IntN(4) {
+			b.WriteString(frags[rng.IntN(len(frags))])
+		}
+		whole := b.String()
+		for i := 0; i <= len(whole); i++ {
+			for _, pieces := range [][]string{{whole[:i], whole[i:]}, {whole[:i/2], whole[i/2 : i], whole[i:]}} {
+				got := redactPieces(t, r, pieces)
+				if f := formsIn(r, got); len(f) > 0 {
+					t.Fatalf("body %q cut as %q: got %q, which holds %q", whole, pieces, got, f)
+				}
+				if tail := cutTail(r, whole, pieces, got); tail != "" {
+					t.Fatalf("body %q cut as %q: got %q, which holds %q, the rest of a secret cut there", whole, pieces, got, tail)
+				}
+			}
 		}
 	}
 }

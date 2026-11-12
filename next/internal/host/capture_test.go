@@ -101,6 +101,32 @@ func TestRedactDiagnosticSecretBetweenAdjacentPieces(t *testing.T) {
 	}
 }
 
+// A body whose start and end lie side by side is redacted as one text also where the start makes
+// the redaction give up and replace it whole: the rest of a secret cut between them is removed.
+func TestRedactDiagnosticAdjacentPiecesAfterCollapse(t *testing.T) {
+	const secret = "sk-body-key-0123456789"
+	head := "model said " + strings.Repeat("\\", 16) + "%25252525 ; upstream: invalid key sk-"
+	got := redactedRequestBody(captureRedactor(secret), protocol.CapturedBody{Body: head, BodyEnd: "body-key-0123456789 rejected"})
+	if joined := got.Body + got.BodyEnd; strings.Contains(joined, "body-key-0123456789") || !strings.HasSuffix(joined, " rejected") {
+		t.Errorf("joined body %q holds the rest of the secret or loses the text after it", joined)
+	}
+}
+
+// A start and an end with nothing left out between them, each as long as the request log keeps,
+// still fit what it keeps once redacted, so it logs them whole rather than report a gap.
+func TestRedactDiagnosticAdjacentPiecesFitTheLog(t *testing.T) {
+	const secret = "sk-fake-credential-value-0123456789abcdef"
+	head := strings.Repeat("a", protocol.CapturedHead-len("word sk-")) + "word sk-"
+	end := "xyz tail " + strings.Repeat("b", protocol.CapturedEnd-len("xyz tail "))
+	got := redactedRequestBody(captureRedactor(secret), protocol.CapturedBody{Body: head, BodyEnd: end, BodySize: int64(len(head) + len(end))})
+	fits := got.BodyEnd == "" && len(got.Body) <= protocol.CapturedHead+protocol.CapturedEnd ||
+		len(got.Body) <= protocol.CapturedHead && len(got.BodyEnd) <= protocol.CapturedEnd
+	if !fits || got.Body+got.BodyEnd != head+end || got.BodySize != int64(len(head)+len(end)) {
+		t.Errorf("body %d bytes, end %d bytes, size %d; want the same %d bytes within %d and %d, or one part within %d",
+			len(got.Body), len(got.BodyEnd), got.BodySize, len(head)+len(end), protocol.CapturedHead, protocol.CapturedEnd, protocol.CapturedHead+protocol.CapturedEnd)
+	}
+}
+
 func TestRedactDiagnosticKeepsHeadersLeftOut(t *testing.T) {
 	d := redactDiagnostic(captureRedactor("sk-fake-credential-value-0123456789abcdef"), protocol.Diagnostic{Upstream: []protocol.UpstreamExchange{{
 		Request:  protocol.UpstreamRequest{Method: "GET", URL: "https://upstream.example.test/", HeadersLeftOut: 3},

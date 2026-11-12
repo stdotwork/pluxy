@@ -466,13 +466,24 @@ order, then `finish`, with `usage` when the upstream reported it.
 
 The body is text: send it as it should reach the client. Core removes the account's secrets from it
 (its credential and the secrets in its `settings`, `proxy_url` and `headers`; see
-[Accounts](#accounts)) as from `raw` fields, also where one piece ends partway through a secret and
-the next goes on with it. To do so, core holds back the end of a piece that could be the start of a
-secret in one of the forms it removes, always fewer bytes than the longest of those forms, until
-the next piece shows whether it is one. It sends what it holds once the body ends with `finish`,
-and drops it when the body breaks off with an error or is cancelled: the body is broken there
-anyway, and what it held could be part of a secret. Except for the direct `codex.models` call
-above, an `error` before `response.start` is
+[Accounts](#accounts)) as from `raw` fields, and reads the pieces as one text for the forms it
+removes (as they are, escaped in JSON or a URL, base64; see [Errors](#errors)): a secret in one of
+those forms that one piece ends partway through and the next goes on with is removed too. To do so,
+core holds back the end of a piece that could be the start of one, fewer bytes than the longest of
+those forms, until the next piece shows whether it is one; when a secret could be part of a JSON
+number, it also holds back a number at the end of a piece and the colon, bracket or comma before
+it, up to 64 bytes more, so that the number becomes `0` as a whole. Where holding back would hide a
+secret core finds in the piece whole (one spelled with other escapes, or text so heavily escaped
+that core replaces it whole with `[redacted]`), core sends the piece at once, redacted whole, and
+removes from the next piece the rest of any secret that began in what it would have held; what it
+sent of that start stays sent. It sends what it holds once the body ends with `finish`, and drops
+it when the body breaks off with an error or is cancelled: the body is broken there anyway, and
+what it held could be part of a secret. Two limits remain: a secret spelled with escapes outside
+those forms (`\u0073` for `s`, `%73`) that a cut splits is not found, as when each piece is
+redacted alone; and a number longer than that cut between pieces may become `[redacted]` rather
+than `0`.
+
+Except for the direct `codex.models` call above, an `error` before `response.start` is
 routed as for `generate`: core tries another account when it is retryable, and otherwise answers
 the client with an error in OpenAI's shape. An `error` after `response.start` ends the body where
 it is; a `text/event-stream` body then gets a last `error` event. An account that does not serve
@@ -1192,8 +1203,9 @@ request log (the first and the last, across every account a request tried), and 
 extension sends to the bounds above whatever it sent: a body longer than 128 KiB is cut to its
 start and end, and at most 16 KiB of header lines are logged, with a line counting the rest. Where
 a body is cut, it also drops the bytes beside the cut that could be the start or the end of a
-credential cut in two; a `body` and `body_end` with nothing left out between them are one text,
-and a credential cut between them is removed whole.
+credential cut in two. A `body` and `body_end` with nothing left out between them are one text:
+core redacts them as it does an [endpoint](#endpoint) body's pieces, so a credential in one of the
+forms it removes that is cut between them is removed, and logs them joined.
 
 In Go, `sdk.Upstream` does all of this for each client it wraps, for requests made with the
 handler's context.
