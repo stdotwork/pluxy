@@ -3,6 +3,7 @@ package host
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"net"
@@ -17,6 +18,7 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 	"github.com/stdotwork/pluxy/next/sdk"
+	"github.com/stdotwork/pluxy/next/sdk/payload"
 )
 
 // echoProxy is an extension that writes the proxy each call carries to stderr and fails the
@@ -30,6 +32,10 @@ func echoProxy() {
 			msg := "cannot reach " + call.Account.ProxyURL
 			for _, k := range slices.Sorted(maps.Keys(call.Account.Headers)) {
 				msg += " " + k + "=" + call.Account.Headers[k]
+			}
+			if info, _ := sdk.UpstreamInfo(ctx); info.Payload != nil {
+				b, _ := json.Marshal(info.Payload)
+				msg += " payload=" + string(b)
 			}
 			fmt.Fprintf(os.Stderr, "proxy is %q\n%s\nproxy done %s\n", call.Account.ProxyURL, msg, call.Account.ID)
 			return &llm.Error{Code: llm.CodeUnavailable, Message: msg}
@@ -317,5 +323,74 @@ func TestOldExtensionGetsNoCallWithHeaders(t *testing.T) {
 	s.Close()
 	if ev.Type != llm.EventError || ev.Error.Code != llm.CodeExtensionCrashed {
 		t.Fatalf("call without headers: event %+v, want the extension's hang-up", ev)
+	}
+}
+
+// testRules are payload rules of which some match the call in TestCallCarriesMatchingPayloadRules.
+var testRules = &payload.Rules{Override: []payload.Rule{
+	// The requested model, before its alias was resolved.
+	{Models: []payload.Model{{Name: "alias-*"}}, Params: map[string]any{"a": 1}},
+	// The upstream model, the extension's channel, the client's format and headers; the body
+	// condition is left for the extension.
+	{Models: []payload.Model{{Name: "m", Protocol: "echo-proxy", FromProtocol: "openai", Headers: map[string]string{"X-Tier": "go*"}, Exist: []string{"tools"}}},
+		Params: map[string]any{"b": 1}},
+	// Another channel.
+	{Models: []payload.Model{{Name: "m", Protocol: "codex"}}, Params: map[string]any{"c": 1}},
+	// The requested model with its thinking suffix, as the client wrote it.
+	{Models: []payload.Model{{Name: "alias-x(high)"}}, Params: map[string]any{"d": 1}},
+	// Another client format.
+	{Models: []payload.Model{{Name: "m", FromProtocol: "claude"}}, Params: map[string]any{"e": 1}},
+}}
+
+// A call carries the payload rules that match it, each model reduced to its body conditions,
+// and none of the client's headers.
+func TestCallCarriesMatchingPayloadRules(t *testing.T) {
+	ext, err := Start(filepath.Join(fakePackage(t, "echo-proxy"), ManifestFile), Options{Log: &syncBuffer{},
+		Payload: func() *payload.Rules { return testRules }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ext.Stop()
+	req := llm.Request{Model: "m", Options: llm.Options{ThinkingSuffix: "high"}, Native: &llm.Native{Format: llm.FormatOpenAIChat, Body: json.RawMessage(`{}`)}}
+	ctx := WithPayloadClient(context.Background(), "alias-x", http.Header{"X-Tier": {"gold"}})
+	s := ext.Generate(ctx, protocol.Account{ID: "p"}, req)
+	ev := s.Next()
+	s.Close()
+	want := `cannot reach  payload={"override":[{"models":[{}],"params":{"a":1}},{"models":[{"exist":["tools"]}],"params":{"b":1}},{"models":[{}],"params":{"d":1}}]}`
+	if ev.Type != llm.EventError || ev.Error.Message != want {
+		t.Errorf("event %+v, want the error %q", ev, want)
+	}
+	// Without the client's request only the upstream model matches, and rule b needs the header.
+	s = ext.Generate(context.Background(), protocol.Account{ID: "p"}, llm.Request{Model: "m"})
+	ev = s.Next()
+	s.Close()
+	if want := "cannot reach "; ev.Type != llm.EventError || ev.Error.Message != want {
+		t.Errorf("without the client: event %+v, want the error %q", ev, want)
+	}
+}
+
+// An extension older than protocol 0.14 cannot apply payload rules, so a call that rules match
+// is refused before it reaches it, as unsupported for the account; another call reaches it.
+func TestOldExtensionGetsNoCallWithPayloadRules(t *testing.T) {
+	rules := &payload.Rules{Filter: []payload.FilterRule{{Models: []payload.Model{{Name: "m"}}, Params: []string{"x"}}}}
+	ext, err := Start(filepath.Join(fakePackage(t, "session-bad-frame"), ManifestFile), Options{Log: &syncBuffer{},
+		Payload: func() *payload.Rules { return rules }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ext.Stop()
+	s := ext.Generate(context.Background(), protocol.Account{ID: "a"}, llm.Request{Model: "m"})
+	ev := s.Next()
+	s.Close()
+	if ev.Type != llm.EventError || ev.Error.Code != llm.CodeUnsupported || ev.Error.Scope != llm.ScopeCredential || !ev.Error.Retryable ||
+		!strings.Contains(ev.Error.Message, "payload rules") {
+		t.Fatalf("event %+v, want a retryable unsupported error for the account that names payload rules", ev)
+	}
+	// The fake extension hangs up on a generate call: one that no rule matches reaches it.
+	s = ext.Generate(context.Background(), protocol.Account{ID: "a"}, llm.Request{Model: "other"})
+	ev = s.Next()
+	s.Close()
+	if ev.Type != llm.EventError || ev.Error.Code != llm.CodeExtensionCrashed {
+		t.Fatalf("call no rule matches: event %+v, want the extension's hang-up", ev)
 	}
 }

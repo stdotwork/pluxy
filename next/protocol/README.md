@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.13
+# pluxy extension protocol, version 0.14
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -21,9 +21,11 @@ optional quota `plan_ends_at`, the end of the subscription in Unix seconds. Vers
 the account's [`proxy_url`](#accounts): the proxy the call's upstream traffic goes through.
 Version 0.12 adds the account's [`headers`](#headers): extra HTTP headers on that traffic.
 Version 0.13 adds [upstream capture](#upstream-capture): what the extension sent upstream and got
-back, for core's request logs. It is deliberately small; later versions add capabilities and more operations without changing
-what is described here. An extension written for version 0 works unchanged with a core that
-speaks 0.13 (see [Versioning](#versioning)).
+back, for core's request logs. Version 0.14 adds [payload rules](#payload-rules): fields of the
+upstream JSON body that the config sets, fills in or removes. It is deliberately small; later
+versions add capabilities and more operations without changing what is described here. An
+extension written for version 0 works unchanged with a core that speaks 0.14 (see
+[Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
 the details. A Go SDK (`github.com/stdotwork/pluxy/next/sdk`) implements the extension side of
@@ -228,6 +230,7 @@ Core opens a connection and writes one call frame:
 | `login` | For `login`: what to sign in with (see [Login and refresh](#login-and-refresh)). |
 | `session` | For `session`: what kind of session to open (see [Sessions](#sessions)). |
 | `capture` | Since 0.13, for `generate`, `count_tokens` and `endpoint`: true when core asks for the call's [upstream capture](#upstream-capture). Absent: false. |
+| `payload` | Since 0.14, for `generate`, `count_tokens` and `endpoint`: the [payload rules](#payload-rules) that apply to the call. Absent: none. |
 
 An extension that gets an `op` it does not know replies with an `error` event whose code is
 `unsupported`.
@@ -1056,6 +1059,70 @@ socket to one session. Turns on an account that takes no sessions go out as sepa
 calls, each carrying the whole conversation so far: core keeps the earlier input and output and
 removes `previous_response_id`.
 
+## Payload rules
+
+Version 0.14. Core's config may hold payload rules (see [the README](../README.md#payload-rules)):
+fields to set, fill in or remove in the JSON body an extension sends upstream, for the requests
+they name. Core works out which rules apply to a `generate`, `count_tokens` or `endpoint` call and
+sends them, and only them, in the call frame's `payload`:
+
+```json
+"payload": {
+  "override": [{"models": [{}], "params": {"service_tier": "priority", "reasoning.effort": "high"}}],
+  "filter": [{"models": [{"exist": ["tools"]}], "params": ["tools.#(name==\"apply_patch\")"]}]
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `default`, `default-raw` | Rules that write each of their `params` where the body has no value yet. |
+| `override`, `override-raw` | Rules that write each of their `params` over what the body has. |
+| `filter` | Rules that remove each path in their `params`, a list. |
+| rule `params` | For the first four lists, an object of path to value. In the `-raw` lists a value is JSON text (a string), written as the JSON it holds. |
+| rule `models` | When the rule applies: when the conditions of any entry hold on the body. Core has already matched each rule's model names, `protocol`, `from-protocol` and `headers` to the call, so an entry holds only conditions on the body, and `{}` always holds. |
+| model `match` | A list of objects of path to value: each path's value must equal its value (as decoded JSON, so `1` equals `1.0`). |
+| model `not-match` | The same, but no path may equal its value. |
+| model `exist`, `not-exist` | Lists of paths that must hold a value that is not `null`, or must not. |
+
+A path is a list of parts joined by dots: a key (`\.` for a dot in it), an array index, or a
+query that picks the first element of the array before it that matches (`#(name=="apply_patch")`)
+or every one (`#(type=="message")#`). A query is terms `key==value` or `key!=value`, joined by
+`&&` and `||` (`&&` binds tighter), where key is a dotted path of plain keys and value is a JSON
+string, number, `true` or `false`. Core refuses at config load every path outside this and every
+raw value that is not JSON, so an extension may skip any it cannot apply.
+
+Rules:
+
+- Apply them to the body of each upstream HTTP request the call makes whose `Content-Type` is
+  `application/json` or a `+json` type and which has no `Content-Encoding`, after everything the
+  extension does to the body, and once: a request the extension sends again is built afresh and
+  gets them again; a body that has had them never gets them twice. Leave every other body as it
+  is (protobuf, forms), and a body that is not a JSON object or array.
+- Paths are relative to the model request. An extension whose body carries the request inside
+  another object applies them inside it: the Antigravity extension's body is
+  `{"project": ..., "request": {...}}`, and its rules apply inside `request`, as in today's core.
+- In this order, checking each rule's conditions on the body as it is when the rule's turn comes:
+  `default`, then `default-raw`, each rule in order, each of its params in sorted path order,
+  writing a value only where the body has none and no earlier default wrote one (the first
+  default wins); then `override`, then `override-raw` (the last write wins); then `filter`. A
+  default writes where the body the extension built has no value: a field the extension filled
+  in itself counts as present.
+- A query that matches nothing names nothing to write or remove. Writing a path creates what it
+  needs, as today's core does: the objects on the way that are missing (in place of a value on
+  the way that is neither an object nor an array) and, for an index past an array's end, `null`
+  elements up to it.
+
+Core sends `payload` only to an extension whose describe reports `protocol_minor` 14 or more; a
+call that rules apply to on an older extension it fails itself with `unsupported` (scope
+`credential`), so routing moves on and the request never leaves without them. Session turns carry
+no `payload` in this version.
+
+In Go, `sdk.Upstream` applies them to each request made with the handler's context, with the
+engine in `github.com/stdotwork/pluxy/next/sdk/payload`; `sdk.WithPayloadRoot` on a request's
+context names the object that holds the request. As with a proxy, the SDK answers a call that
+carries rules with `unsupported` (scope `credential`, retryable) and never runs the handler when
+the extension process has not created any `sdk.Upstream` transport.
+
 ## Upstream capture
 
 Version 0.13. Core writes request logs (see [the README](../README.md#request-logs)), and for a
@@ -1085,7 +1152,7 @@ terminal event (`finish` or `error`):
 | --- | --- |
 | `upstream` | The call's upstream exchanges, in the order their requests were sent. At most 2: when the call made more, its first and its last. |
 | `upstream_left_out` | How many exchanges between those two were left out. Absent: none. |
-| exchange `request` | The request as it was sent: after everything the extension and the account's [`headers`](#headers) did to it. |
+| exchange `request` | The request as it was sent: after everything the extension, the account's [`headers`](#headers) and the call's [payload rules](#payload-rules) did to it. |
 | exchange `response` | What came back. Absent when no response came, with `error` saying why. |
 | exchange `error` | Why the request got no response, such as a connection that was refused. |
 | `time_ms` | When the request was sent, or the response's headers arrived, in Unix milliseconds. |
@@ -1136,7 +1203,7 @@ handler's context.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.13. An extension reports the minor version it
+raise the minor version: this document is version 0.14. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1157,8 +1224,9 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.11 | The account's optional [`proxy_url`](#proxy). |
 | 0.12 | The account's optional [`headers`](#headers). |
 | 0.13 | [Upstream capture](#upstream-capture): the call's optional `capture` and the `diagnostic` frame. |
+| 0.14 | [Payload rules](#payload-rules): the call's optional `payload`. |
 
-## What version 0.13 leaves out
+## What version 0.14 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,
