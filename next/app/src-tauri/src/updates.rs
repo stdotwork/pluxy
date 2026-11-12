@@ -92,7 +92,8 @@ pub async fn release_channel_set(webview: Webview, channel: Channel) -> Result<V
 }
 
 /// Asks to change the feed's address (none: no feed). Returns once the native confirmation is
-/// showing; the window hears `pluxy-release` when it is settled. Cancelling keeps the old feed.
+/// showing; the window hears `pluxy-release` when it is settled, with whether the feed changed
+/// and, when a confirmed change could not be applied, why. Cancelling keeps the old feed.
 #[tauri::command]
 pub fn release_source_set(webview: Webview, source: Option<String>) -> Result<(), String> {
     trusted(&webview)?;
@@ -172,12 +173,14 @@ fn settle_source(app: &AppHandle, id: &str) {
     };
     let mut r = st.releases.lock().unwrap();
     let change = r.change.take_if(|c| c.action == id);
+    // Confirmed but not applied (the settings changed meanwhile, or could not be saved) is an
+    // error the window shows; cancelled, or not confirmed in time, keeps the feed quietly.
     let outcome = match change {
         Some(c) if authorized => match r.apply_source(c.source, c.revision) {
-            Ok(()) => "changed".to_string(),
-            Err(e) => e,
+            Ok(()) => serde_json::json!({"changed": true, "error": null}),
+            Err(e) => serde_json::json!({"changed": false, "error": e}),
         },
-        _ => "kept".to_string(),
+        _ => serde_json::json!({"changed": false, "error": null}),
     };
     drop(r);
     let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-release", outcome);

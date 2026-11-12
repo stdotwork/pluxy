@@ -255,6 +255,32 @@ pub(crate) fn run(
             && attr(main, app_card, "latest") == "0.2.0"
     );
 
+    // While a change waits, Channel is disabled. A confirmed change that the settings outran
+    // (here the channel, set by a direct call) is not applied, and the page says so.
+    ask_source(app, main, &other)?;
+    let channel_disabled = eval(
+        main,
+        "[...document.querySelectorAll('[data-part=release-channel] input')].every(i => i.matches(':disabled'))",
+    );
+    main.eval("window.__channelSet = null; window.__TAURI_INTERNALS__.invoke('release_channel_set', {channel: 'stable'}).then(() => window.__channelSet = true, e => window.__channelSet = String(e))")
+        .map_err(|e| e.to_string())?;
+    let channel_set = wait_for("the direct channel call", || {
+        eval(main, "window.__channelSet").filter(|v| !v.is_null())
+    })?;
+    key(DIALOG, "alt+o")?;
+    let voided = wait_for("the voided change shown as an error", || {
+        eval(
+            main,
+            "document.querySelector('[data-part=release-error]')?.textContent ?? null",
+        )
+        .filter(|t| t.as_str().is_some_and(|t| t.contains("was not changed")))
+    })?;
+    evidence["voided"] = json!({
+        "channel_disabled": channel_disabled, "channel_set": channel_set, "error": voided,
+        "kept": attr(main, "[data-part=release-source]", "source") == feed
+            && attr(main, "[data-part=release-source]", "changing") == "false",
+    });
+
     // Preview (latest): the newest release on either channel, from the same copy.
     click(main, "[data-part=release-channel] input[value=preview]")?;
     wait_attr(

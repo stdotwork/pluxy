@@ -460,6 +460,14 @@ function checkRelease(
     `the stable channel showed ${JSON.stringify(release.stable)}`,
   );
   check(release.cancel_kept === true, "cancelling a feed change did not keep the old feed and its copy");
+  const vo = release.voided ?? {};
+  check(
+    vo.channel_disabled === true &&
+      vo.channel_set === true &&
+      /settings changed while the feed change waited/.test(vo.error ?? "") &&
+      vo.kept === true,
+    `a feed change voided while it waited: ${JSON.stringify(vo)}`,
+  );
   check(
     same(release.preview, { app: "0.3.0-preview.1", core: "1.5.0-rc.1" }),
     `Preview (latest) showed ${JSON.stringify(release.preview)}`,

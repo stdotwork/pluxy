@@ -37,6 +37,12 @@ export interface ReleaseView {
   changing_source: boolean;
 }
 
+/** How a feed change was settled (`pluxy-release`). */
+interface Settled {
+  changed: boolean;
+  error?: string | null;
+}
+
 const CHANNELS = [
   { value: "stable" as const, label: "Stable" },
   { value: "preview" as const, label: "Preview (latest)" },
@@ -277,8 +283,11 @@ export function UpdatesPage() {
 
   useEffect(() => {
     reload();
-    // A feed change is settled in its native confirmation.
-    const off = listen("pluxy-release", reload);
+    // A feed change is settled in its native confirmation; one confirmed but not applied is an error.
+    const off = listen<Settled>("pluxy-release", async (e) => {
+      await reload();
+      if (e.payload?.error) setError(`The release feed was not changed: ${e.payload.error}`);
+    });
     const unsubscribe = themes.subscribe(() => setTheme((n) => n + 1));
     return () => {
       unsubscribe();
@@ -310,7 +319,11 @@ export function UpdatesPage() {
           </span>
         }
       />
-      {error && <Notice tone="danger">{error}</Notice>}
+      {error && (
+        <div data-part="release-error">
+          <Notice tone="danger">{error}</Notice>
+        </div>
+      )}
       {v?.problem && (
         <div data-part="release-problem" data-offline={String(v.problem.offline)}>
           <Notice tone={v.problem.offline ? "warn" : "danger"}>
@@ -338,14 +351,19 @@ export function UpdatesPage() {
             theme={theme}
             onError={setError}
           />
-          <div data-part="release-channel">
+          {/* Changing the channel while a feed change waits would void that change. */}
+          <fieldset
+            data-part="release-channel"
+            disabled={v.changing_source}
+            style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}
+          >
             <Choices
               label="Channel"
               value={v.channel}
               choices={CHANNELS}
               onChange={(channel) => run(() => invoke<ReleaseView>("release_channel_set", { channel }))}
             />
-          </div>
+          </fieldset>
           <div
             data-part="release-source"
             data-source={v.source ?? ""}

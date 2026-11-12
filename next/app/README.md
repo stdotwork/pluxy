@@ -161,7 +161,9 @@ current core version is what the connected core reports in `GET /v0/management/s
 The app has no built-in feed address and reads nothing until the person sets one. Setting,
 changing or removing the address opens the native confirmation (below), with the old and the
 new address; only its confirmed, one-use token applies the change, and cancelling, closing the
-window or letting it expire keeps the old address. The address must be `https://`, with a host
+window or letting it expire keeps the old address. While a change waits, the channel cannot be
+changed; a confirmed change the settings outran (they changed while it waited) or that cannot be
+saved is not applied, and the page shows why. The address must be `https://`, with a host
 and no user name or password. The choice is kept in `release.json` next to `connection.json`,
 readable only by your user. A file the app cannot use (unreadable, larger than 64 KiB, or with an
 address that fails the checks above) is shown as an error saying to fix or delete it, and is never
@@ -356,7 +358,8 @@ native-test builds read that authority (`PLUXY_APP_TEST_FEED_CA`); other builds 
 against the public roots only. A stand-in browser, the run's default `https` handler through
 its own XDG folders, logs each address it is asked to open. The check confirms a feed address in
 the real dialog, then cancels a second change and finds the old address, its file and its copy
-kept; checks for updates and reads the stable and the Preview (latest) versions; opens hostile
+kept; asks for a third, finds Channel disabled, changes the channel by a direct call and confirms,
+and finds the change not applied and the page saying why; checks for updates and reads the stable and the Preview (latest) versions; opens hostile
 notes and finds no script, image, frame, handler or extra link, the Markdown rendered and the
 raw HTML left out; probes every app and plugin command from the notes webview (each refused)
 with the window's `release_get` as control; navigates the notes webview to an address the notes
