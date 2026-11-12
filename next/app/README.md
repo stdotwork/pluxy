@@ -187,14 +187,17 @@ of the window. It has a web context of its own, cleared at each start. No capabi
 the notes' Markdown (CommonMark, with tables and strikethrough) as HTML, rendered natively
 (`src-tauri/src/notes.rs`). Raw HTML in the notes is left out, comments included, as the old
 app's notes were; an image shows as its alternative text, and only absolute `https://` links
-stay links. The document has no script,
+stay links (a link to an IPv6 address does not: the renderer's escaping of its brackets would
+break it). The document has no script,
 and its policy (`script-src 'none'`, `img-src 'none'`, `connect-src 'none'`, no frames or
 forms) allows none and loads nothing but its style sheet, with the window's theme colours and
 fonts, which native code checks as the kit checks theme values. The notes are expanded at first;
 Collapse hides them and closes their webview, Expand opens a new one. The notes webview never
 navigates: following a link opens it in the browser,
-only when the notes link to that exact address, and at most one address a second, notes links
-and "View full release notes" together. Since the document runs no script, only a person
+only when the notes link to that exact address (as the rendered link writes it), and at most one
+address a second, notes links and "View full release notes" together; the code that starts the
+browser refuses anything but `https://` itself. The notes webview saves no downloads and shows
+no context menu. Since the document runs no script, only a person
 activating a link navigates it.
 
 ### Release feed format
@@ -365,7 +368,8 @@ notes and finds no script, image, frame, handler or extra link, the Markdown ren
 raw HTML left out; probes every app and plugin command from the notes webview (each refused)
 with the window's `release_get` as control; navigates the notes webview to an address the notes
 do not link to (nothing opens) and follows the rendered link and "View full release notes" (the
-stand-in browser gets exactly those); collapses the notes (their webview closes) and expands
+stand-in browser gets exactly those); asks the notes webview to download its own style sheet
+(refused, nothing saved) and right-clicks it (no menu); collapses the notes (their webview closes) and expands
 them again (a new one, over the notes area); scrolls the page with the navigation bar on top and
 finds the notes webview over only the part of its area below that bar, hidden once the area is
 out of sight, and back over it unscrolled; stops the feed and finds the offline error with the last good copy and its time; and
@@ -401,6 +405,8 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
   it does not install them.
 - Changing the release feed needs the native confirmation, so it works on Linux only, and so
   does opening an address in the browser.
+- Release notes tables show their columns left-aligned whatever alignment the Markdown asks for:
+  the renderer writes alignment as inline style, which the notes' policy refuses.
 - In managed mode the app does not restart a core that stops; the tray and the Connection page
   show that it stopped and why, and the page offers to start it. A supervisor thread starts the
   core and stays until it exits, since on Linux the parent-death signal follows the thread that
