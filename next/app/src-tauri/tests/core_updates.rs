@@ -522,6 +522,41 @@ fn a_custom_program_runs_only_once_adopted() {
     assert_eq!(exe(pid), f.root.join(format!("cores/versions/{id}/pluxy")));
     assert_eq!(running(&custom), 0);
     assert_eq!(f.reported(), (200, Some("1.0.0".into())));
+
+    // N3: a damaged adopted copy does not start, and adopting the program again repairs it.
+    use std::os::unix::fs::PermissionsExt;
+    f.conn.stop_core();
+    let copy = f.root.join(format!("cores/versions/{id}/pluxy"));
+    std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut bytes = std::fs::read(&copy).unwrap();
+    bytes.push(0);
+    std::fs::write(&copy, bytes).unwrap();
+    std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let mut c = Connection::open(dirs(&f.root), None);
+    let err = c.view().error.unwrap_or_default();
+    assert!(err.contains("adopt it again"), "{err}");
+    assert!(c.core_pid().is_none());
+    // Choosing the program again saves it, and still runs no damaged copy.
+    let err = c
+        .change(Change {
+            mode: Some(Mode::Managed),
+            core_path: Some(custom.display().to_string()),
+            core_source: Some(f.index.display().to_string()),
+            ..Change::default()
+        })
+        .unwrap_err();
+    assert!(err.contains("adopt it again"), "{err}");
+    let (path, sha, size) = c.prepare_adopt().unwrap();
+    c.apply(CoreChange::Adopt {
+        path,
+        sha256: sha,
+        size,
+    })
+    .unwrap();
+    assert_eq!(
+        c.caller().call("GET", "/status", None).body.unwrap()["version"],
+        "1.0.0"
+    );
 }
 
 /// The management key in the managed core's config.

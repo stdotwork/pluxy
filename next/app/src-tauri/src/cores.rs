@@ -452,6 +452,10 @@ impl Store {
     /// its program: the core is started from this open file, not from its path again.
     pub fn program(&self, id: &str) -> Result<File, String> {
         let r = self.record(id)?;
+        let again = match r.kind {
+            Kind::Signed => "install it again",
+            Kind::Adopted => "adopt it again",
+        };
         let folder = self.folder(id);
         let root = open_dir(&folder).map_err(|e| format!("core {id}: {e}"))?;
         let mut seen = 0usize;
@@ -459,7 +463,7 @@ impl Store {
         for f in &r.files {
             let changed = || {
                 format!(
-                    "core {id} changed since it was installed ({}): install it again",
+                    "core {id} changed since it was installed ({}): {again}",
                     f.path
                 )
             };
@@ -480,10 +484,7 @@ impl Store {
             let (sha, size) =
                 sha256_of((&file).take(f.size + 1)).map_err(|e| format!("core {id}: {e}"))?;
             if sha != f.sha256 || size != f.size {
-                return Err(format!(
-                    "core {id} changed since it was installed ({}): install it again",
-                    f.path
-                ));
+                return Err(changed());
             }
             seen += 1;
             if f.path == PROGRAM {
@@ -492,7 +493,7 @@ impl Store {
         }
         if count_files(&folder) != seen {
             return Err(format!(
-                "core {id} changed since it was installed (files were added): install it again"
+                "core {id} changed since it was installed (files were added): {again}"
             ));
         }
         let mut program = program.ok_or_else(|| format!("core {id} has no {PROGRAM} program"))?;
@@ -722,15 +723,20 @@ impl Store {
     }
 
     /// Copies the program at path into a version of its own, `custom-<its SHA-256>`, if it still
-    /// is the regular file of the size and SHA-256 the person confirmed.
+    /// is the regular file of the size and SHA-256 the person confirmed. An adopted version that
+    /// is still intact is kept; a damaged one is copied in again.
     pub fn adopt(&self, path: &Path, sha256: &str, size: u64) -> Result<String, String> {
         artifact::decode_hex::<32>(sha256).map_err(|_| "not a SHA-256")?;
         let id = Self::adopted_id(sha256);
         if let Ok(r) = self.record(&id) {
-            return match r.files.as_slice() {
-                [f] if r.kind == Kind::Adopted && f.sha256 == sha256 => Ok(id),
-                _ => Err(format!("core {id} is installed, but not as this program")),
-            };
+            match r.files.as_slice() {
+                [f] if r.kind == Kind::Adopted && f.sha256 == sha256 => {
+                    if self.program(&id).is_ok() {
+                        return Ok(id);
+                    }
+                }
+                _ => return Err(format!("core {id} is installed, but not as this program")),
+            }
         }
         let changed = || {
             format!(
