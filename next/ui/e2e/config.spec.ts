@@ -288,3 +288,110 @@ test("review: unavailable config source leaves settings usable and shows its err
   await expect(page.getByText("Loading configuration...", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "Configuration source", exact: true })).toHaveCount(0);
 });
+
+test("the Config Panel's tab is in its address: opened, typed, clicked and Back", async ({ page }) => {
+  await openPanel(page, core, "/panel/#/config/source");
+  await signIn(page, core);
+  const tab = (name: string) => page.getByRole("tab", { name, exact: true });
+  const editor = page.getByRole("textbox", { name: "Configuration source", exact: true });
+  await expect(tab("Source")).toHaveAttribute("aria-selected", "true");
+  await expect(editor).not.toHaveValue("");
+
+  await tab("Network").click();
+  await expect(page).toHaveURL(/#\/config\/network$/);
+  await tab("Common").click();
+  await expect(page).toHaveURL(/#\/config$/);
+
+  await page.evaluate(() => {
+    location.hash = "#/config/logging";
+  });
+  await expect(tab("Logging")).toHaveAttribute("aria-selected", "true");
+  await expect(page).toHaveURL(/#\/config\/logging$/);
+  await page.evaluate(() => {
+    location.hash = "#/config/source";
+  });
+  await expect(tab("Source")).toHaveAttribute("aria-selected", "true");
+  await expect(editor).not.toHaveValue("");
+
+  await page.goBack();
+  await expect(tab("Logging")).toHaveAttribute("aria-selected", "true");
+  await page.goBack();
+  await expect(tab("Common")).toHaveAttribute("aria-selected", "true");
+  await expect(page).toHaveURL(/#\/config$/);
+
+  // A tab the page does not have opens the first.
+  await page.evaluate(() => {
+    location.hash = "#/config/nope";
+  });
+  await expect(tab("Network")).toHaveAttribute("aria-selected", "false");
+  await expect(tab("Common")).toHaveAttribute("aria-selected", "true");
+});
+
+test("moving between the page's tabs does not ask about unsaved settings, except to and from Source", async ({
+  page,
+}) => {
+  await openPanel(page, core, "/panel/#/config");
+  await signIn(page, core);
+  const logToFile = page.getByRole("switch", { name: "Log to File", exact: true });
+  const before = await logToFile.isChecked();
+  await logToFile.setChecked(!before);
+  const question = page.getByRole("dialog", { name: "Unsaved changes", exact: true });
+  const tab = (name: string) => page.getByRole("tab", { name, exact: true });
+
+  await tab("Network").click();
+  await page.evaluate(() => {
+    location.hash = "#/config/logging";
+  });
+  await expect(tab("Logging")).toHaveAttribute("aria-selected", "true");
+  await expect(question).toHaveCount(0);
+  await tab("Common").click();
+  await expect(logToFile).toBeChecked({ checked: !before });
+
+  // Source is its own text, so a move to it asks, as its tab does; Stay keeps the tab and address.
+  await page.evaluate(() => {
+    location.hash = "#/config/source";
+  });
+  await expect(question).toBeVisible();
+  await expect(page).toHaveURL(/#\/config$/);
+  await question.getByRole("button", { name: "Stay", exact: true }).click();
+  await expect(tab("Common")).toHaveAttribute("aria-selected", "true");
+  await expect(logToFile).toBeChecked({ checked: !before });
+  await page.evaluate(() => {
+    location.hash = "#/config/source";
+  });
+  await question.getByRole("button", { name: "Leave", exact: true }).click();
+  await expect(tab("Source")).toHaveAttribute("aria-selected", "true");
+  await expect(page).toHaveURL(/#\/config\/source$/);
+  await expect(page.getByRole("textbox", { name: "Configuration source", exact: true })).not.toHaveValue("");
+  await tab("Common").click();
+  await expect(logToFile).toBeChecked({ checked: before });
+});
+
+test("a typed Source address with an account scrolls a long file to the account", async ({ page }) => {
+  const current = await core.mgmt<{ hash: string; content: string }>("GET", "/config");
+  expect(
+    (
+      await core.mgmt("PUT", "/config", {
+        base_hash: current.body.hash,
+        content: `${JSON.stringify(JSON.parse(current.body.content), null, 2)}\n`,
+      })
+    ).status,
+  ).toBe(200);
+  await openPanel(page, core, "/panel/#/config/source?account=alpha-2");
+  await signIn(page, core);
+  const editor = page.getByRole("textbox", { name: "Configuration source", exact: true });
+  await expect(editor).not.toHaveValue("");
+  const view = () =>
+    editor.evaluate((e: HTMLTextAreaElement) => {
+      const lineHeight = Number.parseFloat(getComputedStyle(e).lineHeight);
+      const row = e.value.slice(0, e.selectionStart).split("\n").length - 1;
+      return {
+        text: e.value.slice(e.selectionStart, e.selectionEnd),
+        row,
+        shown: row * lineHeight >= e.scrollTop && (row + 1) * lineHeight <= e.scrollTop + e.clientHeight,
+        scrolled: e.scrollTop > 0,
+      };
+    });
+  await expect.poll(view).toMatchObject({ text: "alpha-2", shown: true, scrolled: true });
+  expect((await view()).row).toBeGreaterThan(20); // below the first screen, so the scroll was needed
+});

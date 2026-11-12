@@ -124,7 +124,7 @@ test("config models and credential tools follow core metadata", async ({ page })
   let detail = await openAccount(page, "alpha-1");
   await expect(detail.getByRole("link", { name: "Edit in Config Panel" })).toHaveAttribute(
     "href",
-    "#/config",
+    "#/config/source?account=alpha-1",
   );
   await expect(detail.getByRole("button", { name: "Refresh OAuth credential" })).toHaveCount(0);
   await expect(detail.getByRole("button", { name: "Sign in again", exact: true })).toHaveCount(0);
@@ -151,4 +151,58 @@ test("config models and credential tools follow core metadata", async ({ page })
   await detail.getByRole("button", { name: "Submit Callback URL" }).click();
   await expect(detail.getByRole("status")).toContainText("Authentication successful!");
   await expect(detail.getByRole("button", { name: "Log in another account" })).toHaveCount(0);
+});
+
+test("Edit in Config Panel opens the Source tab with the account's ID selected", async ({ page }) => {
+  await openPanel(page, core);
+  await signIn(page, core);
+  const detail = await openAccount(page, "alpha-2");
+  await detail.getByRole("link", { name: "Edit in Config Panel" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Config Panel" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Source", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page).toHaveURL(/#\/config\/source\?account=alpha-2$/);
+  const editor = page.getByRole("textbox", { name: "Configuration source", exact: true });
+  await expect(editor).not.toHaveValue("");
+  const value = await editor.inputValue();
+  const start = value.indexOf('"alpha-2"') + 1;
+  expect(start).toBeGreaterThan(0);
+  const cursor = () =>
+    editor.evaluate((e: HTMLTextAreaElement) => ({
+      start: e.selectionStart,
+      end: e.selectionEnd,
+      scrollLeft: e.scrollLeft,
+    }));
+  await expect.poll(cursor).toMatchObject({ start, end: start + "alpha-2".length });
+  await expect(editor).toBeFocused();
+  // Core writes its config on one line, so the ID is far to the right: the editor shows it.
+  expect((await cursor()).scrollLeft).toBeGreaterThan(0);
+  await expect(page.getByText(/has no entry with the ID/)).toHaveCount(0);
+  if (process.env.CONFIG_SOURCE_SHOTS) {
+    await page.screenshot({ path: process.env.CONFIG_SOURCE_SHOTS, fullPage: true, animations: "disabled" });
+  }
+});
+
+test("Edit in Config Panel still opens Source when the file does not hold the account's ID", async ({
+  page,
+}) => {
+  // An account of a provider key section (claude-api-key, ...) has an ID made from its place.
+  await page.route("**/v0/management/config", async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.content = body.content.replaceAll("alpha-2", "renamed");
+    await route.fulfill({ response, json: body });
+  });
+  await openPanel(page, core);
+  await signIn(page, core);
+  const detail = await openAccount(page, "alpha-2");
+  await detail.getByRole("link", { name: "Edit in Config Panel" }).click();
+  await expect(page.getByRole("tab", { name: "Source", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.getByRole("textbox", { name: "Configuration source", exact: true })).not.toHaveValue("");
+  await expect(page.getByText(/has no entry with the ID alpha-2/)).toBeVisible();
 });
