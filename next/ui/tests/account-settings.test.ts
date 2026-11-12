@@ -98,3 +98,69 @@ test("a typed proxy URL is sent trimmed, and clearing the field sets the default
   // Clearing a field that was empty is no change.
   expect(accountChange(none, { ...draftOf(none), proxyUrl: "  " })).toEqual({ change: {} });
 });
+
+// An account as core shows one with headers: a placeholder in place of the value of a header whose
+// name is about authentication.
+const placeholder = "pluxy-redacted-0123456789abcdef01234567";
+const headed = (headers?: Record<string, string>): Account => ({
+  id: "a",
+  source: "login",
+  state: "active",
+  refreshable: false,
+  ...(headers === undefined ? {} : { headers }),
+});
+const shown = { Authorization: placeholder, "X-Title": "pluxy" };
+
+test("headers as core shows them are not sent back, so the stored secret stays", () => {
+  const a = headed(shown);
+  // Shown as core sends them, secrets as placeholders, never decoded.
+  expect(JSON.parse(draftOf(a).headers)).toEqual(shown);
+  expect(draftOf(a).headers).toContain(placeholder);
+  // Untouched, and with another field changed: no headers in the PATCH.
+  expect(accountChange(a, draftOf(a))).toEqual({ change: {} });
+  expect(accountChange(a, { ...draftOf(a), priority: "5" })).toEqual({ change: { priority: 5 } });
+  // The same headers written another way (order, spacing) are no change either.
+  expect(
+    accountChange(a, { ...draftOf(a), headers: `{"X-Title":"pluxy",\n "Authorization": "${placeholder}"}` }),
+  ).toEqual({ change: {} });
+});
+
+test("edited headers go whole, an untouched secret as its placeholder", () => {
+  const a = headed(shown);
+  const edited = `{"Authorization": "${placeholder}", "X-Title": "other", "X-New": "1"}`;
+  expect(accountChange(a, { ...draftOf(a), headers: edited })).toEqual({
+    change: { headers: { Authorization: placeholder, "X-Title": "other", "X-New": "1" } },
+  });
+  // A header left out of the text is removed; a secret typed anew is sent as typed.
+  expect(accountChange(a, { ...draftOf(a), headers: `{"Authorization": "sk-new-value"}` })).toEqual({
+    change: { headers: { Authorization: "sk-new-value" } },
+  });
+  // Headers added to an account that had none.
+  const none = headed();
+  expect(draftOf(none).headers).toBe("");
+  expect(accountChange(none, { ...draftOf(none), headers: `{"X-Title": "pluxy"}` })).toEqual({
+    change: { headers: { "X-Title": "pluxy" } },
+  });
+});
+
+test("removing all headers sends null, and an empty field on an account without headers is no change", () => {
+  const a = headed(shown);
+  for (const text of ["", "  ", "{}", " {\n} "]) {
+    expect(accountChange(a, { ...draftOf(a), headers: text })).toEqual({ change: { headers: null } });
+  }
+  const none = headed();
+  for (const text of ["  ", "{}"]) {
+    expect(accountChange(none, { ...draftOf(none), headers: text })).toEqual({ change: {} });
+  }
+});
+
+test("headers that are not a JSON object of text values are refused", () => {
+  const a = headed(shown);
+  const bad = (text: string) => accountChange(a, { ...draftOf(a), headers: text });
+  expect(bad("{")).toEqual({ invalid: "headersJson" });
+  expect(bad(`["X-Title"]`)).toEqual({ invalid: "headersObject" });
+  expect(bad("null")).toEqual({ invalid: "headersObject" });
+  expect(bad(`"X-Title: pluxy"`)).toEqual({ invalid: "headersObject" });
+  expect(bad(`{"X-Title": 1}`)).toEqual({ invalid: "headersValue" });
+  expect(bad(`{"X-Title": null}`)).toEqual({ invalid: "headersValue" });
+});
