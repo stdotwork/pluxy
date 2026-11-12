@@ -19,7 +19,7 @@ import (
 // as the bytes that arrived. It answers a response.create with a short reply. When the turn's
 // input text is "hold" it stops after the first event and waits for the next message on the socket
 // (the client's interrupt), then finishes the reply; any other message is recorded and not
-// answered.
+// answered. When it is "drop" the upstream closes the socket after the reply.
 type payloadWSUpstream struct {
 	*httptest.Server
 	replies wsUpstream // only its reply() is used
@@ -28,6 +28,7 @@ type payloadWSUpstream struct {
 	messages [][]byte // every message received, in order
 	sockets  int
 	posts    int
+	ended    int // sockets whose handler returned
 }
 
 func newPayloadWSUpstream(t *testing.T) *payloadWSUpstream {
@@ -48,6 +49,11 @@ func newPayloadWSUpstream(t *testing.T) *payloadWSUpstream {
 		u.mu.Lock()
 		u.sockets++
 		u.mu.Unlock()
+		defer func() {
+			u.mu.Lock()
+			u.ended++
+			u.mu.Unlock()
+		}()
 		read := func() ([]byte, bool) {
 			_, data, err := c.Read(context.Background())
 			if err != nil {
@@ -75,7 +81,11 @@ func newPayloadWSUpstream(t *testing.T) *payloadWSUpstream {
 			if m.Type != "response.create" {
 				continue
 			}
-			held := len(m.Input) > 0 && len(m.Input[0].Content) > 0 && m.Input[0].Content[0].Text == "hold"
+			text := ""
+			if len(m.Input) > 0 && len(m.Input[0].Content) > 0 {
+				text = m.Input[0].Content[0].Text
+			}
+			held := text == "hold"
 			for i, ev := range u.replies.reply() {
 				if c.Write(context.Background(), websocket.MessageText, ev) != nil {
 					return
@@ -85,6 +95,10 @@ func newPayloadWSUpstream(t *testing.T) *payloadWSUpstream {
 						return
 					}
 				}
+			}
+			if text == "drop" {
+				_ = c.Close(websocket.StatusNormalClosure, "")
+				return
 			}
 		}
 	}))
@@ -231,5 +245,121 @@ func TestPayloadWebSocketTurns(t *testing.T) {
 	}
 	if !bytes.Equal(raw[3], interrupt) {
 		t.Errorf("the interrupt went upstream as %s, want it as the client sent it, %s", raw[3], interrupt)
+	}
+}
+
+// The response a turn continues is read from the message as it goes out, after the rules: a rule
+// that removes previous_response_id makes the turn continue nothing. The upstream closes the
+// socket the first turn ran on, so a turn that still named a previous response would be refused
+// with previous_response_not_found; with the rule it names none, connects again and completes.
+// An extension that read the response before applying the rules would refuse it.
+func TestPayloadWebSocketRuleRemovesPreviousResponse(t *testing.T) {
+	u := newPayloadWSUpstream(t)
+	base := runCore(t, map[string]any{
+		"listen":      "127.0.0.1:0",
+		"client_keys": []string{clientKey},
+		"payload": map[string]any{
+			"filter": []any{map[string]any{
+				"models": []any{map[string]any{"name": "gpt-*", "protocol": "codex"}},
+				"params": []string{"previous_response_id"},
+			}},
+		},
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "codex", "pluxy-extension.json"),
+			"accounts": []any{map[string]any{
+				"id":         "acct-ws",
+				"models":     []string{"gpt-test"},
+				"settings":   map[string]any{"base_url": u.URL + "/v1", "websockets": true},
+				"credential": map[string]any{"kind": "api_key", "api_key": "sk-ws"},
+			}},
+		},
+	})
+
+	c := dialResponses(t, base)
+	first := wsTurn(t, c, wsCreate("drop", ""))
+	if first["type"] != "response.completed" {
+		t.Fatalf("first turn ended with %v", first)
+	}
+	// Wait until the upstream has closed the socket, then a moment for the extension to see it end.
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		u.mu.Lock()
+		ended := u.ended
+		u.mu.Unlock()
+		if ended == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the upstream's socket did not end")
+		}
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	second := wsTurn(t, c, wsCreate("two", responseID(first)))
+	if second["type"] != "response.completed" {
+		t.Fatalf("a turn naming a previous response ended with %v, want it completed: the rule removes the name, so it continues nothing", second)
+	}
+	raw, got := u.received(t)
+	u.mu.Lock()
+	sockets := u.sockets
+	u.mu.Unlock()
+	if sockets != 2 || len(got) != 2 {
+		t.Fatalf("upstream saw %d sockets and %d messages, want 2 and 2", sockets, len(got))
+	}
+	if _, ok := got[1]["previous_response_id"]; ok {
+		t.Errorf("the second message still names a previous response: %s", raw[1])
+	}
+}
+
+// A turn core sends upstream as an HTTP call (the account takes no WebSocket) gets the rules once,
+// from sdk.Upstream, as a session turn gets them once from sdk.ApplyPayload. The rules are those
+// of TestPayloadWebSocketTurns: of the two apply_patch tools, applying the filter twice would
+// leave neither, and not applying it would leave both.
+func TestPayloadWebSocketTurnsOverHTTP(t *testing.T) {
+	u := newWSUpstream(t)
+	base := runCore(t, map[string]any{
+		"listen":      "127.0.0.1:0",
+		"client_keys": []string{clientKey},
+		"payload": map[string]any{
+			"override": []any{map[string]any{
+				"models": []any{map[string]any{"name": "gpt-*", "protocol": "codex"}},
+				"params": map[string]any{"reasoning.effort": "high"},
+			}},
+			"filter": []any{map[string]any{
+				"models": []any{map[string]any{"name": "gpt-*", "protocol": "codex"}},
+				"params": []string{`tools.#(name=="apply_patch")`},
+			}},
+		},
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "codex", "pluxy-extension.json"),
+			"accounts": []any{map[string]any{
+				"id":         "acct-http",
+				"models":     []string{"gpt-test"},
+				"settings":   map[string]any{"base_url": u.URL + "/v1", "websockets": false},
+				"credential": map[string]any{"kind": "api_key", "api_key": "sk-http"},
+			}},
+		},
+	})
+
+	c := dialResponses(t, base)
+	first := wsTurn(t, c, wsTurnWithTools("one"))
+	second := wsTurn(t, c, wsTurnWithTools("two"))
+	for i, m := range []map[string]any{first, second} {
+		if m["type"] != "response.completed" {
+			t.Fatalf("turn %d ended with %v", i+1, m)
+		}
+	}
+	u.mu.Lock()
+	posts := append([]map[string]any(nil), u.posts...)
+	u.mu.Unlock()
+	if conns := u.connections(); len(conns) != 0 || len(posts) != 2 {
+		t.Fatalf("upstream saw %d sockets and %d HTTP requests, want 0 and 2", len(conns), len(posts))
+	}
+	for i, m := range posts {
+		if v, _ := at(m, "reasoning.effort"); v != "high" {
+			t.Errorf("turn %d: reasoning.effort = %v, want high", i+1, v)
+		}
+		if d := descriptions(m); !reflect.DeepEqual(d, []string{"read", "second"}) {
+			t.Errorf("turn %d: tool descriptions %q, want [read second] (only the first apply_patch removed, once)", i+1, d)
+		}
 	}
 }
