@@ -8,7 +8,7 @@
 //! The management key stays here: the window gets a view of the connection without it.
 //! Nothing in this module needs Tauri, so the tests drive it against a real core.
 
-use crate::client::{certificates, Client, Reply};
+use crate::client::{certificates, Client, Reply, ROTATE};
 use crate::managed::{core_program, write_private, ManagedCore, OnExit};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -193,6 +193,66 @@ pub(crate) struct KeyTarget {
     pub summary: String,
 }
 
+/// A rotation the person is asked to confirm, frozen to the connection it was prepared on.
+pub(crate) struct RotationTarget {
+    revision: u64,
+    /// What the native confirmation says: the core, and how the new key will be kept.
+    pub summary: String,
+}
+
+impl RotationTarget {
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+}
+
+/// How the app keeps a rotated key: as the old one was kept.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Kept {
+    /// In `connection.json`, as the person chose for the old key.
+    Device,
+    /// Not kept: it lasts until the app quits.
+    Session,
+    /// In the config file of the app's own core, which core saved before replying.
+    Core,
+    /// It should have been saved in `connection.json` and was not: why, and what to do.
+    NotSaved(String),
+}
+
+impl Kept {
+    /// The name the window gets for it.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Kept::Device => "device",
+            Kept::Session => "session",
+            Kept::Core => "core",
+            Kept::NotSaved(_) => "not_saved",
+        }
+    }
+
+    /// What the native window showing the new key says about it.
+    pub fn notice(&self) -> String {
+        let shown = "It is shown only here, once.";
+        match self {
+            Kept::Device => format!("The app now uses this management key and keeps it on this device. Programs and browser panels that used the old key need this one. {shown}"),
+            Kept::Session => format!("The app now uses this management key until it quits. It is not kept on this device: copy it now, because you need it to sign in again. {shown}"),
+            Kept::Core => format!("The app's core saved this management key in its config file, and the app uses it. Programs and browser panels that used the old key need this one. {shown}"),
+            Kept::NotSaved(why) => format!("{why} {shown}"),
+        }
+    }
+}
+
+/// A rotated management key, for the native window that shows it once, and how it is kept.
+pub struct Rotation {
+    pub key: String,
+    pub kept: Kept,
+}
+
+/// Whether a key core sent can be used: what a bearer token can carry, of a sane length.
+fn usable_key(k: &str) -> bool {
+    !k.is_empty() && k.len() <= 1024 && k.bytes().all(|b| b.is_ascii_graphic())
+}
+
 /// What a call needs, taken out of the connection so no lock is held while it runs.
 #[derive(Clone)]
 pub struct Caller {
@@ -207,6 +267,29 @@ impl Caller {
             (None, _) => Reply::failed(0, "unavailable", "the app is not connected to a core"),
             (_, None) => Reply::failed(401, "unauthorized", "not signed in"),
         }
+    }
+
+    /// Calls as call does. A call core refused because a rotation replaced the key while it was
+    /// on its way goes once more with the current key, to the same core: core refuses a key
+    /// before acting, so nothing runs twice.
+    pub fn call_or_retry(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        current: impl FnOnce() -> Caller,
+    ) -> Reply {
+        let r = self.call(method, path, body);
+        if r.status != 401 {
+            return r;
+        }
+        let now = current();
+        let same_core =
+            now.client.as_ref().map(Client::base) == self.client.as_ref().map(Client::base);
+        if !same_core || now.key.is_none() || now.key == self.key {
+            return r;
+        }
+        now.call(method, path, body)
     }
 }
 
@@ -453,6 +536,108 @@ impl Connection {
         self.finish_key(target, key, remember)
     }
 
+    /// What a rotation would do, for the native confirmation; changes nothing.
+    pub(crate) fn prepare_rotation(&self) -> Result<RotationTarget, Reply> {
+        let base = self
+            .client
+            .as_ref()
+            .map(|c| c.base().to_string())
+            .ok_or_else(|| Reply::failed(0, "unavailable", "the app is not connected to a core"))?;
+        if self.key.is_none() {
+            return Err(Reply::failed(401, "unauthorized", "not signed in"));
+        }
+        let kept = match self.settings.mode {
+            Some(Mode::Managed) => "The app's core saves the new key in its config file",
+            _ if self.settings.key.is_some() => {
+                "The app keeps the new key on this device, as it kept the old one"
+            }
+            _ => "The app uses the new key until it quits; like the old one, it is not kept on this device",
+        };
+        Ok(RotationTarget {
+            revision: self.revision,
+            summary: format!(
+                "Rotate the management key of {base}. Core replaces it with a new random key at once, and the old key stops working for this app and for every other program that uses it. {kept}, and shows it once in a window of its own."
+            ),
+        })
+    }
+
+    /// Rotates the management key on the core target was prepared for and adopts the new one,
+    /// kept as the old one was. Its caller holds the connection's lock throughout, so nothing
+    /// else changes the connection between core's reply and the new key taking effect. On an
+    /// error the connection is unchanged; the reply never holds a key.
+    pub(crate) fn finish_rotation(&mut self, target: RotationTarget) -> Result<Rotation, Reply> {
+        if self.revision != target.revision {
+            return Err(Reply::failed(
+                409,
+                "conflict",
+                "The connection changed. Rotate again.",
+            ));
+        }
+        let reply = self.caller().call("POST", ROTATE, None);
+        let lost = || {
+            let recover = if self.settings.mode == Some(Mode::Managed) {
+                "Restart the core on the Connection page: the app then reads the current key from its config file."
+            } else {
+                "Find the current key in core's config file and sign in with it before rotating again."
+            };
+            Reply::failed(
+                0,
+                "unknown",
+                format!("Core's reply to the rotation was lost, so the management key may have changed. {recover}"),
+            )
+        };
+        match reply.status {
+            200 => {}
+            0 => return Err(lost()),
+            status => {
+                return Err(Reply {
+                    status,
+                    body: None,
+                    error: reply.error,
+                })
+            }
+        }
+        let key = reply
+            .body
+            .as_ref()
+            .and_then(|b| b.get("value"))
+            .and_then(Value::as_str)
+            .filter(|k| usable_key(k))
+            .map(str::to_owned)
+            .ok_or_else(lost)?;
+        self.revision += 1;
+        self.key = Some(key.clone());
+        let kept = if self.settings.mode == Some(Mode::Managed) {
+            Kept::Core
+        } else if self.settings.key.is_some() {
+            let mut next = self.settings.clone();
+            next.key = Some(key.clone());
+            match next.save(&self.dirs.settings()) {
+                Ok(()) => {
+                    self.settings = next;
+                    Kept::Device
+                }
+                // The old key stays on disk, so a later sign-out still removes it.
+                Err(e) => Kept::NotSaved(format!(
+                    "The management key was rotated, but the new key could not be kept on this device ({e}). The app uses it until it quits; the kept key no longer works. Copy the new key now, fix the problem, then enter the new key again with \"Keep the key on this device\"."
+                )),
+            }
+        } else {
+            Kept::Session
+        };
+        self.error = match &kept {
+            Kept::NotSaved(why) => Some(why.clone()),
+            _ => None,
+        };
+        Ok(Rotation { key, kept })
+    }
+
+    /// Rotates the management key without asking: native confirmation is the caller's.
+    pub fn rotate_key(&mut self) -> Result<Rotation, Reply> {
+        let target = self.prepare_rotation()?;
+        self.finish_rotation(target)
+    }
+
     /// Forgets the key, also the kept one. Managed mode keeps its own.
     pub fn sign_out(&mut self) -> Result<(), String> {
         self.revision += 1;
@@ -680,6 +865,71 @@ mod tests {
         assert!(!serde_json::to_string(&c.view()).unwrap().contains(&key));
         server.join().unwrap();
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A reply without a key the app can use, or a connection changed since the confirmation,
+    /// changes nothing and says the key may have changed (core may have rotated it).
+    #[test]
+    fn a_rotation_reply_without_a_usable_key_changes_nothing() {
+        use std::io::{Read, Write};
+        let bodies = [
+            r#"{}"#,
+            r#"{"value":""}"#,
+            r#"{"value":"two words"}"#,
+            r#"{"value":"line\nbreak"}"#,
+            r#"{"value":7}"#,
+        ];
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for body in bodies {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut head = Vec::new();
+                let mut byte = [0];
+                while !head.ends_with(b"\r\n\r\n") {
+                    stream.read_exact(&mut byte).unwrap();
+                    head.push(byte[0]);
+                }
+                assert!(head.starts_with(b"POST /v0/management/management-key/rotate HTTP/1.1\r\n"));
+                let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        let dir =
+            std::env::temp_dir().join(format!("pluxy-rotate-{}", crate::managed::random_key()));
+        let dirs = Dirs {
+            config: dir.join("config"),
+            core: dir.join("core"),
+        };
+        let old = crate::managed::random_key();
+        Settings {
+            mode: Some(Mode::Local),
+            url: Some(base),
+            key: Some(old.clone()),
+            ..Settings::default()
+        }
+        .save(&dirs.settings())
+        .unwrap();
+        let mut c = Connection::open(dirs.clone(), None);
+        let before = c.view();
+        let saved = fs::read(dirs.settings()).unwrap();
+        for _ in bodies {
+            let r = c.rotate_key().err().expect("an unusable key was adopted");
+            assert_eq!(r.status, 0);
+            assert!(r.error.unwrap().message.contains("may have changed"));
+            assert_eq!(c.view(), before);
+            assert_eq!(c.key.as_deref(), Some(old.as_str()));
+            assert_eq!(fs::read(dirs.settings()).unwrap(), saved);
+        }
+        server.join().unwrap();
+        let target = c.prepare_rotation().ok().unwrap();
+        c.sign_out().unwrap();
+        assert_eq!(
+            c.finish_rotation(target).err().unwrap().status,
+            409,
+            "a rotation confirmed for an older connection ran"
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

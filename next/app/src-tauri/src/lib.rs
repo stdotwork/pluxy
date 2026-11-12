@@ -68,6 +68,7 @@ struct App {
     quitting: AtomicBool,
     key_entry_open: AtomicBool,
     key_entry_after: Mutex<Option<std::time::Instant>>,
+    rotation_open: AtomicBool,
 }
 
 /// Every command checks its caller too: the capability already allows only the window.
@@ -541,10 +542,109 @@ async fn core_call(
     native_test::ingress_operation(&method, &path);
     #[cfg(feature = "native-test")]
     native_test::window_call(&method, &path);
+    if client::native_only(&path) {
+        return Ok(client::Reply::failed(
+            403,
+            "native_only",
+            "the management key is rotated only by the app itself: use Rotate on the Config page",
+        ));
+    }
     let caller = state.conn.lock().unwrap().caller();
-    tauri::async_runtime::spawn_blocking(move || caller.call(&method, &path, body.as_ref()))
-        .await
-        .map_err(|e| e.to_string())
+    let app = webview.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        caller.call_or_retry(&method, &path, body.as_ref(), || {
+            app.state::<App>().conn.lock().unwrap().caller()
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Rotates the management key natively: the person confirms in the native confirmation, the app
+/// calls core's rotation route itself, keeps the new key as the old one was kept and shows it
+/// once in a native window. The window gets only how it went and how the key is kept: 200 with
+/// `kept`, plus an error when it could not be saved; 204 when the person cancelled.
+#[tauri::command]
+async fn management_key_rotate(webview: Webview) -> Result<client::Reply, String> {
+    trusted(&webview)?;
+    let app = webview.app_handle().clone();
+    let st = app.state::<App>();
+    if st.key_entry_open.load(Ordering::SeqCst) {
+        return Err("finish native key entry first".into());
+    }
+    if st.rotation_open.swap(true, Ordering::SeqCst) {
+        return Err("a rotation is already in progress".into());
+    }
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        struct Pending(AppHandle);
+        impl Drop for Pending {
+            fn drop(&mut self) {
+                self.0
+                    .state::<App>()
+                    .rotation_open
+                    .store(false, Ordering::SeqCst);
+            }
+        }
+        let _pending = Pending(handle.clone());
+        rotate(&handle)
+    })
+    .await
+    .map_err(|_| "native rotation failed".into())
+}
+
+#[cfg(target_os = "linux")]
+fn rotate(app: &AppHandle) -> client::Reply {
+    let st = app.state::<App>();
+    let prepared = st.conn.lock().unwrap().prepare_rotation();
+    let target = match prepared {
+        Ok(target) => target,
+        Err(reply) => return reply,
+    };
+    match confirmation::confirm_app(app, target.summary.clone(), target.revision()) {
+        Ok(true) => {}
+        Ok(false) => {
+            return client::Reply {
+                status: 204,
+                body: None,
+                error: None,
+            }
+        }
+        Err(e) => return client::Reply::failed(409, "not_confirmed", e),
+    }
+    let mut c = st.conn.lock().unwrap();
+    let result = c.finish_rotation(target);
+    let view = c.view();
+    drop(c);
+    show_status(app, &view);
+    match result {
+        Err(reply) => reply,
+        Ok(rotation) => {
+            let error = match &rotation.kept {
+                conn::Kept::NotSaved(why) => Some(client::ApiError {
+                    code: "not_saved".into(),
+                    message: why.clone(),
+                }),
+                _ => None,
+            };
+            let body = serde_json::json!({"kept": rotation.kept.name()});
+            key_entry::reveal(app, rotation.key, rotation.kept.notice());
+            client::Reply {
+                status: 200,
+                body: Some(body),
+                error,
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn rotate(_: &AppHandle) -> client::Reply {
+    client::Reply::failed(
+        501,
+        "unsupported",
+        "native key rotation is currently supported on Linux only",
+    )
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -849,6 +949,7 @@ pub fn run() {
             core_restart,
             core_call,
             key_entry,
+            management_key_rotate,
             sign_out,
             page_open,
             page_place,
@@ -908,6 +1009,7 @@ pub fn run() {
                 quitting: AtomicBool::new(false),
                 key_entry_open: AtomicBool::new(false),
                 key_entry_after: Mutex::new(None),
+                rotation_open: AtomicBool::new(false),
             });
             let handle = app.handle().clone();
             #[cfg(target_os = "linux")]

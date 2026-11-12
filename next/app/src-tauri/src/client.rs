@@ -78,6 +78,40 @@ pub fn path_problem(path: &str) -> Option<String> {
     None
 }
 
+/// Core's route that replaces the management key and returns the new one.
+pub const ROTATE: &str = "/management-key/rotate";
+
+/// Whether path is under the management key's own routes, whose replies hold the key: only
+/// native code calls them, never a webview through core_call. Compared as a server might route
+/// it: percent-decoded, case-folded and without empty or `.` segments.
+pub fn native_only(path: &str) -> bool {
+    let bare = path.split(['?', '#']).next().unwrap_or("");
+    let bytes = bare.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| (b as char).to_digit(16);
+        match (
+            bytes[i],
+            bytes.get(i + 1).copied().and_then(hex),
+            bytes.get(i + 2).copied().and_then(hex),
+        ) {
+            (b'%', Some(hi), Some(lo)) => {
+                decoded.push((hi * 16 + lo) as u8);
+                i += 3;
+            }
+            (b, _, _) => {
+                decoded.push(b);
+                i += 1;
+            }
+        }
+    }
+    decoded
+        .split(|&b| b == b'/')
+        .find(|s| !s.is_empty() && *s != b".")
+        .is_some_and(|s| s.eq_ignore_ascii_case(b"management-key"))
+}
+
 /// The certificates in a PEM file, to trust for one core.
 pub fn certificates(pem: &[u8]) -> Result<Vec<Certificate<'static>>, String> {
     let mut certs = Vec::new();
@@ -256,6 +290,36 @@ mod tests {
             "",
         ] {
             assert!(path_problem(bad).is_some(), "{bad:?} was allowed");
+        }
+    }
+
+    #[test]
+    fn the_management_key_routes_are_native_only_however_spelled() {
+        for path in [
+            ROTATE,
+            "/management-key/%72otate",
+            "/%6Danagement-key/rotate",
+            "/%6danagement%2Dkey%2frotate",
+            "/Management-Key/rotate/",
+            "/management-key/rotate?x=1",
+            "//management-key/rotate",
+            "/./management-key/rotate",
+            "/management-key",
+            "/management-key#x",
+        ] {
+            assert!(native_only(path), "{path:?} was allowed");
+        }
+        for path in [
+            "/status",
+            "/client-keys",
+            "/config",
+            "/management-keys",
+            "/x/management-key/rotate",
+            "/status?next=/management-key/rotate",
+            "/management-key%",
+            "",
+        ] {
+            assert!(!native_only(path), "{path:?} was refused");
         }
     }
 

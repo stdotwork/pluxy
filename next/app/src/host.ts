@@ -44,6 +44,9 @@ export const keyEntry = (change?: ConnectionChange) =>
   invoke<KeyEntryResult>("key_entry", { change: change ?? null });
 export const coreRestart = () => invoke<Connection>("core_restart");
 
+/** Core's rotation route. The window never calls it: the native side rotates the key itself. */
+const ROTATE = "/management-key/rotate";
+
 function read(name: string): string | null {
   try {
     return localStorage.getItem(name);
@@ -67,11 +70,13 @@ function write(name: string, value: string | null) {
  */
 export function appHost(conn: Connection, changed: (c: Connection) => void): Host {
   let signed = conn.signed_in;
-  const features = new Set<Feature>();
+  const features = new Set<Feature>(["rotateManagementKey"]);
   if (conn.mode === "local" || conn.mode === "remote") features.add("signOut");
   return {
     async call<T>(method: Method, path: string, body?: unknown): Promise<Reply<T>> {
       try {
+        // Native, behind a native confirmation: the reply says how the new key is kept, never the key.
+        if (method === "POST" && path === ROTATE) return await invoke<Reply<T>>("management_key_rotate");
         return await invoke<Reply<T>>("core_call", { method, path, body: body ?? null });
       } catch (e) {
         return { status: 0, error: { code: "unavailable", message: String(e) } };

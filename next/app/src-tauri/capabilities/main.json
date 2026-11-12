@@ -16,6 +16,7 @@
     "allow-core-restart",
     "allow-core-call",
     "allow-key-entry",
+    "allow-management-key-rotate",
     "allow-sign-out",
     "allow-page-open",
     "allow-page-place",

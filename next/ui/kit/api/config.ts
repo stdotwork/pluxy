@@ -24,5 +24,5 @@ export const configApi = (host: Host) => ({
   clientKeys: () => host.call<{ keys: ClientKey[] }>("GET", "/client-keys"),
   addClientKey: () => host.call<{ key: ClientKey; value: string }>("POST", "/client-keys"),
   deleteClientKey: (id: string) => host.call<void>("DELETE", `/client-keys/${one(id)}`),
-  rotateManagementKey: () => host.call<{ value: string }>("POST", "/management-key/rotate"),
+  rotateManagementKey: () => host.call<{ value?: string }>("POST", "/management-key/rotate"),
 });

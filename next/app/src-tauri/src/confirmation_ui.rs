@@ -152,6 +152,43 @@ pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> 
     .map_err(|e| e.to_string())
 }
 
+/// Reviews an app action started in the app's window, and waits for the person's answer: true
+/// only after Confirm, with its single-use token spent here. Never call it on the GTK thread,
+/// which shows the dialog.
+pub(crate) fn confirm_app(
+    app: &tauri::AppHandle,
+    what: String,
+    generation: u64,
+) -> Result<bool, String> {
+    let id = {
+        let st = app.state::<crate::App>();
+        let mut c = st.confirmations.lock().unwrap();
+        let prepared = c.prepare_app(what, generation)?;
+        c.queue(prepared)?
+    };
+    request(app, id.clone())?;
+    // The dialog cancels itself when its lifetime ends; this is only a backstop.
+    let deadline = Instant::now() + LIFETIME + Duration::from_secs(10);
+    loop {
+        let st = app.state::<crate::App>();
+        let mut c = st.confirmations.lock().unwrap();
+        match c.take_result(&id) {
+            Some(Ok(Some(token))) => {
+                c.consume(&id, &token)?;
+                return Ok(true);
+            }
+            Some(Ok(None)) => return Ok(false),
+            Some(Err(e)) => return Err(e),
+            None if Instant::now() > deadline => {
+                return Err("the confirmation did not finish".into())
+            }
+            None => {}
+        }
+        drop(c);
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// Native settings keep revocation out of page messages and DOM events.
 pub(crate) fn settings(app: &tauri::AppHandle) -> Result<(), String> {
     let handle = app.clone();

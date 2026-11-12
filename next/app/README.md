@@ -40,6 +40,17 @@ The window calls core through the
 `<core>/v0/management/...` only, following no redirects and, for a core on this computer, no
 proxy from the environment. Path segments that are, or decode to, `.` or `..` are refused.
 
+Rotate on the Config page's Connectivity tab rotates the management key natively, on Linux: the
+app opens its native confirmation, which names the core and how the new key will be kept, then
+calls core's `POST /v0/management/management-key/rotate` itself. It keeps the new key as the old
+one was kept (in `connection.json`, for this session only, or, for the app's own core, in that
+core's config file, which core writes) and shows it once in a native window with Copy and
+Close, for other programs that used the old key and for signing in again. The window gets only
+how it went: the key never reaches a webview. `core_call` refuses every path under
+`/management-key`, however it is spelled. If the new key cannot be saved, the app keeps using
+it until it quits and says to copy it and enter it again with "Keep the key on this device".
+A call that left with the old key during a rotation is sent once more with the new one.
+
 Until the app is connected and signed in, the window shows only the Connection page, so a wrong
 address or key can always be fixed there.
 
@@ -117,7 +128,8 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `connection_set` | Changes connection settings without accepting a key |
 | `key_entry` | Opens native key entry, checks the key against core, and returns only signed-in, wrong-key, cancelled or error status plus the connection without its key |
 | `core_restart` | Starts the app's own core again (managed mode) |
-| `core_call` | One management API call to the connected core |
+| `core_call` | One management API call to the connected core; refuses the management key's own routes |
+| `management_key_rotate` | Rotates the management key natively after the native confirmation, keeps and shows the new key natively, and returns only how it went (200 with how the key is kept, 204 when cancelled) |
 | `sign_out` | Forgets the key (local and remote modes) |
 | `page_open`, `page_place`, `page_close` | Opens an extension page's webview over part of the window, moves it, closes it |
 | `page_send` | Passes the window's channel messages to a page's webview |

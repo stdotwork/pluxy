@@ -8,6 +8,8 @@
 //!    top of that page's webview, calls every app command and some Tauri plugin commands: each
 //!    must be refused by Tauri's command check;
 //! 3. waits for the page's own report (it writes it into its settings through the channel);
+//!    then native key entry and management-key rotation (`key_entry_test.rs`,
+//!    `rotation_test.rs`) in local and remote mode, rotation alone in managed mode;
 //! 4. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!

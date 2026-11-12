@@ -492,6 +492,33 @@ impl Confirmations {
     pub fn prepare_import(&mut self, action: Action) -> Result<Prepared, String> {
         self.prepare(action, Origin::Import)
     }
+    /// The app's own action, started in the app's window: no package, file or launch. The
+    /// requester is the app itself; generation ties the review to the state it describes.
+    pub(crate) fn prepare_app(
+        &mut self,
+        what: String,
+        generation: u64,
+    ) -> Result<Prepared, String> {
+        let app = Package {
+            id: "pluxy app".into(),
+            source: "the app's window".into(),
+            digest: String::new(),
+            signer: String::new(),
+            contract: "management API v0".into(),
+            generation,
+        };
+        self.prepare(
+            Action {
+                what,
+                chain: vec![app.clone()],
+                executor: app,
+                native_tool: false,
+                files: vec![],
+                launch: None,
+            },
+            Origin::Main,
+        )
+    }
     // Trusted preparations are created only by native main/tray/UI handlers in this module.
     fn prepare(&mut self, action: Action, origin: Origin) -> Result<Prepared, String> {
         if action.chain.is_empty() {
@@ -798,7 +825,7 @@ impl Confirmations {
 #[path = "confirmation_ui.rs"]
 mod ui;
 pub use ui::page_start;
-pub(crate) use ui::{notice as ui_notice, request, settings};
+pub(crate) use ui::{confirm_app, notice as ui_notice, request, settings};
 
 #[cfg(test)]
 #[path = "confirmation_tests.rs"]
