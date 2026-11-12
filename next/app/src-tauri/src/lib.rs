@@ -243,6 +243,9 @@ fn tray_action(app: &AppHandle, action: &str) {
         drop(c);
         st.busy.store(false, Ordering::SeqCst);
         show_status(&app, &v);
+        // A newer view (from the core's exit, say) may have reached the tray while busy was set,
+        // so v is dropped as older: draw the newest view again without the busy state.
+        refresh_tray(&app);
         let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-connection", ());
     });
 }
