@@ -277,11 +277,12 @@ ran before that Stop. After each step it reads which of Start, Stop and Restart 
 enables, including while an action is held busy. A click on a disabled item still reaches the
 app's handler, which the test confirms from the handler's own refusal; in local and remote modes
 every lifecycle click must be refused that way. It ends with a core running and checks that
-quitting stops that core. Every tray operation asserts zero renderer processes and webviews.
+the core does not outlive the app once it quits, whichever of the app's ways of stopping it
+does so. Every tray operation asserts zero renderer processes and webviews.
 A second managed run starts a stand-in core that says where it listens and exits at once, and
 holds the app's setup until that core's exit callback has run, before the app state exists. It
-checks that the app still starts the real core again, with one recovery attempt, and that
-quitting stops it.
+checks that the app still starts the real core again, with one recovery attempt, and that the
+core does not outlive the app.
 In separate runs, the startup sequence enables login registration through the main webview command,
 checks the entry in its temporary XDG config folder, launches it with the real Desktop Entry consumer (gio launch), checks
 zero windows/webviews and no web process, and verifies that the app's real tray item belongs to

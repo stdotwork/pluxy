@@ -10,7 +10,7 @@ interface Snapshot {
 }
 
 export interface RecoveryResult {
-  /** The owned core left running at the end, which quitting the app must stop. */
+  /** The owned core left running at the end, which must not outlive the app. */
   core_pid?: number;
 }
 

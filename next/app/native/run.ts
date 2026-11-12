@@ -479,7 +479,7 @@ async function runApp(
     check(after === 0, `${after} web processes left after closing the window`);
     if (mode === "managed") {
       check(closed?.core_pid, "the app ran no core");
-      // The tray checks killed that core; quitting must stop the one they left running.
+      // The tray checks killed that core; the one they left running must not outlive the app.
       const last = (steps.get("recovery") as { core_pid?: number } | undefined)?.core_pid;
       check(last, "the tray checks left no owned core running before quit");
       await Bun.sleep(1000);

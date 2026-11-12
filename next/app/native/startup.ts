@@ -97,7 +97,7 @@ function liveParent(pid: number): number | undefined {
     return undefined; // exited
   }
 }
-let offCore: number | undefined; // the core coreOff left running, which quitting must stop
+let offCore: number | undefined; // the core coreOff left running, which must not outlive the app
 /** With Start Core on Launch off the app starts no core and recovers none. Positive controls on
  * the same launch: the tray's Start core starts one, and that core is recovered after a crash. */
 async function coreOff(report: Report, lines: string[]) {
