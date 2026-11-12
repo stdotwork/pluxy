@@ -1,0 +1,25 @@
+@layer kit {
+  .account-settings-json {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .account-edit {
+    min-width: min(640px, 80vw);
+  }
+  .account-edit fieldset {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+  }
+  .account-edit-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+    gap: calc(var(--s) * 2);
+    align-items: center;
+  }
+  .account-edit-row > .btn {
+    justify-self: start;
+  }
+}

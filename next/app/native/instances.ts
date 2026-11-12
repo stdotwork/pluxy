@@ -36,6 +36,13 @@ export async function runInstances(o: InstancesRun): Promise<{ problems: string[
       JSON.stringify({ mode: "managed", core_path: o.core }),
       { mode: 0o600 },
     );
+    // The scenario closes the first's window to the tray (closing asks by default), as the
+    // runner's main checks do.
+    writeFileSync(
+      join(dirs.config, o.identifier, "window.json"),
+      JSON.stringify({ close_behavior: "minimize-to-tray" }),
+      { mode: 0o600 },
+    );
     const session = [
       process.execPath,
       join(import.meta.dir, "session.ts"),

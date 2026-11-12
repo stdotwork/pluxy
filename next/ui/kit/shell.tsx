@@ -53,6 +53,21 @@ export interface PageDef {
   render: () => VNode;
 }
 
+/**
+ * Asked before the shell follows a change of the address's hash to another page: it returns true
+ * to stay, and calls go later to follow the change after all. A page with unsaved changes adds
+ * one with guardLeave.
+ */
+export type LeaveGuard = (go: () => void) => boolean;
+
+const leaveGuards = new Set<LeaveGuard>();
+
+/** Adds a leave guard; the function it returns removes it. */
+export function guardLeave(guard: LeaveGuard): () => void {
+  leaveGuards.add(guard);
+  return () => leaveGuards.delete(guard);
+}
+
 function currentId(pages: PageDef[]): string {
   const path = location.hash.replace(/^#\/?/, "");
   const match = pages.filter((p) => path === p.id || path.startsWith(`${p.id}/`));
@@ -180,7 +195,18 @@ export function Shell(props: {
   const [page, setPage] = useState(() => currentId(pages));
 
   useEffect(() => {
-    const onHash = () => setPage(currentId(pages));
+    const onHash = (e?: HashChangeEvent) => {
+      if (e) {
+        const go = () => location.assign(e.newURL);
+        for (const guard of leaveGuards) {
+          if (guard(go)) {
+            history.replaceState(null, "", e.oldURL);
+            return;
+          }
+        }
+      }
+      setPage(currentId(pages));
+    };
     onHash(); // extension pages arrive after the first render
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);

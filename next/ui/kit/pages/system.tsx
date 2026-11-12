@@ -7,7 +7,7 @@ import { Button, Card, Empty, List, Notice, PageHead, useKit, useLoad, when } fr
 const t = strings("system", {
   title: "System",
   short: "System",
-  tip: "Version, models and client addresses",
+  tip: "Runtime & diagnostics",
   about: "About",
   version: "Core version",
   commit: "Commit {commit}",
