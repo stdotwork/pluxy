@@ -328,8 +328,13 @@ fn quit(app: &AppHandle) {
     remember_window(app);
     #[cfg(target_os = "linux")]
     st.confirmations.lock().unwrap().invalidate();
-    st.conn.lock().unwrap().stop_core();
-    app.exit(0);
+    // Off the calling thread, which may be the main one: a recovery or a tray action can hold
+    // the connection for seconds while a core starts or stops. Tray actions refuse to start now.
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<App>().conn.lock().unwrap().stop_core();
+        app.exit(0);
+    });
 }
 
 /// Saves the window's size and place, as it is now if it is open.
