@@ -23,6 +23,10 @@ const t = strings("accountSettings", {
   edit: "Edit",
   editTitle: "Edit {name}",
   prefix: "Prefix (prefix)",
+  proxyUrl: "Proxy URL (proxy_url)",
+  proxyUrlPlaceholder: "socks5://username:password@proxy_ip:port/",
+  proxyUrlHint:
+    "Empty uses the proxy set for all accounts; direct or none goes without a proxy. A user name and password show as redacted: leave the value as it is to keep them, or type the whole URL to change them.",
   priority: "Priority (priority)",
   priorityPlaceholder: "e.g. 10 or -1",
   priorityHint: "Integers only. Larger value means higher priority.",
@@ -207,6 +211,18 @@ function EditForm(props: { account: Account; close: () => void; saved: () => voi
           <label class="field" data-part="field">
             <span class="label">{t("prefix")}</span>
             <input type="text" value={draft.prefix} onInput={(e) => set("prefix", e.currentTarget.value)} />
+          </label>
+          <label class="field" data-part="field">
+            <span class="label">{t("proxyUrl")}</span>
+            <input
+              type="text"
+              spellcheck={false}
+              autocomplete="off"
+              placeholder={t("proxyUrlPlaceholder")}
+              value={draft.proxyUrl}
+              onInput={(e) => set("proxyUrl", e.currentTarget.value)}
+            />
+            <small class="hint">{t("proxyUrlHint")}</small>
           </label>
           <label class="field" data-part="field">
             <span class="label">{t("priority")}</span>
