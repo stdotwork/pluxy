@@ -195,6 +195,10 @@ func resolved(n *yaml.Node) *yaml.Node {
 	return n
 }
 
+// keyName returns the name a mapping key node gives, also when the key is an alias of an
+// anchored name (*k : value), as core reads it.
+func keyName(n *yaml.Node) string { return resolved(n).Value }
+
 // secrets returns the scalar nodes of the tree under n that hold secrets. strict: n is an
 // account's settings, not a config file, so it has no provider sections.
 func secrets(n *yaml.Node, strict bool) []*yaml.Node {
@@ -240,7 +244,7 @@ func found(n *yaml.Node, strict bool) (out []*yaml.Node, texts map[*yaml.Node]st
 			}
 		case yaml.MappingNode:
 			for i := 0; i+1 < len(v.Content); i += 2 {
-				if kind || v.Content[i].Value != "kind" {
+				if kind || keyName(v.Content[i]) != "kind" {
 					all(v.Content[i+1], kind)
 				}
 			}
@@ -265,7 +269,7 @@ func found(n *yaml.Node, strict bool) (out []*yaml.Node, texts map[*yaml.Node]st
 		for i := 0; i+1 < len(m.Content); i += 2 {
 			key, val := m.Content[i], m.Content[i+1]
 			if key.Value != "<<" || key.Tag != "!!merge" {
-				each(key.Value, val)
+				each(keyName(key), val)
 				continue
 			}
 			merged := []*yaml.Node{val}
@@ -627,7 +631,7 @@ func paths(root *yaml.Node) map[*yaml.Node]string {
 		switch n.Kind {
 		case yaml.MappingNode:
 			for i := 0; i+1 < len(n.Content); i += 2 {
-				walk(n.Content[i+1], at+"."+strconv.Quote(n.Content[i].Value))
+				walk(n.Content[i+1], at+"."+strconv.Quote(keyName(n.Content[i])))
 			}
 		case yaml.SequenceNode:
 			for i, c := range n.Content {

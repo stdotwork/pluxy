@@ -170,7 +170,7 @@ func child(m *yaml.Node, key string) *yaml.Node {
 	}
 	var v *yaml.Node
 	for i := 0; i+1 < len(m.Content); i += 2 {
-		if m.Content[i].Value == key {
+		if keyName(m.Content[i]) == key {
 			v = m.Content[i+1]
 		}
 	}
@@ -223,7 +223,7 @@ func (d *Doc) Delete(path ...string) {
 	}
 	key := path[len(path)-1]
 	for i := len(m.Content) - 2; i >= 0; i -= 2 {
-		if m.Content[i].Value == key {
+		if keyName(m.Content[i]) == key {
 			m.Content = slices.Delete(m.Content, i, i+2)
 			d.edited = true
 		}
