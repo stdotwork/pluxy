@@ -102,7 +102,7 @@ test("account health, cooldown reset, models and a paid test", async ({ page }) 
     await expect(detail.getByText("Cooling", { exact: true })).toBeVisible();
   }
   await detail.getByRole("button", { name: "Clear cooldown", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Clear cooldown", exact: true });
+  const dialog = page.getByRole("dialog", { name: "Clear credential cooldown?", exact: true });
   await expect(dialog).toContainText("It does not restore upstream quota.");
   await dialog.getByRole("button", { name: "Clear cooldown", exact: true }).click();
   await dialog.getByRole("button", { name: "Yes, clear cooldown", exact: true }).click();

@@ -121,6 +121,7 @@ export const PARTS = [
   "account-edit",
   "account-edit-row",
   "account-edit-discard",
+  "subscription-end",
 ] as const;
 
 export type Part = (typeof PARTS)[number];
