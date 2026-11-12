@@ -406,7 +406,9 @@ impl Connection {
         let store = self.store()?;
         let mut st = store.state()?;
         if let Some(c) = st.candidate.take() {
-            ConfigSnapshot::kept(&store, &self.config_path())?.restore()?;
+            if let Some(kept) = ConfigSnapshot::kept(&store, &self.config_path())? {
+                kept.restore()?;
+            }
             st.failed = Some(cores::Failed {
                 version: c.clone(),
                 reason: format!("the app stopped while core {c} was starting"),

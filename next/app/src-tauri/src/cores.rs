@@ -1023,6 +1023,12 @@ impl ConfigSnapshot {
         store.dir.join("config-last-good.absent")
     }
 
+    /// Says the kept record was put back already, so a later start leaves the config (and the
+    /// person's edits since) alone. Beside the config, whose folder putting it back just wrote.
+    fn restored_path(path: &Path) -> PathBuf {
+        path.with_extension("restored")
+    }
+
     /// Takes the config at path, and keeps a record of it beside the store's state (a copy, or
     /// a mark that there was none), so a crash while the candidate starts can still put it back.
     /// The record that no longer holds is removed first: a crash in between leaves neither, and
@@ -1037,11 +1043,13 @@ impl ConfigSnapshot {
             Some(_) => (Self::kept_path(store), Self::absent_path(store)),
             None => (Self::absent_path(store), Self::kept_path(store)),
         };
-        match fs::remove_file(&drop) {
-            Err(e) if e.kind() != io::ErrorKind::NotFound => {
-                return Err(format!("{}: {e}", drop.display()))
+        for drop in [Self::restored_path(path), drop] {
+            match fs::remove_file(&drop) {
+                Err(e) if e.kind() != io::ErrorKind::NotFound => {
+                    return Err(format!("{}: {e}", drop.display()))
+                }
+                _ => {}
             }
-            _ => {}
         }
         write_private(&keep, bytes.as_deref().unwrap_or_default())
             .map_err(|e| format!("{}: {e}", keep.display()))?;
@@ -1051,9 +1059,12 @@ impl ConfigSnapshot {
         })
     }
 
-    /// The record a crashed switch left, for path. Any error reading it is an error, never a
-    /// config to delete.
-    pub fn kept(store: &Store, path: &Path) -> Result<ConfigSnapshot, String> {
+    /// The record a crashed switch left, for path; none when it was put back already. Any error
+    /// reading it is an error, never a config to delete.
+    pub fn kept(store: &Store, path: &Path) -> Result<Option<ConfigSnapshot>, String> {
+        if fs::symlink_metadata(Self::restored_path(path)).is_ok() {
+            return Ok(None);
+        }
         let kept = Self::kept_path(store);
         let bytes = match fs::read(&kept) {
             Ok(b) => Some(b),
@@ -1073,10 +1084,10 @@ impl ConfigSnapshot {
             }
             Err(e) => return Err(format!("reading {}: {e}", kept.display())),
         };
-        Ok(ConfigSnapshot {
+        Ok(Some(ConfigSnapshot {
             path: path.into(),
             bytes,
-        })
+        }))
     }
 
     /// Where the kept copy is.
@@ -1084,7 +1095,8 @@ impl ConfigSnapshot {
         Self::kept_path(store)
     }
 
-    /// Puts the config back as it was.
+    /// Puts the config back as it was, and marks it put back: when the switch's end cannot be
+    /// recorded, the next start must not put it back again over the person's later edits.
     pub fn restore(&self) -> Result<(), String> {
         match &self.bytes {
             Some(b) => write_private(&self.path, b),
@@ -1093,7 +1105,10 @@ impl ConfigSnapshot {
                 _ => Ok(()),
             },
         }
-        .map_err(|e| format!("restoring {}: {e}", self.path.display()))
+        .map_err(|e| format!("restoring {}: {e}", self.path.display()))?;
+        // The config is back either way; without the mark, only a later start's restore repeats.
+        let _ = write_private(&Self::restored_path(&self.path), b"");
+        Ok(())
     }
 }
 

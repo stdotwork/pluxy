@@ -683,6 +683,24 @@ fn an_unrecordable_failure_still_runs_the_last_good_core() {
     std::fs::set_permissions(f.root.join("cores"), std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(err.contains("candidate locked the store"), "{err}");
     assert_eq!(f.reported(), (200, Some("1.0.0".into())), "{err}");
+    // N2: the candidate is still recorded, but its config was put back already: the next start
+    // keeps the person's edits since.
+    let store = Store::open(&f.root.join("cores")).unwrap();
+    assert_eq!(store.state().unwrap().candidate.as_deref(), Some("3.2.0"));
+    let cfg: Value = serde_json::from_slice(&f.config()).unwrap();
+    let edited = serde_json::to_vec(&cfg).unwrap();
+    assert_ne!(edited, f.config());
+    std::fs::write(f.root.join("core/config.json"), &edited).unwrap();
+    f.conn.stop_core();
+    let c = Connection::open(dirs(&f.root), None);
+    assert_eq!(f.config(), edited, "the next start put the old config back");
+    assert_eq!(
+        c.caller().call("GET", "/status", None).body.unwrap()["version"],
+        "1.0.0"
+    );
+    let st = store.state().unwrap();
+    assert_eq!(st.candidate, None);
+    assert_eq!(st.failed.unwrap().version, "3.2.0");
 }
 
 /// A8: an unreadable kept config is an error, not a reason to delete the config.
