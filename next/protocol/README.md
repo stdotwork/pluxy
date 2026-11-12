@@ -1060,8 +1060,8 @@ removes `previous_response_id`.
 
 Version 0.14. Core's config may hold payload rules (see [the README](../README.md#payload-rules)):
 fields to set, fill in or remove in the JSON body an extension sends upstream, for the requests
-they name. Core works out which rules apply to a `generate`, `count_tokens` or `endpoint` call and
-sends them, and only them, in the call frame's `payload`:
+they name. Core works out which rules apply to a `generate`, `count_tokens` or `endpoint` call, or
+(0.15) a session turn, and sends them, and only them, in the frame's `payload`:
 
 ```json
 "payload": {
@@ -1124,9 +1124,12 @@ HTTP requests but would send a session turn without them, which is why turns nee
 In Go, `sdk.Upstream` applies them to each request made with the handler's context, with the
 engine in `github.com/stdotwork/pluxy/next/sdk/payload`; `sdk.WithPayloadRoot` on a request's
 context names the object that holds the request. A session handler passes the message it sends
-for a turn, made with the turn's context, to `sdk.ApplyPayload`. As with a proxy, the SDK answers
-a call or turn that carries rules with `unsupported` (scope `credential`, retryable) and never
-runs the handler when the extension process has not created any `sdk.Upstream` transport.
+for a turn, made with the turn's context, to `sdk.ApplyPayload`, once, on the final message. A
+message it sends as an HTTP request through `sdk.Upstream` already gets the rules there, so it
+must not pass that message to `sdk.ApplyPayload` too: they would apply twice. As with a proxy,
+the SDK answers a call or turn that carries rules with `unsupported` (scope `credential`,
+retryable) and never runs the handler when the extension process has not created any
+`sdk.Upstream` transport.
 
 ## Upstream capture
 

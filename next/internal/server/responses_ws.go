@@ -502,7 +502,9 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 			turnTrace.account = a.Account
 		}
 	}
-	// Rules reach a turn that goes out as an HTTP call; a turn on an upstream session gets none.
+	// Payload rules reach a turn sent as an HTTP call through sdk.Upstream; a turn on an upstream
+	// session gets them on its session.turn frame (protocol 0.15), and an extension that reports
+	// less than 0.15 is refused such a turn.
 	stream := meterStream(g.Router.Generate(host.WithPayloadClient(ctx, sessReq.Model, s.r.Header), rr), m)
 	defer stream.Close()
 	ev := stream.Next()
