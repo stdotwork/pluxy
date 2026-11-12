@@ -33,7 +33,7 @@ type Session struct {
 	writeMu sync.Mutex // turn and interrupt frames
 
 	mu         sync.Mutex
-	creds      []*protocol.Credential // every credential the session has carried, for redaction
+	creds      []*protocol.Credential // every credential and settings' secrets the session has carried, for redaction
 	running    bool                   // a turn has been sent and its terminal event not read
 	closeAfter bool                   // close once the running turn ends
 	closed     bool
@@ -61,7 +61,7 @@ func (e *Extension) OpenSession(ctx context.Context, account protocol.Account, i
 	if perr != nil {
 		return nil, perr
 	}
-	e.held.add(account.ID, account.Credential)
+	creds := append(e.holdAccount(account), proxy)
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", e.socket)
 	if err != nil {
@@ -75,12 +75,12 @@ func (e *Extension) OpenSession(ctx context.Context, account protocol.Account, i
 	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: protocol.OpSession, Account: &account, Session: &info}
 	if err := protocol.WriteFrame(conn, call); err != nil {
 		conn.Close()
-		return nil, e.sessionReadError(ctx, err)
+		return nil, e.sessionReadError(ctx, protocol.NewRedactor(creds...), err)
 	}
 	var reply protocol.Reply
 	if err := protocol.ReadFrame(conn, &reply); err != nil {
 		conn.Close()
-		return nil, e.sessionReadError(ctx, err)
+		return nil, e.sessionReadError(ctx, protocol.NewRedactor(creds...), err)
 	}
 	switch reply.Type {
 	case protocol.TypeSessionReady:
@@ -89,18 +89,18 @@ func (e *Extension) OpenSession(ctx context.Context, account protocol.Account, i
 		if reply.Error == nil {
 			return nil, e.protocolError("an error frame without an error")
 		}
-		ev := protocol.NewRedactor(account.Credential, proxy).Event(reply.Event)
+		ev := protocol.NewRedactor(creds...).Event(reply.Event)
 		return nil, ev.Error
 	default:
 		conn.Close()
-		return nil, redacted(protocol.NewRedactor(account.Credential, proxy), e.protocolError(fmt.Sprintf("a session call was answered with %q", reply.Type)))
+		return nil, e.protocolError(fmt.Sprintf("a session call was answered with %q", protocol.NewRedactor(creds...).String(reply.Type)))
 	}
 	if !stop() {
 		// ctx ended just as the session opened; its conn is closed.
 		return nil, &llm.Error{Code: llm.CodeCancelled, Message: "the request was cancelled"}
 	}
 	s := &Session{ext: e, conn: conn, accountID: account.ID, frames: make(chan sessionFrame), done: make(chan struct{}), closing: make(chan struct{})}
-	for _, c := range []*protocol.Credential{account.Credential, proxy} {
+	for _, c := range creds {
 		if c != nil {
 			s.creds = append(s.creds, c)
 		}
@@ -113,15 +113,15 @@ func (e *Extension) protocolError(what string) *llm.Error {
 	return &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s broke the protocol: %s", e.manifest.ID, what)}
 }
 
-// redacted removes credentials from an error core builds from what the extension sent, such as
-// a protocol error that quotes a frame's type.
+// redacted removes credentials and settings secrets from an error core builds from what the
+// extension sent, such as a protocol error that quotes a frame's type.
 func redacted(r *protocol.Redactor, e *llm.Error) *llm.Error {
 	e.Message = r.String(e.Message)
 	return e
 }
 
-func (e *Extension) sessionReadError(ctx context.Context, err error) *llm.Error {
-	s := &Stream{ctx: ctx, ext: e}
+func (e *Extension) sessionReadError(ctx context.Context, redact *protocol.Redactor, err error) *llm.Error {
+	s := &Stream{ctx: ctx, ext: e, redact: redact}
 	return s.readError(err)
 }
 
@@ -197,9 +197,10 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 		s.mu.Unlock()
 		return refuse(&llm.Error{Code: llm.CodeInternal, Message: "a turn is already running on this session"})
 	}
-	if c := account.Credential; c != nil && !slices.ContainsFunc(s.creds, func(o *protocol.Credential) bool { return sameCredential(o, c) }) {
-		s.creds = append(s.creds, c)
-		s.ext.held.add(account.ID, c)
+	for _, c := range s.ext.holdAccount(account) {
+		if c != nil && !slices.ContainsFunc(s.creds, func(o *protocol.Credential) bool { return sameCredential(o, c) }) {
+			s.creds = append(s.creds, c)
+		}
 	}
 	if proxy != nil && !slices.ContainsFunc(s.creds, func(o *protocol.Credential) bool { return sameCredential(o, proxy) }) {
 		s.creds = append(s.creds, proxy)
@@ -214,7 +215,7 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 	case f := <-s.frames:
 		s.Close()
 		t.end()
-		t.fail(redacted(t.redact, s.ext.protocolError(fmt.Sprintf("a %q frame between turns", f.reply.Type))))
+		t.fail(s.ext.protocolError(fmt.Sprintf("a %q frame between turns", t.redact.String(f.reply.Type))))
 		return t
 	default:
 	}
@@ -231,7 +232,7 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 			return t
 		}
 		s.Close()
-		t.fail((&Stream{ctx: ctx, ext: s.ext}).readError(err))
+		t.fail((&Stream{ctx: ctx, ext: s.ext, redact: t.redact}).readError(err))
 	}
 	return t
 }

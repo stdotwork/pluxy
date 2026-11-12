@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/stdotwork/pluxy/next/internal/configdoc"
 	"github.com/stdotwork/pluxy/next/internal/packages"
 	"github.com/stdotwork/pluxy/next/internal/server"
 )
@@ -59,7 +60,7 @@ const maxManagementBody = 1 << 20
 func (c *Core) Management() http.Handler {
 	m := server.NewManagement(c.Config, c.creds, c.state)
 	m.Check = c.checks.result
-	m.Redactor = c.redactor
+	m.Redactor = accountRedactor{c.redactor}
 	m.Handle("GET /status", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, c.Status())
 	})
@@ -153,4 +154,18 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// accountRedactor is the config redactor as the management API uses it for accounts' headers
+// and settings (server.AccountRedactor), so they show the placeholders GET /config shows. It
+// only turns a stale settings placeholder into server.ErrStaleSecret, which the server package
+// can match: it cannot import configdoc, whose tests import it.
+type accountRedactor struct{ *configdoc.Redactor }
+
+func (r accountRedactor) RestoreSettings(sent, current []byte) ([]byte, error) {
+	b, err := r.Redactor.RestoreSettings(sent, current)
+	if errors.Is(err, configdoc.ErrStale) {
+		return nil, server.ErrStaleSecret
+	}
+	return b, err
 }

@@ -709,3 +709,65 @@ func TestStoredCredentialDoesNotRenew(t *testing.T) {
 		t.Fatal("stored credential was changed by caller")
 	}
 }
+
+// A renewal that started under the account's old settings says nothing about the account once
+// its settings change: a refusal does not mark it for a new login, and a passing failure leaves
+// no backoff on it. A rotated credential is still kept, as on any other change.
+func TestRenewalUnderOldSettingsIsDropped(t *testing.T) {
+	newSettings := func(m *Manager, s string) {
+		t.Helper()
+		if _, err := m.SetAccount("acct", func(a *route.Account) error { a.Settings = json.RawMessage(s); return nil }, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		fail *llm.Error
+	}{
+		{"refused grant", &llm.Error{Code: llm.CodeAuth, Scope: llm.ScopeCredential, Message: "invalid_grant"}},
+		{"passing failure", &llm.Error{Code: llm.CodeUnavailable, Retryable: true, Scope: llm.ScopeEndpoint, Message: "token endpoint down"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &fakeProvider{gate: make(chan struct{}), started: make(chan struct{}, 4), fail: tc.fail}
+			m, store := newManager(t, p, time.Minute)
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				m.Credential(context.Background(), provID, "acct")
+			}()
+			wait(t, p.started)
+			newSettings(m, `{"base_url":"https://elsewhere.example"}`)
+			p.gate <- struct{}{}
+			wait(t, done)
+			if rec, _ := store.Get("acct"); rec.State != StateActive {
+				t.Errorf("state %q after a refusal under the old settings, want %q", rec.State, StateActive)
+			}
+			if e := m.LastRenewalError(func() Record { r, _ := store.Get("acct"); return r }()); e != nil {
+				t.Errorf("renewal error %v kept for the new settings", e)
+			}
+			// The account is still due for renewal: it is asked again, not held back.
+			p.mu.Lock()
+			p.fail = nil
+			p.mu.Unlock()
+			close(p.gate)
+			if c, _, e := m.Credential(context.Background(), provID, "acct"); e != nil || c.AccessToken != "access-2" || p.refreshCalls() != 2 {
+				t.Errorf("Credential = %v, %v after %d refresh calls; want access-2 from a second call", c, e, p.refreshCalls())
+			}
+		})
+	}
+	// A rotated credential from a renewal under the old settings is kept.
+	p := &fakeProvider{gate: make(chan struct{}), started: make(chan struct{}, 2)}
+	m, store := newManager(t, p, time.Minute)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.Credential(context.Background(), provID, "acct")
+	}()
+	wait(t, p.started)
+	newSettings(m, `{"base_url":"https://elsewhere.example"}`)
+	p.gate <- struct{}{}
+	wait(t, done)
+	if rec, _ := store.Get("acct"); rec.Credential.RefreshToken != "refresh-1" || string(rec.Account.Settings) != `{"base_url":"https://elsewhere.example"}` {
+		t.Errorf("record: refresh %q settings %s; want refresh-1 and the new settings", rec.Credential.RefreshToken, rec.Account.Settings)
+	}
+}

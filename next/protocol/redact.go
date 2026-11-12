@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf16"
@@ -143,9 +144,11 @@ func collectStrings(v any, out []string) []string {
 const minFragment = 8
 
 // encodings returns s and the forms it commonly takes in error text and logs: escaped in JSON,
-// escaped in a URL, and base64 (alone, or inside a longer value such as HTTP Basic "user:key").
+// quoted as Go's %q writes it (a message core builds, such as an event check's), escaped in a
+// URL, and base64 (alone, or inside a longer value such as HTTP Basic "user:key").
 func encodings(s string) []string {
-	out := []string{s, url.QueryEscape(s), url.PathEscape(s)}
+	q := strconv.Quote(s)
+	out := []string{s, q[1 : len(q)-1], url.QueryEscape(s), url.PathEscape(s)}
 	if j, err := json.Marshal(s); err == nil {
 		inner := string(j[1 : len(j)-1])
 		out = append(out, inner, strings.ReplaceAll(inner, "/", `\/`))
@@ -616,9 +619,42 @@ func encodeString(s string) []byte {
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 }
 
+// Values core acts on exactly, as routing does on an error's code and scope. A credential that
+// is part of one of these does not change it; any other value that holds a credential is
+// replaced whole (field), so a very short credential cannot turn a value core knows into one it
+// does not. A value added to llm later and missing here is still passed on unless it holds a
+// credential.
+var (
+	codes = set(llm.CodeInvalidRequest, llm.CodeAuth, llm.CodePermission, llm.CodeNotFound, llm.CodeRateLimit,
+		llm.CodeQuota, llm.CodeUnsupported, llm.CodeUpstream, llm.CodeUnavailable, llm.CodeCancelled, llm.CodeInternal,
+		llm.CodeExtensionCrashed, llm.CodeExtensionProtocol, llm.CodeExtensionUnavailable)
+	scopes   = set(llm.ScopeRequest, llm.ScopeCredential, llm.ScopeModel, llm.ScopeEndpoint)
+	finishes = set(llm.FinishStop, llm.FinishLength, llm.FinishToolCalls, llm.FinishContentFilter, llm.FinishOther)
+	formats  = set(llm.FormatOpenAIChat, llm.FormatOpenAIResponses, llm.FormatAnthropicMessages, llm.FormatGeminiGenerate,
+		llm.FormatOpenAIResponsesCompact, llm.FormatCodexAlphaSearch, llm.FormatGeminiInteractions,
+		llm.FormatOpenAIImagesGenerations, llm.FormatOpenAIImagesEdits, llm.OpaqueDevin)
+)
+
+func set(values ...string) map[string]bool {
+	m := map[string]bool{"": true}
+	for _, v := range values {
+		m[v] = true
+	}
+	return m
+}
+
+// field returns s as it is when known holds it or it holds no credential, and Redacted otherwise.
+func (r *Redactor) field(s string, known map[string]bool) string {
+	if known[s] || r.String(s) == s {
+		return s
+	}
+	return Redacted
+}
+
 // Event returns ev with the credential removed from the text and upstream data it carries:
-// error messages and codes, every raw field, reasoning's opaque data, and the identifiers the
-// upstream names the reply with (its id and model, tool call IDs, the raw finish reason).
+// error messages, codes and scopes, every raw field, reasoning's opaque data and its format, the
+// translation report, the reply's format and finish reason, and the identifiers the upstream
+// names the reply with (its id and model, tool call IDs, the raw finish reason).
 // Generated content (deltas, tool names) is the reply itself and is left alone.
 func (r *Redactor) Event(ev llm.Event) llm.Event {
 	if r == nil || r.r == nil {
@@ -630,6 +666,16 @@ func (r *Redactor) Event(ev llm.Event) llm.Event {
 		resp.ID = r.String(resp.ID)
 		resp.Model = r.String(resp.Model)
 		resp.Raw = r.raw(resp.Raw)
+		resp.Format = r.field(resp.Format, formats)
+		if t := resp.Translation; t != nil {
+			tr := *t
+			tr.From, tr.To = r.String(tr.From), r.String(tr.To)
+			tr.Losses = slices.Clone(tr.Losses)
+			for i, l := range tr.Losses {
+				tr.Losses[i] = llm.Loss{Kind: r.String(l.Kind), Path: r.String(l.Path), Detail: r.String(l.Detail)}
+			}
+			resp.Translation = &tr
+		}
 		ev.Response = &resp
 	}
 	if ev.Item != nil {
@@ -639,17 +685,18 @@ func (r *Redactor) Event(ev llm.Event) llm.Event {
 	}
 	if ev.Finish != nil {
 		f := *ev.Finish
-		f.RawReason = r.String(f.RawReason)
+		f.Reason, f.RawReason = r.field(f.Reason, finishes), r.String(f.RawReason)
 		ev.Finish = &f
 	}
 	ev.Usage = r.usage(ev.Usage)
 	if ev.Opaque != nil {
 		o := *ev.Opaque
-		o.Data = r.String(o.Data)
+		o.Format, o.Data = r.field(o.Format, formats), r.String(o.Data)
 		ev.Opaque = &o
 	}
 	if ev.Error != nil {
 		e := *ev.Error
+		e.Code, e.Scope = r.field(e.Code, codes), r.field(e.Scope, scopes)
 		e.Message = r.String(e.Message)
 		e.ProviderCode = r.String(e.ProviderCode)
 		e.Raw = r.raw(e.Raw)

@@ -336,6 +336,27 @@ func TestManageConfigValidate(t *testing.T) {
 					t.Errorf("status %d: %s", code, raw)
 				}
 			})
+			if f.yaml {
+				// A secret given by an alias back into its own anchor, or by a chain of anchors
+				// that each use the one before twice, is refused, and core keeps running.
+				var chain strings.Builder
+				chain.WriteString("a0: &a0 [fake-chain]\n")
+				for i := 1; i <= 40; i++ {
+					fmt.Fprintf(&chain, "a%d: &a%d [*a%d, *a%d]\n", i, i, i-1, i-1)
+				}
+				chain.WriteString("password: *a40\n")
+				for name, doc := range map[string]string{"a self-referencing alias": "x: &a [*a]\npassword: *a\n", "a chain of aliases": chain.String()} {
+					t.Run(name, func(t *testing.T) {
+						start := time.Now()
+						if code, v, raw := validate(doc); code != 200 || v.Valid || time.Since(start) > 5*time.Second {
+							t.Errorf("status %d after %v: %s", code, time.Since(start), raw)
+						}
+						if code, b := c.call(t, http.MethodGet, "/config", nil); code != http.StatusOK {
+							t.Fatalf("core stopped answering: %d %s", code, b)
+						}
+					})
+				}
+			}
 			t.Run("a bad routing value", func(t *testing.T) {
 				var bad string
 				if f.yaml {
