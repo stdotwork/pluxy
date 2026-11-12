@@ -19,9 +19,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        variant: [before, after]
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Revert the close prompt fix (before)
+        if: matrix.variant == 'before'
+        working-directory: .
+        run: |
+          fix=$(git log -1 --format=%H -- next/app/src/window.tsx)
+          git show "$fix" -- next/app/src/window.tsx | git apply -R
+          git diff --stat
       - name: Install packages
         working-directory: .
         run: |
