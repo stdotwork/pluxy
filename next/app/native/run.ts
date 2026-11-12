@@ -487,6 +487,11 @@ function checkRelease(
   check(same(nav.opened, [good]), `the notes link opened ${JSON.stringify(nav.opened)}`);
   check(same(nav.full, [good, full]), `View full release notes opened ${JSON.stringify(nav.full)}`);
   check(nav.stayed === "pluxy-notes://localhost/", `the notes webview navigated to ${nav.stayed}`);
+  const dl = release.downloads ?? {};
+  check(
+    dl.refused >= 1 && dl.saved === false && dl.right_clicks >= 1 && dl.menu_shown === false,
+    `downloads and context menu in the notes webview: ${JSON.stringify(dl)}`,
+  );
   const ex = release.expand ?? {};
   check(
     ex.first_follows === true && ex.collapse_closed === true && ex.expand_follows === true,

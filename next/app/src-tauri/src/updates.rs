@@ -264,7 +264,20 @@ pub fn release_notes_open(
             }
             false
         })
-        .on_new_window(|_, _| NewWindowResponse::Deny);
+        .on_new_window(|_, _| NewWindowResponse::Deny)
+        // Nothing the notes link to is saved: WebKit's "Download Linked File" included.
+        .on_download(|_w, _| {
+            #[cfg(feature = "native-test")]
+            {
+                _w.app_handle()
+                    .state::<App>()
+                    .notes
+                    .lock()
+                    .unwrap()
+                    .downloads += 1;
+            }
+            false
+        });
     let window: Window = webview.window();
     let b = rect.bounds();
     let placed = window
@@ -274,7 +287,8 @@ pub fn release_notes_open(
             LogicalSize::new(b.width.max(1.0), b.height.max(1.0)),
         )
         .map_err(|e| e.to_string())
-        .and_then(|_| crate::place::adopt(&window, &label, b));
+        .and_then(|_| crate::place::adopt(&window, &label, b))
+        .and_then(|_| no_context_menu(webview.app_handle(), &label));
     if let Err(e) = placed {
         state.notes.lock().unwrap().unbind(&label);
         if let Some(w) = webview.app_handle().get_webview(&label) {
@@ -283,6 +297,34 @@ pub fn release_notes_open(
         return Err(e);
     }
     Ok(label)
+}
+
+/// Turns off the notes webview's context menu: its entries (download, copy or open a link
+/// elsewhere) would reach past the one way out, a person following a rendered link.
+fn no_context_menu(app: &AppHandle, label: &str) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        let w = app
+            .get_webview(label)
+            .ok_or_else(|| format!("no notes webview {label}"))?;
+        let _app = app.clone();
+        w.with_webview(move |pw| {
+            use webkit2gtk::WebViewExt;
+            pw.inner().connect_context_menu(move |_, _, _, _| {
+                #[cfg(feature = "native-test")]
+                {
+                    _app.state::<App>().notes.lock().unwrap().menus += 1;
+                }
+                true
+            });
+        })
+        .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (app, label);
+        Ok(())
+    }
 }
 
 fn notes_webview(app: &AppHandle, label: &str) -> Result<Webview, String> {

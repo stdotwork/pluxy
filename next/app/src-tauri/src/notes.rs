@@ -158,6 +158,11 @@ pub struct Notes {
     last_external: Option<Instant>,
     #[cfg(feature = "native-test")]
     pub refused: usize,
+    /// Downloads refused and context menus not shown, for the native test.
+    #[cfg(feature = "native-test")]
+    pub downloads: usize,
+    #[cfg(feature = "native-test")]
+    pub menus: usize,
 }
 
 impl Notes {

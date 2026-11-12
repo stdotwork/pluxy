@@ -336,6 +336,85 @@ pub(crate) fn run(
         "stayed": eval(&notes, "location.href").unwrap_or(Value::Null),
     });
 
+    // Nothing the notes link to is saved: WebKit's download of a link the notes webview can
+    // load (its own style sheet) is refused, and right-clicking shows no menu to start one.
+    let st = app.state::<crate::App>();
+    let css = format!("{}notes.css", dom["href"].as_str().unwrap_or_default());
+    notes
+        .with_webview(move |pw| {
+            use webkit2gtk::WebViewExt;
+            let _ = pw.inner().download_uri(&css);
+        })
+        .map_err(|e| e.to_string())?;
+    let downloads = wait_for("the notes download to be refused", || {
+        let n = st.notes.lock().unwrap().downloads;
+        (n > 0).then_some(n)
+    })?;
+    main.eval(format!(
+        "document.querySelector({}).scrollIntoView({{block: 'center'}})",
+        json!(notes_sel)
+    ))
+    .map_err(|e| e.to_string())?;
+    let at = wait_for("the notes webview over its area", || {
+        let p = placed(app, &label).ok()?;
+        near(&area(main, "app"), &p).then_some(p)
+    })?;
+    let title = main.window().title().map_err(|e| e.to_string())?;
+    let id = wait_for("the app's window", || window(&title))?;
+    let (x, y) = (
+        at["x"].as_f64().unwrap_or(0.0) + 20.0,
+        at["y"].as_f64().unwrap_or(0.0) + 20.0,
+    );
+    let xdo = |args: &[&str]| {
+        std::process::Command::new("xdotool")
+            .args(args)
+            .status()
+            .map_err(|e| e.to_string())
+            .and_then(|s| {
+                s.success()
+                    .then_some(())
+                    .ok_or(format!("xdotool {args:?}: {s}"))
+            })
+    };
+    xdo(&[
+        "mousemove",
+        "--window",
+        &id,
+        &format!("{x:.0}"),
+        &format!("{y:.0}"),
+    ])?;
+    xdo(&["click", "3"])?;
+    let menus = wait_for("the right click on the notes", || {
+        let n = st.notes.lock().unwrap().menus;
+        (n > 0).then_some(n)
+    })?;
+    std::thread::sleep(Duration::from_millis(500));
+    let (tx, rx) = mpsc::channel();
+    app.run_on_main_thread(move || {
+        let shown = gtk::Window::list_toplevels().into_iter().any(|w| {
+            w.is_visible()
+                && w.downcast_ref::<gtk::Container>()
+                    .is_some_and(|c| c.children().iter().any(|m| m.is::<gtk::Menu>()))
+        });
+        let _ = tx.send(shown);
+    })
+    .map_err(|e| e.to_string())?;
+    let menu_shown = rx
+        .recv_timeout(Duration::from_secs(5))
+        .map_err(|e| e.to_string())?;
+    let home = PathBuf::from(env("HOME")?);
+    let saved = [
+        gtk::glib::user_special_dir(gtk::glib::UserDirectory::Downloads),
+        Some(home.join("Downloads")),
+        Some(home),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|d| d.join("notes.css").exists());
+    evidence["downloads"] = json!({
+        "refused": downloads, "saved": saved, "right_clicks": menus, "menu_shown": menu_shown,
+    });
+
     // Expanded at first, the notes webview over the notes area; Collapse hides the notes and
     // closes their webview, Expand shows them again in a new one, over the area again.
     let toggle = "[data-part=release-notes-toggle][data-product=app]";

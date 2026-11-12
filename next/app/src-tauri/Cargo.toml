@@ -55,6 +55,8 @@ libc = "0.2"
 # The same GTK Tauri uses, to lay page webviews over the window (src/place.rs).
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
+# The WebKitGTK Tauri uses, to turn off the notes webviews' context menu (src/updates.rs).
+webkit2gtk = "=2.0.2"
 
 [dev-dependencies]
 json-patch = "4"
