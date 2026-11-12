@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -19,7 +20,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 	"github.com/stdotwork/pluxy/next/sdk"
 	"github.com/stdotwork/pluxy/next/sdk/payload"
-	"reflect"
 )
 
 // fakeSession is the session the "session" fake extension holds. Each turn's reply has the ID

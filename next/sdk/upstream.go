@@ -27,12 +27,12 @@ import (
 // for the same name. A call with payload rules (Info.Payload, protocol minor version 14) has them
 // applied to each request whose body is JSON, after everything else changed it (see
 // WithPayloadRoot); a session turn's upstream message is not such a request, so the extension
-// passes it to ApplyPayload (protocol minor version 15). A call core asks to capture (protocol minor version 13) records each request
-// and what came back, without its secrets, and the SDK reports them to core before the call's
-// terminal event; a response body is recorded as it is read, its start and end only. Use the
-// handler's context on requests so the transport can access UpstreamInfo and core's
-// cancellation: a request without it uses no proxy, no headers and no payload rules and is not
-// recorded.
+// passes it to ApplyPayload (protocol minor version 15). A call core asks to capture (protocol
+// minor version 13) records each request and what came back, without its secrets, and the SDK
+// reports them to core before the call's terminal event; a response body is recorded as it is
+// read, its start and end only. Use the handler's context on requests so the transport can
+// access UpstreamInfo and core's cancellation: a request without it uses no proxy, no headers
+// and no payload rules and is not recorded.
 // base must be non-nil and must not be changed after use.
 func Upstream(base *http.Transport) http.RoundTripper {
 	upstreamUsed.Store(true)
@@ -93,7 +93,7 @@ func (t upstreamTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		req = withHeaders(req, info.Headers)
 	}
 	if info.Payload != nil {
-		if req, err = withPayload(req, info.Payload); err != nil {
+		if req, err = withPayload(req); err != nil {
 			return nil, err
 		}
 	}
@@ -150,7 +150,7 @@ func redirectedAway(req *http.Request) bool {
 // change it. A body that is not JSON (by its Content-Type), or is encoded (Content-Encoding), is
 // sent as it is. The rules apply to the body req carries, once: net/http sends the same new
 // bytes again when it retries the request on another connection.
-func withPayload(req *http.Request, rules *payload.Rules) (*http.Request, error) {
+func withPayload(req *http.Request) (*http.Request, error) {
 	if req.Body == nil || req.Body == http.NoBody || !jsonBody(req.Header) {
 		return req, nil
 	}
