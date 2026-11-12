@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -68,6 +69,13 @@ type AccountView struct {
 	// Headers are the account's headers, with a placeholder in place of each secret value, the
 	// one GET /config shows for it (configdoc.Redactor.Headers).
 	Headers map[string]string `json:"headers,omitempty"`
+	// Settings are an account added by login's settings, with a placeholder in place of each
+	// secret (Management.Redactor), as GET /config shows the config file.
+	Settings json.RawMessage `json:"settings,omitempty"`
+	// SettingsInexact marks settings that hold a number a float64 does not hold exactly (a long
+	// fraction, a very large or very small exponent, an integer past 2^53), which a client that
+	// reads JSON numbers as float64, as a browser does, would write back changed.
+	SettingsInexact bool `json:"settings_inexact,omitempty"`
 
 	// What routing knows about the account now (route.Runtime). An account that receives no
 	// requests (disabled, or waiting for a new login) has none of it.
@@ -105,7 +113,7 @@ type AccountCheck struct {
 
 // fields sets v's routing fields from a, with its secret header values replaced by red's
 // placeholders, and its runtime state from state.
-func (v *AccountView) fields(a route.Account, state *route.State, red HeaderRedactor) {
+func (v *AccountView) fields(a route.Account, state *route.State, red AccountRedactor) {
 	v.Priority, v.Weight, v.MaxConcurrency, v.Prefix = a.Priority, a.Weight, a.MaxConcurrency, a.Prefix
 	v.DisableCooling, v.RequestRetry = a.DisableCooling, a.RequestRetry
 	v.Models, v.ExcludedModels, v.ModelAlias, v.Endpoint = a.Models, a.ExcludedModels, a.ModelAlias, a.Endpoint
@@ -146,20 +154,31 @@ type Management struct {
 	state *route.State
 	// lockout blocks a client that keeps sending a wrong key.
 	lockout *lockout
-	// Redactor hides accounts' secret header values; core sets the one its config reads use, so
-	// an account shows the same placeholder in both. Nil: they show as protocol.Redacted and
-	// PATCH cannot change headers.
-	Redactor HeaderRedactor
+	// Redactor hides the secrets in accounts' headers and settings and puts them back from the
+	// placeholders a PATCH sends; core sets the one its config reads use, so an account shows
+	// the same placeholders in both. Nil: secret header values show as protocol.Redacted,
+	// settings are not shown, and PATCH changes neither.
+	Redactor AccountRedactor
 }
 
-// HeaderRedactor hides the secret values of accounts' headers (configdoc.Redactor is one).
-type HeaderRedactor interface {
+// AccountRedactor hides the secrets in accounts' headers and settings and puts them back: core's
+// config redactor (configdoc.Redactor), which this package cannot import.
+type AccountRedactor interface {
 	// Headers returns h with a placeholder in place of each secret value.
 	Headers(h map[string]string) map[string]string
 	// RestoreHeaders returns sent with each placeholder Headers showed for a value of cur put
 	// back; a placeholder that stands for none is an error.
 	RestoreHeaders(sent, cur map[string]string) (map[string]string, error)
+	// RedactSettings returns settings, a JSON object, with a placeholder in place of each secret.
+	RedactSettings(settings []byte) ([]byte, error)
+	// RestoreSettings returns sent with each placeholder replaced by the secret it stands for in
+	// current. A placeholder that matches no secret in current is an ErrStaleSecret; any other
+	// error means a placeholder is where no secret goes.
+	RestoreSettings(sent, current []byte) ([]byte, error)
 }
+
+// ErrStaleSecret marks a placeholder that matches no secret the account's settings hold now.
+var ErrStaleSecret = errors.New("a redacted value matches no secret the account's settings hold now")
 
 // NewManagement returns the management API with its account and login calls. cfg returns the
 // active config; state is the routing state accounts' cooldowns are read from (nil: none).
@@ -249,8 +268,91 @@ func (m *Management) view(r cred.Record) AccountView {
 	a := r.Account
 	a.ID = r.ID
 	v.fields(a, m.state, m.Redactor)
+	if len(a.Settings) > 0 && m.Redactor != nil {
+		s, err := m.Redactor.RedactSettings(a.Settings)
+		if err != nil {
+			// Never shown unredacted; the settings are then left out of the view.
+			log.Printf("management: account %q: its settings cannot be shown with their secrets hidden", r.ID)
+		} else {
+			v.Settings, v.SettingsInexact = s, inexact(s)
+		}
+	}
 	v.Check = m.check(r.ID)
 	return v
+}
+
+// inexact reports whether a JSON text holds a number that a client reading it as a float64 and
+// writing it back as the shortest decimal that reads as the same float64, as a browser does,
+// would change. Values are compared, not text: 1.0 and 2e3 come back as 1 and 2000, unchanged.
+// It takes time in proportion to the text's length, however long a number is.
+func inexact(b []byte) bool {
+	d := json.NewDecoder(bytes.NewReader(b))
+	d.UseNumber()
+	for {
+		t, err := d.Token()
+		if err != nil {
+			return false
+		}
+		n, ok := t.(json.Number)
+		if !ok {
+			continue
+		}
+		sent := decimalOf(n.String())
+		if sent.digits == "" {
+			continue // zero, which a browser writes back as 0
+		}
+		// The order of magnitude: the value is 0.digits × 10^mag. Past these bounds a float64
+		// holds only infinity or zero, which changes the value.
+		mag := sent.exp + int64(len(sent.digits))
+		if mag > 400 || mag < -400 {
+			return true
+		}
+		sign := ""
+		if sent.neg {
+			sign = "-"
+		}
+		f, err := strconv.ParseFloat(sign+"0."+sent.digits+"e"+strconv.FormatInt(mag, 10), 64)
+		if err != nil || decimalOf(strconv.FormatFloat(f, 'g', -1, 64)) != sent {
+			return true
+		}
+	}
+}
+
+// decimal is a number's value as its sign, its significant digits (no leading or trailing
+// zeros; empty for zero, whose sign is dropped) and an exponent: digits × 10^exp.
+type decimal struct {
+	neg    bool
+	digits string
+	exp    int64
+}
+
+// decimalOf returns a JSON number's value as a decimal, in time in proportion to its length. An
+// exponent too large to matter is cut to ±2^40, so its value still reads as out of range.
+func decimalOf(s string) decimal {
+	var d decimal
+	s, d.neg = strings.CutPrefix(s, "-")
+	mantissa, e, _ := strings.Cut(strings.ToLower(s), "e")
+	whole, frac, _ := strings.Cut(mantissa, ".")
+	if e != "" {
+		eneg := false
+		if e[0] == '+' || e[0] == '-' {
+			eneg, e = e[0] == '-', e[1:]
+		}
+		for i := 0; i < len(e); i++ {
+			d.exp = min(d.exp*10+int64(e[i]-'0'), 1<<40)
+		}
+		if eneg {
+			d.exp = -d.exp
+		}
+	}
+	digits := strings.TrimLeft(whole+frac, "0")
+	trimmed := strings.TrimRight(digits, "0")
+	d.exp += int64(len(digits)-len(trimmed)) - int64(len(frac))
+	d.digits = trimmed
+	if d.digits == "" {
+		return decimal{}
+	}
+	return d
 }
 
 // check returns the result of core's check of account id, or nil.
@@ -496,6 +598,7 @@ func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var disabled *bool
+	var settings json.RawMessage
 	var changes []func(*route.Account) error
 	for name, raw := range req {
 		if name == "disabled" {
@@ -505,12 +608,25 @@ func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
+		if name == "settings" {
+			if m.Redactor == nil {
+				writeManagementError(w, http.StatusInternalServerError, "internal", "settings cannot be changed: core set no redactor for them")
+				return
+			}
+			var obj map[string]json.RawMessage
+			if string(raw) != "null" && (json.Unmarshal(raw, &obj) != nil || obj == nil) {
+				writeManagementError(w, http.StatusBadRequest, "invalid_request", "settings must be an object, or null for none")
+				return
+			}
+			settings = raw
+			continue
+		}
 		set, ok := patchFields[name]
 		if ok && set == nil {
 			set = m.patchHeaders
 		}
 		if !ok {
-			writeManagementError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("%q cannot be changed here: send disabled or any of %s",
+			writeManagementError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("%q cannot be changed here: send disabled, settings or any of %s",
 				name, strings.Join(slices.Sorted(maps.Keys(patchFields)), ", ")))
 			return
 		}
@@ -521,8 +637,8 @@ func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 			return nil
 		})
 	}
-	if disabled == nil && len(changes) == 0 {
-		writeManagementError(w, http.StatusBadRequest, "invalid_request", "nothing to change: send disabled or a routing field")
+	if disabled == nil && settings == nil && len(changes) == 0 {
+		writeManagementError(w, http.StatusBadRequest, "invalid_request", "nothing to change: send disabled, settings or a routing field")
 		return
 	}
 	// Decode every field before changing anything, so a bad one changes nothing. The probe is
@@ -539,12 +655,16 @@ func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	var change func(*route.Account)
-	if len(changes) > 0 {
-		change = func(a *route.Account) {
+	var change func(*route.Account) error
+	if len(changes) > 0 || settings != nil {
+		change = func(a *route.Account) error {
 			for _, c := range changes {
 				_ = c(a) // each decoded above
 			}
+			if settings == nil {
+				return nil
+			}
+			return m.restoreSettings(a, settings)
 		}
 	}
 	rec, err := m.creds.SetAccount(id, change, disabled)
@@ -553,6 +673,24 @@ func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"account": m.view(rec)})
+}
+
+// restoreSettings sets a's settings to sent, with each placeholder replaced by the secret it
+// stands for in a's settings as they are now; null removes them.
+func (m *Management) restoreSettings(a *route.Account, sent json.RawMessage) error {
+	if string(sent) == "null" {
+		a.Settings = nil
+		return nil
+	}
+	b, err := m.Redactor.RestoreSettings(sent, a.Settings)
+	switch {
+	case errors.Is(err, ErrStaleSecret):
+		return fmt.Errorf("%w: settings: a redacted value matches no secret the account's settings hold now; read the account again", cred.ErrConflict)
+	case err != nil:
+		return fmt.Errorf("%w: settings: a redacted value is where no secret goes; write the value itself there", cred.ErrInvalid)
+	}
+	a.Settings = b
+	return nil
 }
 
 func (m *Management) remove(w http.ResponseWriter, r *http.Request) {
