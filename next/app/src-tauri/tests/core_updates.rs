@@ -624,6 +624,28 @@ fn calls_stop_when_the_core_is_gone() {
     );
 }
 
+/// N1: once the app's core is stopped (as at quit), no call goes to its port: not one taken
+/// before, nor one taken after.
+#[test]
+fn calls_after_a_stop_go_nowhere() {
+    let mut f = fixture("stopped");
+    f.install("1.0.0").unwrap();
+    let before = f.conn.caller();
+    let cfg: Value =
+        serde_json::from_slice(&std::fs::read(f.root.join("core/config.json")).unwrap()).unwrap();
+    let listen = cfg["listen"].as_str().unwrap().to_string();
+    f.conn.stop_core();
+    let seen = impostor(std::net::TcpListener::bind(&listen).unwrap());
+    for c in [before, f.conn.caller()] {
+        assert_ne!(c.call("GET", "/status", None).status, 200);
+    }
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "a call reached the new listener"
+    );
+}
+
 /// B1-3: when the config cannot be put back, no core runs and the next start tries again.
 #[test]
 fn a_failed_config_restore_keeps_the_core_stopped_and_retries_at_start() {

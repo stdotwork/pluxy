@@ -9,6 +9,7 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -148,8 +149,9 @@ pub fn core_program(chosen: Option<&str>) -> Result<PathBuf, String> {
 /// Called when the app's core exits, whatever the reason.
 pub type OnExit = Arc<dyn Fn() + Send + Sync>;
 
-/// Set once the app's core has exited, to how it exited.
-pub type ExitFlag = Arc<Mutex<Option<ExitStatus>>>;
+/// Set once the app's core is being stopped or has exited: from then on nothing is sent to its
+/// address, where another program may listen next.
+pub type Gone = Arc<AtomicBool>;
 
 /// A running core of the app's own. A supervisor thread starts it and stays until it exits:
 /// on Linux the parent-death signal follows the thread that started the process, and the
@@ -161,6 +163,7 @@ pub struct ManagedCore {
     key: String,
     tail: Arc<Mutex<VecDeque<String>>>,
     status: Arc<Mutex<Option<ExitStatus>>>,
+    gone: Gone,
 }
 
 impl ManagedCore {
@@ -217,8 +220,10 @@ impl ManagedCore {
             }
         }
         let status: Arc<Mutex<Option<ExitStatus>>> = Arc::new(Mutex::new(None));
+        let gone: Gone = Arc::new(AtomicBool::new(false));
         let (started_tx, started_rx) = mpsc::channel();
         let st = Arc::clone(&status);
+        let g = Arc::clone(&gone);
         let name = name.display().to_string();
         std::thread::spawn(move || {
             let spawned = cmd.spawn();
@@ -230,20 +235,36 @@ impl ManagedCore {
                     return;
                 }
             };
+            // Opened before anything can reap the child, so it is this process's.
+            #[cfg(target_os = "linux")]
+            let mut exit_fd = pidfd(child.id());
             let stderr = child.stderr.take().expect("piped stderr");
             let child = Arc::new(Mutex::new(child));
             let _ = started_tx.send(Ok((Arc::clone(&child), stderr)));
             // Reaped only here, under the lock stop() kills under, so a signal never reaches a
-            // process that has already gone.
+            // process that has already gone. The exit is seen as it happens (a pidfd), and calls
+            // stop before the process is reaped; without a pidfd, within 100 ms.
             loop {
+                #[cfg(target_os = "linux")]
+                if let Some(fd) = &exit_fd {
+                    if exited_fd(fd) {
+                        g.store(true, Ordering::SeqCst);
+                    } else {
+                        exit_fd = None;
+                    }
+                }
                 let done = child.lock().unwrap().try_wait();
                 match done {
                     Ok(None) => std::thread::sleep(Duration::from_millis(100)),
                     Ok(Some(s)) => {
+                        g.store(true, Ordering::SeqCst);
                         *st.lock().unwrap() = Some(s);
                         break;
                     }
-                    Err(_) => break,
+                    Err(_) => {
+                        g.store(true, Ordering::SeqCst);
+                        break;
+                    }
                 }
             }
             if let Some(f) = on_exit {
@@ -279,6 +300,7 @@ impl ManagedCore {
             key,
             tail,
             status,
+            gone,
         };
         let deadline = Instant::now() + START_TIMEOUT;
         let mut gone: Option<Instant> = None;
@@ -331,9 +353,9 @@ impl ManagedCore {
         self.pid
     }
 
-    /// Set once this core has exited.
-    pub fn exit_status(&self) -> ExitFlag {
-        Arc::clone(&self.status)
+    /// Set once this core is being stopped or has exited.
+    pub fn gone(&self) -> Gone {
+        Arc::clone(&self.gone)
     }
 
     /// None while core runs; why it stopped once it has.
@@ -362,6 +384,7 @@ impl ManagedCore {
     }
 
     fn kill(&self) {
+        self.gone.store(true, Ordering::SeqCst);
         {
             let mut c = self.child.lock().unwrap();
             if !matches!(c.try_wait(), Ok(None)) {
@@ -373,7 +396,9 @@ impl ManagedCore {
     }
 
     /// Asks core to stop (SIGTERM, so it drains), and kills it if it has not within 10 seconds.
+    /// Calls stop first: core closes its listener as it starts draining.
     pub fn stop(&mut self) {
+        self.gone.store(true, Ordering::SeqCst);
         {
             let mut c = self.child.lock().unwrap();
             if !matches!(c.try_wait(), Ok(None)) {
@@ -390,6 +415,32 @@ impl ManagedCore {
         }
         if !self.wait(STOP_TIMEOUT) {
             self.kill();
+        }
+    }
+}
+
+/// A pidfd for process pid, readable once it has exited; none on kernels without them.
+#[cfg(target_os = "linux")]
+fn pidfd(pid: u32) -> Option<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd;
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0) };
+    (fd >= 0).then(|| unsafe { std::os::fd::OwnedFd::from_raw_fd(fd as libc::c_int) })
+}
+
+/// Waits until the process behind pidfd fd has exited: true then, false if it cannot wait.
+#[cfg(target_os = "linux")]
+fn exited_fd(fd: &std::os::fd::OwnedFd) -> bool {
+    use std::os::fd::AsRawFd;
+    let mut p = libc::pollfd {
+        fd: fd.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    loop {
+        match unsafe { libc::poll(&mut p, 1, -1) } {
+            1.. => return p.revents & libc::POLLIN != 0,
+            _ if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted => continue,
+            _ => return false,
         }
     }
 }

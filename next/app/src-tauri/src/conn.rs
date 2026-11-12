@@ -12,7 +12,7 @@
 use crate::artifact::PublisherKeys;
 use crate::client::{certificates, Client, Reply};
 use crate::cores::{self, ConfigSnapshot, Store};
-use crate::managed::{core_program, write_private, ExitFlag, ManagedCore, OnExit};
+use crate::managed::{core_program, write_private, Gone, ManagedCore, OnExit};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
@@ -259,8 +259,9 @@ pub struct Connection {
     managed: Option<ManagedCore>,
     /// The installed version the managed core runs.
     running: Option<String>,
-    /// Set once that core has exited: calls stop going to its address then.
-    exited: Option<ExitFlag>,
+    /// Set once that core is being stopped or has exited: calls stop going to its address then.
+    /// It stays set when the core is stopped, until the app connects to something else.
+    gone: Option<Gone>,
     on_core_exit: Option<OnExit>,
     error: Option<String>,
     outcome: Option<Outcome>,
@@ -279,18 +280,21 @@ pub(crate) struct KeyTarget {
 pub struct Caller {
     client: Option<Client>,
     key: Option<String>,
-    exited: Option<ExitFlag>,
+    gone: Option<Gone>,
 }
 
 impl Caller {
     pub fn call(&self, method: &str, path: &str, body: Option<&Value>) -> Reply {
-        // The app's own core has exited: whatever listens on its address now is not it.
-        // shortcut: a call that starts the moment the core exits can still go out; the window
-        // of a few microseconds closes only with a socket the app holds for the core.
+        // The app's own core is stopping or has exited: whatever listens on its address now
+        // may not be it. Still open: a call that passed this check just before a stop or exit
+        // goes out; and after a crash, the kernel frees the port as the core exits, a moment
+        // before the app sees the exit (its pidfd) and sets the flag, so a program that binds
+        // the port in that moment can receive a call with the key. Only a socket the app holds
+        // and hands to the core, or calls without a bearer key, close that.
         if self
-            .exited
+            .gone
             .as_ref()
-            .is_some_and(|e| e.lock().unwrap().is_some())
+            .is_some_and(|g| g.load(std::sync::atomic::Ordering::SeqCst))
         {
             return Reply::failed(0, "unavailable", "the app's core has stopped");
         }
@@ -328,7 +332,7 @@ impl Connection {
             key: None,
             managed: None,
             running: None,
-            exited: None,
+            gone: None,
             on_core_exit,
             error,
             outcome: None,
@@ -345,6 +349,7 @@ impl Connection {
     /// Connects as the settings say, recording why not when it cannot.
     fn connect(&mut self) {
         self.stop_core();
+        self.gone = None;
         self.client = None;
         self.key = None;
         self.error = None;
@@ -422,7 +427,7 @@ impl Connection {
         let name = store.folder(id).join(cores::PROGRAM);
         let core = ManagedCore::start(program, &name, &self.dirs.core, self.on_core_exit.clone())?;
         ready(&core, expected.as_deref())?;
-        self.exited = Some(core.exit_status());
+        self.gone = Some(core.gone());
         self.client = Some(Client::new(core.base(), None));
         self.key = Some(core.key().to_string());
         self.managed = Some(core);
@@ -431,12 +436,15 @@ impl Connection {
     }
 
     /// Stops the app's own core, if it runs one. A local or remote core is never stopped.
+    /// Calls taken before refuse from the moment it begins (its flag stays set); calls taken
+    /// after have no address or key, at quit too.
     pub fn stop_core(&mut self) {
         if let Some(mut core) = self.managed.take() {
             core.stop();
+            self.client = None;
+            self.key = None;
         }
         self.running = None;
-        self.exited = None;
     }
 
     fn require_managed(&self) -> Result<(), String> {
@@ -746,6 +754,7 @@ impl Connection {
         target.settings.key = remember.then(|| key.to_owned());
         target.settings.save(&self.dirs.settings())?;
         self.stop_core();
+        self.gone = None;
         self.revision += 1;
         self.settings = target.settings;
         self.client = Some(target.client);
@@ -816,6 +825,7 @@ impl Connection {
                 };
                 next.save(&self.dirs.settings())?;
                 self.stop_core();
+                self.gone = None;
                 self.revision += 1;
                 self.settings = next;
                 self.client = Some(client);
@@ -859,7 +869,7 @@ impl Connection {
         Caller {
             client: self.client.clone(),
             key: self.key.clone(),
-            exited: self.exited.clone(),
+            gone: self.gone.clone(),
         }
     }
 
@@ -992,6 +1002,67 @@ fn check_key(client: &Client, key: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// N1: a call taken before the app's core is stopped refuses from the moment the stop
+    /// begins, while the core drains with its listener closed and something else answers there.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_caller_refuses_once_its_core_is_being_stopped() {
+        use std::io::{Read, Write};
+        use std::sync::{Arc, Mutex};
+        let dir =
+            std::env::temp_dir().join(format!("pluxy-stopping-{}", crate::managed::random_key()));
+        fs::create_dir_all(&dir).unwrap();
+        // What answers on the core's port once the core has closed its listener.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let keep = seen.clone();
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut c) = conn else { return };
+                let _ = c.set_read_timeout(Some(std::time::Duration::from_millis(500)));
+                let mut buf = [0u8; 4096];
+                if let Ok(n) = c.read(&mut buf) {
+                    keep.lock().unwrap().extend_from_slice(&buf[..n]);
+                }
+                let _ = c.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                );
+            }
+        });
+        // A core that drains for two seconds after SIGTERM.
+        let program = dir.join("core.sh");
+        fs::write(
+            &program,
+            format!("#!/bin/sh\necho 'pluxy: listening on {base}' >&2\ntrap 'sleep 2; exit 0' TERM\nwhile :; do sleep 0.1; done\n"),
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let mut core =
+            ManagedCore::start(fs::File::open(&program).unwrap(), &program, &dir, None).unwrap();
+        let caller = Caller {
+            client: Some(Client::new(core.base(), None)),
+            key: Some(core.key().to_string()),
+            gone: Some(core.gone()),
+        };
+        assert_eq!(caller.call("GET", "/status", None).status, 200);
+        seen.lock().unwrap().clear();
+        let stopping = std::thread::spawn(move || core.stop());
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let r = caller.call("GET", "/status", None);
+        assert_ne!(r.status, 200, "a call went out while the core was stopping");
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "a call went out while the core was stopping"
+        );
+        stopping.join().unwrap();
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn a_failed_sign_in_save_preserves_the_old_connection() {
