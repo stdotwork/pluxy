@@ -28,7 +28,7 @@ type RequestLog struct {
 	// ErrorMaxFiles is how many error logs are kept (today's error-logs-max-files); 0 keeps all.
 	ErrorMaxFiles int
 	// Redact removes the config's secrets (client keys, the management key, the accounts'
-	// credentials) from everything a request log holds.
+	// credentials and the secrets in their settings) from everything a request log holds.
 	Redact *protocol.Redactor
 	// Trim applies the logs folder's size cap; nil: none.
 	Trim func()

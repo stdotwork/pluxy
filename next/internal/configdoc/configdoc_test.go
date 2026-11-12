@@ -69,6 +69,10 @@ func loads(t *testing.T, b string, isYAML bool) *server.Config {
 	return cfg
 }
 
+// secretNodes returns the nodes of the document that hold secrets, and the header text of those
+// that are header values of a provider section.
+func (d *Doc) secretNodes() ([]*yaml.Node, map[*yaml.Node]string) { return found(d.root, false) }
+
 // redactChecked redacts src and checks the properties every redaction must have: every secret
 // the document held is gone as a value (checked by re-parsing, so a comment that repeats it
 // does not count), every placeholder has the documented shape, and Restore puts it all back.
@@ -85,12 +89,14 @@ func redactChecked(t *testing.T, src string, isYAML bool, wantSecrets []string) 
 		t.Fatalf("Redact: %v", err)
 	}
 	vals := scalarValues(t, out, isYAML)
-	for _, s := range secrets {
-		if slices.Contains(vals, s) {
-			t.Errorf("secret %q is still a value in the redacted document:\n%s", s, out)
+	nodes, texts := mustParse(t, src, isYAML).secretNodes()
+	for _, n := range nodes {
+		if slices.Contains(vals, n.Value) {
+			t.Errorf("secret %q is still a value in the redacted document:\n%s", n.Value, out)
 		}
-		if !slices.Contains(vals, r.Placeholder(s)) {
-			t.Errorf("no placeholder for %q in the redacted document:\n%s", s, out)
+		// A secret that is not a string has its type in its placeholder.
+		if !slices.Contains(vals, r.placeholderOf(n, texts)) {
+			t.Errorf("no placeholder for %q in the redacted document:\n%s", n.Value, out)
 		}
 	}
 	for _, s := range mustParse(t, string(out), isYAML).Secrets() {

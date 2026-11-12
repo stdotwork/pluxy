@@ -1338,7 +1338,8 @@ out is removed), and with `null` or `{}` removes them all.
 The value of a header whose name is about authentication (it holds `auth`, `key`, `token`,
 `secret`, `cookie`, `session`, `password` or `signature`, letter case aside) is a secret, by the
 rule config redaction uses: `GET /config` and `GET /accounts` show the same placeholder in its
-place, a placeholder sent back keeps the value, and the value is removed from what extensions log
+place (that of the header core sends, also for a value of a provider section of a `config.yaml`
+written as a number or with spaces around it), a placeholder sent back keeps the value, and the value is removed from what extensions log
 and send back. Core writes no header value in its own logs or errors. An extension older than
 protocol 0.12 cannot send headers, so core does not send it the accounts that have them: their
 requests go to other accounts, and the error says why.
@@ -1407,7 +1408,13 @@ shows each account's last `check`:
 | `failed` | It does not; `error` is why (code `auth` for a refused key, `unavailable` for an upstream that cannot be reached). |
 | `not_checked` | The extension cannot check it without a generation, or has no check; `detail` says which. |
 
-Core also logs each result (`account "work": check passed: ...` or `check failed: ...`). Each
+Core also logs each result (`account "work": check passed: ...` or `check failed: ...`). The
+result and the log line, like everything else a call on an account sends back and the
+extension's own output, show `[redacted]` in place of the account's credential and of each
+secret in its settings (the values `GET /config` and `GET /accounts` show as placeholders), such
+as a `base_url` with a token in its query that an unreachable upstream's error quotes. A
+settings secret shorter than 8 bytes is left in text, since removing every occurrence of so
+short a string would mangle unrelated text. Each
 extension checks with its upstream's model list, and only accounts with an API key:
 
 | Extension | Check |
@@ -1688,7 +1695,7 @@ its keys and its indent. `PUT /config` writes the document as sent.
 
 | Call | What it does |
 | --- | --- |
-| `GET /v0/management/config` | The config file: `format` (`json` or `yaml`), `hash` (as in status) and `content`, the file as written with each secret replaced by a placeholder such as `pluxy-redacted-4f1c...`. Secrets are found by key name, in both layouts of a `config.yaml` and in the JSON config: client keys, the management key, every `api-key` and `api_key`, everything in an account's `credential` except its `kind`, passwords, tokens and secrets, header values about authentication (`Authorization`, `X-Api-Key`, cookies), and any URL with a user name, password or query. Comments are shown as written. 422 when the file does not parse. Today's core returns its config, the management key's hash and provider keys included, as they are. |
+| `GET /v0/management/config` | The config file: `format` (`json` or `yaml`), `hash` (as in status) and `content`, the file as written with each secret replaced by a placeholder such as `pluxy-redacted-4f1c...`. Secrets are found by key name, in both layouts of a `config.yaml` and in the JSON config: client keys, the management key, every `api-key` and `api_key`, everything in an account's `credential` except its `kind`, passwords, tokens and secrets, header values about authentication (`Authorization`, `X-Api-Key`, cookies), and any URL with a user name, password or query. Everything below a key named like a secret is a secret, however deep, also when given through a YAML alias, as `GET /accounts` shows a login account's settings, except in today's core's provider sections at the top of a `config.yaml` (the v8 `api-keys` mapping and the older lists such as `codex-api-key`), whose entries are read by these rules; `true`, `false`, `null` and the empty string never are, as they carry no secret. Comments are shown as written. 422 when the file does not parse. Today's core returns its config, the management key's hash and provider keys included, as they are. |
 | `POST /v0/management/config/validate` | `{"content": "..."}`: checks a document as a reload would, without starting extensions or writing anything. 200 with `valid: true` and the `notices` a `config.yaml` load logs, or `valid: false` and `error`. |
 | `PUT /v0/management/config` | `{"content": "...", "base_hash": "..."}`: replaces the file with the document and applies it. 200 with the file as `GET /config` shows it; 409 when `base_hash` is set and the file has changed since; 422 with `error` when core refuses the document. |
 | `GET /v0/management/client-keys` | The client keys: each one's `id` and `masked` form (first and last two characters, as today's panel shows them; a key shorter than 8 characters is hidden whole). |
@@ -1701,7 +1708,9 @@ its keys and its indent. `PUT /config` writes the document as sent.
 
 In the document, a placeholder stands for the secret it replaced, so a document read with `GET
 /config`, edited and sent back keeps its secrets: core puts each one back from the file as it is
-now. To change a secret, write the new value in its place. A placeholder is accepted only where a
+now. A secret that is not a string has its type in its placeholder, so the number `1234` and the
+string `"1234"` have different placeholders and each goes back as it was written, wherever it is
+moved. To change a secret, write the new value in its place. A placeholder is accepted only where a
 secret goes, and only while the file still holds that secret and core has not restarted (the
 placeholders are keyed hashes with a key core picks at start); otherwise the call answers 409
 (read the config again) or refuses the document. Messages in replies never show a secret either.
@@ -1866,15 +1875,16 @@ logs count toward `logs.max_total_size_mb`, which is applied after each file is 
 Secrets are left out of every request log: values of headers and query parameters whose names
 hold `authorization`, `api-key`, `apikey`, `api_key`, `token`, `secret`, `cookie` or `password`,
 and `key` (an authorization header keeps its scheme, as in `Bearer [redacted]`), and, anywhere in
-the file, every client key, the management key and every config account's credential, in the
-forms the credential redaction finds (JSON escapes, percent-encoding and the rest). Replies and
-upstream sections come from the extension with the account's own credential, its proxy's password
-and its secret header values already removed; in the upstream sections the values of headers and
-query parameters whose names hold `auth`, `key`, `token`, `secret`, `cookie`, `session`,
-`password` or `signature` are masked too, the URL's user name and password are left out, and the
-characters a secret could be made of on each side of a body's left-out middle are left out with it.
-Today's core writes the reply's headers unmasked and logs requests that fail the client key
-check.
+the file, every client key, the management key, every config account's credential and the
+secrets in its settings (as `GET /config` finds them, those of 8 bytes or more), in the forms the
+credential redaction finds (JSON escapes, percent-encoding and the rest). Replies and upstream
+sections come from the extension with the account's own credential, the secrets in its settings,
+its proxy's password and its secret header values already removed; in the upstream sections the
+values of headers and query parameters whose names hold `auth`, `key`, `token`, `secret`,
+`cookie`, `session`, `password` or `signature` are masked too, the URL's user name and password
+are left out, and the characters a secret could be made of on each side of a body's left-out
+middle are left out with it. Today's core writes the reply's headers unmasked and logs requests
+that fail the client key check.
 
 ```json
 {"logs": {"request_log": true, "error_logs_max_files": 10}}
