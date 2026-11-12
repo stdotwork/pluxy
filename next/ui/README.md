@@ -127,6 +127,8 @@ feature, it keeps the old label, unless the label named something this core does
   joined by lines: the System page's "Available Models" lists each extension's models with their
   aliases and the accounts that serve them. A sign-in's own aliases are changed in "Account model
   aliases" on its Edit form.
+- "Invert page", which flipped the selection on the current page: "Select page", "Select
+  filtered" and "Deselect" cover the selections the batch actions need.
 
 **Add Account**
 
@@ -152,6 +154,9 @@ feature, it keeps the old label, unless the label named something this core does
 - "Reset quota" with Claude's reset grants, and xAI's paid one-token refresh: both spend from the
   account. Nothing in the panel spends from an account behind a click, except an account's "Test".
 - The DEV tier preview: a preview for the old panel's developers.
+- The quota timeline, which drew each account's quota windows over the next days: a richer view of
+  the same data, which belongs to the desktop app. Each card shows every limit's use and when it
+  resets.
 
 **Logs Viewer**
 
