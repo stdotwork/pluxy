@@ -63,10 +63,13 @@ const ACTING: &[&str] = &[
     "core_restart",
     "key_entry",
     "confirmation_settings",
+    "management_key_rotate",
 ];
 
 #[path = "key_entry_test.rs"]
 mod key_entry_test;
+#[path = "rotation_test.rs"]
+mod rotation_test;
 
 pub(crate) fn log(step: &str, v: Value) {
     eprintln!("native-test: {step} {v}");
@@ -134,6 +137,9 @@ fn run(app: &AppHandle) -> Result<(), String> {
     }
     if let Ok(stage) = std::env::var("PLUXY_APP_TEST_STARTUP") {
         return startup(app, &stage);
+    }
+    if std::env::var("PLUXY_APP_TEST_ROTATION_RESTART").is_ok() {
+        return rotation_test::after_restart(app);
     }
     let main = wait_for("the window", || app.get_webview(MAIN))?;
     wait_for("the window's shell", || {
@@ -258,6 +264,7 @@ fn run(app: &AppHandle) -> Result<(), String> {
     }
 
     key_entry_test::check(app, &main)?;
+    rotation_test::check(app, &main)?;
     ingress::run(app, &main)?;
 
     // For screenshots: keep the window open until this file exists.
