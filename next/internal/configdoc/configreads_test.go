@@ -2,6 +2,7 @@ package configdoc
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -9,6 +10,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/stdotwork/pluxy/next/protocol"
 )
 
 // redactRoundTrip redacts src, checks that no secret is left as a value where a secret was and
@@ -125,22 +128,29 @@ func TestRestoreKeepsExplicitTags(t *testing.T) {
 }
 
 // The parts of a URL in settings are removed from text on their own as well: its password, its
-// user name and password together and in Basic form, and each query value of 8 bytes or more.
+// user name and password together, in Basic form too, and each query value of 8 bytes or more.
 func TestSettingsSecretsHoldURLParts(t *testing.T) {
 	got := SettingsSecrets([]byte(`{"base_url": "https://gw-user:fake-gw-pass-1234@up.example/v1?token=fake-url-token-1234&v=2"}`))
 	for _, want := range []string{
 		"https://gw-user:fake-gw-pass-1234@up.example/v1?token=fake-url-token-1234&v=2",
 		"fake-gw-pass-1234",
 		"gw-user:fake-gw-pass-1234",
-		base64.StdEncoding.EncodeToString([]byte("gw-user:fake-gw-pass-1234")),
 		"fake-url-token-1234",
 	} {
 		if !slices.Contains(got, want) {
 			t.Errorf("SettingsSecrets lacks %q: %q", want, got)
 		}
 	}
-	if slices.Contains(got, "2") {
-		t.Errorf("SettingsSecrets holds a 1-byte query value: %q", got)
+	if slices.Contains(got, "2") || slices.Contains(got, "gw-user") {
+		t.Errorf("SettingsSecrets holds a value shorter than 8 bytes: %q", got)
+	}
+	// As core removes them from text (host and request log), the Basic form included.
+	data, _ := json.Marshal(got)
+	r := protocol.NewRedactor(&protocol.Credential{Kind: "settings", Data: data})
+	basic := base64.StdEncoding.EncodeToString([]byte("gw-user:fake-gw-pass-1234"))
+	text := "pass fake-gw-pass-1234 basic " + basic + " token fake-url-token-1234"
+	if out := r.String(text); out != "pass [redacted] basic [redacted] token [redacted]" {
+		t.Errorf("redacted %q", out)
 	}
 }
 

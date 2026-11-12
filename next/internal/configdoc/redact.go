@@ -19,6 +19,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/stdotwork/pluxy/next/internal/legacy"
+	"github.com/stdotwork/pluxy/next/internal/proxyurl"
 	"github.com/stdotwork/pluxy/next/internal/upheader"
 )
 
@@ -387,16 +388,35 @@ const MinTextSecret = 8
 
 // SettingsSecrets returns the secret values an account's settings, a JSON object, hold by the
 // rules of RedactSettings, to be removed from text where they occur: those of MinTextSecret
-// bytes or more. Settings that do not parse hold none it can find.
+// bytes or more. Of a URL, its parts are returned on their own too, as an extension may write
+// one without the rest: the forms of its user name and password a proxy URL's are removed in
+// (proxyurl.Password; the redaction adds the Basic form), and each query value. Settings that
+// do not parse hold none it can find.
 func SettingsSecrets(b []byte) []string {
 	d, err := Parse(b, false)
 	if err != nil {
 		return nil
 	}
 	var out []string
+	add := func(s string) {
+		if len(s) >= MinTextSecret && !slices.Contains(out, s) {
+			out = append(out, s)
+		}
+	}
 	for _, n := range secrets(d.root, true) {
-		if len(n.Value) >= MinTextSecret {
-			out = append(out, n.Value)
+		add(n.Value)
+		if !secretURL(n.Value) {
+			continue
+		}
+		for _, f := range proxyurl.Password(n.Value) {
+			add(f)
+		}
+		if u, err := url.Parse(strings.TrimSpace(n.Value)); err == nil {
+			for _, vs := range u.Query() {
+				for _, v := range vs {
+					add(v)
+				}
+			}
 		}
 	}
 	return out
