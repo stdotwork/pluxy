@@ -1339,8 +1339,10 @@ The value of a header whose name is about authentication (it holds `auth`, `key`
 `secret`, `cookie`, `session`, `password` or `signature`, letter case aside) is a secret, by the
 rule config redaction uses: `GET /config` and `GET /accounts` show the same placeholder in its
 place (that of the header core sends, also for a value of a provider section of a `config.yaml`
-written as a number or with spaces around it), a placeholder sent back keeps the value, and the value is removed from what extensions log
-and send back. Core writes no header value in its own logs or errors. An extension older than
+written as a number or with spaces around it), except for a value written as `true` or `false`,
+which `GET /config` shows as written, as it shows `true` and `false` everywhere, while `GET
+/accounts` shows a placeholder. A placeholder sent back keeps the value, and the value is removed
+from what extensions log and send back. Core writes no header value in its own logs or errors. An extension older than
 protocol 0.12 cannot send headers, so core does not send it the accounts that have them: their
 requests go to other accounts, and the error says why.
 
