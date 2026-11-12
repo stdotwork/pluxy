@@ -516,7 +516,9 @@ JSON, URL and base64 forms and as quoted in core's own messages, from everything
 back. Keep values that are not secret,
 especially short ones, out of the credential. Core removes the secrets in the account's
 `settings` the same way: every value below a key named like a secret (such as `api_key`,
-`password` or `*_token`), header values about authentication in a `headers` object, and any URL
+`password`, `*_token`, `accessToken` or `aws_secret_access_key`: names are compared in lower case
+whatever joins their words), header values about authentication in a `headers` or `*_headers`
+object, and any URL
 with a user name, password or query (a `base_url` with a token in it), as its management API
 hides them; of such a URL also its password, its user name and password together (in Basic form
 too) and each query value on their own. Below a key named like a secret, `true`, `false`, `null` and the empty string are

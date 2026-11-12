@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
@@ -77,13 +78,14 @@ func (r *Redactor) placeholderOf(n *yaml.Node, texts map[*yaml.Node]string) stri
 	return PlaceholderPrefix + hex.EncodeToString(mac.Sum(nil)[:12])
 }
 
-// The rules that say which values are secrets. They go by key name, so they hold in both
-// layouts of a config.yaml and in the JSON config:
+// The rules that say which values are secrets. They go by key name, compared in lower case
+// whatever joins its words (accessToken, access_token and access-token are one name), so they
+// hold in both layouts of a config.yaml, in the JSON config and in settings:
 //   - the value of a key named like a secret (api-key, secret-key, management_key,
-//     client_keys, password, *-token, ...), or each item when it is a list;
+//     client_keys, password, *-token, *_secret_access_key, ...), or each item when it is a list;
 //   - every value under a "credential" (an account's credential), except its kind;
 //   - the value of a header whose name is about authentication (Authorization, X-Api-Key,
-//     Cookie, ...), in any "headers" mapping;
+//     Cookie, ...), in any mapping named headers or *headers (extra_headers);
 //   - a URL with a user name, password or query, anywhere.
 //
 // Everything below a key named like a secret is a secret too, however deep, except in the provider
@@ -97,19 +99,53 @@ func (r *Redactor) placeholderOf(n *yaml.Node, texts map[*yaml.Node]string) stri
 var secretNames = map[string]bool{
 	"api-key": true, "api-keys": true, "apikey": true, "secret-key": true, "management-key": true,
 	"client-keys": true, "password": true, "secret": true, "token": true, "private-key": true,
+	"secret-access-key": true, "passphrase": true,
 }
 
+// secretSuffixes end the other names of secrets: refresh-token, client-secret, db-password, ...
+var secretSuffixes = []string{"-token", "-secret", "-password", "-api-key", "-secret-key", "-private-key",
+	"-secret-access-key", "-passphrase"}
+
 func secretName(key string) bool {
-	k := strings.ToLower(strings.ReplaceAll(key, "_", "-"))
+	k := normName(key)
 	if secretNames[k] {
 		return true
 	}
-	for _, suffix := range []string{"-token", "-secret", "-password", "-api-key"} {
+	for _, suffix := range secretSuffixes {
 		if strings.HasSuffix(k, suffix) {
 			return true
 		}
 	}
 	return false
+}
+
+// headersName reports whether a key names a mapping of HTTP headers: headers, extra_headers,
+// customHeaders, ...
+func headersName(key string) bool {
+	k := normName(key)
+	return k == "headers" || strings.HasSuffix(k, "-headers")
+}
+
+// normName returns a key name in lower case with its words joined by "-": accessToken,
+// ACCESS_TOKEN, access.token and access-token are all access-token, and APIKey is api-key.
+func normName(key string) string {
+	r := []rune(key)
+	var b strings.Builder
+	for i, c := range r {
+		switch {
+		case c == '_' || c == '-' || c == '.' || c == ' ':
+			b.WriteByte('-')
+			continue
+		case unicode.IsUpper(c) && i > 0:
+			prev := r[i-1]
+			next := i+1 < len(r) && unicode.IsLower(r[i+1])
+			if unicode.IsLower(prev) || unicode.IsDigit(prev) || unicode.IsUpper(prev) && next {
+				b.WriteByte('-')
+			}
+		}
+		b.WriteRune(unicode.ToLower(c))
+	}
+	return b.String()
 }
 
 func secretHeader(name string) bool { return upheader.Secret(name) }
@@ -363,6 +399,8 @@ func found(n *yaml.Node, strict bool) (out []*yaml.Node, texts map[*yaml.Node]st
 					all(val, false)
 				case strings.EqualFold(key, "headers"):
 					walk(val, ctx{role: roleHeaders, section: c.section})
+				case headersName(key):
+					walk(val, ctx{role: roleHeaders})
 				case c.role == roleTop && key == "api-keys" && resolved(val).Kind == yaml.MappingNode:
 					walk(val, ctx{role: roleSections})
 				case c.role == roleTop && slices.Contains(sectionLists, key):
