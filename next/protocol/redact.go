@@ -719,20 +719,24 @@ func (r *Redactor) Body() *BodyRedactor {
 
 // BodyRedactor removes the credential from a body that arrives in pieces, where a form of it may
 // be cut between two pieces or more. Write takes each piece in turn and returns what may be sent
-// on now; Flush returns the rest once the body ends, breaks off or is cancelled. Joined, what
-// they return is what String returns for the whole body, wherever it was cut, for every form of
-// the credential the body holds as it is: String replaces the longest form at the leftmost
-// position first, and Write returns the text up to the first position where more text could
-// change what is replaced, holding back the rest, which is shorter than the longest form. That
-// is all it holds, so a body of any length passes through in bounded memory and a stream is not
-// delayed except where a piece ends with what could be the start of a form.
+// on now; Flush returns the rest once the body ends (a body that breaks off can drop it instead).
+// Joined, what they return is what String returns for the whole body, wherever it was cut, for
+// every form of the credential the body holds as it is: String replaces the longest form at the
+// leftmost position first, and Write returns the text up to the first position where more text
+// could change what is replaced, holding back the rest, which is shorter than the longest form.
+// That is all it holds, so a body of any length passes through in bounded memory and a stream is
+// not delayed except where a piece ends with what could be the start of a form.
+//
+// It is never worse than redacting each piece on its own: where holding back would cut what
+// String finds in the text whole, such as a credential spelled with escapes outside its listed
+// forms that ends like the start of one, Write holds nothing back and returns all of it.
 //
 // shortcut: String also decodes escapes (\u0073, %73) that could spell the credential, and reads
-// a body that is JSON as JSON; Write does both within each text it returns, so a credential
-// spelled with escapes outside its listed forms (encodings), or a number holding it, is removed
-// as String would remove it only when it lies within one returned text. Holding back for those
-// would need far more than the longest form; do so if an upstream is seen to escape credentials
-// in a streamed body.
+// a body that is JSON as JSON; Write does both within the text it has, so a credential spelled
+// with escapes outside its listed forms (encodings) that a piece cuts in two, or a number holding
+// it, is removed as String would remove it only when it lies within one returned text, as when
+// each piece is redacted on its own. Holding back for those would need far more than the longest
+// form; do so if an upstream is seen to escape credentials in a streamed body.
 type BodyRedactor struct {
 	r       *Redactor
 	byFirst [256][]string // the forms by their first byte, longest first
@@ -746,8 +750,16 @@ func (b *BodyRedactor) Write(piece string) string {
 	}
 	s := b.held + piece
 	cut := b.decided(s)
+	out := b.r.String(s[:cut])
+	if cut < len(s) {
+		if whole := b.r.String(s); whole != out+b.r.String(s[cut:]) {
+			// The cut would split something String finds in s whole: send all of s.
+			b.held = ""
+			return whole
+		}
+	}
 	b.held = strings.Clone(s[cut:]) // not keeping all of a large piece alive
-	return b.r.String(s[:cut])
+	return out
 }
 
 // Flush returns the redacted text the BodyRedactor still holds, for the end of the body.

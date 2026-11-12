@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/base64"
+	"fmt"
 	"math/rand/v2"
 	"strings"
 	"testing"
@@ -122,6 +123,78 @@ func TestBodyRedactorMatchesStringAtEveryCut(t *testing.T) {
 			var pieces []string
 			for rest := whole; rest != ""; {
 				k := min(rng.IntN(12), len(rest))
+				pieces = append(pieces, rest[:k])
+				rest = rest[k:]
+			}
+			check(whole, pieces)
+		}
+	}
+}
+
+// escapedSecret is a made-up credential that the tests below also write with a JSON escape
+// (\u0073 for "s"), which no listed form covers but String decodes.
+const escapedSecret = "sk-fake-credential-value-s"
+
+// holdsEscaped reports whether x holds escapedSecret as it is or once its escapes are decoded.
+func holdsEscaped(x string) bool {
+	d, _, _ := unescapeLayer(x, nil, false, allEscapes)
+	return strings.Contains(x, escapedSecret) || strings.Contains(d, escapedSecret)
+}
+
+// A secret written with an escape, wholly inside one piece, is removed as String removes it,
+// also when it ends with what could be the start of one of its forms (here the plain secret's
+// "s"), whether more of the body follows or not.
+func TestBodyRedactorEscapedSecretInOnePiece(t *testing.T) {
+	r := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: escapedSecret})
+	const piece = `error: key \u0073k-fake-credential-value-s`
+	for _, c := range []struct {
+		pieces []string
+		want   string
+	}{
+		{[]string{piece, `" rejected`}, `error: key [redacted]" rejected`},
+		{[]string{piece}, `error: key [redacted]`},
+	} {
+		if got := redactPieces(t, r, c.pieces); got != c.want {
+			t.Errorf("%q: got %q, want %q", c.pieces, got, c.want)
+		}
+	}
+}
+
+// Wherever a body is cut, the client never gets a secret that redacting each piece on its own
+// would have removed: here secrets written with an escape outside the listed forms, which a
+// piece holds whole or which a cut splits.
+func TestBodyRedactorNeverWorseThanEachPiece(t *testing.T) {
+	r := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: escapedSecret})
+	frags := []string{escapedSecret, "sk-", "s", `" rejected`, "error: key ", " ", "x", `\u00`, "c2st",
+		base64.StdEncoding.EncodeToString([]byte(escapedSecret))[:12]}
+	for i := range len(escapedSecret) {
+		frags = append(frags, escapedSecret[:i]+fmt.Sprintf(`\u%04x`, escapedSecret[i])+escapedSecret[i+1:])
+	}
+	rng := rand.New(rand.NewPCG(3, 4))
+	check := func(whole string, pieces []string) {
+		t.Helper()
+		var each strings.Builder
+		for _, p := range pieces {
+			each.WriteString(r.String(p))
+		}
+		if got := redactPieces(t, r, pieces); holdsEscaped(got) && !holdsEscaped(each.String()) {
+			t.Fatalf("body %q cut as %q: got %q, which holds the secret; each piece alone gives %q", whole, pieces, got, each.String())
+		}
+	}
+	for range 400 {
+		var b strings.Builder
+		for range 1 + rng.IntN(5) {
+			b.WriteString(frags[rng.IntN(len(frags))])
+		}
+		whole := b.String()
+		check(whole, []string{whole})
+		for i := 0; i <= len(whole); i++ {
+			check(whole, []string{whole[:i], whole[i:]})
+		}
+		for range 20 {
+			var pieces []string
+			for rest := whole; rest != ""; {
+				k := min(rng.IntN(16), len(rest))
 				pieces = append(pieces, rest[:k])
 				rest = rest[k:]
 			}
