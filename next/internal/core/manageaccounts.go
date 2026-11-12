@@ -270,7 +270,7 @@ func (c *Core) accountQuota(ctx context.Context, s *snapshot, id string) (*proto
 		if err != nil {
 			return nil, err
 		}
-		q, e := g.Quota(ctx, protocol.Account{ID: a.ID, Settings: a.Settings, Credential: cr, ProxyURL: a.ProxyURL})
+		q, e := g.Quota(ctx, protocol.Account{ID: a.ID, Settings: a.Settings, Credential: cr, ProxyURL: a.ProxyURL, Headers: a.Headers})
 		if e == nil {
 			return q, nil
 		}
@@ -333,7 +333,7 @@ func (c *Core) testAccount(ctx context.Context, s *snapshot, id, model string) (
 // runTest sends req to account a with credential cr and reads the reply.
 func runTest(ctx context.Context, s *snapshot, a route.Account, cr *protocol.Credential, req llm.Request) TestResult {
 	var res TestResult
-	st := s.Attempt(ctx, a.Extension, protocol.Account{ID: a.ID, Settings: a.Settings, Credential: cr, ProxyURL: a.ProxyURL}, req)
+	st := s.Attempt(ctx, a.Extension, protocol.Account{ID: a.ID, Settings: a.Settings, Credential: cr, ProxyURL: a.ProxyURL, Headers: a.Headers}, req)
 	defer st.Close()
 	var reply strings.Builder
 	for {

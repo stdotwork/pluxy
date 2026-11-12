@@ -11,6 +11,7 @@ import (
 
 	"github.com/stdotwork/pluxy/next/format/anthropicmessages"
 	"github.com/stdotwork/pluxy/next/format/geminigenerate"
+	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -106,7 +107,7 @@ func serveCount(w http.ResponseWriter, r *http.Request, g *Generation, f countFo
 		return &countWatch{Stream: g.Count(ctx, ext, a, req), cannot: &cannot}
 	}
 	rr.Attempting = func(a route.Attempt) { t.account = a.Account }
-	stream := g.Router.Generate(r.Context(), rr)
+	stream := g.Router.Generate(host.WithPayloadClient(r.Context(), req.Model, r.Header), rr)
 	defer stream.Close()
 	ev := stream.Next()
 	t.setHeader(w)

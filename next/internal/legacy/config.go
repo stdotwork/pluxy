@@ -19,6 +19,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/stdotwork/pluxy/next/internal/proxyurl"
+	"github.com/stdotwork/pluxy/next/internal/upheader"
 )
 
 // Result is a config.yaml turned into this core's config.
@@ -169,6 +170,17 @@ var families = []family{
 	{"interactions", "interactions-api-key", Gemini},
 }
 
+// SectionLists returns the keys at the top of a config.yaml whose value is a list of provider key
+// entries, in today's core's older spelling (codex-api-key and the rest). In the v8 layout the
+// sections are the values of the top-level api-keys mapping.
+func SectionLists() []string {
+	var out []string
+	for _, f := range families {
+		out = append(out, f.old)
+	}
+	return out
+}
+
 // Statuses of a setting, as next/README.md names them.
 const (
 	supported = iota
@@ -221,7 +233,7 @@ var rules = map[string]rule{
 	"quota-exceeded.switch-preview-model":               {dead, ""},
 
 	"requests.proxy-url":                     {supported, ""},
-	"requests.payload":                       {later, ""},
+	"requests.payload":                       {supported, ""},
 	"requests.tls-handshake-timeout-seconds": {dropped, "off by default and no need found"},
 	"requests.passthrough-headers":           {dropped, "off by default and no need found"},
 	"requests.nonstream-keepalive-interval":  {dropped, "off by default and no need found"},
@@ -298,7 +310,7 @@ var rules = map[string]rule{
 	"api-keys.*[].models[].openapi":                            {later, ""},
 	"api-keys.*[].prefix":                                      {supported, ""},
 	"api-keys.*[].excluded-models":                             {supported, ""},
-	"api-keys.*[].headers":                                     {later, ""},
+	"api-keys.*[].headers":                                     {supported, ""},
 	"api-keys.*[].proxy-url":                                   {supported, ""},
 	"api-keys.*[].connection-pool":                             {later, ""},
 	"api-keys.*[].request-scoped-errors":                       {later, ""},
@@ -447,7 +459,7 @@ var readPaths = []string{
 	"routing.retry.max-retry-credentials", "routing.retry.max-retry-interval", "routing.retry.request-retry",
 	"routing.force-model-prefix", "oauth.model-alias", "oauth.excluded-models",
 	"upstream.codex.disable-codex-cloaking", "upstream.codex.websocket-compression",
-	"upstream.xai.inject-x-search", "requests.proxy-url",
+	"upstream.xai.inject-x-search", "requests.proxy-url", "requests.payload",
 	"oauth.providers.codex.signin-with-chatgpt-identifier",
 	"multimedia.disable-image-generation", "oauth.auth-dir", "observability.usage.usage-statistics-enabled",
 	"observability.logs.logging-to-file", "observability.logs.logs-max-total-size-mb",
@@ -675,6 +687,14 @@ func (x *translator) options() error {
 			return err
 		}
 		x.out["proxy_url"] = proxy
+	}
+	// The payload rules keep today's names, so they go across as they are; the config's own
+	// check (payload.Validate) refuses what this core cannot apply.
+	if rules, _ := get(x.t, "requests.payload"); rules != nil {
+		if _, isMap := rules.(tree); !isMap {
+			return errors.New("requests.payload must be a mapping")
+		}
+		x.out["payload"] = rules
 	}
 	return nil
 }
@@ -990,6 +1010,25 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 			return nil, err
 		}
 		a["proxy_url"] = p
+	}
+	// A key's headers replace its group's; an openai-compatibility group's are its keys', which
+	// have none of their own there.
+	hv := field(g, k, "headers")
+	if f.v8 == "openai-compatibility" {
+		hv = g["headers"]
+	}
+	if h, dynamic, err := headers(hv, path+".headers"); err != nil {
+		return nil, err
+	} else if len(h) > 0 || len(dynamic) > 0 {
+		if err := upheader.Check(display(path)+" key "+id+" headers", h); err != nil {
+			return nil, err
+		}
+		if len(h) > 0 {
+			a["headers"] = h
+		}
+		for _, name := range dynamic {
+			x.notes = append(x.notes, fmt.Sprintf("config.yaml: %s key %s header %s takes its value from the client's request, which this core does not do: not imported", display(path), id, name))
+		}
 	}
 	if f.v8 != "openai-compatibility" {
 		if v := field(g, k, "excluded-models"); v != nil {
@@ -1578,6 +1617,47 @@ func scalar(v any, path string) (string, error) {
 		return strconv.FormatFloat(v, 'f', -1, 64), nil
 	}
 	return "", fmt.Errorf("%s must be text", path)
+}
+
+// headers reads a headers mapping as today's core does (upheader.Import): each value is text,
+// a number or true or false, written as text.
+func headers(v any, path string) (map[string]string, []string, error) {
+	if v == nil {
+		return nil, nil, nil
+	}
+	m, ok := v.(tree)
+	if !ok {
+		return nil, nil, fmt.Errorf("%s must be a mapping", path)
+	}
+	text := map[string]string{}
+	for k, val := range m {
+		s, err := headerText(val, path+"."+k)
+		if err != nil {
+			return nil, nil, err
+		}
+		text[k] = s
+	}
+	h, dynamic, err := upheader.Import(text)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return h, dynamic, nil
+}
+
+// headerText returns a header value, as YAML decodes it, as text: text, a number, or true or false.
+func headerText(v any, path string) (string, error) {
+	if b, isBool := v.(bool); isBool {
+		return strconv.FormatBool(b), nil
+	}
+	return scalar(v, path)
+}
+
+// HeaderText returns a header value of a provider section of a config.yaml, as YAML decodes it,
+// as the header core sends: written as text, without the spaces around it (upheader.Import).
+// ok is false for a value core refuses.
+func HeaderText(v any) (text string, ok bool) {
+	s, err := headerText(v, "")
+	return strings.TrimSpace(s), err == nil
 }
 
 // boolean_ reads a true or false setting; absent is false.

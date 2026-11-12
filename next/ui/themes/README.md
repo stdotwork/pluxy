@@ -199,7 +199,7 @@ These stay stable within a theme contract version:
 | --- | --- |
 | `data-appearance="light"` or `"dark"` | Root element |
 | `data-nav`, `data-list`, `data-detail`, `data-width`, `data-tabs` | Root element, set to the active layout value |
-| `data-page="<page id>"` | Root element: `status`, `accounts`, `add-account`, `quota`, `logs`, `usage`, `config`, `system`, `extensions`, `themes`, or an extension page's ID |
+| `data-page="<page id>"` | Root element: `status`, `accounts`, `add-account`, `routing`, `quota`, `logs`, `usage`, `config`, `system`, `extensions`, `themes`, or an extension page's ID |
 | `data-part="shell"` | The whole UI below the root |
 | `data-part="nav"` | The navigation |
 | `data-part="nav-group"` | A group of navigation entries under its label; `data-group` is `operate`, `gateway`, `observe`, `control` or `extensions` (the extensions' pages) |
@@ -234,6 +234,7 @@ These stay stable within a theme contract version:
 | `data-part="method"` | A sign-in method tile with its label, kind caption and selected flow. |
 | `data-part="flow"` | A reusable account sign-in flow: inputs, prompts, waiting and terminal states. |
 | `data-part="device-code"` | The user code to enter on a device sign-in page. |
+| `data-part="tier"` | A Routing priority tier, containing its heading and account list. |
 | `data-part="tile"` | One fact on the System page's about card: a label, its value and a note. |
 | `data-part="model-group"` | The models of one extension on the System page, under the extension's name and their count. |
 | `data-part="stat"` | A figure with its label and hint on the Dashboard (requests handled, success rate, credentials); `data-tone` is `ok`, `warn` or `danger` when the figure has a verdict. |
@@ -249,6 +250,11 @@ These stay stable within a theme contract version:
 | `data-part="account-test-result"` | The last explicit account test result. |
 | `data-part="account-test-reply"` | The start of the test reply. |
 | `data-part="account-sign-in"` | Sign in to an existing account again. |
+| `data-part="account-settings"` | An account's routing fields and settings, read-only. |
+| `data-part="account-edit"` | The Edit form of an account added by login. |
+| `data-part="account-edit-row"` | One model or model alias row in the Edit form. |
+| `data-part="account-edit-discard"` | The Edit form's question before unsaved changes are discarded. |
+| `data-part="subscription-end"` | The Quota card's line with the day a subscription ends. |
 
 Every other class name, element and attribute can change in any release.
 

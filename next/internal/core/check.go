@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -95,7 +96,7 @@ func (c *Core) checkAccounts(s *snapshot, accounts []route.Account) {
 		if g == nil {
 			continue // safe mode
 		}
-		call := protocol.Account{ID: a.ID, Settings: a.Settings, Credential: a.Credential, ProxyURL: a.ProxyURL}
+		call := protocol.Account{ID: a.ID, Settings: a.Settings, Credential: a.Credential, ProxyURL: a.ProxyURL, Headers: a.Headers}
 		// What identifies the check: the generation (a new one may check differently), the
 		// settings, and the credential. A stored account's credential is renewed on its own, so
 		// it counts by its registration, except for a static key, which only a new login changes.
@@ -103,6 +104,9 @@ func (c *Core) checkAccounts(s *snapshot, accounts []route.Account) {
 		fmt.Fprintf(h, "%p\x00%s\x00", g, a.Extension)
 		h.Write(a.Settings)
 		fmt.Fprintf(h, "\x00%s", a.ProxyURL)
+		for _, k := range slices.Sorted(maps.Keys(a.Headers)) {
+			fmt.Fprintf(h, "\x00%s\x00%s", k, a.Headers[k])
+		}
 		if a.Managed {
 			cred := records[a.ID]
 			call.Credential = &cred

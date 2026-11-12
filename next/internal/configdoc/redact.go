@@ -12,10 +12,14 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/stdotwork/pluxy/next/internal/legacy"
+	"github.com/stdotwork/pluxy/next/internal/upheader"
 )
 
 // A redacted document holds a placeholder in place of each secret: PlaceholderPrefix and the
@@ -52,6 +56,26 @@ func (r *Redactor) ID(secret string) string {
 // Placeholder returns what a redacted document holds in place of secret.
 func (r *Redactor) Placeholder(secret string) string { return PlaceholderPrefix + r.ID(secret) }
 
+// placeholderOf returns the placeholder of a secret's node. A secret that is not a string has its
+// type in its placeholder too, so the number 1234 and the string "1234" have different ones and
+// each goes back with its own type, wherever its placeholder is moved. Its hash uses a key of its
+// own, derived from the Redactor's, so no string's placeholder is ever a typed value's. A secret
+// header value of a provider section has the placeholder of the header core reads from it
+// (texts, see found), the one Headers shows for that account.
+func (r *Redactor) placeholderOf(n *yaml.Node, texts map[*yaml.Node]string) string {
+	if t, ok := texts[n]; ok {
+		return r.Placeholder(t)
+	}
+	if n.Tag == "!!str" {
+		return r.Placeholder(n.Value)
+	}
+	derive := hmac.New(sha256.New, r.key)
+	derive.Write([]byte("pluxy settings: a secret that is not a string"))
+	mac := hmac.New(sha256.New, derive.Sum(nil))
+	fmt.Fprintf(mac, "%d:%s%d:%s", len(n.Tag), n.Tag, len(n.Value), n.Value)
+	return PlaceholderPrefix + hex.EncodeToString(mac.Sum(nil)[:12])
+}
+
 // The rules that say which values are secrets. They go by key name, so they hold in both
 // layouts of a config.yaml and in the JSON config:
 //   - the value of a key named like a secret (api-key, secret-key, management_key,
@@ -60,6 +84,14 @@ func (r *Redactor) Placeholder(secret string) string { return PlaceholderPrefix 
 //   - the value of a header whose name is about authentication (Authorization, X-Api-Key,
 //     Cookie, ...), in any "headers" mapping;
 //   - a URL with a user name, password or query, anywhere.
+//
+// Everything below a key named like a secret is a secret too, however deep, except in the provider
+// sections today's core reads at the top of a config.yaml: the v8 api-keys mapping and the older
+// lists of entries (codex-api-key and the rest, legacy.SectionLists), whose entries are read by
+// the rules above. Account settings have no such sections, on their own (RedactSettings) or as
+// the "settings" of each item of an "accounts" list in a config file. Everywhere, true, false,
+// null and the empty string are never secrets: they carry none, and hiding them would hide what a
+// setting is.
 var secretNames = map[string]bool{
 	"api-key": true, "api-keys": true, "apikey": true, "secret-key": true, "management-key": true,
 	"client-keys": true, "password": true, "secret": true, "token": true, "private-key": true,
@@ -78,14 +110,51 @@ func secretName(key string) bool {
 	return false
 }
 
-func secretHeader(name string) bool {
-	h := strings.ToLower(name)
-	for _, part := range []string{"auth", "key", "token", "secret", "cookie", "session", "password", "signature"} {
-		if strings.Contains(h, part) {
-			return true
-		}
+func secretHeader(name string) bool { return upheader.Secret(name) }
+
+// Headers returns an account's headers fit to show: the placeholder a redacted config document
+// holds in place of each secret value (upheader.Secret).
+func (r *Redactor) Headers(h map[string]string) map[string]string {
+	if len(h) == 0 {
+		return nil
 	}
-	return false
+	out := make(map[string]string, len(h))
+	for k, v := range h {
+		if upheader.Secret(k) {
+			v = r.Placeholder(v)
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// RestoreHeaders returns sent, headers sent back for an account, with each placeholder that
+// Headers showed for a secret value of cur, the account's headers now, replaced by that value.
+// A placeholder may only be the value of a secret header, and one that stands for no secret
+// value of cur is refused, so the placeholder itself is never stored.
+func (r *Redactor) RestoreHeaders(sent, cur map[string]string) (map[string]string, error) {
+	values := map[string]string{}
+	for _, v := range upheader.Secrets(cur) {
+		values[r.Placeholder(v)] = v
+	}
+	var out map[string]string
+	for k, v := range sent {
+		if p := strings.TrimSpace(v); placeholder.MatchString(p) {
+			if !upheader.Secret(k) {
+				return nil, fmt.Errorf("header %s holds a redacted value, but its value is not secret; write the value itself", k)
+			}
+			was, ok := values[p]
+			if !ok {
+				return nil, fmt.Errorf("header %s holds a redacted value that stands for none of the account's header values now; read the account again", k)
+			}
+			v = was
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[k] = v
+	}
+	return out, nil
 }
 
 func secretURL(s string) bool {
@@ -96,88 +165,235 @@ func secretURL(s string) bool {
 	return err == nil && u.Host != "" && (u.User != nil || u.RawQuery != "")
 }
 
-// secrets returns the scalar nodes of the tree under n that hold secrets.
-func secrets(n *yaml.Node) []*yaml.Node {
-	var out []*yaml.Node
+// sectionLists are the top-level keys of a config.yaml whose value is a list of provider entries.
+var sectionLists = legacy.SectionLists()
+
+// ctx is how secrets reads a node: what the place it is in makes it, and whether it is in a
+// provider section.
+type ctx struct {
+	role    role
+	section bool
+}
+
+// role is what a node's place makes it, for the rules that look at a value.
+type role int
+
+const (
+	rolePlain    role = iota
+	roleTop           // a config file's top-level mapping
+	roleSecret        // the value of a key named like a secret
+	roleSections      // the v8 api-keys mapping, at the top of a config file
+	roleEntries       // an older list of provider entries, at the top of a config file
+	roleHeaders       // the value of a "headers" key
+)
+
+// resolved returns the node an alias stands for, or n itself.
+func resolved(n *yaml.Node) *yaml.Node {
+	if n.Kind == yaml.AliasNode && n.Alias != nil {
+		return n.Alias
+	}
+	return n
+}
+
+// secrets returns the scalar nodes of the tree under n that hold secrets. strict: n is an
+// account's settings, not a config file, so it has no provider sections.
+func secrets(n *yaml.Node, strict bool) []*yaml.Node {
+	out, _ := found(n, strict)
+	return out
+}
+
+// found is secrets, with the text core reads from each secret header value of a provider section
+// (legacy.HeaderText), which core reads as text without the spaces around it.
+func found(n *yaml.Node, strict bool) (out []*yaml.Node, texts map[*yaml.Node]string) {
+	// add records v as a secret, unless it is true, false, null or empty (see the rules above).
 	add := func(v *yaml.Node) {
 		if v.Kind == yaml.ScalarNode && v.Tag != "!!null" && v.Tag != "!!bool" && v.Value != "" && !slices.Contains(out, v) {
 			out = append(out, v)
 		}
 	}
-	// all adds every scalar under v, except the values of keys named skip.
-	var all func(v *yaml.Node, skip string)
-	all = func(v *yaml.Node, skip string) {
+	// all adds every scalar under v; with kind false, except the values of keys named "kind" (a
+	// credential's kind). Each node is read at most once in each way, so an alias back into its
+	// own anchor, or anchors that nest aliases many times over, cost no more than the document's
+	// size.
+	type allReading struct {
+		n    *yaml.Node
+		kind bool
+	}
+	allRead := map[allReading]bool{}
+	var all func(v *yaml.Node, kind bool)
+	all = func(v *yaml.Node, kind bool) {
+		k := allReading{v, kind}
+		if allRead[k] {
+			return
+		}
+		allRead[k] = true
 		switch v.Kind {
 		case yaml.ScalarNode:
 			add(v)
 		case yaml.AliasNode:
 			if v.Alias != nil {
-				all(v.Alias, skip)
+				all(v.Alias, kind)
 			}
 		case yaml.SequenceNode:
 			for _, c := range v.Content {
-				all(c, skip)
+				all(c, kind)
 			}
 		case yaml.MappingNode:
 			for i := 0; i+1 < len(v.Content); i += 2 {
-				if v.Content[i].Value != skip {
-					all(v.Content[i+1], skip)
+				if kind || v.Content[i].Value != "kind" {
+					all(v.Content[i+1], kind)
 				}
 			}
 		}
 	}
-	var walk func(v *yaml.Node)
-	walk = func(v *yaml.Node) {
+	// walk reads the tree under v by the rules above, in the way c says the place v is in reads
+	// it: v may be a config file's top-level mapping or the value of a key a rule names (headers,
+	// a secret key, a provider section). An alias is read as its anchor would be in the alias's
+	// place, whatever the anchor's own place, and a mapping merged with "<<" is
+	// read as part of the mapping it is merged into. Each anchor is read at most once in each
+	// way, so an alias back into its own anchor, or anchors that nest aliases many times over,
+	// cost no more than the document's size.
+	type reading struct {
+		n *yaml.Node
+		c ctx
+	}
+	read := map[reading]bool{}
+	var walk func(v *yaml.Node, c ctx)
+	// pairs reads the key-value pairs of the mapping m, and those of the mappings merged into it.
+	var pairs func(m *yaml.Node, c ctx, each func(key string, val *yaml.Node))
+	pairs = func(m *yaml.Node, c ctx, each func(key string, val *yaml.Node)) {
+		for i := 0; i+1 < len(m.Content); i += 2 {
+			key, val := m.Content[i], m.Content[i+1]
+			if key.Value != "<<" || key.Tag != "!!merge" {
+				each(key.Value, val)
+				continue
+			}
+			merged := []*yaml.Node{val}
+			if r := resolved(val); r.Kind == yaml.SequenceNode {
+				merged = r.Content
+			}
+			for _, x := range merged {
+				if r := resolved(x); r.Kind == yaml.MappingNode && !read[reading{r, c}] {
+					read[reading{r, c}] = true
+					pairs(r, c, each)
+				}
+			}
+		}
+	}
+	walk = func(v *yaml.Node, c ctx) {
+		if v.Kind == yaml.AliasNode {
+			if k := (reading{v.Alias, c}); v.Alias != nil && !read[k] {
+				read[k] = true
+				walk(v.Alias, c)
+			}
+			return
+		}
+		plain := ctx{section: c.section}
+		switch {
+		case c.role == roleSecret:
+			all(v, true)
+			return
+		case c.role == roleSections && v.Kind == yaml.MappingNode:
+			// Each section is a list of provider entries, read by the rules.
+			pairs(v, c, func(_ string, val *yaml.Node) { walk(val, ctx{section: true}) })
+			return
+		case c.role == roleEntries && v.Kind == yaml.SequenceNode:
+			// An entry is read by the rules; anything else in the list is a key.
+			for _, x := range v.Content {
+				if resolved(x).Kind != yaml.MappingNode {
+					all(x, true)
+				} else {
+					walk(x, ctx{section: true})
+				}
+			}
+			return
+		case c.role == roleSections || c.role == roleEntries:
+			all(v, true)
+			return
+		case c.role == roleHeaders && v.Kind == yaml.MappingNode:
+			pairs(v, c, func(name string, val *yaml.Node) {
+				if secretHeader(name) {
+					if s := resolved(val); c.section && s.Kind == yaml.ScalarNode {
+						var v any
+						if s.Decode(&v) == nil {
+							if t, ok := legacy.HeaderText(v); ok {
+								if texts == nil {
+									texts = map[*yaml.Node]string{}
+								}
+								texts[s] = t
+							}
+						}
+					}
+					all(val, true)
+				} else {
+					walk(val, plain)
+				}
+			})
+			return
+		}
 		switch v.Kind {
 		case yaml.ScalarNode:
 			if secretURL(v.Value) {
 				add(v)
 			}
 		case yaml.SequenceNode:
-			for _, c := range v.Content {
-				walk(c)
+			for _, x := range v.Content {
+				walk(x, plain)
 			}
 		case yaml.MappingNode:
-			for i := 0; i+1 < len(v.Content); i += 2 {
-				key, val := v.Content[i].Value, v.Content[i+1]
+			pairs(v, c, func(key string, val *yaml.Node) {
 				switch {
 				case strings.EqualFold(key, "credential"):
-					all(val, "kind")
-				case strings.EqualFold(key, "headers") && val.Kind == yaml.MappingNode:
-					for j := 0; j+1 < len(val.Content); j += 2 {
-						if secretHeader(val.Content[j].Value) {
-							all(val.Content[j+1], "")
-						} else {
-							walk(val.Content[j+1])
-						}
-					}
-				case secretName(key) && (val.Kind == yaml.ScalarNode || val.Kind == yaml.AliasNode):
-					all(val, "")
-				case secretName(key) && val.Kind == yaml.SequenceNode:
-					// A list of keys; a list of mappings (provider key entries) is walked.
-					for _, c := range val.Content {
-						if c.Kind == yaml.ScalarNode || c.Kind == yaml.AliasNode {
-							all(c, "")
-						} else {
-							walk(c)
-						}
-					}
+					all(val, false)
+				case strings.EqualFold(key, "headers"):
+					walk(val, ctx{role: roleHeaders, section: c.section})
+				case c.role == roleTop && key == "api-keys" && resolved(val).Kind == yaml.MappingNode:
+					walk(val, ctx{role: roleSections})
+				case c.role == roleTop && slices.Contains(sectionLists, key):
+					walk(val, ctx{role: roleEntries})
+				case secretName(key):
+					walk(val, ctx{role: roleSecret, section: c.section})
 				default:
-					walk(val)
+					walk(val, plain)
 				}
-			}
+			})
 		}
-		// An alias's node is walked where its anchor is.
 	}
-	walk(n)
-	return out
+	if strict {
+		walk(n, ctx{})
+	} else {
+		walk(n, ctx{role: roleTop})
+	}
+	return out, texts
 }
 
 // Secrets returns the secret values the document holds.
 func (d *Doc) Secrets() []string {
 	var out []string
-	for _, n := range secrets(d.root) {
+	for _, n := range secrets(d.root, false) {
 		out = append(out, n.Value)
+	}
+	return out
+}
+
+// MinTextSecret is the length, in bytes, below which SettingsSecrets leaves a secret out: removing
+// every occurrence of a string that short from a reply or a log would mangle unrelated text. A
+// placeholder in a settings document replaces the whole value, so it covers short ones too.
+const MinTextSecret = 8
+
+// SettingsSecrets returns the secret values an account's settings, a JSON object, hold by the
+// rules of RedactSettings, to be removed from text where they occur: those of MinTextSecret
+// bytes or more. Settings that do not parse hold none it can find.
+func SettingsSecrets(b []byte) []string {
+	d, err := Parse(b, false)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, n := range secrets(d.root, true) {
+		if len(n.Value) >= MinTextSecret {
+			out = append(out, n.Value)
+		}
 	}
 	return out
 }
@@ -187,34 +403,46 @@ func (d *Doc) Secrets() []string {
 // block scalar, an anchor or tag before it), the document is written out again with the
 // placeholders, as Doc.Bytes writes it.
 func (r *Redactor) Redact(b []byte, isYAML bool) ([]byte, error) {
+	return r.redact(b, isYAML, false)
+}
+
+// RedactSettings returns an account's settings, a JSON object, with a placeholder in place of
+// each secret, by the stricter rules for settings: everything below a key named like a secret is
+// a secret, however deep.
+func (r *Redactor) RedactSettings(b []byte) ([]byte, error) { return r.redact(b, false, true) }
+
+func (r *Redactor) redact(b []byte, isYAML, strict bool) ([]byte, error) {
 	d, err := Parse(b, isYAML)
 	if err != nil {
 		return nil, err
 	}
-	found := secrets(d.root)
-	if len(found) == 0 {
+	nodes, texts := found(d.root, strict)
+	if len(nodes) == 0 {
 		return b, nil
 	}
 	repl := map[*yaml.Node]string{}
-	for _, n := range found {
-		p := r.Placeholder(n.Value)
+	for _, n := range nodes {
+		p := r.placeholderOf(n, texts)
 		if !isYAML {
 			p = `"` + p + `"`
 		}
 		repl[n] = p
 	}
-	values := d.Secrets()
-	if out, ok := d.replace(repl); ok && redacted(out, isYAML, values) {
+	var values []string
+	for _, n := range nodes {
+		values = append(values, n.Value)
+	}
+	if out, ok := d.replace(repl); ok && redacted(out, isYAML, strict, values) {
 		return out, nil
 	}
-	for _, n := range found {
-		setScalar(n, "!!str", r.Placeholder(n.Value), 0)
+	for _, n := range nodes {
+		setScalar(n, "!!str", r.placeholderOf(n, texts), 0)
 	}
 	out, err := d.encode()
 	if err != nil {
 		return nil, err
 	}
-	if !redacted(out, isYAML, values) {
+	if !redacted(out, isYAML, strict, values) {
 		return nil, errors.New("config: could not redact the config file's secrets")
 	}
 	return out, nil
@@ -229,12 +457,12 @@ func setScalar(n *yaml.Node, tag, value string, style yaml.Style) {
 
 // redacted reports whether a document holds none of the secret values, as a value, and every
 // value in it that the rules call a secret is a placeholder.
-func redacted(b []byte, isYAML bool, values []string) bool {
+func redacted(b []byte, isYAML, strict bool, values []string) bool {
 	d, err := Parse(b, isYAML)
 	if err != nil {
 		return false
 	}
-	for _, n := range secrets(d.root) {
+	for _, n := range secrets(d.root, strict) {
 		if !placeholder.MatchString(n.Value) {
 			return false
 		}
@@ -258,6 +486,16 @@ func redacted(b []byte, isYAML bool, values []string) bool {
 // goes; one that matches no secret in current is an ErrStale. A document without placeholders
 // comes back as it is.
 func (r *Redactor) Restore(edited, current []byte, isYAML bool) ([]byte, error) {
+	return r.restore(edited, current, isYAML, false)
+}
+
+// RestoreSettings is Restore for an account's settings, a JSON object, by the rules of
+// RedactSettings: current is the account's settings as they are now.
+func (r *Redactor) RestoreSettings(edited, current []byte) ([]byte, error) {
+	return r.restore(edited, current, false, true)
+}
+
+func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byte, error) {
 	d, err := Parse(edited, isYAML)
 	if err != nil {
 		return nil, err
@@ -277,28 +515,52 @@ func (r *Redactor) Restore(edited, current []byte, isYAML bool) ([]byte, error) 
 		return edited, nil
 	}
 	// Each placeholder goes back as the secret's text in current, so it keeps its quotes, or
-	// in JSON its type.
-	type secret struct{ value, tag, text string }
-	values := map[string]secret{}
+	// in JSON its type. In settings, it goes back only where the secret is in current (paths).
+	// Two secrets of current may share a placeholder (a header's 1234 and "1234" are the same
+	// header text): a placeholder goes back as the one where it is, else as the first.
+	type secret struct {
+		value, tag, text string
+		paths            map[string]*secret // where the placeholder's secrets are, and which is there
+	}
+	values := map[string]*secret{}
 	if cur, err := Parse(current, isYAML); err == nil {
-		for _, n := range secrets(cur.root) {
-			s := secret{value: n.Value, tag: n.Tag}
+		where := paths(cur.root)
+		nodes, texts := found(cur.root, settings)
+		for _, n := range nodes {
+			p := r.placeholderOf(n, texts)
+			this := &secret{value: n.Value, tag: n.Tag}
 			if sp, ok := cur.span(n); ok {
-				s.text = string(cur.src[sp.start:sp.end])
+				this.text = string(cur.src[sp.start:sp.end])
 			}
-			values[r.Placeholder(n.Value)] = s
+			s := values[p]
+			if s == nil {
+				s = this
+				s.paths = map[string]*secret{}
+				values[p] = s
+			}
+			if s.paths[where[n]] == nil {
+				s.paths[where[n]] = this
+			}
 		}
 	}
-	allowed := secrets(d.root)
-	repl := map[*yaml.Node]secret{}
+	allowed := secrets(d.root, settings)
+	where := paths(d.root)
+	repl := map[*yaml.Node]*secret{}
 	for _, n := range held {
 		s, ok := values[n.Value]
-		// A URL that is a secret is one wherever it is, so its placeholder may go anywhere.
-		if !slices.Contains(allowed, n) && !(ok && secretURL(s.value)) {
+		switch {
+		case settings && ok && s.paths[where[n]] == nil:
+			return nil, fmt.Errorf("%w: line %d: a redacted value is not where its secret is; write the value itself there", ErrInvalid, d.line(n))
+		case settings && !slices.Contains(allowed, n),
+			// A URL that is a secret is one wherever it is, so in a config file its placeholder
+			// may go anywhere.
+			!settings && !slices.Contains(allowed, n) && !(ok && secretURL(s.value)):
 			return nil, fmt.Errorf("%w: line %d: a redacted value is where no secret goes; write the value itself there", ErrInvalid, d.line(n))
-		}
-		if !ok {
+		case !ok:
 			return nil, fmt.Errorf("line %d: %w", d.line(n), ErrStale)
+		}
+		if at := s.paths[where[n]]; at != nil {
+			s = at
 		}
 		repl[n] = s
 	}
@@ -315,7 +577,7 @@ func (r *Redactor) Restore(edited, current []byte, isYAML bool) ([]byte, error) 
 			texts[n] = jsonString(s.value)
 		}
 	}
-	if out, ok := d.replace(texts); ok && restored(out, isYAML, want) {
+	if out, ok := d.replace(texts); ok && restored(out, isYAML, settings, want) {
 		return out, nil
 	}
 	for n, s := range repl {
@@ -329,21 +591,47 @@ func (r *Redactor) Restore(edited, current []byte, isYAML bool) ([]byte, error) 
 	if err != nil {
 		return nil, err
 	}
-	if !restored(out, isYAML, want) {
+	if !restored(out, isYAML, settings, want) {
 		return nil, fmt.Errorf("%w: could not put the redacted secrets back", ErrInvalid)
 	}
 	return out, nil
 }
 
+// paths returns where each node under root is: the keys and list indexes leading to it. A list
+// item that is a scalar has [] for its index, so it may move within its own list, and only there.
+func paths(root *yaml.Node) map[*yaml.Node]string {
+	out := map[*yaml.Node]string{}
+	var walk func(n *yaml.Node, at string)
+	walk = func(n *yaml.Node, at string) {
+		out[n] = at
+		switch n.Kind {
+		case yaml.MappingNode:
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				walk(n.Content[i+1], at+"."+strconv.Quote(n.Content[i].Value))
+			}
+		case yaml.SequenceNode:
+			for i, c := range n.Content {
+				if c.Kind == yaml.ScalarNode {
+					walk(c, at+"[]")
+				} else {
+					walk(c, at+"["+strconv.Itoa(i)+"]")
+				}
+			}
+		}
+	}
+	walk(root, "")
+	return out
+}
+
 // restored reports whether a document holds no placeholder and holds each wanted secret value
 // at least as many times as wanted.
-func restored(b []byte, isYAML bool, want map[string]int) bool {
+func restored(b []byte, isYAML, strict bool, want map[string]int) bool {
 	d, err := Parse(b, isYAML)
 	if err != nil {
 		return false
 	}
 	have := map[string]int{}
-	for _, n := range secrets(d.root) {
+	for _, n := range secrets(d.root, strict) {
 		if placeholder.MatchString(n.Value) {
 			return false
 		}

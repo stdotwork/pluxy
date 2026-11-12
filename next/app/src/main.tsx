@@ -15,6 +15,7 @@ import { ConnectionPage } from "./connection";
 import { appHost, type Connection, connectionGet } from "./host";
 import { NativeExtensionPage } from "./nativePage";
 import { UpdatesPage } from "./updates";
+import { ClosePrompt } from "./window";
 
 function brand(c: Connection): string {
   return c.mode === "remote" && c.target ? `pluxy · ${new URL(c.target).host}` : "pluxy";
@@ -88,7 +89,14 @@ function App(props: { initial: Connection }) {
 }
 
 connectionGet().then(
-  (c) => render(<App initial={c} />, document.body),
+  (c) =>
+    render(
+      <>
+        <App initial={c} />
+        <ClosePrompt />
+      </>,
+      document.body,
+    ),
   (e) => {
     document.body.textContent = `The app could not read its connection: ${e}`;
   },

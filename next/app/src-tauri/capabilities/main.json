@@ -30,6 +30,9 @@
     "allow-release-notes-open",
     "allow-release-notes-place",
     "allow-release-notes-close",
-    "allow-release-notes-full"
+    "allow-release-notes-full",
+    "allow-window-get",
+    "allow-window-set",
+    "allow-window-close"
   ]
 }

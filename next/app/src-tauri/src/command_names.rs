@@ -23,4 +23,7 @@ pub const COMMANDS: &[&str] = &[
     "release_notes_place",
     "release_notes_close",
     "release_notes_full",
+    "window_get",
+    "window_set",
+    "window_close",
 ];

@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
+	"github.com/stdotwork/pluxy/next/sdk/payload"
 )
 
 type recordUpstream struct {
@@ -209,10 +211,39 @@ func TestUpstreamInfoHandlers(t *testing.T) {
 	waitCancelled(t, opening)
 }
 
-// An extension that has not wrapped any client in Upstream cannot send through a proxy, so a call
-// that carries one is answered with an error and never reaches its handler or the upstream; a
-// call without a proxy still does, and once the process wraps a client the proxied call goes
-// through too.
+// A call's headers replace every value the extension set for the same name, whatever its letter
+// case in the header map, keep its other headers, and leave the extension's request as it was.
+func TestUpstreamSetsCallHeaders(t *testing.T) {
+	base := &http.Transport{}
+	recorder := &recordUpstream{}
+	base.RegisterProtocol("record", recorder)
+	call := protocol.Call{Op: protocol.OpGenerate, Account: &protocol.Account{ID: "a",
+		Headers: map[string]string{"anthropic-version": "configured", "X-Gateway-Key": "fake-gw"}}}
+	ctx, _ := withUpstreamInfo(context.Background(), call)
+	req, err := http.NewRequestWithContext(ctx, "POST", "record://upstream.test/v1/messages", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header = http.Header{"anthropic-version": {"own"}, "Anthropic-Version": {"own-too"}, "X-Own": {"kept"}}
+	header := req.Header.Clone()
+	resp, err := Upstream(base).RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	want := http.Header{"Anthropic-Version": {"configured"}, "X-Gateway-Key": {"fake-gw"}, "X-Own": {"kept"}}
+	if got := recorder.request.Header; !reflect.DeepEqual(got, want) {
+		t.Errorf("upstream got headers %v, want %v", got, want)
+	}
+	if !reflect.DeepEqual(req.Header, header) {
+		t.Errorf("the extension's request changed: %v", req.Header)
+	}
+}
+
+// An extension that has not wrapped any client in Upstream cannot send through a proxy, with an
+// account's headers or with a call's payload rules, so a call that carries any of them is
+// answered with an error and never reaches its handler or the upstream; a call without a proxy
+// still does, and once the process wraps a client the proxied call goes through too.
 func TestProxiedCallRefusedWithoutUpstream(t *testing.T) {
 	was := upstreamUsed.Swap(false)
 	t.Cleanup(func() { upstreamUsed.Store(was) })
@@ -290,7 +321,30 @@ func TestProxiedCallRefusedWithoutUpstream(t *testing.T) {
 	}
 
 	refused(t, generate(t, proxy))
+	// An account's headers take the same refusal, and the error holds none of their values.
+	const headerSecret = "Fake-Header-Secret-1"
 	conn := dial(t, socket)
+	hcall := protocol.Call{Type: protocol.TypeCall, ID: "h", Op: protocol.OpGenerate, Request: request,
+		Account: &protocol.Account{ID: "a", Headers: map[string]string{"X-Gateway-Key": headerSecret}}}
+	if err := protocol.WriteFrame(conn, hcall); err != nil {
+		t.Fatal(err)
+	}
+	hr := reply(t, conn)
+	refused(t, hr)
+	if strings.Contains(hr.Error.Message, headerSecret) {
+		t.Fatalf("the error shows a header value: %q", hr.Error.Message)
+	}
+	conn.Close()
+	// So do a call's payload rules, which only a wrapped client applies.
+	conn = dial(t, socket)
+	pcall := protocol.Call{Type: protocol.TypeCall, ID: "p", Op: protocol.OpGenerate, Request: request, Account: &protocol.Account{ID: "a"},
+		Payload: &payload.Rules{Override: []payload.Rule{{Models: []payload.Model{{}}, Params: map[string]any{"service_tier": "priority"}}}}}
+	if err := protocol.WriteFrame(conn, pcall); err != nil {
+		t.Fatal(err)
+	}
+	refused(t, reply(t, conn))
+	conn.Close()
+	conn = dial(t, socket)
 	if err := protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeCall, ID: "c", Op: protocol.OpCheck, Account: &protocol.Account{ID: "a", ProxyURL: proxy}}); err != nil {
 		t.Fatal(err)
 	}
@@ -436,5 +490,194 @@ func TestProxyTransportClosesIdleConnections(t *testing.T) {
 				t.Errorf("the base transport changed: IdleConnTimeout %v", base.IdleConnTimeout)
 			}
 		})
+	}
+}
+
+// A redirect that keeps the host but changes the scheme (https to http) is away from the first
+// request too: the account's secret headers would go out unencrypted.
+func TestRedirectedAwayOnSchemeChange(t *testing.T) {
+	first, _ := http.NewRequest(http.MethodGet, "https://api.example.test/start", nil)
+	for _, c := range []struct {
+		to   string
+		away bool
+	}{
+		{"https://api.example.test/next", false},
+		{"https://API.example.test/next", false},
+		{"http://api.example.test/next", true},
+		{"https://api.example.test:8443/next", true},
+		{"https://other.example.test/next", true},
+	} {
+		next, _ := http.NewRequest(http.MethodGet, c.to, nil)
+		next.Response = &http.Response{Request: first}
+		if got := redirectedAway(next); got != c.away {
+			t.Errorf("redirect to %s: away %v, want %v", c.to, got, c.away)
+		}
+	}
+}
+
+// A request that has no Header map (a RoundTripper may be given one) gets the call's headers
+// instead of panicking.
+func TestUpstreamHeadersOnRequestWithoutHeaderMap(t *testing.T) {
+	base := &http.Transport{}
+	recorder := &recordUpstream{}
+	base.RegisterProtocol("record", recorder)
+	call := protocol.Call{Op: protocol.OpGenerate, Account: &protocol.Account{ID: "a", Headers: map[string]string{"X-Title": "fake-title"}}}
+	u, _ := url.Parse("record://upstream.test/v1/messages")
+	ctx, _ := withUpstreamInfo(context.Background(), call)
+	req := (&http.Request{Method: "POST", URL: u, Body: http.NoBody}).WithContext(ctx)
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("RoundTrip panicked: %v", r)
+		}
+	}()
+	resp, err := Upstream(base).RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if got := recorder.request.Header.Get("X-Title"); got != "fake-title" {
+		t.Errorf("upstream got X-Title %q, want fake-title", got)
+	}
+}
+
+// A redirect to another host never carries the account's secret headers (net/http leaves
+// Authorization and Cookie out there, but the call's context still holds the configured ones), nor
+// does a later hop of the same chain, even when the extension set one of those names itself (net/http
+// copies other headers to the redirect); a header that is not secret does, and a redirect on the same
+// host carries all of them.
+func TestUpstreamRedirectKeepsSecretHeadersOnTheirHost(t *testing.T) {
+	type seen struct{ secret, key, title string }
+	var first, same, other, otherHop atomic.Pointer[seen]
+	record := func(dst *atomic.Pointer[seen], r *http.Request) {
+		dst.Store(&seen{r.Header.Get("Authorization"), r.Header.Get("X-Api-Key"), r.Header.Get("X-Title")})
+	}
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/hop" {
+			record(&other, r)
+			http.Redirect(w, r, "/final", http.StatusFound) // a second hop on the other host
+			return
+		}
+		record(&otherHop, r)
+	}))
+	defer target.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/away":
+			record(&first, r)
+			http.Redirect(w, r, target.URL+"/hop", http.StatusFound)
+		case "/along":
+			http.Redirect(w, r, "/landed", http.StatusFound)
+		case "/landed":
+			record(&same, r)
+		}
+	}))
+	defer origin.Close()
+	call := protocol.Call{Op: protocol.OpGenerate, Account: &protocol.Account{ID: "a", Headers: map[string]string{
+		"Authorization": "Bearer fake-token-1", "X-Api-Key": "fake-key-1", "X-Title": "fake-title"}}}
+	client := &http.Client{Transport: Upstream(&http.Transport{})}
+	get := func(path string) {
+		t.Helper()
+		ctx, _ := withUpstreamInfo(context.Background(), call)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, origin.URL+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header["x-api-key"] = []string{"fake-extension-key"} // the extension's own, not canonical
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+	}
+	all := seen{"Bearer fake-token-1", "fake-key-1", "fake-title"}
+	get("/away")
+	if got := first.Load(); got == nil || *got != all {
+		t.Errorf("the first request got %+v, want all the account's headers", got)
+	}
+	for name, got := range map[string]*seen{"redirect to another host": other.Load(), "its second hop": otherHop.Load()} {
+		if got == nil || *got != (seen{title: "fake-title"}) {
+			t.Errorf("%s got %+v, want only the header that is not secret", name, got)
+		}
+	}
+	get("/along")
+	if got := same.Load(); got == nil || *got != all {
+		t.Errorf("redirect on the same host got %+v, want all the account's headers", got)
+	}
+}
+
+// A call's payload rules change each JSON request body once, inside the root the extension
+// names, and leave bodies that are not JSON or are encoded as they are. The second account's
+// retry and net/http's own resend get the same bytes (GetBody).
+func TestUpstreamAppliesPayload(t *testing.T) {
+	rules := &payload.Rules{
+		Override: []payload.Rule{{Models: []payload.Model{{}}, Params: map[string]any{"service_tier": "priority"}}},
+		Filter:   []payload.FilterRule{{Models: []payload.Model{{}}, Params: []string{`tools.#(name=="apply_patch")`}}},
+	}
+	const body = `{"model":"m","tools":[{"name":"apply_patch","n":1},{"name":"apply_patch","n":2}]}`
+	// The old engine removes only the first match (testdata case "example filter codex flat
+	// tools, two patches: first only").
+	const want = `{"model":"m","service_tier":"priority","tools":[{"name":"apply_patch","n":2}]}`
+	ctx, _ := withUpstreamInfo(context.Background(), protocol.Call{Op: protocol.OpGenerate, Payload: rules})
+	send := func(ctx context.Context, contentType, encoding, body string) (*recordUpstream, *http.Request) {
+		t.Helper()
+		base := &http.Transport{}
+		recorder := &recordUpstream{}
+		base.RegisterProtocol("record", recorder)
+		req, err := http.NewRequestWithContext(ctx, "POST", "record://upstream.test/v1/responses", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", contentType)
+		if encoding != "" {
+			req.Header.Set("Content-Encoding", encoding)
+		}
+		resp, err := Upstream(base).RoundTrip(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return recorder, req
+	}
+	sameJSON := func(got, want string) bool {
+		var g, w any
+		return json.Unmarshal([]byte(got), &g) == nil && json.Unmarshal([]byte(want), &w) == nil && reflect.DeepEqual(g, w)
+	}
+
+	rec, _ := send(ctx, "application/json; charset=utf-8", "", body)
+	if !sameJSON(rec.body, want) {
+		t.Errorf("upstream got %s, want %s", rec.body, want)
+	}
+	if n := rec.request.ContentLength; n != int64(len(rec.body)) {
+		t.Errorf("ContentLength %d for a body of %d bytes", n, len(rec.body))
+	}
+	again, err := rec.request.GetBody()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := io.ReadAll(again); string(b) != rec.body {
+		t.Errorf("GetBody gave %s, the request sent %s", b, rec.body)
+	}
+
+	wrapped := `{"project":"p","request":` + body + `}`
+	rec, _ = send(WithPayloadRoot(ctx, "request"), "application/json", "", wrapped)
+	if w := `{"project":"p","request":` + want + `}`; !sameJSON(rec.body, w) {
+		t.Errorf("with root request: upstream got %s, want %s", rec.body, w)
+	}
+
+	for _, c := range []struct{ contentType, encoding string }{{"application/x-www-form-urlencoded", ""}, {"application/json", "gzip"}, {"", ""}} {
+		if rec, _ = send(ctx, c.contentType, c.encoding, body); rec.body != body {
+			t.Errorf("Content-Type %q, Content-Encoding %q: upstream got %s, want it unchanged", c.contentType, c.encoding, rec.body)
+		}
+	}
+	if rec, _ = send(context.Background(), "application/json", "", body); rec.body != body {
+		t.Errorf("without the call's context: upstream got %s, want it unchanged", rec.body)
+	}
+
+	// Capture comes after the rules: the request log shows the body as it went upstream.
+	captured, capture := withUpstreamInfo(context.Background(), protocol.Call{Op: protocol.OpGenerate, Payload: rules, Capture: true})
+	rec, _ = send(captured, "application/json", "", body)
+	d := capture.take()
+	if d == nil || len(d.Upstream) != 1 || d.Upstream[0].Request.Body != rec.body || !sameJSON(rec.body, want) {
+		t.Errorf("captured %+v, upstream got %s", d, rec.body)
 	}
 }

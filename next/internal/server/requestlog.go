@@ -28,7 +28,7 @@ type RequestLog struct {
 	// ErrorMaxFiles is how many error logs are kept (today's error-logs-max-files); 0 keeps all.
 	ErrorMaxFiles int
 	// Redact removes the config's secrets (client keys, the management key, the accounts'
-	// credentials) from everything a request log holds.
+	// credentials and the secrets in their settings) from everything a request log holds.
 	Redact *protocol.Redactor
 	// Trim applies the logs folder's size cap; nil: none.
 	Trim func()
@@ -365,7 +365,11 @@ func (l *RequestLog) format(e *requestEntry) []byte {
 	writeHeaders(&b, e.headers)
 	b.WriteString("\n=== REQUEST BODY ===\n")
 	b.Write(e.body)
-	fmt.Fprintf(&b, "\n\n=== %s ===\n", e.replyTitle)
+	b.WriteString("\n\n")
+	if e.trace != nil {
+		e.trace.upstream.write(&b)
+	}
+	fmt.Fprintf(&b, "=== %s ===\n", e.replyTitle)
 	if e.status != 0 {
 		fmt.Fprintf(&b, "Status: %d\n", e.status)
 	}
@@ -392,6 +396,9 @@ func logged(w http.ResponseWriter, r *http.Request, g *Generation, h func(w http
 	}
 	at := time.Now()
 	r, t := requestTrace(r)
+	if g.RequestLog.All {
+		r = r.WithContext(t.captureUpstream(r.Context()))
+	}
 	rec := &recorder{ResponseWriter: w, body: g.RequestLog.newCapture()}
 	h(rec, r)
 	g.RequestLog.write(&requestEntry{at: at, method: r.Method, url: r.URL, client: ClientIP(r), headers: r.Header, body: t.body, trace: t,

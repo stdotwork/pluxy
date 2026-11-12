@@ -182,6 +182,8 @@ export interface LoginFlowProps {
   existingAccountId?: string;
   /** A new account ID already chosen by the caller; methods without inputs start at once. */
   newAccountId?: string;
+  /** Names of the inputs the account keeps in its settings; a sign-in again may leave them empty. */
+  keptInputs?: string[];
   onSuccess(accountId: string): void;
   onReset?(completed: boolean): void;
 }
@@ -189,6 +191,12 @@ export interface LoginFlowProps {
 export function suggestedAccountId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(6));
   return `account-${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/** An input may be left empty when the method says so, or when a sign-in again keeps its value
+ * in the account's settings (a secret is never kept there, so it is always asked for). */
+export function optionalInput(field: LoginInput, kept: string[]): boolean {
+  return field.optional === true || (!field.secret && kept.includes(field.name));
 }
 
 export function validAccountId(id: string): boolean {
@@ -225,7 +233,11 @@ export function LoginFlow(props: LoginFlowProps) {
   const idHint = useId();
   success.current = props.onSuccess;
   const id = props.existingAccountId ?? props.newAccountId ?? accountId;
-  const inputs = props.method.inputs ?? [];
+  const kept = props.keptInputs ?? [];
+  const inputs = (props.method.inputs ?? []).map((field) => ({
+    ...field,
+    optional: optionalInput(field, kept),
+  }));
   const validId = validAccountId(id);
   const readingFile = Object.values(reading).some(Boolean);
   const fileReading = (name: string, active: boolean) => setReading((all) => ({ ...all, [name]: active }));

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { problem } from "../api";
 import type { ConfigDocument } from "../api/config";
 import type { CoreSettings } from "../api/settings";
-import type { PageDef } from "../shell";
+import { guardLeave, type PageDef } from "../shell";
 import { Tabs } from "../tabs";
 import { Button, Notice, PageHead, useKit } from "../ui";
 import { ConfigDialog } from "./configDialog";
@@ -85,19 +85,18 @@ export function ConfigPage() {
       e.stopPropagation();
       setLeave({ run: () => location.assign(url.href) });
     };
-    const hash = (e: HashChangeEvent) => {
-      if (!dirtyRef.current) return;
-      e.stopImmediatePropagation();
-      history.replaceState(null, "", e.oldURL);
-      setLeave({ run: () => location.assign(e.newURL) });
-    };
     window.addEventListener("beforeunload", beforeUnload);
     document.addEventListener("click", click, true);
-    window.addEventListener("hashchange", hash, true);
+    // Back and a typed #/… address change the hash; the shell asks its guards before it follows.
+    const unguard = guardLeave((go) => {
+      if (!dirtyRef.current) return false;
+      setLeave({ run: go });
+      return true;
+    });
     return () => {
       window.removeEventListener("beforeunload", beforeUnload);
       document.removeEventListener("click", click, true);
-      window.removeEventListener("hashchange", hash, true);
+      unguard();
     };
   }, []);
   const switchTab = (next: string) => {
