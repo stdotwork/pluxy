@@ -4,6 +4,8 @@ import type { Account, AccountChange, AccountModelAlias, AccountModelEntry } fro
 
 export interface SettingsDraft {
   prefix: string;
+  /** The account's proxy_url as core shows it, with "redacted" for a user name and password. */
+  proxyUrl: string;
   priority: string;
   weight: string;
   disableCooling: boolean;
@@ -37,6 +39,7 @@ export function modelRow(m: string | AccountModelEntry): { name: string; alias: 
 export function draftOf(a: Account): SettingsDraft {
   return {
     prefix: a.prefix ?? "",
+    proxyUrl: a.proxy_url ?? "",
     priority: a.priority ? String(a.priority) : "",
     weight: a.weight === undefined ? "" : String(a.weight),
     disableCooling: a.disable_cooling ?? false,
@@ -161,6 +164,11 @@ export function accountChange(
 
   const prefix = d.prefix.trim() || null;
   if (differs(prefix, a.prefix)) change.prefix = prefix;
+
+  // Core shows the URL without its user name and password. It is sent only when the person
+  // changed it, so the stored one, password included, stays unless they type another.
+  const proxy = d.proxyUrl.trim() || null;
+  if (differs(proxy, a.proxy_url)) change.proxy_url = proxy;
 
   const priority = integer(d.priority);
   if (priority === undefined) return { invalid: "priority" };
