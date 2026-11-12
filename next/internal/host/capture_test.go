@@ -84,6 +84,23 @@ func TestRedactDiagnosticSecretAtTheCut(t *testing.T) {
 	}
 }
 
+// A body sent as a start and an end with nothing between them (body_size no more than the two
+// together, or absent) is one text: the request log writes the two joined. A secret cut between
+// them is removed as from the whole body.
+func TestRedactDiagnosticSecretBetweenAdjacentPieces(t *testing.T) {
+	const secret = "sk-fake-credential-value-0123456789abcdef"
+	head, end := "start sk-fake-credential", "-value-0123456789abcdef end"
+	for _, size := range []int64{int64(len(head) + len(end)), 0} {
+		got := redactedRequestBody(captureRedactor(secret), protocol.CapturedBody{Body: head, BodyEnd: end, BodySize: size})
+		if joined := got.Body + got.BodyEnd; joined != "start [redacted] end" {
+			t.Errorf("body_size %d: joined body %q (%q + %q), want %q", size, joined, got.Body, got.BodyEnd, "start [redacted] end")
+		}
+		if got.BodySize != int64(len(got.Body)+len(got.BodyEnd)) {
+			t.Errorf("body_size %d: BodySize %d for %d bytes with nothing left out", size, got.BodySize, len(got.Body)+len(got.BodyEnd))
+		}
+	}
+}
+
 func TestRedactDiagnosticKeepsHeadersLeftOut(t *testing.T) {
 	d := redactDiagnostic(captureRedactor("sk-fake-credential-value-0123456789abcdef"), protocol.Diagnostic{Upstream: []protocol.UpstreamExchange{{
 		Request:  protocol.UpstreamRequest{Method: "GET", URL: "https://upstream.example.test/", HeadersLeftOut: 3},
