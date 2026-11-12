@@ -501,8 +501,6 @@ impl Releases {
         Ok(())
     }
 
-    /// Takes the feed a check read, or the reason it could not be read, if that check is still
-    /// the latest of the current feed. A bad feed, or a problem, leaves the last good copy.
     /// Starts a check of the current feed, if there is one.
     pub fn begin_check(&mut self) -> Option<Check> {
         let source = self.settings.source.clone()?;
@@ -514,6 +512,8 @@ impl Releases {
         })
     }
 
+    /// Takes the feed a check read, or the reason it could not be read, if that check is still
+    /// the latest of the current feed. A bad feed, or a problem, leaves the last good copy.
     pub fn checked(&mut self, check: &Check, read: Result<Vec<u8>, Problem>) {
         let source = check.source.as_str();
         // A later check was started, or the feed changed (even back to this address) while this
