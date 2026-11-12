@@ -90,7 +90,8 @@ SHA-256 (in `cores/records/`, apart from the folders), and makes the files read-
 every start it opens every file beneath the version's folder without following links, checks
 that it is a regular file of the recorded size, then its digest, and runs the core from the
 program file it just checked, not from its path again. A changed version does not start:
-**Install … again** installs the same release over it, through the same checks and confirmation.
+**Install … again** installs the same release over it, through the same checks and confirmation;
+a changed adopted copy is copied in again by adopting the same program again.
 
 **Switching** to a version (an install, **Roll back to** an installed version, or an adoption)
 stops the running core, keeps a copy of `core/config.json` (or a mark that there was none) and
@@ -100,11 +101,13 @@ the app started (read from `/proc` on Linux, before the app sends anything there
 `GET /v0/management/status` with the app's management key and, for a release, reports the
 version it was signed as, and the app has saved the new selection. If not, the app puts the
 config back as it was, removes a version it installed for this switch, and runs the version that
-worked before; the page says why the new one did not start. If the config cannot be put back, no
+worked before (when the switch reinstalled that very version, the one before it, which then stays
+selected); the page says why the new one did not start. If the config cannot be put back, no
 core runs: the candidate stays recorded with the copy, and the app tries again at its next start.
-If the app stops while a version starts, it does the same at its next start; a copy it cannot
-read is an error, and the config is left as it is. Once the app's core has exited, the app sends
-nothing more to its address. The app keeps the
+Once it is put back, a mark beside the config says so, and no later start puts it back again over
+your edits. If the app stops while a version starts, it does the same at its next start; a copy
+it cannot read is an error, and the config is left as it is. From the moment the app begins to
+stop its core, or sees it exit, it sends nothing more to that address. The app keeps the
 running version and the one before it, and removes older ones after a switch. Rolling back
 reaches only an installed version.
 
