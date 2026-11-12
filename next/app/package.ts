@@ -151,8 +151,8 @@ async function testPackage(outDir: string) {
     // What the build needs from the network, fetched here by the lockfile with the caller's
     // Cargo; the build is offline.
     // One absolute Cargo home for the fetch and the build's links; Cargo reads a relative
-    // CARGO_HOME from its working folder.
-    const callerCargo = resolve(tauriDir, process.env.CARGO_HOME ?? join(homedir(), ".cargo"));
+    // CARGO_HOME from its working folder, and treats an empty one as unset.
+    const callerCargo = resolve(tauriDir, process.env.CARGO_HOME || join(homedir(), ".cargo"));
     run("cargo", ["fetch", "--locked"], tauriDir, { ...process.env, CARGO_HOME: callerCargo } as Record<
       string,
       string
