@@ -1124,7 +1124,8 @@ request log (the first and the last, across every account a request tried), and 
 extension sends to the bounds above whatever it sent: a body longer than 128 KiB is cut to its
 start and end, and at most 16 KiB of header lines are logged, with a line counting the rest. Where
 a body is cut, it also drops the bytes beside the cut that could be the start or the end of a
-credential cut in two.
+credential cut in two; a `body` and `body_end` with nothing left out between them are one text,
+and a credential cut between them is removed whole.
 
 In Go, `sdk.Upstream` does all of this for each client it wraps, for requests made with the
 handler's context.
