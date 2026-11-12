@@ -1368,8 +1368,10 @@ mod tests {
         assert_eq!(connections(&mute), 1);
     }
 
-    /// A launch whose holder never answers ends, and not before its deadline. Only a watchdog
-    /// bounds it from above; the deadline itself is the test above's.
+    /// A launch whose holder never answers ends, not before its deadline and not long after it:
+    /// the upper bound is loose (2 s past a 300 ms deadline) so a loaded machine cannot fail it,
+    /// and catches a wait that runs many times too long. That nothing starts after the deadline
+    /// is the test above's.
     #[test]
     fn a_launch_that_gets_no_answer_ends() {
         let t = temp();
@@ -1385,6 +1387,10 @@ mod tests {
         let e = e.expect("a launch ran as a second instance");
         assert!(e.contains("did not answer"), "{e}");
         assert!(took >= wait, "it gave up after {took:?}, before {wait:?}");
+        assert!(
+            took < wait + Duration::from_secs(2),
+            "it took {took:?} for a {wait:?} deadline"
+        );
         // Its one try waits for the answer until the deadline; there is no try after it.
         assert!(connections(&mute) <= 1);
     }
