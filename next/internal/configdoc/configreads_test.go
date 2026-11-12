@@ -155,32 +155,41 @@ func TestSettingsSecretsHoldURLParts(t *testing.T) {
 }
 
 // Reading and restoring a config file takes time in proportion to its size: 60,000 client keys,
-// under the 1 MiB body limit, each take well under the bound.
+// about the 1 MiB body limit, each take well under the bound, in JSON and in a config.yaml.
 func TestRedactAndRestoreManySecrets(t *testing.T) {
-	var b strings.Builder
-	b.WriteString(`{"listen": "127.0.0.1:8317", "client_keys": [`)
-	for i := range 60000 {
-		if i > 0 {
-			b.WriteString(", ")
+	for _, isYAML := range []bool{false, true} {
+		var b strings.Builder
+		if isYAML {
+			b.WriteString("access:\n  api-keys:\n")
+			for i := range 60000 {
+				fmt.Fprintf(&b, "    - \"sk-many-%06d\"\n", i)
+			}
+		} else {
+			b.WriteString(`{"listen": "127.0.0.1:8317", "client_keys": [`)
+			for i := range 60000 {
+				if i > 0 {
+					b.WriteString(", ")
+				}
+				fmt.Fprintf(&b, `"sk-many-%06d"`, i)
+			}
+			b.WriteString("]}\n")
 		}
-		fmt.Fprintf(&b, `"sk-many-%06d"`, i)
-	}
-	b.WriteString("]}\n")
-	src := b.String()
-	bound := 5 * time.Second
-	if raceDetector {
-		bound = 30 * time.Second
-	}
-	r := NewRedactor()
-	start := time.Now()
-	red, err := r.Redact([]byte(src), false)
-	if took := time.Since(start); err != nil || took > bound {
-		t.Fatalf("Redact took %v (bound %v): %v", took, bound, err)
-	}
-	start = time.Now()
-	back, err := r.Restore(red, []byte(src), false)
-	if took := time.Since(start); err != nil || took > bound || string(back) != src {
-		t.Fatalf("Restore took %v (bound %v), same document %v: %v", took, bound, string(back) == src, err)
+		src := b.String()
+		bound := 5 * time.Second
+		if raceDetector {
+			bound = 30 * time.Second
+		}
+		r := NewRedactor()
+		start := time.Now()
+		red, err := r.Redact([]byte(src), isYAML)
+		if took := time.Since(start); err != nil || took > bound {
+			t.Fatalf("yaml %v: Redact took %v (bound %v): %v", isYAML, took, bound, err)
+		}
+		start = time.Now()
+		back, err := r.Restore(red, []byte(src), isYAML)
+		if took := time.Since(start); err != nil || took > bound || string(back) != src {
+			t.Fatalf("yaml %v: Restore took %v (bound %v), same document %v: %v", isYAML, took, bound, string(back) == src, err)
+		}
 	}
 }
 

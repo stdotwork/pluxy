@@ -211,8 +211,10 @@ func secrets(n *yaml.Node, strict bool) []*yaml.Node {
 // (legacy.HeaderText), which core reads as text without the spaces around it.
 func found(n *yaml.Node, strict bool) (out []*yaml.Node, texts map[*yaml.Node]string) {
 	// add records v as a secret, unless it is true, false, null or empty (see the rules above).
+	added := map[*yaml.Node]bool{}
 	add := func(v *yaml.Node) {
-		if v.Kind == yaml.ScalarNode && v.Tag != "!!null" && v.Tag != "!!bool" && v.Value != "" && !slices.Contains(out, v) {
+		if v.Kind == yaml.ScalarNode && v.Tag != "!!null" && v.Tag != "!!bool" && v.Value != "" && !added[v] {
+			added[v] = true
 			out = append(out, v)
 		}
 	}
@@ -588,7 +590,10 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 			}
 		}
 	}
-	allowed := secrets(d.root, settings)
+	allowed := map[*yaml.Node]bool{}
+	for _, n := range secrets(d.root, settings) {
+		allowed[n] = true
+	}
 	where := paths(d.root)
 	repl := map[*yaml.Node]*secret{}
 	for _, n := range held {
@@ -596,10 +601,10 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 		switch {
 		case settings && ok && s.paths[where[n]] == nil:
 			return nil, fmt.Errorf("%w: line %d: a redacted value is not where its secret is; write the value itself there", ErrInvalid, d.line(n))
-		case settings && !slices.Contains(allowed, n),
+		case settings && !allowed[n],
 			// A URL that is a secret is one wherever it is, so in a config file its placeholder
 			// may go anywhere.
-			!settings && !slices.Contains(allowed, n) && !(ok && secretURL(s.value)):
+			!settings && !allowed[n] && !(ok && secretURL(s.value)):
 			return nil, fmt.Errorf("%w: line %d: a redacted value is where no secret goes; write the value itself there", ErrInvalid, d.line(n))
 		case !ok:
 			return nil, fmt.Errorf("line %d: %w", d.line(n), ErrStale)
@@ -728,12 +733,20 @@ func (d *Doc) replace(repl map[*yaml.Node]string) ([]byte, bool) {
 		}
 		edits = append(edits, edit{s, text})
 	}
-	slices.SortFunc(edits, func(a, b edit) int { return b.start - a.start })
-	out := slices.Clone(d.src)
+	slices.SortFunc(edits, func(a, b edit) int { return a.start - b.start })
+	var out bytes.Buffer
+	out.Grow(len(d.src))
+	last := 0
 	for _, e := range edits {
-		out = slices.Concat(out[:e.start], []byte(e.text), out[e.end:])
+		if e.start < last { // two nodes at one place: an alias's anchor, replaced once
+			continue
+		}
+		out.Write(d.src[last:e.start])
+		out.WriteString(e.text)
+		last = e.end
 	}
-	return out, true
+	out.Write(d.src[last:])
+	return out.Bytes(), true
 }
 
 // span returns where a scalar's text is in the source, quotes included, and an explicit tag
@@ -746,7 +759,7 @@ func (d *Doc) span(n *yaml.Node) (span, bool) {
 	if n.Kind != yaml.ScalarNode || n.Anchor != "" || n.Line < 1 || n.Column < 1 {
 		return span{}, false
 	}
-	start := offset(d.src, n.Line, n.Column)
+	start := d.offset(n.Line, n.Column)
 	if start < 0 {
 		return span{}, false
 	}
@@ -812,16 +825,20 @@ func valueSpan(src []byte, start int, value string, style yaml.Style) (span, boo
 }
 
 // offset returns the byte offset of a 1-based line and column (in characters, as yaml.v3
-// counts them), or -1.
-func offset(src []byte, line, col int) int {
-	off := 0
-	for l := 1; l < line; l++ {
-		i := bytes.IndexByte(src[off:], '\n')
-		if i < 0 {
-			return -1
+// counts them), or -1. Where each line starts is found once per document.
+func (d *Doc) offset(line, col int) int {
+	if d.lines == nil {
+		d.lines = []int{0}
+		for i, c := range d.src {
+			if c == '\n' {
+				d.lines = append(d.lines, i+1)
+			}
 		}
-		off += i + 1
 	}
+	if line < 1 || line > len(d.lines) {
+		return -1
+	}
+	src, off := d.src, d.lines[line-1]
 	for c := 1; c < col; c++ {
 		if off >= len(src) || src[off] == '\n' {
 			return -1

@@ -31,6 +31,8 @@ type Doc struct {
 	// spans are where each JSON scalar's text is in src.
 	spans  map[*yaml.Node]span
 	edited bool
+	// lines are the offsets in src where each line starts, once offset needs them.
+	lines []int
 }
 
 // span is a range of bytes in a document's source.
