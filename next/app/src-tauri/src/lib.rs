@@ -14,6 +14,7 @@ include!(concat!(env!("OUT_DIR"), "/build_receipt.rs"));
 #[no_mangle]
 pub static PLUXY_TEST_BUILD: [u8; 31] = *b"PLUXY_TEST_BUILD_DO_NOT_RELEASE";
 
+pub mod access;
 pub mod artifact;
 pub mod client;
 mod command_names;
