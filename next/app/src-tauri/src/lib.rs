@@ -1634,7 +1634,7 @@ async fn device_imports(
                     c.queue(prepared)?
                 };
                 confirmation::request(&app, action.clone())?;
-                route::confirmed(&app, &action)
+                route::confirmed(&app, &action, &program::Cancel::default())
                     .map_err(|e| format!("{e}; {id}'s native imports stay as they were"))?;
                 st.device
                     .lock()

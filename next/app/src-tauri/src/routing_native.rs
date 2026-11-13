@@ -17,19 +17,23 @@
 //! - cyclic: a tool whose imports lead back to it is refused before any confirmation;
 //! - web: a curated web package (like Easy mode) installs as curated; its page's call is refused
 //!   until the person confirms its imports natively, then answered, with the page as the chain;
-//!   its write-class call asks again (cancelled: never ran); an Unverified package cannot get
-//!   import consent and its page's call is refused; a native tool's own page calls its own
-//!   operation;
-//! - stale: once the target is updated, the consent no longer covers it and the call is refused
-//!   until consent is given again; native routes reach the new release;
+//!   its write-class call asks again (cancelled: never ran; confirmed: ran once); an Unverified
+//!   package cannot get import consent and its page's call is refused; a window call cancelled
+//!   while its write's confirmation is open closes the dialog and never runs; a native tool's own
+//!   page calls its own operation;
+//! - stale: once the target is updated (a swap, confirmed), the consent naming it is gone and the
+//!   call is refused until consent is given again; native routes reach the new release;
 //! - revoke: revoking the consent while a page's call runs delivers no result to it, and the
 //!   next call is refused;
 //! - launch: a launch-class call started by a native click asks, and with "remember" ticked, the
 //!   next identical one from a native click runs without asking; the same launch through relay
 //!   (another chain) asks again, as does one from the window without a native click; through a web
-//!   package's import it asks each time, even after "remember" was ticked there.
+//!   package's import it asks each time and offers no "remember".
 //!
 //! One line on stderr: `native-test: routing <JSON>`.
+
+/// The label of a launch confirmation's "remember" checkbox, as the dialog shows it.
+const REMEMBER: &str = "Remember this exact executable, argv and cwd";
 
 use super::admission::{dialog, dialog_text, ok, press, require, settle, start};
 use super::{eval, log, wait_for};
@@ -506,6 +510,21 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 r["result"]["calls"] == before + 1,
                 format!("the summary after the cancelled store: {r} (had {before})"),
             )?;
+            // The control on the same route: confirmed, the write runs, once.
+            std::thread::sleep(Duration::from_millis(1100));
+            let id = page.send(TARGET, "store", json!({"value": "confirmed"}))?;
+            let text = dialog_text(app)?;
+            require(
+                text.contains("store") && text.contains("confirmed"),
+                format!("the second store confirmation: {text}"),
+            )?;
+            std::thread::sleep(Duration::from_millis(1100));
+            press("alt+o")?;
+            let r = page.reply(&id)?;
+            require(
+                r["result"]["stored"] == "confirmed" && r["result"]["calls"] == before + 2,
+                format!("the confirmed store: {r} (had {before})"),
+            )?;
             // Unverified: no consent, and its page's call refused; the guide's on the same route is
             // the control.
             refused_unasked(
@@ -526,6 +545,40 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             require(
                 summary_ok(&r["result"]),
                 format!("the control after the viewer: {r}"),
+            )?;
+            // A window call cancelled while its write's confirmation is open: the dialog closes
+            // and the write never runs.
+            let calls = r["result"]["calls"].as_u64().unwrap_or_default();
+            let slot = start(
+                main,
+                "program_call",
+                json!({"package": TARGET, "op": "store", "input": {"value": "withdrawn"},
+                    "ticket": "routing-withdrawn"}),
+            )?;
+            dialog_text(app)?;
+            ok(
+                main,
+                "program_cancel",
+                json!({"ticket": "routing-withdrawn"}),
+            )?;
+            let r = settle(main, &slot)?;
+            require(
+                r["ok"] == false && r["error"].as_str().is_some_and(|e| e.contains("cancelled")),
+                format!("the cancelled call with its confirmation open: {r}"),
+            )?;
+            wait_for("the withdrawn confirmation to close", || {
+                app.state::<crate::App>()
+                    .confirmations
+                    .lock()
+                    .unwrap()
+                    .showing
+                    .is_empty()
+                    .then_some(())
+            })?;
+            let r = page.call(TARGET, "summary", json!({"items": items}))?;
+            require(
+                r["result"]["calls"] == calls + 1,
+                format!("the target after the withdrawn write: {r} (had {calls})"),
             )?;
             // A native tool's own page calls its own operation.
             let mut own = Page::open(app, main, TARGET)?;
@@ -648,7 +701,8 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             let text = dialog_text(app)?;
             require(
                 text.contains(launch["executable"].as_str().unwrap_or("?"))
-                    && text.contains("main window"),
+                    && text.contains("main window")
+                    && text.contains(REMEMBER),
                 format!("the clicked launch's confirmation: {text}"),
             )?;
             press("alt+r")?;
@@ -694,11 +748,15 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             press("alt+c")?;
             let r = settle(main, &slot)?;
             require(r["ok"] == false, format!("the cancelled launch: {r}"))?;
-            // Through the guide's import: asks, also after "remember" was ticked there.
+            // Through the guide's import: asks each time, and offers no "remember", which a page
+            // chain could never use.
             let id = page.send(TARGET, "launch", launch.clone())?;
-            dialog()?;
+            let text = dialog_text(app)?;
+            require(
+                !text.contains(REMEMBER),
+                format!("the guide's launch confirmation offers to remember: {text}"),
+            )?;
             std::thread::sleep(Duration::from_millis(1100));
-            press("alt+r")?;
             press("alt+o")?;
             let r = page.reply(&id)?;
             require(

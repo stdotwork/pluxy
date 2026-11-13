@@ -11,7 +11,9 @@
 //! does. The call then goes to the program host pinned to the release it was granted for.
 //!
 //! A page's call in flight is cancelled when its package's import consent is revoked or its page
-//! closes, and its answer is delivered only if the call is still granted then.
+//! closes, and its answer is delivered only if the call is still granted then. A call cancelled
+//! while its native confirmation is open withdraws the confirmation; a confirmed call is granted
+//! again before it runs. The rules that need no app are in `route_rules.rs`.
 //!
 //! Linux only, as the program host.
 
@@ -21,13 +23,13 @@ use crate::program::{self, CallError, Cancel, Context, Hop, Outbound};
 use crate::App;
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
-/// The longest chain: its requester and four tools.
-const MAX_CHAIN: usize = 5;
+#[path = "route_rules.rs"]
+mod rules;
+pub use rules::Routes;
 /// How long a call waits for its native confirmation, which expires after a minute.
 const CONFIRMATION: Duration = Duration::from_secs(75);
 /// The largest input, as the program host takes it.
@@ -40,38 +42,6 @@ struct Origin {
     page: Option<String>,
     packages: Vec<confirmation::Package>,
     gesture: Arc<Mutex<Option<Gesture>>>,
-}
-
-struct Inflight {
-    caller: String,
-    label: String,
-    flag: Arc<AtomicBool>,
-}
-
-/// The page calls in flight.
-#[derive(Default)]
-pub struct Routes {
-    inflight: Mutex<Vec<Inflight>>,
-}
-
-impl Routes {
-    /// Cancels package caller's page calls: its import consent was revoked.
-    pub fn revoked(&self, caller: &str) {
-        for i in self.inflight.lock().unwrap().iter() {
-            if i.caller == caller {
-                i.flag.store(true, Ordering::SeqCst);
-            }
-        }
-    }
-
-    /// Cancels page label's calls: it closed.
-    pub fn page_closed(&self, label: &str) {
-        for i in self.inflight.lock().unwrap().iter() {
-            if i.label == label {
-                i.flag.store(true, Ordering::SeqCst);
-            }
-        }
-    }
 }
 
 fn fail(code: &str, message: impl Into<String>) -> CallError {
@@ -100,13 +70,14 @@ pub fn call_main(
     input: Value,
     gesture: Option<Gesture>,
 ) -> Result<Value, CallError> {
-    let grant = app
-        .state::<App>()
-        .device
-        .lock()
-        .unwrap()
-        .main_grant(package, op, &roots())
-        .map_err(refused)?;
+    let grant = || {
+        app.state::<App>()
+            .device
+            .lock()
+            .unwrap()
+            .main_grant(package, op, &roots())
+            .map_err(refused)
+    };
     let origin = Origin {
         page: None,
         packages: vec![device::main_window()],
@@ -115,7 +86,8 @@ pub fn call_main(
     dispatch(
         app,
         call,
-        grant,
+        grant()?,
+        &grant,
         vec![Hop::Main],
         origin,
         input,
@@ -146,41 +118,16 @@ fn outbound(app: &AppHandle, o: Outbound) -> Result<Value, CallError> {
             "only a tool's run makes calls of its own",
         ));
     };
-    let mut chain = o.context.chain.clone();
-    chain.push(o.caller.clone());
-    if chain
-        .iter()
-        .any(|h| h.package() == Some(o.package.as_str()))
-    {
-        let path: Vec<&str> = chain
-            .iter()
-            .map(|h| h.package().unwrap_or("main window"))
-            .collect();
-        return Err(fail(
-            "permission",
-            format!(
-                "{id}'s call of {} would go back into its own chain ({})",
-                o.package,
-                path.join(", ")
-            ),
-        ));
-    }
-    if chain.len() >= MAX_CHAIN {
-        return Err(fail(
-            "permission",
-            format!(
-                "{id}'s call of {} would make a chain longer than {MAX_CHAIN}",
-                o.package
-            ),
-        ));
-    }
-    let (grant, caller) = app
-        .state::<App>()
-        .device
-        .lock()
-        .unwrap()
-        .native_grant((id, sha256, *generation), &o.package, &o.op, &roots())
-        .map_err(refused)?;
+    let chain = rules::extend(&o.context.chain, &o.caller, &o.package)?;
+    let grant = || {
+        app.state::<App>()
+            .device
+            .lock()
+            .unwrap()
+            .native_grant((id, sha256, *generation), &o.package, &o.op, &roots())
+            .map_err(refused)
+    };
+    let (g, caller) = grant()?;
     let mut packages = parent.packages.clone();
     packages.push(caller.package());
     let origin = Origin {
@@ -190,7 +137,8 @@ fn outbound(app: &AppHandle, o: Outbound) -> Result<Value, CallError> {
     };
     // Registered like any call, so `cancel_all` reaches it too.
     let call = app.state::<App>().programs.begin_call(None)?;
-    dispatch(app, call, grant, chain, origin, o.input, o.cancel)
+    let regrant = || grant().map(|(g, _)| g);
+    dispatch(app, call, g, &regrant, chain, origin, o.input, o.cancel)
 }
 
 /// A page's `native.call` with params `{package, op, input}`, call id of page label's document
@@ -244,55 +192,56 @@ fn page_call(app: &AppHandle, label: &str, params: &Value) -> Result<Value, Call
         params["package"].as_str().unwrap_or_default(),
         params["op"].as_str().unwrap_or_default(),
     );
-    let grant = |c: &device::Catalog| c.page_grant((&caller, &sha256), package, op, &roots());
-    let (g, requester) = {
-        let c = st.device.lock().unwrap();
-        let g = grant(&c).map_err(refused)?;
-        let r = c
-            .requester(&caller, &roots())
-            .ok_or_else(|| fail("permission", format!("{caller} is not installed")))?;
-        (g, r)
+    let grant = || {
+        st.device
+            .lock()
+            .unwrap()
+            .page_grant((&caller, &sha256), package, op, &roots())
+            .map_err(refused)
     };
-    let flag = Arc::new(AtomicBool::new(false));
-    st.routes.inflight.lock().unwrap().push(Inflight {
-        caller: caller.clone(),
-        label: label.into(),
-        flag: Arc::clone(&flag),
-    });
-    let origin = Origin {
-        page: Some(label.into()),
-        packages: vec![requester],
-        gesture: Arc::new(Mutex::new(None)),
-    };
-    let chain = vec![Hop::Page {
-        id: caller.clone(),
-        sha256: sha256.clone(),
-        page: binding.page.clone(),
-    }];
-    let r = st.programs.begin_call(None).and_then(|call| {
-        dispatch(
-            app,
-            call,
-            g,
-            chain,
-            origin,
-            params["input"].clone(),
-            Cancel::default().with(&flag),
-        )
-    });
-    st.routes
-        .inflight
-        .lock()
-        .unwrap()
-        .retain(|i| !Arc::ptr_eq(&i.flag, &flag));
-    // Revoked, closed or changed while it ran: nothing it answered is delivered.
-    if flag.load(Ordering::SeqCst) {
-        return Err(fail(
-            "permission",
-            format!("{caller}'s call of {package} was revoked while it ran"),
-        ));
-    }
-    grant(&st.device.lock().unwrap()).map_err(refused)?;
+    // Registered before it is granted (`rules::page_call`), so no revocation slips between.
+    let r = rules::page_call(
+        &st.routes,
+        &caller,
+        label,
+        package,
+        || {
+            let g = grant()?;
+            let r = st
+                .device
+                .lock()
+                .unwrap()
+                .requester(&caller, &roots())
+                .ok_or_else(|| fail("permission", format!("{caller} is not installed")))?;
+            Ok((g, r))
+        },
+        |(g, requester), cancel| {
+            let origin = Origin {
+                page: Some(label.into()),
+                packages: vec![requester],
+                gesture: Arc::new(Mutex::new(None)),
+            };
+            let chain = vec![Hop::Page {
+                id: caller.clone(),
+                sha256: sha256.clone(),
+                page: binding.page.clone(),
+            }];
+            st.programs.begin_call(None).and_then(|call| {
+                dispatch(
+                    app,
+                    call,
+                    g,
+                    &grant,
+                    chain,
+                    origin,
+                    params["input"].clone(),
+                    cancel,
+                )
+            })
+        },
+    );
+    // Changed while it ran: nothing it answered is delivered.
+    grant()?;
     r
 }
 
@@ -302,12 +251,15 @@ fn release_of(caller: &str, folder: &str) -> Option<String> {
     (device::asset_url(caller, digest, "") == folder).then(|| digest.to_string())
 }
 
-/// Checks input against grant's operation, has a write or launch confirmed, and calls it in a
-/// context with chain and origin, pinned to the granted release.
+/// Checks input against grant's operation, has a write or launch confirmed, grants it again once
+/// confirmed (regrant must give the same release and operation), and calls it in a context with
+/// chain and origin, pinned to the granted release.
+#[allow(clippy::too_many_arguments)]
 fn dispatch(
     app: &AppHandle,
     call: program::Call,
     grant: Grant,
+    regrant: &dyn Fn() -> Result<Grant, CallError>,
     chain: Vec<Hop>,
     origin: Origin,
     input: Value,
@@ -321,7 +273,20 @@ fn dispatch(
     }
     program::schema::check(&grant.op.input_schema, &input, "input")
         .map_err(|e| fail("invalid_request", e))?;
-    authorize(app, &grant, &origin, &input)?;
+    if authorize(app, &grant, &origin, &input, &call.cancelled_by(&cancel))? {
+        // Asked: the catalog may have changed while the person answered.
+        let now = regrant()?;
+        if now.target != grant.target || now.op != grant.op {
+            return Err(fail(
+                "permission",
+                format!(
+                    "{}'s {} changed while it was being confirmed; call it again",
+                    grant.target.id(),
+                    grant.op.id
+                ),
+            ));
+        }
+    }
     let context = Context {
         chain,
         expect: Some((grant.target.sha256().into(), grant.target.installed_at())),
@@ -371,16 +336,18 @@ fn launch_of(
 
 /// A read goes ahead. A write or launch needs the person's native confirmation of the whole
 /// chain and the exact input, now; a launch from a chain the window started with a native
-/// gesture may use a remembered approval of exactly that instead.
+/// gesture may use a remembered approval of exactly that instead. A cancel while the
+/// confirmation is open withdraws it. Whether it asked.
 fn authorize(
     app: &AppHandle,
     grant: &Grant,
     origin: &Origin,
     input: &Value,
-) -> Result<(), CallError> {
+    cancel: &Cancel,
+) -> Result<bool, CallError> {
     let effect = grant.op.effect.as_str();
     if effect == "read" {
-        return Ok(());
+        return Ok(false);
     }
     let executor = grant.target.package();
     let launch = if effect == "launch" {
@@ -405,7 +372,18 @@ fn authorize(
     };
     let refuse = |e: String| fail("permission", e);
     let st = app.state::<App>();
-    let id = if origin.page.is_some() {
+    let page = origin.page.is_some();
+    // The rate and pending limits first, then any executable hashed without the lock.
+    st.confirmations
+        .lock()
+        .unwrap()
+        .room(page, &action.chain[0].id)
+        .map_err(refuse)?;
+    if let Some(l) = &action.launch {
+        let h = confirmation::Hashed::of(&l.executable).map_err(refuse)?;
+        st.confirmations.lock().unwrap().warm(h);
+    }
+    let id = if page {
         let p = st
             .confirmations
             .lock()
@@ -421,7 +399,9 @@ fn authorize(
             Some(g) => match c.remembered(p, g) {
                 Ok(token) => {
                     let id = c.token_action(&token).unwrap_or_default().to_string();
-                    return c.consume(&id, &token).map(|_| ()).map_err(refuse);
+                    // shortcut: the confirmed launch's opened executable and cwd (`Authorized`)
+                    // are dropped here; P8h1's spawn takes them over and launches from them.
+                    return c.consume(&id, &token).map(|_| false).map_err(refuse);
                 }
                 Err(p) => *p,
             },
@@ -432,24 +412,25 @@ fn authorize(
         confirmation::request(app, id.clone()).map_err(refuse)?;
         id
     };
-    confirmed(app, &id).map_err(|e| fail("cancelled", e))
+    confirmed(app, &id, cancel)
+        .map(|_| true)
+        .map_err(|e| fail("cancelled", e))
 }
 
 /// Waits for the person's answer to the native confirmation of prepared action id, which its
-/// dialog's own handler leaves for native code, and spends its single-use token.
-pub(crate) fn confirmed(app: &AppHandle, id: &str) -> Result<(), String> {
+/// dialog's own handler leaves for native code, and spends its single-use token. Once cancel is
+/// set, the confirmation is withdrawn and its dialog closes.
+pub(crate) fn confirmed(app: &AppHandle, id: &str, cancel: &Cancel) -> Result<(), String> {
     let st = app.state::<App>();
-    let deadline = Instant::now() + CONFIRMATION;
-    let outcome = loop {
-        if let Some(r) = st.confirmations.lock().unwrap().take_result(id) {
-            break r;
-        }
-        if Instant::now() > deadline {
-            return Err("the native confirmation expired".into());
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    };
+    let outcome = rules::wait(
+        || st.confirmations.lock().unwrap().take_result(id),
+        cancel,
+        CONFIRMATION,
+        || st.confirmations.lock().unwrap().withdraw(id),
+    )?;
     match outcome {
+        // shortcut: the confirmed launch's opened executable and cwd (`Authorized`) are dropped
+        // here; P8h1's spawn takes them over and launches from them.
         Ok(Some(token)) => st
             .confirmations
             .lock()

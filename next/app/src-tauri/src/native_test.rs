@@ -48,6 +48,7 @@ mod program;
 #[cfg(target_os = "linux")]
 #[path = "routing_native.rs"]
 mod routing;
+#[cfg(target_os = "linux")]
 #[path = "swap_native.rs"]
 mod swap;
 pub use ingress::{
