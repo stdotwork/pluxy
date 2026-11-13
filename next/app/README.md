@@ -130,6 +130,10 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `device_install_file` | Opens the native file chooser and installs or updates the package chosen there (Linux) |
 | `device_enable`, `device_remove`, `device_rollback` | Enables or disables, removes, or rolls back a package on this device |
 | `device_page_open` | Opens a webview for a page of a package on this device, at the address its catalog keeps |
+| `access_list` | The approved signers and every grant of Access |
+| `access_signer` | Opens a native confirmation to approve a device package's signer for its source |
+| `access_grant` | Opens the native file chooser for a package's declared resource, then a native confirmation, and keeps the grant |
+| `access_revoke` | Revokes a grant, answering once the reads under it have finished |
 | `window_get`, `window_set` | Reads or saves the Close behavior, and whether there is a usable tray |
 | `window_close` | Answers the close prompt: Exit App or Minimize to Tray, and whether to remember it |
 
@@ -191,7 +195,10 @@ in one of two ways:
   `{"version": 0, "registries": [{"name": "...", "url": "..."}]}`; each `url` is an index (the
   [protocol's format](../protocol/README.md#registry-index)) at an absolute local path or an
   `https://` address. The archive must have the size and SHA-256 the index lists for this
-  computer's platform, and hold the ID and version it lists.
+  computer's platform, and hold the ID and version it lists. An index may also list the
+release's publisher signature (`key_id`, `public_key`, `descriptor` and `signature`, see
+[the app package contract](app-host/README.md#signed-descriptor-bytes)): all four or none. The
+signature is checked before the archive is unpacked and kept with the release, for Access.
 
 Before anything is kept, the app checks the archive: regular files and folders only, no links,
 devices or names that leave the folder, at most 10,000 entries and 512 MiB unpacked. The
@@ -205,8 +212,8 @@ No source is curated in this build, so every package is labelled **Unverified**,
 whose ID claims a reserved publisher (`pluxy`) is refused from any source, before a registry's
 archive is fetched and again after a local archive is unpacked. A package keeps the source it was
 installed from: a release from another source is refused until the package is removed. Packages
-get no resources, settings or programs here: their pages' settings calls answer `unavailable`,
-and native tools are refused.
+get no settings or programs here: their pages' settings calls answer `unavailable`, and native
+tools are refused. They get files and folders only through Access, below.
 
 Installing a newer release keeps the one it replaces as the last good release. A candidate that
 fails any check leaves the active release, its files and its open pages as they were. **Roll
@@ -222,6 +229,68 @@ pages site does: scripts, styles, images and fonts from the scheme only, no requ
 no frames or forms. The webview may not navigate its frame out of that folder. Installing,
 rolling back, disabling or removing a package closes its open page webviews at once; the window
 then opens the new release's page, if the page is still listed.
+
+## Access (Linux)
+
+Access lets a page-only package on this device read files and folders you choose for it, through
+a broker in the app. A package asks with `app.resources`: each resource is a `file` or a
+`subtree` (a folder), with the operations it wants. This app grants `read` of a file, and `list`
+and `read` in a folder; other operations are shown and never granted. A declaration grants
+nothing by itself, and a page core lists gets no Access at all.
+
+Granting takes three things, each in native UI the window can only start:
+
+1. **A signed release.** Only a release whose registry listed a publisher signature can be
+   granted files; one installed from a file, or listed unsigned, is refused.
+2. **An approved signer.** The package's detail on the Device extensions page shows the signer
+   (publisher, key ID and full public key) and the registry it came from. **Approve signer…**
+   opens a native confirmation showing them. The approval holds for that key from that registry
+   only: the same package, key and bytes from another registry start with no approval and no
+   grants.
+3. **A grant.** **Grant…** next to a resource opens the native file chooser (the desktop portal's
+   when GTK uses portals) for a file or a folder. A whole home folder or the root folder is
+   refused. A native confirmation then shows the package with its source, digest and signer, the
+   resource and its operations, what you chose and what it resolves to, and says the package's
+   pages can send what they read anywhere they can reach. Cancelling the chooser or the
+   confirmation grants nothing.
+
+A grant binds the package, its source, its release digest, its signer and the resource to what
+you confirmed: the path you chose, the file or folder it resolves to and that target's device and
+inode, and, when you chose a link (as stow and chezmoi make), the link's own identity and text.
+Each read checks all of it again. A newer release, a rollback to another release, or the same
+release from another source is not granted what the first was; granting again replaces the
+grant. A link that points elsewhere, or a target replaced (as editors save, by rename), refuses
+reads with `changed` until you grant it again, even if it is put back. Removing the package
+removes its grants.
+
+Pages read with three channel methods, answered by native code, never by the window, so the
+bytes never reach the window: `resources.status`, `resources.read` and `resources.list`
+([the app package contract](app-host/README.md#access-for-web-packages)). The page webview's
+native binding names the package and release; nothing in the call can name another. A file
+grant reads that file only. A folder grant reads through a folder handle (`cap-std`) opened on
+the granted folder: `..`, absolute paths, empty parts and links that leave the folder are
+refused, while links inside it are followed. Only regular files are read, at most 1 MiB per
+call. Hard links inside a granted folder disclose the files they name.
+
+**Revoke** removes a grant and bumps a revision every read checks before it answers. A read
+already under way answers `revoked`, not its bytes, and the revocation answers only once such
+reads have finished. A revocation cannot take back what a page already read.
+
+A file the document portal offers (a path under `$XDG_RUNTIME_DIR/doc/`) is granted for this
+run of the app only: its grant is never saved, so the next launch asks again. The document
+portal's D-Bus interface (`org.freedesktop.portal.Documents`, version 5) takes persistence only as
+a flag when a file is added and has no call that reports it, so no portal grant is kept. When the portal stops offering the file, reads answer `unavailable`;
+the broker never reads the file behind it.
+
+Grants and approved signers are in `access.json` beside `connection.json`, readable only by your
+user (mode 0600, folder 0700), written by an exclusive temporary file, sync and rename. A damaged
+or unsupported file is moved to `access.json.corrupt-<time>` and Access starts with no grants; if
+it cannot be moved, Access refuses grants and reads until it is fixed. Handles opened for reads
+are kept while the app runs; after a restart each target is opened again and its identity
+checked.
+
+This is a check that cooperates with the person, not a sandbox: another program of the same user
+can change files between a check and a read.
 
 ## Native confirmations (Linux)
 
@@ -331,6 +400,23 @@ and remove leaves nothing in the store. Through the native file chooser, driven 
 cancel changes nothing, a reserved-publisher file is refused and an Unverified file installs, and
 its page stays open for the window's close check.
 
+In managed mode, another session runs the Access checks (`native/access-suite.ts`, which
+launches the app twice, through the stages in `src-tauri/src/access_native.rs`, with fixtures from
+`native/access.ts`: archives signed with an Ed25519 key made for that run, whose private half never
+leaves the fixture builder). Its choosers are the desktop portal's (`GTK_USE_PORTAL=1`), driven
+with `xdotool`, as are its native confirmations. An unsigned package and an unapproved signer are
+refused a grant; cancelling the signer's approval, the chooser or the confirmation changes
+nothing; a confirmed grant of a config-manager link reads its target's bytes in the page; a path
+with a file grant, an undeclared or ungranted resource, another package, a page core lists (even
+posting to the native scheme directly), `..`, absolute paths and a link out of a granted folder
+are refused, while the folder lists and reads, also through a link inside it; a retargeted link
+and a replaced target are refused until granted again; a read held in flight answers `revoked`
+and the revocation waits for it; a document portal file is granted for the session only and
+refused once the portal deletes it; a newer release and the same release from another registry
+get nothing. The second launch reads the kept grant and has no session-only one. The suite also
+checks every file the broker opened: never the files a page was refused or the portal file's host
+file.
+
 In managed mode, two more sessions run the window checks (`native/window.ts`, which launches
 the app through the stages in `src-tauri/src/native_window.rs`), one with a tray watcher and
 one without. They close the window as its window manager would (a GTK delete event) and answer
@@ -385,9 +471,10 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
 
 ## Limits
 
-- Device extensions: no curated source, signed packages, resources, settings or native tools yet;
-  installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
-  native run.
+- Device extensions: no curated source, settings or native tools yet; installing from a file
+  needs the Linux file chooser. Safe mode is covered by unit tests, not a native run.
+- Access: Linux only; reads only (no writes or watchers); a signature only from a registry, not
+  for a package installed from a file; document portal grants last one session.
 - Tested on Linux only. On Windows the page document's address is
   `http://pluxy-page.localhost/`; neither Windows nor macOS has been run.
 - No installer or bundled core yet (`bundle.active` is off).

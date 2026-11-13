@@ -3,8 +3,9 @@
 This reference defines the app contribution to a pluxy package and app program contract v0.
 The signature verifier is shared Rust code in `src-tauri/src/artifact.rs`. The desktop app
 installs page-only web packages on this device
-([extensions on this device](../README.md#extensions-on-this-device)); signed packages,
-resources, native admission and the Rust program host are later implementation work.
+([extensions on this device](../README.md#extensions-on-this-device)) and grants signed ones
+files through [Access](#access-for-web-packages); native admission and the Rust program host are
+later implementation work.
 Core recognizes app contributions to refuse app-only packages and use only the provider part of
 a mixed package. Start with the [tutorial](TUTORIAL.md).
 
@@ -93,6 +94,14 @@ the same verifier. `PublisherKeys` supplies publisher/source/key lookup separate
 `VerifiedArchive<R>` retains the rewound checked reader. Later folder-grant, native-admission and core-update code uses `into_archive()`
 instead of reopening a path, prevent concurrent writes, and check manifest identity after extraction.
 
+A registry index lists a release's signature beside its artifact's `url`, `sha256` and `size`:
+`key_id` (1 to 64 letters, digits, `.`, `_` or `-`), `public_key` (64 lower-case hex digits),
+`descriptor` (the exact descriptor text, as a JSON string) and `signature` (128 lower-case hex
+digits). All four or none. The desktop app refuses a release whose descriptor does not match the
+index's ID, version, `web` tier, this computer's platform, size and SHA-256, or the archive,
+before unpacking it. For a source that is not curated, the key comes from the index: a person
+approves it natively, for that source only, before any grant.
+
 Version 2.2.0 is retained over stable 3.0.0 to avoid its curve25519-dalek 5, ed25519/signature 3
 and sha2 0.11 dependency transition. The app already uses sha2 0.10; both Dalek versions expose
 strict verification. This pin enables no optional features and makes no independent audit claim.
@@ -104,6 +113,35 @@ them. Production keys and feeds are release configuration. Generate test keys at
 temporary storage; never track private keys. Test public roots require both a dedicated test
 build and isolated temporary trust profile. Normal builds with no production roots refuse native
 enablement; they never substitute test roots.
+
+## Access for web packages
+
+A web package's pages read granted files through its page channel (version 0), with three methods
+the desktop app's native code answers for a page of a package on this device. A page core lists
+gets `unknown_method` for each. Grants come only from the person, in native UI (the app README's
+Access section); a page cannot ask for one.
+
+| Method | `params` | `result` |
+| --- | --- | --- |
+| `resources.status` | `null` | `{"resources": [{"id", "kind", "operations", "granted", "session_only"}]}`: each resource this release declares, and whether it is granted to it now |
+| `resources.read` | `{"resource", "path"?, "offset"?}` | `{"data", "size", "offset", "eof"}`: up to 1 MiB of a regular file from `offset` (default 0), as base64 in `data`; `size` is the file's size |
+| `resources.list` | `{"resource", "path"?}` | `{"entries": [{"name", "kind", "size"?}], "truncated"}`: a folder's entries sorted by name, at most 1,000; `kind` is `file` (with `size`), `folder`, `link` or `other` |
+
+A `file` resource is read with no `path`. A `subtree` resource takes `path`, slash-separated parts
+inside the granted folder; for `resources.list`, empty or absent means the folder itself. A
+`file` resource cannot be listed. Unknown parameters are refused. Error codes:
+
+| Code | When |
+| --- | --- |
+| `bad_request` | Parameters of the wrong shape or unknown, an undeclared resource or operation, a `path` with a `file` resource |
+| `not_granted` | No grant for this package, release, source and signer, or the operation is not granted |
+| `refused` | An absolute path, `..`, `.` or empty parts, a link leaving the folder, or not a regular file |
+| `changed` | The chosen link or the target changed since it was granted; it stays refused until granted again |
+| `unavailable` | The file is gone, or the document portal no longer offers it |
+| `revoked` | The grant was revoked while the call was in flight |
+
+The native ingress limits of every page channel call apply to these too. Grants are bound to the
+package's source, release digest and approved signer: a new release asks again.
 
 ## App program contract v0
 
