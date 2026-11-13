@@ -185,6 +185,9 @@ impl Origin {
 /// Immutable native preparation, including open identities. Never returned to JavaScript.
 pub struct Prepared {
     origin: Origin,
+    /// The app's own action (prepare_app): no package, file or launch to show, so its review is
+    /// its description alone, and no launch notice follows it.
+    own: bool,
     exact: ExactAction,
     files: Vec<OpenTarget>,
     executable: Option<OpenTarget>,
@@ -222,6 +225,15 @@ impl Prepared {
         ))
     }
     pub fn review(&self) -> Result<String, String> {
+        if self.own {
+            return Ok(self
+                .exact
+                .what
+                .split('\n')
+                .map(escape_format_characters)
+                .collect::<Vec<_>>()
+                .join("\n"));
+        }
         // JSON quoting makes argv boundaries, newlines and control characters unambiguous.
         let mut s = review_text(&self.exact)?;
         if self.exact.native_tool {
@@ -507,7 +519,7 @@ impl Confirmations {
             contract: "management API v0".into(),
             generation,
         };
-        self.prepare(
+        let mut p = self.prepare(
             Action {
                 what,
                 chain: vec![app.clone()],
@@ -517,7 +529,9 @@ impl Confirmations {
                 launch: None,
             },
             Origin::Main,
-        )
+        )?;
+        p.own = true;
+        Ok(p)
     }
     // Trusted preparations are created only by native main/tray/UI handlers in this module.
     fn prepare(&mut self, action: Action, origin: Origin) -> Result<Prepared, String> {
@@ -593,6 +607,7 @@ impl Confirmations {
         };
         let p = Prepared {
             origin,
+            own: false,
             exact: ExactAction {
                 what: action.what,
                 chain: action.chain,

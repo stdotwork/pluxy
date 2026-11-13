@@ -37,20 +37,17 @@ pub(crate) fn notice(app: &tauri::AppHandle, text: String) {
 }
 
 pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> {
-    let (review, launch, summary, page) = {
+    let (review, launch, summary, page, own) = {
         let st = app.state::<crate::App>();
         let mut c = st.confirmations.lock().unwrap();
         let review = c.review(&id)?;
         if !c.showing.insert(id.clone()) {
             return Err("confirmation already showing".into());
         }
-        let summary = c.pending.get(&id).unwrap().prepared.notice();
-        (
-            review.0,
-            review.1,
-            summary,
-            c.pending.get(&id).unwrap().page,
-        )
+        let pending = c.pending.get(&id).unwrap();
+        let summary = pending.prepared.notice();
+        let (page, own) = (pending.page, pending.prepared.own);
+        (review.0, review.1, summary, page, own)
     };
     let handle = app.clone();
     app.run_on_main_thread(move || {
@@ -135,7 +132,10 @@ pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> 
             }
             c.results.insert(id.clone(), result);
             drop(c);
-            notice(&app, text);
+            // The app's own action shows its own outcome (such as the window with a new key).
+            if !own {
+                notice(&app, text);
+            }
             d.hide();
             // No GTK state is queried after destroying this completed dialog.
             unsafe {

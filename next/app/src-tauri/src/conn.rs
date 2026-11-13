@@ -552,16 +552,16 @@ impl Connection {
             return Err(Reply::failed(401, "unauthorized", "not signed in"));
         }
         let kept = match self.settings.mode {
-            Some(Mode::Managed) => "The app's core saves the new key in its config file",
+            Some(Mode::Managed) => "The app's core saves the new key in its config file.",
             _ if self.settings.key.is_some() => {
-                "The app keeps the new key on this device, as it kept the old one"
+                "The app keeps the new key on this device, as it kept the old one."
             }
-            _ => "The app uses the new key until it quits; like the old one, it is not kept on this device",
+            _ => "The app uses the new key until it quits; like the old one, it is not kept on this device.",
         };
         Ok(RotationTarget {
             revision: self.revision,
             summary: format!(
-                "Rotate the management key of {base}. Core replaces it with a new random key at once, and the old key stops working for this app and for every other program that uses it. {kept}, and shows it once in a window of its own."
+                "Rotate the management key of {base}. Core replaces it with a new random key at once, and the old key stops working for this app and for every other program that uses it. {kept} The app shows the new key once in a window of its own."
             ),
         })
     }
