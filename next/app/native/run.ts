@@ -487,6 +487,8 @@ function checkRelease(
   if (!release) return;
   const good = `${feed.base}/notes/0.3.0-preview.1`;
   const full = `${feed.base}/releases/0.3.0-preview.1`;
+  // The fixture's `/escaped/a[1]?q=x|y`, as the notes document writes it (and WebKit navigates to it).
+  const escaped = `${feed.base}/escaped/a%5B1%5D?q=x%7Cy`;
   const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   check(release.no_default === true, "release settings existed before any feed was confirmed");
   check(release.confirmed === true, "the confirmed feed was not kept in release.json");
@@ -515,7 +517,10 @@ function checkRelease(
   check(n.ran === null, `a script in the notes ran: ${n.ran}`);
   check(n.heading === "What changed", `the notes' Markdown was not rendered: ${n.heading}`);
   check(n.html_left_out === true, "raw HTML in the notes was not left out, or the text was lost");
-  check(same(n.links, [good]), `the notes link to ${JSON.stringify(n.links)}, not only ${good}`);
+  check(
+    same(n.links, [good, escaped]),
+    `the notes link to ${JSON.stringify(n.links)}, not ${good} and ${escaped}`,
+  );
   check(
     release.control?.ok === true && release.control.source === feed.url,
     `the window's release_get control failed: ${JSON.stringify(release.control)}`,
@@ -529,6 +534,10 @@ function checkRelease(
   check(same(nav.unlinked_opened, []), `an unlinked address opened: ${JSON.stringify(nav.unlinked_opened)}`);
   check(same(nav.opened, [good]), `the notes link opened ${JSON.stringify(nav.opened)}`);
   check(same(nav.full, [good, full]), `View full release notes opened ${JSON.stringify(nav.full)}`);
+  check(
+    same(nav.escaped, [good, full, escaped]),
+    `the link with escaped characters opened ${JSON.stringify(nav.escaped)}`,
+  );
   check(nav.stayed === "pluxy-notes://localhost/", `the notes webview navigated to ${nav.stayed}`);
   const dl = release.downloads ?? {};
   check(
@@ -564,7 +573,7 @@ function checkRelease(
   const seen = Object.fromEntries(feed.requests);
   check(same(seen, { "/feed.json": 1 }), `the feed server saw ${JSON.stringify(seen)}, not one feed read`);
   const opened = existsSync(browserLog) ? readFileSync(browserLog, "utf8").trim().split("\n") : [];
-  check(same(opened, [good, full]), `the stand-in browser opened ${JSON.stringify(opened)}`);
+  check(same(opened, [good, full, escaped]), `the stand-in browser opened ${JSON.stringify(opened)}`);
 }
 
 /** Removes a run's folder. A desktop service the run's bus started (such as the document portal,

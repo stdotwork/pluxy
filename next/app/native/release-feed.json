@@ -21,7 +21,7 @@
       "version": "0.3.0-preview.1",
       "channel": "preview",
       "published": "2026-11-05T09:00:00Z",
-      "notes": "## What changed\n\n**Bold** text and `code`.\n\n<script>window.__hostileRan = 1</script>\n\n<img src=\"{BASE}/pixel.png\" onerror=\"window.__hostileRan = 2\">\n\n<iframe src=\"{BASE}/frame\"></iframe>\n\n<a href=\"{BASE}/raw-html-link\">raw link</a>\n\n![tracker]({BASE}/pixel.png)\n\n[script link](javascript:window.__hostileRan=3) [plain http](http://127.0.0.1/plain) [relative](notes.html)\n\n[Read the full notes]({BASE}/notes/0.3.0-preview.1)\n",
+      "notes": "## What changed\n\n**Bold** text and `code`.\n\n<script>window.__hostileRan = 1</script>\n\n<img src=\"{BASE}/pixel.png\" onerror=\"window.__hostileRan = 2\">\n\n<iframe src=\"{BASE}/frame\"></iframe>\n\n<a href=\"{BASE}/raw-html-link\">raw link</a>\n\n![tracker]({BASE}/pixel.png)\n\n[script link](javascript:window.__hostileRan=3) [plain http](http://127.0.0.1/plain) [relative](notes.html)\n\n[Read the full notes]({BASE}/notes/0.3.0-preview.1)\n\n[A link with escaped characters]({BASE}/escaped/a[1]?q=x|y)\n",
       "notes_url": "{BASE}/releases/0.3.0-preview.1",
       "artifacts": { "note": "fields a later format adds are ignored" }
     },

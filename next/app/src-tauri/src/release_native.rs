@@ -356,8 +356,22 @@ pub(crate) fn run(
         let l = browser_log(&browser);
         (l.len() >= 2).then_some(l)
     })?;
+    // A link with characters the renderer escapes (`[`, `]`, `|`): WebKit navigates to the
+    // address as the document writes it, and that has to open in the browser too.
+    std::thread::sleep(Duration::from_millis(1100));
+    notes
+        .eval("[...document.querySelectorAll('main a')].find(a => a.href.includes('/escaped/')).click()")
+        .map_err(|e| e.to_string())?;
+    let escaped_opened = wait_for(
+        "the browser to get the link with escaped characters",
+        || {
+            let l = browser_log(&browser);
+            (l.len() >= 3).then_some(l)
+        },
+    )?;
     evidence["navigation"] = json!({
         "unlinked_opened": unlinked, "opened": opened, "full": full_opened,
+        "escaped": escaped_opened,
         "expected": [good, full],
         "stayed": eval(&notes, "location.href").unwrap_or(Value::Null),
     });
