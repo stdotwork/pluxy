@@ -8,7 +8,8 @@
 //!    top of that page's webview, calls every app command and some Tauri plugin commands: each
 //!    must be refused by Tauri's command check;
 //! 3. waits for the page's own report (it writes it into its settings through the channel);
-//! 4. closes the window, reports which webviews are left, and quits (stopping the app's own core)
+//! 4. in managed mode, checks this device's extension catalog (`device_native.rs`);
+//! 5. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!
 //! Each step prints one line on stderr: `native-test: <step> <JSON>`.
@@ -19,6 +20,8 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Webview};
 
+#[path = "device_native.rs"]
+mod device;
 #[path = "native_ingress.rs"]
 mod ingress;
 pub use ingress::{
@@ -63,6 +66,7 @@ const ACTING: &[&str] = &[
     "core_restart",
     "key_entry",
     "confirmation_settings",
+    "device_install_file",
 ];
 
 #[path = "key_entry_test.rs"]
@@ -259,6 +263,11 @@ fn run(app: &AppHandle) -> Result<(), String> {
 
     key_entry_test::check(app, &main)?;
     ingress::run(app, &main)?;
+
+    // This device's extension catalog (device_native.rs), with fixtures from native/device.ts.
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_DEVICE") {
+        device::run(app, &main, dir.into())?;
+    }
 
     // For screenshots: keep the window open until this file exists.
     if let Ok(f) = std::env::var("PLUXY_APP_TEST_HOLD") {

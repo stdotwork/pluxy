@@ -247,5 +247,19 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
         "ingress_closed",
         json!({"closed":204,"subsequent_call":409}),
     );
+    // Close the fixture page and turn the fixture off, so pages opened by later steps load
+    // their own documents.
+    main.eval("location.hash='#/extensions'")
+        .map_err(|e| e.to_string())?;
+    wait_for("ingress fixture page closed", || {
+        app.state::<App>()
+            .pages
+            .lock()
+            .unwrap()
+            .labels()
+            .is_empty()
+            .then_some(())
+    })?;
+    app.state::<App>().pages.lock().unwrap().ingress_fixture = false;
     Ok(())
 }

@@ -1,9 +1,11 @@
 // The app's document in an extension page's webview. That webview has no app commands: the
 // native side serves this document to it (pluxy-page://), and its /send address is the one way
 // out, tagged by the native side with the webview it came from. This document shows the
-// extension's page in a sandboxed frame from the pages site, does the panel's side of the
-// page's hello, and passes the page's channel messages to and from the app's window, which
-// answers them (src/nativePage.tsx). It holds no key and no address but the page's own.
+// extension's page in a sandboxed frame from the pages site (for a package installed on this
+// device, from the app's pluxy-app: scheme, which serves only that page's release), does the
+// panel's side of the page's hello, and passes the page's channel messages to and from the
+// app's window, which answers them (src/nativePage.tsx). It holds no key and no address but
+// the page's own.
 
 const frame = document.createElement("iframe");
 let hello = false;

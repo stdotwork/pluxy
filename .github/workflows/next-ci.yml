@@ -105,13 +105,16 @@ jobs:
           # setup-go saves this job's Go caches for later jobs, release builds among them, so the
           # container reads the module cache without writing to it and builds in its own GOCACHE.
           # Unlike the Test step, cgo is off here: the image has no C compiler, and next/ has no cgo code.
-          # playwright test runs on the image's Node 26, not on the Node 24 this job sets up.
+          # playwright test runs on the image's own Node (26 in 1.65.0), not on the Node 24 this job sets up.
+          # .git is mounted read-only over the checkout: the checkout's post-step runs git there with
+          # the job token in its environment, so the image must not be able to change git's config.
           docker run --rm --init --ipc=host \
             --user "$(id -u):$(id -g)" \
             -e CI -e HOME=/tmp -e CGO_ENABLED=0 \
             -e PATH="$goroot/bin:$bun_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
             -e GOMODCACHE="$gomodcache" -e GOCACHE=/tmp/go-build \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v "$GITHUB_WORKSPACE/.git:$GITHUB_WORKSPACE/.git:ro" \
             -v "$goroot:$goroot:ro" -v "$bun_dir:$bun_dir:ro" \
             -v "$gomodcache:$gomodcache:ro" \
             -w "$PWD" \

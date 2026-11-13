@@ -2,7 +2,8 @@
 
 The desktop app is the UI kit's second build ([`../ui`](../ui/README.md)), in a Tauri 2 window,
 with a tray icon. It shows core's pages in the same places and with the same themes as the web
-panel, then adds its own Connection page. Extension pages open in webviews of their own.
+panel, then adds its own Connection and Device extensions pages. Extension pages, from core and
+from packages installed on this device, open in webviews of their own.
 
 | Folder | What it holds |
 | --- | --- |
@@ -151,6 +152,12 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `page_send` | Passes the window's channel messages to a page's webview |
 | `confirmation_request` | Opens native review for an opaque action ID already prepared by native code; returns no approval or token |
 | `confirmation_settings` | Opens native settings to inspect and revoke exact remembered launches (Linux) |
+| `device_list` | This device's extension catalog |
+| `device_registries` | What the registries in `device-registries.json` offer this computer |
+| `device_install` | Installs or updates a package from one of those registries |
+| `device_install_file` | Opens the native file chooser and installs or updates the package chosen there (Linux) |
+| `device_enable`, `device_remove`, `device_rollback` | Enables or disables, removes, or rolls back a package on this device |
+| `device_page_open` | Opens a webview for a page of a package on this device, at the address its catalog keeps |
 | `window_get`, `window_set` | Reads or saves the Close behavior, and whether there is a usable tray |
 | `window_close` | Answers the close prompt: Exit App or Minimize to Tray, and whether to remember it |
 
@@ -193,6 +200,56 @@ native error; if even that cannot reach the renderer, the channel closes. The wr
 bounded FIFO of eight calls one at a time; hello and closed messages always enter that FIFO. Refusals return an HTTP status and, for bodies within the transport limit with a readable id,
 the matching channel error. Oversized transport bodies are rejected without scanning for an id.
 Permissions and extension settings still use the shared kit's channel. No page receives a key.
+
+## Extensions on this device
+
+The Device extensions page manages page-only app packages (`app.tier` `web`, see
+[the app package contract](app-host/README.md)) installed on this computer. They are apart from
+the extensions of the core the app is connected to: installing one never installs it in core,
+and core's Extensions page never lists it. Their pages are listed in the navigation with core's
+extension pages.
+
+A package comes from a release archive (the [protocol's format](../protocol/README.md#release-archives))
+in one of two ways:
+
+- from a file the person chooses in the native file chooser. The window only asks for the
+  chooser and never names a path;
+- from a registry named in `device-registries.json` in the app's config folder (on Linux
+  `~/.config/dev.pluxy.desktop/`), as core's config names its registries. The file holds
+  `{"version": 0, "registries": [{"name": "...", "url": "..."}]}`; each `url` is an index (the
+  [protocol's format](../protocol/README.md#registry-index)) at an absolute local path or an
+  `https://` address. The archive must have the size and SHA-256 the index lists for this
+  computer's platform, and hold the ID and version it lists.
+
+Before anything is kept, the app checks the archive: regular files and folders only, no links,
+devices or names that leave the folder, at most 10,000 entries and 512 MiB unpacked. The
+manifest must be a valid manifest version 1 with a web app contribution for host contract 0 and
+an existing file for each page. The app unpacks it into a staging folder and moves it into an
+immutable store, `device-packages/store/<archive SHA-256>/` in the app's data folder, with
+read-only files. The catalog (`device-packages/catalog.json`) records each package's source and
+each release's version, digest, sizes, formats, pages and the SHA-256 of each page file.
+
+No source is curated in this build, so every package is labelled **Unverified**, and a package
+whose ID claims a reserved publisher (`pluxy`) is refused from any source, before a registry's
+archive is fetched and again after a local archive is unpacked. A package keeps the source it was
+installed from: a release from another source is refused until the package is removed. Packages
+get no resources, settings or programs here: their pages' settings calls answer `unavailable`,
+and native tools are refused.
+
+Installing a newer release keeps the one it replaces as the last good release. A candidate that
+fails any check leaves the active release, its files and its open pages as they were. **Roll
+back** makes the last good release active again, after checking that its files are unchanged.
+Starting the app with `--safe-mode` lists no page of a package on this device and opens or serves
+none; the Device extensions page still shows and manages them.
+
+A device page opens like a core page, in a page webview with the app's page document, but its
+frame loads from the `pluxy-app:` scheme. That scheme serves a page webview only the files of the
+release folder it was opened for, only while that release is active and enabled, and only while
+each file still has the SHA-256 recorded at install. Each file is served sandboxed, as core's
+pages site does: scripts, styles, images and fonts from the scheme only, no requests from script,
+no frames or forms. The webview may not navigate its frame out of that folder. Installing,
+rolling back, disabling or removing a package closes its open page webviews at once; the window
+then opens the new release's page, if the page is still listed.
 
 ## Native confirmations (Linux)
 
@@ -291,6 +348,17 @@ core ownership, and removal. A separate session with no watcher verifies that a 
 opens exactly one window and webview. Visible launches are positive controls for the same
 renderer-process count used by silent launches.
 
+In managed mode the same run checks this device's extension catalog (`native/device.ts` builds
+the archives and a local registry; `src-tauri/src/device_native.rs` drives the app). From the
+registry, a reserved-publisher package is refused and an Unverified package installs and its page
+answers through the channel; a newer release replaces it while its page is open, closing the old
+page webview; a candidate needing another host contract is refused and the working page keeps
+answering; the asset scheme serves the active release to its page webview and refuses it the
+replaced release's files; roll back, disable, enable and remove each leave no page webview behind
+and remove leaves nothing in the store. Through the native file chooser, driven with `xdotool`,
+cancel changes nothing, a reserved-publisher file is refused and an Unverified file installs, and
+its page stays open for the window's close check.
+
 In managed mode, two more sessions run the window checks (`native/window.ts`, which launches
 the app through the stages in `src-tauri/src/native_window.rs`), one with a tray watcher and
 one without. They close the window as its window manager would (a GTK delete event) and answer
@@ -356,6 +424,9 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
 
 ## Limits
 
+- Device extensions: no curated source, signed packages, resources, settings or native tools yet;
+  installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
+  native run.
 - Tested on Linux only. On Windows the page document's address is
   `http://pluxy-page.localhost/`; neither Windows nor macOS has been run.
 - No installer or bundled core yet (`bundle.active` is off).
