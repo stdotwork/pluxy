@@ -110,6 +110,24 @@ mod gtk_overlay {
     pub fn forget_all() {
         PLACED.with(|p| p.borrow_mut().clear());
     }
+
+    // TEMP-DIAG
+    #[cfg(feature = "native-test")]
+    pub fn preferred(label: &str) -> Option<(i32, i32, i32, i32)> {
+        PLACED.with(|p| {
+            let p = p.borrow();
+            let w = p.get(label)?;
+            let (a, b) = w.preferred_height();
+            let (c, d) = w.preferred_width();
+            Some((a, b, c, d))
+        })
+    }
+}
+
+// TEMP-DIAG
+#[cfg(all(feature = "native-test", target_os = "linux"))]
+pub fn preferred(label: &str) -> Option<(i32, i32, i32, i32)> {
+    gtk_overlay::preferred(label)
 }
 
 /// Puts the page webview labelled label, just added to window, at b; none hides it.

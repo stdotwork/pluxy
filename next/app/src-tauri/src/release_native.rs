@@ -519,7 +519,15 @@ pub(crate) fn run(
             } else {
                 near(&want, &got)
             };
-            last = json!({"geometry": g, "want": want, "placed": got,
+            let pref = {
+                let (tx, rx) = mpsc::channel();
+                let l = again.clone();
+                let _ = app.run_on_main_thread(move || {
+                    let _ = tx.send(crate::place::preferred(&l));
+                });
+                json!(rx.recv_timeout(Duration::from_secs(5)).ok().flatten())
+            };
+            last = json!({"geometry": g, "want": want, "placed": got, "preferred_h_w": pref,
                 "log": eval(main, "window.__placeLog.slice(-30)")});
             ok.then(|| last.clone())
         })
