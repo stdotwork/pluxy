@@ -459,26 +459,14 @@ func TestRestoreRefusals(t *testing.T) {
 			t.Errorf("err = %v, want ErrStale", err)
 		}
 	})
-	t.Run("a URL secret may move to another key", func(t *testing.T) {
+	t.Run("a URL secret goes back only where it is", func(t *testing.T) {
 		edited := strings.Replace(string(red), `"name": "private"`, `"name": "`+urlPH+`"`, 1)
 		if edited == string(red) {
 			t.Fatal("test edit did not apply")
 		}
-		out, err := r.Restore([]byte(edited), []byte(restoreJSON), false)
-		if err != nil {
-			t.Fatalf("Restore: %v", err)
-		}
-		var doc struct {
-			Packages struct {
-				Registries []struct{ Name, URL string } `json:"registries"`
-			} `json:"packages"`
-		}
-		if err := json.Unmarshal(out, &doc); err != nil {
-			t.Fatal(err)
-		}
-		reg := doc.Packages.Registries[0]
-		if reg.Name != "https://fakeuser:fakepass@registry.example.com/index.json" || reg.URL != reg.Name {
-			t.Errorf("registry = %+v", reg)
+		_, err := r.Restore([]byte(edited), []byte(restoreJSON), false)
+		if !errors.Is(err, ErrInvalid) || errors.Is(err, ErrStale) {
+			t.Errorf("err = %v, want ErrInvalid only", err)
 		}
 	})
 	t.Run("a document with no placeholders comes back unchanged", func(t *testing.T) {
