@@ -76,13 +76,17 @@ fn choose(title: &str, path: &Path, folder: bool) -> Result<(), String> {
     }
     x(&["key", "--clearmodifiers", "ctrl+l"])?;
     std::thread::sleep(Duration::from_millis(300));
-    x(&[
-        "type",
-        "--clearmodifiers",
-        "--delay",
-        "20",
-        path.to_str().ok_or("fixture path is not UTF-8")?,
-    ])?;
+    let path = path.to_str().ok_or("fixture path is not UTF-8")?;
+    // A typed folder's name completes inline to `name/`, and then to its only subfolder, before
+    // the chooser reads its location (the tree grant once got `tree/inner`). Typed as `name/.`,
+    // nothing completes (the fixtures' folders hold no hidden entries), and GLib canonicalizes
+    // the chosen `name/.` to the folder itself (`g_canonicalize_filename`).
+    let typed = if folder {
+        format!("{path}/.")
+    } else {
+        path.to_string()
+    };
+    x(&["type", "--clearmodifiers", "--delay", "20", &typed])?;
     std::thread::sleep(Duration::from_millis(300));
     x(&["key", "--clearmodifiers", "Return"])?;
     Ok(())
