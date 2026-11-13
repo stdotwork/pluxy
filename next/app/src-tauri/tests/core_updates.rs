@@ -56,6 +56,14 @@ fn built() -> &'static Path {
             &d.join("3.2.0"),
             "chmod 500 ../cores\necho 'pluxy: candidate locked the store' >&2\nexit 3",
         );
+        // 1.0.0, which first makes the app's core store unwritable while ../lock-now exists.
+        script_core(
+            &d.join("1.0.0-locking"),
+            &format!(
+                "[ -e ../lock-now ] && chmod 500 ../cores\nexec '{}' \"$@\"",
+                d.join("1.0.0/pluxy").display()
+            ),
+        );
         d
     })
 }
@@ -928,7 +936,7 @@ fn a_fallback_that_cannot_be_recorded_says_so() {
     let err = f.conn.apply(CoreChange::Install(staged)).unwrap_err();
     std::fs::set_permissions(f.root.join("cores"), std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(
-        err.contains("core 1.0.0 runs again (the app could not record it as selected"),
+        err.contains("core 1.0.0 runs again (the app could not record that"),
         "{err}"
     );
     assert_eq!(f.reported(), (200, Some("1.0.0".into())));
@@ -937,6 +945,47 @@ fn a_fallback_that_cannot_be_recorded_says_so() {
     assert_eq!(
         c.caller().call("GET", "/status", None).body.unwrap()["version"],
         "1.0.0"
+    );
+}
+
+/// A failed repair's end is saved once, with the fallback's selection: when the store turns
+/// unwritable as the version before starts (as if the app died then), nothing of it was
+/// saved, so the next start still sees the candidate and falls back again, rather than running
+/// the failed version.
+#[test]
+fn a_failed_repair_is_recorded_with_its_fallback_in_one_save() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut f = fixture("one-save");
+    let b = built();
+    let keys = use_source(
+        &mut f,
+        "locking-source",
+        &[
+            ("1.0.0", b.join("1.0.0-locking")),
+            ("2.0.0", b.join("2.0.0")),
+        ],
+    );
+    for v in ["1.0.0", "2.0.0"] {
+        let staged = f.conn.prepare_install(&keys, v).unwrap();
+        f.conn.apply(CoreChange::Install(staged)).unwrap();
+    }
+    let bad = use_source(&mut f, "bad-source", &[("2.0.0", b.join("3.0.0"))]);
+    std::fs::write(f.root.join("lock-now"), b"").unwrap();
+    let staged = f.conn.prepare_install(&bad, "2.0.0").unwrap();
+    let err = f.conn.apply(CoreChange::Install(staged)).unwrap_err();
+    std::fs::set_permissions(f.root.join("cores"), std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::remove_file(f.root.join("lock-now")).unwrap();
+    assert!(err.contains("core 1.0.0 runs again"), "{err}");
+    f.conn.stop_core();
+    let c = Connection::open(dirs(&f.root), None);
+    assert_eq!(
+        c.caller()
+            .call("GET", "/status", None)
+            .body
+            .map(|b| b["version"].clone()),
+        Some(Value::from("1.0.0")),
+        "the next start did not fall back: {:?}",
+        Store::open(&f.root.join("cores")).unwrap().state()
     );
 }
 

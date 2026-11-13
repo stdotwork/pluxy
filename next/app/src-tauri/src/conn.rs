@@ -579,8 +579,8 @@ impl Connection {
     /// The running core is stopped first, then the config is kept and the candidate recorded;
     /// the switch counts only once the candidate answers and the new selection is saved. When
     /// the candidate fails, the config is put back, and only then does the last good core start
-    /// again; if the config cannot be put back, no core runs and the candidate stays recorded,
-    /// so the next start tries again.
+    /// again, its failure saved with that core's selection in one save; if the config cannot be
+    /// put back, no core runs and the candidate stays recorded, so the next start tries again.
     fn switch(
         &mut self,
         store: &Store,
@@ -594,33 +594,36 @@ impl Connection {
         self.client = None;
         self.key = None;
         self.error = None;
-        // tried: the candidate ran, or its files were replaced.
-        let back = |c: &mut Self, why: String, tried: bool| -> Result<(), String> {
-            let Some(last) = last_good(store, &st, id, tried) else {
-                c.error = Some(why.clone());
-                return Err(why);
-            };
-            match c.run_version(store, &last) {
-                Ok(()) => {
-                    let mut msg = format!("{why}; core {last} runs again");
-                    if st.selected.as_deref() != Some(last.as_str()) {
-                        let saved = store.state().and_then(|now| {
-                            store.save_state(&ended(store, &now, None, Some(&last)))
-                        });
-                        if let Err(e) = saved {
-                            msg.push_str(&format!(
-                                " (the app could not record it as selected: {e})"
-                            ));
-                        }
+        // Runs the version that worked before. tried: the candidate ran, or its files were
+        // replaced. failed: why the candidate failed, saved together with the fallback's
+        // selection; until that one save the candidate stays recorded, so the next start undoes
+        // the switch again (and puts the config back again only if the mark that it was put
+        // back was not saved either).
+        let back = |c: &mut Self,
+                    mut msg: String,
+                    tried: bool,
+                    failed: Option<cores::Failed>|
+         -> Result<(), String> {
+            let last = last_good(store, &st, id, tried);
+            let mut runs = None;
+            if let Some(last) = &last {
+                match c.run_version(store, last) {
+                    Ok(()) => {
+                        msg.push_str(&format!("; core {last} runs again"));
+                        runs = Some(last.as_str());
                     }
-                    Err(msg)
-                }
-                Err(e) => {
-                    let msg = format!("{why}; core {last} did not start either: {e}");
-                    c.error = Some(msg.clone());
-                    Err(msg)
+                    Err(e) => msg.push_str(&format!("; core {last} did not start either: {e}")),
                 }
             }
+            if failed.is_some() || runs.is_some_and(|r| st.selected.as_deref() != Some(r)) {
+                if let Err(e) = store.save_state(&ended(store, &st, failed, runs)) {
+                    msg.push_str(&format!(" (the app could not record that: {e})"));
+                }
+            }
+            if runs.is_none() {
+                c.error = Some(msg.clone());
+            }
+            Err(msg)
         };
         let snapshot = match ConfigSnapshot::take(store, &self.config_path()) {
             Ok(s) => s,
@@ -629,6 +632,7 @@ impl Connection {
                     self,
                     format!("the app could not keep a copy of the config: {e}"),
                     replaced,
+                    None,
                 )
             }
         };
@@ -639,6 +643,7 @@ impl Connection {
                 self,
                 format!("the app could not record the switch: {e}"),
                 replaced,
+                None,
             );
         }
         let started = self.run_version(store, id).and_then(|()| {
@@ -680,18 +685,11 @@ impl Connection {
         if fresh {
             store.remove(id);
         }
-        let mut failed = st.clone();
-        failed.candidate = None;
-        failed.failed = Some(cores::Failed {
+        let failed = cores::Failed {
             version: id.to_string(),
             reason: why,
-        });
-        if let Err(e) = store.save_state(&failed) {
-            // Still recorded as the candidate: the next start undoes the switch again, and puts
-            // the config back again only if the mark that it was put back was not saved either.
-            msg.push_str(&format!(" (the app could not record that: {e})"));
-        }
-        back(self, msg, true)
+        };
+        back(self, msg, true, Some(failed))
     }
 
     /// Records how a core change ended, for the window.
