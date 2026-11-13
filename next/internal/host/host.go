@@ -596,9 +596,10 @@ func (s *Stream) last() llm.Event {
 }
 
 // bodyPiece returns a body piece as the JSON string a native event carries. BodyRedactor cuts
-// a body only where a form of a secret starts or ends, or before an ASCII byte (a number, or the
-// colon, bracket or comma before one), each of which is where a character starts, so the piece
-// is valid UTF-8 as the decoded string it came from was, and encodes exactly.
+// a body only where a form of a secret starts or ends, before an ASCII byte (a number, or the
+// colon, bracket or comma before one), or, after text sent whole, at the start of a character it
+// left as it was, each of which is where a character starts, so the piece is valid UTF-8 as the
+// decoded string it came from was, and encodes exactly.
 func bodyPiece(text string) json.RawMessage {
 	b, _ := json.Marshal(text)
 	return b

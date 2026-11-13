@@ -194,6 +194,20 @@ func TestBodyRedactorFallbackKeepsHoldingTheUnchangedEnd(t *testing.T) {
 	}
 }
 
+// After text sent whole, a number holding the secret that ends in 0 still becomes 0, as String on
+// the whole body makes it: the 0 String writes is not taken for the number's own last digit.
+func TestBodyRedactorFallbackNumberEndingInZero(t *testing.T) {
+	r := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: "12345670"})
+	pieces := []string{"x:12345670:12345670", "}"}
+	want := r.String(strings.Join(pieces, ""))
+	if want != "x:[redacted]:0}" {
+		t.Fatalf("String = %q, want %q", want, "x:[redacted]:0}")
+	}
+	if got := redactPieces(t, r, pieces); got != want {
+		t.Errorf("%q: got %q, want %q", pieces, got, want)
+	}
+}
+
 // Wherever a body is cut, the client never gets a secret that redacting each piece on its own
 // would have removed: here secrets written with an escape outside the listed forms, which a
 // piece holds whole or which a cut splits.

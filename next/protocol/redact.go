@@ -806,9 +806,12 @@ func (b *BodyRedactor) emit(s string, final bool) string {
 			// The cut would hide what String finds in the text whole: send it whole, and keep the
 			// end, so that a form starting there is still removed from what follows. Of that end,
 			// what the text whole changed counts as sent; the rest, which the text whole ends with
-			// as it was, is held back as before rather than sent.
+			// as it was, is held back as before rather than sent. That the text whole merely ends
+			// like it (a 0 standing for a number that ends in 0) is not enough: redacting the text
+			// up to there must give the rest of the text whole.
 			j := 0
-			for j < len(b.held) && !(utf8.RuneStart(b.held[j]) && strings.HasSuffix(whole, b.held[j:])) {
+			for j < len(b.held) && !(utf8.RuneStart(b.held[j]) && strings.HasSuffix(whole, b.held[j:]) &&
+				whole[:len(whole)-(len(b.held)-j)] == b.r.String(s[skip:cut+j])) {
 				j++
 			}
 			b.sent = j
