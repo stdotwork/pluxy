@@ -16,8 +16,10 @@
 //! at a time per tool, and can be cancelled. Each call holds a lease; when the last lease ends
 //! the tool stops after the idle delay (30 seconds): its stdin closes, and after the stop grace
 //! its whole process group is killed, then it is reaped, and no process or thread of it is left.
-//! `stop` (when its package changes, is disabled or removed) and `stop_all` (when the app quits)
-//! do the same at once.
+//! `stop` (when its package changes, is disabled or removed) and `stop_all` (when the app quits,
+//! after which no call or swap starts a tool) do the same at once; `cancel_all` (when the window
+//! closes) cancels every call, of every release, so the tools stop when idle. Calls waiting for a
+//! tool to start or stop are bounded too, and calls waiting on a start that fails get its error.
 //!
 //! A tool that exits unexpectedly, or breaks its pipe, has crashed: its calls fail. A call after
 //! a backoff starts it again (one second, doubling to a minute; a call during it is refused);
@@ -34,8 +36,10 @@
 //! was. Calls to a package run one at a time across its releases, so the old release's work ends
 //! before the new release's starts.
 //!
-//! Its stderr is logged, one bounded line at a time with control characters escaped and the
-//! values the tool must not show removed; the last lines say why it stopped.
+//! Its stderr is logged, one bounded line at a time, at most `LOG_RATE` lines a second, with
+//! control and format characters escaped and the values the tool must not show removed; the last
+//! lines say why it stopped. What a tool says that reaches a caller or the status is escaped the
+//! same way.
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -64,6 +68,8 @@ const MAX_LOG_LINE: usize = 8 << 10;
 /// Stderr lines kept, to say why a tool stopped.
 const TAIL: usize = 20;
 const MAX_TICKET: usize = 64;
+/// Stderr lines logged a second; the rest are left out, and counted.
+const LOG_RATE: usize = 50;
 /// How often the supervisor looks at its tool, and the pipe readers at their stop flag.
 const TICK: Duration = Duration::from_millis(100);
 
@@ -109,29 +115,30 @@ impl Default for Limits {
 /// A declared operation, as the host checks calls against it.
 #[derive(Clone, Debug)]
 pub struct Operation {
-    pub id: String,
-    pub input_schema: Value,
-    pub output_schema: Value,
+    id: String,
+    input_schema: Value,
+    output_schema: Value,
 }
 
-/// What the host starts a tool from: an admitted record's facts (`From<&device::Admitted>`).
+/// What the host starts a tool from: an admitted record's facts. Built only
+/// `From<&device::Admitted>`, outside the unit tests.
 #[derive(Clone, Debug)]
 pub struct Spec {
-    pub id: String,
+    id: String,
     /// The release archive's SHA-256, which the tool echoes in hello.
-    pub sha256: String,
+    sha256: String,
     /// The release's install time: its generation.
-    pub generation: u64,
+    generation: u64,
     /// The program file, inside dir, and its expected SHA-256.
-    pub program: PathBuf,
-    pub program_sha256: String,
+    program: PathBuf,
+    program_sha256: String,
     /// The release's immutable folder: the tool's working folder.
-    pub dir: PathBuf,
-    pub operations: Vec<Operation>,
+    dir: PathBuf,
+    operations: Vec<Operation>,
     /// The state version the release writes, which describe must report.
-    pub state_version: i64,
+    state_version: i64,
     /// Values the tool's log lines must never show. None yet: the host gives tools no secret.
-    pub secrets: Vec<String>,
+    secrets: Vec<String>,
 }
 
 impl From<&crate::device::Admitted> for Spec {
@@ -158,8 +165,12 @@ impl From<&crate::device::Admitted> for Spec {
     }
 }
 
-/// Gives the admitted record for a package ID, checked now, or why there is none.
-pub type Resolve = Box<dyn Fn(&str) -> Result<Spec, String> + Send + Sync>;
+/// Gives the admitted record for a package ID, checked now, or why there is none. Only the
+/// device catalog makes an `Admitted`.
+pub type Resolve = Box<dyn Fn(&str) -> Result<crate::device::Admitted, String> + Send + Sync>;
+
+/// What the host starts from: `Resolve`'s record, or the unit tests' own.
+type Records = Box<dyn Fn(&str) -> Result<Spec, String> + Send + Sync>;
 
 /// A call's failure: a protocol error code (`../../protocol/README.md#errors`) and a message.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -202,6 +213,21 @@ pub struct Draining {
     pub generation: u64,
     pub pid: Option<u32>,
     pub leases: usize,
+}
+
+/// Text with control and format characters escaped (such as U+202E, which reorders what follows
+/// it), as the native confirmation shows text.
+fn escape(text: &str) -> String {
+    crate::confirmation::escape_format_characters(text)
+}
+
+/// e as it leaves the host: what a tool put in it escaped.
+fn escaped(e: CallError) -> CallError {
+    CallError {
+        code: escape(&e.code),
+        message: escape(&e.message),
+        unknown: e.unknown,
+    }
 }
 
 /// A tool's state, for the window.
@@ -275,6 +301,22 @@ struct Slot {
     /// Crashed: no start before then.
     retry_at: Option<Instant>,
     unknown: Vec<Unknown>,
+    /// A call is starting it: other calls wait until that start has ended, however the tool's
+    /// phase changes meanwhile.
+    starting: bool,
+    /// Starts so far, and the last that failed with its error, for the calls that waited on it.
+    starts: u64,
+    failed: Option<(u64, CallError)>,
+    /// Calls waiting for it to start or stop: at most `MAX_PENDING`.
+    waiting: usize,
+}
+
+/// Why a start did not make the tool ready.
+enum StartError {
+    /// The call is not one its record allows: nothing started.
+    Refused(CallError),
+    /// The start failed: the calls waiting on it get this too.
+    Failed(CallError),
 }
 
 /// Why a running tool is being stopped.
@@ -313,6 +355,8 @@ struct Run {
     /// Reaped, and its slot updated.
     reaped: AtomicBool,
     tail: Mutex<VecDeque<String>>,
+    /// Its last stderr line, as logged: why it stopped, if it says.
+    last_line: Mutex<Option<String>>,
 }
 
 impl Run {
@@ -353,35 +397,28 @@ impl Run {
 
     /// Breaks the pipe: a frame against the contract.
     fn violation(&self, why: String) {
-        eprintln!("program {}: {why}", self.spec.id);
+        eprintln!("program {}: {}", self.spec.id, escape(&why));
         self.finish(End::Failed(why), true);
         self.pending.lock().unwrap().clear();
         self.hello.lock().unwrap().take();
     }
 
-    fn log(&self, line: &str) {
+    /// Keeps line in the tail and, if shown, logs it; gives it as kept.
+    fn log(&self, line: &str, shown: bool) -> String {
         let mut line = line.to_string();
         for s in self.spec.secrets.iter().filter(|s| !s.is_empty()) {
             line = line.replace(s.as_str(), "[redacted]");
         }
-        let line: String = line
-            .chars()
-            .flat_map(|c| {
-                let keep = !c.is_control() || c == '\t';
-                let esc: Vec<char> = if keep {
-                    vec![c]
-                } else {
-                    c.escape_default().collect()
-                };
-                esc
-            })
-            .collect();
-        eprintln!("program {}: {line}", self.spec.id);
+        let line = escape(&line);
+        if shown {
+            eprintln!("program {}: {line}", self.spec.id);
+        }
         let mut t = self.tail.lock().unwrap();
         if t.len() == TAIL {
             t.pop_front();
         }
-        t.push_back(line);
+        t.push_back(line.clone());
+        line
     }
 
     fn tail(&self) -> Vec<String> {
@@ -390,11 +427,15 @@ impl Run {
 }
 
 struct Inner {
-    resolve: Resolve,
+    resolve: Records,
     limits: Limits,
     slots: Mutex<HashMap<String, Slot>>,
     changed: Condvar,
     tickets: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// Every call under way, by number, to cancel them all.
+    calls: Mutex<HashMap<u64, Arc<AtomicBool>>>,
+    /// The app is quitting: no tool starts and no lease is given.
+    closing: AtomicBool,
 }
 
 impl Inner {
@@ -481,91 +522,160 @@ fn valid_ticket(t: &str) -> bool {
 }
 
 impl Host {
+    /// A host that starts each tool from the record resolve gives for it at that moment.
     pub fn new(resolve: Resolve, limits: Limits) -> Host {
+        Host::with(
+            Box::new(move |id| resolve(id).map(|a| Spec::from(&a))),
+            limits,
+        )
+    }
+
+    /// For the unit tests: records that are no device's.
+    #[cfg(test)]
+    fn for_tests(records: Records, limits: Limits) -> Host {
+        Host::with(records, limits)
+    }
+
+    fn with(resolve: Records, limits: Limits) -> Host {
         Host(Arc::new(Inner {
             resolve,
             limits,
             slots: Mutex::new(HashMap::new()),
             changed: Condvar::new(),
             tickets: Mutex::new(HashMap::new()),
+            calls: Mutex::new(HashMap::new()),
+            closing: AtomicBool::new(false),
         }))
     }
 
     /// A lease on tool id, starting it if it is not running (once, however many ask at once).
     pub fn lease(&self, id: &str) -> Result<Lease, CallError> {
+        self.lease_for(id, &|_| Ok(()), &AtomicBool::new(false))
+            .map_err(escaped)
+    }
+
+    /// `lease`, for a call check allows: check sees the record the lease would be on before any
+    /// lease is taken or tool started. A cancel is seen before each start and each wait.
+    fn lease_for(
+        &self,
+        id: &str,
+        check: &dyn Fn(&Spec) -> Result<(), CallError>,
+        cancel: &AtomicBool,
+    ) -> Result<Lease, CallError> {
         let inner = &self.0;
         let mut slots = inner.slots();
+        // The start this call waited on, if it waited on one.
+        let mut waited_on: Option<u64> = None;
         loop {
+            if inner.closing.load(Ordering::SeqCst) {
+                return Err(fail("extension_unavailable", "the app is quitting"));
+            }
+            if cancel.load(Ordering::SeqCst) {
+                return Err(fail("cancelled", "the call was cancelled"));
+            }
             let slot = slots.entry(id.to_string()).or_default();
-            match slot.phase {
-                // Being stopped already: wait for it to go, then start it again.
-                Phase::Ready if slot.run.as_ref().is_some_and(|r| r.ending()) => {
-                    slots = inner.changed.wait_timeout(slots, TICK).unwrap().0;
+            if let (Some(n), Some((m, e))) = (waited_on, &slot.failed) {
+                if n == *m {
+                    return Err(e.clone());
                 }
-                Phase::Ready => {
-                    let run = slot.run.clone().expect("a ready tool runs");
-                    slot.leases += 1;
-                    slot.idle_since = None;
-                    return Ok(Lease {
-                        inner: Arc::clone(inner),
-                        run,
-                    });
-                }
-                Phase::Starting | Phase::Draining => {
-                    slots = inner.changed.wait(slots).unwrap();
-                }
-                Phase::Crashed
-                    if slot.retry_at.is_some_and(|t| t > Instant::now()) =>
-                {
-                    let left = slot.retry_at.unwrap() - Instant::now();
-                    return Err(fail(
-                        "extension_unavailable",
-                        format!(
-                            "{id} crashed ({}); a call may restart it in {} ms",
-                            slot.last.clone().unwrap_or_default(),
-                            left.as_millis() + 1
-                        ),
-                    ));
-                }
-                Phase::Quarantined => {
-                    return Err(fail(
-                        "extension_unavailable",
-                        format!(
-                            "{id} is quarantined after {} crashes in a row (last: {}); disable and enable it again, or update it",
-                            slot.crashes,
-                            slot.last.clone().unwrap_or_default()
-                        ),
-                    ))
-                }
-                Phase::Incompatible => {
-                    return Err(fail(
-                        "extension_unavailable",
-                        slot.last
-                            .clone()
-                            .unwrap_or_else(|| format!("{id} is incompatible")),
-                    ))
-                }
-                Phase::Idle | Phase::Stopped | Phase::Crashed => {
-                    slot.phase = Phase::Starting;
-                    slot.stop_asked = false;
-                    drop(slots);
-                    let started = start(inner, id);
-                    slots = inner.slots();
-                    if let Err(e) = started {
+            }
+            if slot.starting {
+                waited_on = Some(slot.starts);
+            } else {
+                match slot.phase {
+                    // Being stopped already: wait for it to go, then start it again.
+                    Phase::Ready if slot.run.as_ref().is_some_and(|r| r.ending()) => {}
+                    Phase::Ready => {
+                        let run = slot.run.clone().expect("a ready tool runs");
+                        check(&run.spec)?;
+                        slot.leases += 1;
+                        slot.idle_since = None;
+                        return Ok(Lease {
+                            inner: Arc::clone(inner),
+                            run,
+                        });
+                    }
+                    Phase::Starting | Phase::Draining => {}
+                    Phase::Crashed
+                        if slot.retry_at.is_some_and(|t| t > Instant::now()) =>
+                    {
+                        let left = slot.retry_at.unwrap() - Instant::now();
+                        return Err(fail(
+                            "extension_unavailable",
+                            format!(
+                                "{id} crashed ({}); a call may restart it in {} ms",
+                                slot.last.clone().unwrap_or_default(),
+                                left.as_millis() + 1
+                            ),
+                        ));
+                    }
+                    Phase::Quarantined => {
+                        return Err(fail(
+                            "extension_unavailable",
+                            format!(
+                                "{id} is quarantined after {} crashes in a row (last: {}); disable and enable it again, or update it",
+                                slot.crashes,
+                                slot.last.clone().unwrap_or_default()
+                            ),
+                        ))
+                    }
+                    Phase::Incompatible => {
+                        return Err(fail(
+                            "extension_unavailable",
+                            slot.last
+                                .clone()
+                                .unwrap_or_else(|| format!("{id} is incompatible")),
+                        ))
+                    }
+                    Phase::Idle | Phase::Stopped | Phase::Crashed => {
+                        slot.phase = Phase::Starting;
+                        slot.starting = true;
+                        slot.stop_asked = false;
+                        slot.starts += 1;
+                        let n = slot.starts;
+                        drop(slots);
+                        let started = start(inner, id, check);
+                        slots = inner.slots();
                         let slot = slots.entry(id.to_string()).or_default();
-                        // A swap made another release's tool ready meanwhile: that one serves.
-                        if slot.phase == Phase::Ready && slot.run.as_ref().is_some_and(|r| !r.ending()) {
-                            continue;
-                        }
-                        if slot.phase == Phase::Starting {
-                            slot.phase = Phase::Idle;
-                        }
-                        slot.last = Some(e.message.clone());
+                        slot.starting = false;
                         inner.changed.notify_all();
-                        return Err(e);
+                        if let Err(e) = started {
+                            // A swap made another release's tool ready meanwhile: that one
+                            // serves.
+                            if slot.phase == Phase::Ready
+                                && slot.run.as_ref().is_some_and(|r| !r.ending())
+                            {
+                                continue;
+                            }
+                            if slot.phase == Phase::Starting {
+                                slot.phase = Phase::Idle;
+                            }
+                            let e = match e {
+                                StartError::Refused(e) => e,
+                                StartError::Failed(e) => {
+                                    slot.last = Some(e.message.clone());
+                                    slot.failed = Some((n, e.clone()));
+                                    e
+                                }
+                            };
+                            inner.changed.notify_all();
+                            return Err(e);
+                        }
+                        continue;
                     }
                 }
             }
+            // Starting or stopping: wait, with at most MAX_PENDING others.
+            if slot.waiting >= MAX_PENDING {
+                return Err(fail(
+                    "unavailable",
+                    format!("{MAX_PENDING} calls wait for {id} already"),
+                ));
+            }
+            slot.waiting += 1;
+            slots = inner.changed.wait_timeout(slots, TICK).unwrap().0;
+            // Slots are never removed.
+            slots.get_mut(id).expect("its slot").waiting -= 1;
         }
     }
 
@@ -577,6 +687,13 @@ impl Host {
         input: Value,
         ticket: Option<&str>,
     ) -> Result<Value, CallError> {
+        let call = self.begin_call(ticket)?;
+        self.run_call(call, id, op, input)
+    }
+
+    /// A call, registered: from now on `cancel` (by its ticket, if it has one) and `cancel_all`
+    /// reach it. Begin it as the request arrives, before it can wait; then `run_call` it.
+    pub fn begin_call(&self, ticket: Option<&str>) -> Result<Call, CallError> {
         let cancel = Arc::new(AtomicBool::new(false));
         if let Some(t) = ticket {
             if !valid_ticket(t) {
@@ -591,11 +708,33 @@ impl Host {
             }
             tickets.insert(t.to_string(), Arc::clone(&cancel));
         }
-        let r = self.call_inner(id, op, input, &cancel);
-        if let Some(t) = ticket {
-            self.0.tickets.lock().unwrap().remove(t);
+        let n = CALL_IDS.fetch_add(1, Ordering::SeqCst);
+        self.0.calls.lock().unwrap().insert(n, Arc::clone(&cancel));
+        Ok(Call {
+            inner: Arc::clone(&self.0),
+            n,
+            ticket: ticket.map(String::from),
+            cancel,
+        })
+    }
+
+    /// Calls op of tool id with input, as call.
+    pub fn run_call(
+        &self,
+        call: Call,
+        id: &str,
+        op: &str,
+        input: Value,
+    ) -> Result<Value, CallError> {
+        self.call_inner(id, op, input, &call.cancel)
+            .map_err(escaped)
+    }
+
+    /// Cancels every call under way: the window that made them closed.
+    pub fn cancel_all(&self) {
+        for c in self.0.calls.lock().unwrap().values() {
+            c.store(true, Ordering::SeqCst);
         }
-        r
     }
 
     /// Cancels the call with ticket.
@@ -616,22 +755,23 @@ impl Host {
         input: Value,
         cancel: &AtomicBool,
     ) -> Result<Value, CallError> {
-        let lease = self.lease(id)?;
-        let run = &lease.run;
-        let decl = run
-            .spec
-            .operations
-            .iter()
-            .find(|o| o.id == op)
-            .ok_or_else(|| fail("unsupported", format!("{id} declares no operation {op}")))?;
         if serde_json::to_vec(&input).map_or(usize::MAX, |b| b.len()) > MAX_INPUT {
             return Err(fail(
                 "invalid_request",
                 format!("the input is larger than {MAX_INPUT} bytes"),
             ));
         }
-        schema::check(&decl.input_schema, &input, "input")
-            .map_err(|e| fail("invalid_request", e))?;
+        // Checked against the record before the tool is leased, or started.
+        let lease = self.lease_for(
+            id,
+            &|spec| {
+                schema::check(&declared(spec, op)?.input_schema, &input, "input")
+                    .map_err(|e| fail("invalid_request", e))
+            },
+            cancel,
+        )?;
+        let run = &lease.run;
+        let decl = declared(&run.spec, op)?;
         // Its turn: one call of the package at a time, across its releases, at most MAX_PENDING
         // at once.
         {
@@ -761,7 +901,12 @@ impl Host {
     /// Stops every tool and waits until each has been reaped, for at most the stop grace and a
     /// little more: the app is quitting.
     pub fn stop_all(&self) {
-        let ids: Vec<String> = self.0.slots().keys().cloned().collect();
+        let ids: Vec<String> = {
+            let slots = self.0.slots();
+            self.0.closing.store(true, Ordering::SeqCst);
+            self.0.changed.notify_all();
+            slots.keys().cloned().collect()
+        };
         for id in &ids {
             self.stop(id);
         }
@@ -798,7 +943,7 @@ impl Host {
             pid: run.and_then(|r| r.pid()),
             leases,
             generation: run.map(|r| r.spec.generation),
-            last: slot.and_then(|s| s.last.clone()),
+            last: slot.and_then(|s| s.last.as_deref().map(escape)),
             log: run.map_or_else(
                 || slot.map(|s| s.log.clone()).unwrap_or_default(),
                 |r| r.tail(),
@@ -809,7 +954,18 @@ impl Host {
                 .and_then(|s| s.retry_at)
                 .and_then(|t| t.checked_duration_since(Instant::now()))
                 .map(|d| d.as_millis() as u64 + 1),
-            unknown: slot.map(|s| s.unknown.clone()).unwrap_or_default(),
+            unknown: slot
+                .map(|s| {
+                    s.unknown
+                        .iter()
+                        .map(|u| Unknown {
+                            op: escape(&u.op),
+                            why: escape(&u.why),
+                            ..u.clone()
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
             draining: slot
                 .map(|s| {
                     s.old
@@ -825,10 +981,20 @@ impl Host {
         }
     }
 
-    /// Starts spec's tool to replace tool spec.id's (a swap): hello and describe, with no call
-    /// and no lease. The running one serves on meanwhile; a candidate that fails leaves it as it
-    /// was. `switch` makes the candidate the one that serves.
-    pub fn prepare(&self, spec: Spec) -> Result<Prepared, CallError> {
+    /// Starts the tool of admitted, a release the device catalog admitted, to replace the one of
+    /// its package (a swap): hello and describe, with no call and no lease. The running one
+    /// serves on meanwhile; a candidate that fails leaves it as it was. `switch` makes the
+    /// candidate the one that serves. Once the app is quitting, no candidate starts.
+    pub fn prepare(&self, admitted: &crate::device::Admitted) -> Result<Prepared, CallError> {
+        self.prepare_spec(Spec::from(admitted))
+    }
+
+    /// `prepare`, from a record: the unit tests' own, or an admitted one.
+    fn prepare_spec(&self, spec: Spec) -> Result<Prepared, CallError> {
+        self.prepare_inner(spec).map_err(escaped)
+    }
+
+    fn prepare_inner(&self, spec: Spec) -> Result<Prepared, CallError> {
         let inner = &self.0;
         let id = spec.id.clone();
         let unavailable = |e: String| fail("extension_unavailable", e);
@@ -837,6 +1003,9 @@ impl Host {
         let (run, hello_rx, cmd) = new_run(inner, spec, &program);
         {
             let mut slots = inner.slots();
+            if inner.closing.load(Ordering::SeqCst) {
+                return Err(unavailable("the app is quitting".into()));
+            }
             let slot = slots.entry(id.clone()).or_default();
             if slot.candidate.is_some() {
                 return Err(unavailable(format!("a swap of {id} is under way already")));
@@ -919,6 +1088,33 @@ impl Host {
     }
 }
 
+/// The operation op as spec declares it.
+fn declared<'a>(spec: &'a Spec, op: &str) -> Result<&'a Operation, CallError> {
+    spec.operations.iter().find(|o| o.id == op).ok_or_else(|| {
+        fail(
+            "unsupported",
+            format!("{} declares no operation {op}", spec.id),
+        )
+    })
+}
+
+/// A call `Host::begin_call` registered; it leaves the host's lists when dropped.
+pub struct Call {
+    inner: Arc<Inner>,
+    n: u64,
+    ticket: Option<String>,
+    cancel: Arc<AtomicBool>,
+}
+
+impl Drop for Call {
+    fn drop(&mut self) {
+        self.inner.calls.lock().unwrap().remove(&self.n);
+        if let Some(t) = &self.ticket {
+            self.inner.tickets.lock().unwrap().remove(t);
+        }
+    }
+}
+
 /// The turn of the call holding it, given up when it ends.
 struct Turn<'a>(&'a Run);
 
@@ -967,7 +1163,9 @@ fn command(spec: &Spec, f: &std::fs::File) -> Command {
     // The kernel opens /proc/self/fd/<n>, the checked file, as it executes; the descriptor is
     // close-on-exec, so the tool does not keep it.
     let mut cmd = Command::new(format!("/proc/self/fd/{}", f.as_raw_fd()));
-    cmd.env_clear()
+    // Its command line; its short name (`comm`) stays the descriptor's number.
+    cmd.arg0(&spec.program)
+        .env_clear()
         .env("PLUXY_APP_CONTRACT_VERSIONS", CONTRACT.to_string())
         .env("PLUXY_EXTENSION_ID", &spec.id)
         .env("PLUXY_APP_ARTIFACT_SHA256", &spec.sha256)
@@ -984,8 +1182,9 @@ fn command(spec: &Spec, f: &std::fs::File) -> Command {
             if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) != 0 {
                 return Err(io::Error::last_os_error());
             }
+            // The app exited while starting it. Nothing between fork and exec may allocate.
             if libc::getppid() != parent {
-                return Err(io::Error::other("the app exited while starting it"));
+                return Err(io::Error::from_raw_os_error(libc::ESRCH));
             }
             // Only its three pipes reach it: every other descriptor closes as it executes.
             if libc::syscall(
@@ -1025,6 +1224,7 @@ fn new_run(
         closed: AtomicBool::new(false),
         reaped: AtomicBool::new(false),
         tail: Mutex::new(VecDeque::new()),
+        last_line: Mutex::new(None),
     });
     let cmd = command(&run.spec, program);
     (run, hello_rx, cmd)
@@ -1050,40 +1250,38 @@ fn spawn_supervisor(
     }
 }
 
-/// Starts tool id from its admitted record and waits until it is ready, or has failed and been
-/// reaped. The slot is Starting.
-fn start(inner: &Arc<Inner>, id: &str) -> Result<(), CallError> {
-    let spec = (inner.resolve)(id).map_err(|e| fail("extension_unavailable", e))?;
+/// Starts tool id from its admitted record, if check allows the call on it, and waits until it is
+/// ready, or has failed and been reaped. The slot is Starting.
+fn start(
+    inner: &Arc<Inner>,
+    id: &str,
+    check: &dyn Fn(&Spec) -> Result<(), CallError>,
+) -> Result<(), StartError> {
+    let failed = |e: String| StartError::Failed(fail("extension_unavailable", e));
+    let spec = (inner.resolve)(id).map_err(failed)?;
     if spec.id != id {
-        return Err(fail(
-            "extension_unavailable",
-            format!("the record for {id} names {}", spec.id),
-        ));
+        return Err(failed(format!("the record for {id} names {}", spec.id)));
     }
     if let Err(e) = compatible(&spec) {
         set_incompatible(inner, id, &e);
-        return Err(fail("extension_unavailable", e));
+        return Err(failed(e));
     }
-    let program = open_program(&spec).map_err(|e| fail("extension_unavailable", e))?;
+    check(&spec).map_err(StartError::Refused)?;
+    let program = open_program(&spec).map_err(failed)?;
     let (run, hello_rx, cmd) = new_run(inner, spec, &program);
     {
         let mut slots = inner.slots();
         let slot = slots.entry(id.to_string()).or_default();
-        // Its package changed since its record was read: that record is not run.
-        if slot.stop_asked {
+        // Its package changed since its record was read, or the app is quitting: that record
+        // is not run.
+        if slot.stop_asked || inner.closing.load(Ordering::SeqCst) {
             slot.stop_asked = false;
             slot.phase = Phase::Stopped;
-            return Err(fail(
-                "extension_unavailable",
-                format!("{id} was stopped while it started"),
-            ));
+            return Err(failed(format!("{id} was stopped while it started")));
         }
         // A swap made another release's tool the one that serves meanwhile.
         if slot.phase != Phase::Starting || slot.run.is_some() {
-            return Err(fail(
-                "extension_unavailable",
-                format!("{id} was replaced while it started"),
-            ));
+            return Err(failed(format!("{id} was replaced while it started")));
         }
         slot.run = Some(Arc::clone(&run));
         slot.leases = 0;
@@ -1095,7 +1293,7 @@ fn start(inner: &Arc<Inner>, id: &str) -> Result<(), CallError> {
                 slot.run = None;
             }
         }
-        return Err(fail("extension_unavailable", format!("starting {id}: {e}")));
+        return Err(failed(format!("starting {id}: {e}")));
     }
     match handshake(inner, &run, hello_rx) {
         Ok(reported) => {
@@ -1112,10 +1310,7 @@ fn start(inner: &Arc<Inner>, id: &str) -> Result<(), CallError> {
             drop(slots);
             run.finish(End::Stopped, true);
             wait_reaped(inner, &run);
-            Err(fail(
-                "extension_unavailable",
-                format!("{id} was stopped while it started"),
-            ))
+            Err(failed(format!("{id} was stopped while it started")))
         }
         Err(e) => {
             let incompatible = e.code == "incompatible";
@@ -1128,7 +1323,7 @@ fn start(inner: &Arc<Inner>, id: &str) -> Result<(), CallError> {
                 true,
             );
             wait_reaped(inner, &run);
-            Err(fail("extension_unavailable", e.message))
+            Err(failed(e.message))
         }
     }
 }
@@ -1191,7 +1386,11 @@ fn handshake(
             ),
         )
     };
-    let exited = || fail("extension_crashed", format!("{id} exited as it started"));
+    // The tool exited, or broke its pipe, which says why.
+    let exited = || match run.end.lock().unwrap().clone() {
+        Some(End::Failed(why)) => fail("extension_crashed", format!("{id} {why}")),
+        _ => fail("extension_crashed", format!("{id} exited as it started")),
+    };
     let incompatible = |why: String| fail("incompatible", format!("{id} is incompatible: {why}"));
     let h = match hello.recv_timeout(left()) {
         Ok(h) => h,
@@ -1325,6 +1524,7 @@ fn supervise(
     if let Some(e) = threads.iter().find_map(|t| t.as_ref().err()) {
         run.finish(End::Failed(format!("its pipe threads: {e}")), true);
     }
+    let [_, _, log_reader] = threads;
     let _ = spawned.send(Ok(()));
     let mut stopping: Option<Instant> = None;
     loop {
@@ -1382,10 +1582,17 @@ fn supervise(
         unsafe {
             libc::killpg(pid as libc::pid_t, libc::SIGKILL);
         }
+        // And itself, should it have left its group.
+        let _ = child.kill();
     }
     let status = child.wait();
     run.tx.lock().unwrap().take();
     run.closed.store(true, Ordering::SeqCst);
+    // Its last lines, and the count of those left out of the log, reach the status. The reader
+    // stops within a tick once it is reaped.
+    if let Ok(t) = log_reader {
+        let _ = t.join();
+    }
     run.pending.lock().unwrap().clear();
     run.hello.lock().unwrap().take();
     let end = run.end.lock().unwrap().clone();
@@ -1393,7 +1600,7 @@ fn supervise(
         Ok(s) => s.to_string(),
         Err(e) => e.to_string(),
     };
-    let last_line = run.tail().last().cloned();
+    let last_line = run.last_line.lock().unwrap().clone();
     let mut slots = inner.slots();
     if let Some(slot) = slots.get_mut(&run.spec.id) {
         // A replaced or a candidate release's tool leaves the one that serves as it is.
@@ -1424,11 +1631,8 @@ fn supervise(
                     ),
                 ),
             };
-            // A stop asked for while it was starting wins over the start's own outcome. A crash:
-            // backoff before the next start, or quarantine after too many in a row.
-            slot.phase = if slot.phase == Phase::Stopped {
-                Phase::Stopped
-            } else if phase == Phase::Crashed {
+            // A crash: backoff before the next start, or quarantine after too many in a row.
+            slot.phase = if phase == Phase::Crashed {
                 if run.started.elapsed() >= inner.limits.stable {
                     slot.crashes = 0;
                 }
@@ -1552,23 +1756,69 @@ fn deliver(run: &Run, frame: &[u8], said_hello: &mut bool) -> Result<(), String>
     Ok(())
 }
 
+/// Keeps a tool's lines in its tail and logs them, at most `LOG_RATE` a second; the rest are
+/// left out of the log, and counted.
+struct Rate<'a> {
+    run: &'a Run,
+    since: Instant,
+    lines: usize,
+    left_out: usize,
+}
+
+impl Rate<'_> {
+    fn log(&mut self, line: &str) {
+        if self.since.elapsed() >= Duration::from_secs(1) {
+            self.flush();
+            self.since = Instant::now();
+            self.lines = 0;
+        }
+        let shown = self.lines < LOG_RATE;
+        if shown {
+            self.lines += 1;
+        } else {
+            self.left_out += 1;
+        }
+        let kept = self.run.log(line, shown);
+        *self.run.last_line.lock().unwrap() = Some(kept);
+    }
+
+    fn flush(&mut self) {
+        if self.left_out > 0 {
+            self.run.log(
+                &format!(
+                    "({} lines left out: more than {LOG_RATE} a second)",
+                    self.left_out
+                ),
+                true,
+            );
+            self.left_out = 0;
+        }
+    }
+}
+
 fn read_log(run: &Run, mut stderr: ChildStderr) {
     let fd = stderr.as_raw_fd();
     let mut line: Vec<u8> = Vec::new();
     let mut skipping = false;
     let mut chunk = vec![0u8; 8 << 10];
+    let mut rate = Rate {
+        run,
+        since: Instant::now(),
+        lines: 0,
+        left_out: 0,
+    };
     while let Some(n) = read_some(run, &mut stderr, fd, &mut chunk) {
         for &b in &chunk[..n] {
             if b == b'\n' {
                 if !skipping {
-                    run.log(&String::from_utf8_lossy(&line));
+                    rate.log(&String::from_utf8_lossy(&line));
                 }
                 line.clear();
                 skipping = false;
             } else if !skipping {
                 line.push(b);
                 if line.len() > MAX_LOG_LINE {
-                    run.log(&format!(
+                    rate.log(&format!(
                         "(a line longer than {MAX_LOG_LINE} bytes, not logged)"
                     ));
                     line.clear();
@@ -1578,8 +1828,9 @@ fn read_log(run: &Run, mut stderr: ChildStderr) {
         }
     }
     if !line.is_empty() && !skipping {
-        run.log(&String::from_utf8_lossy(&line));
+        rate.log(&String::from_utf8_lossy(&line));
     }
+    rate.flush();
 }
 
 /// The part of JSON Schema the host checks calls and replies against. A schema using any other

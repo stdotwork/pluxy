@@ -1304,6 +1304,13 @@ fn only_a_curated_signed_native_tool_installs() {
     done(root);
 }
 
+/// The native tool id as `native_candidate_unlocked` checks it, for a catalog the test holds.
+fn candidate(c: &Catalog, id: &str, roots: &dyn Roots) -> Result<Admitted, String> {
+    let (a, tree) = c.native_candidate_record(id, roots)?;
+    admission::verify_tree(&a.dir, &tree)?;
+    Ok(a)
+}
+
 #[test]
 fn admission_is_confirmed_per_release_and_checked_each_time() {
     let root = temp();
@@ -1316,7 +1323,7 @@ fn admission_is_confirmed_per_release_and_checked_each_time() {
     let sha = c.get("pluxy/tool").unwrap().active.sha256.clone();
 
     // What the native confirmation shows, then the admission it confirms.
-    let a = c.native_candidate("pluxy/tool", &roots).unwrap();
+    let a = candidate(&c, "pluxy/tool", &roots).unwrap();
     let dir = d.store().join(&sha);
     assert_eq!(
         (&a.sha256, &a.dir, &a.program),
@@ -1353,10 +1360,10 @@ fn admission_is_confirmed_per_release_and_checked_each_time() {
     }
     let mut changed = a.clone();
     changed.version = "9".into();
-    let e = c.admit(&changed, &roots).unwrap_err();
+    let e = c.admit_checked(&changed, &roots).unwrap_err();
     assert!(e.contains("changed while it was being confirmed"), "{e}");
     assert!(c.admitted("pluxy/tool", &roots).is_err());
-    c.admit(&a, &roots).unwrap();
+    c.admit_checked(&a, &roots).unwrap();
     assert_eq!(c.admitted("pluxy/tool", &roots).unwrap(), a);
     assert!(c.view(&roots).packages[0].authorized);
     // Admitted is checked again each time: against the roots and in safe mode.
@@ -1365,7 +1372,7 @@ fn admission_is_confirmed_per_release_and_checked_each_time() {
     let mut safe = Catalog::open(d.clone(), true, &roots);
     let e = safe.admitted("pluxy/tool", &roots).unwrap_err();
     assert!(e.contains("safe mode"), "{e}");
-    let e = safe.admit(&a, &roots).unwrap_err();
+    let e = safe.admit_checked(&a, &roots).unwrap_err();
     assert!(e.contains("safe mode"), "{e}");
     // The admission is kept with the catalog.
     assert_eq!(
@@ -1394,25 +1401,25 @@ fn admission_is_confirmed_per_release_and_checked_each_time() {
     c.set_enabled("pluxy/tool", false, &roots).unwrap();
     assert!(c.get("pluxy/tool").unwrap().admission.is_none());
     assert!(c.admitted("pluxy/tool", &roots).is_err());
-    let a = c.native_candidate("pluxy/tool", &roots).unwrap();
-    c.admit(&a, &roots).unwrap();
-    let e = c.native_candidate("pluxy/tool", &roots).unwrap_err();
+    let a = candidate(&c, "pluxy/tool", &roots).unwrap();
+    c.admit_checked(&a, &roots).unwrap();
+    let e = candidate(&c, "pluxy/tool", &roots).unwrap_err();
     assert!(e.contains("enabled already"), "{e}");
 
     // A new release, and rolling back, each wait disabled for a fresh confirmation.
     install(&mut c, "1.1.0").unwrap();
     let p = c.get("pluxy/tool").unwrap();
     assert!(!p.enabled && p.admission.is_none(), "{p:?}");
-    let b = c.native_candidate("pluxy/tool", &roots).unwrap();
-    c.admit(&b, &roots).unwrap();
+    let b = candidate(&c, "pluxy/tool", &roots).unwrap();
+    c.admit_checked(&b, &roots).unwrap();
     c.rollback("pluxy/tool").unwrap();
     let p = c.get("pluxy/tool").unwrap();
     assert!(
         !p.enabled && p.admission.is_none() && p.active.sha256 == sha,
         "{p:?}"
     );
-    let a = c.native_candidate("pluxy/tool", &roots).unwrap();
-    c.admit(&a, &roots).unwrap();
+    let a = candidate(&c, "pluxy/tool", &roots).unwrap();
+    c.admit_checked(&a, &roots).unwrap();
     c.admitted("pluxy/tool", &roots).unwrap();
 
     // Hashing the files without the catalog's lock gives the same records, and admit_checked
@@ -1508,10 +1515,10 @@ fn an_enabled_native_tool_is_swapped_only_once_the_swap_commits() {
     let stage =
         |v: &str| stage_from_registry(&d, &roots, "curated", "pluxy/tool", Some(v)).unwrap();
     c.commit(stage("1.0.0")).unwrap();
-    let a = c.native_candidate("pluxy/tool", &roots).unwrap();
+    let a = candidate(&c, "pluxy/tool", &roots).unwrap();
     // Not enabled: an update is no swap, and it is installed as before.
     assert!(!c.swaps("pluxy/tool", &stage("1.1.0").release));
-    c.admit(&a, &roots).unwrap();
+    c.admit_checked(&a, &roots).unwrap();
     let v1 = c.admitted("pluxy/tool", &roots).unwrap();
 
     // Staged into the store and held there, while 1.0.0 stays active, enabled and admitted.
@@ -1561,8 +1568,8 @@ fn an_enabled_native_tool_is_swapped_only_once_the_swap_commits() {
     let e = c.commit_swap(r, &roots).unwrap_err();
     assert!(e.contains("not an enabled native tool"), "{e}");
     assert_eq!(c.get("pluxy/tool").unwrap().active.version, "1.1.0");
-    let b = c.native_candidate("pluxy/tool", &roots).unwrap();
-    c.admit(&b, &roots).unwrap();
+    let b = candidate(&c, "pluxy/tool", &roots).unwrap();
+    c.admit_checked(&b, &roots).unwrap();
     // A swap that another swap overtook does not commit either.
     let stale = c.swap_rollback("pluxy/tool", &roots).unwrap();
     let r = c.swap_rollback("pluxy/tool", &roots).unwrap();
@@ -1607,8 +1614,8 @@ fn a_release_that_cannot_read_the_state_is_refused() {
     let e = c.rollback("pluxy/tool").unwrap_err();
     assert!(e.contains("cannot read the state"), "{e}");
     // Enabled: refused as a swap, and it stays admitted.
-    let a = c.native_candidate("pluxy/tool", &roots).unwrap();
-    c.admit(&a, &roots).unwrap();
+    let a = candidate(&c, "pluxy/tool", &roots).unwrap();
+    c.admit_checked(&a, &roots).unwrap();
     let e = c.swap_rollback("pluxy/tool", &roots).unwrap_err();
     assert!(e.contains("cannot read the state"), "{e}");
     let e = c.swap_update(stage("1.0.0"), &roots).unwrap_err();

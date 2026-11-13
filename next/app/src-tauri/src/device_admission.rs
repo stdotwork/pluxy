@@ -167,7 +167,7 @@ impl Package {
 
 /// An admitted native tool, checked: the only record the program host may start a program
 /// from (`Catalog::admitted`, called again before each start), and what the native confirmation
-/// enabling it shows (`Catalog::native_candidate`). It holds no signer logic for the host to redo.
+/// enabling it shows (`native_candidate_unlocked`). It holds no signer logic for the host to redo.
 /// Only `device` builds or changes one; everyone else reads it through the methods below.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Admitted {
@@ -480,15 +480,8 @@ pub(super) fn verify_tree(dir: &Path, want: &BTreeMap<String, String>) -> Result
 impl Catalog {
     /// Package id as an admitted native tool would be run: a native release with a curated
     /// signature that verifies against its root now, from the source it was signed for, for
-    /// this host contract, with every file unchanged.
-    fn check_native(&self, id: &str, roots: &dyn Roots) -> Result<Admitted, String> {
-        let (a, tree) = self.native_record(id, roots)?;
-        verify_tree(&a.dir, &tree)?;
-        Ok(a)
-    }
-
-    /// `check_native` but for the installed files: the record and the digests its files must
-    /// have, to be checked without the catalog's lock (`checked_unlocked`).
+    /// this host contract; and the digests its files must have, which the caller checks without
+    /// the catalog's lock (`checked_unlocked`).
     fn native_record(&self, id: &str, roots: &dyn Roots) -> Result<(Admitted, Tree), String> {
         let p = self
             .packages
@@ -545,15 +538,9 @@ impl Catalog {
         Ok((a, r.tree.clone()))
     }
 
-    /// The native tool id as the native confirmation enabling it shows it, checked.
-    pub fn native_candidate(&self, id: &str, roots: &dyn Roots) -> Result<Admitted, String> {
-        let (a, tree) = self.native_candidate_record(id, roots)?;
-        verify_tree(&a.dir, &tree)?;
-        Ok(a)
-    }
-
-    /// `native_candidate` but for the installed files.
-    fn native_candidate_record(
+    /// The native tool id as the native confirmation enabling it shows it, and its files'
+    /// digests (`native_candidate_unlocked`).
+    pub(super) fn native_candidate_record(
         &self,
         id: &str,
         roots: &dyn Roots,
@@ -568,24 +555,14 @@ impl Catalog {
     }
 
     /// Enables the native tool a, after its native confirmation, when it is still the release,
-    /// source and signer the person confirmed and still checks out.
-    pub fn admit(&mut self, a: &Admitted, roots: &dyn Roots) -> Result<(), String> {
-        let now = self.check_native(&a.id, roots);
-        self.admit_as(a, now)
-    }
-
-    /// `admit`, for a candidate whose files `native_candidate_unlocked` checked just now without
-    /// the catalog's lock: the record must still be the one checked.
+    /// source and signer the person confirmed. Its files were checked just now without the
+    /// catalog's lock (`native_candidate_unlocked`): the record must still be the one checked.
     pub fn admit_checked(&mut self, a: &Admitted, roots: &dyn Roots) -> Result<(), String> {
-        let now = self.native_record(&a.id, roots).map(|(now, _)| now);
-        self.admit_as(a, now)
-    }
-
-    fn admit_as(&mut self, a: &Admitted, now: Result<Admitted, String>) -> Result<(), String> {
         if self.safe_mode {
             return Err("the app runs in safe mode: no native tool is enabled".into());
         }
-        if now? != *a {
+        let (now, _) = self.native_record(&a.id, roots)?;
+        if now != *a {
             return Err(format!(
                 "{} changed while it was being confirmed; enable it again",
                 a.id
@@ -683,8 +660,9 @@ pub fn admitted_unlocked(
     checked_unlocked(catalog, |c| c.admitted_record(id, roots))
 }
 
-/// `Catalog::native_candidate`, hashing the files without the catalog's lock
-/// (`checked_unlocked`); enable it with `Catalog::admit_checked`.
+/// The native tool id as the native confirmation enabling it shows it, checked, hashing its
+/// files without the catalog's lock (`checked_unlocked`); enable it with
+/// `Catalog::admit_checked`.
 pub fn native_candidate_unlocked(
     catalog: &std::sync::Mutex<Catalog>,
     id: &str,

@@ -681,3 +681,43 @@ func TestUpstreamAppliesPayload(t *testing.T) {
 		t.Errorf("captured %+v, upstream got %s", d, rec.body)
 	}
 }
+
+// ApplyPayload gives a message that is not an HTTP request (a session turn's upstream message) the
+// rules of its turn: once, inside the root the extension names, and as it is when the turn has no
+// rules or the message is not a JSON object or array. Expected values are the ones of
+// TestUpstreamAppliesPayload (the old engine's oracle).
+func TestApplyPayload(t *testing.T) {
+	rules := &payload.Rules{
+		Override: []payload.Rule{{Models: []payload.Model{{}}, Params: map[string]any{"service_tier": "priority"}}},
+		Filter:   []payload.FilterRule{{Models: []payload.Model{{}}, Params: []string{`tools.#(name=="apply_patch")`}}},
+	}
+	const body = `{"model":"m","tools":[{"name":"apply_patch","n":1},{"name":"apply_patch","n":2}]}`
+	const want = `{"model":"m","service_tier":"priority","tools":[{"name":"apply_patch","n":2}]}`
+	turn, _ := withUpstreamInfo(context.Background(), protocol.Call{Type: protocol.TypeSessionTurn, Payload: rules})
+	// The engine adds a new member at the end of its object, so compare the JSON, not the text.
+	sameJSON := func(got []byte, want string) bool {
+		var g, w any
+		return json.Unmarshal(got, &g) == nil && json.Unmarshal([]byte(want), &w) == nil && reflect.DeepEqual(g, w)
+	}
+	if got := ApplyPayload(turn, []byte(body)); !sameJSON(got, want) {
+		t.Errorf("ApplyPayload = %s, want %s", got, want)
+	}
+	wrapped := `{"project":"p","request":` + body + `}`
+	if got, w := ApplyPayload(WithPayloadRoot(turn, "request"), []byte(wrapped)), `{"project":"p","request":`+want+`}`; !sameJSON(got, w) {
+		t.Errorf("with root request: ApplyPayload = %s, want %s", got, w)
+	}
+	for name, ctx := range map[string]context.Context{
+		"a turn without rules": func() context.Context {
+			c, _ := withUpstreamInfo(context.Background(), protocol.Call{Type: protocol.TypeSessionTurn})
+			return c
+		}(),
+		"a context without the call": context.Background(),
+	} {
+		if got := ApplyPayload(ctx, []byte(body)); string(got) != body {
+			t.Errorf("%s: ApplyPayload = %s, want the message as it is", name, got)
+		}
+	}
+	if got := ApplyPayload(turn, []byte(`"not an object"`)); string(got) != `"not an object"` {
+		t.Errorf("a message that is not an object or array: ApplyPayload = %s, want it as it is", got)
+	}
+}

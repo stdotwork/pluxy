@@ -235,7 +235,7 @@ impl Prepared {
         Ok(s)
     }
 }
-fn escape_format_characters(text: &str) -> String {
+pub(crate) fn escape_format_characters(text: &str) -> String {
     use gtk::glib::Unichar;
     let mut out = String::new();
     for ch in text.chars() {

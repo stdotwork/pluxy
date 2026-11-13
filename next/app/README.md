@@ -70,6 +70,42 @@ as `window.damaged-<random>.json` and the defaults used.
 A minimized window's pages are hidden (`document.visibilityState`), so the kit's polling, which
 runs only while its page is visible, stops until the window is restored.
 
+## One app per profile
+
+The app runs once per profile: your user and the app's data folder (on Linux
+`~/.local/share/dev.pluxy.desktop/`), not the place the program is installed. Launching it again
+on that profile, from the app menu, a shortcut or the login autostart entry (Silent Launch applies
+only to a login launch that is the first), shows the first app's window (a new one if it was
+closed to the tray) and exits with status 0, starting no core, tray icon or webview. Another `HOME` or `XDG_*` folder is another
+profile, with its own app and core.
+
+Before anything else, the app takes an exclusive lock on `instance/lock` in the data folder
+(`flock`: the system releases it when the app ends, however it ends, so a killed app leaves nothing
+to recover). The folder must be your user's and not a link; the lock is opened inside it without
+following a link, and used only if it is a plain file of yours with mode 600. The app then listens
+on a socket in a short folder of yours: `pluxy-app/` in `XDG_RUNTIME_DIR`, else `pluxy-app-<uid>/`
+in the temporary folder, so a long data folder path does not matter. The app skips a folder that
+another user could swap for theirs: one with a link above it, or below a folder that belongs to
+another user (other than root) or that others may write in without its sticky bit (as `/tmp` has
+it). The socket's name is a digest
+of the data folder, and the app writes its path to `instance/address`. The folders, the lock, the
+address and the socket are readable by your user only. A later launch reads the address, connects
+without blocking, checks the socket is your user's, and sends it one fixed message; the first app
+accepts only a connection from the same user (peer credentials), reads at most 64 bytes from each
+for at most 2 seconds, serves up to 32 at once, and ignores anything but that message. The launch
+exits once the first app has shown its window, or fails with a message on stderr if the first does
+not answer within 20 seconds, or at once if the first could not listen. A socket a killed app left
+behind is removed by the next app, which holds the lock.
+The lock is not inherited by the app's core.
+
+## Privacy mode
+
+The navigation's **Privacy mode** toggle masks account e-mail addresses and identifiers where
+the kit shows them, as in the panel (`ui/kit/privacy.ts`), and extension pages are told in their
+theme snapshot. The app keeps the choice natively, in `privacy-mode.json` beside
+`connection.json` (readable only by your user), not in the window's storage, so losing that
+storage cannot turn it off. A file that cannot be read or parsed counts as on.
+
 ## Startup preferences
 
 The Connection page has three startup choices:
@@ -134,6 +170,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `program_status` | Whether a native tool runs, its leases, how it last stopped, its crashes in a row and backoff, calls of unknown outcome, and replaced releases still draining (Linux) |
 | `window_get`, `window_set` | Reads or saves the Close behavior, and whether there is a usable tray |
 | `window_close` | Answers the close prompt: Exit App or Minimize to Tray, and whether to remember it |
+| `privacy_get`, `privacy_set` | Reads or saves privacy mode |
 
 The window may also listen to the app's events. To add a command: add it to
 `command_names.rs`, to `generate_handler!` in `lib.rs`, and its `allow-<name>` permission to
@@ -238,10 +275,13 @@ its SHA-256 against the record and runs that opened file, in its package folder,
 environment, only its three private pipes, a process group of its own and a parent-death signal,
 from a supervisor thread that stays until the tool has been reaped. Calls follow [app program
 contract v0](app-host/README.md#app-program-contract-v0), one at a time. When the last call
-ends, the tool stops after 30 seconds idle; any change to its package (disable, update, roll back,
-remove) and quitting the app stop it at once. Stopping closes its stdin, kills its whole process
-group after five seconds and reaps it: no process or thread of it is left. Pages, including the
-tool's own, have no program command and no route to its pipes.
+ends, the tool stops after 30 seconds idle; closing the window cancels its calls, so their tools
+stop when idle. Any change to its package (disable, update, roll back, remove) and quitting the
+app stop it at once, and once the app is quitting no call starts a tool. Stopping closes its
+stdin, kills its whole process group after five seconds and reaps it: no process or thread of it
+is left. If the app itself dies, the tool gets SIGTERM and nothing kills its group, so a tool must
+end the processes it started when its input ends and on SIGTERM. Pages, including the tool's own,
+have no program command and no route to its pipes.
 
 Updating or rolling back a native tool that is enabled swaps it while it serves on. The new
 release is staged and shown in its own native confirmation; once confirmed, the program host
@@ -424,6 +464,17 @@ prompt or the setting, quits and stops the app's own core; the next launch opens
 window was. A pending test sign-in's polls are counted while the window shows, while it is
 unmapped (as a window manager minimizes it; GDK then reports it minimized) and once it is mapped
 again. Without a tray watcher, closing quits without asking, with Minimize to Tray or Ask saved.
+
+Then, in a session of its own (`native/instances-session.ts`), it launches the app again and
+again on one profile and checks that each later launch exits 0 within 10 seconds, starts no app or core of its own (it counts the
+app and core processes), and has the first show its window, also after the window was hidden and
+after it was closed to the tray, and for a login launch (`--autostart` with Silent Launch on) as
+well; that the socket is in the runtime folder, where `instance/address`
+says; that a launch with other `HOME` and `XDG_*` folders is an app and
+core of its own; that after the first app is killed with SIGKILL (its lock file and socket stay)
+the next launch becomes the app, starts its core and is the one a later launch raises; and that
+the socket and its address are gone when the app quits. The other profile's data folder is too long
+for a socket path, and a second launch of it still raises it.
 The `native-test` feature is for that test alone; release builds never have it.
 
 In local and remote modes, the test also drives the real GTK dialog with `xdotool`: good keys
@@ -469,7 +520,8 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
 ## Limits
 
 - Device extensions: no production trust roots (so no curated source outside tests), resources
-  or settings yet, and native tools run on Linux only, with no routing from pages yet; installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
+  or settings yet, and native tools run on Linux only (5.11 or later: the program host needs
+  `close_range` with `CLOSE_RANGE_CLOEXEC`), with no routing from pages yet; installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
   native run.
 - Tested on Linux only. On Windows the page document's address is
   `http://pluxy-page.localhost/`; neither Windows nor macOS has been run.
@@ -488,6 +540,9 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
   startup without a watcher. It does not check every desktop's tray UI.
 - The tray host is asked about only when the window closes: if it goes away while the app sits
   in the tray, the app stays there with no way back to it but stopping it.
+- Raising the first app's window is Unix only (a Unix socket); where there is none, a second
+  launch exits with an error and the first's window stays as it was. The native test checks that
+  the raised window is shown, not that it has the keyboard focus: that is the desktop's to give.
 - The native test needs the desktop services above, and the pinned AppImage runtime from
   github.com (or a copy in its cache folder), so it does not run offline on a bare machine.
 - Native admission bounds work after a scheme request reaches the handler. They do not bound

@@ -21,12 +21,14 @@ mod command_names;
 pub mod confirmation;
 pub mod conn;
 pub mod device;
+pub mod instance;
 mod key_entry;
 pub mod managed;
 #[cfg(feature = "native-test")]
 mod native_test;
 pub mod pages;
 mod place;
+mod privacy;
 #[cfg(target_os = "linux")]
 pub mod program;
 #[cfg(debug_assertions)]
@@ -220,6 +222,17 @@ fn close_webviews(app: &AppHandle, labels: Vec<String>) -> Vec<String> {
     }
 }
 
+/// Shows the window (a new one if it was closed), for a later launch of the app on this profile,
+/// and says whether it did. On the window's own thread, where the tray's "Open pluxy" runs too.
+fn raise_window(app: &AppHandle) -> bool {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let a = app.clone();
+    let queued = app.run_on_main_thread(move || {
+        let _ = tx.send(open_window(&a).is_ok());
+    });
+    queued.is_ok() && rx.recv_timeout(std::time::Duration::from_secs(15)) == Ok(true)
+}
+
 /// Stops the app's own core, if it runs one, and exits. A local or remote core keeps running.
 fn quit(app: &AppHandle) {
     let st = app.state::<App>();
@@ -362,6 +375,32 @@ fn window_view(app: &AppHandle) -> window::View {
             .close_behavior,
         tray: usable_tray(app).is_ok(),
     }
+}
+
+fn privacy_file(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    Ok(app
+        .path()
+        .app_config_dir()
+        .map_err(|e| e.to_string())?
+        .join(privacy::FILE))
+}
+
+/// Whether privacy mode is on (`privacy.rs`).
+#[tauri::command]
+async fn privacy_get(webview: Webview) -> Result<bool, String> {
+    trusted(&webview)?;
+    Ok(privacy::load(&privacy_file(webview.app_handle())?))
+}
+
+/// Saves privacy mode; only the window's own toggle calls it.
+#[tauri::command]
+async fn privacy_set(webview: Webview, on: bool) -> Result<bool, String> {
+    trusted(&webview)?;
+    // One write at a time, as window_set writes under its store's lock.
+    static SAVING: Mutex<()> = Mutex::new(());
+    let _saving = SAVING.lock().unwrap();
+    privacy::save(&privacy_file(webview.app_handle())?, on)?;
+    Ok(on)
 }
 
 #[tauri::command]
@@ -822,8 +861,14 @@ fn deliver_page(app: &AppHandle, label: &str, generation: &str, msg: Value) -> R
     let callback_label = label.to_string();
     let callback_generation = generation.to_string();
     let callback_msg = serde_json::json!({"type":msg["type"],"data":{"id":msg["data"]["id"],"event":msg["data"]["event"],"error":{"code":msg["data"]["error"]["code"]}}});
+    #[cfg(feature = "native-test")]
+    let sent = msg.clone();
     let result = target
         .eval_with_callback(js, move |result| {
+            #[cfg(feature = "native-test")]
+            if result == "true" {
+                native_test::privacy::delivered(&sent);
+            }
             finish_page_delivery(
                 &callback_app,
                 &callback_label,
@@ -1014,13 +1059,12 @@ fn native_swap(
             return Err("the update was cancelled".to_string());
         }
         swap.verify()?;
-        let spec = program::Spec::from(swap.admitted());
         // On a thread of its own that ends with the start: the tool is held by the host's
         // supervisor thread, never by the thread that started it.
         std::thread::scope(|s| {
             std::thread::Builder::new()
                 .name("pluxy-prog-swap".into())
-                .spawn_scoped(s, || st.programs.prepare(spec))
+                .spawn_scoped(s, || st.programs.prepare(swap.admitted()))
                 .map_err(|e| e.to_string())?
                 .join()
                 .map_err(|_| "the swap's thread failed".to_string())?
@@ -1296,12 +1340,11 @@ async fn device_rollback(webview: Webview, id: String) -> Result<device::View, S
 fn program_resolver(app: AppHandle) -> program::Resolve {
     Box::new(move |id| {
         // Its files are hashed without holding the catalog (`checked_unlocked`).
-        let a = device::admitted_unlocked(
+        device::admitted_unlocked(
             &app.state::<App>().device,
             id,
             &trust::TrustStore::current(),
-        )?;
-        Ok(program::Spec::from(&a))
+        )
     })
 }
 
@@ -1319,6 +1362,12 @@ async fn program_call(
     #[cfg(target_os = "linux")]
     {
         let app = webview.app_handle().clone();
+        // Registered now, before it can wait, so a cancel or the window's closing reaches it.
+        let call = app
+            .state::<App>()
+            .programs
+            .begin_call(ticket.as_deref())
+            .map_err(|e| e.to_string())?;
         tauri::async_runtime::spawn_blocking(move || {
             // On a thread of its own that ends with the call: a tool this call starts is held by
             // the host's supervisor thread, never by the thread that started it.
@@ -1327,7 +1376,7 @@ async fn program_call(
                 .spawn(move || {
                     app.state::<App>()
                         .programs
-                        .call(&package, &op, input, ticket.as_deref())
+                        .run_call(call, &package, &op, input)
                         .map_err(|e| e.to_string())
                 })
                 .map_err(|e| e.to_string())?
@@ -1573,10 +1622,35 @@ pub fn run() {
             window_get,
             window_set,
             window_close,
+            privacy_get,
+            privacy_set,
         ])
         .register_asynchronous_uri_scheme_protocol(pages::SCHEME, page_scheme)
         .register_asynchronous_uri_scheme_protocol(device::ASSET_SCHEME, asset_scheme)
         .setup(|app| {
+            // First, before the core, the tray or any webview: one app per profile. A later launch
+            // has the first show its window, and ends here, having started nothing.
+            let instance =
+                match instance::start(&app.path().app_data_dir()?.join("instance"), instance::WAIT)
+                {
+                    Ok(instance::Start::First(i)) => i,
+                    Ok(instance::Start::Raised) => {
+                        eprintln!("pluxy-app: already running; its window is shown");
+                        std::process::exit(0);
+                    }
+                    Err(e) => {
+                        eprintln!("pluxy-app: {e}");
+                        std::process::exit(1);
+                    }
+                };
+            let raise = app.handle().clone();
+            if let Err(e) = instance.listen(&instance::socket_dirs(), move || raise_window(&raise))
+            {
+                // The lock still keeps a second app out; a later launch is told at once that this
+                // window cannot be raised.
+                eprintln!("pluxy-app: no way to raise this window from a later launch: {e}");
+            }
+            app.manage(instance);
             let config = app.path().app_config_dir()?;
             let startup_store = startup::Store::new(
                 config.clone(),
@@ -1714,6 +1788,9 @@ pub fn run() {
                         .lock()
                         .unwrap()
                         .invalidate();
+                    // Its native tool calls end, so their tools stop when idle.
+                    #[cfg(target_os = "linux")]
+                    app.state::<App>().programs.cancel_all();
                     // Its webviews went with it.
                     app.state::<App>().pages.lock().unwrap().clear();
                     place::forget_all();
@@ -1739,6 +1816,9 @@ pub fn run() {
                 #[cfg(target_os = "linux")]
                 st.programs.stop_all();
                 st.conn.lock().unwrap().stop_core();
+            }
+            if let Some(i) = app.try_state::<instance::Instance>() {
+                i.release();
             }
         }
         _ => {}

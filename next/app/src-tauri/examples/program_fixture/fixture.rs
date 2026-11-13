@@ -16,12 +16,15 @@
 //! `summary` also says its release's version, when it answered (milliseconds since the Unix
 //! epoch) and the calls of unknown outcome the host reported in describe (`reported`).
 //!
-//! At start it starts one child, itself again, which sleeps in its process group until killed, so
-//! the checks can see the host stop the whole group. It exits at the end of its input. A
-//! `fixture.json` beside the manifest makes it misbehave for the unit tests (`Mode`).
+//! At start it starts one child, itself again, which sleeps in its process group. As the contract
+//! asks, it ends that child before it exits at the end of its input and on SIGTERM; one that
+//! crashes or ignores the end of its input leaves it to the host's group kill. A `fixture.json`
+//! beside the manifest makes it misbehave for the unit tests (`Mode`).
 
 use serde_json::{json, Value};
 use std::io::{self, Read, Write};
+#[cfg(unix)]
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Duration;
 
 /// The variable the fixture's child is started with, and nothing else.
@@ -46,6 +49,25 @@ struct Mode {
     stderr: Vec<String>,
     /// Answers `summary` with this output instead.
     output: Option<Value>,
+    /// Leaves its process group for the app's, once its child has started.
+    leave_group: bool,
+    /// Adds this many bytes to `summary`'s output.
+    pad: Option<usize>,
+    /// Sends a result before hello.
+    before_hello: bool,
+    /// Sends a frame of an unknown type before `summary`'s result.
+    unknown_frame: bool,
+    /// Says hello with these contract versions instead.
+    hello_versions: Option<Value>,
+    /// Describes this state version instead of the manifest's.
+    state_version: Option<Value>,
+    /// Answers `summary` with an error with this message.
+    error_message: Option<String>,
+    /// Writes this many lines to stderr at start, then waits a little over a second before the
+    /// `stderr` lines.
+    stderr_burst: usize,
+    /// Exits with status 3 right after it has described itself.
+    exit_after_describe: bool,
 }
 
 impl Mode {
@@ -73,6 +95,15 @@ impl Mode {
                 })
                 .unwrap_or_default(),
             output: v.get("output").cloned(),
+            leave_group: v["leave_group"] == true,
+            pad: v["pad"].as_u64().map(|n| n as usize),
+            before_hello: v["before_hello"] == true,
+            unknown_frame: v["unknown_frame"] == true,
+            hello_versions: v.get("hello_versions").cloned(),
+            state_version: v.get("state_version").cloned(),
+            error_message: s("error_message"),
+            stderr_burst: v["stderr_burst"].as_u64().unwrap_or_default() as usize,
+            exit_after_describe: v["exit_after_describe"] == true,
         }
     }
 }
@@ -121,6 +152,45 @@ fn sleep_forever() -> ! {
     }
 }
 
+/// Its child's process ID, for the SIGTERM handler.
+#[cfg(unix)]
+static CHILD_PID: AtomicI32 = AtomicI32::new(0);
+
+/// On SIGTERM (the parent-death signal) it ends its child, then exits.
+#[cfg(unix)]
+extern "C" fn on_term(_: libc::c_int) {
+    let child = CHILD_PID.load(Ordering::SeqCst);
+    unsafe {
+        if child > 0 {
+            libc::kill(child, libc::SIGKILL);
+        }
+        libc::_exit(143);
+    }
+}
+
+/// Ends its child and exits: the end of its input.
+fn exit(child: &mut Option<std::process::Child>) -> ! {
+    if let Some(c) = child {
+        let _ = c.kill();
+        let _ = c.wait();
+    }
+    std::process::exit(0);
+}
+
+/// The parent-death signal it was given, if any.
+fn pdeathsig() -> i64 {
+    #[cfg(target_os = "linux")]
+    {
+        let mut sig: libc::c_int = 0;
+        unsafe { libc::prctl(libc::PR_GET_PDEATHSIG, &mut sig as *mut libc::c_int) };
+        i64::from(sig)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        0
+    }
+}
+
 /// Runs the fixture: as its child when started with `CHILD`, else as the tool.
 pub fn main() -> ! {
     if std::env::var_os(CHILD).is_some() {
@@ -131,7 +201,7 @@ pub fn main() -> ! {
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or(Value::Null);
-    let child = std::env::current_exe()
+    let mut child_process = std::env::current_exe()
         .and_then(|exe| {
             std::process::Command::new(exe)
                 .env_clear()
@@ -141,10 +211,24 @@ pub fn main() -> ! {
                 .stderr(std::process::Stdio::null())
                 .spawn()
         })
-        .map(|c| c.id())
         .ok();
+    let child = child_process.as_ref().map(|c| c.id());
+    #[cfg(unix)]
+    unsafe {
+        CHILD_PID.store(child.unwrap_or_default() as i32, Ordering::SeqCst);
+        libc::signal(libc::SIGTERM, on_term as *const () as libc::sighandler_t);
+        if mode.leave_group {
+            libc::setpgid(0, libc::getpgid(libc::getppid()));
+        }
+    }
     {
         let mut err = io::stderr().lock();
+        for i in 0..mode.stderr_burst {
+            let _ = writeln!(err, "burst {i}");
+        }
+        if mode.stderr_burst > 0 {
+            std::thread::sleep(Duration::from_millis(1100));
+        }
         for line in &mode.stderr {
             let _ = writeln!(err, "{line}");
         }
@@ -153,14 +237,23 @@ pub fn main() -> ! {
     let mut output = io::stdout().lock();
     if mode.silent {
         while read_frame(&mut input).is_some() {}
-        std::process::exit(0);
+        exit(&mut child_process);
+    }
+    if mode.before_hello {
+        write_frame(
+            &mut output,
+            &json!({"type": "result", "id": "c-0", "output": {}}),
+        );
     }
     let env = |k: &str| std::env::var(k).unwrap_or_default();
-    let versions: Vec<i64> = env("PLUXY_APP_CONTRACT_VERSIONS")
-        .split(',')
-        .filter_map(|v| v.trim().parse().ok())
-        .filter(|v| *v == 0)
-        .collect();
+    let versions = mode.hello_versions.clone().unwrap_or_else(|| {
+        let v: Vec<i64> = env("PLUXY_APP_CONTRACT_VERSIONS")
+            .split(',')
+            .filter_map(|v| v.trim().parse().ok())
+            .filter(|v| *v == 0)
+            .collect();
+        json!(v)
+    });
     write_frame(
         &mut output,
         &json!({
@@ -191,11 +284,17 @@ pub fn main() -> ! {
                     list.push(json!({"id": extra, "description": "Not in the manifest",
                         "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}));
                 }
+                let mut state = manifest["app"]["state"].clone();
+                if let Some(v) = &mode.state_version {
+                    state["version"] = v.clone();
+                }
                 write_frame(
                     &mut output,
-                    &json!({"type": "result", "id": id, "operations": ops,
-                        "state": manifest["app"]["state"]}),
+                    &json!({"type": "result", "id": id, "operations": ops, "state": state}),
                 );
+                if mode.exit_after_describe {
+                    std::process::exit(3);
+                }
             }
             (Some("call"), Some(op)) => {
                 calls += 1;
@@ -203,6 +302,10 @@ pub fn main() -> ! {
                     std::process::exit(3);
                 }
                 match op {
+                    "summary" if mode.error_message.is_some() => write_frame(
+                        &mut output,
+                        &error(&id, "internal", mode.error_message.as_deref().unwrap_or("")),
+                    ),
                     "summary" => {
                         let items: Vec<&str> = f["input"]["items"]
                             .as_array()
@@ -221,7 +324,7 @@ pub fn main() -> ! {
                         let pgid = unsafe { libc::getpgrp() };
                         #[cfg(not(unix))]
                         let pgid = 0;
-                        let out = mode.output.clone().unwrap_or_else(|| {
+                        let mut out = mode.output.clone().unwrap_or_else(|| {
                             json!({
                                 "count": items.len(),
                                 "longest": longest,
@@ -235,8 +338,17 @@ pub fn main() -> ! {
                                 "version": version,
                                 "at": at(),
                                 "reported": reported,
+                                "pdeathsig": pdeathsig(),
+                                "arg0": std::env::args_os().next()
+                                    .map(|a| a.to_string_lossy().into_owned()),
                             })
                         });
+                        if let Some(n) = mode.pad {
+                            out["pad"] = json!("x".repeat(n));
+                        }
+                        if mode.unknown_frame {
+                            write_frame(&mut output, &json!({"type": "bogus", "id": id}));
+                        }
                         write_frame(
                             &mut output,
                             &json!({"type": "result", "id": id, "output": out}),
@@ -278,5 +390,5 @@ pub fn main() -> ! {
     if mode.ignore_eof {
         sleep_forever();
     }
-    std::process::exit(0);
+    exit(&mut child_process);
 }

@@ -122,9 +122,22 @@ fn release(mode: Value, version: &str, generation: u64) -> Spec {
     }
 }
 
-fn host_for(spec: Spec, limits: Limits) -> Host {
-    Host::new(
+/// A package folder, removed with the host that holds it.
+struct Folder(PathBuf);
+
+impl Drop for Folder {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A host whose record for ID is spec; each start first runs before, given the ID.
+fn host_gated(spec: Spec, limits: Limits, before: impl Fn(&str) + Send + Sync + 'static) -> Host {
+    let folder = Folder(spec.dir.clone());
+    Host::for_tests(
         Box::new(move |id| {
+            let _ = &folder;
+            before(id);
             if id == ID {
                 Ok(spec.clone())
             } else {
@@ -133,6 +146,22 @@ fn host_for(spec: Spec, limits: Limits) -> Host {
         }),
         limits,
     )
+}
+
+fn host_for(spec: Spec, limits: Limits) -> Host {
+    host_gated(spec, limits, |_| {})
+}
+
+/// A host whose starts each wait for a message on the sender it gives.
+fn gated(mode: Value) -> (Arc<Host>, mpsc::Sender<()>) {
+    let (tx, rx) = mpsc::channel::<()>();
+    let rx = Mutex::new(rx);
+    let h = host_gated(package(mode), fast(), move |id| {
+        if id == ID {
+            let _ = rx.lock().unwrap().recv();
+        }
+    });
+    (Arc::new(h), tx)
 }
 
 fn host(mode: Value) -> Host {
@@ -160,6 +189,22 @@ fn until(what: &str, secs: u64, f: impl Fn() -> bool) {
 
 fn pids(v: &Value) -> (u64, u64) {
     (v["pid"].as_u64().unwrap(), v["child"].as_u64().unwrap())
+}
+
+/// Its result, once it ends within secs.
+fn joined<T>(t: std::thread::JoinHandle<T>, secs: u64, what: &str) -> T {
+    until(what, secs, || t.is_finished());
+    t.join().unwrap()
+}
+
+fn spawn_summary(h: &Arc<Host>) -> std::thread::JoinHandle<Result<Value, CallError>> {
+    let h = Arc::clone(h);
+    std::thread::spawn(move || summary(&h, &[]))
+}
+
+/// The tool's current run, to see its turn.
+fn run_of(h: &Host) -> Option<Arc<Run>> {
+    h.0.slots().get(ID).and_then(|s| s.run.clone())
 }
 
 #[test]
@@ -202,7 +247,7 @@ fn concurrent_calls_start_one_tool_with_only_the_contract() {
     assert_eq!((s.state, s.pid), ("ready", Some(pid as u32)));
     assert!(alive(child));
     h.stop_all();
-    // Reaped; the child got SIGKILL with its group and goes a moment later.
+    // Reaped; it ended its child as it exited.
     assert!(!alive(pid));
     until("its child to go", 5, || !alive(child));
     assert_eq!(h.status(ID).state, "stopped");
@@ -320,7 +365,8 @@ fn calls_are_checked_before_they_reach_the_tool() {
             .code,
         "invalid_request"
     );
-    // None of them reached it: its first call is this one.
+    // None of them started it, or reached it: its first call is this one.
+    assert_eq!(h.status(ID).pid, None, "a refused call started the tool");
     assert_eq!(summary(&h, &[]).unwrap()["calls"], 1);
     h.stop_all();
 }
@@ -351,7 +397,9 @@ fn calls_wait_their_turn_and_are_bounded() {
             usize::from(turn.0) + turn.1 == MAX_PENDING
         })
     });
-    let over = h.call(ID, "wait", json!({}), None).unwrap_err();
+    let h2 = Arc::clone(&h);
+    let over = std::thread::spawn(move || h2.call(ID, "wait", json!({}), Some("q-over")));
+    let over = joined(over, 5, "the call over the bound to be refused").unwrap_err();
     assert_eq!(over.code, "unavailable", "{over}");
     for i in 0..MAX_PENDING {
         h.cancel(&format!("q-{i}")).unwrap();
@@ -367,6 +415,8 @@ fn a_mismatched_hello_or_describe_is_incompatible_until_stopped() {
     for mode in [
         json!({"hello_sha256": "cd".repeat(32)}),
         json!({"extra_operation": "more"}),
+        json!({"hello_versions": [7]}),
+        json!({"state_version": 3}),
     ] {
         let h = host(mode.clone());
         let e = summary(&h, &[]).unwrap_err();
@@ -480,6 +530,7 @@ fn its_log_is_bounded_escaped_and_redacted() {
         "plain",
         format!("holds {SECRET} inside"),
         "colour \u{1b}[31m",
+        "bidi \u{202e}x",
         long,
         "after",
     ]}));
@@ -493,7 +544,8 @@ fn its_log_is_bounded_escaped_and_redacted() {
         vec![
             "plain".to_string(),
             "holds [redacted] inside".into(),
-            "colour \\u{1b}[31m".into(),
+            "colour \\u001b[31m".into(),
+            "bidi \\u202ex".into(),
             format!("(a line longer than {MAX_LOG_LINE} bytes, not logged)"),
             "after".into(),
         ]
@@ -704,7 +756,7 @@ fn a_swap_drains_the_old_release_and_serializes_calls_across_releases() {
     let held = h.lease(ID).unwrap();
 
     // Prepared: started and described, but no call reaches it and the old one serves.
-    let p = h.prepare(v2).unwrap();
+    let p = h.prepare_spec(v2).unwrap();
     let new = u64::from(p.run.pid().unwrap());
     assert!(alive(new));
     let slow = call_in_thread(&h, "slow", json!({"ms": 1500}));
@@ -757,7 +809,7 @@ fn a_failed_or_abandoned_candidate_leaves_the_old_release_serving() {
     // Incompatible: refused, reaped, and the old release serves on.
     let mut bad = release(json!({"extra_operation": "more"}), "1.2.0", 3);
     bad.sha256 = "ab".repeat(32);
-    let e = h.prepare(bad).err().expect("refused");
+    let e = h.prepare_spec(bad).err().expect("refused");
     assert!(e.message.contains("incompatible"), "{e}");
     let s = h.status(ID);
     assert_eq!(
@@ -767,7 +819,7 @@ fn a_failed_or_abandoned_candidate_leaves_the_old_release_serving() {
     // Silent until its startup limit: refused the same way.
     let t = Instant::now();
     let e = h
-        .prepare(release(json!({"silent": true}), "1.2.0", 3))
+        .prepare_spec(release(json!({"silent": true}), "1.2.0", 3))
         .err()
         .expect("refused");
     assert!(
@@ -775,12 +827,12 @@ fn a_failed_or_abandoned_candidate_leaves_the_old_release_serving() {
         "{e}"
     );
     // Abandoned (dropped without a switch): stopped.
-    let p = h.prepare(release(Value::Null, "1.1.0", 2)).unwrap();
+    let p = h.prepare_spec(release(Value::Null, "1.1.0", 2)).unwrap();
     let cand = u64::from(p.run.pid().unwrap());
     drop(p);
     until("the abandoned candidate to go", 5, || !alive(cand));
     // Stopped by a package change before its switch: the switch is refused.
-    let p = h.prepare(release(Value::Null, "1.1.0", 2)).unwrap();
+    let p = h.prepare_spec(release(Value::Null, "1.1.0", 2)).unwrap();
     let cand = u64::from(p.run.pid().unwrap());
     h.stop(ID);
     let e = h.switch(p).unwrap_err();
@@ -806,7 +858,7 @@ fn a_draining_release_is_stopped_at_the_drain_limit() {
     let (old, _) = pids(&summary(&h, &[]).unwrap());
     let waiting = call_in_thread(&h, "wait", json!({}));
     until("the wait call", 5, || h.status(ID).state == "active");
-    let p = h.prepare(release(Value::Null, "1.1.0", 2)).unwrap();
+    let p = h.prepare_spec(release(Value::Null, "1.1.0", 2)).unwrap();
     let t = Instant::now();
     h.switch(p).unwrap();
     let e = waiting.join().unwrap().unwrap_err();
@@ -820,5 +872,399 @@ fn a_draining_release_is_stopped_at_the_drain_limit() {
     // The release serving now is not crashed by it.
     assert_eq!(h.status(ID).state, "ready");
     assert_eq!(summary(&h, &[]).unwrap()["version"], "1.1.0");
+    h.stop_all();
+}
+
+#[test]
+fn after_stop_all_no_call_starts_a_tool() {
+    let h = Arc::new(host(json!({"ignore_eof": true})));
+    let (pid, child) = pids(&summary(&h, &[]).unwrap());
+    // A call waiting for the tool to stop, to start it again.
+    h.stop(ID);
+    assert_eq!(h.status(ID).state, "draining");
+    let waiting = spawn_summary(&h);
+    until("the call to wait", 5, || {
+        h.0.slots().get(ID).is_some_and(|s| s.waiting == 1)
+    });
+    h.stop_all();
+    let e = joined(waiting, 5, "the waiting call").unwrap_err();
+    assert_eq!(e.code, "extension_unavailable", "{e}");
+    let e = summary(&h, &[]).unwrap_err();
+    assert!(e.message.contains("quitting"), "{e}");
+    assert_eq!(h.status(ID).pid, None);
+    assert!(!alive(pid));
+    until("its child to go", 5, || !alive(child));
+}
+
+#[test]
+fn cancel_all_ends_every_call_and_the_tool_stops_when_idle() {
+    let h = Arc::new(host(Value::Null));
+    let (pid, _) = pids(&summary(&h, &[]).unwrap());
+    let calls: Vec<_> = [None, Some("all-1")]
+        .into_iter()
+        .map(|t| {
+            let h = Arc::clone(&h);
+            std::thread::spawn(move || h.call(ID, "wait", json!({}), t))
+        })
+        .collect();
+    until("the wait calls", 5, || {
+        run_of(&h).is_some_and(|r| {
+            let turn = r.gate.turn.lock().unwrap();
+            turn.0 && turn.1 == 1
+        })
+    });
+    h.cancel_all();
+    for c in calls {
+        let e = joined(c, 5, "the cancelled call").unwrap_err();
+        assert_eq!(e.code, "cancelled", "{e}");
+    }
+    until("the idle stop", 10, || h.status(ID).state == "idle");
+    assert!(!alive(pid));
+}
+
+#[test]
+fn a_tool_that_leaves_its_group_and_ignores_the_end_of_its_input_is_killed() {
+    let h = host(json!({"ignore_eof": true, "leave_group": true}));
+    let out = summary(&h, &[]).unwrap();
+    let (pid, child) = pids(&out);
+    assert_ne!(out["pgid"], pid, "it did not leave its group");
+    h.stop(ID);
+    until("the kill", 10, || !alive(pid) && !alive(child));
+    until("the reap", 5, || h.status(ID).state == "stopped");
+}
+
+#[test]
+fn calls_waiting_on_a_failed_start_get_its_error() {
+    let starts = Arc::new(AtomicU64::new(0));
+    let counted = Arc::clone(&starts);
+    let h = Arc::new(host_gated(
+        package(json!({"silent": true})),
+        fast(),
+        move |_| {
+            counted.fetch_add(1, Ordering::SeqCst);
+        },
+    ));
+    let first = spawn_summary(&h);
+    until("the start", 5, || h.status(ID).state == "starting");
+    let calls: Vec<_> = (0..2).map(|_| spawn_summary(&h)).collect();
+    until("the calls to wait", 5, || {
+        h.0.slots().get(ID).is_some_and(|s| s.waiting == 2)
+    });
+    for c in std::iter::once(first).chain(calls) {
+        let e = c.join().unwrap().unwrap_err();
+        assert!(e.message.contains("did not say hello"), "{e}");
+    }
+    // One start, not one after another.
+    assert_eq!(starts.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn calls_waiting_for_a_start_are_bounded() {
+    let (h, go) = gated(Value::Null);
+    let first = spawn_summary(&h);
+    until("the start", 5, || h.status(ID).state == "starting");
+    // Leases: calls would also meet the bound on calls waiting their turn.
+    let lease = |h: &Arc<Host>| {
+        let h = Arc::clone(h);
+        std::thread::spawn(move || h.lease(ID).map(|l| l.run.pid()))
+    };
+    let waiting: Vec<_> = (0..MAX_PENDING).map(|_| lease(&h)).collect();
+    until("the calls to wait", 5, || {
+        h.0.slots()
+            .get(ID)
+            .is_some_and(|s| s.waiting == MAX_PENDING)
+    });
+    let over = joined(lease(&h), 5, "the call over the bound").unwrap_err();
+    assert_eq!(over.code, "unavailable", "{over}");
+    go.send(()).unwrap();
+    let (pid, _) = pids(&joined(first, 5, "the first call").unwrap());
+    for w in waiting {
+        assert_eq!(joined(w, 5, "a waiting call").unwrap(), Some(pid as u32));
+    }
+    h.stop_all();
+}
+
+#[test]
+fn a_stop_while_its_record_is_read_starts_nothing() {
+    let (h, go) = gated(Value::Null);
+    let call = spawn_summary(&h);
+    until("the start", 5, || h.status(ID).state == "starting");
+    h.stop(ID);
+    go.send(()).unwrap();
+    let e = joined(call, 5, "the call").unwrap_err();
+    assert!(e.message.contains("stopped while it started"), "{e}");
+    let s = h.status(ID);
+    assert_eq!((s.state, s.pid), ("stopped", None));
+    go.send(()).unwrap();
+    summary(&h, &[]).unwrap();
+    h.stop_all();
+}
+
+#[test]
+fn the_tool_gets_its_name_the_parent_death_signal_and_no_inherited_descriptor() {
+    // A descriptor the app leaves inheritable, as a library might: dup clears close-on-exec.
+    let fd = unsafe { libc::dup(2) };
+    assert!(fd > 2);
+    let spec = package(Value::Null);
+    let program = spec.program.clone();
+    let h = host_for(spec, fast());
+    let out = summary(&h, &[]);
+    unsafe { libc::close(fd) };
+    let out = out.unwrap();
+    assert_eq!(out["fds"], json!([0, 1, 2]));
+    assert_eq!(out["pdeathsig"], libc::SIGTERM);
+    assert_eq!(out["arg0"], json!(program));
+    h.stop_all();
+}
+
+#[test]
+fn a_frame_against_the_contract_breaks_the_pipe() {
+    // Just under the frame limit is a frame.
+    let h = host(json!({"pad": MAX_FRAME - 1024}));
+    summary(&h, &[]).unwrap();
+    h.stop_all();
+    for (mode, why) in [
+        (json!({"pad": MAX_FRAME}), "the limit is"),
+        (json!({"unknown_frame": true}), "unknown type"),
+    ] {
+        let h = host(mode.clone());
+        let e = summary(&h, &[]).unwrap_err();
+        assert_eq!(e.code, "extension_crashed", "{mode}: {e}");
+        until("the stop", 5, || h.status(ID).state == "crashed");
+        let last = h.status(ID).last.unwrap();
+        assert!(last.contains(why), "{mode}: {last}");
+    }
+    // A reply before hello is not taken for one: the tool is crashed, not incompatible.
+    let h = host(json!({"before_hello": true}));
+    let e = summary(&h, &[]).unwrap_err();
+    assert!(e.message.contains("before hello"), "{e}");
+    assert_eq!(h.status(ID).state, "crashed", "{e}");
+}
+
+#[test]
+fn a_call_waiting_its_turn_ends_when_the_tool_stops() {
+    let h = Arc::new(host(json!({"ignore_eof": true})));
+    summary(&h, &[]).unwrap();
+    let h2 = Arc::clone(&h);
+    let first = std::thread::spawn(move || h2.call(ID, "wait", json!({}), None));
+    until("the wait call", 5, || {
+        run_of(&h).is_some_and(|r| r.gate.turn.lock().unwrap().0)
+    });
+    let second = spawn_summary(&h);
+    until("the second call to wait its turn", 5, || {
+        run_of(&h).is_some_and(|r| r.gate.turn.lock().unwrap().1 == 1)
+    });
+    h.stop(ID);
+    let e = joined(second, 5, "the waiting call").unwrap_err();
+    assert_eq!(e.code, "extension_unavailable", "{e}");
+    // It did not wait for the call ahead of it, which ends only with the kill.
+    assert!(!first.is_finished());
+    assert_eq!(
+        joined(first, 5, "the first call").unwrap_err().code,
+        "extension_crashed"
+    );
+}
+
+#[test]
+fn a_call_after_an_unanswered_cancel_waits_for_a_new_tool() {
+    let h = Arc::new(host(json!({"ignore_cancel": true})));
+    let (pid, _) = pids(&summary(&h, &[]).unwrap());
+    let h2 = Arc::clone(&h);
+    let waiting = std::thread::spawn(move || h2.call(ID, "wait", json!({}), Some("w-3")));
+    until("the wait call", 5, || h.status(ID).state == "active");
+    h.cancel("w-3").unwrap();
+    waiting.join().unwrap().unwrap_err();
+    // At once, while the old one is still being stopped: it gets no lease on that one, but waits
+    // for it to go. An unanswered cancel is a crash, so that call meets the backoff.
+    let e = summary(&h, &[]).unwrap_err();
+    assert!(e.message.contains("may restart it in"), "{e}");
+    until("the backoff", 5, || h.status(ID).retry_in_ms.is_none());
+    let again = summary(&h, &[]).unwrap();
+    assert_ne!(again["pid"], pid);
+    h.stop_all();
+}
+
+#[test]
+fn what_a_tool_says_reaches_the_caller_escaped() {
+    let h = host(json!({"error_message": "a\u{202e}b\u{1b}c"}));
+    let e = summary(&h, &[]).unwrap_err();
+    assert_eq!(
+        (e.code.as_str(), e.message.as_str()),
+        ("internal", "a\\u202eb\\u001bc")
+    );
+    h.stop_all();
+    let h = host(json!({"hello_sha256": "\u{202e}"}));
+    let e = summary(&h, &[]).unwrap_err();
+    let last = h.status(ID).last.unwrap();
+    for m in [&e.message, &last] {
+        assert!(m.contains("\\u202e") && !m.contains('\u{202e}'), "{m}");
+    }
+}
+
+#[test]
+fn its_log_rate_is_bounded() {
+    let h = host(json!({"stderr_burst": 500, "stderr": ["after"]}));
+    summary(&h, &[]).unwrap();
+    until("the log", 5, || {
+        h.status(ID).log.iter().any(|l| l == "after")
+    });
+    let log = h.status(ID).log;
+    let n = log.len();
+    // The tail keeps every line; only the log leaves lines out.
+    assert_eq!(
+        log[n - 3..],
+        [
+            "burst 499".to_string(),
+            format!(
+                "({} lines left out: more than {LOG_RATE} a second)",
+                500 - LOG_RATE
+            ),
+            "after".into(),
+        ]
+    );
+    h.stop_all();
+}
+
+#[test]
+fn a_crash_after_a_burst_keeps_its_last_words_and_the_count() {
+    let mut lines: Vec<String> = (0..500).map(|i| format!("burst {i}")).collect();
+    lines.push("last words".into());
+    let h = host(json!({"stderr": lines, "crash_on": "summary"}));
+    summary(&h, &[]).unwrap_err();
+    until("the crash", 5, || h.status(ID).state == "crashed");
+    let s = h.status(ID);
+    let n = s.log.len();
+    assert_eq!(
+        s.log[n - 2..],
+        [
+            "last words".to_string(),
+            format!(
+                "({} lines left out: more than {LOG_RATE} a second)",
+                501 - LOG_RATE
+            ),
+        ],
+        "{s:?}"
+    );
+    assert!(
+        s.last.as_deref().unwrap().ends_with(": last words"),
+        "{s:?}"
+    );
+}
+
+#[test]
+fn a_call_waiting_for_a_start_is_cancelled_at_once() {
+    let (h, go) = gated(Value::Null);
+    let first = spawn_summary(&h);
+    until("the start", 5, || h.status(ID).state == "starting");
+    let h2 = Arc::clone(&h);
+    let ticketed =
+        std::thread::spawn(move || h2.call(ID, "summary", json!({"items": []}), Some("s-1")));
+    let plain = spawn_summary(&h);
+    until("the calls to wait", 5, || {
+        h.0.slots().get(ID).is_some_and(|s| s.waiting == 2)
+    });
+    h.cancel("s-1").unwrap();
+    let e = joined(ticketed, 5, "the cancelled call").unwrap_err();
+    assert_eq!(e.code, "cancelled", "{e}");
+    h.cancel_all();
+    let e = joined(plain, 5, "the call cancel_all reached").unwrap_err();
+    assert_eq!(e.code, "cancelled", "{e}");
+    // The start goes on for the call that made it, which cancel_all reached too.
+    go.send(()).unwrap();
+    let e = joined(first, 5, "the first call").unwrap_err();
+    assert_eq!(e.code, "cancelled", "{e}");
+    h.stop_all();
+}
+
+#[test]
+fn a_call_begun_before_cancel_all_never_starts_its_tool() {
+    let h = host(Value::Null);
+    let call = h.begin_call(None).unwrap();
+    h.cancel_all();
+    let e = h
+        .run_call(call, ID, "summary", json!({"items": []}))
+        .unwrap_err();
+    assert_eq!(e.code, "cancelled", "{e}");
+    assert_eq!(h.status(ID).pid, None);
+    assert!(h.0.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_tool_that_exits_after_describe_backs_off_and_is_quarantined() {
+    // Each start describes, then the tool exits: without a backoff, every call restarted it.
+    let h = host(json!({"exit_after_describe": true}));
+    for n in 1..=5u32 {
+        summary(&h, &[]).unwrap_err();
+        until("the exit", 5, || {
+            let s = h.status(ID);
+            s.pid.is_none() && s.crashes == n
+        });
+        if n == 5 {
+            break;
+        }
+        // During the backoff a call is refused and starts nothing.
+        let wait = retry_in(&h);
+        let e = summary(&h, &[]).unwrap_err();
+        assert!(e.message.contains("may restart it in"), "{e}");
+        assert_eq!((h.status(ID).pid, h.status(ID).crashes), (None, n));
+        std::thread::sleep(wait + Duration::from_millis(50));
+    }
+    let e = summary(&h, &[]).unwrap_err();
+    assert!(e.message.contains("quarantined after 5 crashes"), "{e}");
+    assert_eq!(h.status(ID).pid, None);
+    h.stop_all();
+}
+
+#[test]
+fn after_stop_all_no_candidate_starts_and_a_prepared_one_is_reaped() {
+    let h = host(Value::Null);
+    summary(&h, &[]).unwrap();
+    let p = h.prepare_spec(release(Value::Null, "1.1.0", 2)).unwrap();
+    let candidate = u64::from(p.run.pid().unwrap());
+    h.stop_all();
+    assert!(!alive(candidate));
+    let e = h.switch(p).unwrap_err();
+    assert_eq!(e.code, "extension_unavailable", "{e}");
+    let e = h
+        .prepare_spec(release(Value::Null, "1.1.0", 3))
+        .err()
+        .expect("refused");
+    assert!(e.message.contains("quitting"), "{e}");
+    let slots = h.0.slots();
+    let slot = &slots[ID];
+    assert!(slot.run.is_none() && slot.candidate.is_none() && slot.old.is_empty());
+}
+
+#[test]
+fn cancel_all_reaches_a_call_on_a_draining_release() {
+    let h = Arc::new(host(Value::Null));
+    let (old, _) = pids(&summary(&h, &[]).unwrap());
+    let waiting = call_in_thread(&h, "wait", json!({}));
+    until("the wait call", 5, || h.status(ID).state == "active");
+    let p = h.prepare_spec(release(Value::Null, "1.1.0", 2)).unwrap();
+    h.switch(p).unwrap();
+    assert_eq!(h.status(ID).draining.len(), 1);
+    h.cancel_all();
+    let e = joined(waiting, 5, "the wait call").unwrap_err();
+    assert!(e.code == "cancelled" && !e.unknown, "{e}");
+    until("the old release to go", 5, || {
+        !alive(old) && h.status(ID).draining.is_empty()
+    });
+    assert_eq!(summary(&h, &[]).unwrap()["version"], "1.1.0");
+    h.stop_all();
+}
+
+#[test]
+fn what_a_candidate_says_reaches_the_caller_escaped() {
+    let h = host(Value::Null);
+    summary(&h, &[]).unwrap();
+    let e = h
+        .prepare_spec(release(json!({"hello_sha256": "\u{202e}"}), "1.1.0", 2))
+        .err()
+        .expect("refused");
+    assert!(
+        e.message.contains("\\u202e") && !e.message.contains('\u{202e}'),
+        "{e}"
+    );
     h.stop_all();
 }
