@@ -248,7 +248,30 @@ func TestRedactAndRestoreTimeGrowsWithSize(t *testing.T) {
 			return []byte(b.String())
 		}
 	}
+	// Provider entries without names, which Restore pairs by their secrets: all with the same key,
+	// and with that key and a header secret of their own (n secrets in all). Those with the key
+	// alone are a quarter as many as n, so a pairing slower than linear fails the test in
+	// seconds, not minutes.
+	sharedKey := func(header bool) func(n int) []byte {
+		return func(n int) []byte {
+			var b strings.Builder
+			b.WriteString("codex-api-key:\n")
+			entries := n / 4
+			if header {
+				entries = n / 2
+			}
+			for i := range entries {
+				fmt.Fprintf(&b, "  - api-key: \"fake-shared-key-000\"\n    base-url: \"https://e%06d.example/v1\"\n", i)
+				if header {
+					fmt.Fprintf(&b, "    headers:\n      Authorization: \"Bearer fake-own-%06d\"\n", i)
+				}
+			}
+			return []byte(b.String())
+		}
+	}
 	layouts := []layout{
+		{"config.yaml entries sharing a key", true, sharedKey(false)},
+		{"config.yaml entries sharing a key, each with a header of its own", true, sharedKey(true)},
 		{"json", false, func(n int) []byte {
 			var b strings.Builder
 			b.WriteString(`{"client_keys": [`)

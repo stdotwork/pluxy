@@ -1207,23 +1207,80 @@ func pairItems(edited, current *yaml.Node, marks map[*yaml.Node]string, cur curR
 			}
 		})
 	}
-	candidates := map[int][]int{}
+	// Items that hold the same placeholders at the same keys have the same candidates, so they
+	// are paired as a group, its candidates found once, from the current items that hold its
+	// rarest mark: many entries that share a key cost no more than reading them. Each group takes
+	// free candidates first, the groups that need most before the others; an item left over then
+	// looks for an augmenting path (Kuhn's algorithm), skipping a group that found none in this
+	// search, and a group that found none once never finds one later.
+	type group struct {
+		need   []mark
+		cands  []int // the items of current, not paired by name, that hold each of need
+		items  []int // the items of edited that hold need
+		failed int   // the search in which the group found no item, plus one
+		dead   bool  // a search found no item for it: none ever will
+	}
+	groups := map[string]*group{}
+	var order []*group
+	groupOf := map[int]*group{}
 	for _, i := range rest {
 		var need []mark
-		eachMark(edited.Content[i], true, marks, func(at, p string) { need = append(need, mark{at, p}) })
+		in := map[mark]bool{}
+		eachMark(edited.Content[i], true, marks, func(at, p string) {
+			if m := (mark{at, p}); !in[m] {
+				in[m] = true
+				need = append(need, m)
+			}
+		})
 		if len(need) == 0 {
 			continue
 		}
-		for _, j := range held[need[0]] {
-			if !slices.ContainsFunc(need, func(m mark) bool { return !has[j][m] }) {
-				candidates[i] = append(candidates[i], j)
+		slices.SortFunc(need, func(a, b mark) int { return cmp.Or(cmp.Compare(a.at, b.at), cmp.Compare(a.placeholder, b.placeholder)) })
+		var key strings.Builder
+		for _, m := range need {
+			key.WriteString(strconv.Quote(m.at) + strconv.Quote(m.placeholder))
+		}
+		g := groups[key.String()]
+		if g == nil {
+			g = &group{need: need}
+			rarest := need[0]
+			for _, m := range need[1:] {
+				if len(held[m]) < len(held[rarest]) {
+					rarest = m
+				}
 			}
+			for _, j := range held[rarest] {
+				if !slices.ContainsFunc(need, func(m mark) bool { return !has[j][m] }) {
+					g.cands = append(g.cands, j)
+				}
+			}
+			groups[key.String()] = g
+			order = append(order, g)
+		}
+		g.items = append(g.items, i)
+		groupOf[i] = g
+	}
+	slices.SortStableFunc(order, func(a, b *group) int { return len(b.need) - len(a.need) })
+	for _, g := range order {
+		next := 0
+		for _, i := range g.items {
+			for next < len(g.cands) && owner[g.cands[next]] >= 0 {
+				next++
+			}
+			if next == len(g.cands) {
+				break
+			}
+			owner[g.cands[next]], out[i] = i, g.cands[next]
 		}
 	}
 	seen := make([]int, len(current.Content)) // the search that last looked at each item, plus one
 	var take func(i, search int) bool
 	take = func(i, search int) bool {
-		for _, j := range candidates[i] {
+		g := groupOf[i]
+		if g.failed == search {
+			return false
+		}
+		for _, j := range g.cands {
 			if seen[j] == search {
 				continue
 			}
@@ -1233,10 +1290,17 @@ func pairItems(edited, current *yaml.Node, marks map[*yaml.Node]string, cur curR
 				return true
 			}
 		}
+		g.failed = search
 		return false
 	}
-	for search, i := range rest {
-		take(i, search+1)
+	search := 0
+	for _, g := range order {
+		for _, i := range g.items {
+			if out[i] < 0 && !g.dead {
+				search++
+				g.dead = !take(i, search)
+			}
+		}
 	}
 	return out
 }
