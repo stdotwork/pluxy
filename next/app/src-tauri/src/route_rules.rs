@@ -227,7 +227,7 @@ mod tests {
         // The control: the window's direct call keeps the remembered approval.
         assert_eq!(preparation(&[Hop::Main]), Preparation::Main);
         // A page's chain asks fresh, with or without tool hops.
-        assert_eq!(preparation(&[page.clone()]), Preparation::Page);
+        assert_eq!(preparation(std::slice::from_ref(&page)), Preparation::Page);
         assert_eq!(preparation(&[page, tool("pluxy/relay")]), Preparation::Page);
         // A tool hop after the window makes it an import, at any depth.
         assert_eq!(
