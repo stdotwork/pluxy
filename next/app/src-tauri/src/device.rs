@@ -904,6 +904,38 @@ fn read_bounded(path: &Path, max: u64) -> Result<Vec<u8>, String> {
     read_open(f, path, max)
 }
 
+/// The SHA-256 and length of the regular file at path, of at most max bytes, read in 64 KiB
+/// chunks, so a large file is never held whole.
+fn hash_file(path: &Path, max: u64) -> Result<(String, u64), String> {
+    let mut o = fs::OpenOptions::new();
+    o.read(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(&mut o, libc::O_NONBLOCK);
+    let mut f = o
+        .open(path)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    if !f.metadata().is_ok_and(|m| m.is_file()) {
+        return Err(format!("{} is not a regular file", path.display()));
+    }
+    let mut h = Sha256::new();
+    let mut len = 0u64;
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = f
+            .read(&mut buf)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        len += n as u64;
+        if len > max {
+            return Err(format!("{} is larger than {max} bytes", path.display()));
+        }
+        h.update(&buf[..n]);
+    }
+    Ok((hex(&h.finalize()), len))
+}
+
 /// Reads the open file f (named path in errors), which must be a regular file of at most max
 /// bytes.
 fn read_open(f: fs::File, path: &Path, max: u64) -> Result<Vec<u8>, String> {
@@ -1380,9 +1412,9 @@ fn hash_files(
             if t.is_dir() {
                 todo.push((e.path(), format!("{rel}/")));
             } else if t.is_file() {
-                let b = read_bounded(&e.path(), max_bytes)?;
-                total += b.len() as u64;
-                out.insert(rel, hex(&Sha256::digest(&b)));
+                let (digest, len) = hash_file(&e.path(), max_bytes)?;
+                total += len;
+                out.insert(rel, digest);
                 if out.len() > max_files || total > max_bytes {
                     return Err(format!(
                         "{what} holds more than {max_files} files or {} MiB",
