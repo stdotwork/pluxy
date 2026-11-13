@@ -4,7 +4,7 @@
 # Configuration is measure.txt at the repo root of this branch:
 #   before=<full sha>   the commit to measure as "before"
 #   after=<full sha>    the commit to measure as "after"
-#   shards=<1..10>      jobs per variant (default 8)
+#   shards=<1..25>      jobs per variant (default 8); GitHub runs about 20 jobs at once, the rest queue
 #   iters=<1..20>       full native test runs per job (default 10)
 # Both commits must be on a pushed branch. To run a measurement: edit measure.txt, commit, push.
 name: Next app measure
@@ -46,7 +46,7 @@ jobs:
           fail() { echo "::error::measure.txt: $1"; exit 1; }
           [[ $before =~ ^[0-9a-f]{40}$ ]] || fail "before= must be a full 40-character sha"
           [[ $after =~ ^[0-9a-f]{40}$ ]] || fail "after= must be a full 40-character sha"
-          [[ $shards =~ ^[0-9]+$ ]] && (( shards >= 1 && shards <= 10 )) || fail "shards= must be 1 to 10"
+          [[ $shards =~ ^[0-9]+$ ]] && (( shards >= 1 && shards <= 25 )) || fail "shards= must be 1 to 25"
           [[ $iters =~ ^[0-9]+$ ]] && (( iters >= 1 && iters <= 20 )) || fail "iters= must be 1 to 20"
           {
             echo "before=$before"
@@ -99,6 +99,18 @@ jobs:
             exit 1
           fi
           echo "$PRETTY_NAME"
+      # What this runner VM is, kept with the job's results so a bad runner can be told from a good one.
+      - name: Machine facts
+        working-directory: .
+        run: |
+          mkdir -p "$RUNNER_TEMP/measure-out"
+          cpu=$(lscpu | sed -n 's/^Model name:[[:space:]]*//p' | head -n 1)
+          hv=$(lscpu | sed -n 's/^Hypervisor vendor:[[:space:]]*//p' | head -n 1)
+          mhz=$(sed -n 's/^cpu MHz[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo | head -n 1)
+          mem=$(free -m | awk '/^Mem:/ {print $2}')
+          load=$(cut -d' ' -f1-3 /proc/loadavg)
+          echo "MACHINE $VARIANT shard=$SHARD host=$(hostname) cpu=\"$cpu\" mhz=$mhz hypervisor=\"$hv\" nproc=$(nproc) mem_mb=$mem image=${ImageVersion:-unknown} kernel=$(uname -r) load=\"$load\"" \
+            | tee "$RUNNER_TEMP/measure-out/machine.txt"
       # Copied from next-app.yml's Native job.
       - name: Install WebKitGTK, the tray library, Xvfb, D-Bus, the portals, a tray watcher, squashfs-tools and xdotool
         working-directory: .
@@ -271,6 +283,17 @@ jobs:
               echo "| $v | $runs | $failures | $skipped | $jobs of $expected |"
               echo "$v: $runs runs, $failures failures (skipped $skipped, jobs reported $jobs of $expected)" >&2
             done
+            echo
+            echo "#### Per job: counts and the runner's machine facts"
+            echo
+            echo '```'
+            for d in results/result-*/; do
+              [ -f "$d/counts.txt" ] || continue
+              read -r cv cs cr cp cf csk < "$d/counts.txt"
+              facts=$(sed -E 's/^MACHINE [a-z]+ shard=[0-9]+ //' "$d/machine.txt" 2>/dev/null || echo "no machine facts")
+              echo "$cv shard=$cs runs=$cr fail=$cf | $facts"
+            done | sort -V
+            echo '```'
             echo
             for v in before after; do
               echo "#### Failed checks, $v (count, check)"
