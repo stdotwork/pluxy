@@ -1,5 +1,6 @@
 // This device's extension catalog, as the native side reports it (src-tauri/src/device.rs):
-// page-only app packages installed on this computer, apart from the connected core's. Each call
+// app packages installed on this computer, apart from the connected core's: page-only packages
+// and curated native tools (src-tauri/src/device_admission.rs). Each call
 // answers in the kit's reply shape, so pages can use the kit's loading and action helpers.
 
 import { invoke } from "@tauri-apps/api/core";
@@ -28,13 +29,21 @@ export interface DeviceRelease {
   resources: string[];
   /** Whether it declares settings; they are not served on this device yet. */
   settings: boolean;
+  tier: "web" | "native";
+  /** A native tool's declared operations, as [id, description]. */
+  operations: [string, string][];
+  /** A curated release's signer: its publisher and key ID. */
+  signer: string | null;
 }
 
 export interface DevicePackage {
   id: string;
   enabled: boolean;
-  /** No source is curated in this build, so always "unverified". */
-  trust: "unverified";
+  /** "curated" for a release signed by a curated first-party key, otherwise "unverified". */
+  trust: "curated" | "unverified";
+  tier: "web" | "native";
+  /** A native tool: whether the person enabled it in a native confirmation for this release. */
+  authorized: boolean;
   source: { kind: "local" | "registry"; name: string; index?: string };
   active: DeviceRelease;
   last_good?: DeviceRelease;
@@ -88,6 +97,7 @@ export const device = {
     reply<DeviceCatalog>("device_install", { registry, id, version: version ?? null }),
   /** Opens the native file chooser; the window names no path. */
   installFile: () => reply<DeviceCatalog>("device_install_file"),
+  /** Enabling a native tool opens the native confirmation and answers once it is closed. */
   setEnabled: (id: string, enabled: boolean) => reply<DeviceCatalog>("device_enable", { id, enabled }),
   remove: (id: string) => reply<DeviceCatalog>("device_remove", { id }),
   rollback: (id: string) => reply<DeviceCatalog>("device_rollback", { id }),

@@ -99,16 +99,24 @@ impl Package {
     }
 }
 
-/// An admitted native tool, checked: what the program host may run, and what the native
-/// confirmation shows.
+/// An admitted native tool, checked: the only record the program host may start a program
+/// from (`Catalog::admitted`, called again before each start), and what the native confirmation
+/// enabling it shows (`Catalog::native_candidate`). It holds no signer logic for the host to redo.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Admitted {
+    /// Package ID, `publisher/name`.
     pub id: String,
+    /// The active release's version.
     pub version: String,
+    /// SHA-256 of the release archive, in lower-case hex; also its store folder's name.
     pub sha256: String,
+    /// The archive's byte count.
     pub size: u64,
+    /// When this release was installed (Unix seconds): its generation.
     pub installed_at: u64,
+    /// The registry it was installed from.
     pub source: Source,
+    /// The curated signature: publisher, key ID, source and the exact signed bytes.
     pub signed: Signed,
     /// The root's public key, in lower-case hex.
     pub public_key: String,
@@ -116,9 +124,13 @@ pub struct Admitted {
     pub dir: PathBuf,
     /// The program for this computer, inside dir.
     pub program: PathBuf,
+    /// The operations the package declares.
     pub operations: Vec<OperationDecl>,
+    /// The state versions it writes and reads.
     pub state: StateDecl,
+    /// The app contribution's format version (`app.version`).
     pub app_version: i64,
+    /// The app host contract it was admitted for.
     pub host_contract: i64,
 }
 

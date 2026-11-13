@@ -168,7 +168,7 @@ fn same_launch_recipe(a: &ExactAction, b: &ExactAction) -> bool {
 }
 /// Set only by native entry points, never deserialized from page data.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // Main/tray launcher handlers are added by the launcher slice.
+#[allow(dead_code)] // Tray and native UI launcher handlers are added by the launcher slice.
 enum Origin {
     Main,
     Tray,

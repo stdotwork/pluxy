@@ -2,9 +2,9 @@
 
 This reference defines the app contribution to a pluxy package and app program contract v0.
 The signature verifier is shared Rust code in `src-tauri/src/artifact.rs`. The desktop app
-installs page-only web packages on this device
-([extensions on this device](../README.md#extensions-on-this-device)); signed packages,
-resources, native admission and the Rust program host are later implementation work.
+installs page-only web packages and curated signed native tools on this device
+([extensions on this device](../README.md#extensions-on-this-device)). It admits a native tool
+but runs none yet: resources and the Rust program host are later implementation work.
 Core recognizes app contributions to refuse app-only packages and use only the provider part of
 a mixed package. Start with the [tutorial](TUTORIAL.md).
 
@@ -68,6 +68,10 @@ enablement displays **full access to your user account** in the main UI and nati
 Its page still has no Tauri permissions. Process isolation contains crashes; it does not confine
 a native program.
 
+The program host takes a native tool only as `device::Admitted`
+(`src-tauri/src/device_admission.rs`), from `Catalog::admitted`, which checks the confirmation,
+the root, the signature and every installed file again each time it is called.
+
 ### Signed descriptor bytes
 
 A signed artifact has a UTF-8 JSON descriptor, detached Ed25519 signature and archive:
@@ -82,7 +86,11 @@ signature over those exact bytes against the trusted publisher key, then verify 
 and SHA-256 **before extraction**. Check the extracted manifest ID, version and tier against the
 descriptor, and platform against the selected artifact. Store the exact descriptor bytes and
 signature; never verify a receiver's reserialized JSON. Whitespace and key order are signed too.
-The index pins size, digest, key identity and signature. Detached signature files contain exactly
+The index pins size, digest, key identity and signature: a signed artifact adds `key_id` (the
+key's ID in its root), `descriptor` (the exact descriptor bytes as a JSON string) and `signature`
+beside `url`, `sha256` and `size`. The desktop app reads them only from a curated registry, one
+whose index address equals a trust root's `source` exactly; from any other registry they are
+ignored and the package is Unverified. Detached signature files contain exactly
 64 raw Ed25519 bytes; JSON/index transport encodes them as 128 lower-case hexadecimal digits.
 Public keys are 32 bytes, encoded as 64 lower-case hexadecimal digits. Verification uses pinned
 `ed25519-dalek` 2.2.0 with `VerifyingKey::verify_strict` and default features disabled. This is

@@ -1,8 +1,9 @@
-// The app's page for extensions on this device: page-only app packages installed on this
-// computer, apart from the connected core's Extensions page. The person installs a package from
-// a file they choose in the native file chooser or from a registry named in
-// device-registries.json, and enables, disables, rolls back or removes it. Every package here is
-// Unverified: this build has no curated source.
+// The app's page for extensions on this device: app packages installed on this computer, apart
+// from the connected core's Extensions page. The person installs a package from a file they
+// choose in the native file chooser or from a registry named in device-registries.json, and
+// enables, disables, rolls back or removes it. A package is Unverified unless a curated
+// first-party key signed it; only such a package may be a native tool, which has full access to
+// the person's user account and is enabled only through a native confirmation.
 
 import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
@@ -32,9 +33,9 @@ const t = strings("device", {
   short: "Device",
   tip: "Extension pages installed on this computer",
   intro:
-    "Pages installed on this computer, apart from the extensions of the core the app is connected to. They run in a webview with no app commands and get no files or settings.",
+    "Extensions installed on this computer, apart from the extensions of the core the app is connected to. Their pages run in a webview with no app commands and get no files or settings. Native tools come only from a curated source and stay disabled until you enable them in a native confirmation.",
   safeMode:
-    "Safe mode: pages from this device are not loaded. Disable or remove a package here, then start the app without --safe-mode.",
+    "Safe mode: pages from this device are not loaded and no native tool is enabled. Disable or remove a package here, then start the app without --safe-mode.",
   installFile: "Install from file…",
   refresh: "Refresh",
   extension: "Extension",
@@ -44,7 +45,17 @@ const t = strings("device", {
   state: "State",
   unverified: "Unverified",
   unverifiedWhy:
-    "No curated source is set up in this app, so it cannot tell who published this package. Its pages still get no app commands, files or settings.",
+    "It does not come from a curated source, so the app cannot tell who published it. Its pages still get no app commands, files or settings.",
+  curated: "Curated",
+  curatedWhy:
+    "Signed by a curated first-party key and installed from the curated source that key belongs to.",
+  kind: "Kind",
+  web: "Pages",
+  native: "Native tool",
+  fullAccess:
+    "This native tool has full access to your user account. Enabling it opens a native confirmation that shows its source, digest and signer.",
+  signer: "Signer",
+  operations: "Operations",
   local: "File {name}",
   registry: "Registry {name}",
   registryAt: "Registry {name} ({index})",
@@ -84,6 +95,14 @@ function sourceText(p: DevicePackage): string {
       : t("registry", { name: p.source.name });
 }
 
+function trustBadge(p: DevicePackage) {
+  return p.trust === "curated" ? (
+    <Badge tone="ok">{t("curated")}</Badge>
+  ) : (
+    <Badge tone="warn">{t("unverified")}</Badge>
+  );
+}
+
 function releaseFacts(r: DeviceRelease): [string, ComponentChildren][] {
   return [
     [t("version"), <span class="mono">{r.version}</span>],
@@ -101,6 +120,8 @@ function releaseFacts(r: DeviceRelease): [string, ComponentChildren][] {
     [t("pages"), r.pages.map((p) => p.title).join(", ") || undefined],
     [t("resources"), r.resources.length ? t("resourcesValue", { ids: r.resources.join(", ") }) : undefined],
     [t("settings"), r.settings ? t("settingsValue") : undefined],
+    [t("signer"), r.signer ?? undefined],
+    [t("operations"), r.operations.map(([id, what]) => `${id}: ${what}`).join("; ") || undefined],
   ];
 }
 
@@ -115,14 +136,16 @@ function PackageDetail(props: { p: DevicePackage; onClose: () => void; onChanged
     <Detail title={p.id} onClose={props.onClose}>
       <Facts
         rows={[
-          [t("trust"), <Badge tone="warn">{t("unverified")}</Badge>],
+          [t("trust"), trustBadge(p)],
+          [t("kind"), t(p.tier === "native" ? "native" : "web")],
           [t("source"), sourceText(p)],
           [t("state"), <StateBadge state={p.enabled ? "active" : "disabled"} />],
           ...releaseFacts(p.active),
           [t("lastGood"), p.last_good && <span class="mono">{p.last_good.version}</span>],
         ]}
       />
-      <p class="muted">{t("unverifiedWhy")}</p>
+      <p class="muted">{t(p.trust === "curated" ? "curatedWhy" : "unverifiedWhy")}</p>
+      {p.tier === "native" && <Notice tone="warn">{t("fullAccess")}</Notice>}
       {(act.error ?? remove.error) && <Notice tone="danger">{act.error ?? remove.error}</Notice>}
       <div class="actions">
         <Button
@@ -266,7 +289,7 @@ export function DevicePage(props: { onChanged: () => void }) {
                 columns={[
                   { label: t("extension"), value: (p) => p.id, mono: true },
                   { label: t("version"), value: (p) => p.active.version, mono: true },
-                  { label: t("trust"), value: () => <Badge tone="warn">{t("unverified")}</Badge> },
+                  { label: t("trust"), value: trustBadge },
                   { label: t("source"), value: sourceText },
                   {
                     label: t("state"),
