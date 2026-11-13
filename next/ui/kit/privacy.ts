@@ -64,12 +64,15 @@ function identityVariants(identity: string): string[] {
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
- * Masks e-mail addresses and URL credentials anywhere in text. The given identities (such as
- * the labels of the accounts the text is about) are masked first, also in their file-name forms.
+ * Masks e-mail addresses and URL credentials anywhere in text, then the given identities (such
+ * as the labels of the accounts the text is about), also in their file-name forms. Addresses go
+ * first: an identity masked inside one would leave the rest of the address unmatched, and shown.
  */
 export function maskSensitiveText(text: string, identities: readonly string[] = []): string {
   if (!text) return text;
-  let masked = text;
+  let masked = text
+    .replace(URL_USERINFO_PATTERN, `$1${MASK}@`)
+    .replace(EMAIL_PATTERN, (email) => maskEmail(email));
   for (const identity of identities) {
     const replacement = maskIdentifier(identity);
     for (const variant of identityVariants(identity)) {
@@ -77,9 +80,7 @@ export function maskSensitiveText(text: string, identities: readonly string[] = 
       masked = masked.replace(new RegExp(escapeRegExp(variant), "gi"), () => replacement);
     }
   }
-  return masked
-    .replace(URL_USERINFO_PATTERN, `$1${MASK}@`)
-    .replace(EMAIL_PATTERN, (email) => maskEmail(email));
+  return masked;
 }
 
 /** Whether privacy mode is on, kept where the host build keeps it. */

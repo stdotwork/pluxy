@@ -32,7 +32,8 @@ test("masks proxy URL credentials", () => {
 
 test("masks known identities inside names, including file-name forms", () => {
   const identities = ["alice@example.com", "my-gcp-project-123456"];
-  expect(maskSensitiveText("codex-alice@example.com-plus", identities)).toBe("codex-al***@e***.com-plus");
+  // The address is masked as an address first (the old app masked the identity first).
+  expect(maskSensitiveText("codex-alice@example.com-plus", identities)).toBe("co***@e***.com-plus");
   expect(maskSensitiveText("antigravity-alice_example_com", identities)).toBe("antigravity-al***@e***.com");
   expect(maskSensitiveText("alice@example.com-my-gcp-project-123456", identities)).toBe(
     "al***@e***.com-my***56",
@@ -61,7 +62,7 @@ console.log(JSON.stringify([maskIdentifier("@alice"), maskEmail("@alice"), maskI
 test("replacement patterns in an identity do not leak it", () => {
   // `$&` in a string replacement would paste the whole matched identity back in.
   const identity = "$&abcdef@example.com";
-  expect(maskSensitiveText(`account ${identity} failed`, [identity])).toBe("account $&***@e***.com failed");
+  expect(maskSensitiveText(`account ${identity} failed`, [identity])).toBe("account $&ab***@e***.com failed");
   const project = "$&abcdefghijk-project-77";
   expect(maskSensitiveText(`project ${project} failed`, [project])).toBe("project $&***77 failed");
   // `$'` would paste in the text after the match.
@@ -94,3 +95,11 @@ console.log(JSON.stringify({ ms: performance.now() - start, same: out[0] === run
   // seconds for 80,000.
   expect(r.ms).toBeLessThan(2000);
 }, 30000);
+
+test("an identity inside an address does not break the address's mask", () => {
+  // Masking the identity first left the rest of the address unmatched, and so shown.
+  expect(maskSensitiveText("mail alice.smith@gmail.com", ["gmail"])).toBe("mail al***@g***.com");
+  expect(maskSensitiveText("bob.jones@devcorp.io", ["dev"])).toBe("bo***@d***.io");
+  expect(maskSensitiveText("alice.smith@example.com", ["smith"])).toBe("al***@e***.com");
+  expect(maskSensitiveText("socks5://smith:pw@proxy.local", ["smith"])).toBe("socks5://***@proxy.local");
+});
