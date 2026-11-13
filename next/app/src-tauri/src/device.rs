@@ -9,11 +9,13 @@
 //! A package from a source that is not curated is Unverified, and one claiming a reserved
 //! publisher (`pluxy`, or a publisher a trust root names) is refused. A native tool (`app.tier`
 //! `native`) is admitted only from a curated registry with a first-party signature, and runs
-//! only after the person enabled it in a native confirmation (`device_admission.rs`). No package
-//! gets resources or settings here. The previous release stays as the last good one, so a
-//! failed candidate keeps the active release and the person can roll back. With `--safe-mode`,
-//! no device page is listed, opened or served and no native tool is admitted; the catalog can
-//! still be managed.
+//! only after the person enabled it in a native confirmation (`device_admission.rs`). Any other
+//! publisher signature a registry lists is checked with the key the index names before the
+//! archive is unpacked and kept with the release, for Access (`access.rs`) to grant files only to
+//! web packages whose signer the person approved. No package gets settings here. The previous
+//! release stays as the last good one, so a failed candidate keeps the active release and the
+//! person can roll back. With `--safe-mode`, no device page is listed, opened or served and no
+//! native tool is admitted; the catalog can still be managed.
 
 #[cfg(target_os = "linux")]
 pub use admission::main_window;
@@ -104,16 +106,21 @@ pub struct Release {
     /// SHA-256 of each file under ui_dir, by slash-separated path: only these are served.
     #[serde(default)]
     pub files: BTreeMap<String, String>,
-    /// Resource IDs the package asks for. None is granted in this build.
+    /// Resource IDs the package asks for.
     #[serde(default)]
     pub resources: Vec<String>,
+    /// The resources it declares, as Access grants them.
+    #[serde(default)]
+    pub declared: Vec<crate::access::Declared>,
     /// Whether the package declares settings. They are not served in this build.
     #[serde(default)]
     pub settings: bool,
     /// `web` or `native`.
     #[serde(default = "web")]
     pub tier: String,
-    /// The curated signature it was installed with, if any.
+    /// The publisher signature a registry listed for it, checked at install: against a curated
+    /// root for a native tool, otherwise with the key the index named. Whether it is curated is
+    /// derived from the current roots (`Package::curated_signature`), never from its presence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signed: Option<Signed>,
     /// Native: the program for this computer, by its path in the package.
@@ -230,6 +237,7 @@ pub struct ReleaseView {
     pub ui_version: Option<i64>,
     pub pages: Vec<PageView>,
     pub resources: Vec<String>,
+    pub declared: Vec<crate::access::Declared>,
     pub settings: bool,
     pub tier: String,
     /// Native: the declared operations, by ID and description.
@@ -238,8 +246,21 @@ pub struct ReleaseView {
     pub imports: Vec<ImportDecl>,
     /// Native: the operations other packages may import.
     pub exports: Option<ExportDecl>,
-    /// The signer of a curated release: publisher and key ID.
-    pub signer: Option<String>,
+    /// Who signed it, and whether the person approved that signer for its source (Access).
+    /// Whether the signature is curated is the package's `trust`, from the current roots.
+    pub signer: Option<SignerView>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SignerView {
+    pub publisher: String,
+    pub key_id: String,
+    pub public_key: String,
+    pub source: String,
+    pub approved: bool,
+    /// Whether Access may use this signature (`Catalog::facts`): a web release whose publisher
+    /// no root reserves. Otherwise the window offers no signer approval or grants for it.
+    pub access: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -334,7 +355,21 @@ fn now() -> u64 {
         .unwrap_or(0)
 }
 
-fn release_view(id: &str, r: &Release) -> ReleaseView {
+/// The signature of release r of package id that Access may use: a web release's, whose
+/// publisher no root reserves now. A native tool or a reserved publisher's package is never
+/// granted files, whoever signed it.
+fn for_access<'a>(id: &str, r: &'a Release, roots: &dyn Roots) -> Option<&'a Signed> {
+    r.signed
+        .as_ref()
+        .filter(|_| r.tier == "web" && reserved(id, roots).is_none())
+}
+
+fn release_view(
+    id: &str,
+    r: &Release,
+    roots: &dyn Roots,
+    approved: &dyn Fn(&Signed) -> bool,
+) -> ReleaseView {
     ReleaseView {
         version: r.version.clone(),
         sha256: r.sha256.clone(),
@@ -355,6 +390,7 @@ fn release_view(id: &str, r: &Release) -> ReleaseView {
             })
             .collect(),
         resources: r.resources.clone(),
+        declared: r.declared.clone(),
         settings: r.settings,
         tier: r.tier.clone(),
         operations: r
@@ -362,10 +398,14 @@ fn release_view(id: &str, r: &Release) -> ReleaseView {
             .iter()
             .map(|o| (o.id.clone(), o.description.clone()))
             .collect(),
-        signer: r
-            .signed
-            .as_ref()
-            .map(|s| format!("{} key {}", s.publisher, s.key_id)),
+        signer: r.signed.as_ref().map(|s| SignerView {
+            publisher: s.publisher.clone(),
+            key_id: s.key_id.clone(),
+            public_key: s.public_key.clone(),
+            source: s.source.clone(),
+            approved: approved(s),
+            access: for_access(id, r, roots).is_some(),
+        }),
         imports: r.imports.clone(),
         exports: r.exports.clone(),
     }
@@ -578,6 +618,11 @@ impl Catalog {
     }
 
     pub fn view(&self, roots: &dyn Roots) -> View {
+        self.view_with(roots, &|_| false)
+    }
+
+    /// The catalog as the window shows it, with each signer's approval as approved says.
+    pub fn view_with(&self, roots: &dyn Roots, approved: &dyn Fn(&Signed) -> bool) -> View {
         View {
             safe_mode: self.safe_mode,
             warning: self.warning.clone(),
@@ -597,11 +642,32 @@ impl Catalog {
                     authorized: p.authorized(),
                     imports_allowed: self.imports_allowed(id, roots),
                     source: p.source.clone(),
-                    active: release_view(id, &p.active),
-                    last_good: p.last_good.as_ref().map(|r| release_view(id, r)),
+                    active: release_view(id, &p.active, roots, approved),
+                    last_good: p
+                        .last_good
+                        .as_ref()
+                        .map(|r| release_view(id, r, roots, approved)),
                 })
                 .collect(),
         }
+    }
+
+    /// What Access needs to know about package id, with the signature Access may use
+    /// (`for_access`).
+    pub fn facts(&self, id: &str, roots: &dyn Roots) -> Option<crate::access::Facts> {
+        let p = self.packages.get(id)?;
+        Some(crate::access::Facts {
+            id: id.into(),
+            enabled: p.enabled,
+            source: p
+                .source
+                .index
+                .clone()
+                .filter(|_| p.source.kind == "registry"),
+            sha256: p.active.sha256.clone(),
+            signed: for_access(id, &p.active, roots).cloned(),
+            declared: p.active.declared.clone(),
+        })
     }
 
     pub fn get(&self, id: &str) -> Option<&Package> {
@@ -1564,6 +1630,7 @@ fn stage_signed(
             pages: vec![],
             files: BTreeMap::new(),
             resources: vec![],
+            declared: vec![],
             settings: false,
             tier: web(),
             signed: None,
@@ -1627,6 +1694,16 @@ fn stage_signed(
         .iter()
         .flatten()
         .map(|x| x.id.clone())
+        .collect();
+    r.declared = app
+        .resources
+        .iter()
+        .flatten()
+        .map(|x| crate::access::Declared {
+            id: x.id.clone(),
+            kind: x.kind.clone(),
+            operations: x.operations.clone(),
+        })
         .collect();
     r.settings = app.config.is_some();
     r.imports = imports::import_decls(&m.id, &app)?;
@@ -1740,6 +1817,57 @@ struct Artifact {
     descriptor: Option<String>,
     #[serde(default)]
     signature: Option<String>,
+}
+
+/// Checks a signature registry index lists for package id's release version that no root
+/// vouches for, against the archive, before it is unpacked: the descriptor's signature with the
+/// key the index names, then its ID, version, web tier, platform, size and SHA-256 against the
+/// index and the archive. A signature proves who signed, not that the package is safe; Access
+/// grants files only once the person approved that signer for this source. Never a native
+/// tool's: only a curated root's key admits one.
+fn unvouched(
+    index: &str,
+    id: &str,
+    version: &str,
+    a: &Artifact,
+    archive: &[u8],
+) -> Result<Option<Signed>, String> {
+    use crate::artifact::{decode_hex, verify_archive, Tier};
+    let Some(l) = listed(id, version, a)? else {
+        return Ok(None);
+    };
+    let bad = |e: String| format!("{id} {version}: the registry's signature does not hold: {e}");
+    let key =
+        ed25519_dalek::VerifyingKey::from_bytes(&decode_hex::<32>(l.public_key).map_err(bad)?)
+            .map_err(|_| bad("public_key is not an Ed25519 key".into()))?;
+    let sig = decode_hex::<64>(l.signature).map_err(bad)?;
+    let verified = verify_archive(
+        &key,
+        l.descriptor.as_bytes(),
+        &sig,
+        &platform(),
+        std::io::Cursor::new(archive),
+    )
+    .map_err(bad)?;
+    let d = verified.descriptor();
+    if d.id != id || d.version != version || d.tier != Tier::Web {
+        return Err(bad(
+            "the signed descriptor names another package, version or tier".into(),
+        ));
+    }
+    if d.size != a.size || d.sha256 != a.sha256.to_ascii_lowercase() {
+        return Err(bad(
+            "the signed descriptor names another archive than the index".into(),
+        ));
+    }
+    Ok(Some(Signed {
+        publisher: id.split('/').next().unwrap_or_default().into(),
+        key_id: l.key_id.into(),
+        public_key: l.public_key.into(),
+        source: index.into(),
+        descriptor: l.descriptor.into(),
+        signature: l.signature.into(),
+    }))
 }
 
 /// Go's platform name for this computer, as registry artifacts are keyed.
@@ -2006,8 +2134,9 @@ fn listed<'a>(
 
 /// What install makes of registry r's entry a for id's release version, before anything is
 /// fetched: the signature to verify against r's root, None for a package installed unsigned
-/// (Unverified), or why it is refused. Only a reserved publisher's package, from a curated
-/// registry, is verified; any other signature is ignored, since no root vouches for it.
+/// or with a signature no root vouches for (Unverified, `unvouched`), or why it is refused. Every
+/// signature a curated registry lists, and a reserved publisher's package, which only a curated
+/// registry may list, is verified against the registry's root.
 fn to_verify<'a>(
     roots: &dyn Roots,
     r: &Registry,
@@ -2016,6 +2145,11 @@ fn to_verify<'a>(
     a: &'a Artifact,
 ) -> Result<Option<admission::Listed<'a>>, String> {
     let l = listed(id, version, a)?;
+    // A curated registry is first-party only: a key in it that is not its root's means the
+    // registry is compromised or misconfigured, so verifying against the root refuses it.
+    if l.is_some() && roots.curated(&r.url) {
+        return Ok(l);
+    }
     let Some(why) = reserved(id, roots) else {
         return Ok(None);
     };
@@ -2032,7 +2166,8 @@ fn to_verify<'a>(
 
 /// Fetches and stages package id's release version (the newest with an archive for this
 /// computer, when none is named) from registry name. From a curated registry (one a trust root
-/// names by its index), a signed artifact is verified against the root before it is unpacked.
+/// names by its index), a signed artifact is verified against the root before it is unpacked;
+/// a signature another registry lists is checked with the index's key.
 pub fn stage_from_registry(
     dirs: &Dirs,
     roots: &dyn Roots,
@@ -2071,6 +2206,8 @@ pub fn stage_from_registry(
     let a = &release.artifacts[&platform];
     let listed = to_verify(roots, &r, id, &release.version, a)?;
     let mut bytes = fetch_artifact(&base, a)?;
+    // A signature no root vouches for: kept for Access's approved signers, never curated.
+    let mut unvouched_signature = None;
     let signing = match listed {
         Some(l) => {
             let (s, archive) =
@@ -2078,9 +2215,12 @@ pub fn stage_from_registry(
             bytes = archive;
             Some(s)
         }
-        None => None,
+        None => {
+            unvouched_signature = unvouched(&r.url, id, &release.version, a, &bytes)?;
+            None
+        }
     };
-    stage_signed(
+    let mut c = stage_signed(
         dirs,
         &bytes,
         Source {
@@ -2096,7 +2236,11 @@ pub fn stage_from_registry(
         }),
         signing,
         roots,
-    )
+    )?;
+    if unvouched_signature.is_some() {
+        c.release.signed = unvouched_signature;
+    }
+    Ok(c)
 }
 
 #[path = "device_admission.rs"]

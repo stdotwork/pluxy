@@ -925,6 +925,124 @@ fn a_store_that_cannot_be_listed_is_reported() {
     done(root);
 }
 
+#[test]
+fn registry_signatures_are_checked_before_unpacking_and_kept() {
+    use ed25519_dalek::{Signer, SigningKey};
+    let root = temp();
+    let d = dirs(&root);
+    let reg = root.join("reg");
+    fs::create_dir_all(&reg).unwrap();
+    let m = manifest(
+        "example/files",
+        "1.0.0",
+        serde_json::json!({"resources": [{"id": "config", "kind": "file", "operations": ["read"]}]}),
+    );
+    let v1 = archive(&[("pluxy-extension.json", &m), ("pages/index.html", b"<p>1")]);
+    fs::write(reg.join("f1.tar.gz"), &v1).unwrap();
+    // A key made for this test only.
+    let mut seed = [0u8; 32];
+    getrandom::fill(&mut seed).unwrap();
+    let key = SigningKey::from_bytes(&seed);
+    let public = hex(key.verifying_key().as_bytes());
+    let p = platform();
+    let descriptor = |version: &str, sha: &str| {
+        format!(
+            r#"{{"id":"example/files","version":"{version}","tier":"web","platform":"{p}","size":{},"sha256":"{sha}"}}"#,
+            v1.len()
+        )
+    };
+    let signed = |desc: &str| {
+        serde_json::json!({"url": "f1.tar.gz", "sha256": digest(&v1), "size": v1.len(),
+            "key_id": "k1", "public_key": public, "descriptor": desc,
+            "signature": hex(&key.sign(desc.as_bytes()).to_bytes())})
+    };
+    let good = descriptor("1.0.0", &digest(&v1));
+    let mut tampered = signed(&good);
+    tampered["descriptor"] = serde_json::json!(good.replace("\"size\"", " \"size\""));
+    let mut partial = signed(&good);
+    partial.as_object_mut().unwrap().remove("signature");
+    let mut bad_key = signed(&good);
+    bad_key["key_id"] = serde_json::json!("k 1");
+    let other_digest = descriptor("1.0.0", &"0".repeat(64));
+    let index = serde_json::json!({"registry_version": 0, "packages": {
+        "example/files": {"releases": [
+            {"version": "1.6.0", "artifacts": {p.clone(): bad_key}},
+            {"version": "1.5.0", "artifacts": {p.clone(): signed(&other_digest)}},
+            {"version": "1.4.0", "artifacts": {p.clone(): signed(&descriptor("1.4.0", &digest(&v1)))}},
+            {"version": "1.3.0", "artifacts": {p.clone(): signed(&good)}},
+            {"version": "1.2.0", "artifacts": {p.clone(): partial}},
+            {"version": "1.1.0", "artifacts": {p.clone(): tampered}},
+            {"version": "1.0.0", "artifacts": {p.clone(): signed(&good)}}
+        ]}
+    }});
+    fs::write(reg.join("index.json"), serde_json::to_vec(&index).unwrap()).unwrap();
+    let url = reg.join("index.json").display().to_string();
+    fs::write(
+        &d.registries,
+        serde_json::to_vec(&serde_json::json!({"version": 0, "registries": [
+            {"name": "fixture", "url": url}]}))
+        .unwrap(),
+    )
+    .unwrap();
+    for (v, says) in [
+        ("1.6.0", "key_id is not valid"),
+        // The descriptor names an archive the index does not.
+        ("1.5.0", "does not hold"),
+        // Signed for 1.4.0, listed (and holding) another version: the archive holds 1.0.0.
+        ("1.4.0", "not example/files 1.4.0"),
+        // A valid signature of 1.0.0's descriptor offered as 1.3.0.
+        ("1.3.0", "another package, version or tier"),
+        ("1.2.0", "part of a signature"),
+        ("1.1.0", "invalid descriptor signature"),
+    ] {
+        let e = stage_from_registry(&d, &NoRoots, "fixture", "example/files", Some(v)).unwrap_err();
+        assert!(e.contains(says), "{v}: {e}");
+    }
+    // Opened first, as the app does: opening clears staged folders left behind.
+    let mut cat = Catalog::open(d.clone(), false, &NoRoots);
+    let c = stage_from_registry(&d, &NoRoots, "fixture", "example/files", Some("1.0.0")).unwrap();
+    let s = c.release.signed.clone().unwrap();
+    assert_eq!(
+        (
+            s.publisher.as_str(),
+            s.key_id.as_str(),
+            s.public_key.as_str(),
+            s.source.as_str(),
+            s.descriptor.as_str()
+        ),
+        (
+            "example",
+            "k1",
+            public.as_str(),
+            url.as_str(),
+            good.as_str()
+        )
+    );
+    assert_eq!(c.release.declared[0].id, "config");
+    cat.commit(c).unwrap();
+    let f = cat.facts("example/files", &NoRoots).unwrap();
+    assert_eq!(f.source.as_deref(), Some(url.as_str()));
+    assert_eq!(f.signed, Some(s.clone()));
+    let v = cat.view_with(&NoRoots, &|x| x == &s);
+    assert!(v.packages[0].active.signer.as_ref().unwrap().approved);
+    let unapproved = cat.view(&NoRoots);
+    assert!(
+        !unapproved.packages[0]
+            .active
+            .signer
+            .as_ref()
+            .unwrap()
+            .approved
+    );
+    // Kept across a restart, exactly.
+    let again = Catalog::open(d.clone(), false, &NoRoots);
+    assert_eq!(
+        again.facts("example/files", &NoRoots).unwrap().signed,
+        Some(s)
+    );
+    done(root);
+}
+
 // ---- Signed native-tier admission (device_admission.rs) ----
 
 /// Native-tier trust with one test root, for keys generated by the test.
@@ -1076,6 +1194,8 @@ fn native_fixture(root: &Path) -> (Dirs, TestRoots) {
     let bad_key = native_package("pluxy/badkey", "1.0.0");
     let long_key = native_package("pluxy/longkey", "1.0.0");
     let web_desc = package("pluxy/webdesc", "1.0.0");
+    let signed_native = native_package("example/signednative", "1.0.0");
+    let web_native = native_package("example/webnative", "1.0.0");
     for (f, b) in [
         ("badkey", &bad_key),
         ("longkey", &long_key),
@@ -1090,6 +1210,8 @@ fn native_fixture(root: &Path) -> (Dirs, TestRoots) {
         ("forged", &forged),
         ("renamed", &renamed),
         ("lookalike", &lookalike),
+        ("signednative", &signed_native),
+        ("webnative", &web_native),
     ] {
         fs::write(reg.join(f), b).unwrap();
     }
@@ -1118,10 +1240,11 @@ fn native_fixture(root: &Path) -> (Dirs, TestRoots) {
     );
     wrong["public_key"] = hex(other_key.verifying_key().as_bytes()).into();
     // Signed by a key no root names, for a publisher no root names: no provenance here.
-    let page_signed = signed_artifact(
+    let page_signed = signed_artifact_as(
         "signedpage",
         &signed_page,
         Some((&other_key, "example/signedpage", "1.0.0")),
+        "web",
     );
     let mut page_part = page_signed.clone();
     page_part.as_object_mut().unwrap().remove("descriptor");
@@ -1151,8 +1274,21 @@ fn native_fixture(root: &Path) -> (Dirs, TestRoots) {
         "pluxy/renamed": one(signed_artifact("renamed", &renamed, Some((&key, "pluxy/renamed", "2.0.0")))),
         "example/native": one(signed_artifact("lookalike", &lookalike, None)),
     }});
+    // Native tools signed by a key no root names: as a native tool, and as a web package.
+    let native_signed = signed_artifact(
+        "signednative",
+        &signed_native,
+        Some((&other_key, "example/signednative", "1.0.0")),
+    );
+    let native_as_web = signed_artifact_as(
+        "webnative",
+        &web_native,
+        Some((&other_key, "example/webnative", "1.0.0")),
+        "web",
+    );
     let other = serde_json::json!({"registry_version": 0, "packages": {"pluxy/tool": tool,
         "example/signedpage": one(page_signed), "example/partial": one(page_part),
+        "example/signednative": one(native_signed), "example/webnative": one(native_as_web),
         "example/native": one(signed_artifact("lookalike", &lookalike, None))}});
     fs::write(
         reg.join("curated.json"),
@@ -1209,7 +1345,8 @@ fn only_a_curated_signed_native_tool_installs() {
         let e = refused("curated", id, &roots);
         assert!(e.contains("key_id is not valid"), "{id}: {e}");
     }
-    // A curated web package installs, enabled, as curated.
+    // A curated web package installs, enabled, as curated. Its signature is its root's, which
+    // Access never uses: a reserved publisher's package gets no signer approval or grants.
     {
         let mut c = Catalog::open(d.clone(), false, &roots);
         c.commit(
@@ -1218,11 +1355,18 @@ fn only_a_curated_signed_native_tool_installs() {
         .unwrap();
         let p = c.get("pluxy/webdesc").unwrap();
         assert!(p.enabled && p.active.signed.is_some(), "{p:?}");
-        assert_eq!(c.view(&roots).packages[0].trust, "curated");
+        let v = c.view(&roots);
+        assert_eq!(v.packages[0].trust, "curated");
+        assert!(!v.packages[0].active.signer.as_ref().unwrap().access);
+        assert!(c.facts("pluxy/webdesc", &roots).unwrap().signed.is_none());
         // Without its root, it is held as any reserved publisher's package.
         assert!(c.set_enabled("pluxy/webdesc", true, &NoRoots).is_err());
         c.remove("pluxy/webdesc").unwrap();
     }
+    // A curated registry lists only its root's keys: any other signature in it is refused,
+    // whatever the publisher.
+    let e = refused("curated", "example/signedpage", &roots);
+    assert!(e.contains("unknown publisher key"), "{e}");
     // What the registries list says the same, before anything is fetched; whether a package is
     // a native tool only its archive tells.
     let listed = offers(&d, &roots).unwrap();
@@ -1241,6 +1385,7 @@ fn only_a_curated_signed_native_tool_installs() {
     assert_eq!(
         refusals("curated"),
         set(&[
+            "example/signedpage",
             "pluxy/badkey",
             "pluxy/forged",
             "pluxy/longkey",
@@ -1251,16 +1396,57 @@ fn only_a_curated_signed_native_tool_installs() {
         ])
     );
     assert_eq!(refusals("other"), set(&["example/partial", "pluxy/tool"]));
-    // A signature a root does not vouch for is ignored, from either registry: Unverified.
-    for registry in ["curated", "other"] {
+    // A signature no root vouches for, from a registry no root names, is checked with the
+    // index's key and kept for Access's approved signers; the package stays Unverified.
+    {
+        let registry = "other";
         let mut c = Catalog::open(d.clone(), false, &roots);
         c.commit(stage_from_registry(&d, &roots, registry, "example/signedpage", None).unwrap())
             .unwrap();
         let p = c.get("example/signedpage").unwrap();
-        assert!(p.active.signed.is_none(), "{registry}: {p:?}");
+        let s = p.active.signed.clone().unwrap();
+        let index = root.join("reg").join(format!("{registry}.json"));
+        assert_eq!(
+            (s.publisher.as_str(), s.key_id.as_str(), s.source.as_str()),
+            ("example", "k1", index.display().to_string().as_str()),
+            "{registry}"
+        );
+        assert_ne!(s.public_key, hex(roots.key.as_bytes()));
         assert_eq!(c.view(&roots).packages[0].trust, "unverified");
+        assert!(p.curated_signature("example/signedpage", &roots).is_err());
+        assert_eq!(
+            c.facts("example/signedpage", &roots).unwrap().signed,
+            Some(s)
+        );
+        // Once a root names its publisher, Access no longer gets its signature.
+        let reserving = TestRoots {
+            publisher: "example".into(),
+            source: roots.source.clone(),
+            key_id: "k1".into(),
+            key: roots.key,
+        };
+        assert!(c
+            .facts("example/signedpage", &reserving)
+            .unwrap()
+            .signed
+            .is_none());
+        // The window shows the signer, and offers Access for it only while Access may use it.
+        let shown = |roots: &dyn Roots| {
+            c.view(roots).packages[0]
+                .active
+                .signer
+                .as_ref()
+                .map(|s| s.access)
+        };
+        assert_eq!(shown(&roots), Some(true));
+        assert_eq!(shown(&reserving), Some(false));
         c.remove("example/signedpage").unwrap();
     }
+    // Such a signature never makes a native tool, whatever tier its descriptor names.
+    let e = refused("other", "example/signednative", &roots);
+    assert!(e.contains("another package, version or tier"), "{e}");
+    let e = refused("other", "example/webnative", &roots);
+    assert!(e.contains("native tool"), "{e}");
     // A build with no roots: nothing is curated.
     let e = refused("curated", "pluxy/tool", &NoRoots);
     assert!(e.contains("not configured"), "{e}");
@@ -1290,7 +1476,11 @@ fn only_a_curated_signed_native_tool_installs() {
         (p.trust, p.tier.as_str(), p.enabled, p.authorized),
         ("curated", "native", false, false)
     );
-    assert_eq!(p.active.signer.as_deref(), Some("pluxy key k1"));
+    let signer = p.active.signer.as_ref().unwrap();
+    assert_eq!(
+        (signer.publisher.as_str(), signer.key_id.as_str()),
+        ("pluxy", "k1")
+    );
     // The label follows the roots this app has now: without the root it is not curated.
     let v = c.view(&NoRoots);
     assert_eq!(v.packages[0].trust, "unverified");
@@ -1332,6 +1522,11 @@ fn admission_is_confirmed_per_release_and_checked_each_time() {
     };
     install(&mut c, "1.0.0").unwrap();
     let sha = c.get("pluxy/tool").unwrap().active.sha256.clone();
+    // A native tool's curated signature never goes to Access, and the window offers none.
+    assert!(c.get("pluxy/tool").unwrap().active.signed.is_some());
+    assert!(c.facts("pluxy/tool", &roots).unwrap().signed.is_none());
+    let v = c.view(&roots);
+    assert!(!v.packages[0].active.signer.as_ref().unwrap().access);
 
     // What the native confirmation shows, then the admission it confirms.
     let a = candidate(&c, "pluxy/tool", &roots).unwrap();

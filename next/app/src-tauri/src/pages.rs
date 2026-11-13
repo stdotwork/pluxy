@@ -43,6 +43,14 @@ impl Binding {
             None => Url::parse(&self.pages_origin).is_ok_and(|o| o.origin() == url.origin()),
         }
     }
+    /// For a page of a package on this device: the package's ID and the digest of the release
+    /// the page was opened from.
+    pub fn device_release(&self) -> Option<(String, String)> {
+        let folder = self.device.as_ref()?.strip_suffix('/')?;
+        let id = self.extension.strip_prefix("device:")?;
+        let (_, digest) = folder.rsplit_once('/')?;
+        Some((id.into(), digest.into()))
+    }
     /// The frame-src source of the page's wrapper document. A device page's folder is
     /// enforced by the asset scheme, which serves a page webview only its own folder.
     fn frame_source(&self) -> String {
@@ -307,8 +315,13 @@ impl Pages {
                 }
                 let c: Call =
                     serde_json::from_str(sent.data.get()).map_err(|_| fail(400, "bad_request"))?;
+                // Access (access.rs) answers these natively, for a device page only: a page
+                // core lists has no such methods.
+                let device = w.binding.device.is_some();
                 let params_ok = match c.method.as_str() {
                     "theme.get" | "config.get" => c.params.is_null(),
+                    "resources.status" if device => c.params.is_null(),
+                    "resources.read" | "resources.list" if device => c.params.is_object(),
                     "config.set" => c.params.as_object().is_some_and(|p| {
                         p.len() == 1 && p.get("values").is_some_and(Value::is_object)
                     }),
@@ -1689,6 +1702,69 @@ mod tests {
         // A second document from its own folder closes the channel.
         p.frame_navigation(&label, &Url::parse(&format!("{folder}other.html")).unwrap());
         assert!(p.document_closed(&label));
+    }
+    #[test]
+    fn only_device_pages_have_access_methods() {
+        let now = Instant::now();
+        let mut p = Pages::default();
+        let core = page(&mut p, "example/files", now);
+        for (method, params) in [
+            ("resources.status", Value::Null),
+            ("resources.read", json!({"resource": "config"})),
+            ("resources.list", json!({"resource": "tree"})),
+        ] {
+            refused(
+                request(&mut p, &core, "call", call("core", method, params), now),
+                400,
+                "unknown_method",
+                Some("core"),
+            );
+        }
+        let base = crate::device::asset_base();
+        let digest = "a".repeat(64);
+        let folder = format!("{base}example/files/{digest}/");
+        let b = Binding {
+            extension: "device:example/files".into(),
+            page: "files".into(),
+            title: "Files".into(),
+            url: Url::parse(&format!("{folder}index.html")).unwrap(),
+            pages_origin: base,
+            device: Some(folder),
+        };
+        assert_eq!(
+            b.device_release(),
+            Some(("example/files".into(), digest.clone()))
+        );
+        assert_eq!(binding("example/files").device_release(), None);
+        let label = p.bind(b).unwrap();
+        p.begin_document(&label);
+        hello(&mut p, &label, now);
+        for (id, method, params) in [
+            ("s", "resources.status", Value::Null),
+            ("r", "resources.read", json!({"resource": "config"})),
+            (
+                "l",
+                "resources.list",
+                json!({"resource": "tree", "path": ""}),
+            ),
+        ] {
+            let (served, msg) = request(&mut p, &label, "call", call(id, method, params), now);
+            assert_eq!(served.status, 204);
+            assert_eq!(msg.unwrap().data["method"], method);
+        }
+        // Parameters of the wrong shape never reach the broker.
+        for (method, params) in [
+            ("resources.status", json!({})),
+            ("resources.read", json!("config")),
+            ("resources.list", Value::Null),
+        ] {
+            refused(
+                request(&mut p, &label, "call", call("bad", method, params), now),
+                400,
+                "bad_request",
+                Some("bad"),
+            );
+        }
     }
     #[test]
     fn hello_arrays_are_refused_before_window_forwarding() {

@@ -35,22 +35,9 @@ impl Roots for crate::trust::TrustStore {
     }
 }
 
-/// The curated signature a release was installed with: the same shape as the signatures
-/// Access keeps for approved signers (P8e3).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Signed {
-    pub publisher: String,
-    /// The key's ID in its root.
-    pub key_id: String,
-    /// The Ed25519 public key the index named, which is the root's, in lower-case hex.
-    pub public_key: String,
-    /// The curated registry's index the root names: the trust domain.
-    pub source: String,
-    /// The exact signed descriptor bytes, UTF-8 JSON as the index gave them.
-    pub descriptor: String,
-    /// The detached Ed25519 signature, in lower-case hex.
-    pub signature: String,
-}
+/// A release's publisher signature: one type for a curated root's and for one Access's
+/// approved signers use (`access.rs`).
+pub use crate::access::Signed;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OperationDecl {

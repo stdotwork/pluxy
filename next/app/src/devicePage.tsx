@@ -5,7 +5,8 @@
 // first-party key signed it; only such a package may be a native tool, which has full access to
 // the person's user account and is enabled only through a native confirmation. A curated web
 // package's calls of native tools' operations (its imports) are allowed only through a native
-// confirmation too, and can be revoked here.
+// confirmation too, and can be revoked here. A web package signed by a signer the person approved
+// can be granted files and folders it declares (Access); each grant asks natively.
 
 import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
@@ -28,14 +29,14 @@ import {
   useLoad,
   when,
 } from "../../ui/kit/ui";
-import { type DevicePackage, type DeviceRelease, device } from "./device";
+import { type AccessGrant, access, type DevicePackage, type DeviceRelease, device } from "./device";
 
 const t = strings("device", {
   title: "Device extensions",
   short: "Device",
   tip: "Extension pages installed on this computer",
   intro:
-    "Extensions installed on this computer, apart from the extensions of the core the app is connected to. Their pages run in a webview with no app commands and get no files or settings. Native tools come only from a curated source and stay disabled until you enable them in a native confirmation.",
+    "Extensions installed on this computer, apart from the extensions of the core the app is connected to. Their pages run in a webview with no app commands and get no settings, and only the files you grant them. Native tools come only from a curated source and stay disabled until you enable them in a native confirmation.",
   safeMode:
     "Safe mode: pages from this device are not loaded and no native tool is enabled. Disable or remove a package here, then start the app without --safe-mode.",
   installFile: "Install from file…",
@@ -47,7 +48,7 @@ const t = strings("device", {
   state: "State",
   unverified: "Unverified",
   unverifiedWhy:
-    "It does not come from a curated source, so the app cannot tell who published it. Its pages still get no app commands, files or settings.",
+    "It does not come from a curated source, so the app cannot tell who published it. Its pages still get no app commands or settings, and no files unless you approve its signer and grant them.",
   curated: "Curated",
   curatedWhy:
     "Signed by a curated first-party key and installed from the curated source that key belongs to.",
@@ -56,7 +57,6 @@ const t = strings("device", {
   native: "Native tool",
   fullAccess:
     "This native tool has full access to your user account. Enabling it opens a native confirmation that shows its source, digest and signer.",
-  signer: "Signer",
   operations: "Operations",
   imports: "Imports",
   importValue: "{package} (contract {contract}, {required}): {operations}",
@@ -82,7 +82,30 @@ const t = strings("device", {
   pages: "Pages",
   lastGood: "Last good release",
   resources: "Asks for files",
-  resourcesValue: "{ids} (not available on this device yet)",
+  resourcesValue: "{ids}",
+  access: "Access",
+  signer: "Signer",
+  signerValue: "{publisher} key {key}",
+  signerKey: "Public key",
+  approved: "approved",
+  notApproved: "not approved",
+  unsigned: "Not signed: this package cannot be granted files.",
+  approveSigner: "Approve signer…",
+  signerWhy:
+    "Approving a signer lets packages it signs from this source ask you for files and folders. A signature says who signed a package, not that it is safe.",
+  resourceKind: "{kind}: {ops}",
+  file: "file",
+  folder: "folder",
+  notGranted: "not granted",
+  grantedTo: "{selected}",
+  grantedVia: "{selected} → {target}",
+  sessionOnly: "until the app quits",
+  changedBadge: "changed: grant again",
+  otherRelease: "granted to another release",
+  grant: "Grant…",
+  grantAgain: "Grant again…",
+  revoke: "Revoke",
+  readWarning: "A package's pages can send what they read anywhere they can reach.",
   settings: "Settings",
   settingsValue: "declared, not available on this device yet",
   enabled: "enabled",
@@ -136,7 +159,10 @@ function releaseFacts(r: DeviceRelease): [string, ComponentChildren][] {
     [t("pages"), r.pages.map((p) => p.title).join(", ") || undefined],
     [t("resources"), r.resources.length ? t("resourcesValue", { ids: r.resources.join(", ") }) : undefined],
     [t("settings"), r.settings ? t("settingsValue") : undefined],
-    [t("signer"), r.signer ?? undefined],
+    [
+      t("signer"),
+      r.signer ? t("signerValue", { publisher: r.signer.publisher, key: r.signer.key_id }) : undefined,
+    ],
     [t("operations"), r.operations.map(([id, what]) => `${id}: ${what}`).join("; ") || undefined],
     [
       t("imports"),
@@ -158,6 +184,84 @@ function releaseFacts(r: DeviceRelease): [string, ComponentChildren][] {
         : undefined,
     ],
   ];
+}
+
+function grantText(g: AccessGrant): string {
+  return g.selected === g.target
+    ? t("grantedTo", { selected: g.selected })
+    : t("grantedVia", { selected: g.selected, target: g.target });
+}
+
+/** The package's signer, and each resource it declares with what is granted. */
+function AccessDetail(props: { p: DevicePackage }) {
+  const { p } = props;
+  const grants = useLoad(access.list);
+  const act = useAction(grants.reload);
+  // Only a signature Access may use is offered for approval and grants (src-tauri/src/device.rs).
+  const signer = p.active.signer?.access ? p.active.signer : null;
+  if (p.active.declared.length === 0) return null;
+  const mine = (grants.data?.grants ?? []).filter((g) => g.package === p.id);
+  return (
+    <>
+      <h3>{t("access")}</h3>
+      <Facts
+        rows={[
+          [
+            t("signer"),
+            signer ? (
+              <>
+                {t("signerValue", { publisher: signer.publisher, key: signer.key_id })}{" "}
+                <Badge tone={signer.approved ? "ok" : "warn"}>
+                  {signer.approved ? t("approved") : t("notApproved")}
+                </Badge>
+              </>
+            ) : (
+              t("unsigned")
+            ),
+          ],
+          [t("source"), signer && <span class="mono">{signer.source}</span>],
+          [t("signerKey"), signer && <span class="mono">{signer.public_key}</span>],
+          ...p.active.declared.map((r): [string, ComponentChildren] => {
+            const g = mine.find((x) => x.resource === r.id);
+            const current = g && g.sha256 === p.active.sha256;
+            return [
+              `${r.id} (${t("resourceKind", { kind: r.kind === "file" ? t("file") : t("folder"), ops: r.operations.join(", ") })})`,
+              <>
+                {g ? <span class="mono">{grantText(g)}</span> : <span class="muted">{t("notGranted")}</span>}{" "}
+                {g?.session_only && <Badge tone="warn">{t("sessionOnly")}</Badge>}{" "}
+                {g?.changed && <Badge tone="danger">{t("changedBadge")}</Badge>}{" "}
+                {g && !current && <Badge tone="warn">{t("otherRelease")}</Badge>}{" "}
+                {signer?.approved && (
+                  <Button disabled={act.busy} onClick={() => act.run(() => access.grant(p.id, r.id))}>
+                    {g ? t("grantAgain") : t("grant")}
+                  </Button>
+                )}{" "}
+                {g && (
+                  <Button
+                    variant="quiet"
+                    disabled={act.busy}
+                    onClick={() => act.run(() => access.revoke(g.id))}
+                  >
+                    {t("revoke")}
+                  </Button>
+                )}
+              </>,
+            ];
+          }),
+        ]}
+      />
+      <p class="muted">{signer?.approved ? t("readWarning") : t("signerWhy")}</p>
+      {(grants.error ?? act.error) && <Notice tone="danger">{grants.error ?? act.error}</Notice>}
+      {grants.data?.warning && <Notice tone="warn">{grants.data.warning}</Notice>}
+      {signer && !signer.approved && (
+        <div class="actions">
+          <Button disabled={act.busy} onClick={() => act.run(() => access.approveSigner(p.id))}>
+            {t("approveSigner")}
+          </Button>
+        </div>
+      )}
+    </>
+  );
 }
 
 function PackageDetail(props: { p: DevicePackage; onClose: () => void; onChanged: () => void }) {
@@ -187,6 +291,7 @@ function PackageDetail(props: { p: DevicePackage; onClose: () => void; onChanged
       <p class="muted">{t(p.trust === "curated" ? "curatedWhy" : "unverifiedWhy")}</p>
       {p.tier === "native" && <Notice tone="warn">{t("fullAccess")}</Notice>}
       {webImports && <p class="muted">{t(p.trust === "curated" ? "importsWhy" : "importsUnverified")}</p>}
+      {p.tier === "web" && <AccessDetail p={p} />}
       {(act.error ?? remove.error) && <Notice tone="danger">{act.error ?? remove.error}</Notice>}
       <div class="actions">
         <Button
@@ -351,7 +456,7 @@ export function DevicePage(props: { onChanged: () => void }) {
           detail={
             chosen && (
               <PackageDetail
-                key={`${chosen.id} ${chosen.active.sha256} ${chosen.enabled} ${chosen.imports_allowed}`}
+                key={`${chosen.id} ${chosen.active.sha256} ${chosen.enabled} ${chosen.imports_allowed} ${chosen.active.signer?.approved}`}
                 p={chosen}
                 onClose={() => setSelected(undefined)}
                 onChanged={changed}

@@ -12,6 +12,8 @@
 //!    `rotation_test.rs`) in local and remote mode, rotation alone in managed mode; in local and
 //!    remote mode the window closes to the tray during a rotation and opens again;
 //! 4. in managed mode, checks this device's extension catalog (`device_native.rs`);
+//!    Access, the broker for files people grant to device packages, has stages of its own
+//!    (`access_native.rs`, `PLUXY_APP_TEST_ACCESS_STAGE`);
 //!    with `PLUXY_APP_TEST_ADMISSION`, a session checks only signed native-tier admission
 //!    (`admission_native.rs`) and quits; with `PLUXY_APP_TEST_PROGRAM`, only the program host
 //!    (`program_native.rs`, then `swap_native.rs`);
@@ -35,6 +37,9 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Webview};
 
+#[cfg(target_os = "linux")]
+#[path = "access_native.rs"]
+mod access;
 #[cfg(target_os = "linux")]
 #[path = "admission_native.rs"]
 mod admission;
@@ -184,6 +189,10 @@ fn probe(w: &Webview, calls: &[&str]) -> Result<Value, String> {
 }
 
 fn run(app: &AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    if let Ok(stage) = std::env::var("PLUXY_APP_TEST_ACCESS_STAGE") {
+        return access::run(app, &stage);
+    }
     #[cfg(target_os = "linux")]
     if let Ok(stage) = std::env::var("PLUXY_APP_TEST_WINDOW") {
         return window::run(app, &stage);

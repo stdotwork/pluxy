@@ -3,9 +3,9 @@
 This reference defines the app contribution to a pluxy package and app program contract v0.
 The signature verifier is shared Rust code in `src-tauri/src/artifact.rs`. The desktop app
 installs page-only web packages and curated signed native tools on this device
-([extensions on this device](../README.md#extensions-on-this-device)), and runs an admitted
-tool's program on demand through the program host (`src-tauri/src/program.rs`, Linux).
-Resources are later implementation work.
+([extensions on this device](../README.md#extensions-on-this-device)), grants signed web
+packages files through [Access](#access-for-web-packages), and runs an admitted tool's program
+on demand through the program host (`src-tauri/src/program.rs`, Linux).
 Core recognizes app contributions to refuse app-only packages and use only the provider part of
 a mixed package. Start with the [tutorial](TUTORIAL.md).
 
@@ -99,9 +99,11 @@ JSON string) and `signature` beside `url`, `sha256` and `size`, all four or none
 signature is refused. The desktop app verifies one only for a reserved publisher's package from a
 curated registry, one whose index address equals a trust root's `source` exactly: the key is the
 root's for that publisher and `key_id`, and `public_key` must be that key, or the package is
-refused. Any other listed signature, from a registry no root names or for a publisher no root
-names, is ignored for now and the package is Unverified; such a package is never a native tool
-and never has a reserved ID. Detached signature files contain exactly
+refused. In a curated registry every listed signature is checked so, whatever the package's
+publisher: a key that is not the root's is refused. A signature a registry no root names lists
+is verified with the `public_key` the index names and kept for
+[Access](#access-for-web-packages); the package is Unverified, is never a native tool and never
+has a reserved ID. Detached signature files contain exactly
 64 raw Ed25519 bytes; JSON/index transport encodes them as 128 lower-case hexadecimal digits.
 Public keys are 32 bytes, encoded as 64 lower-case hexadecimal digits. Verification uses pinned
 `ed25519-dalek` 2.2.0 with `VerifyingKey::verify_strict` and default features disabled. This is
@@ -111,6 +113,12 @@ an approved key from native settings for web resources or curated native admissi
 the same verifier. `PublisherKeys` supplies publisher/source/key lookup separately.
 `VerifiedArchive<R>` retains the rewound checked reader. Later folder-grant, native-admission and core-update code uses `into_archive()`
 instead of reopening a path, prevent concurrent writes, and check manifest identity after extraction.
+
+For such a signature, the desktop app refuses a release whose descriptor does not match the
+index's ID, version, `web` tier, this computer's platform, size and SHA-256, or the archive,
+before unpacking it. Its key comes from the index: a person approves it natively, for that
+source only, before any grant. Whether a signature is curated is derived from the app's current
+roots each time, never from a release carrying one.
 
 Version 2.2.0 is retained over stable 3.0.0 to avoid its curve25519-dalek 5, ed25519/signature 3
 and sha2 0.11 dependency transition. The app already uses sha2 0.10; both Dalek versions expose
@@ -123,6 +131,35 @@ them. Production keys and feeds are release configuration. Generate test keys at
 temporary storage; never track private keys. Test public roots require both a dedicated test
 build and isolated temporary trust profile. Normal builds with no production roots refuse native
 enablement; they never substitute test roots.
+
+## Access for web packages
+
+A web package's pages read granted files through its page channel (version 0), with three methods
+the desktop app's native code answers for a page of a package on this device. A page core lists
+gets `unknown_method` for each. Grants come only from the person, in native UI (the app README's
+Access section); a page cannot ask for one.
+
+| Method | `params` | `result` |
+| --- | --- | --- |
+| `resources.status` | `null` | `{"resources": [{"id", "kind", "operations", "granted", "session_only"}]}`: each resource this release declares, and whether it is granted to it now |
+| `resources.read` | `{"resource", "path"?, "offset"?}` | `{"data", "size", "offset", "eof"}`: up to 1 MiB of a regular file from `offset` (default 0), as base64 in `data`; `size` is the file's size |
+| `resources.list` | `{"resource", "path"?}` | `{"entries": [{"name", "kind", "size"?}], "truncated"}`: a folder's entries sorted by name, at most 1,000; `kind` is `file` (with `size`), `folder`, `link` or `other`. The app reads no further than 1,000 entries: for a bigger folder, `truncated` is true and the entries are the first 1,000 the folder gave |
+
+A `file` resource is read with no `path`. A `subtree` resource takes `path`, slash-separated parts
+inside the granted folder; for `resources.list`, empty or absent means the folder itself. A
+`file` resource cannot be listed. Unknown parameters are refused. Error codes:
+
+| Code | When |
+| --- | --- |
+| `bad_request` | Parameters of the wrong shape or unknown, an undeclared resource or operation, a `path` with a `file` resource |
+| `not_granted` | No grant for this package, release, source and signer, or the operation is not granted |
+| `refused` | An absolute path, `..`, `.` or empty parts, a link leaving the folder, a file or folder on another mount than the granted folder (such as one mounted inside it), or not a regular file |
+| `changed` | The chosen link, where it resolves, or the target (its identity or its mount) changed since it was granted; it stays refused until granted again |
+| `unavailable` | The file is gone, cannot be reached for now (permissions, an I/O error, too many open files), or the document portal no longer offers it; the grant stays, and a later call may read |
+| `revoked` | The grant was revoked while the call was in flight |
+
+The native ingress limits of every page channel call apply to these too. Grants are bound to the
+package's source, release digest and approved signer: a new release asks again.
 
 ## App program contract v0
 

@@ -571,7 +571,9 @@ impl Confirmations {
     }
 
     /// For the main window's command handlers only, after their caller check, with an action
-    /// native code built from verified records (enabling a native tool). Never page data.
+    /// native code built from verified records (enabling a native tool, granting a file or
+    /// folder through Access). Never page data. Main origin never reuses a remembered launch:
+    /// these actions have no launch.
     pub(crate) fn prepare_main(&mut self, action: Action) -> Result<Prepared, String> {
         self.prepare(action, Origin::Main)
     }

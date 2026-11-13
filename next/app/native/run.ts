@@ -29,7 +29,8 @@
 // build and a clean AppImage, and refuse the test package (renamed or not) and an AppImage holding
 // a test-feature binary.
 // In managed mode it then runs the window checks (window.ts, native_window.rs) in two more
-// sessions, one with a tray watcher and one without.
+// sessions, one with a tray watcher and one without, and the Access checks (access-suite.ts,
+// access_native.rs) in another, with the desktop portal's file chooser (GTK_USE_PORTAL=1).
 // Then, in a session of its own (instances.ts, instances-session.ts), the single-instance
 // scenario: a second launch on the same profile exits and raises the first's window, a launch on
 // another profile runs as its own app, and a killed owner's stale lock is recovered.
@@ -73,6 +74,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline";
+import { buildAccessFixtures } from "./access";
 import { buildAdmissionFixtures, MARKER_FILE, PROFILE_FILE } from "./admission";
 import { appImageHeader, buildSmokeAppImage, packAppImage } from "./appimage";
 import { buildDeviceFixtures } from "./device";
@@ -245,9 +247,9 @@ function managementKey(config: string): string {
   return JSON.parse(readFileSync(config, "utf8")).management_key;
 }
 
-/** The window checks (window.ts), with or without a tray watcher in the session, and the privacy
- * mode checks (privacy.ts). */
-type Suite = "window" | "window-no-tray" | "privacy";
+/** The window checks (window.ts), with or without a tray watcher in the session, the privacy
+ * mode checks (privacy.ts), and the Access checks (access-suite.ts). */
+type Suite = "window" | "window-no-tray" | "privacy" | "access";
 
 /** For a local or remote core, rotation.coreConfig is its config file. rotation.root keeps the
  * run's folders for the caller to remove; with rotation.restart the app starts again on them,
@@ -314,7 +316,26 @@ async function runApp(
     const quit = join(root, "quit");
     // This device's extension catalog is the same in every mode: check it once, in managed mode.
     const device =
-      mode === "managed" && !admission && !program && !routing ? join(root, "device") : undefined;
+      mode === "managed" && !admission && !program && !routing && suite !== "access"
+        ? join(root, "device")
+        : undefined;
+    const access = suite === "access" ? join(root, "access") : undefined;
+    if (access) {
+      mkdirSync(access);
+      writeFileSync(
+        join(dirs.config, identifier, "device-registries.json"),
+        JSON.stringify(buildAccessFixtures(access)),
+      );
+      // No recent files for the session's GTK programs, the portal's file chooser among them:
+      // with recent files, a folder chooser opens in its Recent view, where a typed folder
+      // cannot be chosen (GTK 3.24 gtkfilechooserwidget.c gtk_file_chooser_widget_get_files);
+      // without, it opens in a folder (startup mode falls back to the current folder).
+      mkdirSync(join(dirs.config, "gtk-3.0"), { recursive: true });
+      writeFileSync(
+        join(dirs.config, "gtk-3.0", "settings.ini"),
+        "[Settings]\ngtk-recent-files-enabled=false\n",
+      );
+    }
     // A test trust profile in HOME naming curated registries: the admission session's build
     // honours it; the device check's normal build must not.
     const curated = device || admission ? join(root, "curated") : undefined;
@@ -402,7 +423,8 @@ async function runApp(
       WEBKIT_DISABLE_DMABUF_RENDERER: "1",
       LIBGL_ALWAYS_SOFTWARE: "1",
       NO_AT_BRIDGE: "1",
-      GTK_USE_PORTAL: "0",
+      // GTK's own file chooser, except for the Access checks, which use the desktop portal's.
+      GTK_USE_PORTAL: access ? "1" : "0",
       // The FUSE-free way to run an AppImage, which the session's smoke AppImage uses.
       APPIMAGE_EXTRACT_AND_RUN: "1",
       PLUXY_APP_TEST_PAGE: PAGE,
@@ -410,6 +432,7 @@ async function runApp(
       PLUXY_APP_TEST_STATE: join(root, "state.json"),
       PLUXY_APP_TEST_TRAY_HOLD: join(root, "tray-hold"),
       ...(device ? { PLUXY_APP_TEST_DEVICE: device, PLUXY_APP_TEST_CURATED: curated as string } : {}),
+      ...(access ? { PLUXY_APP_TEST_ACCESS: access, PLUXY_APP_TEST_ACCESS_HOLD: join(access, "hold") } : {}),
       ...(admission ? { PLUXY_APP_TEST_ADMISSION: curated as string } : {}),
       // In the app's environment, never in the tool's (program_native.rs checks its names).
       ...(programDir ? { PLUXY_APP_TEST_PROGRAM: programDir, PLUXY_TEST_PROGRAM_CANARY: randomUUID() } : {}),
@@ -436,7 +459,12 @@ async function runApp(
       probe,
       appImage,
       randomUUID(),
-      suite ? join(import.meta.dir, suite === "privacy" ? "privacy.ts" : "window.ts") : bin,
+      suite
+        ? join(
+            import.meta.dir,
+            suite === "access" ? "access-suite.ts" : suite === "privacy" ? "privacy.ts" : "window.ts",
+          )
+        : bin,
     ];
     const xvfb = ["xvfb-run", "-a", "-s", "-screen 0 1280x800x24 -nolisten tcp", ...session];
     const proc = spawn("dbus-run-session", ["--", ...xvfb], {
@@ -467,8 +495,8 @@ async function runApp(
         problems.push("management key appeared on stdout/stderr");
         return;
       }
-      // window.ts's and privacy.ts's checks, each shown.
-      const driver = /^(window|privacy): /.exec(line)?.[1];
+      // window.ts's, privacy.ts's and access-suite.ts's checks, each shown.
+      const driver = /^(window|privacy|access): /.exec(line)?.[1];
       if (driver) {
         console.log(`  ${mode} | ${line}`);
         if (line.startsWith(`${driver}: suite passed`)) suitePassed = true;
@@ -1090,7 +1118,7 @@ async function main(): Promise<number> {
           true,
         )),
       );
-      for (const suite of ["window", "window-no-tray", "privacy"] as const)
+      for (const suite of ["window", "window-no-tray", "privacy", "access"] as const)
         p.push(
           ...(await runApp(
             "managed",
