@@ -48,6 +48,9 @@ mod device;
 #[path = "native_ingress.rs"]
 mod ingress;
 #[cfg(target_os = "linux")]
+#[path = "jobs_native.rs"]
+mod jobs;
+#[cfg(target_os = "linux")]
 #[path = "program_native.rs"]
 mod program;
 #[cfg(target_os = "linux")]
@@ -384,11 +387,12 @@ fn run(app: &AppHandle) -> Result<(), String> {
         crate::quit(app);
         return Ok(());
     }
-    // Cross-package routing and import authorization (routing_native.rs), in a session of its
-    // own.
+    // Cross-package routing and import authorization (routing_native.rs), then declared jobs
+    // (jobs_native.rs), in a session of their own.
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_ROUTING") {
-        routing::run(app, &main, dir.into())?;
+        routing::run(app, &main, dir.clone().into())?;
+        jobs::run(app, &main, dir.into())?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());

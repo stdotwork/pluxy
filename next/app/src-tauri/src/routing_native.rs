@@ -106,7 +106,7 @@ fn asked(
 }
 
 /// Enables native tool id through its confirmation, confirmed; returns the confirmation's text.
-fn enable(app: &AppHandle, main: &Webview, id: &str) -> Result<String, String> {
+pub(super) fn enable(app: &AppHandle, main: &Webview, id: &str) -> Result<String, String> {
     let (text, slot) = asked(
         app,
         main,
@@ -119,7 +119,12 @@ fn enable(app: &AppHandle, main: &Webview, id: &str) -> Result<String, String> {
     Ok(text)
 }
 
-fn install(main: &Webview, registry: &str, id: &str, version: &str) -> Result<(), String> {
+pub(super) fn install(
+    main: &Webview,
+    registry: &str,
+    id: &str,
+    version: &str,
+) -> Result<(), String> {
     ok(
         main,
         "device_install",
@@ -129,7 +134,7 @@ fn install(main: &Webview, registry: &str, id: &str, version: &str) -> Result<()
 }
 
 /// The window's call of op of package with input: `{ok, value}` or `{ok: false, error}`.
-fn call(main: &Webview, package: &str, op: &str, input: Value) -> Result<Value, String> {
+pub(super) fn call(main: &Webview, package: &str, op: &str, input: Value) -> Result<Value, String> {
     let slot = start(
         main,
         "program_call",

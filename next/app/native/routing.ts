@@ -11,7 +11,13 @@
 // - pluxy/guide: a curated web package, like Easy mode, importing pluxy/target's summary, wait,
 //   store and launch, with a page;
 // - example/hub-viewer: the same imports (summary only), unsigned, from a registry no root names:
-//   Unverified.
+//   Unverified;
+// - for the jobs check (src-tauri/src/jobs_native.rs), which runs after the routing check:
+//   pluxy/jobs-hub consumes kind pluxy/jobs-hub/items (schema 1) through its deliver operation
+//   take; pluxy/jobs-source, releases 1.0.0 and 1.1.0, produces it at schema 1 through scan;
+//   pluxy/jobs-other produces it at schema 2, which the hub does not accept; pluxy/jobs-thief
+//   consumes only its own kind; pluxy/jobs-dup produces one kind twice and pluxy/jobs-outside
+//   consumes another package's kind: both are refused at install.
 //
 // The curated registry lists the pluxy packages, each signed with a publisher key generated for
 // this run; the private key never leaves this process. expect.json holds what the check compares
@@ -104,6 +110,44 @@ const relay = {
   output_schema: object,
 };
 
+const jobsOp = {
+  id: "jobs",
+  description: "Ask the host's job service",
+  effect: "read",
+  input_schema: object,
+  output_schema: object,
+};
+const take = {
+  id: "take",
+  description: "Take a delivery of a job",
+  effect: "read",
+  input_schema: object,
+  output_schema: object,
+};
+const report = {
+  id: "report",
+  description: "Say what was delivered",
+  effect: "read",
+  input_schema: object,
+  output_schema: object,
+};
+const scan = {
+  id: "scan",
+  description: "Send items as a job",
+  effect: "read",
+  input_schema: {
+    type: "object",
+    properties: {
+      count: { type: "integer", minimum: 0, maximum: 64 },
+      mode: { type: "string" },
+      hold: { type: "integer", minimum: 0, maximum: 1000 },
+    },
+    additionalProperties: false,
+  },
+  output_schema: object,
+};
+const ITEMS_KIND = "pluxy/jobs-hub/items";
+
 interface Package {
   id: string;
   version: string;
@@ -148,6 +192,37 @@ function web(id: string, imports: object[]): Package {
 }
 
 const PACKAGES: Package[] = [
+  native("pluxy/jobs-hub", "1.0.0", {
+    operations: [jobsOp, take, report],
+    consumes: [{ kind: ITEMS_KIND, schema: [1], deliver: "take" }],
+  }),
+  native("pluxy/jobs-source", "1.0.0", {
+    operations: [scan],
+    produces: [{ kind: ITEMS_KIND, schema: 1, operation: "scan" }],
+  }),
+  native("pluxy/jobs-source", "1.1.0", {
+    operations: [scan],
+    produces: [{ kind: ITEMS_KIND, schema: 1, operation: "scan" }],
+  }),
+  native("pluxy/jobs-other", "1.0.0", {
+    operations: [scan],
+    produces: [{ kind: ITEMS_KIND, schema: 2, operation: "scan" }],
+  }),
+  native("pluxy/jobs-thief", "1.0.0", {
+    operations: [jobsOp, take],
+    consumes: [{ kind: "pluxy/jobs-thief/items", schema: [1], deliver: "take" }],
+  }),
+  native("pluxy/jobs-dup", "1.0.0", {
+    operations: [scan],
+    produces: [
+      { kind: ITEMS_KIND, schema: 1, operation: "scan" },
+      { kind: ITEMS_KIND, schema: 1, operation: "scan" },
+    ],
+  }),
+  native("pluxy/jobs-outside", "1.0.0", {
+    operations: [take],
+    consumes: [{ kind: ITEMS_KIND, schema: [1], deliver: "take" }],
+  }),
   native(
     "pluxy/target",
     "1.0.0",

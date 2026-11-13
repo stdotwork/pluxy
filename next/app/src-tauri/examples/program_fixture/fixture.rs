@@ -18,6 +18,20 @@
 //! - `crash` never: it exits at once with status 3;
 //! - `flood` never: it sends 2000 call frames the host refuses, and reads nothing more.
 //!
+//! As a job's consumer and producer (`app-host/README.md`, "Jobs"; `src/jobs_native.rs`):
+//!
+//! - `jobs` sends one `jobs` frame to the host, `{op, input}` from its input, for this call, and
+//!   answers with the host's answer: `{"answer": {"output": ...}}` or `{"answer": {"error": ...}}`;
+//! - `take`, a deliver operation, keeps what the host delivered (its input and the call's chain),
+//!   waits `value.hold` milliseconds when the batch names it, and answers `{"ok": true}`;
+//! - `report` answers with everything `take` kept, in order (`deliveries`);
+//! - `scan`, a job's operation, sends `count` batches `{"n", "item": "item-<n>", "hold"}` as
+//!   progress, never more than the job's window ahead of the host's acks, waits until each is
+//!   acknowledged and answers `{"sent", "acked", "max_unacked", "window"}`. `mode` makes it
+//!   misbehave: `flood` sends twice the window and one more without waiting, `forge` sends one
+//!   batch naming a `source`, `big` one batch padded past the host's limit, and `wait` one batch;
+//!   each then waits for its cancel.
+//!
 //! Each answer of summary, store, launch and relay also carries the `chain` the host's call named.
 //!
 //! `summary` also says its release's version, when it answered (milliseconds since the Unix
@@ -194,6 +208,116 @@ fn relay(input: &mut impl Read, output: &mut impl Write, f: &Value, n: u64) -> V
     json!({"error": {"code": "extension_unavailable", "message": "the host closed the pipe"}})
 }
 
+/// Sends one `jobs` frame `{op, input}` from f's input to the host, for call f, and waits for the
+/// host's answer: `{"output": ...}` or `{"error": ...}`.
+fn host_jobs(input: &mut impl Read, output: &mut impl Write, f: &Value, n: u64) -> Value {
+    let own = format!("q-{n}");
+    write_frame(
+        output,
+        &json!({"type": "jobs", "id": own, "for": f["id"], "op": f["input"]["op"],
+            "input": f["input"]["input"]}),
+    );
+    while let Some(m) = read_frame(input) {
+        match m["type"].as_str() {
+            Some("result") if m["id"] == own => return json!({"output": m["output"]}),
+            Some("error") if m["id"] == own => return json!({"error": m["error"]}),
+            _ => {}
+        }
+    }
+    json!({"error": {"code": "extension_unavailable", "message": "the host closed the pipe"}})
+}
+
+/// Reads frames for job call id until its cancel, which it answers, or the end of its input,
+/// counting acks in acked.
+fn until_cancelled(input: &mut impl Read, output: &mut impl Write, id: &Value, acked: &mut u64) {
+    while let Some(m) = read_frame(input) {
+        match m["type"].as_str() {
+            Some("ack") if m["id"] == *id => *acked = m["seq"].as_u64().unwrap_or(*acked),
+            Some("cancel") if m["id"] == *id => {
+                write_frame(output, &error(id, "cancelled", "the job was cancelled"));
+                return;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Runs job call f of `scan` (see the module's description).
+fn scan(input: &mut impl Read, output: &mut impl Write, f: &Value) {
+    let id = f["id"].clone();
+    let window = f["job"]["window"].as_u64().unwrap_or(0);
+    let count = f["input"]["count"].as_u64().unwrap_or(0);
+    let hold = f["input"]["hold"].clone();
+    let batch = |n: u64| json!({"type": "progress", "id": id, "value": {"n": n, "item": format!("item-{n}"), "hold": hold}});
+    let (mut sent, mut acked, mut max_unacked) = (0u64, 0u64, 0u64);
+    if window == 0 {
+        return write_frame(
+            output,
+            &error(&id, "invalid_request", "scan runs only as a job"),
+        );
+    }
+    match f["input"]["mode"].as_str().unwrap_or_default() {
+        "flood" => {
+            for n in 1..=window * 2 + 1 {
+                write_frame(output, &batch(n));
+            }
+            return until_cancelled(input, output, &id, &mut acked);
+        }
+        "forge" => {
+            let mut b = batch(1);
+            b["source"] = json!({"package": "pluxy/jobs-other"});
+            write_frame(output, &b);
+            return until_cancelled(input, output, &id, &mut acked);
+        }
+        "big" => {
+            let mut b = batch(1);
+            b["value"]["pad"] = json!("x".repeat(60 << 10));
+            write_frame(output, &b);
+            return until_cancelled(input, output, &id, &mut acked);
+        }
+        "wait" => {
+            write_frame(output, &batch(1));
+            return until_cancelled(input, output, &id, &mut acked);
+        }
+        _ => {}
+    }
+    /// Reads one frame for job call id: an ack, or its cancel (answered: false, the job ends).
+    fn next(input: &mut impl Read, output: &mut impl Write, id: &Value, acked: &mut u64) -> bool {
+        match read_frame(input) {
+            Some(m) if m["type"] == "ack" && m["id"] == *id => {
+                *acked = m["seq"].as_u64().unwrap_or(*acked);
+                true
+            }
+            Some(m) if m["type"] == "cancel" && m["id"] == *id => {
+                write_frame(output, &error(id, "cancelled", "the job was cancelled"));
+                false
+            }
+            Some(_) => true,
+            None => std::process::exit(0),
+        }
+    }
+    for n in 1..=count {
+        while sent - acked >= window {
+            if !next(input, output, &id, &mut acked) {
+                return;
+            }
+        }
+        write_frame(output, &batch(n));
+        sent += 1;
+        max_unacked = max_unacked.max(sent - acked);
+    }
+    while acked < sent {
+        if !next(input, output, &id, &mut acked) {
+            return;
+        }
+    }
+    write_frame(
+        output,
+        &json!({"type": "result", "id": id, "output": {"sent": sent, "acked": acked,
+            "max_unacked": max_unacked, "window": window}}),
+    );
+}
+
 /// Its child's process ID, for the SIGTERM handler.
 #[cfg(unix)]
 static CHILD_PID: AtomicI32 = AtomicI32::new(0);
@@ -309,6 +433,8 @@ pub fn main() -> ! {
     let mut calls = 0u64;
     let mut waiting: Option<Value> = None;
     let mut relayed = 0u64;
+    let mut asked = 0u64;
+    let mut deliveries: Vec<Value> = Vec::new();
     let mut reported = Value::Null;
     let version = manifest["version"].clone();
     let at = || {
@@ -434,6 +560,28 @@ pub fn main() -> ! {
                                 "version": version, "pid": std::process::id(), "at": at()}}),
                         );
                     }
+                    "jobs" => {
+                        asked += 1;
+                        let answer = host_jobs(&mut input, &mut output, &f, asked);
+                        write_frame(
+                            &mut output,
+                            &json!({"type": "result", "id": id, "output": {"answer": answer}}),
+                        );
+                    }
+                    "take" => {
+                        deliveries.push(json!({"input": f["input"], "chain": chain}));
+                        let hold = f["input"]["value"]["hold"].as_u64().unwrap_or(0);
+                        std::thread::sleep(Duration::from_millis(hold));
+                        write_frame(
+                            &mut output,
+                            &json!({"type": "result", "id": id, "output": {"ok": true}}),
+                        );
+                    }
+                    "report" => write_frame(
+                        &mut output,
+                        &json!({"type": "result", "id": id, "output": {"deliveries": deliveries}}),
+                    ),
+                    "scan" => scan(&mut input, &mut output, &f),
                     "crash" => std::process::exit(3),
                     "flood" => {
                         for i in 0..2000 {
