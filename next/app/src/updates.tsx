@@ -117,14 +117,21 @@ function NotesView(props: {
     setLabel(undefined);
     setError(undefined);
     // TEMP-DIAG
-    const dbg = (window as unknown as { __placeLog: unknown[] });
+    const dbg = window as unknown as { __placeLog: unknown[] };
     dbg.__placeLog ??= [];
     let seq = 0;
     const mk = (from: string) => () => {
       if (opened && area.current) {
         const rect = visibleRect(area.current);
         const n = ++seq;
-        dbg.__placeLog.push({ n, from, y: rect?.y, h: rect?.height, s: Math.round(window.scrollY), t: Math.round(performance.now()) });
+        dbg.__placeLog.push({
+          n,
+          from,
+          y: rect?.y,
+          h: rect?.height,
+          s: Math.round(window.scrollY),
+          t: Math.round(performance.now()),
+        });
         invoke("release_notes_place", { label: opened, rect })
           .catch(() => {})
           .then(() => dbg.__placeLog.push({ done: n, t: Math.round(performance.now()) }));
