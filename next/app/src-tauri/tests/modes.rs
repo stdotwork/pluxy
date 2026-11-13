@@ -2,7 +2,8 @@
 //! (next/e2e/panelcore, which needs Go). No window: these drive the same connection code the
 //! window's commands use. Every core runs in a temporary folder on a random loopback port.
 
-use pluxy_app::conn::{Change, Connection, Dirs, Mode};
+use pluxy_app::client::{certificates, Client};
+use pluxy_app::conn::{Change, Connection, Dirs, Kept, Mode, Settings};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -51,6 +52,8 @@ struct Core {
     base: String,
     key: String,
     ca: Option<String>,
+    /// Core's config file, which holds its current management key.
+    config: PathBuf,
 }
 
 impl Core {
@@ -79,8 +82,33 @@ impl Core {
             base: v["base"].as_str().unwrap().into(),
             key: v["key"].as_str().unwrap().into(),
             ca: v["ca"].as_str().map(String::from),
+            config: v["config"].as_str().unwrap().into(),
         }
     }
+
+    /// This core, reached directly, not through the app.
+    fn client(&self) -> Client {
+        let certs = self
+            .ca
+            .as_ref()
+            .map(|f| certificates(&std::fs::read(f).unwrap()).unwrap());
+        Client::new(&self.base, certs)
+    }
+
+    fn status(&self, key: &str) -> u16 {
+        self.client().call(key, "GET", "/status", None).status
+    }
+}
+
+/// Rotates c's management key, failing the test with core's or the app's reason.
+fn rotate(c: &mut Connection) -> pluxy_app::conn::Rotation {
+    c.rotate_key()
+        .unwrap_or_else(|r| panic!("rotation failed: {r:?}"))
+}
+
+/// The management key in the core config at path: core saves a rotated key there first.
+fn config_key(path: &Path) -> String {
+    pluxy_app::managed::management_key(path).unwrap()
 }
 
 impl Drop for Core {
@@ -264,4 +292,166 @@ fn remote_needs_https_and_trusts_the_given_authority_only() {
     let c = Connection::open(dirs(&root), None);
     assert_eq!(c.caller().call("GET", "/status", None).status, 200);
     drop(c);
+}
+
+/// A rotated key is kept as the old one was, also across a restart (a new Connection on the same
+/// folders, as the app opens it at startup); the old key stops working; a failed save leaves the
+/// app on the new key and saying what to do; a call in flight with the old key goes again.
+#[test]
+fn local_rotation_keeps_the_new_key_as_the_old_one_was_kept() {
+    let core = Core::start(false);
+    let root = temp("rotate-local");
+    let mut c = Connection::open(dirs(&root), None);
+    c.change(Change {
+        mode: Some(Mode::Local),
+        url: Some(core.base.clone()),
+        ..Change::default()
+    })
+    .unwrap();
+
+    // Kept on this device.
+    c.sign_in(&core.key, true).unwrap();
+    let in_flight = c.caller();
+    let first = rotate(&mut c);
+    assert_eq!(first.kept, Kept::Device);
+    assert_eq!(first.key, config_key(&core.config));
+    assert_ne!(first.key, core.key);
+    assert_eq!(core.status(&core.key), 401);
+    assert_eq!(core.status(&first.key), 200);
+    assert_eq!(c.caller().call("GET", "/status", None).status, 200);
+    let settings = dirs(&root).settings();
+    assert_eq!(
+        Settings::load(&settings).unwrap().key,
+        Some(first.key.clone())
+    );
+    assert!(c.view().error.is_none());
+    // A call that left with the old key is refused, and sent again with the new one.
+    assert_eq!(in_flight.call("GET", "/status", None).status, 401);
+    assert_eq!(
+        in_flight
+            .call_or_retry("GET", "/status", None, || c.caller())
+            .status,
+        200
+    );
+    drop(c);
+    let mut c = Connection::open(dirs(&root), None);
+    assert!(c.view().signed_in && c.view().remembered);
+    assert_eq!(c.caller().call("GET", "/status", None).status, 200);
+
+    // Not kept: it lasts until the app quits, and signs in again after a restart.
+    c.sign_out().unwrap();
+    c.sign_in(&first.key, false).unwrap();
+    let second = rotate(&mut c);
+    assert_eq!(second.kept, Kept::Session);
+    assert_eq!(second.key, config_key(&core.config));
+    assert_eq!(core.status(&first.key), 401);
+    assert_eq!(c.caller().call("GET", "/status", None).status, 200);
+    assert_eq!(Settings::load(&settings).unwrap().key, None);
+    drop(c);
+    let mut c = Connection::open(dirs(&root), None);
+    assert!(!c.view().signed_in);
+    assert_eq!(
+        c.sign_in(&first.key, false).unwrap_err(),
+        "core refused this key"
+    );
+    c.sign_in(&second.key, false).unwrap();
+
+    // A failed save: the app works on the new key, the old kept key stays on disk, and the
+    // connection says what to do; doing it recovers.
+    c.sign_in(&second.key, true).unwrap();
+    let config = dirs(&root).config;
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let third = c.rotate_key();
+        std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let third = third.unwrap_or_else(|r| panic!("rotation failed: {r:?}"));
+        let Kept::NotSaved(why) = &third.kept else {
+            panic!("a failed save was not reported: {:?}", third.kept)
+        };
+        assert!(why.contains("could not be kept on this device"), "{why}");
+        assert!(!why.contains(&third.key));
+        assert_eq!(c.view().error.as_deref(), Some(why.as_str()));
+        assert_eq!(c.caller().call("GET", "/status", None).status, 200);
+        assert_eq!(core.status(&second.key), 401);
+        assert_eq!(
+            Settings::load(&settings).unwrap().key,
+            Some(second.key.clone())
+        );
+        drop(c);
+        // After a restart the stale kept key is refused, as the connection said.
+        let mut c = Connection::open(dirs(&root), None);
+        assert_eq!(c.caller().call("GET", "/status", None).status, 401);
+        c.sign_in(&third.key, true).unwrap();
+        assert!(c.view().error.is_none());
+        drop(c);
+        let c = Connection::open(dirs(&root), None);
+        assert_eq!(c.caller().call("GET", "/status", None).status, 200);
+    }
+}
+
+/// The app's own core saves the rotated key in its config file, where the app reads it when it
+/// starts the core again.
+#[test]
+fn managed_rotation_survives_restarting_the_core() {
+    let root = temp("rotate-managed");
+    let out = Command::new("go")
+        .args(["run", "./e2e/panelcore", "-prepare"])
+        .arg(root.join("program"))
+        .current_dir(next_dir())
+        .stderr(Stdio::inherit())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let program: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let mut c = Connection::open(dirs(&root), None);
+    c.change(Change {
+        mode: Some(Mode::Managed),
+        core_path: Some(program["core"].as_str().unwrap().into()),
+        ..Change::default()
+    })
+    .unwrap();
+    let config = dirs(&root).core.join("config.json");
+    let old = config_key(&config);
+    let base = c.view().target.unwrap();
+    let rotated = rotate(&mut c);
+    assert_eq!(rotated.kept, Kept::Core);
+    assert_eq!(rotated.key, config_key(&config));
+    assert_ne!(rotated.key, old);
+    let direct = Client::new(&base, None);
+    assert_eq!(direct.call(&old, "GET", "/status", None).status, 401);
+    assert_eq!(c.caller().call("GET", "/status", None).status, 200);
+    assert_eq!(Settings::load(&dirs(&root).settings()).unwrap().key, None);
+    c.stop_core();
+    drop(c);
+    // The core starts again on the same port, with the key from its config file.
+    let c = Connection::open(dirs(&root), None);
+    assert_eq!(c.caller().call("GET", "/status", None).status, 200);
+    assert_eq!(direct.call(&old, "GET", "/status", None).status, 401);
+    drop(c);
+}
+
+/// Over https with the given authority, a kept rotated key works after a restart.
+#[test]
+fn remote_rotation_keeps_the_key_across_a_restart() {
+    let core = Core::start(true);
+    let root = temp("rotate-remote");
+    let mut c = Connection::open(dirs(&root), None);
+    c.change(Change {
+        mode: Some(Mode::Remote),
+        url: Some(core.base.clone()),
+        ca_file: core.ca.clone(),
+        ..Change::default()
+    })
+    .unwrap();
+    c.sign_in(&core.key, true).unwrap();
+    let rotated = rotate(&mut c);
+    assert_eq!(rotated.kept, Kept::Device);
+    assert_eq!(rotated.key, config_key(&core.config));
+    assert_eq!(core.status(&core.key), 401);
+    drop(c);
+    let mut c = Connection::open(dirs(&root), None);
+    assert!(c.view().signed_in && c.view().remembered);
+    assert_eq!(c.caller().call("GET", "/status", None).status, 200);
+    assert_eq!(core.status(&rotated.key), 200);
 }

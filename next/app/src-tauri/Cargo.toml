@@ -3,7 +3,7 @@ name = "pluxy-app"
 version = "0.1.0"
 description = "The pluxy desktop app: a window, a tray icon and, if wanted, a core of its own"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.89"
 publish = false
 
 [lib]
@@ -27,6 +27,12 @@ artifact-test-trust = []
 name = "session_probe"
 required-features = ["native-test"]
 
+# The native test's disposable summary tool (native/program.ts packs it into a signed test
+# package); the program host's unit tests run its code too. Never part of a release.
+[[example]]
+name = "program_fixture"
+path = "examples/program_fixture/main.rs"
+
 [build-dependencies]
 serde_json = "1"
 json-patch = "4"
@@ -48,6 +54,9 @@ semver = "1"
 # Release notes: Markdown to HTML, with raw HTML and images dropped (src/notes.rs).
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 pulldown-cmark-escape = "0.11"
+# Release archives of packages installed on this device (src/device.rs): gzip-compressed tar.
+flate2 = "=1.1.11"
+tar = { version = "=0.4.46", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -65,6 +74,11 @@ tauri-utils = { version = "=2.10.2", default-features = false }
 # GTK's D-Bus layer, for the native test's probe (examples/session_probe.rs) only.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 gio = "0.18"
+
+# SHA-256 unoptimized runs at about 16 MB/s, and the program host hashes a tool's program at each
+# start: in the unit tests that tool is the test binary itself, of a hundred megabytes and more.
+[profile.dev.package.sha2]
+opt-level = 3
 
 [profile.release]
 codegen-units = 1

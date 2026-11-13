@@ -132,6 +132,11 @@ impl<R> VerifiedArchive<R> {
     pub fn into_archive(self) -> R {
         self.archive
     }
+    /// The verified descriptor and the checked, rewound archive handle, for a consumer that
+    /// keeps both (native admission stores the exact descriptor bytes and signature).
+    pub fn into_parts(self) -> (VerifiedDescriptor, R) {
+        (self.signed, self.archive)
+    }
 }
 
 /// Authenticate before reading archive bytes, stream size/hash checks, and retain the handle.

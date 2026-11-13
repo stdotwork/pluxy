@@ -1,8 +1,11 @@
 # App package contract
 
 This reference defines the app contribution to a pluxy package and app program contract v0.
-The signature verifier is shared Rust code in `src-tauri/src/artifact.rs`. The desktop installer
-and Rust program host are later implementation work.
+The signature verifier is shared Rust code in `src-tauri/src/artifact.rs`. The desktop app
+installs page-only web packages and curated signed native tools on this device
+([extensions on this device](../README.md#extensions-on-this-device)), and runs an admitted
+tool's program on demand through the program host (`src-tauri/src/program.rs`, Linux).
+Resources are later implementation work.
 Core recognizes app contributions to refuse app-only packages and use only the provider part of
 a mixed package. Start with the [tutorial](TUTORIAL.md).
 
@@ -66,6 +69,14 @@ enablement displays **full access to your user account** in the main UI and nati
 Its page still has no Tauri permissions. Process isolation contains crashes; it does not confine
 a native program.
 
+The program host takes a native tool only as `device::Admitted`
+(`src-tauri/src/device_admission.rs`), from `Catalog::admitted`, which checks the confirmation,
+the root, the signature and every installed file again each time it is called. Only the
+catalog builds one; it offers, read-only: ID, version, archive SHA-256 and size, install time,
+source, signature, the root's public key, store folder, program path and the program's SHA-256
+(check the opened file against it before running it), operations, state versions, app
+contribution version and host contract.
+
 ### Signed descriptor bytes
 
 A signed artifact has a UTF-8 JSON descriptor, detached Ed25519 signature and archive:
@@ -80,7 +91,15 @@ signature over those exact bytes against the trusted publisher key, then verify 
 and SHA-256 **before extraction**. Check the extracted manifest ID, version and tier against the
 descriptor, and platform against the selected artifact. Store the exact descriptor bytes and
 signature; never verify a receiver's reserialized JSON. Whitespace and key order are signed too.
-The index pins size, digest, key identity and signature. Detached signature files contain exactly
+The index pins size, digest, key identity and signature: a signed artifact adds `key_id` (1 to
+64 letters, digits, `.`, `_` or `-`), `public_key`, `descriptor` (the exact descriptor bytes as a
+JSON string) and `signature` beside `url`, `sha256` and `size`, all four or none; part of a
+signature is refused. The desktop app verifies one only for a reserved publisher's package from a
+curated registry, one whose index address equals a trust root's `source` exactly: the key is the
+root's for that publisher and `key_id`, and `public_key` must be that key, or the package is
+refused. Any other listed signature, from a registry no root names or for a publisher no root
+names, is ignored for now and the package is Unverified; such a package is never a native tool
+and never has a reserved ID. Detached signature files contain exactly
 64 raw Ed25519 bytes; JSON/index transport encodes them as 128 lower-case hexadecimal digits.
 Public keys are 32 bytes, encoded as 64 lower-case hexadecimal digits. Verification uses pinned
 `ed25519-dalek` 2.2.0 with `VerifyingKey::verify_strict` and default features disabled. This is
@@ -105,8 +124,9 @@ enablement; they never substitute test roots.
 
 ## App program contract v0
 
-This is the contract the later Rust host implements. It adds no provider operation and does not
-change provider wire version 0.7. Start a verified absolute executable directly in its immutable
+The Rust program host implements this contract on Linux; [The Linux host](#the-linux-host) says
+what it adds and what is still to come. It adds no provider operation and does not change
+provider wire version 0.7. Start a verified absolute executable directly in its immutable
 package folder, with a cleared environment and only required platform values. Pass selected
 home/config/context explicitly; do not inherit shell credentials.
 The host supplies `PLUXY_APP_CONTRACT_VERSIONS` (comma-separated supported major versions,
@@ -150,6 +170,7 @@ Never automatically retry a mutation whose outcome is unknown.
 | authorized | Native authorization exists for this source and digest. |
 | idle | After idle stop, no lease, program, watcher, scan or thread remains. |
 | starting | Spawn and hello/describe readiness are in progress. |
+| ready | Started and described, with no lease: it stops after the idle delay. |
 | active | Calls or jobs own leases. |
 | draining | Admission stopped; work is finishing or cancelling. |
 | crashed | Unexpected exit failed pending calls. |
@@ -159,7 +180,8 @@ Never automatically retry a mutation whose outcome is unknown.
 
 Installation, enablement and authorization are distinct from process state. Start on demand with
 a ten-second startup limit. Last lease release schedules idle stop, default 30 seconds. On stdin
-EOF/stop, checkpoint and exit. After five seconds, kill/reap only the owned tool group. A dedicated
+EOF/stop, checkpoint, end every process the tool started and exit; do the same on SIGTERM, which
+the tool gets if the app dies without stopping it, when nothing kills its group. After five seconds, kill/reap only the owned tool group. A dedicated
 supervisor thread remains until exit/reap, including on Linux where the parent-death signal follows
 the creating thread. Explicitly launched agents have separate lifetimes outside tool cleanup.
 
@@ -172,6 +194,87 @@ at switch. Rollback rechecks trust and state compatibility. Disable/removal stop
 cancels work, drains/reconciles commits, closes pipes and reaps processes. Preserve private backups
 until explicit removal. Stop a full-access process to end its access; grants cannot revoke its OS
 access while it runs.
+
+### The Linux host
+
+The program host starts a tool from `Catalog::admitted`'s record at that moment, never from
+anything a caller passes. On top of the rules above:
+
+- It opens the program file, checks its SHA-256 against the record and executes that opened file,
+  so a replaced file never runs. A program must therefore be a native executable, not a script:
+  an interpreter would open the path again.
+- The tool's environment holds exactly the three variables above. Only stdin, stdout and stderr
+  are open in it; every other descriptor closes as it executes. It leads a process group of its
+  own and gets SIGTERM if the app dies without stopping it. Its command line (`argv[0]`) is its
+  program's path; its short process name (`comm`) is the number of the descriptor it was run
+  from. Its supervisor thread starts it and stays until it has been reaped. It needs
+  Linux 5.11 or later (`close_range` with `CLOSE_RANGE_CLOEXEC`).
+- Hello must come first and name the record's ID and digest and contract 0. The describe reply's
+  `operations` are objects with an `id`; their IDs must be exactly the manifest's, and
+  `state.version` the manifest's. A tool that does not match stays **incompatible** until its
+  package changes. `describe` is the host's call: a manifest may not declare it.
+- A frame from a tool may be at most 1 MiB; a larger one, an unknown frame type or a reply
+  before hello breaks the pipe and the tool is stopped; a start it breaks fails saying which.
+  A reply to a call that is no longer
+  waiting is dropped. Progress frames are read and not delivered yet.
+- Inputs are at most 64 KiB of JSON. Inputs and outputs are checked against the operation's
+  schemas, which may use only `type`, `properties`, `required`, `additionalProperties`, `items`,
+  `enum`, `const`, `minimum`, `maximum`, `minLength`, `maxLength`, `minItems`, `maxItems` and
+  the annotations `title`, `description`, `default`, `examples` and `$comment`; a schema using
+  any other keyword makes the tool incompatible rather than half checked. An output its schema
+  refuses fails the call with `extension_protocol`.
+- A call is checked against its operation and input schema before the tool is leased or
+  started. Calls to one tool run one at a time, at most eight at once counting those waiting
+  their turn, and at most eight more wait for it to start or stop. Calls that waited on a start
+  that failed get that start's error rather than starting it again. A cancelled call has five
+  seconds for its terminal reply; after that the tool is stopped. A cancel also ends a call
+  still waiting for its tool to start or stop.
+- Each call holds a lease. Idle stop, a change to the package and app quit close the tool's
+  stdin, kill its whole process group after five seconds (once its leader exits, the rest of
+  the group at once), and the tool itself if it left that group, and reap it. A child that
+  leaves the group is not followed. Closing the window cancels every call, so the tools stop
+  when idle; once the app is quitting, no call or swap starts a tool.
+- Stderr lines are logged prefixed with the tool's ID, at most 8 KiB each (a longer one is left
+  out with a note) and 50 a second (the rest are left out and counted), with control and format
+  characters (such as U+202E) escaped and the values the host knows the tool must not show
+  removed. The last 20 lines, kept whether or not the rate let them into the log, and the count
+  of those left out, say why it stopped. Error messages and hello or describe values a tool
+  sends reach the window and the status escaped the same way.
+- A tool that exits on its own, breaks its pipe or leaves a cancel unanswered has **crashed**.
+  Nothing restarts it on its own: a call after the backoff (one second, doubling with each crash
+  in a row, up to a minute) starts it, and a call during the backoff is refused. Five crashes in a
+  row make it **quarantined**: calls are refused until its package changes (disabled and enabled
+  again, updated, rolled back). A clean stop (when idle, or a stop the host asked for, such as a
+  disable) or a run of ten minutes starts a new count: with the 30-second idle stop, crashes in a
+  row are those with no clean stop between them. A crash of a release that is draining is not
+  counted.
+- A call the tool received and did not answer (it crashed, was stopped, left a cancel unanswered
+  or reached the drain limit) has an **unknown outcome**: its error says so, and it is never sent
+  again. The host keeps it until the package's next start, which carries the list in describe,
+  as `{"type":"call","id":"c-9","op":"describe","contract_version":0,"unknown":[{"id":"c-7","op":"apply","generation":1700000000}]}`
+  (`generation` is the release's install time). A tool that writes must reconcile those calls
+  with its own records before it answers describe. The describe that carries them waits for the
+  package's turn, so no call of the package runs while the tool reconciles; if the turn does not
+  come within the startup limit, that describe carries none. Whichever release starts next gets
+  them, except a swap's candidate, which gets none; once that start serves, the host forgets them.
+  Delivery may repeat (a start that fails after its describe is told again at the next one), so
+  reconciliation must be idempotent. A call refused before it was sent, an `error` frame and a
+  cancel the tool answered all have known outcomes.
+- **Swaps.** Updating or rolling back an enabled native tool stages the release and asks for
+  its own native confirmation. Once confirmed, the host starts the release's tool and runs hello
+  and describe with no call; it fails as any start does. It does not start if the package was
+  disabled, removed or changed while the confirmation was open, and a second update of a package
+  is refused while one is under way. Then the catalog commits it as active,
+  enabled and admitted, only if the release it replaces is still the active, admitted one, and
+  new calls and leases go to the new tool. The old one **drains**: calls holding its leases,
+  including those waiting their turn, finish on it; then its stdin closes as for any stop. After
+  ten minutes (the drain limit) it is stopped and its unanswered calls have unknown outcomes.
+  Calls of one package run one at a time, whichever release they reach: the new release's first
+  call waits for the call running on the old one, and calls still waiting their turn on either
+  release go in no set order. The package's pages close at the switch. A cancelled confirmation
+  or a candidate that fails installs nothing; the old release stays active and serving.
+
+Still to come: calls routed from pages, jobs, secrets, and Windows and macOS.
 
 ## Shared manifest fixtures
 
