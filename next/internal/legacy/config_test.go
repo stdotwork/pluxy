@@ -340,6 +340,7 @@ server:
   discovery: {enabled: false, service-name: x}
   commercial-mode: true
   discovery-typo: 1
+client: {codex: {enable-apply-patch: true}}
 quota-exceeded: {switch-project: true}
 routing:
   session-affinity-subagents: true
@@ -354,8 +355,8 @@ observability:
 `)
 	n := notices(r)
 	for _, want := range []string{
-		"not supported yet, ignored: routing.session-affinity-rebind-on\n",
-		"dropped, ignored: plugins (replaced by packages), server.commercial-mode (it turns off features this core does not have), upstream.claude.session-date-pin-days (making other clients look like Claude Code is out of scope), upstream.claude.tool-search (Codex's tool search on Claude accounts: off by default, with no panel or app control)\n",
+		"not supported yet, ignored: client.codex.enable-apply-patch\n",
+		"dropped, ignored: plugins (replaced by packages), routing.session-affinity-rebind-on (no need found), server.commercial-mode (it turns off features this core does not have), upstream.claude.session-date-pin-days (making other clients look like Claude Code is out of scope), upstream.claude.tool-search (Codex's tool search on Claude accounts: off by default, with no panel or app control)\n",
 		"unknown keys, ignored: server.discovery-typo\n",
 		"websocket-compression: false is not supported",
 	} {
@@ -366,6 +367,75 @@ observability:
 	for _, quiet := range []string{"switch-project", "discovery (", "session-affinity-subagents", "error-logs-max-files", "debug", "model-level-cooling"} {
 		if strings.Contains(n, quiet) {
 			t.Errorf("notices name %q:\n%s", quiet, n)
+		}
+	}
+}
+
+// TestDecidedDroppedSettings: settings decided not to be built are named as dropped, with their
+// reason, and never as "not supported yet"; the neighbours that are still to come stay Later.
+func TestDecidedDroppedSettings(t *testing.T) {
+	r := translate(t, `
+server:
+  response-compression: {enabled: true, min-bytes: 10}
+  discovery: {enabled: true, service-name: x}
+routing: {session-affinity-rebind-on: quota}
+oauth:
+  request-scoped-errors: [{status: 400}]
+  providers:
+    antigravity: {sensitive-words: [x], connection-pool: {enabled: true}}
+    devin: {sensitive-words: [x]}
+antigravity-signature-bypass-strict: true
+api-keys:
+  meta: [{api-key: m}]
+  openai-compatibility:
+    - name: compat
+      base-url: https://compat.example.com/v1
+      support-prompt-cache-key: true
+      connection-pool: {enabled: true}
+      request-scoped-errors: [{status: 400}]
+      keys: [{api-key: k}]
+      models:
+        - {name: m, alias: m, display-name: D, max-context-length: 9, input-modalities: [text], output-modalities: [text], is-compat: true, use-max-completion-tokens: true, thinking: {levels: [low]}, force-mapping: true, image: true}
+  vertex:
+    - name: v
+      keys: [{api-key: k, openapi: true}]
+      models: [{name: m, support-configuration-update: true}]
+`)
+	var later, dropped string
+	for _, n := range r.Notices {
+		if rest, ok := strings.CutPrefix(n, "config.yaml: not supported yet, ignored: "); ok {
+			later = rest
+		}
+		if rest, ok := strings.CutPrefix(n, "config.yaml: dropped, ignored: "); ok {
+			dropped = rest
+		}
+	}
+	for _, want := range []string{
+		"server.response-compression (", "server.discovery.enabled (", "routing.session-affinity-rebind-on (",
+		"oauth.request-scoped-errors (", "oauth.providers.antigravity (", "oauth.providers.devin (", "api-keys.meta (",
+		"api-keys.openai-compatibility.support-prompt-cache-key", "api-keys.openai-compatibility.connection-pool",
+		"api-keys.openai-compatibility.request-scoped-errors",
+		"api-keys.openai-compatibility.models.display-name", "api-keys.openai-compatibility.models.max-context-length",
+		"api-keys.openai-compatibility.models.input-modalities", "api-keys.openai-compatibility.models.output-modalities",
+		"api-keys.openai-compatibility.models.is-compat", "api-keys.openai-compatibility.models.use-max-completion-tokens",
+		"api-keys.openai-compatibility.models.thinking",
+	} {
+		if !strings.Contains(dropped, want) {
+			t.Errorf("not named as dropped: %q\n%s", want, notices(r))
+		}
+		if strings.Contains(later, want) {
+			t.Errorf("named as not supported yet: %q\n%s", want, notices(r))
+		}
+	}
+	for _, want := range []string{
+		"api-keys.openai-compatibility.models.force-mapping", "api-keys.openai-compatibility.models.image",
+		"api-keys.vertex.models.support-configuration-update", "api-keys.vertex.openapi",
+	} {
+		if !strings.Contains(later, want) {
+			t.Errorf("not named as not supported yet: %q\n%s", want, notices(r))
+		}
+		if strings.Contains(dropped, want) {
+			t.Errorf("named as dropped: %q\n%s", want, notices(r))
 		}
 	}
 }
