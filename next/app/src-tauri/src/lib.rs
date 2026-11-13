@@ -39,6 +39,8 @@ pub mod release_config;
 pub mod route;
 mod startup;
 pub mod trust;
+#[cfg(target_os = "linux")]
+pub mod vault;
 pub mod window;
 
 pub use command_names::COMMANDS;
@@ -91,6 +93,10 @@ struct App {
     /// Page calls of native operations in flight (`route.rs`).
     #[cfg(target_os = "linux")]
     routes: route::Routes,
+    /// Secrets the person entered natively, references to them, and tools' backups and journals
+    /// (`vault.rs`).
+    #[cfg(target_os = "linux")]
+    vault: std::sync::Arc<vault::Vault>,
     status: Mutex<Option<MenuItem<Wry>>>,
     /// Start, Stop and Restart, in that order.
     core_actions: Mutex<Vec<MenuItem<Wry>>>,
@@ -2162,13 +2168,92 @@ fn program_status(webview: Webview, package: String) -> Result<Value, String> {
     trusted(&webview)?;
     #[cfg(target_os = "linux")]
     {
-        serde_json::to_value(webview.state::<App>().programs.status(&package))
-            .map_err(|e| e.to_string())
+        let st = webview.state::<App>();
+        let mut status =
+            serde_json::to_value(st.programs.status(&package)).map_err(|e| e.to_string())?;
+        // Its journals: open ones, and how recent ones ended.
+        status["journals"] =
+            serde_json::to_value(st.vault.journals(&package)).map_err(|e| e.to_string())?;
+        Ok(status)
     }
     #[cfg(not(target_os = "linux"))]
     {
         let _ = package;
         Err("native tools run on Linux only for now".into())
+    }
+}
+
+/// Asks for a secret in native key entry and keeps it in the vault as label; gives its ID. The
+/// secret never passes through the window: GTK's hidden entry reads it.
+#[tauri::command]
+async fn vault_secret_add(webview: Webview, label: String) -> Result<Value, String> {
+    trusted(&webview)?;
+    #[cfg(target_os = "linux")]
+    {
+        let app = webview.app_handle().clone();
+        if app
+            .state::<App>()
+            .key_entry_open
+            .swap(true, Ordering::SeqCst)
+        {
+            return Err("native key entry is already open".into());
+        }
+        tauri::async_runtime::spawn_blocking(move || {
+            let st = app.state::<App>();
+            let input = key_entry::request_as(
+                &app,
+                "pluxy secret",
+                format!(
+                    "The secret to keep in this device's vault as \"{label}\". Native tools get it only after you confirm each use."
+                ),
+                false,
+            );
+            st.key_entry_open.store(false, Ordering::SeqCst);
+            match input {
+                Ok(Some(input)) => st
+                    .vault
+                    .add_secret(&label, input.key.as_str())
+                    .map(|id| serde_json::json!({"id": id})),
+                Ok(None) => Err("cancelled".into()),
+                Err(e) => Err(e.into()),
+            }
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = label;
+        Err("the vault is on Linux only for now".into())
+    }
+}
+
+/// The vault's secrets: IDs, labels and when each was entered, never a value.
+#[tauri::command]
+fn vault_secrets(webview: Webview) -> Result<Value, String> {
+    trusted(&webview)?;
+    #[cfg(target_os = "linux")]
+    {
+        Ok(serde_json::json!({"secrets": webview.state::<App>().vault.secrets()}))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err("the vault is on Linux only for now".into())
+    }
+}
+
+/// Removes secret id from the vault; references to it are refused from now on.
+#[tauri::command]
+fn vault_secret_remove(webview: Webview, id: String) -> Result<(), String> {
+    trusted(&webview)?;
+    #[cfg(target_os = "linux")]
+    {
+        webview.state::<App>().vault.remove_secret(&id)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = id;
+        Err("the vault is on Linux only for now".into())
     }
 }
 
@@ -2421,6 +2506,9 @@ pub fn run() {
             program_call,
             program_cancel,
             program_status,
+            vault_secret_add,
+            vault_secrets,
+            vault_secret_remove,
             window_get,
             window_set,
             window_close,
@@ -2515,6 +2603,13 @@ pub fn run() {
             );
             #[cfg(feature = "native-test")]
             native_test::hold_for_early_exit();
+            #[cfg(target_os = "linux")]
+            let vault =
+                std::sync::Arc::new(vault::Vault::open(app.path().app_data_dir()?.join("vault")));
+            #[cfg(target_os = "linux")]
+            if let Some(w) = vault.broken() {
+                eprintln!("pluxy-app: the vault is not used: {w}");
+            }
             // The page webviews keep nothing from one run to the next.
             let pages_dir = app.path().app_cache_dir()?.join("pages");
             let _ = std::fs::remove_dir_all(&pages_dir);
@@ -2539,6 +2634,8 @@ pub fn run() {
                 ),
                 #[cfg(target_os = "linux")]
                 routes: route::Routes::default(),
+                #[cfg(target_os = "linux")]
+                vault: std::sync::Arc::clone(&vault),
                 status: Mutex::new(None),
                 core_actions: Mutex::new(Vec::new()),
                 shown: Mutex::new(Shown::default()),
@@ -2557,6 +2654,12 @@ pub fn run() {
                 .state::<App>()
                 .programs
                 .set_route(route::route(handle.clone()));
+            // And their vault frames, describe's journals and what is redacted, to the vault.
+            #[cfg(target_os = "linux")]
+            handle
+                .state::<App>()
+                .programs
+                .set_private(vault as std::sync::Arc<dyn program::Private>);
             #[cfg(target_os = "linux")]
             if let Some(message) = handle
                 .state::<App>()

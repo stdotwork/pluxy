@@ -88,7 +88,66 @@ fn operations() -> Vec<Operation> {
             input_schema: json!({"type": "object"}),
             output_schema: json!({"type": "object"}),
         },
+        Operation {
+            id: "apply".into(),
+            input_schema: json!({"type": "object"}),
+            output_schema: json!({"type": "object"}),
+        },
+        Operation {
+            id: "report".into(),
+            input_schema: json!({"type": "object"}),
+            output_schema: json!({"type": "object"}),
+        },
     ]
+}
+
+/// The host-private services, as the unit tests see them: SECRET is redacted, journals are kept
+/// in memory, and each vault frame is recorded with the call's operation and whether the tool was
+/// describing.
+#[derive(Default)]
+struct Stub {
+    journals: Mutex<Vec<Value>>,
+    frames: Mutex<Vec<(String, String, bool)>>,
+    /// journal.end is refused: the journal stays open.
+    keep_open: bool,
+}
+
+impl Private for Stub {
+    fn journals(&self, _: &str) -> Vec<Value> {
+        self.journals.lock().unwrap().clone()
+    }
+    fn frame(&self, tool: &Hop, op: &str, describing: bool, r: &Value) -> Result<Value, CallError> {
+        assert_eq!(tool.package(), Some(ID));
+        let kind = r["op"].as_str().unwrap_or_default().to_string();
+        self.frames
+            .lock()
+            .unwrap()
+            .push((kind.clone(), op.into(), describing));
+        match kind.as_str() {
+            "backup.put" => Ok(json!({"backup": "b-1"})),
+            "journal.begin" => Ok(json!({"journal": "j-1"})),
+            "journal.commit" => Ok(json!({"journal": r["journal"], "outcome": "committed"})),
+            "journal.end" if self.keep_open => Err(fail("unavailable", "kept open")),
+            "journal.end" => {
+                self.journals
+                    .lock()
+                    .unwrap()
+                    .retain(|j| j["id"] != r["journal"]);
+                Ok(json!({"journal": r["journal"], "outcome": r["outcome"]}))
+            }
+            _ => Err(fail("unsupported", "no such operation")),
+        }
+    }
+    fn redact(&self, text: &str) -> String {
+        text.replace(SECRET, "[redacted]")
+    }
+}
+
+/// host with a Stub as its host-private services.
+fn private(h: &Host, stub: Stub) -> Arc<Stub> {
+    let stub = Arc::new(stub);
+    h.set_private(Arc::clone(&stub) as Arc<dyn Private>);
+    stub
 }
 
 /// A package folder for the fixture, misbehaving as mode says (null: not at all).
@@ -128,7 +187,6 @@ fn release(mode: Value, version: &str, generation: u64) -> Spec {
         dir,
         operations: operations(),
         state_version: 0,
-        secrets: vec![SECRET.into()],
     }
 }
 
@@ -544,6 +602,7 @@ fn its_log_is_bounded_escaped_and_redacted() {
         long,
         "after",
     ]}));
+    private(&h, Stub::default());
     summary(&h, &[]).unwrap();
     until("the log", 5, || {
         h.status(ID).log.iter().any(|l| l == "after")
@@ -881,6 +940,7 @@ fn a_call_allowed_for_another_release_is_refused() {
             chain: vec![Hop::Main],
             expect: Some((sha.into(), generation)),
             extra: Box::new(()),
+            secrets: Vec::new(),
         })
     };
     let e = h
@@ -1580,4 +1640,106 @@ fn a_clean_stop_ends_the_crashes_in_a_row() {
     until("the crash", 5, || h.status(ID).pid.is_none());
     assert_eq!(h.status(ID).crashes, 1);
     h.stop_all();
+}
+
+fn sha256_hex(b: &[u8]) -> String {
+    Sha256::digest(b)
+        .iter()
+        .map(|x| format!("{x:02x}"))
+        .collect()
+}
+
+#[test]
+fn a_call_delivers_its_secrets_in_its_frame_and_the_tool_reaches_the_vault_only_for_it() {
+    let h = host(Value::Null);
+    let stub = private(&h, Stub::default());
+    let dir = std::env::temp_dir().join(format!("pluxy-vault-{}", call_id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("config");
+    let context = Context {
+        chain: vec![Hop::Main],
+        expect: None,
+        extra: Box::new(()),
+        secrets: vec![("r-1".into(), SECRET.into())],
+    };
+    let call = h.begin_call(None).unwrap();
+    let out = h
+        .run_call_with(
+            call,
+            ID,
+            "apply",
+            json!({"key": "r-1", "file": file}),
+            Arc::new(context),
+            Cancel::default(),
+        )
+        .unwrap();
+    // The tool had the secret (it wrote it), and its answer and log have it redacted.
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        format!("key={SECRET}\n")
+    );
+    assert_eq!(out["echo"], "[redacted]");
+    assert!(!out.to_string().contains(SECRET));
+    until("its log line", 5, || {
+        h.status(ID).log.iter().any(|l| l.contains("applied key"))
+    });
+    assert!(!h.status(ID).log.iter().any(|l| l.contains(SECRET)));
+    assert_eq!(
+        *stub.frames.lock().unwrap(),
+        vec![
+            ("backup.put".to_string(), "apply".to_string(), false),
+            ("journal.begin".into(), "apply".into(), false),
+            ("journal.commit".into(), "apply".into(), false),
+        ]
+    );
+    // A call with no secrets carries none: the tool says so.
+    let e = h
+        .call(ID, "apply", json!({"key": "r-1", "file": file}), None)
+        .unwrap_err();
+    assert!(e.message.contains("no secret was delivered"), "{e}");
+    h.stop_all();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn open_journals_go_in_the_next_describe_and_must_be_ended_before_it_serves() {
+    let dir = std::env::temp_dir().join(format!("pluxy-vault-{}", call_id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("config");
+    std::fs::write(&file, "new").unwrap();
+    let journal = json!({"id": "j-7", "op": "apply", "generation": 1, "began": 1,
+        "intent": {"file": file, "sha256": sha256_hex(b"new")}});
+    // Reconciled: the file holds what the journal names, so it is ended as committed, in
+    // describe, before the call runs.
+    let h = host(Value::Null);
+    let stub = private(&h, Stub::default());
+    stub.journals.lock().unwrap().push(journal.clone());
+    let out = h.call(ID, "report", json!({}), None).unwrap();
+    assert_eq!(out["reconciled"][0]["journal"], "j-7");
+    assert_eq!(out["reconciled"][0]["outcome"], "committed");
+    assert_eq!(
+        *stub.frames.lock().unwrap(),
+        vec![("journal.end".to_string(), String::new(), true)]
+    );
+    assert!(stub.journals.lock().unwrap().is_empty());
+    // The next start names none.
+    h.stop(ID);
+    until("the stop", 5, || h.status(ID).state == "stopped");
+    let out = h.call(ID, "report", json!({}), None).unwrap();
+    assert_eq!(out["reconciled"], json!([]));
+    h.stop_all();
+    // Left open: the start fails, and the call never runs.
+    let h = host(Value::Null);
+    let stub = private(
+        &h,
+        Stub {
+            keep_open: true,
+            ..Default::default()
+        },
+    );
+    stub.journals.lock().unwrap().push(journal);
+    let e = h.call(ID, "report", json!({}), None).unwrap_err();
+    assert!(e.message.contains("still open"), "{e}");
+    h.stop_all();
+    let _ = std::fs::remove_dir_all(dir);
 }

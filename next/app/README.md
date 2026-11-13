@@ -202,7 +202,9 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `access_grant` | Opens the native file chooser for a package's declared resource, then a native confirmation, and keeps the grant |
 | `access_revoke` | Revokes a grant, answering once the reads under it have finished |
 | `program_call`, `program_cancel` | Calls an operation of an admitted native tool, starting it if it is not running; cancels a call by the ticket it was given (Linux) |
-| `program_status` | Whether a native tool runs, its leases, how it last stopped, its crashes in a row and backoff, calls of unknown outcome, and replaced releases still draining (Linux) |
+| `program_status` | Whether a native tool runs, its leases, how it last stopped, its crashes in a row and backoff, calls of unknown outcome, replaced releases still draining, and its vault journals, open and recently ended (Linux) |
+| `vault_secret_add` | Opens native key entry and keeps the secret typed there in the vault under a label; returns only its ID (Linux) |
+| `vault_secrets`, `vault_secret_remove` | The vault's secrets, by ID and label, never their values; removes one (Linux) |
 | `window_get`, `window_set` | Reads or saves the Close behavior, and whether there is a usable tray |
 | `window_close` | Answers the close prompt: Exit App or Minimize to Tray, and whether to remember it |
 | `privacy_get`, `privacy_set` | Reads or saves privacy mode |
@@ -339,6 +341,16 @@ The host sets each call's chain (the requester, then each tool that called on), 
 back into the chain or a chain of more than five, and asks a native confirmation naming the whole
 chain for each `write` or `launch` call. [Calls between packages](app-host/README.md#calls-between-packages)
 has the manifest fields, frames and rules.
+
+Secrets the person types into native key entry (`vault_secret_add`) are kept in the app's
+private vault. An operation's declared secret fields carry them: the window names a secret by its
+ID, a confirmation names each secret and the tool that gets it, and the tool receives the secret
+on its pipe, or only a reference to it, which it may pass on only in that call and only to an
+operation its import allows. Secret values and references are redacted from tools' logs, status,
+errors and outputs. Tools keep backups and journals in the vault, and a write a tool or the app
+did not finish is reconciled at its next start, never written again.
+[Secrets, references and the vault](app-host/README.md#secrets-references-and-the-vault) has the
+details.
 
 Updating or rolling back a native tool that is enabled swaps it while it serves on. The new
 release is staged and shown in its own native confirmation; once confirmed, the program host
@@ -739,6 +751,10 @@ There is no updater yet; the signed-update slice calls this gate.
   `close_range` with `CLOSE_RANGE_CLOEXEC`); a confirmed launch-class call is passed to its
   operation, and the app starts nothing itself yet; installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
   native run.
+- Vault: Linux only. Secrets are kept in a 0600 file in the app's data folder, not in the system
+  keyring, and only exact values are redacted. The window has no vault page yet; no secret is
+  bound to a core or client yet, and no agent is started with one: secrets reach only native
+  tools' pipes. Backups have no retention: a package keeps at most 256.
 - Access: Linux only (5.8 or later: grants record the `statx` mount ID); web packages only; reads only (no writes or watchers); a signature only
   from a registry, not for a package installed from a file; document portal grants last one
   session.

@@ -19,6 +19,8 @@ const MAX_IMPORTS: usize = 16;
 const EFFECTS: &[&str] = &["read", "write", "launch"];
 /// The input fields a launch-class operation names its launch with.
 pub const LAUNCH_FIELDS: &[&str] = &["executable", "argv", "cwd"];
+/// Secret fields an operation may declare.
+const MAX_SECRET_FIELDS: usize = 4;
 
 /// An operation's effect when its manifest names none: it asks before each call.
 pub(super) fn write_effect() -> String {
@@ -33,6 +35,7 @@ pub(super) struct ImportSpec {
     contract: Vec<i64>,
     operations: Vec<String>,
     required: Option<bool>,
+    secrets: Vec<String>,
 }
 
 /// A native tool's exports, as its manifest declares them.
@@ -55,6 +58,9 @@ pub struct ImportDecl {
     /// Required: the package is enabled only with the target enabled. Optional: a call while
     /// the target is missing fails as unavailable.
     pub required: bool,
+    /// The operations it may pass secret references to (a native tool's imports only).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secrets: Vec<String>,
 }
 
 /// A native tool's exports, as the catalog keeps them.
@@ -103,6 +109,9 @@ impl Consent {
 pub struct Grant {
     pub target: Admitted,
     pub op: OperationDecl,
+    /// The caller may pass secret references in the operation's secret fields: a native tool
+    /// whose import allows it.
+    pub passes_secrets: bool,
 }
 
 /// Why a call is not allowed: `permission` (the caller may not make it) or
@@ -127,7 +136,7 @@ fn unavailable(message: String) -> Refused {
     }
 }
 
-pub(super) fn validate_imports(imports: Option<&[ImportSpec]>) -> Result<(), String> {
+pub(super) fn validate_imports(imports: Option<&[ImportSpec]>, web: bool) -> Result<(), String> {
     let Some(imports) = imports else {
         return Ok(());
     };
@@ -152,6 +161,49 @@ pub(super) fn validate_imports(imports: Option<&[ImportSpec]>) -> Result<(), Str
                 "app.imports require unique package IDs, nonnegative contracts and unique operation IDs"
                     .into(),
             );
+        }
+        let mut seen = BTreeSet::new();
+        if i.secrets
+            .iter()
+            .any(|o| !ops.contains(o.as_str()) || !seen.insert(o.as_str()))
+        {
+            return Err(
+                "app.imports secrets must name operations the import lists, once each".into(),
+            );
+        }
+        if web && !i.secrets.is_empty() {
+            return Err("a web package's imports cannot pass secrets".into());
+        }
+    }
+    Ok(())
+}
+
+/// An operation's secret fields: at most `MAX_SECRET_FIELDS` string properties of its input,
+/// each `value` or `reference`.
+pub(super) fn validate_secrets(op: &Operation) -> Result<(), String> {
+    let Some(secrets) = &op.secrets else {
+        return Ok(());
+    };
+    if secrets.len() > MAX_SECRET_FIELDS {
+        return Err(format!(
+            "app.operations {}: at most {MAX_SECRET_FIELDS} secret fields",
+            op.id
+        ));
+    }
+    for (field, how) in secrets {
+        if how != "value" && how != "reference" {
+            return Err(format!(
+                "app.operations {}: secret field {field} is value or reference",
+                op.id
+            ));
+        }
+        if op.input_schema["type"] != "object"
+            || op.input_schema["properties"][field.as_str()]["type"] != "string"
+        {
+            return Err(format!(
+                "app.operations {}: secret field {field} must be a string property of its input",
+                op.id
+            ));
         }
     }
     Ok(())
@@ -211,6 +263,7 @@ pub(super) fn import_decls(id: &str, app: &App) -> Result<Vec<ImportDecl>, Strin
             contract: i.contract.clone(),
             operations: i.operations.clone(),
             required: i.required.unwrap_or(true),
+            secrets: i.secrets.clone(),
         })
         .collect();
     if imports.iter().any(|i| i.package == id) {
@@ -228,11 +281,16 @@ pub(super) fn listing(imports: &[ImportDecl]) -> String {
         .iter()
         .map(|i| {
             format!(
-                "{} (export contract {:?}, {}): {}",
+                "{} (export contract {:?}, {}): {}{}",
                 i.package,
                 i.contract,
                 if i.required { "required" } else { "optional" },
-                i.operations.join(", ")
+                i.operations.join(", "),
+                if i.secrets.is_empty() {
+                    String::new()
+                } else {
+                    format!(", passing secret references to {}", i.secrets.join(", "))
+                }
             )
         })
         .collect();
@@ -499,7 +557,11 @@ impl Catalog {
             .find(|o| o.id == op)
             .cloned()
             .ok_or_else(|| forbidden(format!("{target} declares no operation {op}")))?;
-        Ok(Grant { target: a, op })
+        Ok(Grant {
+            target: a,
+            op,
+            passes_secrets: false,
+        })
     }
 
     /// A call by native tool caller, running its release sha256 of generation, of target's op:
@@ -530,7 +592,15 @@ impl Catalog {
             .find(|o| o.id == op)
             .cloned()
             .ok_or_else(|| forbidden(format!("{target} declares no operation {op}")))?;
-        Ok((Grant { target: a, op }, c))
+        let passes_secrets = i.secrets.contains(&op.id);
+        Ok((
+            Grant {
+                target: a,
+                op,
+                passes_secrets,
+            },
+            c,
+        ))
     }
 
     /// Package id as native confirmations name a page's requester: a native tool by its admitted
@@ -629,6 +699,10 @@ impl Catalog {
             .find(|o| o.id == op)
             .cloned()
             .ok_or_else(|| forbidden(format!("{target} declares no operation {op}")))?;
-        Ok(Grant { target: a, op })
+        Ok(Grant {
+            target: a,
+            op,
+            passes_secrets: false,
+        })
     }
 }
