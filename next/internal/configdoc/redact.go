@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
@@ -86,7 +87,8 @@ func (r *Redactor) placeholderOf(n *yaml.Node, texts map[*yaml.Node]string) stri
 //     client_keys, password, *-token, *_secret_access_key, ...), or each item when it is a list;
 //   - every value under a "credential" (an account's credential), except its kind;
 //   - the value of a header whose name is about authentication (Authorization, X-Api-Key,
-//     Cookie, ...), in any mapping named headers or *headers (extra_headers);
+//     Cookie, ...) or is named like a secret, in any mapping whose name holds header
+//     (headers, extra_headers, headers_override);
 //   - a URL with a user name, password or query, anywhere.
 //
 // Everything below a key named like a secret is a secret too, however deep, except in the provider
@@ -103,11 +105,27 @@ var secretNames = map[string]bool{
 
 // secretSuffixes end the other names of secrets, and are names of secrets themselves:
 // refreshtoken, clientsecret, dbpassword, awssecretaccesskey, ...
-var secretSuffixes = []string{"token", "secret", "password", "apikey", "secretkey", "privatekey",
-	"secretaccesskey", "passphrase"}
+var secretSuffixes = []string{"token", "secret", "secrets", "password", "passwords", "apikey", "secretkey",
+	"privatekey", "secretaccesskey", "passphrase"}
+
+// spellingWords are words a secret's name may end in that say how its value is written:
+// api_key_value, privateKeyPem, client_secret_b64. A number may end it too (apiKey2).
+var spellingWords = []string{"value", "pem", "der", "data", "raw", "b64", "base64", "hex", "str", "string", "text", "bytes"}
 
 func secretName(key string) bool {
-	k := joinedName(key)
+	w := words(key)
+	for len(w) > 0 {
+		last := w[len(w)-1]
+		if len(w) > 1 && (slices.Contains(spellingWords, last) || strings.Trim(last, "0123456789") == "") {
+			w = w[:len(w)-1]
+			continue
+		}
+		if t := strings.TrimRight(last, "0123456789"); t != "" {
+			w[len(w)-1] = t
+		}
+		break
+	}
+	k := strings.Join(w, "")
 	if secretNames[k] {
 		return true
 	}
@@ -120,14 +138,45 @@ func secretName(key string) bool {
 }
 
 // headersName reports whether a key names a mapping of HTTP headers: headers, extra_headers,
-// customHeaders, ...
-func headersName(key string) bool { return strings.HasSuffix(joinedName(key), "headers") }
+// customHeaders, extra_header, headers_override, ...
+func headersName(key string) bool { return strings.Contains(joinedName(key), "header") }
 
 // joinedName returns a key name in lower case with its words written together: accessToken,
 // ACCESS_TOKEN, access.token, access-token and accesstoken are all accesstoken.
-func joinedName(key string) string { return strings.ToLower(wordJoins.Replace(key)) }
+func joinedName(key string) string { return strings.Join(words(key), "") }
 
-var wordJoins = strings.NewReplacer("_", "", "-", "", ".", "", " ", "")
+// words returns the words of a key name, in lower case: those between _, -, . and spaces, and
+// those camelCase starts (apiKey2 is api, key2; APIKey is api, key).
+func words(key string) []string {
+	r := []rune(key)
+	var out []string
+	from := -1
+	for i, c := range r {
+		if c == '_' || c == '-' || c == '.' || c == ' ' {
+			if from >= 0 {
+				out = append(out, strings.ToLower(string(r[from:i])))
+			}
+			from = -1
+			continue
+		}
+		if from >= 0 && i > 0 {
+			prev := r[i-1]
+			upper := unicode.IsUpper(c) && (unicode.IsLower(prev) || unicode.IsDigit(prev) ||
+				unicode.IsUpper(prev) && i+1 < len(r) && unicode.IsLower(r[i+1]))
+			if upper {
+				out = append(out, strings.ToLower(string(r[from:i])))
+				from = i
+			}
+		}
+		if from < 0 {
+			from = i
+		}
+	}
+	if from >= 0 {
+		out = append(out, strings.ToLower(string(r[from:])))
+	}
+	return out
+}
 
 func secretHeader(name string) bool { return upheader.Secret(name) }
 
@@ -363,7 +412,7 @@ func found(n *yaml.Node, strict bool) (out []*yaml.Node, texts map[*yaml.Node]st
 			return
 		case c.role == roleHeaders && v.Kind == yaml.MappingNode:
 			pairs(v, c, func(name string, val *yaml.Node) {
-				if secretHeader(name) {
+				if secretHeader(name) || secretName(name) {
 					if s := resolved(val); c.section && s.Kind == yaml.ScalarNode {
 						var v any
 						if s.Decode(&v) == nil {

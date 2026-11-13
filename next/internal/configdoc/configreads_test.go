@@ -313,15 +313,16 @@ func TestRedactUnknownV8Section(t *testing.T) {
 }
 
 // Names are compared without regard to letter case and to how words are joined, if they are
-// (camelCase, snake_case, kebab-case, written together), and a mapping named headers or ending
-// in headers is read by the header rules.
+// (camelCase, snake_case, kebab-case, written together), and a mapping whose name holds header
+// is read by the header rules, where a key named like a secret is one too.
 func TestSecretNames(t *testing.T) {
 	for _, name := range []string{
 		"api_key", "apiKey", "API-KEY", "accessToken", "access_token", "refreshToken", "id-token",
 		"client_secret", "clientSecret", "aws_secret_access_key", "AWS_SECRET_ACCESS_KEY", "secretAccessKey",
 		"password", "dbPassword", "private_key", "privateKey", "secret_key", "management_key", "client_keys",
 		"passphrase", "token", "secret", "accesstoken", "apitoken", "clientsecret", "secretkey", "privatekey",
-		"awssecretaccesskey", "dbpassword", "x-apikey",
+		"awssecretaccesskey", "dbpassword", "x-apikey", "client_secrets", "secrets", "passwords", "dbPasswords",
+		"api_key_value", "apiKey2", "privateKeyPem", "client_secret_b64", "TOKEN_VALUE",
 	} {
 		if !secretName(name) {
 			t.Errorf("%q is not a secret name", name)
@@ -331,15 +332,19 @@ func TestSecretNames(t *testing.T) {
 		"max_tokens", "maxTokens", "max-output-tokens", "token_count_estimate", "prompt_cache_key",
 		"cache-key", "partition_key", "key_id", "keys", "secretary", "base_url", "model", "kind",
 		"passthrough-headers", "tokenizer", "monkey", "tokens", "api_key_id", "max_token_count", "secret_name",
+		"token_url", "token_type", "private_key_id", "input_token_limit", "promptTokenCount", "value", "pem", "2",
 	} {
 		if secretName(name) {
 			t.Errorf("%q is a secret name", name)
 		}
 	}
 	src := `{"settings": {"extra_headers": {"Authorization": "Bearer fake-extra-header-1", "X-Title": "kept-title"},
-  "customHeaders": {"X-Api-Key": "fake-custom-header-1"}, "upstreamheaders": {"Cookie": "fake-joined-header-1"}}}`
+  "customHeaders": {"X-Api-Key": "fake-custom-header-1"}, "upstreamheaders": {"Cookie": "fake-joined-header-1"},
+  "extra_header": {"Authorization": "fake-singular-header-1"}, "headers_override": {"X-Auth": "fake-override-header-1"},
+  "request_headers": {"passphrase": "fake-header-passphrase-1", "client_secret": "fake-header-secret-1"}}}`
 	got := SettingsSecrets([]byte(src))
-	for _, want := range []string{"Bearer fake-extra-header-1", "fake-custom-header-1", "fake-joined-header-1"} {
+	for _, want := range []string{"Bearer fake-extra-header-1", "fake-custom-header-1", "fake-joined-header-1",
+		"fake-singular-header-1", "fake-override-header-1", "fake-header-passphrase-1", "fake-header-secret-1"} {
 		if !slices.Contains(got, want) {
 			t.Errorf("SettingsSecrets lacks %q: %q", want, got)
 		}
