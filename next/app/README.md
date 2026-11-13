@@ -104,8 +104,9 @@ config back as it was, removes a version it installed for this switch, and runs 
 worked before (when the switch reinstalled that very version, the one before it, which then stays
 selected); the page says why the new one did not start. If the config cannot be put back, no
 core runs: the candidate stays recorded with the copy, and the app tries again at its next start.
-Once it is put back, a mark beside the config says so, and no later start puts it back again over
-your edits. If the app stops while a version starts, it does the same at its next start; a copy
+Once it is put back, a mark beside the config says so, and a later start does not put it back
+again over your edits, unless the app could save neither the failure nor that mark: then the
+next start puts the same config back once more. If the app stops while a version starts, it does the same at its next start; a copy
 it cannot read is an error, and the config is left as it is. From the moment the app begins to
 stop its core, or sees it exit, it sends nothing more to that address. The app keeps the
 running version and the one before it, and removes older ones after a switch. Rolling back
