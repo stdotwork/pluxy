@@ -521,7 +521,8 @@ whatever joins their words, or none), header values about authentication in an o
 `headers` or ending in `headers` (`extra_headers`), and any URL
 with a user name, password or query (a `base_url` with a token in it), as its management API
 hides them; of such a URL also its user name, its password, the two together (in Basic form
-too) and each query value on their own. Below a key named like a secret, `true`, `false`, `null` and the empty string are
+too) and the value of each query parameter named like a secret (`key`, `token`, `sig`, ...), as
+written and decoded, on their own. Below a key named like a secret, `true`, `false`, `null` and the empty string are
 not secrets: they carry none. Unlike a credential's strings, a settings secret shorter than 8
 bytes is left in text, since removing every occurrence of so short a string would mangle
 unrelated text; the management API still shows it as a placeholder. When the settings change,

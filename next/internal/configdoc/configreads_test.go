@@ -158,21 +158,31 @@ func TestRestoreKeepsExplicitTags(t *testing.T) {
 }
 
 // The parts of a URL in settings are removed from text on their own as well: its password, its
-// user name and password together, in Basic form too, and each query value of 8 bytes or more.
+// user name and password together, in Basic form too, and each value of 8 bytes or more of a
+// query parameter named like a secret, as written and decoded. Other query values, such as a
+// date or a region, are no secrets.
 func TestSettingsSecretsHoldURLParts(t *testing.T) {
-	got := SettingsSecrets([]byte(`{"base_url": "https://gw-user:fake-gw-pass-1234@up.example/v1?token=fake-url-token-1234&v=2"}`))
+	const u = "https://gw-user:fake-gw-pass-1234@up.example/v1?token=fake-url-token-1234&v=2" +
+		"&api-version=2024-10-21&region=us-east-1&key=sk+live/abc%3D%3D1234&sig=fake-url-sig-1234"
+	got := SettingsSecrets([]byte(`{"base_url": "` + u + `"}`))
 	for _, want := range []string{
-		"https://gw-user:fake-gw-pass-1234@up.example/v1?token=fake-url-token-1234&v=2",
+		u,
 		"fake-gw-pass-1234",
 		"gw-user:fake-gw-pass-1234",
 		"fake-url-token-1234",
+		"sk+live/abc%3D%3D1234", // as written
+		"sk live/abc==1234",     // as a query decodes it
+		"sk+live/abc==1234",     // with only its escapes decoded
+		"fake-url-sig-1234",
 	} {
 		if !slices.Contains(got, want) {
 			t.Errorf("SettingsSecrets lacks %q: %q", want, got)
 		}
 	}
-	if slices.Contains(got, "2") || slices.Contains(got, "gw-user") {
-		t.Errorf("SettingsSecrets holds a value shorter than 8 bytes: %q", got)
+	for _, plain := range []string{"2", "gw-user", "2024-10-21", "us-east-1"} {
+		if slices.Contains(got, plain) {
+			t.Errorf("SettingsSecrets holds %q, no secret: %q", plain, got)
+		}
 	}
 	// As core removes them from text (host and request log), the Basic form included.
 	data, _ := json.Marshal(got)

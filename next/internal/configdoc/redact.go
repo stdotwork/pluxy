@@ -21,6 +21,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/legacy"
 	"github.com/stdotwork/pluxy/next/internal/proxyurl"
 	"github.com/stdotwork/pluxy/next/internal/upheader"
+	"github.com/stdotwork/pluxy/next/protocol"
 )
 
 // A redacted document holds a placeholder in place of each secret: PlaceholderPrefix and the
@@ -458,12 +459,24 @@ func (d *Doc) TextSecrets() []string {
 // short ones too.
 const MinTextSecret = 8
 
+// secretParam reports whether a URL's query parameter is named like a secret: by the rule for
+// header and query parameter names (protocol.SecretName: key, token, auth, signature, ...), by
+// the rules for key names, or sig (a signature) or code (an OAuth code).
+func secretParam(name string) bool {
+	switch joinedName(name) {
+	case "sig", "code":
+		return true
+	}
+	return protocol.SecretName(name) || secretName(name)
+}
+
 // SettingsSecrets returns the secret values an account's settings, a JSON object, hold by the
 // rules of RedactSettings, to be removed from text where they occur: those of MinTextSecret
 // bytes or more. Of a URL, its parts are returned on their own too, as an extension may write
 // one without the rest: the forms of its user name and password a proxy URL's are removed in
-// (proxyurl.Password; the redaction adds the Basic form), and each query value. Settings that
-// do not parse hold none it can find.
+// (proxyurl.Password; the redaction adds the Basic form), and the value of each query parameter
+// named like a secret (secretParam), as written and decoded. Settings that do not parse hold
+// none it can find.
 func SettingsSecrets(b []byte) []string {
 	d, err := Parse(b, false)
 	if err != nil {
@@ -486,9 +499,17 @@ func SettingsSecrets(b []byte) []string {
 			add(f)
 		}
 		if u, err := url.Parse(strings.TrimSpace(n.Value)); err == nil {
-			for _, vs := range u.Query() {
-				for _, v := range vs {
-					add(v)
+			for _, kv := range strings.Split(u.RawQuery, "&") {
+				k, v, _ := strings.Cut(kv, "=")
+				if name, err := url.QueryUnescape(k); err != nil || !secretParam(name) {
+					continue
+				}
+				add(v)
+				if s, err := url.QueryUnescape(v); err == nil {
+					add(s)
+				}
+				if s, err := url.PathUnescape(v); err == nil {
+					add(s)
 				}
 			}
 		}
