@@ -876,6 +876,9 @@ fn grant_stage(
         json!({"resource": "config"}),
         &text("replaced"),
     )?;
+    // Revoked again, so the relaunch finds only the grant it checks.
+    let mirror = grant_of(main, "example/files", "config")?.ok_or("no mirror grant")?;
+    ok(main, "access_revoke", json!({"grant": mirror["id"]}))?;
     let r = call(main, "access_list", json!({}))?;
     out["grants"] = r["value"]["grants"].clone();
     Ok(())
