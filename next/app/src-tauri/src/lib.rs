@@ -1175,12 +1175,11 @@ fn device_rollback(webview: Webview, id: String) -> Result<device::View, String>
 fn program_resolver(app: AppHandle) -> program::Resolve {
     Box::new(move |id| {
         // Its files are hashed without holding the catalog (`checked_unlocked`).
-        let a = device::admitted_unlocked(
+        device::admitted_unlocked(
             &app.state::<App>().device,
             id,
             &trust::TrustStore::current(),
-        )?;
-        Ok(program::Spec::from(&a))
+        )
     })
 }
 
@@ -1593,6 +1592,9 @@ pub fn run() {
                         .lock()
                         .unwrap()
                         .invalidate();
+                    // Its native tool calls end, so their tools stop when idle.
+                    #[cfg(target_os = "linux")]
+                    app.state::<App>().programs.cancel_all();
                     // Its webviews went with it.
                     app.state::<App>().pages.lock().unwrap().clear();
                     place::forget_all();

@@ -112,13 +112,9 @@ impl Drop for Folder {
 }
 
 /// A host whose record for ID is spec; each start first runs before, given the ID.
-fn host_gated(
-    spec: Spec,
-    limits: Limits,
-    before: impl Fn(&str) + Send + Sync + 'static,
-) -> Host {
+fn host_gated(spec: Spec, limits: Limits, before: impl Fn(&str) + Send + Sync + 'static) -> Host {
     let folder = Folder(spec.dir.clone());
-    Host::new(
+    Host::for_tests(
         Box::new(move |id| {
             let _ = &folder;
             before(id);
@@ -615,7 +611,8 @@ fn after_stop_all_no_call_starts_a_tool() {
     let e = summary(&h, &[]).unwrap_err();
     assert!(e.message.contains("quitting"), "{e}");
     assert_eq!(h.status(ID).pid, None);
-    assert!(!alive(pid) && !alive(child));
+    assert!(!alive(pid));
+    until("its child to go", 5, || !alive(child));
 }
 
 #[test]
@@ -677,16 +674,23 @@ fn calls_waiting_for_a_start_are_bounded() {
     let (h, go) = gated(Value::Null);
     let first = spawn_summary(&h);
     until("the start", 5, || h.status(ID).state == "starting");
-    let waiting: Vec<_> = (0..MAX_PENDING).map(|_| spawn_summary(&h)).collect();
+    // Leases: calls would also meet the bound on calls waiting their turn.
+    let lease = |h: &Arc<Host>| {
+        let h = Arc::clone(h);
+        std::thread::spawn(move || h.lease(ID).map(|l| l.run.pid()))
+    };
+    let waiting: Vec<_> = (0..MAX_PENDING).map(|_| lease(&h)).collect();
     until("the calls to wait", 5, || {
-        h.0.slots().get(ID).is_some_and(|s| s.waiting == MAX_PENDING)
+        h.0.slots()
+            .get(ID)
+            .is_some_and(|s| s.waiting == MAX_PENDING)
     });
-    let over = joined(spawn_summary(&h), 5, "the call over the bound").unwrap_err();
+    let over = joined(lease(&h), 5, "the call over the bound").unwrap_err();
     assert_eq!(over.code, "unavailable", "{over}");
     go.send(()).unwrap();
     let (pid, _) = pids(&joined(first, 5, "the first call").unwrap());
     for w in waiting {
-        assert_eq!(joined(w, 5, "a waiting call").unwrap()["pid"], pid);
+        assert_eq!(joined(w, 5, "a waiting call").unwrap(), Some(pid as u32));
     }
     h.stop_all();
 }
@@ -744,6 +748,7 @@ fn a_frame_against_the_contract_breaks_the_pipe() {
     // A reply before hello is not taken for one: the tool is crashed, not incompatible.
     let h = host(json!({"before_hello": true}));
     let e = summary(&h, &[]).unwrap_err();
+    assert!(e.message.contains("before hello"), "{e}");
     assert_eq!(h.status(ID).state, "crashed", "{e}");
 }
 
