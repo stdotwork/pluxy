@@ -2,7 +2,7 @@
 // with its two bugs fixed: `$&` in an identity and an identity starting with `@`.
 import { expect, test } from "bun:test";
 import { join } from "node:path";
-import { accountIdentities, maskEmail, maskIdentifier, maskSensitiveText } from "../kit/privacy";
+import { accountIdentities, maskEmail, maskIdentifier, maskSensitiveText, textMasker } from "../kit/privacy";
 
 test("masks emails while keeping enough shape to tell accounts apart", () => {
   expect(maskEmail("alice.smith@example.com")).toBe("al***@e***.com");
@@ -131,4 +131,22 @@ test("a Vertex account's project is one of its identities", () => {
   expect(maskIdentifier(a.label)).not.toContain("billing");
   expect(accountIdentities({ label: "alice@example.com" })).toEqual(["alice@example.com"]);
   expect(accountIdentities({})).toEqual([]);
+});
+
+test("a log's lines are masked with one masker per set of labels", () => {
+  // The Logs Viewer masks up to 10,000 lines; building the identities' patterns for each line
+  // took about 2 s for 30 labels, once per render. Built once, it is milliseconds; the bound is
+  // loose so a busy machine does not fail it.
+  const labels = Array.from({ length: 30 }, (_, i) => `user${i}.name@example${i}.com`);
+  const lines = Array.from(
+    { length: 10000 },
+    (_, i) => `[info ] credentials: account "user${i % 40}_name_example${i % 40}_com" added`,
+  );
+  const start = performance.now();
+  const mask = textMasker(labels);
+  const masked = lines.map(mask);
+  expect(performance.now() - start).toBeLessThan(1000);
+  expect(masked[3]).toBe('[info ] credentials: account "us***@e***.com" added');
+  expect(masked[35]).toBe(lines[35]);
+  for (const i of [0, 7, 29, 31]) expect(masked[i]).toBe(maskSensitiveText(lines[i] as string, labels));
 });

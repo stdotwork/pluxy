@@ -65,24 +65,42 @@ function identityVariants(identity: string): string[] {
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/** Masks text, with or without a value. */
+export interface Masker {
+  (text: string): string;
+  (text: string | undefined): string | undefined;
+}
+
 /**
- * Masks e-mail addresses and URL credentials anywhere in text, then the given identities (such
- * as the labels of the accounts the text is about), also in their file-name forms. Addresses go
- * first: an identity masked inside one would leave the rest of the address unmatched, and shown.
+ * A masker for one set of identities (such as the labels of the accounts the text is about),
+ * built once for many texts: e-mail addresses and URL credentials anywhere in text, then the
+ * identities, also in their file-name forms, in one pass. Addresses go first: an identity masked
+ * inside one would leave the rest of the address unmatched, and shown.
  */
-export function maskSensitiveText(text: string, identities: readonly string[] = []): string {
-  if (!text) return text;
-  let masked = text
-    .replace(URL_USERINFO_PATTERN, `$1${MASK}@`)
-    .replace(EMAIL_PATTERN, (email) => maskEmail(email));
+export function textMasker(identities: readonly string[]): Masker {
+  const replacements = new Map<string, string>();
   for (const identity of identities) {
     const replacement = maskIdentifier(identity);
     for (const variant of identityVariants(identity)) {
-      // A function: a replacement string would expand `$&`, `$'` and the like in the identity.
-      masked = masked.replace(new RegExp(escapeRegExp(variant), "gi"), () => replacement);
+      const key = variant.toLowerCase();
+      if (!replacements.has(key)) replacements.set(key, replacement);
     }
   }
-  return masked;
+  const keys = [...replacements.keys()].sort((a, b) => b.length - a.length);
+  const known = keys.length > 0 ? new RegExp(keys.map(escapeRegExp).join("|"), "gi") : undefined;
+  return ((text: string | undefined) => {
+    if (!text) return text;
+    const masked = text
+      .replace(URL_USERINFO_PATTERN, `$1${MASK}@`)
+      .replace(EMAIL_PATTERN, (email) => maskEmail(email));
+    // A function: a replacement string would expand `$&`, `$'` and the like in the identity.
+    return known ? masked.replace(known, (m) => replacements.get(m.toLowerCase()) ?? MASK) : masked;
+  }) as Masker;
+}
+
+/** textMasker's masking of one text. */
+export function maskSensitiveText(text: string, identities: readonly string[] = []): string {
+  return textMasker(identities)(text);
 }
 
 /**
@@ -155,19 +173,20 @@ export interface Privacy {
   /** A name or free text: e-mail addresses, URL credentials and the given identities masked. */
   text(value: string, identities?: readonly (string | undefined)[]): string;
   text(value: string | undefined, identities?: readonly (string | undefined)[]): string | undefined;
+  /** text's masking for many texts about the same identities, built once. */
+  masker(identities: readonly (string | undefined)[]): Masker;
 }
+
+const unchanged = ((text: string | undefined) => text) as Masker;
+const known = (identities: readonly (string | undefined)[]) => identities.filter((i): i is string => !!i);
 
 export function privacyMasks(on: boolean): Privacy {
   return {
     on,
     id: ((value: string | undefined) => (on && value ? maskIdentifier(value) : value)) as Privacy["id"],
     text: ((value: string | undefined, identities: readonly (string | undefined)[] = []) =>
-      on && value
-        ? maskSensitiveText(
-            value,
-            identities.filter((i): i is string => !!i),
-          )
-        : value) as Privacy["text"],
+      on && value ? maskSensitiveText(value, known(identities)) : value) as Privacy["text"],
+    masker: (identities) => (on ? textMasker(known(identities)) : unchanged),
   };
 }
 
@@ -182,6 +201,8 @@ export function usePrivacy(): Privacy {
  * The labels of core's accounts while privacy mode is on (none while it is off), for text that
  * names accounts only by ID or shows what a request carried, such as usage records and logs.
  */
+const NONE: string[] = [];
+
 export function useAccountLabels(): string[] {
   const { api } = useKit();
   const { on } = usePrivacy();
@@ -199,5 +220,5 @@ export function useAccountLabels(): string[] {
       live = false;
     };
   }, [on, api]);
-  return on ? labels : [];
+  return on ? labels : NONE;
 }

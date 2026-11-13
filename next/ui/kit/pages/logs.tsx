@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { type ErrorLogFile, type LogContent, problem } from "../api";
 import { useAccountLabels, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
@@ -88,7 +88,7 @@ export function LogsPage() {
   // Privacy mode masks what the views show; search, downloads and the files keep the real text.
   const p = usePrivacy();
   const labels = useAccountLabels();
-  const mask = (text: string | undefined) => p.text(text, labels);
+  const mask = useMemo(() => p.masker(labels), [p, labels]);
   const files = useLoad(api.errorLogs);
   const [lines, setLines] = useState<string[]>([]);
   const [error, setError] = useState<string>();
@@ -219,9 +219,13 @@ export function LogsPage() {
     }
   };
   const query = search.toLocaleLowerCase();
-  const shown = lines.filter(
-    (line) => (!level || logLevel(line) === level) && line.toLocaleLowerCase().includes(query),
+  // Masked once per change of the lines or the labels, not on each render (a read every 2 seconds
+  // while reading continuously, each keystroke in the search).
+  const masked = useMemo(() => lines.map(mask), [lines, mask]);
+  const shownAt = lines.flatMap((line, i) =>
+    (!level || logLevel(line) === level) && line.toLocaleLowerCase().includes(query) ? [i] : [],
   );
+  const shown = shownAt.map((i) => lines[i] as string);
   return (
     <>
       <PageHead
@@ -272,9 +276,9 @@ export function LogsPage() {
           data-wrap={wrap ? "" : undefined}
         >
           {shown.length ? (
-            shown.map((line, i) => (
-              <div key={i} data-part="log-line" data-level={logLevel(line)}>
-                {mask(line)}
+            shownAt.map((i) => (
+              <div key={i} data-part="log-line" data-level={logLevel(lines[i] as string)}>
+                {masked[i]}
               </div>
             ))
           ) : (
