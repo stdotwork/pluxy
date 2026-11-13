@@ -825,10 +825,11 @@ fn its_log_rate_is_bounded() {
     });
     let log = h.status(ID).log;
     let n = log.len();
+    // The tail keeps every line; only the log leaves lines out.
     assert_eq!(
         log[n - 3..],
         [
-            format!("burst {}", LOG_RATE - 1),
+            "burst 499".to_string(),
             format!(
                 "({} lines left out: more than {LOG_RATE} a second)",
                 500 - LOG_RATE
@@ -836,5 +837,56 @@ fn its_log_rate_is_bounded() {
             "after".into(),
         ]
     );
+    h.stop_all();
+}
+
+#[test]
+fn a_crash_after_a_burst_keeps_its_last_words_and_the_count() {
+    let mut lines: Vec<String> = (0..500).map(|i| format!("burst {i}")).collect();
+    lines.push("last words".into());
+    let h = host(json!({"stderr": lines, "crash_on": "summary"}));
+    summary(&h, &[]).unwrap_err();
+    until("the crash", 5, || h.status(ID).state == "crashed");
+    let s = h.status(ID);
+    let n = s.log.len();
+    assert_eq!(
+        s.log[n - 2..],
+        [
+            "last words".to_string(),
+            format!(
+                "({} lines left out: more than {LOG_RATE} a second)",
+                501 - LOG_RATE
+            ),
+        ],
+        "{s:?}"
+    );
+    assert!(
+        s.last.as_deref().unwrap().ends_with(": last words"),
+        "{s:?}"
+    );
+}
+
+#[test]
+fn a_call_waiting_for_a_start_is_cancelled_at_once() {
+    let (h, go) = gated(Value::Null);
+    let first = spawn_summary(&h);
+    until("the start", 5, || h.status(ID).state == "starting");
+    let h2 = Arc::clone(&h);
+    let ticketed =
+        std::thread::spawn(move || h2.call(ID, "summary", json!({"items": []}), Some("s-1")));
+    let plain = spawn_summary(&h);
+    until("the calls to wait", 5, || {
+        h.0.slots().get(ID).is_some_and(|s| s.waiting == 2)
+    });
+    h.cancel("s-1").unwrap();
+    let e = joined(ticketed, 5, "the cancelled call").unwrap_err();
+    assert_eq!(e.code, "cancelled", "{e}");
+    h.cancel_all();
+    let e = joined(plain, 5, "the call cancel_all reached").unwrap_err();
+    assert_eq!(e.code, "cancelled", "{e}");
+    // The start goes on for the call that made it, which cancel_all reached too.
+    go.send(()).unwrap();
+    let e = joined(first, 5, "the first call").unwrap_err();
+    assert_eq!(e.code, "cancelled", "{e}");
     h.stop_all();
 }
