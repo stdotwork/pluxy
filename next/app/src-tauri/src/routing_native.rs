@@ -160,8 +160,10 @@ fn package_view(main: &Webview, id: &str) -> Result<Value, String> {
         .ok_or_else(|| format!("{id} is not listed: {list}"))
 }
 
-/// A page of package id, opened, with its channel up.
+/// A page of package id, opened in the window, with its channel up. The window opens its webview
+/// and answers its hello, as it does for the person; it shows one page at a time.
 struct Page {
+    app: AppHandle,
     label: String,
     wv: Webview,
     next: u64,
@@ -169,19 +171,28 @@ struct Page {
 
 impl Page {
     fn open(app: &AppHandle, main: &Webview, id: &str) -> Result<Page, String> {
-        let label = ok(
-            main,
-            "device_page_open",
-            json!({"id": id, "page": "page", "rect": {"x": 0, "y": 0, "width": 400, "height": 300}}),
-        )?;
-        let label = label
-            .as_str()
-            .ok_or(format!("page label {label}"))?
-            .to_string();
-        let wv = wait_for("the page webview", || app.get_webview(&label))?;
-        wait_for("the page's frame document", || {
-            eval(&wv, "document.querySelector('iframe') !== null").filter(|v| v == true)
+        let route = format!("device/{id}/page");
+        wait_for(&format!("{route} in the navigation"), || {
+            eval(
+                main,
+                &format!("document.querySelector('a[href=\"#/{route}\"]') !== null"),
+            )
+            .filter(|v| v == true)
         })?;
+        main.eval(format!("location.hash = {}", json!(format!("#/{route}"))))
+            .map_err(|e| e.to_string())?;
+        let label = wait_for(&format!("a page webview showing {id}"), || {
+            app.webviews().into_iter().find_map(|(label, w)| {
+                (label != crate::MAIN
+                    && eval(&w, "document.querySelector('iframe')?.src ?? null")
+                        .and_then(|v| v.as_str().map(|s| s.contains(&format!("/{id}/"))))
+                        == Some(true))
+                .then_some(label)
+            })
+        })?;
+        let wv = app
+            .get_webview(&label)
+            .ok_or_else(|| format!("no webview {label}"))?;
         wv.eval(
             "window.__route = {replies: {}, ready: false}; addEventListener('message', (e) => { \
              const d = e.data; if (d && d.routeReady) window.__route.ready = true; \
@@ -192,7 +203,12 @@ impl Page {
         wait_for("the page's channel", || {
             eval(&wv, "window.__route?.ready === true").filter(|v| v == true)
         })?;
-        Ok(Page { label, wv, next: 0 })
+        Ok(Page {
+            app: app.clone(),
+            label,
+            wv,
+            next: 0,
+        })
     }
 
     /// Sends a native.call of op of package with input from the page, through its channel.
@@ -224,8 +240,13 @@ impl Page {
         self.reply(&id)
     }
 
+    /// Leaves the page in the window, which closes its webview.
     fn close(self, main: &Webview) -> Result<(), String> {
-        ok(main, "page_close", json!({"label": self.label})).map(|_| ())
+        main.eval("location.hash = '#/device'")
+            .map_err(|e| e.to_string())?;
+        wait_for(&format!("{} to close", self.label), || {
+            self.app.get_webview(&self.label).is_none().then_some(())
+        })
     }
 }
 
@@ -499,6 +520,8 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 "the Unverified viewer's call",
             )?;
             viewer.close(main)?;
+            // The window shows one page at a time: the guide's again.
+            let mut page = Page::open(app, main, GUIDE)?;
             let r = page.call(TARGET, "summary", json!({"items": items}))?;
             require(
                 summary_ok(&r["result"]),
@@ -512,7 +535,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 format!("the target's own page: {r}"),
             )?;
             own.close(main)?;
-            guide = Some(page);
+            guide = Some(Page::open(app, main, GUIDE)?);
             Ok(())
         })(),
     )?;
