@@ -101,12 +101,14 @@ the app started (read from `/proc` on Linux, before the app sends anything there
 `GET /v0/management/status` with the app's management key and, for a release, reports the
 version it was signed as, and the app has saved the new selection. If not, the app puts the
 config back as it was, removes a version it installed for this switch, and runs the version that
-worked before (when the switch reinstalled that very version, the one before it, which then stays
-selected); the page says why the new one did not start. If the config cannot be put back, no
+worked before (when the switch was to the selected version itself, and reinstalled it, copied a
+damaged adopted program in again, or ran it with **Roll back to** and it failed, the one before
+it, which is then selected once it runs); the page says why the new one did not start. If the config cannot be put back, no
 core runs: the candidate stays recorded with the copy, and the app tries again at its next start.
 Once it is put back, a mark beside the config says so, and a later start does not put it back
 again over your edits, unless the app could save neither the failure nor that mark: then the
-next start puts the same config back once more. If the app stops while a version starts, it does the same at its next start; a copy
+next start puts the same config back once more. If the app stops while a version starts, it does the same at its next start, also when that
+was a reinstall or rollback of the selected version; a copy
 it cannot read is an error, and the config is left as it is. From the moment the app begins to
 stop its core, or sees it exit, it sends nothing more to that address. The app keeps the
 running version and the one before it, and removes older ones after a switch. Rolling back
