@@ -519,7 +519,8 @@ pub(crate) fn run(
             } else {
                 near(&want, &got)
             };
-            last = json!({"geometry": g, "want": want, "placed": got});
+            last = json!({"geometry": g, "want": want, "placed": got,
+                "log": eval(main, "window.__placeLog.slice(-30)")});
             ok.then(|| last.clone())
         })
         .map_err(|e| format!("{e}: {last}"))

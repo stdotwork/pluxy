@@ -116,12 +116,23 @@ function NotesView(props: {
     let opened: string | undefined;
     setLabel(undefined);
     setError(undefined);
-    const place = () => {
-      if (opened && area.current)
-        invoke("release_notes_place", { label: opened, rect: visibleRect(area.current) }).catch(() => {});
+    // TEMP-DIAG
+    const dbg = (window as unknown as { __placeLog: unknown[] });
+    dbg.__placeLog ??= [];
+    let seq = 0;
+    const mk = (from: string) => () => {
+      if (opened && area.current) {
+        const rect = visibleRect(area.current);
+        const n = ++seq;
+        dbg.__placeLog.push({ n, from, y: rect?.y, h: rect?.height, s: Math.round(window.scrollY), t: Math.round(performance.now()) });
+        invoke("release_notes_place", { label: opened, rect })
+          .catch(() => {})
+          .then(() => dbg.__placeLog.push({ done: n, t: Math.round(performance.now()) }));
+      }
     };
-    placeNow.current = place;
-    const resize = new ResizeObserver(place);
+    const place = mk("scroll");
+    placeNow.current = mk("render");
+    const resize = new ResizeObserver(mk("ro"));
     invoke<string>("release_notes_open", {
       product: props.product,
       rect: visibleRect(el),
