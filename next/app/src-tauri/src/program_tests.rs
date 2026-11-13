@@ -890,3 +890,16 @@ fn a_call_waiting_for_a_start_is_cancelled_at_once() {
     assert_eq!(e.code, "cancelled", "{e}");
     h.stop_all();
 }
+
+#[test]
+fn a_call_begun_before_cancel_all_never_starts_its_tool() {
+    let h = host(Value::Null);
+    let call = h.begin_call(None).unwrap();
+    h.cancel_all();
+    let e = h
+        .run_call(call, ID, "summary", json!({"items": []}))
+        .unwrap_err();
+    assert_eq!(e.code, "cancelled", "{e}");
+    assert_eq!(h.status(ID).pid, None);
+    assert!(h.0.calls.lock().unwrap().is_empty());
+}

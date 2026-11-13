@@ -266,6 +266,8 @@ struct Run {
     /// Reaped: the pipe readers stop even if some other process holds the pipes open.
     closed: AtomicBool,
     tail: Mutex<VecDeque<String>>,
+    /// Its last stderr line, as logged: why it stopped, if it says.
+    last_line: Mutex<Option<String>>,
 }
 
 impl Run {
@@ -312,18 +314,22 @@ impl Run {
         self.hello.lock().unwrap().take();
     }
 
-    fn log(&self, line: &str) {
+    /// Keeps line in the tail and, if shown, logs it; gives it as kept.
+    fn log(&self, line: &str, shown: bool) -> String {
         let mut line = line.to_string();
         for s in self.spec.secrets.iter().filter(|s| !s.is_empty()) {
             line = line.replace(s.as_str(), "[redacted]");
         }
         let line = escape(&line);
-        eprintln!("program {}: {line}", self.spec.id);
+        if shown {
+            eprintln!("program {}: {line}", self.spec.id);
+        }
         let mut t = self.tail.lock().unwrap();
         if t.len() == TAIL {
             t.pop_front();
         }
-        t.push_back(line);
+        t.push_back(line.clone());
+        line
     }
 
     fn tail(&self) -> Vec<String> {
@@ -415,15 +421,17 @@ impl Host {
 
     /// A lease on tool id, starting it if it is not running (once, however many ask at once).
     pub fn lease(&self, id: &str) -> Result<Lease, CallError> {
-        self.lease_for(id, &|_| Ok(())).map_err(escaped)
+        self.lease_for(id, &|_| Ok(()), &AtomicBool::new(false))
+            .map_err(escaped)
     }
 
     /// `lease`, for a call check allows: check sees the record the lease would be on before any
-    /// lease is taken or tool started.
+    /// lease is taken or tool started. A cancel is seen before each start and each wait.
     fn lease_for(
         &self,
         id: &str,
         check: &dyn Fn(&Spec) -> Result<(), CallError>,
+        cancel: &AtomicBool,
     ) -> Result<Lease, CallError> {
         let inner = &self.0;
         let mut slots = inner.slots();
@@ -432,6 +440,9 @@ impl Host {
         loop {
             if inner.closing.load(Ordering::SeqCst) {
                 return Err(fail("extension_unavailable", "the app is quitting"));
+            }
+            if cancel.load(Ordering::SeqCst) {
+                return Err(fail("cancelled", "the call was cancelled"));
             }
             let slot = slots.entry(id.to_string()).or_default();
             if let (Some(n), Some((m, e))) = (waited_on, &slot.failed) {
@@ -517,8 +528,14 @@ impl Host {
         input: Value,
         ticket: Option<&str>,
     ) -> Result<Value, CallError> {
+        let call = self.begin_call(ticket)?;
+        self.run_call(call, id, op, input)
+    }
+
+    /// A call, registered: from now on `cancel` (by its ticket, if it has one) and `cancel_all`
+    /// reach it. Begin it as the request arrives, before it can wait; then `run_call` it.
+    pub fn begin_call(&self, ticket: Option<&str>) -> Result<Call, CallError> {
         let cancel = Arc::new(AtomicBool::new(false));
-        let n = CALL_IDS.fetch_add(1, Ordering::SeqCst);
         if let Some(t) = ticket {
             if !valid_ticket(t) {
                 return Err(fail(
@@ -532,13 +549,26 @@ impl Host {
             }
             tickets.insert(t.to_string(), Arc::clone(&cancel));
         }
+        let n = CALL_IDS.fetch_add(1, Ordering::SeqCst);
         self.0.calls.lock().unwrap().insert(n, Arc::clone(&cancel));
-        let r = self.call_inner(id, op, input, &cancel);
-        self.0.calls.lock().unwrap().remove(&n);
-        if let Some(t) = ticket {
-            self.0.tickets.lock().unwrap().remove(t);
-        }
-        r.map_err(escaped)
+        Ok(Call {
+            inner: Arc::clone(&self.0),
+            n,
+            ticket: ticket.map(String::from),
+            cancel,
+        })
+    }
+
+    /// Calls op of tool id with input, as call.
+    pub fn run_call(
+        &self,
+        call: Call,
+        id: &str,
+        op: &str,
+        input: Value,
+    ) -> Result<Value, CallError> {
+        self.call_inner(id, op, input, &call.cancel)
+            .map_err(escaped)
     }
 
     /// Cancels every call under way: the window that made them closed.
@@ -573,10 +603,14 @@ impl Host {
             ));
         }
         // Checked against the record before the tool is leased, or started.
-        let lease = self.lease_for(id, &|spec| {
-            schema::check(&declared(spec, op)?.input_schema, &input, "input")
-                .map_err(|e| fail("invalid_request", e))
-        })?;
+        let lease = self.lease_for(
+            id,
+            &|spec| {
+                schema::check(&declared(spec, op)?.input_schema, &input, "input")
+                    .map_err(|e| fail("invalid_request", e))
+            },
+            cancel,
+        )?;
         let run = &lease.run;
         let decl = declared(&run.spec, op)?;
         // Its turn: one call at a time, at most MAX_PENDING at once.
@@ -733,6 +767,23 @@ fn declared<'a>(spec: &'a Spec, op: &str) -> Result<&'a Operation, CallError> {
     })
 }
 
+/// A call `Host::begin_call` registered; it leaves the host's lists when dropped.
+pub struct Call {
+    inner: Arc<Inner>,
+    n: u64,
+    ticket: Option<String>,
+    cancel: Arc<AtomicBool>,
+}
+
+impl Drop for Call {
+    fn drop(&mut self) {
+        self.inner.calls.lock().unwrap().remove(&self.n);
+        if let Some(t) = &self.ticket {
+            self.inner.tickets.lock().unwrap().remove(t);
+        }
+    }
+}
+
 /// The turn of the call holding it, given up when it ends.
 struct Turn<'a>(&'a Run);
 
@@ -781,7 +832,7 @@ fn command(spec: &Spec, f: &std::fs::File) -> Command {
     // The kernel opens /proc/self/fd/<n>, the checked file, as it executes; the descriptor is
     // close-on-exec, so the tool does not keep it.
     let mut cmd = Command::new(format!("/proc/self/fd/{}", f.as_raw_fd()));
-    // What process listings show it as.
+    // Its command line; its short name (`comm`) stays the descriptor's number.
     cmd.arg0(&spec.program)
         .env_clear()
         .env("PLUXY_APP_CONTRACT_VERSIONS", CONTRACT.to_string())
@@ -851,6 +902,7 @@ fn start(
         kill: AtomicBool::new(false),
         closed: AtomicBool::new(false),
         tail: Mutex::new(VecDeque::new()),
+        last_line: Mutex::new(None),
     });
     let cmd = command(&run.spec, &program);
     {
@@ -1105,6 +1157,7 @@ fn supervise(
     if let Some(e) = threads.iter().find_map(|t| t.as_ref().err()) {
         run.finish(End::Failed(format!("its pipe threads: {e}")), true);
     }
+    let [_, _, log_reader] = threads;
     let _ = spawned.send(Ok(()));
     let mut stopping: Option<Instant> = None;
     loop {
@@ -1155,6 +1208,11 @@ fn supervise(
     let status = child.wait();
     run.tx.lock().unwrap().take();
     run.closed.store(true, Ordering::SeqCst);
+    // Its last lines, and the count of those left out of the log, reach the status. The reader
+    // stops within a tick once it is reaped.
+    if let Ok(t) = log_reader {
+        let _ = t.join();
+    }
     run.pending.lock().unwrap().clear();
     run.hello.lock().unwrap().take();
     let end = run.end.lock().unwrap().clone();
@@ -1162,7 +1220,7 @@ fn supervise(
         Ok(s) => s.to_string(),
         Err(e) => e.to_string(),
     };
-    let last_line = run.tail().last().cloned();
+    let last_line = run.last_line.lock().unwrap().clone();
     let mut slots = inner.slots();
     if let Some(slot) = slots.get_mut(&run.spec.id) {
         if slot.run.as_ref().is_some_and(|r| Arc::ptr_eq(r, &run)) {
@@ -1292,7 +1350,8 @@ fn deliver(run: &Run, frame: &[u8], said_hello: &mut bool) -> Result<(), String>
     Ok(())
 }
 
-/// Logs a tool's lines, at most `LOG_RATE` a second; the rest are counted.
+/// Keeps a tool's lines in its tail and logs them, at most `LOG_RATE` a second; the rest are
+/// left out of the log, and counted.
 struct Rate<'a> {
     run: &'a Run,
     since: Instant,
@@ -1307,20 +1366,25 @@ impl Rate<'_> {
             self.since = Instant::now();
             self.lines = 0;
         }
-        if self.lines < LOG_RATE {
+        let shown = self.lines < LOG_RATE;
+        if shown {
             self.lines += 1;
-            self.run.log(line);
         } else {
             self.left_out += 1;
         }
+        let kept = self.run.log(line, shown);
+        *self.run.last_line.lock().unwrap() = Some(kept);
     }
 
     fn flush(&mut self) {
         if self.left_out > 0 {
-            self.run.log(&format!(
-                "({} lines left out: more than {LOG_RATE} a second)",
-                self.left_out
-            ));
+            self.run.log(
+                &format!(
+                    "({} lines left out: more than {LOG_RATE} a second)",
+                    self.left_out
+                ),
+                true,
+            );
             self.left_out = 0;
         }
     }

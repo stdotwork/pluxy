@@ -205,8 +205,9 @@ anything a caller passes. On top of the rules above:
   an interpreter would open the path again.
 - The tool's environment holds exactly the three variables above. Only stdin, stdout and stderr
   are open in it; every other descriptor closes as it executes. It leads a process group of its
-  own and gets SIGTERM if the app dies without stopping it. Process listings show it by its
-  program's path. Its supervisor thread starts it and stays until it has been reaped. It needs
+  own and gets SIGTERM if the app dies without stopping it. Its command line (`argv[0]`) is its
+  program's path; its short process name (`comm`) is the number of the descriptor it was run
+  from. Its supervisor thread starts it and stays until it has been reaped. It needs
   Linux 5.11 or later (`close_range` with `CLOSE_RANGE_CLOEXEC`).
 - Hello must come first and name the record's ID and digest and contract 0. The describe reply's
   `operations` are objects with an `id`; their IDs must be exactly the manifest's, and
@@ -226,7 +227,8 @@ anything a caller passes. On top of the rules above:
   started. Calls to one tool run one at a time, at most eight at once counting those waiting
   their turn, and at most eight more wait for it to start or stop. Calls that waited on a start
   that failed get that start's error rather than starting it again. A cancelled call has five
-  seconds for its terminal reply; after that the tool is stopped.
+  seconds for its terminal reply; after that the tool is stopped. A cancel also ends a call
+  still waiting for its tool to start or stop.
 - Each call holds a lease. Idle stop, a change to the package and app quit close the tool's
   stdin, kill its whole process group after five seconds (once its leader exits, the rest of
   the group at once), and the tool itself if it left that group, and reap it. A child that
@@ -235,7 +237,8 @@ anything a caller passes. On top of the rules above:
 - Stderr lines are logged prefixed with the tool's ID, at most 8 KiB each (a longer one is left
   out with a note) and 50 a second (the rest are left out and counted), with control and format
   characters (such as U+202E) escaped and the values the host knows the tool must not show
-  removed. The last 20 say why it stopped. Error messages and hello or describe values a tool
+  removed. The last 20 lines, kept whether or not the rate let them into the log, and the count
+  of those left out, say why it stopped. Error messages and hello or describe values a tool
   sends reach the window and the status escaped the same way.
 
 Still to come: crash backoff and quarantine (a crashed tool starts again at its next call), swaps

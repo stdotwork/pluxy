@@ -1209,6 +1209,12 @@ async fn program_call(
     #[cfg(target_os = "linux")]
     {
         let app = webview.app_handle().clone();
+        // Registered now, before it can wait, so a cancel or the window's closing reaches it.
+        let call = app
+            .state::<App>()
+            .programs
+            .begin_call(ticket.as_deref())
+            .map_err(|e| e.to_string())?;
         tauri::async_runtime::spawn_blocking(move || {
             // On a thread of its own that ends with the call: a tool this call starts is held by
             // the host's supervisor thread, never by the thread that started it.
@@ -1217,7 +1223,7 @@ async fn program_call(
                 .spawn(move || {
                     app.state::<App>()
                         .programs
-                        .call(&package, &op, input, ticket.as_deref())
+                        .run_call(call, &package, &op, input)
                         .map_err(|e| e.to_string())
                 })
                 .map_err(|e| e.to_string())?
