@@ -3,7 +3,9 @@
 // choose in the native file chooser or from a registry named in device-registries.json, and
 // enables, disables, rolls back or removes it. A package is Unverified unless a curated
 // first-party key signed it; only such a package may be a native tool, which has full access to
-// the person's user account and is enabled only through a native confirmation.
+// the person's user account and is enabled only through a native confirmation. A curated web
+// package's calls of native tools' operations (its imports) are allowed only through a native
+// confirmation too, and can be revoked here.
 
 import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
@@ -56,6 +58,20 @@ const t = strings("device", {
     "This native tool has full access to your user account. Enabling it opens a native confirmation that shows its source, digest and signer.",
   signer: "Signer",
   operations: "Operations",
+  imports: "Imports",
+  importValue: "{package} (contract {contract}, {required}): {operations}",
+  required: "required",
+  optional: "optional",
+  exports: "Exports",
+  exportsValue: "contract {contract}: {operations}",
+  nativeImports: "Native imports",
+  importsAllowed: "allowed for this release",
+  importsNotAllowed: "not allowed",
+  importsWhy:
+    "This package's pages call native tools' operations. They are refused until you allow them in a native confirmation that lists each operation; a write or launch still asks each time.",
+  importsUnverified: "Only a curated package may call native tools, so its calls are refused.",
+  allowImports: "Allow native imports…",
+  revokeImports: "Revoke native imports",
   local: "File {name}",
   registry: "Registry {name}",
   registryAt: "Registry {name} ({index})",
@@ -122,11 +138,31 @@ function releaseFacts(r: DeviceRelease): [string, ComponentChildren][] {
     [t("settings"), r.settings ? t("settingsValue") : undefined],
     [t("signer"), r.signer ?? undefined],
     [t("operations"), r.operations.map(([id, what]) => `${id}: ${what}`).join("; ") || undefined],
+    [
+      t("imports"),
+      r.imports
+        .map((i) =>
+          t("importValue", {
+            package: i.package,
+            contract: i.contract.join(", "),
+            required: t(i.required ? "required" : "optional"),
+            operations: i.operations.join(", "),
+          }),
+        )
+        .join("; ") || undefined,
+    ],
+    [
+      t("exports"),
+      r.exports
+        ? t("exportsValue", { contract: r.exports.contract, operations: r.exports.operations.join(", ") })
+        : undefined,
+    ],
   ];
 }
 
 function PackageDetail(props: { p: DevicePackage; onClose: () => void; onChanged: () => void }) {
   const { p } = props;
+  const webImports = p.tier === "web" && p.active.imports.length > 0;
   const act = useAction(props.onChanged);
   const remove = useAction(() => {
     props.onClose();
@@ -142,10 +178,15 @@ function PackageDetail(props: { p: DevicePackage; onClose: () => void; onChanged
           [t("state"), <StateBadge state={p.enabled ? "active" : "disabled"} />],
           ...releaseFacts(p.active),
           [t("lastGood"), p.last_good && <span class="mono">{p.last_good.version}</span>],
+          [
+            t("nativeImports"),
+            webImports ? t(p.imports_allowed ? "importsAllowed" : "importsNotAllowed") : undefined,
+          ],
         ]}
       />
       <p class="muted">{t(p.trust === "curated" ? "curatedWhy" : "unverifiedWhy")}</p>
       {p.tier === "native" && <Notice tone="warn">{t("fullAccess")}</Notice>}
+      {webImports && <p class="muted">{t(p.trust === "curated" ? "importsWhy" : "importsUnverified")}</p>}
       {(act.error ?? remove.error) && <Notice tone="danger">{act.error ?? remove.error}</Notice>}
       <div class="actions">
         <Button
@@ -155,6 +196,14 @@ function PackageDetail(props: { p: DevicePackage; onClose: () => void; onChanged
         >
           {p.enabled ? t("disable") : t("enable")}
         </Button>
+        {webImports && p.trust === "curated" && (
+          <Button
+            disabled={act.busy}
+            onClick={() => act.run(() => device.setImports(p.id, !p.imports_allowed))}
+          >
+            {p.imports_allowed ? t("revokeImports") : t("allowImports")}
+          </Button>
+        )}
         {p.last_good && (
           <Button disabled={act.busy} onClick={() => act.run(() => device.rollback(p.id))}>
             {t("rollBack", { version: p.last_good.version })}
@@ -302,7 +351,7 @@ export function DevicePage(props: { onChanged: () => void }) {
           detail={
             chosen && (
               <PackageDetail
-                key={`${chosen.id} ${chosen.active.sha256} ${chosen.enabled}`}
+                key={`${chosen.id} ${chosen.active.sha256} ${chosen.enabled} ${chosen.imports_allowed}`}
                 p={chosen}
                 onClose={() => setSelected(undefined)}
                 onChanged={changed}
