@@ -965,6 +965,8 @@ fn registry_signatures_are_checked_before_unpacking_and_kept() {
         let e = stage_from_registry(&d, "fixture", "example/files", Some(v)).unwrap_err();
         assert!(e.contains(says), "{v}: {e}");
     }
+    // Opened first, as the app does: opening clears staged folders left behind.
+    let mut cat = Catalog::open(d.clone(), false);
     let c = stage_from_registry(&d, "fixture", "example/files", Some("1.0.0")).unwrap();
     let s = c.release.signed.clone().unwrap();
     assert_eq!(
@@ -984,7 +986,6 @@ fn registry_signatures_are_checked_before_unpacking_and_kept() {
         )
     );
     assert_eq!(c.release.declared[0].id, "config");
-    let mut cat = Catalog::open(d.clone(), false);
     cat.commit(c).unwrap();
     let f = cat.facts("example/files").unwrap();
     assert_eq!(f.source.as_deref(), Some(url.as_str()));
