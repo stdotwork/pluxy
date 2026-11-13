@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { type Account, problem } from "../api";
 import type { CoreSettings } from "../api/settings";
 import type { Reply } from "../host";
+import { accountIdentities, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { strings } from "../strings";
 import { Badge, Button, Card, Empty, List, Notice, PageHead, useKit } from "../ui";
@@ -100,14 +101,19 @@ export function canMove(tiers: Tier[], priority: number, direction: "up" | "down
   const edge = direction === "up" ? index === 0 : index === tiers.length - 1;
   return !(edge && tier.accounts.length === 1);
 }
-/** What identifies a focused control across a re-render that replaces its element. */
+/**
+ * What identifies a focused control across a re-render that replaces its element: its focus key,
+ * which names the account by ID (privacy mode can give two accounts the same accessible name).
+ */
 const focusKey = (element: Element | null) =>
   element instanceof HTMLElement && element !== document.body
-    ? element.id
-      ? `#${element.id}`
-      : (element.getAttribute("aria-label") ??
-        (element.tagName === "BUTTON" ? element.textContent : "") ??
-        "")
+    ? element.dataset.focusKey
+      ? `key:${element.dataset.focusKey}`
+      : element.id
+        ? `#${element.id}`
+        : (element.getAttribute("aria-label") ??
+          (element.tagName === "BUTTON" ? element.textContent : "") ??
+          "")
     : "";
 /** Puts focus back on the control with this key, or on the row's other button when it is disabled. */
 function focusByKey(key: string) {
@@ -137,12 +143,13 @@ function coolingTime(account: Account): string | undefined {
       : t("seconds", { count: seconds });
 }
 function WeightEditor({ account, save }: { account: Account; save: (weight: number | null) => void }) {
+  const p = usePrivacy();
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState("");
   // Set once the editor is done with its value, so the blur that follows removing the input cannot save again.
   const closed = useRef(true);
   const refocus = useRef("");
-  const name = t("setWeightFor", { id: account.id });
+  const name = t("setWeightFor", { id: p.text(account.id, accountIdentities(account)) });
   useEffect(() => {
     if (editing || !refocus.current) return;
     focusByKey(refocus.current);
@@ -162,6 +169,7 @@ function WeightEditor({ account, save }: { account: Account; save: (weight: numb
       <Button
         disabled={account.source === "config"}
         label={name}
+        focusKey={`weight ${account.id}`}
         onClick={() => {
           setValue(account.weight === undefined ? "" : String(account.weight));
           closed.current = false;
@@ -176,6 +184,7 @@ function WeightEditor({ account, save }: { account: Account; save: (weight: numb
           <input
             type="number"
             aria-label={name}
+            data-focus-key={`weight ${account.id}`}
             min="0"
             step="1"
             value={value}
@@ -201,6 +210,7 @@ function WeightEditor({ account, save }: { account: Account; save: (weight: numb
 }
 export function RoutingPage() {
   const { api, unauthorized } = useKit();
+  const p = usePrivacy();
   const [settings, setSettings] = useState<CoreSettings>();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [busy, setBusy] = useState(true);
@@ -320,7 +330,7 @@ export function RoutingPage() {
           </Button>
         }
       />
-      {error && <Notice tone="danger">{error}</Notice>}
+      {error && <Notice tone="danger">{p.text(error, accounts.flatMap(accountIdentities))}</Notice>}
       {!settings ? (
         <Notice tone="muted">{t("loading")}</Notice>
       ) : (
@@ -344,9 +354,9 @@ export function RoutingPage() {
                         label: t("account"),
                         value: (a) => (
                           <>
-                            {a.id}
+                            {p.text(a.id, accountIdentities(a))}
                             <small class="routing-identity muted">
-                              {a.label}
+                              {p.id(a.label)}
                               {a.extension && <> · {a.extension}</>}
                             </small>
                             {a.source === "config" && <Badge tone="muted">{t("config")}</Badge>}
@@ -384,7 +394,10 @@ export function RoutingPage() {
                               <Button
                                 key={direction}
                                 disabled={a.source === "config" || !canMove(tiers, tier.priority, direction)}
-                                label={t(direction === "up" ? "upFor" : "downFor", { id: a.id })}
+                                focusKey={`${direction} ${a.id}`}
+                                label={t(direction === "up" ? "upFor" : "downFor", {
+                                  id: p.text(a.id, accountIdentities(a)),
+                                })}
                                 onClick={() => {
                                   const priority = movePriority(tiers, tier.priority, direction);
                                   run(() => api.changeAccountRouting(a.id, { priority }));

@@ -11,7 +11,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useLayoutEffect, useRef, useState } from "preact/hooks";
 import { type Channel, isHello, type Outcome, pickVersion, serve } from "../../ui/kit/extensions/channel";
-import { type ExtensionPageProps, settingsOutcome, themeSnapshot } from "../../ui/kit/extensions/page";
+import {
+  type ExtensionPageProps,
+  settingsOutcome,
+  subscribePresentation,
+  themeSnapshot,
+} from "../../ui/kit/extensions/page";
 import { pageProblem } from "../../ui/kit/extensions/site";
 import { Button, Notice, PageHead, useKit } from "../../ui/kit/ui";
 import { type PageMessage, PageRouter } from "./pageEvents";
@@ -48,7 +53,7 @@ const noDeviceSettings = async (): Promise<Outcome> => ({
 });
 
 export function NativeExtensionPage(props: ExtensionPageProps & { device?: boolean }) {
-  const { api, themes, unauthorized } = useKit();
+  const { api, themes, privacy, unauthorized } = useKit();
   const { ext, page, device } = props;
   const area = useRef<HTMLElement>(null);
   const [mount, setMount] = useState(0); // a new webview, and a new channel, each time it changes
@@ -106,7 +111,7 @@ export function NativeExtensionPage(props: ExtensionPageProps & { device?: boole
         ports.port1,
         { extension: ext.id, permissions: permissions ? permissions.split(" ") : [] },
         {
-          theme: () => themeSnapshot(themes.resolved),
+          theme: () => themeSnapshot(themes.resolved, privacy.on),
           configGet: device ? noDeviceSettings : () => settingsOutcome(api.settings(ext.id), unauthorized),
           configSet: device
             ? noDeviceSettings
@@ -123,7 +128,7 @@ export function NativeExtensionPage(props: ExtensionPageProps & { device?: boole
           type: "welcome",
           extension: ext.id,
           page: page.id,
-          theme: themeSnapshot(themes.resolved),
+          theme: themeSnapshot(themes.resolved, privacy.on),
         },
       });
       setPhase("connected");
@@ -165,7 +170,9 @@ export function NativeExtensionPage(props: ExtensionPageProps & { device?: boole
           setError(String(e));
         },
       );
-    const unsubscribe = themes.subscribe(() => channel?.event("theme", themeSnapshot(themes.resolved)));
+    const unsubscribe = subscribePresentation(themes, privacy, () =>
+      channel?.event("theme", themeSnapshot(themes.resolved, privacy.on)),
+    );
     return () => {
       live = false;
       resize.disconnect();
@@ -188,6 +195,7 @@ export function NativeExtensionPage(props: ExtensionPageProps & { device?: boole
     props.pagesOrigin,
     api,
     themes,
+    privacy,
     unauthorized,
   ]);
 
