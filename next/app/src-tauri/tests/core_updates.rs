@@ -781,6 +781,80 @@ fn a_failed_repair_of_the_selected_version_runs_the_one_before() {
     );
 }
 
+/// N4 only for a candidate that was tried: a switch that fails before the candidate runs (here,
+/// keeping a copy of the config fails) runs the selected version again, unless an install
+/// replaced that version's files.
+#[test]
+fn a_switch_that_fails_before_the_candidate_runs_keeps_an_untried_selection() {
+    let mut f = fixture("untried");
+    f.install("1.0.0").unwrap();
+    f.install("2.0.0").unwrap();
+    f.conn.stop_core();
+    // A folder where the stale mark of a missing config would be: it cannot be removed.
+    std::fs::create_dir(f.root.join("cores/config-last-good.absent")).unwrap();
+    let store = Store::open(&f.root.join("cores")).unwrap();
+    // 2.0.0 is selected but stopped; rolling back to it fails before it runs.
+    let err = f
+        .conn
+        .apply(CoreChange::Rollback("2.0.0".into()))
+        .unwrap_err();
+    assert!(err.contains("could not keep a copy of the config"), "{err}");
+    assert!(err.contains("core 2.0.0 runs again"), "{err}");
+    assert_eq!(f.reported(), (200, Some("2.0.0".into())));
+    assert_eq!(store.state().unwrap().selected.as_deref(), Some("2.0.0"));
+    // Installing 2.0.0 again replaces its files before keeping the copy fails: 1.0.0 runs.
+    let err = f.install("2.0.0").unwrap_err();
+    assert!(err.contains("core 1.0.0 runs again"), "{err}");
+    assert_eq!(f.reported(), (200, Some("1.0.0".into())));
+    assert_eq!(store.state().unwrap().selected.as_deref(), Some("1.0.0"));
+}
+
+/// A fallback whose selection cannot be saved says so, as an unrecorded failure does; the next
+/// start then falls back the same way.
+#[test]
+fn a_fallback_that_cannot_be_recorded_says_so() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut f = fixture("unrecorded-fallback");
+    f.install("1.0.0").unwrap();
+    f.install("2.0.0").unwrap();
+    // A source whose 2.0.0 makes the store unwritable and exits.
+    let src = f.root.join("locking-source");
+    std::fs::create_dir_all(&src).unwrap();
+    let index = src.join("index.json");
+    let keys = Keys::new(&index);
+    write_index(
+        &index,
+        &[release(
+            &src,
+            &keys,
+            "2.0.0",
+            &pack(&built().join("3.2.0")),
+            true,
+        )],
+    );
+    f.conn
+        .change(Change {
+            mode: Some(Mode::Managed),
+            core_source: Some(index.display().to_string()),
+            ..Change::default()
+        })
+        .unwrap();
+    let staged = f.conn.prepare_install(&keys, "2.0.0").unwrap();
+    let err = f.conn.apply(CoreChange::Install(staged)).unwrap_err();
+    std::fs::set_permissions(f.root.join("cores"), std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(
+        err.contains("core 1.0.0 runs again (the app could not record it as selected"),
+        "{err}"
+    );
+    assert_eq!(f.reported(), (200, Some("1.0.0".into())));
+    f.conn.stop_core();
+    let c = Connection::open(dirs(&f.root), None);
+    assert_eq!(
+        c.caller().call("GET", "/status", None).body.unwrap()["version"],
+        "1.0.0"
+    );
+}
+
 /// B1-3: when the config cannot be put back, no core runs and the next start tries again.
 #[test]
 fn a_failed_config_restore_keeps_the_core_stopped_and_retries_at_start() {

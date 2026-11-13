@@ -529,7 +529,7 @@ impl Connection {
             CoreChange::Install(staged) => {
                 let fresh = !store.installed(staged.version());
                 let id = store.install(staged)?;
-                self.switch(&store, &id, fresh)
+                self.switch(&store, &id, fresh, true)
             }
             CoreChange::Rollback(id) => {
                 if !store.installed(&id) {
@@ -537,11 +537,11 @@ impl Connection {
                         "core {id} is not installed: there is nothing to roll back to"
                     ));
                 }
-                self.switch(&store, &id, false)
+                self.switch(&store, &id, false, false)
             }
             CoreChange::Adopt { path, sha256, size } => {
                 let fresh = !store.installed(&Store::adopted_id(&sha256));
-                let id = store.adopt(&path, &sha256, size)?;
+                let (id, copied) = store.adopt(&path, &sha256, size)?;
                 // The program is adopted before anything runs from it; a failed switch keeps
                 // it waiting for adoption again.
                 let pending = self.settings.core_path.take();
@@ -552,7 +552,7 @@ impl Connection {
                     }
                     return Err(e);
                 }
-                let r = self.switch(&store, &id, fresh);
+                let r = self.switch(&store, &id, fresh, copied);
                 if r.is_err() {
                     self.settings.core_path = pending;
                     let _ = self.settings.save(&self.dirs.settings());
@@ -563,27 +563,35 @@ impl Connection {
     }
 
     /// Runs version id in place of the current core. fresh: id was installed for this switch, so
-    /// a failure removes it again.
+    /// a failure removes it again. replaced: id's files were written for this switch (an install,
+    /// or an adoption that copied the program in), so they never ran.
     ///
     /// The running core is stopped first, then the config is kept and the candidate recorded;
     /// the switch counts only once the candidate answers and the new selection is saved. When
     /// the candidate fails, the config is put back, and only then does the last good core start
     /// again; if the config cannot be put back, no core runs and the candidate stays recorded,
     /// so the next start tries again.
-    fn switch(&mut self, store: &Store, id: &str, fresh: bool) -> Result<(), String> {
+    fn switch(
+        &mut self,
+        store: &Store,
+        id: &str,
+        fresh: bool,
+        replaced: bool,
+    ) -> Result<(), String> {
         self.revision += 1;
         let st = store.state()?;
         self.stop_core();
         self.client = None;
         self.key = None;
         self.error = None;
-        let back = |c: &mut Self, why: String| -> Result<(), String> {
-            // The version that worked before; when this switch repaired that very version, the
-            // one before it, which then stays selected.
+        // tried: the candidate ran, or its files were replaced.
+        let back = |c: &mut Self, why: String, tried: bool| -> Result<(), String> {
+            // The version that worked before; when this switch repaired that very version and
+            // it was tried, the one before it, which then stays selected.
             let last = st
                 .selected
                 .clone()
-                .filter(|s| s != id)
+                .filter(|s| !(tried && s == id))
                 .or_else(|| st.previous.clone());
             let Some(last) = last else {
                 c.error = Some(why.clone());
@@ -591,14 +599,20 @@ impl Connection {
             };
             match c.run_version(store, &last) {
                 Ok(()) => {
+                    let mut msg = format!("{why}; core {last} runs again");
                     if st.selected.as_deref() != Some(last.as_str()) {
-                        if let Ok(mut now) = store.state() {
+                        let saved = store.state().and_then(|mut now| {
                             now.previous = now.selected.take();
                             now.selected = Some(last.clone());
-                            let _ = store.save_state(&now);
+                            store.save_state(&now)
+                        });
+                        if let Err(e) = saved {
+                            msg.push_str(&format!(
+                                " (the app could not record it as selected: {e})"
+                            ));
                         }
                     }
-                    Err(format!("{why}; core {last} runs again"))
+                    Err(msg)
                 }
                 Err(e) => {
                     let msg = format!("{why}; core {last} did not start either: {e}");
@@ -613,13 +627,18 @@ impl Connection {
                 return back(
                     self,
                     format!("the app could not keep a copy of the config: {e}"),
+                    replaced,
                 )
             }
         };
         let mut marked = st.clone();
         marked.candidate = Some(id.to_string());
         if let Err(e) = store.save_state(&marked) {
-            return back(self, format!("the app could not record the switch: {e}"));
+            return back(
+                self,
+                format!("the app could not record the switch: {e}"),
+                replaced,
+            );
         }
         let started = self.run_version(store, id).and_then(|()| {
             let mut done = st.clone();
@@ -670,7 +689,7 @@ impl Connection {
             // Still recorded as the candidate: the next start puts the same config back.
             msg.push_str(&format!(" (the app could not record that: {e})"));
         }
-        back(self, msg)
+        back(self, msg, true)
     }
 
     /// Records how a core change ended, for the window.

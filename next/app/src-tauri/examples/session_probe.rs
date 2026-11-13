@@ -58,7 +58,7 @@ fn adopt_core(cores: &str, program: &str) -> Result<Vec<String>, String> {
     let store = Store::open(std::path::Path::new(cores))?;
     let path = std::path::Path::new(program);
     let (sha256, size) = Store::inspect(path)?;
-    let id = store.adopt(path, &sha256, size)?;
+    let (id, _) = store.adopt(path, &sha256, size)?;
     let mut state = store.state()?;
     state.selected = Some(id.clone());
     store.save_state(&state)?;

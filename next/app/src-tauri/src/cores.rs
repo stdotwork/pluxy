@@ -724,15 +724,16 @@ impl Store {
 
     /// Copies the program at path into a version of its own, `custom-<its SHA-256>`, if it still
     /// is the regular file of the size and SHA-256 the person confirmed. An adopted version that
-    /// is still intact is kept; a damaged one is copied in again.
-    pub fn adopt(&self, path: &Path, sha256: &str, size: u64) -> Result<String, String> {
+    /// is still intact is kept; a damaged one is copied in again. Returns the version, and
+    /// whether the program was copied in (false: the intact version was kept).
+    pub fn adopt(&self, path: &Path, sha256: &str, size: u64) -> Result<(String, bool), String> {
         artifact::decode_hex::<32>(sha256).map_err(|_| "not a SHA-256")?;
         let id = Self::adopted_id(sha256);
         if let Ok(r) = self.record(&id) {
             match r.files.as_slice() {
                 [f] if r.kind == Kind::Adopted && f.sha256 == sha256 => {
                     if self.program(&id).is_ok() {
-                        return Ok(id);
+                        return Ok((id, false));
                     }
                 }
                 _ => return Err(format!("core {id} is installed, but not as this program")),
@@ -793,7 +794,7 @@ impl Store {
         if result.is_err() {
             remove_tree(&tmp);
         }
-        result.map(|()| id)
+        result.map(|()| (id, true))
     }
 }
 
