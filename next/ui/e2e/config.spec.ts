@@ -146,6 +146,74 @@ for (const theme of ["default", "terminal", "paper"]) {
   });
 }
 
+test("the Network tab sets, keeps and clears the global proxy URL", async ({ page }) => {
+  const settings = async () => (await core.mgmt<CoreSettings>("GET", "/settings")).body;
+  // The config as GET /config shows it: the proxy URL's secret part is a placeholder keyed by the
+  // value, so the same placeholder means the same stored URL.
+  const storedProxy = async () =>
+    (await core.mgmt<{ content: string }>("GET", "/config")).body.content.match(
+      /"proxy_url":\s*"([^"]*)"/,
+    )?.[1];
+  expect((await settings())["proxy-url"]).toBe("");
+
+  const patches: Record<string, unknown>[] = [];
+  page.on("request", (r) => {
+    if (r.method() === "PATCH" && new URL(r.url()).pathname.endsWith("/v0/management/settings"))
+      patches.push(r.postDataJSON());
+  });
+  await openPanel(page, core);
+  await signIn(page, core);
+  await goTo(page, "Config Panel");
+  await page.getByRole("tab", { name: "Network", exact: true }).click();
+  const proxy = page.getByRole("textbox", { name: "Proxy URL", exact: true });
+  const save = page.getByRole("button", { name: "Save changes", exact: true });
+  const saved = page.getByText("Configuration saved successfully", { exact: true });
+  await expect(proxy).toHaveValue("");
+  await expect(proxy).toHaveAttribute("placeholder", "socks5://user:pass@127.0.0.1:1080/");
+  if (process.env.P7_SHOTS) await page.screenshot({ path: `${process.env.P7_SHOTS}/config-proxy-empty.png` });
+
+  // A URL with a user name and password: core holds it and shows it with `redacted` in their place.
+  await proxy.fill("socks5://alice:s3cretpass@127.0.0.1:1080/");
+  await save.click();
+  await expect(saved).toBeVisible();
+  expect(patches).toEqual([{ "proxy-url": "socks5://alice:s3cretpass@127.0.0.1:1080/" }]);
+  expect((await settings())["proxy-url"]).toBe("socks5://redacted@127.0.0.1:1080");
+  await expect(proxy).toHaveValue("socks5://redacted@127.0.0.1:1080");
+  const held = await storedProxy();
+  expect(held).toMatch(/^pluxy-redacted-/);
+  if (process.env.P7_SHOTS) await page.screenshot({ path: `${process.env.P7_SHOTS}/config-proxy-set.png` });
+
+  // Saving another setting sends no proxy, so the password stays: the stored URL is the same one.
+  await page.getByRole("switch", { name: "Force Model Prefix", exact: true }).check();
+  await save.click();
+  await expect(page.getByText("Configuration saved successfully", { exact: true })).toBeVisible();
+  expect(patches).toHaveLength(2);
+  expect(patches[1]).toEqual({ routing: { "force-model-prefix": true } });
+  expect((await settings())["proxy-url"]).toBe("socks5://redacted@127.0.0.1:1080");
+  expect(await storedProxy()).toBe(held);
+
+  // A URL core refuses shows as other settings errors do, and changes nothing.
+  await proxy.fill("ftp://proxy.example:21");
+  await save.click();
+  await expect(page.getByRole("alert")).toContainText("proxy-url");
+  await expect(saved).toHaveCount(0);
+  expect((await settings())["proxy-url"]).toBe("socks5://redacted@127.0.0.1:1080");
+  expect(await storedProxy()).toBe(held);
+
+  // Clearing the field removes the proxy.
+  await proxy.fill("");
+  await save.click();
+  await expect(saved).toBeVisible();
+  expect(patches.at(-1)).toEqual({ "proxy-url": "" });
+  expect((await settings())["proxy-url"]).toBe("");
+  expect(await storedProxy()).toBeUndefined();
+  await expect(proxy).toHaveValue("");
+
+  // The field is found by search, by its label and its settings name.
+  await page.getByPlaceholder("Search settings (label or YAML key)").fill("proxy-url");
+  await expect(proxy).toBeVisible();
+});
+
 test("review: fractional duration readbacks do not block unrelated saves or hide refusals", async ({
   page,
 }) => {
