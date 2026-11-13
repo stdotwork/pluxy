@@ -504,7 +504,7 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 	}
 	// Payload rules reach a turn sent as an HTTP call through sdk.Upstream; a turn on an upstream
 	// session gets them on its session.turn frame (protocol 0.15), and an extension that reports
-	// less than 0.15 is refused such a turn.
+	// less than 0.15 is refused a turn that rules apply to.
 	stream := meterStream(g.Router.Generate(host.WithPayloadClient(ctx, sessReq.Model, s.r.Header), rr), m)
 	defer stream.Close()
 	ev := stream.Next()

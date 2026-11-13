@@ -226,7 +226,8 @@ passes the message it writes upstream for each turn (not a control message such 
 interrupt) to `sdk.ApplyPayload(ctx, body)` once, just before writing it, with the turn's `ctx`
 and after everything else it does to the message (`extensions/codex/websocket.go` does this). Do
 not also pass a message that goes out as an HTTP request through `sdk.Upstream` to
-`sdk.ApplyPayload`: `sdk.Upstream` has applied the rules to it already, and they would apply twice.
+`sdk.ApplyPayload`: `sdk.Upstream` applies the rules to it when it sends it, so they would apply
+twice.
 
 ## 8. List models (optional, protocol 0.3)
 
