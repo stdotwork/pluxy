@@ -426,6 +426,67 @@ func TestRestoreCopyNeedsItsOriginal(t *testing.T) {
 	}
 }
 
+// A document Restore refuses because list items cannot all be paired takes time that grows with
+// its size about as the document does: entries whose keys pair them along a chain, and as many
+// more that each fit only the first entry, which the chain already takes. 32 times the entries
+// take well under 96 times as long; a search for each of them took over 300 times.
+func TestRestoreRefusalTimeGrowsWithSize(t *testing.T) {
+	const small, large, most = 500, 16000, 96.0
+	docs := func(r *Redactor, n int) (cur, edited []byte) {
+		key := func(i int) string { return fmt.Sprintf("fake-chain-key-%06d", i) }
+		head := func(i int) string { return fmt.Sprintf("fake-head-key-%06d", i) }
+		var c, e strings.Builder
+		c.WriteString("openai-compatibility:\n")
+		e.WriteString("openai-compatibility:\n")
+		for j := range n {
+			fmt.Fprintf(&c, "  - base-url: \"https://e%06d.example/v1\"\n    api-key-entries:\n      - api-key: %q\n", j, key(j))
+			if j > 0 {
+				fmt.Fprintf(&c, "      - api-key: %q\n", key(j-1))
+			} else {
+				c.WriteString("    headers:\n")
+				for i := range n {
+					fmt.Fprintf(&c, "      X-Api-Key-%d: %q\n", i, head(i))
+				}
+			}
+			fmt.Fprintf(&e, "  - base-url: \"https://e%06d.example/v1\"\n    api-key-entries:\n      - api-key: %q\n", j, r.Placeholder(key(j)))
+		}
+		for i := range n {
+			fmt.Fprintf(&e, "  - base-url: \"https://x%06d.example/v1\"\n    headers:\n      X-Api-Key-%d: %q\n", i, i, r.Placeholder(head(i)))
+		}
+		return []byte(c.String()), []byte(e.String())
+	}
+	r := NewRedactor()
+	run := func(n int) func() {
+		cur, edited := docs(r, n)
+		if _, err := r.Redact(cur, true); err != nil {
+			t.Fatal(err)
+		}
+		return func() {
+			if _, err := r.Restore(edited, cur, true); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Restore: %v, want ErrInvalid", err)
+			}
+		}
+	}
+	timed := func(f func()) time.Duration {
+		runtime.GC()
+		defer debug.SetGCPercent(debug.SetGCPercent(-1))
+		start := time.Now()
+		f()
+		return time.Since(start)
+	}
+	few, many := run(small), run(large)
+	best := [2]time.Duration{time.Hour, time.Hour}
+	for range 3 {
+		best[0] = min(best[0], timed(few))
+		best[1] = min(best[1], timed(many))
+	}
+	if ratio := float64(best[1]) / float64(best[0]); ratio > most {
+		t.Errorf("Restore refusing %d entries took %v, %d took %v: %.1f times as long, want at most %.0f", small, best[0], large, best[1], ratio, most)
+	} else {
+		t.Logf("%d entries %v, %d entries %v: %.1f times", small, best[0], large, best[1], ratio)
+	}
+}
+
 // A placeholder put where its secret's text, written back as it was, reads differently (a comma
 // inside a flow list) goes back quoted: the document is written out again rather than
 // refused, also when a copy of that secret stays in place. The secret moves from a block list

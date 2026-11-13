@@ -82,15 +82,17 @@ func (u *keyUpstream) requests() int {
 	return len(u.seen)
 }
 
-// carrying returns, for each request u got with a header whose value holds secret, that header's
-// name and the request's method and path.
+// carrying returns, for each request u got with a header whose value or name holds secret (a
+// name in any case, as HTTP writes header names), that header's name and the request's method and
+// path.
 func (u *keyUpstream) carrying(secret string) []string {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	var out []string
 	for _, r := range u.seen {
 		for _, name := range slices.Sorted(maps.Keys(r.header)) {
-			if slices.ContainsFunc(r.header[name], func(v string) bool { return strings.Contains(v, secret) }) {
+			if strings.Contains(strings.ToLower(name), strings.ToLower(secret)) ||
+				slices.ContainsFunc(r.header[name], func(v string) bool { return strings.Contains(v, secret) }) {
 				out = append(out, name+" of "+r.method+" "+r.path)
 			}
 		}
@@ -394,6 +396,10 @@ func TestConfigPlacementYAMLAlias(t *testing.T) {
 		{"the management key aliased into a header of account b", managementKey, func(t *testing.T, content string, m placeMarks) string {
 			s := replaceOnce(t, content, m.management, "&mk "+m.management)
 			return replaceOnce(t, s, "    - id: b\n", "    - id: b\n      headers:\n        X-Api-Key: *mk\n")
+		}},
+		{"the management key aliased into a header name of account b", managementKey, func(t *testing.T, content string, m placeMarks) string {
+			s := replaceOnce(t, content, m.management, "&mk "+m.management)
+			return replaceOnce(t, s, "    - id: b\n", "    - id: b\n      headers:\n        *mk : x\n")
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {

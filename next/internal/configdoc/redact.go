@@ -851,6 +851,12 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 			marks[n] = n.Value
 		}
 		reads, dup = slots(d.root, marks, cr)
+		// A mapping key that is a placeholder, or an alias of one, would make its secret the
+		// name of a key, such as a header core sends: no secret goes there, even when the
+		// placeholder is also read where its secret is.
+		if k := keyHolding(d.root, marks); k != nil {
+			return nil, fmt.Errorf("%w: line %d: a mapping key reads a redacted value; write the value itself there", ErrInvalid, d.line(k))
+		}
 	}
 	repl := map[*yaml.Node]*secret{}
 	var copies []copyAt
@@ -1090,6 +1096,41 @@ func readNodes(root *yaml.Node, follow bool, places func(list *yaml.Node, at str
 	walk(root, "", 0)
 }
 
+// keyHolding returns the first mapping key under root that is, or reads through an alias, a
+// node holding one of marks, or nil. Every mapping of the document is in its tree, also one read
+// only through "<<", so each node is looked at once.
+func keyHolding(root *yaml.Node, marks map[*yaml.Node]string) *yaml.Node {
+	holds := map[*yaml.Node]bool{}
+	var has func(n *yaml.Node) bool
+	has = func(n *yaml.Node) bool {
+		n = resolved(n)
+		if v, ok := holds[n]; ok {
+			return v
+		}
+		holds[n] = false // an anchor inside itself holds nothing more through itself
+		_, v := marks[n]
+		v = v || slices.ContainsFunc(n.Content, has)
+		holds[n] = v
+		return v
+	}
+	var key *yaml.Node
+	var walk func(n *yaml.Node)
+	walk = func(n *yaml.Node) {
+		for i, c := range n.Content {
+			if key != nil {
+				return
+			}
+			if n.Kind == yaml.MappingNode && i%2 == 0 && has(c) {
+				key = c
+				return
+			}
+			walk(c)
+		}
+	}
+	walk(root)
+	return key
+}
+
 // listPlaces gives the items of a list their places as paths does: a scalar's is [], so it may
 // move within its own list, and only there.
 func listPlaces(list *yaml.Node, at string) []string {
@@ -1207,7 +1248,6 @@ func pairItems(edited, current *yaml.Node, marks map[*yaml.Node]string, cur curR
 		cands  []int // the items of current that hold each of need
 		items  []int // the items of edited that hold need
 		failed int   // the search in which the group found no item, plus one
-		dead   bool  // a search found no item for it: none ever will
 	}
 	fits := func(need []mark, j int) bool {
 		return has[j] != nil && !slices.ContainsFunc(need, func(m mark) bool { return !has[j][m] })
@@ -1303,12 +1343,17 @@ func pairItems(edited, current *yaml.Node, marks map[*yaml.Node]string, cur curR
 		g.failed = search
 		return false
 	}
+	// Once one item finds none the document is refused, so the rest are not searched: each
+	// failed search can cost a walk over the whole list.
 	search := 0
+search:
 	for _, g := range order {
 		for _, i := range g.items {
-			if out[i] < 0 && !g.dead {
+			if out[i] < 0 {
 				search++
-				g.dead = !take(i, search)
+				if !take(i, search) {
+					break search
+				}
 			}
 		}
 	}

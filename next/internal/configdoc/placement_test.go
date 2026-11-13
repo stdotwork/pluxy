@@ -322,6 +322,14 @@ func TestRestorePlacesEachSecretInItsOwnSlot(t *testing.T) {
 				"  accounts:\n", "  accounts:\n    - id: b\n      credential:\n        kind: api_key\n        api_key: \"<b>\"\n"}, 0},
 		{"yaml: a file's aliased key in another account's header", placeAliased, true,
 			[]string{"    - id: b\n", "    - id: b\n      headers:\n        X-Api-Key: *ka\n"}, 18},
+		// A key that is an alias of a placeholder would make the secret a key's name, such as
+		// a header's that core sends: refused, naming the key's line.
+		{"yaml: the management key as a header's name, by an alias", placeYAML, true,
+			[]string{`secret-key: "<mgmt>"`, `secret-key: &mk "<mgmt>"`, "    - id: b\n", "    - id: b\n      headers:\n        *mk : x\n"}, 11},
+		{"yaml: a file's aliased key as another account's header name", placeAliased, true,
+			[]string{"    - id: b\n", "    - id: b\n      headers:\n        *ka : x\n"}, 18},
+		{"yaml: a file's aliased key as a top-level key", placeAliased, true,
+			[]string{"        api_key: \"<b>\"\n", "        api_key: \"<b>\"\n*ka : 1\n"}, 20},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := NewRedactor()
