@@ -156,7 +156,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `device_registries` | What the registries in `device-registries.json` offer this computer |
 | `device_install` | Installs or updates a package from one of those registries |
 | `device_install_file` | Opens the native file chooser and installs or updates the package chosen there (Linux) |
-| `device_enable`, `device_remove`, `device_rollback` | Enables or disables, removes, or rolls back a package on this device |
+| `device_enable`, `device_remove`, `device_rollback` | Enables or disables (a native tool only through its native confirmation), removes, or rolls back a package on this device |
 | `device_page_open` | Opens a webview for a page of a package on this device, at the address its catalog keeps |
 | `window_get`, `window_set` | Reads or saves the Close behavior, and whether there is a usable tray |
 | `window_close` | Answers the close prompt: Exit App or Minimize to Tray, and whether to remember it |
@@ -203,8 +203,9 @@ Permissions and extension settings still use the shared kit's channel. No page r
 
 ## Extensions on this device
 
-The Device extensions page manages page-only app packages (`app.tier` `web`, see
-[the app package contract](app-host/README.md)) installed on this computer. They are apart from
+The Device extensions page manages app packages (see
+[the app package contract](app-host/README.md)) installed on this computer: page-only packages
+(`app.tier` `web`) and curated native tools (`native`). They are apart from
 the extensions of the core the app is connected to: installing one never installs it in core,
 and core's Extensions page never lists it. Their pages are listed in the navigation with core's
 extension pages.
@@ -223,24 +224,45 @@ in one of two ways:
 
 Before anything is kept, the app checks the archive: regular files and folders only, no links,
 devices or names that leave the folder, at most 10,000 entries and 512 MiB unpacked. The
-manifest must be a valid manifest version 1 with a web app contribution for host contract 0 and
-an existing file for each page. The app unpacks it into a staging folder and moves it into an
+manifest must be a valid manifest version 1 with an app contribution for host contract 0: a web
+one with an existing file for each page, or a curated native one (below). The app unpacks it into a staging folder and moves it into an
 immutable store, `device-packages/store/<archive SHA-256>/` in the app's data folder, with
 read-only files. The catalog (`device-packages/catalog.json`) records each package's source and
-each release's version, digest, sizes, formats, pages and the SHA-256 of each page file.
+each release's version, digest, sizes, formats, pages and the SHA-256 of each page file. A catalog
+holding a native tool is saved as version 1, so an app from before native tools, which reads only
+version 0, moves it aside with a warning instead of reading the tool as a page package.
 
-No source is curated in this build, so every package is labelled **Unverified**, and a package
-whose ID claims a reserved publisher (`pluxy`) is refused from any source, before a registry's
-archive is fetched and again after a local archive is unpacked. A package keeps the source it was
-installed from: a release from another source is refused until the package is removed. Packages
-get no resources, settings or programs here: their pages' settings calls answer `unavailable`,
-and native tools are refused.
+A registry is curated when its index address equals the `source` of a native-tier trust root
+exactly. This build compiles no roots (production roots are a release decision), so nothing is
+curated outside a test build with a test trust profile. A package from any other source is
+labelled **Unverified**, and one whose ID claims a reserved publisher (`pluxy`, or any publisher a
+root names) is refused, before a registry's archive is fetched and again after a local archive is
+unpacked. A package installed before a root reserved its publisher is disabled when the
+catalog opens, with a warning, and cannot be enabled while the app's roots reserve its
+publisher and its release does not verify as curated against them. A package keeps the source it was installed from: a release from another source is
+refused until the package is removed. Packages get no resources or settings here: their pages'
+settings calls answer `unavailable`.
+
+A native tool installs only from a curated registry whose index entry carries a descriptor signed
+by the root's key for that publisher and source, and names that key as its `public_key`; the
+signature, then the archive's size and SHA-256, are checked before it is unpacked, and the
+manifest's ID, version and tier after. A signature the index lists for any other package is
+ignored, and the Device extensions page marks an entry the index already shows install would
+refuse. Its
+program for this computer must be an executable file in the package, and the SHA-256 of every
+file is recorded. It is labelled **Curated** and installs disabled. Enabling it opens a native
+confirmation that says it has **full access to your user account** and shows its ID, source,
+digest, signer, contracts, operations and program; only Confirm there enables it, and the catalog
+records that admission against the release, source, signer and key. Disabling, updating, rolling
+back or removing it ends the admission, so a new release asks again. Nothing here runs the
+program; the program host takes only what `Catalog::admitted` returns, after checking the
+admission, the root, the signature and every installed file again.
 
 Installing a newer release keeps the one it replaces as the last good release. A candidate that
 fails any check leaves the active release, its files and its open pages as they were. **Roll
 back** makes the last good release active again, after checking that its files are unchanged.
 Starting the app with `--safe-mode` lists no page of a package on this device and opens or serves
-none; the Device extensions page still shows and manages them.
+none, and admits no native tool; the Device extensions page still shows and manages them.
 
 A device page opens like a core page, in a page webview with the app's page document, but its
 frame loads from the `pluxy-app:` scheme. That scheme serves a page webview only the files of the
@@ -357,7 +379,21 @@ answering; the asset scheme serves the active release to its page webview and re
 replaced release's files; roll back, disable, enable and remove each leave no page webview behind
 and remove leaves nothing in the store. Through the native file chooser, driven with `xdotool`,
 cancel changes nothing, a reserved-publisher file is refused and an Unverified file installs, and
-its page stays open for the window's close check.
+its page stays open for the window's close check. With a valid test trust profile in its HOME,
+this normal build still refuses a curated registry's signed native tool and installs that
+registry's web package.
+
+One more managed session runs a build with `artifact-test-trust` against a test trust profile
+(`native/admission.ts` generates the publisher key, signs the native fixture and writes the
+profile; `src-tauri/src/admission_native.rs` drives the app). From an uncurated registry the
+curated signed entry and an unsigned lookalike are refused; from the curated one a package signed
+by an unknown key and an unsigned one are refused; with the profile's roots emptied, then with its
+marker removed, the signed tool is refused. Each refusal has an Unverified web install on the same
+route as its positive control. The signed tool then installs disabled, the page shows its
+full-access warning, Cancel in the real GTK confirmation leaves it disabled and not admitted, and
+Confirm enables it with an admitted record naming its store folder, program, source and key.
+Another curated source for it is refused; removed and installed from there, it starts disabled
+again.
 
 In managed mode, two more sessions run the window checks (`native/window.ts`, which launches
 the app through the stages in `src-tauri/src/native_window.rs`), one with a tray watcher and
@@ -424,8 +460,8 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
 
 ## Limits
 
-- Device extensions: no curated source, signed packages, resources, settings or native tools yet;
-  installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
+- Device extensions: no production trust roots (so no curated source outside tests), resources,
+  settings or native program host yet; installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
   native run.
 - Tested on Linux only. On Windows the page document's address is
   `http://pluxy-page.localhost/`; neither Windows nor macOS has been run.

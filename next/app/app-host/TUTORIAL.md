@@ -1,8 +1,9 @@
 # Write an app package manifest
 
 This walkthrough prepares two package folders for the [app package contract](README.md).
-The desktop app installs the page-only package on this device; the native program host is later
-work, so the native package is not installed or executed.
+The desktop app installs the page-only package on this device. It installs the native package
+only from a curated registry, signed by a curated first-party key, and does not run it yet: the
+native program host is later work.
 
 ## Make a page-only web package
 
@@ -75,7 +76,7 @@ grants. Optional `app.ui` pages still have no native IPC permissions.
 Pack each platform folder using the [archive rules](../../protocol/README.md#release-archives).
 Compute exact archive size and SHA-256. Write a UTF-8 descriptor with ID, version, tier and
 platform, then sign those exact bytes with the publisher's Ed25519 key. Preserve the original
-bytes beside the detached signature. The later verifier checks both before extraction; changing
+bytes beside the detached signature. The app's verifier checks both before extraction; changing
 an archive byte requires a new digest and signature.
 
 For a mixed package, add provider `protocol` and `programs` at the top level, with optional
