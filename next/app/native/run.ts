@@ -19,6 +19,10 @@
 // Then, in a session of its own (instances.ts, instances-session.ts), the single-instance
 // scenario: a second launch on the same profile exits and raises the first's window, a launch on
 // another profile runs as its own app, and a killed owner's stale lock is recovered.
+// The signed native-tier admission check (admission.ts, admission_native.rs) runs in one more
+// session, with the app built with artifact-test-trust and a test trust profile in the run's HOME.
+// The other sessions run a build without that feature; its device check shows the same profile
+// admits nothing there.
 // The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
@@ -33,6 +37,7 @@ import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
+  copyFileSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -44,6 +49,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline";
+import { buildAdmissionFixtures } from "./admission";
 import { buildSmokeAppImage } from "./appimage";
 import { buildDeviceFixtures } from "./device";
 import { runInstances } from "./instances";
@@ -180,6 +186,7 @@ async function runApp(
   noTray = false,
   key?: string,
   suite?: Suite,
+  admission = false,
 ): Promise<string[]> {
   const root = mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
   const problems: string[] = [];
@@ -209,12 +216,25 @@ async function runApp(
       );
     const quit = join(root, "quit");
     // This device's extension catalog is the same in every mode: check it once, in managed mode.
-    const device = mode === "managed" ? join(root, "device") : undefined;
-    if (device) {
-      mkdirSync(device);
+    const device = mode === "managed" && !admission ? join(root, "device") : undefined;
+    // A test trust profile in HOME naming curated registries: the admission session's build
+    // honours it; the device check's normal build must not.
+    const curated = device || admission ? join(root, "curated") : undefined;
+    let nonce: string | undefined;
+    if (curated) {
+      mkdirSync(curated);
+      if (device) mkdirSync(device);
+      const a = buildAdmissionFixtures(curated, dirs.home);
+      nonce = a.nonce;
+      const registries = admission
+        ? a.registries
+        : [
+            ...(buildDeviceFixtures(device as string) as { registries: object[] }).registries,
+            ...a.registries.filter((r) => r.name === "curated"),
+          ];
       writeFileSync(
         join(dirs.config, identifier, "device-registries.json"),
-        JSON.stringify(buildDeviceFixtures(device)),
+        JSON.stringify({ version: 0, registries }),
       );
     }
     const keyFile = join(root, "key-input");
@@ -238,7 +258,9 @@ async function runApp(
       APPIMAGE_EXTRACT_AND_RUN: "1",
       PLUXY_APP_TEST_PAGE: PAGE,
       PLUXY_APP_TEST_QUIT: quit,
-      ...(device ? { PLUXY_APP_TEST_DEVICE: device } : {}),
+      ...(device ? { PLUXY_APP_TEST_DEVICE: device, PLUXY_APP_TEST_CURATED: curated as string } : {}),
+      ...(admission ? { PLUXY_APP_TEST_ADMISSION: curated as string } : {}),
+      ...(nonce ? { PLUXY_TEST_TRUST_NONCE: nonce } : {}),
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: identifier } : {}),
       ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
       ...(key ? { PLUXY_APP_TEST_KEY_FILE: keyFile } : {}),
@@ -358,6 +380,15 @@ async function runApp(
     }
     check(!steps.has("failed"), `the app's test steps failed: ${JSON.stringify(steps.get("failed"))}`);
 
+    if (admission) {
+      const a = steps.get("admission");
+      check(a?.passed === true, "the native admission check did not complete");
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} admission ${JSON.stringify(a ?? {})}`);
+      console.log(`${mode}: admission ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
     if (startup) {
       check(
         log.some((l) => l.startsWith("startup preferences passed:")),
@@ -464,11 +495,17 @@ async function runApp(
     // swapped-in release to its page webview and refused that webview the replaced one's files.
     if (device) {
       const d = steps.get("device") as
-        | { passed?: boolean; v2_label?: string; digests?: Record<string, string> }
+        | { passed?: boolean; v2_label?: string; digests?: Record<string, string>; normal_build?: string }
         | undefined;
       // Without its line, the app's failed step says where the check stopped and why.
       const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
       check(d?.passed === true, `the device catalog check did not complete: ${failure}`);
+      // This normal build refused the curated registry's signed native tool despite the HOME's
+      // valid test trust profile, for want of roots.
+      check(
+        d?.normal_build?.includes("not configured"),
+        `the normal build did not refuse the curated native tool: ${JSON.stringify(d?.normal_build)}`,
+      );
       const dg = d?.digests ?? {};
       const served = (label: string | undefined, digest: string | undefined, status: number) =>
         assets.some((a) => a.label === label && a.path.includes(`/${digest}/`) && a.status === status);
@@ -572,8 +609,22 @@ run(
   tauri,
 );
 const targetDir = resolvePath(tauri, process.env.CARGO_TARGET_DIR ?? "target");
-const bin = join(targetDir, "debug", "pluxy-app");
 const probe = join(targetDir, "debug", "examples", "session_probe");
+// The build without artifact-test-trust, kept aside before the build with it replaces it.
+const binDir = mkdtempSync(join(tmpdir(), "pluxy-app-native-bin-"));
+const bin = join(binDir, "pluxy-app");
+try {
+  copyFileSync(join(targetDir, "debug", "pluxy-app"), bin);
+  run(
+    "cargo",
+    ["build", "--locked", "--features", "native-test,artifact-test-trust", "--bin", "pluxy-app"],
+    tauri,
+  );
+} catch (e) {
+  rmSync(binDir, { recursive: true, force: true });
+  throw e;
+}
+const trustBin = join(targetDir, "debug", "pluxy-app");
 const appImageDir = mkdtempSync(join(tmpdir(), "pluxy-app-native-appimage-"));
 const problems: string[] = [];
 let appImage = ""; // the smoke AppImage the sessions run
@@ -587,6 +638,19 @@ try {
     const p = await runApp("managed", bin, { mode: "managed", core_path: core });
     p.push(...(await runApp("managed", bin, { mode: "managed", core_path: core }, undefined, true)));
     p.push(...(await runApp("managed", bin, { mode: "managed", core_path: core }, undefined, true, true)));
+    p.push(
+      ...(await runApp(
+        "managed",
+        trustBin,
+        { mode: "managed", core_path: core },
+        undefined,
+        false,
+        false,
+        undefined,
+        undefined,
+        true,
+      )),
+    );
     for (const suite of ["window", "window-no-tray", "privacy"] as const)
       p.push(
         ...(await runApp(
@@ -639,6 +703,7 @@ try {
   setupFailure = e.message;
 } finally {
   rmSync(appImageDir, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
 }
 
 if (setupFailure !== undefined) {

@@ -467,13 +467,33 @@ order, then `finish`, with `usage` when the upstream reported it.
 
 The body is text: send it as it should reach the client. Core removes the account's secrets from it
 (its credential and the secrets in its `settings`, `proxy_url` and `headers`; see
-[Accounts](#accounts)) as from `raw` fields, also where one piece ends partway through a secret and
-the next goes on with it. To do so, core holds back the end of a piece that could be the start of a
-secret in one of the forms it removes, always fewer bytes than the longest of those forms, until
-the next piece shows whether it is one. It sends what it holds once the body ends with `finish`,
-and drops it when the body breaks off with an error or is cancelled: the body is broken there
-anyway, and what it held could be part of a secret. Except for the direct `codex.models` call
-above, an `error` before `response.start` is
+[Accounts](#accounts)) as from `raw` fields, and reads the pieces as one text for the forms it
+removes (as they are, escaped in JSON or a URL, base64; see [Errors](#errors)): a secret in one of
+those forms that one piece ends partway through and the next goes on with is removed too. To do so,
+core holds back the end of a piece that could be the start of one, fewer bytes than the longest of
+those forms, until the next piece shows whether it is one. When a secret could be part of a JSON
+number, core also holds back a colon, bracket or comma at the end of a piece, with any spaces after
+it and the number that follows, if any (a run of digits, `-`, `+`, `.`, `e` and `E` that starts
+with a digit or `-`), when they take 64 bytes or fewer, so that a number holding the secret
+becomes `0` as a whole; where they start inside one of those forms, it holds back that form too.
+Other text is not held back for this, such as the `e` that ends `there`. Where holding back would
+change what core finds in the text whole (for example a secret spelled with other escapes, or text
+so heavily escaped that core replaces all of it with
+`[redacted]`), core sends at once all it has, redacted whole, but for the end of what it would have
+held that this left as it was, which it goes on holding back. It then replaces with `[redacted]`
+the rest of a secret in one of those forms that began in what it would have held and that later
+pieces complete; what it sent of that start stays sent. It sends what it still holds once the body
+ends with `finish`, and drops it when the body breaks off with an error or is cancelled: the body
+is broken there anyway, and what it held could be part of a secret. Three limits remain. A secret
+spelled with escapes outside those forms (`\u0073` for `s`, `%73`) that a cut splits is not found,
+as when each piece is redacted alone. A number that, with what stands before it, takes more than 64
+bytes and is cut between pieces may become `[redacted]`, or `0` followed by the rest of its digits,
+rather than `0`, which leaves the JSON invalid. And core reads as JSON each text that is JSON on its
+own, so where a cut makes a piece JSON on its own that the whole body is not (such as a JSON
+string), or the other way round, a number holding a secret may become `0` rather than `[redacted]`,
+or the other way round. In the last two the secret is still removed.
+
+Except for the direct `codex.models` call above, an `error` before `response.start` is
 routed as for `generate`: core tries another account when it is retryable, and otherwise answers
 the client with an error in OpenAI's shape. An `error` after `response.start` ends the body where
 it is; a `text/event-stream` body then gets a last `error` event. An account that does not serve
@@ -517,9 +537,14 @@ JSON, URL and base64 forms and as quoted in core's own messages, from everything
 back. Keep values that are not secret,
 especially short ones, out of the credential. Core removes the secrets in the account's
 `settings` the same way: every value below a key named like a secret (such as `api_key`,
-`password` or `*_token`), header values about authentication in a `headers` object, and any URL
+`password`, `*_token`, `accessToken` or `aws_secret_access_key`: names are compared in lower case
+whatever joins their words, or none, and may end in a number or a word such as `value` or
+`pem`), header values about authentication or named like a secret in an object whose name holds
+`header` (`extra_headers`, `headers_override`), and any URL
 with a user name, password or query (a `base_url` with a token in it), as its management API
-hides them. Below a key named like a secret, `true`, `false`, `null` and the empty string are
+hides them; of such a URL also its user name, its password, the two together (in Basic form
+too) and the value of each query parameter named like a secret (`key`, `token`, `sig`, ...), as
+written and decoded, on their own. Below a key named like a secret, `true`, `false`, `null` and the empty string are
 not secrets: they carry none. Unlike a credential's strings, a settings secret shorter than 8
 bytes is left in text, since removing every occurrence of so short a string would mangle
 unrelated text; the management API still shows it as a placeholder. When the settings change,
@@ -569,7 +594,7 @@ the extension's other headers stay. Core never sends `Host`, `Content-Length`,
 or a value with a line break or another control character: its config load refuses them.
 
 The value of a header whose name is about authentication (its name holds `auth`, `key`,
-`token`, `secret`, `cookie`, `session`, `password` or `signature`, letter case aside) is a
+`token`, `secret`, `cookie`, `session`, `password`, `passphrase` or `signature`, letter case aside) is a
 secret: an extension never logs or shows it, and core removes it from everything a call sends
 back, as it does a credential's strings; a value shorter than 8 bytes is removed only next to
 its name, as text shows a header (`Name: value`, `Name:value`, `Name=value`, JSON's
@@ -1207,8 +1232,9 @@ request log (the first and the last, across every account a request tried), and 
 extension sends to the bounds above whatever it sent: a body longer than 128 KiB is cut to its
 start and end, and at most 16 KiB of header lines are logged, with a line counting the rest. Where
 a body is cut, it also drops the bytes beside the cut that could be the start or the end of a
-credential cut in two; a `body` and `body_end` with nothing left out between them are one text,
-and a credential cut between them is removed whole.
+credential cut in two. A `body` and `body_end` with nothing left out between them are one text:
+core redacts them as it does an [endpoint](#endpoint) body's pieces, so a credential in one of the
+forms it removes that is cut between them is removed, and logs them joined.
 
 In Go, `sdk.Upstream` does all of this for each client it wraps, for requests made with the
 handler's context.

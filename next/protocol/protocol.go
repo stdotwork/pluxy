@@ -197,7 +197,7 @@ func ParseProxyURL(s string) (*url.URL, error) {
 // (Authorization, X-Api-Key, Cookie, key, ...), so its value is a secret.
 func SecretName(name string) bool {
 	n := strings.ToLower(name)
-	for _, part := range []string{"auth", "key", "token", "secret", "cookie", "session", "password", "signature"} {
+	for _, part := range []string{"auth", "key", "token", "secret", "cookie", "session", "password", "passphrase", "signature"} {
 		if strings.Contains(n, part) {
 			return true
 		}
