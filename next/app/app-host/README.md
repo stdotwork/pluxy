@@ -3,9 +3,9 @@
 This reference defines the app contribution to a pluxy package and app program contract v0.
 The signature verifier is shared Rust code in `src-tauri/src/artifact.rs`. The desktop app
 installs page-only web packages and curated signed native tools on this device
-([extensions on this device](../README.md#extensions-on-this-device)), and runs an admitted
-tool's program on demand through the program host (`src-tauri/src/program.rs`, Linux).
-Resources are later implementation work.
+([extensions on this device](../README.md#extensions-on-this-device)), grants signed web
+packages files through [Access](#access-for-web-packages), and runs an admitted tool's program
+on demand through the program host (`src-tauri/src/program.rs`, Linux).
 Core recognizes app contributions to refuse app-only packages and use only the provider part of
 a mixed package. Start with the [tutorial](TUTORIAL.md).
 
@@ -26,7 +26,9 @@ them. App-only packages omit provider fields; no dummy provider is needed.
 | `config` | Optional settings, using the existing [config format](../../ui/extension-pages/README.md#config), with its own version. App settings belong to this device. |
 | `resources` | Web only: requested broker resources, each with an `id`, `kind` (`file` or `subtree`) and nonempty `operations` list. A declaration grants no access. |
 | `programs` | Native only: platform (`GOOS/GOARCH`) to relative executable path, as for provider programs. At least one entry is required. |
-| `operations` | Native only: declared operations, each with an `id`, plain `description`, and `input_schema` and `output_schema` JSON objects. At least one is required. |
+| `operations` | Native only: declared operations, each with an `id`, plain `description`, `input_schema` and `output_schema` JSON objects, and an optional `effect` (`read`, `write` or `launch`; absent means `write`). At least one is required. |
+| `exports` | Native only, optional: `{"contract": <nonnegative integer>, "operations": [<declared IDs>]}`, the operations other packages may import and the version of that export contract. |
+| `imports` | Optional, both tiers: at most 16 entries `{"package": <ID>, "contract": [<accepted export contracts>], "operations": [<IDs>], "required": <bool, default true>}`, one per package, never the package itself. See [Calls between packages](#calls-between-packages). |
 | `state` | Native only: `version` written by this release and nonempty `readable_versions` list. Check state compatibility before swap or rollback. |
 
 Resource and operation IDs use 1 to 32 lower-case letters, digits and hyphens, starting with a
@@ -34,8 +36,8 @@ letter or digit, and are unique within their respective lists. State and host co
 are nonnegative integers. Paths must stay inside the
 package. Web packages cannot declare programs, native operations or state; native packages cannot
 request folder grants through `resources`. Resources describe exact files or bounded subtrees
-selected later by the user, never automatic home-directory access. Native import routing, jobs
-and secret references belong to their later host contracts; these fields do not introduce them.
+selected later by the user, never automatic home-directory access. Jobs and secret references
+belong to their later host contracts; these fields do not introduce them.
 
 Package release, manifest, provider protocol, UI, config and app contribution versions are
 separate. App program negotiation is separate too. A mixed package can be compatible with core
@@ -97,9 +99,11 @@ JSON string) and `signature` beside `url`, `sha256` and `size`, all four or none
 signature is refused. The desktop app verifies one only for a reserved publisher's package from a
 curated registry, one whose index address equals a trust root's `source` exactly: the key is the
 root's for that publisher and `key_id`, and `public_key` must be that key, or the package is
-refused. Any other listed signature, from a registry no root names or for a publisher no root
-names, is ignored for now and the package is Unverified; such a package is never a native tool
-and never has a reserved ID. Detached signature files contain exactly
+refused. In a curated registry every listed signature is checked so, whatever the package's
+publisher: a key that is not the root's is refused. A signature a registry no root names lists
+is verified with the `public_key` the index names and kept for
+[Access](#access-for-web-packages); the package is Unverified, is never a native tool and never
+has a reserved ID. Detached signature files contain exactly
 64 raw Ed25519 bytes; JSON/index transport encodes them as 128 lower-case hexadecimal digits.
 Public keys are 32 bytes, encoded as 64 lower-case hexadecimal digits. Verification uses pinned
 `ed25519-dalek` 2.2.0 with `VerifyingKey::verify_strict` and default features disabled. This is
@@ -109,6 +113,12 @@ an approved key from native settings for web resources or curated native admissi
 the same verifier. `PublisherKeys` supplies publisher/source/key lookup separately.
 `VerifiedArchive<R>` retains the rewound checked reader. Later folder-grant, native-admission and core-update code uses `into_archive()`
 instead of reopening a path, prevent concurrent writes, and check manifest identity after extraction.
+
+For such a signature, the desktop app refuses a release whose descriptor does not match the
+index's ID, version, `web` tier, this computer's platform, size and SHA-256, or the archive,
+before unpacking it. Its key comes from the index: a person approves it natively, for that
+source only, before any grant. Whether a signature is curated is derived from the app's current
+roots each time, never from a release carrying one.
 
 Version 2.2.0 is retained over stable 3.0.0 to avoid its curve25519-dalek 5, ed25519/signature 3
 and sha2 0.11 dependency transition. The app already uses sha2 0.10; both Dalek versions expose
@@ -121,6 +131,35 @@ them. Production keys and feeds are release configuration. Generate test keys at
 temporary storage; never track private keys. Test public roots require both a dedicated test
 build and isolated temporary trust profile. Normal builds with no production roots refuse native
 enablement; they never substitute test roots.
+
+## Access for web packages
+
+A web package's pages read granted files through its page channel (version 0), with three methods
+the desktop app's native code answers for a page of a package on this device. A page core lists
+gets `unknown_method` for each. Grants come only from the person, in native UI (the app README's
+Access section); a page cannot ask for one.
+
+| Method | `params` | `result` |
+| --- | --- | --- |
+| `resources.status` | `null` | `{"resources": [{"id", "kind", "operations", "granted", "session_only"}]}`: each resource this release declares, and whether it is granted to it now |
+| `resources.read` | `{"resource", "path"?, "offset"?}` | `{"data", "size", "offset", "eof"}`: up to 1 MiB of a regular file from `offset` (default 0), as base64 in `data`; `size` is the file's size |
+| `resources.list` | `{"resource", "path"?}` | `{"entries": [{"name", "kind", "size"?}], "truncated"}`: a folder's entries sorted by name, at most 1,000; `kind` is `file` (with `size`), `folder`, `link` or `other`. The app reads no further than 1,000 entries: for a bigger folder, `truncated` is true and the entries are the first 1,000 the folder gave |
+
+A `file` resource is read with no `path`. A `subtree` resource takes `path`, slash-separated parts
+inside the granted folder; for `resources.list`, empty or absent means the folder itself. A
+`file` resource cannot be listed. Unknown parameters are refused. Error codes:
+
+| Code | When |
+| --- | --- |
+| `bad_request` | Parameters of the wrong shape or unknown, an undeclared resource or operation, a `path` with a `file` resource |
+| `not_granted` | No grant for this package, release, source and signer, or the operation is not granted |
+| `refused` | An absolute path, `..`, `.` or empty parts, a link leaving the folder, a file or folder on another mount than the granted folder (such as one mounted inside it), or not a regular file |
+| `changed` | The chosen link, where it resolves, or the target (its identity or its mount) changed since it was granted; it stays refused until granted again |
+| `unavailable` | The file is gone, cannot be reached for now (permissions, an I/O error, too many open files), or the document portal no longer offers it; the grant stays, and a later call may read |
+| `revoked` | The grant was revoked while the call was in flight |
+
+The native ingress limits of every page channel call apply to these too. Grants are bound to the
+package's source, release digest and approved signer: a new release asks again.
 
 ## App program contract v0
 
@@ -274,7 +313,111 @@ anything a caller passes. On top of the rules above:
   release go in no set order. The package's pages close at the switch. A cancelled confirmation
   or a candidate that fails installs nothing; the old release stays active and serving.
 
-Still to come: calls routed from pages, jobs, secrets, and Windows and macOS.
+Still to come: jobs, secrets, and Windows and macOS.
+
+## Calls between packages
+
+The Linux host routes every call of a native tool's operation, whoever makes it: the main window
+(`program_call`), a page (its `native.call` method) or another native tool (a `call` frame on its
+pipe). Each call is checked against the catalog as it is at that moment, and the host, never the
+call, says who the caller is: the window, the page's webview and its package release, or the
+calling tool's running release. Programs never talk to each other directly.
+
+### What a package declares
+
+A native tool lists the operations it offers other packages in `exports`, under an export
+contract number it raises when it changes them incompatibly. A package lists what it calls in
+`imports`: the target package, the export contracts it works with and the exact operations.
+Package versions are not compared; only the contract number is.
+
+Each operation has an effect: `read` (runs with no question asked), `write` (asks a native
+confirmation each call) or `launch` (asks a native confirmation of the exact launch). A launch
+operation's input schema must require `executable`, `argv` and `cwd`.
+
+### Enabling a native tool with imports
+
+A native tool is enabled only when each required import's target is an enabled, admitted native
+tool that exports those operations under a contract the import accepts, and when its imports,
+required or optional, do not lead back to it through other enabled tools (no cycles). Its native
+confirmation lists its imports. The same checks apply to an update or rollback of an enabled tool
+(a swap), when it is staged and again when it commits. A missing optional target is not an error
+at enable: a call to it fails as `extension_unavailable`. The host never installs or picks a replacement for a missing
+target. Enabling the tool is the person's consent to its imports.
+
+### Web packages: native consent
+
+Only a curated web package may call native tools; an Unverified one is refused, always. Its
+imports are refused until the person allows them on the Device extensions page, which calls
+`device_imports {id, allowed: true}` (main window only) and opens a native confirmation listing
+the caller's source, digest and signer and each target operation with its effect. The consent
+is bound to the caller's release and to each target's release, export contract and operations.
+Disabling, updating, rolling back or removing the caller clears it, and so does disabling,
+updating, rolling back, swapping or removing any target it names: enabling that target again is a
+new decision, so those calls are refused until the person allows them again. `allowed: false`
+revokes it and cancels the package's page calls still running; their answers are never
+delivered. A page call is registered before it is granted, so a revocation at any point after
+the grant reaches it.
+
+### Frames
+
+A call from the host to a tool carries the call's chain:
+
+```json
+{"type":"call","id":"c-2","op":"summary","input":{"items":["a"]},
+ "chain":[{"kind":"main"},{"kind":"package","id":"pluxy/relay","sha256":"<digest>","generation":1700000000}]}
+```
+
+The chain starts with the original requester, `{"kind":"main"}` or
+`{"kind":"page","id":<package>,"sha256":<release digest>,"page":<page ID>}`, followed by each tool
+that called on, at its release digest and generation (install time). A tool calls an import for
+the host call it is serving, named in `for`:
+
+```json
+{"type":"call","id":"o-1","for":"c-2","package":"pluxy/target","op":"summary","input":{"items":["a"]}}
+```
+
+The host answers on the tool's stdin with `{"type":"result","id":"o-1","output":{...}}` or an
+`error` frame; the tool may send `{"type":"cancel","id":"o-1"}`. Its calls are cancelled when the
+call they serve is cancelled or ends. A frame naming `chain`, `caller`, `requester`, `from`,
+`origin` or `context` is refused with `permission`, as is a `for` the tool is not serving or an
+ID in use; a tool has at most eight calls of its own at once.
+
+A page calls with the page channel method `native.call`, params `{"package", "op", "input"}`. The
+app answers it in the page's own webview and never forwards it to the main window. Error codes
+map to the page channel's: `permission` and `cancelled` to `forbidden`, `invalid_request` to
+`bad_request`, the rest to `unavailable`. A native tool's own page may call only its own
+operations; a web package's page calls only what it imports, with consent. A page call is
+cancelled when its page closes or its consent is revoked, and its answer is delivered only if the
+call is still allowed then.
+
+### How a call is decided
+
+A call goes ahead only if all of these hold, checked again for each call:
+
+- The window may call any declared operation of an admitted tool. A tool may call only an
+  operation it imports and its target exports, under an accepted contract, and only while it
+  runs its current admitted release. A web package's page needs its consent, as above.
+- The target is enabled and admitted. The call is pinned to the target release it was allowed
+  for: if another release would serve it, it fails with `extension_unavailable` and starts
+  nothing.
+- The target is not already in the chain (no call back into the chain), and the chain is at most
+  five hops long, the requester and four tools.
+- The input is at most 64 KiB and matches the operation's input schema.
+- A `write` call has a fresh native confirmation naming the whole chain and the exact input. A
+  `launch` call has a fresh native confirmation of the exact executable, `argv` and `cwd`. Only a
+  chain the window started from a native gesture (a native button press) may use a remembered
+  approval, and only of exactly that chain and launch; a matching launch from another chain asks
+  again, and a chain a page started always asks, with no "remember" in its dialog. The host
+  confirms the launch; the operation receives it as its input, as with any call (the host's own
+  launcher comes later). The confirmation's rate and pending limits are checked before an
+  executable is hashed, and it is hashed without holding the confirmations' lock. A call cancelled
+  while its confirmation is open (its ticket, the window closing, its page closing or its consent
+  revoked) withdraws it, and the dialog closes. Once confirmed, the call is granted again and runs
+  only if the target release and operation are the ones confirmed.
+
+A routed call is then a call like any other: it is registered so a cancel and the window's
+closing reach it, and it goes through the same limits, per-package turn, backoff, quarantine and
+unknown-outcome rules as a call from the window.
 
 ## Shared manifest fixtures
 

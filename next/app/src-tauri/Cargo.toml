@@ -52,6 +52,10 @@ sha2 = "=0.10.9"
 # Release archives of packages installed on this device (src/device.rs): gzip-compressed tar.
 flate2 = "=1.1.11"
 tar = { version = "=0.4.46", default-features = false }
+# Access (src/access.rs): reads relative to a folder the person granted, never leaving it.
+cap-std = "=4.0.3"
+# Bytes a page reads through Access travel as base64 in its channel's JSON.
+base64 = "=0.23.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

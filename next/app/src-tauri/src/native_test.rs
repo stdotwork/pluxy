@@ -12,6 +12,8 @@
 //!    `rotation_test.rs`) in local and remote mode, rotation alone in managed mode; in local and
 //!    remote mode the window closes to the tray during a rotation and opens again;
 //! 4. in managed mode, checks this device's extension catalog (`device_native.rs`);
+//!    Access, the broker for files people grant to device packages, has stages of its own
+//!    (`access_native.rs`, `PLUXY_APP_TEST_ACCESS_STAGE`);
 //!    with `PLUXY_APP_TEST_ADMISSION`, a session checks only signed native-tier admission
 //!    (`admission_native.rs`) and quits; with `PLUXY_APP_TEST_PROGRAM`, only the program host
 //!    (`program_native.rs`, then `swap_native.rs`);
@@ -36,6 +38,9 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Webview};
 
 #[cfg(target_os = "linux")]
+#[path = "access_native.rs"]
+mod access;
+#[cfg(target_os = "linux")]
 #[path = "admission_native.rs"]
 mod admission;
 #[path = "device_native.rs"]
@@ -45,6 +50,9 @@ mod ingress;
 #[cfg(target_os = "linux")]
 #[path = "program_native.rs"]
 mod program;
+#[cfg(target_os = "linux")]
+#[path = "routing_native.rs"]
+mod routing;
 #[cfg(target_os = "linux")]
 #[path = "swap_native.rs"]
 mod swap;
@@ -348,6 +356,10 @@ fn shrunk_page_steps(
 
 fn run(app: &AppHandle) -> Result<(), String> {
     #[cfg(target_os = "linux")]
+    if let Ok(stage) = std::env::var("PLUXY_APP_TEST_ACCESS_STAGE") {
+        return access::run(app, &stage);
+    }
+    #[cfg(target_os = "linux")]
     if let Ok(stage) = std::env::var("PLUXY_APP_TEST_WINDOW") {
         return window::run(app, &stage);
     }
@@ -368,6 +380,15 @@ fn run(app: &AppHandle) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_ADMISSION") {
         admission::run(app, &main, dir.into())?;
+        log("quit", json!({}));
+        crate::quit(app);
+        return Ok(());
+    }
+    // Cross-package routing and import authorization (routing_native.rs), in a session of its
+    // own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_ROUTING") {
+        routing::run(app, &main, dir.into())?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());

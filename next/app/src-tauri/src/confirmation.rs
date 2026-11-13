@@ -83,6 +83,42 @@ struct OpenTarget {
     identity: Target,
     file: File,
 }
+
+/// The SHA-256 of executable file f, whose metadata m was read before: refused if it changed.
+fn hash_file(f: &mut File, m: &Metadata) -> Result<String, String> {
+    let mut hash = Sha256::new();
+    let mut b = [0u8; 65536];
+    loop {
+        let n = f.read(&mut b).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        hash.update(&b[..n]);
+    }
+    if Metadata::read(f)? != *m {
+        return Err("executable changed while hashing".into());
+    }
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+/// A launch's executable, hashed without the confirmations' lock: `Confirmations::warm` keeps it
+/// in the cache `prepare` checks, so preparing it then hashes nothing more under the lock.
+pub struct Hashed(PathBuf, Metadata, String);
+
+impl Hashed {
+    pub fn of(executable: &Path) -> Result<Hashed, String> {
+        let mut e = OpenTarget::open(executable)?;
+        if !e.file.metadata().map_err(|e| e.to_string())?.is_file() {
+            return Err("executable is not a regular file".into());
+        }
+        let m = Metadata::read(&e.file)?;
+        if m.mode & 0o111 == 0 {
+            return Err("file is not executable".into());
+        }
+        let h = hash_file(&mut e.file, &m)?;
+        Ok(Hashed(e.identity.canonical, m, h))
+    }
+}
 impl OpenTarget {
     fn open(path: &Path) -> Result<Self, String> {
         if !path.is_absolute() {
@@ -535,7 +571,9 @@ impl Confirmations {
     }
 
     /// For the main window's command handlers only, after their caller check, with an action
-    /// native code built from verified records (enabling a native tool). Never page data.
+    /// native code built from verified records (enabling a native tool, granting a file or
+    /// folder through Access). Never page data. Main origin never reuses a remembered launch:
+    /// these actions have no launch.
     pub(crate) fn prepare_main(&mut self, action: Action) -> Result<Prepared, String> {
         self.prepare(action, Origin::Main)
     }
@@ -567,21 +605,9 @@ impl Confirmations {
             {
                 h.clone()
             } else {
-                // shortcut: the first hash runs under the mutex on the caller's thread;
-                // move preparation off the GTK thread when a real launcher lands.
-                let mut hash = Sha256::new();
-                let mut b = [0u8; 65536];
-                loop {
-                    let n = e.file.read(&mut b).map_err(|e| e.to_string())?;
-                    if n == 0 {
-                        break;
-                    }
-                    hash.update(&b[..n]);
-                }
-                if Metadata::read(&e.file)? != m {
-                    return Err("executable changed while hashing".into());
-                }
-                let h = format!("{:x}", hash.finalize());
+                // shortcut: a hash not warmed first (`Hashed::of`) runs under the mutex on the
+                // caller's thread; move preparation off the GTK thread when a real launcher lands.
+                let h = hash_file(&mut e.file, &m)?;
                 self.cache
                     .insert(e.identity.canonical.clone(), (m.clone(), h.clone()));
                 #[cfg(test)]
@@ -636,6 +662,50 @@ impl Confirmations {
             .retain(|id, _| self.pending.contains_key(id));
         self.issued.retain(|_, t| t.expires > now);
     }
+    /// Whether a confirmation for package could be queued now, from a page (`page`) or a trusted
+    /// origin: the same rate and pending limits `queue` applies, checked before any preparation
+    /// work (such as hashing an executable). `queue` checks them again.
+    pub fn room(&mut self, page: bool, package: &str) -> Result<(), String> {
+        self.prune();
+        if page {
+            if self
+                .last_page
+                .get(package)
+                .is_some_and(|t| t.elapsed() < Duration::from_secs(1))
+            {
+                return Err("one launch confirmation attempt per second".into());
+            }
+            if self
+                .pending
+                .values()
+                .any(|p| p.page && p.prepared.exact.chain[0].id == package)
+            {
+                return Err("a launch confirmation is already pending for this package".into());
+            }
+        }
+        let limit = if page {
+            PAGE_PENDING_LIMIT
+        } else {
+            TRUSTED_PENDING_LIMIT
+        };
+        if self.pending.values().filter(|p| p.page == page).count() >= limit {
+            return Err("too many pending confirmations".into());
+        }
+        Ok(())
+    }
+
+    /// Keeps an executable hashed without the lock, for `prepare` to use while it is unchanged.
+    pub fn warm(&mut self, h: Hashed) {
+        self.cache.insert(h.0, (h.1, h.2));
+    }
+
+    /// Takes back pending confirmation id: its caller no longer waits for it (the call was
+    /// cancelled). Its dialog closes as cancelled, and a Confirm racing with that confirms nothing.
+    pub fn withdraw(&mut self, id: &str) {
+        self.pending.remove(id);
+        self.saving_warnings.remove(id);
+    }
+
     /// Limits follow immutable native origin, never a page-supplied flag.
     pub fn queue(&mut self, prepared: Prepared) -> Result<String, String> {
         self.prune();

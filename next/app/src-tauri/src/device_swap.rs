@@ -92,6 +92,8 @@ impl Catalog {
         let p = self.swapping(id)?;
         state_readable(id, &p.active, &release)?;
         let (admitted, _) = self.release_record(id, p, &release, roots)?;
+        // As at enable: its required imports are enabled tools exporting them, with no cycle.
+        self.dependencies(id, &admitted.imports, roots)?;
         Ok(Swap {
             id: id.into(),
             from: (p.active.sha256.clone(), p.active.installed_at),
@@ -136,8 +138,9 @@ impl Catalog {
             return Err(format!("an update of {id} is under way already"));
         }
         self.place(c)?;
-        self.holding.insert(id.clone(), c.release.sha256.clone());
+        // Held only once staged: a refused one leaves nothing held.
         let mut s = self.swap(id, c.release.clone(), c.source.clone(), false, roots)?;
+        self.holding.insert(id.clone(), c.release.sha256.clone());
         s.held = Some(c.release.sha256.clone());
         Ok(s)
     }
@@ -183,6 +186,8 @@ impl Catalog {
         if now != s.admitted {
             return Err(format!("{id} changed during the swap; try again"));
         }
+        // Its imports again: a target disabled during the swap refuses it.
+        self.dependencies(id, &s.admitted.imports, roots)?;
         Ok(p)
     }
 
@@ -196,6 +201,7 @@ impl Catalog {
         p.source = s.source.clone();
         p.enabled = true;
         p.admission = Some(Admission::of(&s.admitted));
+        self.drop_consents_naming(id);
         if let Err(e) = self.save() {
             self.packages.insert(id.clone(), previous);
             return Err(e);

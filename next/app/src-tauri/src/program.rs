@@ -44,6 +44,12 @@
 //! control and format characters escaped and the values the tool must not show removed; the last
 //! lines say why it stopped. What a tool says that reaches a caller or the status is escaped the
 //! same way.
+//!
+//! The host authorizes nothing: the router (`route.rs`) decides each call and passes it with a
+//! `Context`, whose chain each call frame names. A tool calls another package's operation by
+//! sending a `call` frame on its stdout for the host call it serves (`for`); the host hands it to
+//! the router (`Host::set_route`) and writes the answer to the tool's stdin. A frame naming its own
+//! caller or chain is refused: the host sets them.
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -54,9 +60,9 @@ use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 /// The app program contract major version this host speaks.
@@ -67,6 +73,9 @@ const MAX_FRAME: usize = 1 << 20;
 const MAX_INPUT: usize = 64 << 10;
 /// Calls per package at once, the one running and those waiting their turn.
 const MAX_PENDING: usize = 8;
+/// Frames waiting for a tool's stdin beyond which a refusal of its own call breaks the pipe: it
+/// sends calls and does not read their answers.
+const MAX_QUEUED: usize = 64;
 /// The longest stderr line logged; a longer one is left out, with a note.
 const MAX_LOG_LINE: usize = 8 << 10;
 /// Stderr lines kept, to say why a tool stopped.
@@ -175,6 +184,94 @@ pub type Resolve = Box<dyn Fn(&str) -> Result<crate::device::Admitted, String> +
 
 /// What the host starts from: `Resolve`'s record, or the unit tests' own.
 type Records = Box<dyn Fn(&str) -> Result<Spec, String> + Send + Sync>;
+
+/// Fields a tool's call frame may not have: the host names a call's caller and chain.
+const IDENTITY_FIELDS: &[&str] = &["chain", "caller", "requester", "from", "origin", "context"];
+
+/// One hop of a call's chain, as the host sets it: the original requester first (the window, or
+/// a page of a package at its release), then each tool that called on, at its release and
+/// generation. Call frames carry it as `chain`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum Hop {
+    Main,
+    Page {
+        id: String,
+        sha256: String,
+        page: String,
+    },
+    Package {
+        id: String,
+        sha256: String,
+        generation: u64,
+    },
+}
+
+impl Hop {
+    /// The package it names, if any.
+    pub fn package(&self) -> Option<&str> {
+        match self {
+            Hop::Main => None,
+            Hop::Page { id, .. } | Hop::Package { id, .. } => Some(id),
+        }
+    }
+}
+
+/// What a call carries besides its operation and input.
+pub struct Context {
+    /// The chain, as call frames name it.
+    pub chain: Vec<Hop>,
+    /// The release the call is for, as the router granted it: its archive digest and
+    /// generation. A running tool of another release refuses the call.
+    pub expect: Option<(String, u64)>,
+    /// The router's own record of the call, opaque to the host.
+    pub extra: Box<dyn std::any::Any + Send + Sync>,
+}
+
+impl Context {
+    /// A call from the window with nothing else: what `Host::call` uses.
+    #[cfg(test)]
+    pub fn main() -> Context {
+        Context {
+            chain: vec![Hop::Main],
+            expect: None,
+            extra: Box::new(()),
+        }
+    }
+}
+
+/// Flags any of which cancels a call: its ticket's, those of the calls it serves, and whether
+/// those have ended.
+#[derive(Clone, Default)]
+pub struct Cancel(Vec<Arc<AtomicBool>>);
+
+impl Cancel {
+    /// This set and flag.
+    pub fn with(&self, flag: &Arc<AtomicBool>) -> Cancel {
+        let mut c = self.clone();
+        c.0.push(Arc::clone(flag));
+        c
+    }
+    pub fn is_set(&self) -> bool {
+        self.0.iter().any(|f| f.load(Ordering::SeqCst))
+    }
+}
+
+/// A call a tool made on its pipe, for the router: the tool's run, the context of the host call
+/// it made it for, and what it asks for.
+pub struct Outbound {
+    /// The calling tool, at the release and generation it runs.
+    pub caller: Hop,
+    pub context: Arc<Context>,
+    pub package: String,
+    pub op: String,
+    pub input: Value,
+    /// Cancelled when the tool cancels it, or the call it serves is cancelled or ends.
+    pub cancel: Cancel,
+}
+
+/// Decides and makes a tool's call (`Host::set_route`).
+pub type Route = Arc<dyn Fn(Outbound) -> Result<Value, CallError> + Send + Sync>;
 
 /// A call's failure: a protocol error code (`../../protocol/README.md#errors`) and a message.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -348,6 +445,8 @@ struct Run {
     pid: AtomicU64,
     /// To the writer thread; taken to close the tool's stdin.
     tx: Mutex<Option<Sender<Vec<u8>>>>,
+    /// Frames sent to the writer thread and not yet written.
+    queued: Arc<AtomicUsize>,
     hello: Mutex<Option<Sender<Value>>>,
     pending: Mutex<HashMap<String, Sender<Reply>>>,
     /// Its package's turn.
@@ -361,6 +460,11 @@ struct Run {
     /// Reaped, and its slot updated.
     reaped: AtomicBool,
     tail: Mutex<VecDeque<String>>,
+    /// The host calls it is serving: their context and cancel flags (with an ended flag).
+    serving: Mutex<HashMap<String, (Arc<Context>, Cancel)>>,
+    /// Its own calls through the host, by its ID, with their cancel flags.
+    outbound: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    route: Option<Route>,
     /// Its last stderr line, as logged: why it stopped, if it says.
     last_line: Mutex<Option<String>>,
 }
@@ -378,7 +482,10 @@ impl Run {
         let mut frame = (body.len() as u32).to_be_bytes().to_vec();
         frame.extend(body);
         match self.tx.lock().unwrap().as_ref() {
-            Some(tx) if tx.send(frame).is_ok() => Ok(()),
+            Some(tx) if tx.send(frame).is_ok() => {
+                self.queued.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
             _ => Err(fail(
                 "extension_unavailable",
                 format!("{} is stopping", self.spec.id),
@@ -438,6 +545,7 @@ struct Inner {
     slots: Mutex<HashMap<String, Slot>>,
     changed: Condvar,
     tickets: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    route: OnceLock<Route>,
     /// Every call under way, by number, to cancel them all.
     calls: Mutex<HashMap<u64, Arc<AtomicBool>>>,
     /// The app is quitting: no tool starts and no lease is given.
@@ -547,14 +655,20 @@ impl Host {
             slots: Mutex::new(HashMap::new()),
             changed: Condvar::new(),
             tickets: Mutex::new(HashMap::new()),
+            route: OnceLock::new(),
             calls: Mutex::new(HashMap::new()),
             closing: AtomicBool::new(false),
         }))
     }
 
+    /// Sets the router tools' own calls go to. Without one, they are refused.
+    pub fn set_route(&self, route: Route) {
+        let _ = self.0.route.set(route);
+    }
+
     /// A lease on tool id, starting it if it is not running (once, however many ask at once).
     pub fn lease(&self, id: &str) -> Result<Lease, CallError> {
-        self.lease_for(id, &|_| Ok(()), &AtomicBool::new(false))
+        self.lease_for(id, &|_| Ok(()), &Cancel::default())
             .map_err(escaped)
     }
 
@@ -564,7 +678,7 @@ impl Host {
         &self,
         id: &str,
         check: &dyn Fn(&Spec) -> Result<(), CallError>,
-        cancel: &AtomicBool,
+        cancel: &Cancel,
     ) -> Result<Lease, CallError> {
         let inner = &self.0;
         let mut slots = inner.slots();
@@ -574,7 +688,7 @@ impl Host {
             if inner.closing.load(Ordering::SeqCst) {
                 return Err(fail("extension_unavailable", "the app is quitting"));
             }
-            if cancel.load(Ordering::SeqCst) {
+            if cancel.is_set() {
                 return Err(fail("cancelled", "the call was cancelled"));
             }
             let slot = slots.entry(id.to_string()).or_default();
@@ -683,7 +797,10 @@ impl Host {
         }
     }
 
-    /// Calls op of tool id with input. With a ticket, `cancel` can cancel it.
+    /// Calls op of tool id with input, from the window with nothing else. With a ticket,
+    /// `cancel` can cancel it. The unit tests' own: the app's calls go through the router
+    /// (`route.rs`), which decides each one and calls `run_call_with`.
+    #[cfg(test)]
     pub fn call(
         &self,
         id: &str,
@@ -722,7 +839,9 @@ impl Host {
         })
     }
 
-    /// Calls op of tool id with input, as call.
+    /// Calls op of tool id with input, as call, from the window with nothing else. Test-only,
+    /// as `call`.
+    #[cfg(test)]
     pub fn run_call(
         &self,
         call: Call,
@@ -730,7 +849,28 @@ impl Host {
         op: &str,
         input: Value,
     ) -> Result<Value, CallError> {
-        self.call_inner(id, op, input, &call.cancel)
+        self.run_call_with(
+            call,
+            id,
+            op,
+            input,
+            Arc::new(Context::main()),
+            Cancel::default(),
+        )
+    }
+
+    /// Calls op of tool id with input, as call, in context, the router's decision; any of also
+    /// cancels it too.
+    pub fn run_call_with(
+        &self,
+        call: Call,
+        id: &str,
+        op: &str,
+        input: Value,
+        context: Arc<Context>,
+        also: Cancel,
+    ) -> Result<Value, CallError> {
+        self.call_inner(id, op, input, &also.with(&call.cancel), context)
             .map_err(escaped)
     }
 
@@ -757,7 +897,8 @@ impl Host {
         id: &str,
         op: &str,
         input: Value,
-        cancel: &AtomicBool,
+        cancel: &Cancel,
+        context: Arc<Context>,
     ) -> Result<Value, CallError> {
         if serde_json::to_vec(&input).map_or(usize::MAX, |b| b.len()) > MAX_INPUT {
             return Err(fail(
@@ -765,10 +906,21 @@ impl Host {
                 format!("the input is larger than {MAX_INPUT} bytes"),
             ));
         }
-        // Checked against the record before the tool is leased, or started.
+        // Checked against the record before the tool is leased, or started: the release the
+        // router allowed the call for, if it named one, the operation and the input.
         let lease = self.lease_for(
             id,
             &|spec| {
+                if let Some((sha256, generation)) = &context.expect {
+                    if spec.sha256 != *sha256 || spec.generation != *generation {
+                        return Err(fail(
+                            "extension_unavailable",
+                            format!(
+                                "{id} runs another release than the one this call was allowed for"
+                            ),
+                        ));
+                    }
+                }
                 schema::check(&declared(spec, op)?.input_schema, &input, "input")
                     .map_err(|e| fail("invalid_request", e))
             },
@@ -791,7 +943,7 @@ impl Host {
             while turn.0 {
                 let (t, _) = gate.turned.wait_timeout(turn, TICK).unwrap();
                 turn = t;
-                if cancel.load(Ordering::SeqCst) || run.ending() {
+                if cancel.is_set() || run.ending() {
                     turn.1 -= 1;
                     return Err(if run.ending() {
                         fail("extension_unavailable", format!("{id} is stopping"))
@@ -804,12 +956,18 @@ impl Host {
             turn.0 = true;
         }
         let _turn = Turn(run);
-        if cancel.load(Ordering::SeqCst) {
+        if cancel.is_set() {
             return Err(fail("cancelled", "the call was cancelled"));
         }
         let cid = call_id();
         let (tx, rx) = mpsc::channel();
         run.pending.lock().unwrap().insert(cid.clone(), tx);
+        // The calls the tool makes for this one are cancelled with it, and once it has ended.
+        let ended = Arc::new(AtomicBool::new(false));
+        run.serving
+            .lock()
+            .unwrap()
+            .insert(cid.clone(), (Arc::clone(&context), cancel.with(&ended)));
         // Once sent, a call that ends without the tool's answer has an unknown outcome.
         let unknown = |why: String, code: &str| CallError {
             code: code.into(),
@@ -817,7 +975,8 @@ impl Host {
             unknown: true,
         };
         let result = (|| {
-            run.send(&json!({"type": "call", "id": cid, "op": op, "input": input}))?;
+            run.send(&json!({"type": "call", "id": cid, "op": op, "input": input,
+                "chain": context.chain}))?;
             let mut cancelled: Option<Instant> = None;
             loop {
                 match rx.recv_timeout(TICK) {
@@ -837,7 +996,7 @@ impl Host {
                         ))
                     }
                     Err(RecvTimeoutError::Timeout) => match cancelled {
-                        None if cancel.load(Ordering::SeqCst) => {
+                        None if cancel.is_set() => {
                             let _ = run.send(&json!({"type": "cancel", "id": cid}));
                             cancelled = Some(Instant::now());
                         }
@@ -855,6 +1014,8 @@ impl Host {
             }
         })();
         run.pending.lock().unwrap().remove(&cid);
+        run.serving.lock().unwrap().remove(&cid);
+        ended.store(true, Ordering::SeqCst);
         if let Err(e) = &result {
             if e.unknown {
                 let mut slots = self.0.slots();
@@ -1125,6 +1286,14 @@ pub struct Call {
     cancel: Arc<AtomicBool>,
 }
 
+impl Call {
+    /// also with this call's own flag: what cancels it, for work done for it before it runs
+    /// (such as a wait for its native confirmation).
+    pub fn cancelled_by(&self, also: &Cancel) -> Cancel {
+        also.with(&self.cancel)
+    }
+}
+
 impl Drop for Call {
     fn drop(&mut self) {
         self.inner.calls.lock().unwrap().remove(&self.n);
@@ -1254,6 +1423,7 @@ fn new_run(
         spec,
         pid: AtomicU64::new(0),
         tx: Mutex::new(None),
+        queued: Arc::new(AtomicUsize::new(0)),
         hello: Mutex::new(Some(hello_tx)),
         pending: Mutex::new(HashMap::new()),
         gate,
@@ -1263,6 +1433,9 @@ fn new_run(
         closed: AtomicBool::new(false),
         reaped: AtomicBool::new(false),
         tail: Mutex::new(VecDeque::new()),
+        serving: Mutex::new(HashMap::new()),
+        outbound: Mutex::new(HashMap::new()),
+        route: inner.route.get().cloned(),
         last_line: Mutex::new(None),
     });
     let cmd = command(&run.spec, program);
@@ -1565,7 +1738,10 @@ fn supervise(
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
     *run.tx.lock().unwrap() = Some(tx);
     let threads = [
-        spawn_named("pluxy-prog-in", move || write_frames(stdin, rx)),
+        spawn_named("pluxy-prog-in", {
+            let queued = Arc::clone(&run.queued);
+            move || write_frames(stdin, rx, &queued)
+        }),
         spawn_named("pluxy-prog-out", {
             let r = Arc::clone(&run);
             move || read_frames(&r, stdout)
@@ -1720,9 +1896,11 @@ fn spawn_named(
     std::thread::Builder::new().name(name.into()).spawn(f)
 }
 
-fn write_frames(mut stdin: ChildStdin, rx: mpsc::Receiver<Vec<u8>>) {
+fn write_frames(mut stdin: ChildStdin, rx: mpsc::Receiver<Vec<u8>>, queued: &AtomicUsize) {
     for frame in rx {
-        if stdin.write_all(&frame).and_then(|_| stdin.flush()).is_err() {
+        let written = stdin.write_all(&frame).and_then(|_| stdin.flush());
+        queued.fetch_sub(1, Ordering::SeqCst);
+        if written.is_err() {
             break;
         }
     }
@@ -1752,7 +1930,7 @@ fn read_some(run: &Run, r: &mut impl Read, fd: i32, buf: &mut [u8]) -> Option<us
     }
 }
 
-fn read_frames(run: &Run, mut stdout: ChildStdout) {
+fn read_frames(run: &Arc<Run>, mut stdout: ChildStdout) {
     let fd = stdout.as_raw_fd();
     let mut buf = Vec::new();
     let mut chunk = vec![0u8; 64 << 10];
@@ -1782,7 +1960,7 @@ fn read_frames(run: &Run, mut stdout: ChildStdout) {
     run.hello.lock().unwrap().take();
 }
 
-fn deliver(run: &Run, frame: &[u8], said_hello: &mut bool) -> Result<(), String> {
+fn deliver(run: &Arc<Run>, frame: &[u8], said_hello: &mut bool) -> Result<(), String> {
     let v: Value = serde_json::from_slice(frame).map_err(|e| format!("sent a bad frame: {e}"))?;
     let kind = v["type"].as_str().unwrap_or_default().to_string();
     if !*said_hello {
@@ -1801,6 +1979,16 @@ fn deliver(run: &Run, frame: &[u8], said_hello: &mut bool) -> Result<(), String>
     let reply = match kind.as_str() {
         // Progress goes nowhere yet; reading it keeps the pipe flowing.
         "progress" => return Ok(()),
+        "call" => {
+            outbound(run, id, &v);
+            return Ok(());
+        }
+        "cancel" => {
+            if let Some(f) = run.outbound.lock().unwrap().get(id) {
+                f.store(true, Ordering::SeqCst);
+            }
+            return Ok(());
+        }
         "result" => Reply::Result(v.clone()),
         "error" => Reply::Error(fail(
             v["error"]["code"].as_str().unwrap_or("internal"),
@@ -1813,6 +2001,97 @@ fn deliver(run: &Run, frame: &[u8], said_hello: &mut bool) -> Result<(), String>
         let _ = tx.send(reply);
     }
     Ok(())
+}
+
+/// A tool's own call, frame v with ID id: refused at once when it names its caller or chain, a
+/// host call it is not serving, or an ID in use; otherwise the router decides and makes it, on a
+/// thread of its own, and its answer goes back on the tool's stdin.
+fn outbound(run: &Arc<Run>, id: &str, v: &Value) {
+    let refuse = |code: &str, message: String| {
+        if run.ending() {
+            return;
+        }
+        // A tool that keeps calling and reads no answer would queue refusals without end.
+        if run.queued.load(Ordering::SeqCst) >= MAX_QUEUED {
+            return run.violation(format!(
+                "sent calls faster than it read the answers ({MAX_QUEUED} frames waited for its stdin)"
+            ));
+        }
+        let _ = run.send(&json!({"type": "error", "id": id,
+            "error": {"code": code, "message": message}}));
+    };
+    if !valid_ticket(id) {
+        return refuse(
+            "invalid_request",
+            "a call ID is 1 to 64 letters, digits, '-', '_' or '.'".into(),
+        );
+    }
+    if let Some(f) = IDENTITY_FIELDS.iter().find(|f| v.get(**f).is_some()) {
+        return refuse(
+            "permission",
+            format!("a call may not name its {f}: the host sets a call's caller and chain"),
+        );
+    }
+    let (Some(package), Some(op), Some(serves)) =
+        (v["package"].as_str(), v["op"].as_str(), v["for"].as_str())
+    else {
+        return refuse(
+            "invalid_request",
+            "a call names the package, op and the host call it is for".into(),
+        );
+    };
+    let Some((context, cancel)) = run.serving.lock().unwrap().get(serves).cloned() else {
+        return refuse(
+            "permission",
+            format!("{serves} is not a call {} is serving", run.spec.id),
+        );
+    };
+    let Some(route) = run.route.clone() else {
+        return refuse(
+            "unsupported",
+            "this host routes no calls between packages".into(),
+        );
+    };
+    let flag = Arc::new(AtomicBool::new(false));
+    {
+        let mut out = run.outbound.lock().unwrap();
+        if out.contains_key(id) {
+            return refuse("invalid_request", format!("call ID {id} is in use"));
+        }
+        if out.len() >= MAX_PENDING {
+            return refuse(
+                "unavailable",
+                format!("{} has {MAX_PENDING} calls of its own already", run.spec.id),
+            );
+        }
+        out.insert(id.to_string(), Arc::clone(&flag));
+    }
+    let o = Outbound {
+        caller: Hop::Package {
+            id: run.spec.id.clone(),
+            sha256: run.spec.sha256.clone(),
+            generation: run.spec.generation,
+        },
+        context,
+        package: package.into(),
+        op: op.into(),
+        input: v["input"].clone(),
+        cancel: cancel.with(&flag),
+    };
+    let (r, rid) = (Arc::clone(run), id.to_string());
+    let spawned = spawn_named("pluxy-prog-route", move || {
+        let answer = match route(o) {
+            Ok(output) => json!({"type": "result", "id": rid, "output": output}),
+            Err(e) => json!({"type": "error", "id": rid,
+                "error": {"code": e.code, "message": e.message}}),
+        };
+        r.outbound.lock().unwrap().remove(&rid);
+        let _ = r.send(&answer);
+    });
+    if let Err(e) = spawned {
+        run.outbound.lock().unwrap().remove(id);
+        refuse("unavailable", format!("starting the call: {e}"));
+    }
 }
 
 /// Keeps a tool's lines in its tail and logs them, at most `LOG_RATE` a second; the rest are
