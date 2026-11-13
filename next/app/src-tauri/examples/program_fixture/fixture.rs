@@ -163,10 +163,10 @@ fn sleep_forever() -> ! {
 /// waits for the host's answer: `{"output": ...}` or `{"error": ...}`. A cancel of f while it
 /// waits is passed on as a cancel of this call.
 fn relay(input: &mut impl Read, output: &mut impl Write, f: &Value, n: u64) -> Value {
-    let rid = format!("o-{n}");
+    let own = format!("o-{n}");
     let mut call = json!({
         "type": "call",
-        "id": rid,
+        "id": own,
         "for": f["input"].get("for").cloned().unwrap_or_else(|| f["id"].clone()),
         "package": f["input"]["package"],
         "op": f["input"]["op"],
@@ -177,11 +177,13 @@ fn relay(input: &mut impl Read, output: &mut impl Write, f: &Value, n: u64) -> V
             frame.insert(k.clone(), v.clone());
         }
     }
+    // The ID sent, which extra may have replaced: the host answers that one.
+    let rid = call["id"].clone();
     write_frame(output, &call);
     while let Some(m) = read_frame(input) {
         match m["type"].as_str() {
-            Some("result") if m["id"] == rid.as_str() => return json!({"output": m["output"]}),
-            Some("error") if m["id"] == rid.as_str() => return json!({"error": m["error"]}),
+            Some("result") if m["id"] == rid => return json!({"output": m["output"]}),
+            Some("error") if m["id"] == rid => return json!({"error": m["error"]}),
             Some("cancel") if m["id"] == f["id"] => {
                 write_frame(output, &json!({"type": "cancel", "id": rid}));
             }
