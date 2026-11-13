@@ -68,6 +68,11 @@ tauri-utils = { version = "=2.10.2", default-features = false }
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 gio = "0.18"
 
+# SHA-256 unoptimized runs at about 16 MB/s, and the program host hashes a tool's program at each
+# start: in the unit tests that tool is the test binary itself, of a hundred megabytes and more.
+[profile.dev.package.sha2]
+opt-level = 3
+
 [profile.release]
 codegen-units = 1
 lto = true

@@ -654,19 +654,27 @@ fn a_tool_that_leaves_its_group_and_ignores_the_end_of_its_input_is_killed() {
 
 #[test]
 fn calls_waiting_on_a_failed_start_get_its_error() {
-    let h = Arc::new(host(json!({"silent": true})));
-    let t = Instant::now();
-    let calls: Vec<_> = (0..3).map(|_| spawn_summary(&h)).collect();
-    for c in calls {
+    let starts = Arc::new(AtomicU64::new(0));
+    let counted = Arc::clone(&starts);
+    let h = Arc::new(host_gated(
+        package(json!({"silent": true})),
+        fast(),
+        move |_| {
+            counted.fetch_add(1, Ordering::SeqCst);
+        },
+    ));
+    let first = spawn_summary(&h);
+    until("the start", 5, || h.status(ID).state == "starting");
+    let calls: Vec<_> = (0..2).map(|_| spawn_summary(&h)).collect();
+    until("the calls to wait", 5, || {
+        h.0.slots().get(ID).is_some_and(|s| s.waiting == 2)
+    });
+    for c in std::iter::once(first).chain(calls) {
         let e = c.join().unwrap().unwrap_err();
         assert!(e.message.contains("did not say hello"), "{e}");
     }
     // One start, not one after another.
-    assert!(
-        t.elapsed() < fast().startup * 2,
-        "three calls took {:?}",
-        t.elapsed()
-    );
+    assert_eq!(starts.load(Ordering::SeqCst), 1);
 }
 
 #[test]
