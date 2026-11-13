@@ -41,6 +41,20 @@ The window calls core through the
 `<core>/v0/management/...` only, following no redirects and, for a core on this computer, no
 proxy from the environment. Path segments that are, or decode to, `.` or `..` are refused.
 
+Rotate on the Config page's Connectivity tab rotates the management key natively, on Linux: the
+app opens its native confirmation, which names the core and how the new key will be kept, then
+calls core's `POST /v0/management/management-key/rotate` itself. It keeps the new key as the old
+one was kept (in `connection.json`, for this session only, or, for the app's own core, in that
+core's config file, which core writes) and shows it once in a native window with Copy and
+Close, for other programs that used the old key and for signing in again. That window stays open
+when the main window closes to the tray, and a later rotation's window replaces it. The window
+gets only how it went: the key never reaches a webview. `core_call` refuses every path under
+`/management-key`, however it is spelled. If the new key cannot be saved, the app keeps using
+it until it quits and says to copy it and enter it again with "Keep the key on this device".
+A call that left with the old key during a rotation is sent once more with the new one. The app
+waits at most 30 seconds for core's reply to a rotation, since other calls and Quit wait for it;
+without a reply it says the key may have changed and where to find it.
+
 Until the app is connected and signed in, the window shows only the Connection page, so a wrong
 address or key can always be fixed there.
 
@@ -54,10 +68,23 @@ while the app sits in the tray. A window that does not answer the question withi
 (its page still loading, or busy) closes to the tray.
 
 The tray menu shows what the app is connected to, and has "Open pluxy" (a new window) and "Quit
-pluxy". Closing the window quits the app, whatever the choice, when there is no usable tray: the
+pluxy". In managed mode, "Start core", "Stop core" and "Restart core" control only the core the
+app started. They work with the window closed and no renderer running. "Restart core" is
+enabled only while the core runs. While one of them runs, the tray says "Core working…",
+disables all three and refuses another click. They are disabled in local and remote modes, and
+the native side refuses them there too, even if a desktop delivers a click on a disabled item.
+Closing the window quits the app, whatever the choice, when there is no usable tray: the
 app made no tray icon, or the session's `org.kde.StatusNotifierWatcher` is missing or has no
 registered host (asked at each close, since GTK makes an icon even with no desktop to show it).
 The setting then says so.
+
+When an owned core exits unexpectedly, the app retries after 2, 5 and 15 seconds, with at most
+three automatic recovery attempts in a rolling five-minute window. A successful recovery keeps
+that budget, so a core that keeps crashing still stops being restarted. After the third failed
+recovery or another crash within that window, the tray shows "Core recovery paused" and the
+Connection page shows the reason. An explicit Start, Stop or Restart, from the tray or the
+window, or a mode change, cancels any scheduled recovery and clears the budget. A core you
+stopped stays stopped, and so does one that Start Core on Launch left unstarted.
 
 The window opens at the size and place it last had, kept when it closes and when the app quits:
 the size in logical pixels, the place in physical ones, never noted while minimized, maximized
@@ -153,8 +180,10 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `connection_get` | The connection, without the key |
 | `connection_set` | Changes connection settings without accepting a key |
 | `key_entry` | Opens native key entry, checks the key against core, and returns only signed-in, wrong-key, cancelled or error status plus the connection without its key |
+| `core_start` | Starts the app's own core only if it is not running (managed mode) |
 | `core_restart` | Starts the app's own core again (managed mode) |
-| `core_call` | One management API call to the connected core |
+| `core_call` | One management API call to the connected core; refuses the management key's own routes |
+| `management_key_rotate` | Rotates the management key natively after the native confirmation, keeps and shows the new key natively, and returns only how it went (200 with how the key is kept, 204 when cancelled) |
 | `sign_out` | Forgets the key (local and remote modes) |
 | `page_open`, `page_place`, `page_close` | Opens an extension page's webview over part of the window, moves it, closes it |
 | `page_send` | Passes the window's channel messages to a page's webview |
@@ -398,12 +427,30 @@ that frame can reach the scheme, and navigation of that real frame closes native
 admissions, forwarding and real core settings operations, with a successful call on the same page.
 It checks that the page webview covers the page area, that
 closing the window leaves no webview and
-no web process, and that quitting stops only the app's own core. The startup sequence then enables login registration through the main webview command,
+no web process, and that quitting stops only the app's own core. With the window closed, it
+finds the app's real StatusNotifierItem through the session's tray watcher and sends the actual
+Start/Stop/Restart menu events over com.canonical.dbusmenu. It kills only the reported owned
+core as an on-demand crash fixture, after checking that the process is still the app's live
+child. It checks recovery, the three-attempt cutoff, and that an explicit Start clears the
+budget. It checks that a pending recovery cannot undo a manual Stop and that no recovery attempt
+ran before that Stop. After each step it reads which of Start, Stop and Restart the menu
+enables, including while an action is held busy. A click on a disabled item still reaches the
+app's handler, which the test confirms from the handler's own refusal; in local and remote modes
+every lifecycle click must be refused that way. It ends with a core running and checks that
+the core does not outlive the app once it quits, whichever of the app's ways of stopping it
+does so. Every tray operation asserts zero renderer processes and webviews.
+A second managed run starts a stand-in core that says where it listens and exits at once, and
+holds the app's setup until that core's exit callback has run, before the app state exists. It
+checks that the app still starts the real core again, with one recovery attempt, and that the
+core does not outlive the app.
+In separate runs, the startup sequence enables login registration through the main webview command,
 checks the entry in its temporary XDG config folder, launches it with the real Desktop Entry consumer (gio launch), checks
 zero windows/webviews and no web process, and verifies that the app's real tray item belongs to
 its PID in the tray watcher's registered item list. It checks login with Silent Launch on and
 off, an app-menu launch with Silent Launch on, managed-core startup, core startup off, foreign
-core ownership, and removal. A separate session with no watcher verifies that a silent login
+core ownership, and removal. In the core-startup-off launch it waits past the first recovery
+delay and checks that no core started and no recovery ran, then starts the core with the
+tray's Start core and crashes it: that core is recovered. A separate session with no watcher verifies that a silent login
 opens exactly one window and webview. Visible launches are positive controls for the same
 renderer-process count used by silent launches.
 
@@ -528,18 +575,18 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
 - Tested on Linux only. On Windows the page document's address is
   `http://pluxy-page.localhost/`; neither Windows nor macOS has been run.
 - No installer or bundled core yet (`bundle.active` is off).
-- In managed mode the app does not restart a core that stops; the tray and the Connection page
-  show that it stopped and why, and the page offers to start it. A supervisor thread starts the
-  core and stays until it exits, since on Linux the parent-death signal follows the thread that
-  started it.
+- Recovery history lasts for the current app process; quitting the app ends its recovery window.
+  A supervisor thread starts the core and stays until it exits, since on Linux the parent-death
+  signal follows the thread that started it.
 - Native key entry is implemented on Linux only. Windows and macOS refuse key entry until
   their native dialogs are implemented; there is no webview entry fallback.
 - Hidden native entry keeps keys out of the webview API. It does not isolate them from another
   process with the same user's operating-system access, and transient native buffers are not
   guaranteed to be erased from memory.
 - A kept key is stored in `connection.json`, not in the system keyring.
-- The Linux native suite checks the app's own tray item in the watcher's registration list and
-  startup without a watcher. It does not check every desktop's tray UI.
+- The Linux native suite checks the app's own tray item in the watcher's registration list,
+  drives its Start, Stop and Restart through the item's D-Bus menu, and checks startup without a
+  watcher. It does not check every desktop's tray UI.
 - The tray host is asked about only when the window closes: if it goes away while the app sits
   in the tray, the app stays there with no way back to it but stopping it.
 - Raising the first app's window is Unix only (a Unix socket); where there is none, a second

@@ -248,7 +248,30 @@ func TestRedactAndRestoreTimeGrowsWithSize(t *testing.T) {
 			return []byte(b.String())
 		}
 	}
+	// Provider entries without names, which Restore pairs by their secrets: all with the same key,
+	// and with that key and a header secret of their own (n secrets in all). Those with the key
+	// alone are a quarter as many as n, so a pairing slower than linear fails the test in
+	// seconds, not minutes.
+	sharedKey := func(header bool) func(n int) []byte {
+		return func(n int) []byte {
+			var b strings.Builder
+			b.WriteString("codex-api-key:\n")
+			entries := n / 4
+			if header {
+				entries = n / 2
+			}
+			for i := range entries {
+				fmt.Fprintf(&b, "  - api-key: \"fake-shared-key-000\"\n    base-url: \"https://e%06d.example/v1\"\n", i)
+				if header {
+					fmt.Fprintf(&b, "    headers:\n      Authorization: \"Bearer fake-own-%06d\"\n", i)
+				}
+			}
+			return []byte(b.String())
+		}
+	}
 	layouts := []layout{
+		{"config.yaml entries sharing a key", true, sharedKey(false)},
+		{"config.yaml entries sharing a key, each with a header of its own", true, sharedKey(true)},
 		{"json", false, func(n int) []byte {
 			var b strings.Builder
 			b.WriteString(`{"client_keys": [`)
@@ -403,15 +426,77 @@ func TestRestoreCopyNeedsItsOriginal(t *testing.T) {
 	}
 }
 
+// A document Restore refuses because list items cannot all be paired takes time that grows with
+// its size about as the document does: entries whose keys pair them along a chain, and as many
+// more that each fit only the first entry, which the chain already takes. 32 times the entries
+// take well under 96 times as long; a search for each of them took over 300 times.
+func TestRestoreRefusalTimeGrowsWithSize(t *testing.T) {
+	const small, large, most = 500, 16000, 96.0
+	docs := func(r *Redactor, n int) (cur, edited []byte) {
+		key := func(i int) string { return fmt.Sprintf("fake-chain-key-%06d", i) }
+		head := func(i int) string { return fmt.Sprintf("fake-head-key-%06d", i) }
+		var c, e strings.Builder
+		c.WriteString("openai-compatibility:\n")
+		e.WriteString("openai-compatibility:\n")
+		for j := range n {
+			fmt.Fprintf(&c, "  - base-url: \"https://e%06d.example/v1\"\n    api-key-entries:\n      - api-key: %q\n", j, key(j))
+			if j > 0 {
+				fmt.Fprintf(&c, "      - api-key: %q\n", key(j-1))
+			} else {
+				c.WriteString("    headers:\n")
+				for i := range n {
+					fmt.Fprintf(&c, "      X-Api-Key-%d: %q\n", i, head(i))
+				}
+			}
+			fmt.Fprintf(&e, "  - base-url: \"https://e%06d.example/v1\"\n    api-key-entries:\n      - api-key: %q\n", j, r.Placeholder(key(j)))
+		}
+		for i := range n {
+			fmt.Fprintf(&e, "  - base-url: \"https://x%06d.example/v1\"\n    headers:\n      X-Api-Key-%d: %q\n", i, i, r.Placeholder(head(i)))
+		}
+		return []byte(c.String()), []byte(e.String())
+	}
+	r := NewRedactor()
+	run := func(n int) func() {
+		cur, edited := docs(r, n)
+		if _, err := r.Redact(cur, true); err != nil {
+			t.Fatal(err)
+		}
+		return func() {
+			if _, err := r.Restore(edited, cur, true); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Restore: %v, want ErrInvalid", err)
+			}
+		}
+	}
+	timed := func(f func()) time.Duration {
+		runtime.GC()
+		defer debug.SetGCPercent(debug.SetGCPercent(-1))
+		start := time.Now()
+		f()
+		return time.Since(start)
+	}
+	few, many := run(small), run(large)
+	best := [2]time.Duration{time.Hour, time.Hour}
+	for range 3 {
+		best[0] = min(best[0], timed(few))
+		best[1] = min(best[1], timed(many))
+	}
+	if ratio := float64(best[1]) / float64(best[0]); ratio > most {
+		t.Errorf("Restore refusing %d entries took %v, %d took %v: %.1f times as long, want at most %.0f", small, best[0], large, best[1], ratio, most)
+	} else {
+		t.Logf("%d entries %v, %d entries %v: %.1f times", small, best[0], large, best[1], ratio)
+	}
+}
+
 // A placeholder put where its secret's text, written back as it was, reads differently (a comma
-// inside a flow list or mapping) goes back quoted: the document is written out again rather than
-// refused, also when a copy of that secret stays in place.
+// inside a flow list) goes back quoted: the document is written out again rather than
+// refused, also when a copy of that secret stays in place. The secret moves from a block list
+// into a flow list of the same list, which the placement rule allows.
 func TestRestoreQuotesASecretTheFlowWouldSplit(t *testing.T) {
 	const key = "sk-aaaa,bbbb1234"
-	cur := "api-key: " + key + "\n"
+	cur := "access:\n  api-keys:\n    - " + key + "\n"
 	for _, tc := range []struct{ name, cur, edited, want string }{
-		{"a copy in place", cur + "note: " + key + "\n", "api-key: [P]\nnote: P\n", "api-key: [\"" + key + "\"]\nnote: \"" + key + "\"\n"},
-		{"each value counted", cur, "m: {api-key: P}\n", "m: {api-key: \"" + key + "\"}\n"},
+		{"a copy in place", cur + "note: " + key + "\n", "access:\n  api-keys: [P]\nnote: P\n", "access:\n  api-keys: [\"" + key + "\"]\nnote: \"" + key + "\"\n"},
+		{"each value counted", cur, "access:\n  api-keys: [P]\n", "access:\n  api-keys: [\"" + key + "\"]\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := NewRedactor()

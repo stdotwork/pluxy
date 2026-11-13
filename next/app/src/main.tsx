@@ -58,12 +58,16 @@ function devicePages(catalog?: DeviceCatalog): PageDef[] {
 function App(props: { initial: Connection; privacy: PrivacyState }) {
   const { privacy } = props;
   const [conn, setConn] = useState(props.initial);
+  // What the Connection page shows: conn, or newer after a rotation, which refreshes it alone so
+  // the shell and its pages (the Config page's notices) stay as they are.
+  const [shown, setShown] = useState(props.initial);
   const [generation, setGeneration] = useState(0);
   const changed = (c: Connection) => {
     setConn(c);
+    setShown(c);
     setGeneration((n) => n + 1);
   };
-  const host = useMemo(() => appHost(conn, changed), [conn]);
+  const host = useMemo(() => appHost(conn, changed, setShown), [conn]);
   // This device's catalog: reloaded when the native side says it changed, keeping the newest
   // load's answer.
   const [catalog, setCatalog] = useState<DeviceCatalog>();
@@ -103,12 +107,12 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
         title: "Connection",
         short: "Conn",
         group: "control",
-        render: () => <ConnectionPage connection={conn} onChange={changed} />,
+        render: () => <ConnectionPage connection={shown} onChange={changed} />,
       },
       devicePage(loadDevice),
       ...devicePages(catalog),
     ],
-    [conn, catalog, loadDevice],
+    [shown, catalog, loadDevice],
   );
 
   // Not connected or not signed in (or the app's own core did not start): the Connection page,
@@ -128,7 +132,7 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
         <div class="shell" data-part="shell">
           <main class="main" data-part="main">
             <div class="content">
-              <ConnectionPage connection={conn} onChange={changed} />
+              <ConnectionPage connection={shown} onChange={changed} />
               <DevicePage onChanged={loadDevice} />
             </div>
           </main>
