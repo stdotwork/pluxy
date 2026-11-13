@@ -357,7 +357,7 @@ fn a_mismatched_hello_or_describe_is_incompatible_until_stopped() {
         let again = summary(&h, &[]).unwrap_err();
         assert!(again.message.contains("incompatible"), "{again}");
         h.stop(ID);
-        assert_eq!(h.status(ID).state, "stopped");
+        assert_eq!(h.status(ID).state, "idle");
         assert!(summary(&h, &[]).is_err());
     }
 }
@@ -396,6 +396,24 @@ fn a_tool_that_ignores_the_end_of_its_input_is_killed_after_the_grace() {
     until("the kill", 10, || !alive(pid) && !alive(child));
     assert!(t.elapsed() >= fast().stop);
     until("the reap", 5, || h.status(ID).state == "stopped");
+}
+
+#[test]
+fn stopping_a_tool_that_does_not_run_leaves_it_as_it_was() {
+    let h = host_for(package(Value::Null), fast());
+    h.stop(ID);
+    assert_eq!(h.status(ID).state, "idle");
+    let e = h
+        .call("pluxy/other", "summary", json!({}), None)
+        .unwrap_err();
+    assert!(e.message.contains("not installed"), "{e}");
+    h.stop("pluxy/other");
+    assert_eq!(h.status("pluxy/other").state, "idle");
+    let (pid, _) = pids(&summary(&h, &[]).unwrap());
+    h.stop(ID);
+    until("the stop", 5, || {
+        h.status(ID).state == "stopped" && !alive(pid)
+    });
 }
 
 #[test]

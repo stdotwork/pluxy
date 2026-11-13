@@ -551,7 +551,8 @@ impl Host {
     }
 
     /// Stops tool id, if it runs, without waiting: its package changed, or was disabled or
-    /// removed. Its next call starts it again from the record admitted then.
+    /// removed. Its next call starts it again from the record admitted then. One that does not
+    /// run stays as it is, but one incompatible is checked again at its next call.
     pub fn stop(&self, id: &str) {
         let mut slots = self.0.slots();
         if let Some(slot) = slots.get_mut(id) {
@@ -562,8 +563,9 @@ impl Host {
                 }
             } else if slot.phase == Phase::Starting {
                 slot.stop_asked = true;
-            } else {
-                slot.phase = Phase::Stopped;
+            } else if slot.phase == Phase::Incompatible {
+                // Not running: its next call checks the package as it is now.
+                slot.phase = Phase::Idle;
             }
             self.0.changed.notify_all();
         }
