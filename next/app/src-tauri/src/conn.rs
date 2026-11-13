@@ -686,7 +686,8 @@ impl Connection {
             reason: why,
         });
         if let Err(e) = store.save_state(&failed) {
-            // Still recorded as the candidate: the next start puts the same config back.
+            // Still recorded as the candidate: the next start undoes the switch again, and puts
+            // the config back again only if the mark that it was put back was not saved either.
             msg.push_str(&format!(" (the app could not record that: {e})"));
         }
         back(self, msg, true)
