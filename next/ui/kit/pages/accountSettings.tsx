@@ -4,7 +4,7 @@
 
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { Account } from "../api";
-import { usePrivacy } from "../privacy";
+import { accountIdentities, usePrivacy } from "../privacy";
 import { guardLeave } from "../shell";
 import { strings } from "../strings";
 import { Button, Choices, Facts, Notice, Switch, useAction, useKit } from "../ui";
@@ -102,7 +102,7 @@ const modelText = (entries: Account["models"]) => pairs(entries?.map(modelRow));
 export function AccountSettings(props: { account: Account }) {
   const a = props.account;
   const p = usePrivacy();
-  const ids = [a.label];
+  const ids = accountIdentities(a);
   const flag = (v?: boolean) => (v === undefined ? undefined : v ? t("on") : t("off"));
   return (
     <section class="stack" data-part="account-settings" aria-label={t("heading")}>
@@ -212,7 +212,7 @@ function EditForm(props: { account: Account; close: () => void; saved: () => voi
   const aliases = rows(draft.aliases, (l) => set("aliases", l));
   return (
     <ConfigDialog
-      title={t("editTitle", { name: p.text(a.id, [a.label]) })}
+      title={t("editTitle", { name: p.text(a.id, accountIdentities(a)) })}
       close={() => !save.busy && ask(props.close)}
     >
       <form
@@ -423,7 +423,9 @@ function EditForm(props: { account: Account; close: () => void; saved: () => voi
           </label>
         </fieldset>
         {(invalid || save.error) && (
-          <Notice tone="danger">{invalid ? t(`invalid_${invalid}`) : p.text(save.error, [a.label])}</Notice>
+          <Notice tone="danger">
+            {invalid ? t(`invalid_${invalid}`) : p.text(save.error, accountIdentities(a))}
+          </Notice>
         )}
         {leave ? (
           <div

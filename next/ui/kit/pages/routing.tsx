@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { type Account, problem } from "../api";
 import type { CoreSettings } from "../api/settings";
 import type { Reply } from "../host";
-import { usePrivacy } from "../privacy";
+import { accountIdentities, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { strings } from "../strings";
 import { Badge, Button, Card, Empty, List, Notice, PageHead, useKit } from "../ui";
@@ -144,7 +144,7 @@ function WeightEditor({ account, save }: { account: Account; save: (weight: numb
   // Set once the editor is done with its value, so the blur that follows removing the input cannot save again.
   const closed = useRef(true);
   const refocus = useRef("");
-  const name = t("setWeightFor", { id: p.text(account.id, [account.label]) });
+  const name = t("setWeightFor", { id: p.text(account.id, accountIdentities(account)) });
   useEffect(() => {
     if (editing || !refocus.current) return;
     focusByKey(refocus.current);
@@ -323,14 +323,7 @@ export function RoutingPage() {
           </Button>
         }
       />
-      {error && (
-        <Notice tone="danger">
-          {p.text(
-            error,
-            accounts.map((a) => a.label),
-          )}
-        </Notice>
-      )}
+      {error && <Notice tone="danger">{p.text(error, accounts.flatMap(accountIdentities))}</Notice>}
       {!settings ? (
         <Notice tone="muted">{t("loading")}</Notice>
       ) : (
@@ -354,7 +347,7 @@ export function RoutingPage() {
                         label: t("account"),
                         value: (a) => (
                           <>
-                            {p.text(a.id, [a.label])}
+                            {p.text(a.id, accountIdentities(a))}
                             <small class="routing-identity muted">
                               {p.id(a.label)}
                               {a.extension && <> · {a.extension}</>}
@@ -395,7 +388,7 @@ export function RoutingPage() {
                                 key={direction}
                                 disabled={a.source === "config" || !canMove(tiers, tier.priority, direction)}
                                 label={t(direction === "up" ? "upFor" : "downFor", {
-                                  id: p.text(a.id, [a.label]),
+                                  id: p.text(a.id, accountIdentities(a)),
                                 })}
                                 onClick={() => {
                                   const priority = movePriority(tiers, tier.priority, direction);

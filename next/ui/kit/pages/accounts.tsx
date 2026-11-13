@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { type Account, problem } from "../api";
 import { one } from "../api/path";
-import { usePrivacy } from "../privacy";
+import { accountIdentities, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { strings } from "../strings";
 import { Tabs } from "../tabs";
@@ -188,7 +188,7 @@ export function AccountsPage() {
   const list = accounts.data?.accounts ?? [];
   const p = usePrivacy();
   // Notices name accounts by ID, with their labels masked inside when privacy mode is on.
-  const labels = list.map((a) => a.label);
+  const labels = list.flatMap(accountIdentities);
   const chosen = list.find((a) => a.id === selected);
   const filtered = useMemo(() => filterAccounts(list, filters, now), [list, filters, now]);
   const total = Math.max(1, Math.ceil(filtered.length / perPage));
@@ -456,14 +456,14 @@ export function AccountsPage() {
                 selected={selected}
                 onSelect={setSelected}
                 columns={[
-                  { label: t("account"), value: (a) => p.text(a.id, [a.label]), mono: true },
+                  { label: t("account"), value: (a) => p.text(a.id, accountIdentities(a)), mono: true },
                   {
                     label: t("selectColumn"),
                     value: (a) => (
                       <input
                         type="checkbox"
                         data-part="select"
-                        aria-label={t("select", { id: p.text(a.id, [a.label]) })}
+                        aria-label={t("select", { id: p.text(a.id, accountIdentities(a)) })}
                         checked={checked.has(a.id)}
                         disabled={busy}
                         onClick={(e) => e.stopPropagation()}
@@ -490,7 +490,7 @@ export function AccountsPage() {
                   {
                     label: t("check"),
                     value: (a) => (
-                      <span title={p.text(a.check?.error?.message ?? a.check?.detail, [a.label])}>
+                      <span title={p.text(a.check?.error?.message ?? a.check?.detail, accountIdentities(a))}>
                         {a.check?.state === "ok"
                           ? t("ok")
                           : a.check?.state === "checking"
@@ -506,7 +506,10 @@ export function AccountsPage() {
                     value: (a) =>
                       coolingUntil(a) > now ? t("cooling", { time: coolingTime(coolingUntil(a), now) }) : "",
                   },
-                  { label: t("lastError"), value: (a) => p.text(a.last_error?.message, [a.label]) ?? "" },
+                  {
+                    label: t("lastError"),
+                    value: (a) => p.text(a.last_error?.message, accountIdentities(a)) ?? "",
+                  },
                   { label: t("requests"), value: (a) => a.active_requests ?? 0 },
                 ]}
               />

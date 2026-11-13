@@ -1,7 +1,7 @@
 import { useRef, useState } from "preact/hooks";
 import { type Account, type AccountTestResult, problem } from "../api";
 import { LoginFlow } from "../loginFlow";
-import { usePrivacy } from "../privacy";
+import { accountIdentities, usePrivacy } from "../privacy";
 import { strings } from "../strings";
 import { Badge, Button, ConfirmButton, Facts, List, Notice, useKit, useLoad, when } from "../ui";
 import { credentialTools } from "./accountTools.helpers";
@@ -73,7 +73,7 @@ export function AccountTools(props: { account: Account; onChanged(): void }) {
   const { api, unauthorized } = useKit();
   const p = usePrivacy();
   const a = props.account;
-  const ids = [a.label];
+  const ids = accountIdentities(a);
   const tools = credentialTools(a);
   const [modelsOpen, setModelsOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);

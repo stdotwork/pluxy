@@ -2,7 +2,7 @@
 // with its two bugs fixed: `$&` in an identity and an identity starting with `@`.
 import { expect, test } from "bun:test";
 import { join } from "node:path";
-import { maskEmail, maskIdentifier, maskSensitiveText } from "../kit/privacy";
+import { accountIdentities, maskEmail, maskIdentifier, maskSensitiveText } from "../kit/privacy";
 
 test("masks emails while keeping enough shape to tell accounts apart", () => {
   expect(maskEmail("alice.smith@example.com")).toBe("al***@e***.com");
@@ -114,4 +114,21 @@ test("account IDs core makes from imported file names are masked", () => {
   expect(maskSensitiveText("codex-bob.jones-work-example.com", ["bob.jones+work@example.com"])).toBe(
     "codex-bo***@e***.com",
   );
+});
+
+test("a Vertex account's project is one of its identities", () => {
+  // Core names an imported Vertex key's account vertex-<project> and labels it "project (email)";
+  // the project is also in its settings.
+  const a = {
+    label: "acme-billing-prod (svc@acme.iam.gserviceaccount.com)",
+    settings: { vertex: { project: "acme-billing-prod", location: "global" } },
+  };
+  const ids = accountIdentities(a);
+  expect(maskSensitiveText("vertex-acme-billing-prod", ids)).toBe("vertex-ac***od");
+  const settings = maskSensitiveText(JSON.stringify(a.settings), ids);
+  expect(settings).not.toContain("acme-billing");
+  expect(settings).toContain('"project":"ac***od"');
+  expect(maskIdentifier(a.label)).not.toContain("billing");
+  expect(accountIdentities({ label: "alice@example.com" })).toEqual(["alice@example.com"]);
+  expect(accountIdentities({})).toEqual([]);
 });

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { type Account, problem, type Quota, type QuotaLimit, type QuotaReply } from "../api";
 import { Meter } from "../meter";
-import { usePrivacy } from "../privacy";
+import { accountIdentities, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { rich, strings } from "../strings";
 import { Button, Empty, Facts, List, Notice, PageHead, useKit, useLoad, when } from "../ui";
@@ -278,7 +278,7 @@ export function QuotaPage() {
               label: t("account"),
               value: (a) => (
                 <>
-                  {p.text(a.id, [a.label])}
+                  {p.text(a.id, accountIdentities(a))}
                   <small class="quota-identity muted">
                     {p.id(a.label)}
                     {a.extension && <> · {a.extension}</>}

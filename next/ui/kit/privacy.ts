@@ -85,6 +85,27 @@ export function maskSensitiveText(text: string, identities: readonly string[] = 
   return masked;
 }
 
+/**
+ * What names an account's owner, for masking text about it: its label (usually its e-mail
+ * address); for a "project (email)" label, as core gives an imported Vertex key, each part; and a
+ * Vertex project in its settings, which core also puts in its ID (vertex-<project>).
+ */
+export function accountIdentities(a: { label?: string; settings?: Record<string, unknown> }): string[] {
+  const out: string[] = [];
+  const label = a.label?.trim();
+  if (label) {
+    out.push(label);
+    const open = label.indexOf(" (");
+    if (open > 0 && label.endsWith(")")) out.push(label.slice(0, open), label.slice(open + 2, -1));
+  }
+  const vertex = a.settings?.vertex;
+  const project =
+    typeof vertex === "object" && vertex !== null ? (vertex as { project?: unknown }).project : undefined;
+  if (typeof project === "string" && project.trim() && !out.includes(project.trim()))
+    out.push(project.trim());
+  return out;
+}
+
 /** Whether privacy mode is on, kept where the host build keeps it. */
 export class PrivacyState {
   private listeners = new Set<() => void>();
@@ -170,7 +191,7 @@ export function useAccountLabels(): string[] {
     let live = true;
     api.accounts().then(
       (r) => {
-        if (live && r.body) setLabels(r.body.accounts.flatMap((a) => (a.label ? [a.label] : [])));
+        if (live && r.body) setLabels(r.body.accounts.flatMap(accountIdentities));
       },
       () => {},
     );

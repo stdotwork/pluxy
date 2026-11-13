@@ -2,7 +2,7 @@
 // AccountDetailProps and nothing else; it uses AccountState for its own state column.
 
 import type { Account } from "../api";
-import { usePrivacy } from "../privacy";
+import { accountIdentities, usePrivacy } from "../privacy";
 import { strings } from "../strings";
 import {
   Badge,
@@ -60,7 +60,7 @@ export function AccountDetail(props: AccountDetailProps) {
   const { api } = useKit();
   const p = usePrivacy();
   const a = props.account;
-  const ids = [a.label];
+  const ids = accountIdentities(a);
   const act = useAction(props.onChanged);
   const remove = useAction(() => {
     props.onClose();
