@@ -1,0 +1,291 @@
+# TEMPORARY: measures how often the full native test (`bun run test:native`) fails, for two
+# commits, on GitHub runners. Never merged; the branch is deleted when the measurement is done.
+#
+# Configuration is measure.txt at the repo root of this branch:
+#   before=<full sha>   the commit to measure as "before"
+#   after=<full sha>    the commit to measure as "after"
+#   shards=<1..10>      jobs per variant (default 8)
+#   iters=<1..20>       full native test runs per job (default 10)
+# Both commits must be on a pushed branch. To run a measurement: edit measure.txt, commit, push.
+name: Next app measure
+
+on:
+  push:
+    branches:
+      - next/p8-native-window-measure
+
+# A new push replaces the measurement still running for an older one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  config:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      before: ${{ steps.read.outputs.before }}
+      after: ${{ steps.read.outputs.after }}
+      shards: ${{ steps.read.outputs.shards }}
+      iters: ${{ steps.read.outputs.iters }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read measure.txt
+        id: read
+        run: |
+          get() { grep -E "^$1=" measure.txt | tail -n 1 | cut -d= -f2- | tr -d '[:space:]'; }
+          before=$(get before)
+          after=$(get after)
+          shards=$(get shards)
+          iters=$(get iters)
+          shards=${shards:-8}
+          iters=${iters:-10}
+          fail() { echo "::error::measure.txt: $1"; exit 1; }
+          [[ $before =~ ^[0-9a-f]{40}$ ]] || fail "before= must be a full 40-character sha"
+          [[ $after =~ ^[0-9a-f]{40}$ ]] || fail "after= must be a full 40-character sha"
+          [[ $shards =~ ^[0-9]+$ ]] && (( shards >= 1 && shards <= 10 )) || fail "shards= must be 1 to 10"
+          [[ $iters =~ ^[0-9]+$ ]] && (( iters >= 1 && iters <= 20 )) || fail "iters= must be 1 to 20"
+          {
+            echo "before=$before"
+            echo "after=$after"
+            echo "iters=$iters"
+            echo "shards=$(jq -cn --argjson n "$shards" '[range(1; $n + 1)]')"
+          } >> "$GITHUB_OUTPUT"
+          echo "before=$before after=$after shards=$shards iters=$iters"
+
+  measure:
+    needs: config
+    # Pinned like the real Native job (next-app.yml): the package names and the file paths the
+    # native test starts services from are Ubuntu 24.04's.
+    runs-on: ubuntu-24.04
+    # About 2.5 minutes per full run once built; the loop below starts no new run after 38 minutes.
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [before, after]
+        shard: ${{ fromJSON(needs.config.outputs.shards) }}
+    env:
+      VARIANT: ${{ matrix.variant }}
+      SHARD: ${{ matrix.shard }}
+      ITERS: ${{ needs.config.outputs.iters }}
+      SHA: ${{ matrix.variant == 'before' && needs.config.outputs.before || needs.config.outputs.after }}
+    defaults:
+      run:
+        working-directory: next/app
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check out the variant's commit
+        working-directory: .
+        run: |
+          if ! git cat-file -e "$SHA^{commit}" 2>/dev/null; then
+            echo "::error::$SHA is not on any pushed branch of this repository"
+            exit 1
+          fi
+          git checkout --detach "$SHA"
+          echo "variant $VARIANT: $(git log -1 --format='%H %s')"
+      - name: Check the runner is Ubuntu 24.04
+        working-directory: .
+        run: |
+          . /etc/os-release
+          if [ "$VERSION_ID" != "24.04" ]; then
+            echo "::error::the packages and paths here are Ubuntu 24.04's; this runner is $PRETTY_NAME"
+            exit 1
+          fi
+          echo "$PRETTY_NAME"
+      # Copied from next-app.yml's Native job.
+      - name: Install WebKitGTK, the tray library, Xvfb, D-Bus, the portals, a tray watcher, squashfs-tools and xdotool
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth dbus-daemon \
+            xdg-desktop-portal xdg-desktop-portal-gtk ayatana-indicator-application squashfs-tools xdotool
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: next/go.mod
+          cache: true
+          cache-dependency-path: next/go.mod
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.3'
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.97.0
+        with:
+          components: rustfmt, clippy
+      - name: Cache Rust dependencies and build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: next/app/src-tauri -> target
+      # The app builds the UI kit from next/ui, with its copy of preact.
+      - name: UI kit install
+        working-directory: next/ui
+        run: bun install --frozen-lockfile
+      - name: Install
+        run: bun install --frozen-lockfile
+      # What native/run.ts builds before it runs anything (the window, the app, the session probe,
+      # panelcore), done once here so the first run is not slower than the rest. Each run below
+      # still runs run.ts's own build step, which finds everything built.
+      - name: Build once
+        run: |
+          bun run build
+          (cd src-tauri && cargo build --locked --features native-test --bin pluxy-app --example session_probe)
+          (cd .. && go build -o /dev/null ./e2e/panelcore)
+      - name: Native test loop
+        timeout-minutes: 55
+        env:
+          # No new run starts after this many seconds; a run in progress is allowed to finish.
+          LOOP_BUDGET_SECONDS: '2280'
+        run: |
+          set +e
+          logs="$RUNNER_TEMP/measure-logs"
+          failed_logs="$RUNNER_TEMP/measure-failed-logs"
+          out="$RUNNER_TEMP/measure-out"
+          mkdir -p "$logs" "$failed_logs" "$out"
+          : > "$out/lines.txt"
+
+          # The failed checks of one run, shortened and joined with " | " (a check's name can
+          # hold a comma): window.ts's `window: FAILED <check>` lines, run.ts's list of problems,
+          # and a setup failure.
+          failed_checks() {
+            local log=$1 code=$2 list
+            list=$(
+              {
+                grep -aoE 'window: FAILED .*' "$log" | sed -E 's/^window: FAILED //'
+                sed -n -E '/^[0-9]+ problems:$/,$p' "$log" | grep -aE '^- ' | sed -E 's/^- //' \
+                  | grep -avE 'the window checks failed'
+                grep -a -A1 '^native test setup failed' "$log" | tr '\n' ' ' | sed -E 's/^(.+)$/SETUP: \1/'
+                echo
+              } | sed -E '/^[[:space:]]*$/d' | cut -c1-110 | sed -E 's/[[:space:]]+$//' \
+                | awk '!seen[$0]++ { printf "%s%s", (n++ ? " | " : ""), $0 } END { print "" }'
+            )
+            if [ -z "$list" ]; then
+              list="no FAILED line found; exit=$code; last line: $(tail -n 1 "$log" | cut -c1-100)"
+            fi
+            printf '%s' "$list"
+          }
+
+          start=$SECONDS
+          runs=0 pass=0 fail=0 skipped=0
+          for i in $(seq 1 "$ITERS"); do
+            id="$VARIANT shard=$SHARD iter=$i"
+            if (( SECONDS - start > LOOP_BUDGET_SECONDS )); then
+              line="MEASURE $id result=skipped failed_checks=out of time budget"
+              echo "$line"; echo "$line" >> "$out/lines.txt"
+              skipped=$((skipped + 1))
+              continue
+            fi
+            log="$logs/$VARIANT-shard$SHARD-iter$i.log"
+            t0=$SECONDS
+            timeout --kill-after=30s 15m bun run test:native > "$log" 2>&1
+            code=$?
+            secs=$((SECONDS - t0))
+            runs=$((runs + 1))
+            if [ "$code" -eq 0 ] && grep -aq '^native test passed in all three modes$' "$log"; then
+              result=pass
+              checks=-
+              pass=$((pass + 1))
+            else
+              result=fail
+              fail=$((fail + 1))
+              if [ "$code" -eq 124 ] || [ "$code" -eq 137 ]; then
+                checks="the run timed out after 15m (exit $code) | $(failed_checks "$log" "$code")"
+                # A hung run can leave its session behind: clear it before the next run.
+                pkill -KILL -x 'pluxy-app|Xvfb|dbus-daemon' 2>/dev/null
+              elif [ "$code" -eq 0 ]; then
+                checks="exit 0 but no success line | $(failed_checks "$log" "$code")"
+              else
+                checks=$(failed_checks "$log" "$code")
+              fi
+              cp "$log" "$failed_logs/"
+              echo "::group::failed run $id (exit $code), last 80 lines"
+              tail -n 80 "$log"
+              echo "::endgroup::"
+            fi
+            line="MEASURE $id result=$result failed_checks=$checks"
+            echo "$line"; echo "$line" >> "$out/lines.txt"
+            echo "ITER-TIME $id secs=$secs"
+          done
+          echo "$VARIANT $SHARD $runs $pass $fail $skipped" > "$out/counts.txt"
+          echo "job $VARIANT shard=$SHARD: runs=$runs pass=$pass fail=$fail skipped=$skipped, loop took $((SECONDS - start))s"
+          # The job ends red only now, after every iteration.
+          [ "$fail" -eq 0 ]
+      - name: Upload the counts and MEASURE lines
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: result-${{ matrix.variant }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/measure-out
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Upload the logs of failed runs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failed-logs-${{ matrix.variant }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/measure-failed-logs
+          if-no-files-found: ignore
+          retention-days: 3
+
+  summary:
+    needs: [config, measure]
+    if: always() && needs.config.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Download every job's counts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: result-*
+          path: results
+      - name: Table
+        env:
+          BEFORE: ${{ needs.config.outputs.before }}
+          AFTER: ${{ needs.config.outputs.after }}
+          SHARDS: ${{ needs.config.outputs.shards }}
+          ITERS: ${{ needs.config.outputs.iters }}
+        run: |
+          expected=$(jq -n --argjson s "$SHARDS" '$s | length')
+          {
+            echo "### Native test measurement"
+            echo
+            echo "before \`$BEFORE\`, after \`$AFTER\`; $expected jobs per variant, $ITERS runs per job."
+            echo
+            echo "| variant | runs | failures | skipped | jobs reported |"
+            echo "| --- | --- | --- | --- | --- |"
+            for v in before after; do
+              files=$(ls results/result-$v-*/counts.txt 2>/dev/null || true)
+              if [ -n "$files" ]; then
+                # shellcheck disable=SC2086
+                read -r runs failures skipped jobs < <(cat $files | awk '{r+=$3; f+=$5; s+=$6; j++} END {print r+0, f+0, s+0, j+0}')
+              else
+                runs=0 failures=0 skipped=0 jobs=0
+              fi
+              echo "| $v | $runs | $failures | $skipped | $jobs of $expected |"
+              echo "$v: $runs runs, $failures failures (skipped $skipped, jobs reported $jobs of $expected)" >&2
+            done
+            echo
+            for v in before after; do
+              echo "#### Failed checks, $v (count, check)"
+              echo
+              echo '```'
+              grep -h "^MEASURE $v .* result=fail " results/result-$v-*/lines.txt 2>/dev/null \
+                | sed -E 's/^.* failed_checks=//' | awk -F' [|] ' '{ for (i = 1; i <= NF; i++) print $i }' \
+                | sort | uniq -c | sort -rn
+              echo '```'
+              echo
+              echo "#### Failing runs, $v"
+              echo
+              echo '```'
+              grep -h "^MEASURE $v .* result=fail " results/result-$v-*/lines.txt 2>/dev/null | sort
+              echo '```'
+              echo
+            done
+          } | tee -a "$GITHUB_STEP_SUMMARY"
