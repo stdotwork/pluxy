@@ -29,6 +29,8 @@ mod native_test;
 pub mod pages;
 mod place;
 mod privacy;
+#[cfg(target_os = "linux")]
+pub mod program;
 #[cfg(debug_assertions)]
 pub mod release_config;
 mod startup;
@@ -72,6 +74,9 @@ struct App {
     /// This device's extension catalog. Installs check and stage a release without it.
     device: Mutex<device::Catalog>,
     device_dirs: device::Dirs,
+    /// The admitted native tools that run, on demand (`program.rs`).
+    #[cfg(target_os = "linux")]
+    programs: program::Host,
     status: Mutex<Option<MenuItem<Wry>>>,
     /// What closing the window does, and its size and place (`window.rs`).
     window: Mutex<window::Store>,
@@ -235,6 +240,8 @@ fn quit(app: &AppHandle) {
     remember_window(app);
     #[cfg(target_os = "linux")]
     st.confirmations.lock().unwrap().invalidate();
+    #[cfg(target_os = "linux")]
+    st.programs.stop_all();
     st.conn.lock().unwrap().stop_core();
     app.exit(0);
 }
@@ -978,6 +985,10 @@ fn device_changed(
         (labels, catalog.view(&trust::TrustStore::current()), left)
     };
     left.extend(close_webviews(app, labels));
+    // A native tool runs only as the release it was admitted as: any change stops it, and its
+    // next call starts it from its record then, if it still has one.
+    #[cfg(target_os = "linux")]
+    st.programs.stop(id);
     let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-device", ());
     if left.is_empty() {
         Ok(view)
@@ -1144,11 +1155,9 @@ async fn device_enable(
 #[cfg(target_os = "linux")]
 fn native_enable(app: &AppHandle, id: &str) -> Result<device::View, String> {
     let st = app.state::<App>();
-    let candidate = st
-        .device
-        .lock()
-        .unwrap()
-        .native_candidate(id, &trust::TrustStore::current())?;
+    // Its files are hashed without holding the catalog (`checked_unlocked`).
+    let candidate =
+        device::native_candidate_unlocked(&st.device, id, &trust::TrustStore::current())?;
     let action = {
         let mut c = st.confirmations.lock().unwrap();
         let prepared = c.prepare_main(candidate.confirmation())?;
@@ -1175,8 +1184,15 @@ fn native_enable(app: &AppHandle, id: &str) -> Result<device::View, String> {
     };
     // Spends the single-use token and checks the program file is the one shown.
     st.confirmations.lock().unwrap().consume(&action, &token)?;
+    // Its files once more, then the record under the catalog's lock: still the one shown.
+    let now = device::native_candidate_unlocked(&st.device, id, &trust::TrustStore::current())?;
+    if now != candidate {
+        return Err(format!(
+            "{id} changed while it was being confirmed; enable it again"
+        ));
+    }
     device_changed(app, id, |c| {
-        c.admit(&candidate, &trust::TrustStore::current())
+        c.admit_checked(&candidate, &trust::TrustStore::current())
     })
 }
 
@@ -1196,6 +1212,96 @@ fn device_remove(webview: Webview, id: String) -> Result<device::View, String> {
 #[tauri::command]
 fn device_rollback(webview: Webview, id: String) -> Result<device::View, String> {
     device_change(&webview, &id, |c| c.rollback(&id))
+}
+
+/// What the program host starts tool id from: its admitted record, checked now
+/// (`Catalog::admitted`).
+#[cfg(target_os = "linux")]
+fn program_resolver(app: AppHandle) -> program::Resolve {
+    Box::new(move |id| {
+        // Its files are hashed without holding the catalog (`checked_unlocked`).
+        device::admitted_unlocked(
+            &app.state::<App>().device,
+            id,
+            &trust::TrustStore::current(),
+        )
+    })
+}
+
+/// Calls operation op of the native tool package with input, starting the tool if it is not
+/// running. With a ticket, `program_cancel` cancels the call.
+#[tauri::command]
+async fn program_call(
+    webview: Webview,
+    package: String,
+    op: String,
+    input: Value,
+    ticket: Option<String>,
+) -> Result<Value, String> {
+    trusted(&webview)?;
+    #[cfg(target_os = "linux")]
+    {
+        let app = webview.app_handle().clone();
+        // Registered now, before it can wait, so a cancel or the window's closing reaches it.
+        let call = app
+            .state::<App>()
+            .programs
+            .begin_call(ticket.as_deref())
+            .map_err(|e| e.to_string())?;
+        tauri::async_runtime::spawn_blocking(move || {
+            // On a thread of its own that ends with the call: a tool this call starts is held by
+            // the host's supervisor thread, never by the thread that started it.
+            std::thread::Builder::new()
+                .name("pluxy-prog-call".into())
+                .spawn(move || {
+                    app.state::<App>()
+                        .programs
+                        .run_call(call, &package, &op, input)
+                        .map_err(|e| e.to_string())
+                })
+                .map_err(|e| e.to_string())?
+                .join()
+                .map_err(|_| "the call's thread failed".to_string())?
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (package, op, input, ticket);
+        Err("native tools run on Linux only for now".into())
+    }
+}
+
+/// Cancels the native tool call with ticket.
+#[tauri::command]
+fn program_cancel(webview: Webview, ticket: String) -> Result<(), String> {
+    trusted(&webview)?;
+    #[cfg(target_os = "linux")]
+    {
+        webview.state::<App>().programs.cancel(&ticket)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = ticket;
+        Err("native tools run on Linux only for now".into())
+    }
+}
+
+/// Whether the native tool package runs, and how it last stopped.
+#[tauri::command]
+fn program_status(webview: Webview, package: String) -> Result<Value, String> {
+    trusted(&webview)?;
+    #[cfg(target_os = "linux")]
+    {
+        serde_json::to_value(webview.state::<App>().programs.status(&package))
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = package;
+        Err("native tools run on Linux only for now".into())
+    }
 }
 
 /// The `pluxy-app:` scheme: a device page's files, served only to the page webview bound to
@@ -1390,6 +1496,9 @@ pub fn run() {
             device_remove,
             device_rollback,
             device_page_open,
+            program_call,
+            program_cancel,
+            program_status,
             window_get,
             window_set,
             window_close,
@@ -1479,6 +1588,11 @@ pub fn run() {
                 closing: Mutex::new(Vec::new()),
                 device: Mutex::new(catalog),
                 device_dirs,
+                #[cfg(target_os = "linux")]
+                programs: program::Host::new(
+                    program_resolver(app.handle().clone()),
+                    Default::default(),
+                ),
                 status: Mutex::new(None),
                 window: Mutex::new(window_prefs),
                 has_tray: AtomicBool::new(false),
@@ -1554,6 +1668,9 @@ pub fn run() {
                         .lock()
                         .unwrap()
                         .invalidate();
+                    // Its native tool calls end, so their tools stop when idle.
+                    #[cfg(target_os = "linux")]
+                    app.state::<App>().programs.cancel_all();
                     // Its webviews went with it.
                     app.state::<App>().pages.lock().unwrap().clear();
                     place::forget_all();
@@ -1576,6 +1693,8 @@ pub fn run() {
         }
         RunEvent::Exit => {
             if let Some(st) = app.try_state::<App>() {
+                #[cfg(target_os = "linux")]
+                st.programs.stop_all();
                 st.conn.lock().unwrap().stop_core();
             }
             if let Some(i) = app.try_state::<instance::Instance>() {
