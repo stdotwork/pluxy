@@ -99,6 +99,14 @@ api-keys:
   - api-key: "<k1>"
     base-url: "https://one.example/v1"
 `
+	// Each account also writes its key under a plain key: a copy, hidden and put back as one.
+	placeCopy = `{
+  "extension": {"accounts": [
+    {"id": "a", "note": "<a>", "credential": {"kind": "api_key", "api_key": "<a>"}},
+    {"id": "b", "note": "<b>", "credential": {"kind": "api_key", "api_key": "<b>"}}
+  ]}
+}
+`
 	placeCompat = `openai-compatibility:
   - name: one
     base-url: "https://one.example/v1"
@@ -166,6 +174,12 @@ func TestRestorePlacesEachSecretInItsOwnSlot(t *testing.T) {
 		{"json: client keys reordered", placeJSON, false, []string{`["<c1>", "<c2>"]`, `["<c2>", "<c1>"]`}, 0},
 		{"json: registries reordered", placeJSON, false,
 			[]string{`[{"name": "one", "url": "<reg1>"}, {"name": "two", "url": "<reg2>"}]`, `[{"name": "two", "url": "<reg2>"}, {"name": "one", "url": "<reg1>"}]`}, 0},
+
+		{"json: accounts with copies reordered", placeCopy, false,
+			[]string{
+				"    {\"id\": \"a\", \"note\": \"<a>\", \"credential\": {\"kind\": \"api_key\", \"api_key\": \"<a>\"}},\n", "",
+				`"api_key": "<b>"}}`, "\"api_key\": \"<b>\"}},\n    {\"id\": \"a\", \"note\": \"<a>\", \"credential\": {\"kind\": \"api_key\", \"api_key\": \"<a>\"}}",
+			}, 0},
 
 		{"yaml: another account's key in an account's api_key", placeYAML, true,
 			[]string{`api_key: "<b>"`, `api_key: "<a>"`}, 12},

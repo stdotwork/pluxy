@@ -1336,7 +1336,7 @@ itself under that name, as an HTTP client leaves out `Authorization` there.
 out is removed), and with `null` or `{}` removes them all.
 
 The value of a header whose name is about authentication (it holds `auth`, `key`, `token`,
-`secret`, `cookie`, `session`, `password` or `signature`, letter case aside) is a secret, by the
+`secret`, `cookie`, `session`, `password`, `passphrase` or `signature`, letter case aside) is a secret, by the
 rule config redaction uses: `GET /config` and `GET /accounts` show the same placeholder in its
 place (that of the header core sends, also for a value of a provider section of a `config.yaml`
 written as a number or with spaces around it), except for a value written as `true` or `false`,
@@ -1697,7 +1697,7 @@ its keys and its indent. `PUT /config` writes the document as sent.
 
 | Call | What it does |
 | --- | --- |
-| `GET /v0/management/config` | The config file: `format` (`json` or `yaml`), `hash` (as in status) and `content`, the file as written with each secret replaced by a placeholder such as `pluxy-redacted-4f1c...`. Secrets are found by key name, in both layouts of a `config.yaml` and in the JSON config: client keys, the management key, every `api-key` and `api_key`, everything in an account's `credential` except its `kind`, passwords, tokens and secrets (names are compared in lower case whatever joins their words, or none, so `accessToken` and `accesstoken` are `access_token`; `aws_secret_access_key` is one too), header values about authentication (`Authorization`, `X-Api-Key`, cookies) in any mapping named `headers` or ending in `headers` (`extra_headers`), and any URL with a user name, password or query. Everything below a key named like a secret is a secret, however deep, also when given through a YAML alias (as a value, or as a key's name), as `GET /accounts` shows a login account's settings, except in today's core's provider sections at the top of a `config.yaml` (the sections of the v8 `api-keys` mapping, such as `codex`, and the older lists such as `codex-api-key`), whose entries are read by these rules; any other key of the v8 `api-keys` mapping is read as a secret key; `true`, `false`, `null` and the empty string never are, as they carry no secret. Comments are shown as written. 422 when the file does not parse. Today's core returns its config, the management key's hash and provider keys included, as they are. |
+| `GET /v0/management/config` | The config file: `format` (`json` or `yaml`), `hash` (as in status) and `content`, the file as written with each secret replaced by a placeholder such as `pluxy-redacted-4f1c...`. Secrets are found by key name, in both layouts of a `config.yaml` and in the JSON config: client keys, the management key, every `api-key` and `api_key`, everything in an account's `credential` except its `kind`, passwords, tokens and secrets (names are compared in lower case whatever joins their words, or none, so `accessToken` and `accesstoken` are `access_token`, with letters folded as core matches a JSON key to a setting, so `client_keyſ` is `client_keys`; `aws_secret_access_key`, `client_secrets` and `passwords` are ones too, and so is a name that ends in a number or a word saying how the value is written, such as `apiKey2`, `api_key_value` or `privateKeyPem`), header values about authentication (`Authorization`, `X-Api-Key`, cookies) or named like a secret in any mapping whose name holds `header` (`extra_headers`, `headers_override`), and any URL with a user name, password or query. Everything below a key named like a secret is a secret, however deep, also when given through a YAML alias (as a value, or as a key's name), as `GET /accounts` shows a login account's settings, except in today's core's provider sections at the top of a `config.yaml` (the sections of the v8 `api-keys` mapping, such as `codex`, and the older lists such as `codex-api-key`), whose entries are read by these rules; any other key of the v8 `api-keys` mapping is read as a secret key. A string secret of 8 bytes or more written again as a whole value anywhere else in the file (a note holding a key) is hidden there too; a shorter copy, or a number, is shown, and so is a copy of a value that is a secret only for being in a mapping below a secret key. `true`, `false`, `null` and the empty string never are secrets, as they carry none. Comments are shown as written. 422 when the file does not parse. Today's core returns its config, the management key's hash and provider keys included, as they are. |
 | `POST /v0/management/config/validate` | `{"content": "..."}`: checks a document as a reload would, without starting extensions or writing anything. 200 with `valid: true` and the `notices` a `config.yaml` load logs, or `valid: false` and `error`. |
 | `PUT /v0/management/config` | `{"content": "...", "base_hash": "..."}`: replaces the file with the document and applies it. Each placeholder goes back only where its own secret is in the file now: the same account (by its `id`) or list item, and the same keys (below). 200 with the file as `GET /config` shows it; 409 when `base_hash` is set and the file has changed since; 422 with `error` when core refuses the document, such as for a placeholder anywhere else, naming its line; a refused document writes nothing. |
 | `GET /v0/management/client-keys` | The client keys: each one's `id` and `masked` form (first and last two characters, as today's panel shows them; a key shorter than 8 characters is hidden whole). |
@@ -1720,18 +1720,20 @@ registry, a named provider entry of a `config.yaml`), so items can be reordered.
 `id` or `name` the file does not have yet (a renamed account), or that has neither (an entry of
 an older list such as `codex-api-key`, a key of an entry), is known by the secrets it holds: it
 stands for an item of the file that holds them all and that no other item stands for. A plain
-value in a list, such as a client key, may move within its list. So a placeholder cannot take
-one account's key, the management key or a client key into another account, another entry, a
-header or another setting: core refuses the document, naming the line, and the value must be
-written there itself. One limit: an account keeps its key's placeholder when its `base_url`
-changes, here or through `PATCH /accounts/{id}`, so a client that may change an account may
-point its kept key at another address. A placeholder is accepted only while the file still holds
-that secret and core has not restarted (the placeholders are keyed hashes with a key core picks
-at start); otherwise the call answers 409 (read the config again). Messages in replies never
-show a secret either, however short, except a value shorter than 8 bytes that is a secret only
-for being in a mapping below a secret key (the `3` of `client_secret: {rotate_after_days: 3}`),
-which is left in text as a short secret of account settings is: replacing every occurrence of so
-short a value would garble the message.
+value in a list, such as a client key, may move within its list. A copy's placeholder goes back
+the same way, where the file holds that copy now, and only while the document still holds the
+secret it copies: a copy whose key was renamed, that moved to another item of a list, or whose
+secret was changed or removed is refused. So a placeholder cannot take one account's key, the
+management key or a client key into another account, another entry, a header or another
+setting: core refuses the document, naming the line, and the value must be written there
+itself. One limit: an account keeps its key's placeholder when its `base_url` changes, here or
+through `PATCH /accounts/{id}`, so a client that may change an account may point its kept key at
+another address. A placeholder is accepted only while the file still holds that secret and core
+has not restarted (the placeholders are keyed hashes with a key core picks at start); otherwise
+the call answers 409 (read the config again). Messages in replies never show a secret either,
+however short, except a number shorter than 8 bytes that is a secret only for being in a
+mapping below a secret key (the `3` of `client_secret: {rotate_after_days: 3}`), which is left
+in text: replacing every `3` in a message would garble it.
 
 A `config.yaml` keeps each setting under the name it already has there: the v8 name, or the
 older spelling when only that is in the file. New client keys go to `access.api-keys`, or to the
@@ -1899,7 +1901,7 @@ credential redaction finds (JSON escapes, percent-encoding and the rest). Replie
 sections come from the extension with the account's own credential, the secrets in its settings,
 its proxy's password and its secret header values already removed; in the upstream sections the
 values of headers and query parameters whose names hold `auth`, `key`, `token`, `secret`,
-`cookie`, `session`, `password` or `signature` are masked too, the URL's user name and password
+`cookie`, `session`, `password`, `passphrase` or `signature` are masked too, the URL's user name and password
 are left out, and the characters a secret could be made of on each side of a body's left-out
 middle are left out with it. Today's core writes the reply's headers unmasked and logs requests
 that fail the client key check.
