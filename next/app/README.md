@@ -194,6 +194,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `device_install` | Installs or updates a package from one of those registries |
 | `device_install_file` | Opens the native file chooser and installs or updates the package chosen there (Linux) |
 | `device_enable`, `device_remove`, `device_rollback` | Enables or disables (a native tool only through its native confirmation), removes, or rolls back a package on this device |
+| `device_imports` | Allows a curated web package's native imports, through a native confirmation, or revokes them (Linux) |
 | `device_page_open` | Opens a webview for a page of a package on this device, at the address its catalog keeps |
 | `program_call`, `program_cancel` | Calls an operation of an admitted native tool, starting it if it is not running; cancels a call by the ticket it was given (Linux) |
 | `program_status` | Whether a native tool runs, its leases, how it last stopped, its crashes in a row and backoff, calls of unknown outcome, and replaced releases still draining (Linux) |
@@ -280,8 +281,10 @@ root names) is refused, before a registry's archive is fetched and again after a
 unpacked. A package installed before a root reserved its publisher is disabled when the
 catalog opens, with a warning, and cannot be enabled while the app's roots reserve its
 publisher and its release does not verify as curated against them. A package keeps the source it was installed from: a release from another source is
-refused until the package is removed. Packages get no resources or settings here: their pages'
-settings calls answer `unavailable`.
+refused until the package is removed. A web package from a curated registry whose index entry
+carries a descriptor signed by the root's key, as for native tools below, installs as **Curated**;
+only such a package may call native tools (below). Packages get no resources or settings here:
+their pages' settings calls answer `unavailable`.
 
 A native tool installs only from a curated registry whose index entry carries a descriptor signed
 by the root's key for that publisher and source, and names that key as its `public_key`; the
@@ -310,7 +313,22 @@ app stop it at once, and once the app is quitting no call starts a tool. Stoppin
 stdin, kills its whole process group after five seconds and reaps it: no process or thread of it
 is left. If the app itself dies, the tool gets SIGTERM and nothing kills its group, so a tool must
 end the processes it started when its input ends and on SIGTERM. Pages, including the tool's own,
-have no program command and no route to its pipes.
+have no program command and no route to its pipes; they reach operations only through the router,
+below.
+
+Every call of a native tool's operation goes through the router (`src-tauri/src/route.rs`, Linux):
+from the window, from a page (its `native.call` method, answered in the page's own webview) and
+from another native tool (a call on its pipe). The router checks each call against the catalog at
+that moment: a tool calls only what it imports and its target exports, under an accepted export
+contract; a native tool's page calls only its own tool; a curated web package's page calls only
+its imports, once the person allowed them in a native confirmation from the Device extensions
+page (**Allow native imports**, revoked with **Revoke native imports**). An Unverified package
+never gets that. A native tool is enabled only when its required imports are enabled tools that
+export them, and only if its imports lead back to it nowhere; its enable confirmation lists them.
+The host sets each call's chain (the requester, then each tool that called on), refuses a call
+back into the chain or a chain of more than five, and asks a native confirmation naming the whole
+chain for each `write` or `launch` call. [Calls between packages](app-host/README.md#calls-between-packages)
+has the manifest fields, frames and rules.
 
 Updating or rolling back a native tool that is enabled swaps it while it serves on. The new
 release is staged and shown in its own native confirmation; once confirmed, the program host
@@ -376,7 +394,9 @@ local-file check, not a defense against malicious same-user metadata manipulatio
 
 Each preparation records its native entry point's origin: Main, Tray, NativeUi, Page or Import.
 Page and Import origins cannot use remembered approval, even with a fresh native gesture; this
-rule is tested at the unit level. Import routing itself is separate work. Gesture construction
+rule is tested at the unit level. The router prepares a write or launch from a chain a page
+started through Page Start, and one from any other chain as a Main action naming the whole chain;
+only the latter, started by a native gesture, may use a remembered approval. Gesture construction
 is private to native handlers and fixtures, and a gesture expires after five seconds.
 
 Page Start uses the separate native entry point, always opens a fresh dialog, permits one pending
@@ -387,7 +407,7 @@ Confirm disabled for one second after mapping. Non-UTF-8 paths are refused befor
 Unicode format characters (including bidi and zero-width characters), control characters and
 Pango line separators (U+2028/U+2029) are displayed as escaped Unicode.
 
-Import routing and real launchers are added separately; this module contains no launcher. Host
+Real launchers are added separately; this module contains no launcher. Host
 callers must invalidate pending preparations/tokens when package, contract, environment or secret
 policy records change, and prepare a new action. Tokens and pending reviews expire after 60
 seconds, work once for their preparation, and fail on changed file identity or executable metadata.
@@ -570,7 +590,8 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
 
 - Device extensions: no production trust roots (so no curated source outside tests), resources
   or settings yet, and native tools run on Linux only (5.11 or later: the program host needs
-  `close_range` with `CLOSE_RANGE_CLOEXEC`), with no routing from pages yet; installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
+  `close_range` with `CLOSE_RANGE_CLOEXEC`); a confirmed launch-class call is passed to its
+  operation, and the app starts nothing itself yet; installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
   native run.
 - Tested on Linux only. On Windows the page document's address is
   `http://pluxy-page.localhost/`; neither Windows nor macOS has been run.
