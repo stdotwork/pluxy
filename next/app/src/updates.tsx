@@ -100,8 +100,14 @@ function NotesView(props: {
   theme: number;
 }) {
   const area = useRef<HTMLElement>(null);
+  const placeNow = useRef<(() => void) | undefined>(undefined);
   const [label, setLabel] = useState<string>();
   const [error, setError] = useState<string>();
+
+  // The page moves the area without resizing or scrolling it when something above it comes or
+  // goes (a notice), so it is placed again after every render, and when any block around it
+  // changes size.
+  useLayoutEffect(() => placeNow.current?.());
 
   useLayoutEffect(() => {
     const el = area.current;
@@ -114,6 +120,7 @@ function NotesView(props: {
       if (opened && area.current)
         invoke("release_notes_place", { label: opened, rect: visibleRect(area.current) }).catch(() => {});
     };
+    placeNow.current = place;
     const resize = new ResizeObserver(place);
     invoke<string>("release_notes_open", {
       product: props.product,
@@ -128,6 +135,7 @@ function NotesView(props: {
         opened = l;
         setLabel(l);
         resize.observe(el);
+        for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) resize.observe(p);
         window.addEventListener("resize", place);
         window.addEventListener("scroll", place, true);
       },
@@ -135,6 +143,7 @@ function NotesView(props: {
     );
     return () => {
       live = false;
+      placeNow.current = undefined;
       resize.disconnect();
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", place, true);
