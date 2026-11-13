@@ -36,8 +36,10 @@
 // The signed native-tier admission check (admission.ts, admission_native.rs) runs in one more
 // session, with the app built with artifact-test-trust and a test trust profile in the run's HOME,
 // and the program host check (program.ts, program_native.rs) in one more with that build: a signed
-// summary tool, started on demand, called and cancelled, stopped when idle, disabled and quit,
-// whose processes are gone after the app quits. The other sessions run a build without that
+// summary tool, started on demand, called and cancelled, stopped when idle and disabled, then
+// (swap_native.rs) swapped to a new release while a call drains on the old one, kept when a
+// candidate is incompatible, crashed into backoff and quarantine, and rolled back; its processes
+// are gone after the app quits. The other sessions run a build without that
 // feature; its device check shows the same profile admits nothing there.
 // The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
 //
@@ -572,17 +574,26 @@ async function runApp(
         | undefined;
       const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
       check(p?.passed === true, `the program host check did not complete: ${failure}`);
-      // After the app quit, neither the tool nor the child in its process group runs.
+      // The swap check runs on from where the program check left (swap_native.rs).
+      const w = steps.get("swap") as typeof p;
+      check(w?.passed === true, `the swap check did not complete: ${failure}`);
+      // After the app quit, neither tool the checks left running nor its child runs.
       await Bun.sleep(1000);
-      const left = (p?.quit_pids ?? []).filter((pid) => runs(pid, p?.program ?? ""));
-      check(
-        p?.quit_pids?.length === 2,
-        `the program check named no processes to watch: ${JSON.stringify(p)}`,
-      );
-      check(left.length === 0, `the tool's processes ${left.join(", ")} still run after the app quit`);
-      for (const pid of left) killTree(pid);
+      for (const [what, r] of [
+        ["program", p],
+        ["swap", w],
+      ] as const) {
+        const left = (r?.quit_pids ?? []).filter((pid) => runs(pid, r?.program ?? ""));
+        check(
+          r?.quit_pids?.length === 2,
+          `the ${what} check named no processes to watch: ${JSON.stringify(r)}`,
+        );
+        check(left.length === 0, `the tool's processes ${left.join(", ")} still run after the app quit`);
+        for (const pid of left) killTree(pid);
+      }
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode} program ${JSON.stringify(p ?? {})}`);
+      console.log(`${mode} swap ${JSON.stringify(w ?? {})}`);
       console.log(`${mode}: program ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }

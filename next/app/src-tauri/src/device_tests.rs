@@ -976,13 +976,22 @@ fn blob() -> Vec<u8> {
 /// A native tool's archive: its manifest, an executable program for this computer and a data
 /// file of about 200 KiB.
 fn native_package(id: &str, version: &str) -> Vec<u8> {
+    native_package_state(
+        id,
+        version,
+        serde_json::json!({"version": 0, "readable_versions": [0]}),
+    )
+}
+
+/// `native_package`, writing and reading the state versions state names.
+fn native_package_state(id: &str, version: &str, state: Value) -> Vec<u8> {
     let m = serde_json::to_vec(&serde_json::json!({
         "manifest_version": 1, "id": id, "version": version,
         "app": {"version": 0, "tier": "native", "host_versions": [0],
             "programs": {platform(): "bin/tool"},
             "operations": [{"id": "inspect", "description": "Report its state",
                 "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}],
-            "state": {"version": 0, "readable_versions": [0]}}
+            "state": state}
     }))
     .unwrap();
     let blob = blob();
@@ -1051,6 +1060,12 @@ fn native_fixture(root: &Path) -> (Dirs, TestRoots) {
     let other_key = signing_key();
     let v1 = native_package("pluxy/tool", "1.0.0");
     let v2 = native_package("pluxy/tool", "1.1.0");
+    // Writes state version 1 and reads 0 and 1: 1.0.0 and 1.1.0 cannot read what it writes.
+    let v3 = native_package_state(
+        "pluxy/tool",
+        "2.0.0",
+        serde_json::json!({"version": 1, "readable_versions": [0, 1]}),
+    );
     let unsigned = native_package("pluxy/unsigned", "1.0.0");
     let forged = native_package("pluxy/forged", "1.0.0");
     let renamed = native_package("pluxy/renamed", "1.0.0");
@@ -1070,6 +1085,7 @@ fn native_fixture(root: &Path) -> (Dirs, TestRoots) {
         ("signedpage", &signed_page),
         ("v1", &v1),
         ("v2", &v2),
+        ("v3", &v3),
         ("unsigned", &unsigned),
         ("forged", &forged),
         ("renamed", &renamed),
@@ -1081,7 +1097,8 @@ fn native_fixture(root: &Path) -> (Dirs, TestRoots) {
     let one = |a: Value| serde_json::json!({"releases": [{"version": "1.0.0", "artifacts": {p.clone(): a}}]});
     let tool = serde_json::json!({"releases": [
         {"version": "1.1.0", "artifacts": {p.clone(): signed_artifact("v2", &v2, Some((&key, "pluxy/tool", "1.1.0")))}},
-        {"version": "1.0.0", "artifacts": {p.clone(): signed_artifact("v1", &v1, Some((&key, "pluxy/tool", "1.0.0")))}}
+        {"version": "1.0.0", "artifacts": {p.clone(): signed_artifact("v1", &v1, Some((&key, "pluxy/tool", "1.0.0")))}},
+        {"version": "2.0.0", "artifacts": {p.clone(): signed_artifact("v3", &v3, Some((&key, "pluxy/tool", "2.0.0")))}}
     ]});
     // Signed by another key, listing the root's key: the signature does not hold.
     let mut forged_entry = signed_artifact(
@@ -1487,5 +1504,157 @@ fn a_package_whose_publisher_a_root_now_reserves_is_disabled() {
     c.set_enabled("example/page", true, &acme).unwrap();
     // Removing it still works.
     c.remove("acme/page").unwrap();
+    done(root);
+}
+
+#[test]
+fn an_enabled_native_tool_is_swapped_only_once_the_swap_commits() {
+    let root = temp();
+    let (d, roots) = native_fixture(&root);
+    let mut c = Catalog::open(d.clone(), false, &roots);
+    let stage =
+        |v: &str| stage_from_registry(&d, &roots, "curated", "pluxy/tool", Some(v)).unwrap();
+    c.commit(stage("1.0.0")).unwrap();
+    let a = candidate(&c, "pluxy/tool", &roots).unwrap();
+    // Not enabled: an update is no swap, and it is installed as before.
+    assert!(!c.swaps("pluxy/tool", &stage("1.1.0").release));
+    c.admit_checked(&a, &roots).unwrap();
+    let v1 = c.admitted("pluxy/tool", &roots).unwrap();
+
+    // Staged into the store and held there, while 1.0.0 stays active, enabled and admitted.
+    let u = stage("1.1.0");
+    assert!(c.swaps("pluxy/tool", &u.release));
+    let sha2 = u.release.sha256.clone();
+    let s = c.swap_update(u, &roots).unwrap();
+    assert_eq!(
+        (s.admitted().version(), s.from_version()),
+        ("1.1.0", "1.0.0")
+    );
+    assert_eq!(s.admitted().dir(), d.store().join(&sha2));
+    s.verify().unwrap();
+    assert_eq!(c.admitted("pluxy/tool", &roots).unwrap(), v1);
+    // Another change collects the store, but not the folder being swapped in.
+    install(&mut c, &package("acme/page", "1"), local("a")).unwrap();
+    assert!(store_names(&d).contains(&sha2));
+    // Ended without a commit: nothing changed, and the folder goes.
+    c.end_swap(s);
+    assert!(!store_names(&d).contains(&sha2));
+    assert_eq!(c.admitted("pluxy/tool", &roots).unwrap(), v1);
+    assert_eq!(c.get("pluxy/tool").unwrap().last_good, None);
+
+    // Committed: 1.1.0 is active, enabled and admitted as its swap's record; 1.0.0 is last good.
+    let s = c.swap_update(stage("1.1.0"), &roots).unwrap();
+    let v2 = s.admitted().clone();
+    c.commit_swap(s, &roots).unwrap();
+    let p = c.get("pluxy/tool").unwrap();
+    assert!(p.enabled && p.authorized(), "{p:?}");
+    assert_eq!(p.last_good.as_ref().unwrap().version, "1.0.0");
+    assert_eq!(c.admitted("pluxy/tool", &roots).unwrap(), v2);
+    assert_eq!(
+        Catalog::open(d.clone(), false, &roots)
+            .admitted("pluxy/tool", &roots)
+            .unwrap(),
+        v2
+    );
+
+    // A rollback is a swap to the last good release, with its own record.
+    let r = c.swap_rollback("pluxy/tool", &roots).unwrap();
+    assert_eq!(
+        (r.admitted().version(), r.from_version()),
+        ("1.0.0", "1.1.0")
+    );
+    // Changed meanwhile (here: disabled), it does not commit.
+    c.set_enabled("pluxy/tool", false, &roots).unwrap();
+    let e = c.commit_swap(r, &roots).unwrap_err();
+    assert!(e.contains("not an enabled native tool"), "{e}");
+    assert_eq!(c.get("pluxy/tool").unwrap().active.version, "1.1.0");
+    let b = candidate(&c, "pluxy/tool", &roots).unwrap();
+    c.admit_checked(&b, &roots).unwrap();
+    // A swap that another swap overtook does not commit either.
+    let stale = c.swap_rollback("pluxy/tool", &roots).unwrap();
+    let r = c.swap_rollback("pluxy/tool", &roots).unwrap();
+    c.commit_swap(r, &roots).unwrap();
+    let e = c.commit_swap(stale, &roots).unwrap_err();
+    assert!(e.contains("changed during the swap"), "{e}");
+    let p = c.get("pluxy/tool").unwrap();
+    assert_eq!(
+        (
+            p.active.version.as_str(),
+            p.last_good.as_ref().unwrap().version.as_str()
+        ),
+        ("1.0.0", "1.1.0")
+    );
+    assert_eq!(c.admitted("pluxy/tool", &roots).unwrap(), v1);
+    // The same release is no update.
+    let e = c.swap_update(stage("1.0.0"), &roots).unwrap_err();
+    assert!(e.contains("already installed"), "{e}");
+    done(root);
+}
+
+#[test]
+fn a_release_that_cannot_read_the_state_is_refused() {
+    let root = temp();
+    let (d, roots) = native_fixture(&root);
+    let mut c = Catalog::open(d.clone(), false, &roots);
+    let stage =
+        |v: &str| stage_from_registry(&d, &roots, "curated", "pluxy/tool", Some(v)).unwrap();
+    // 2.0.0 writes state version 1 and reads 0 and 1: it may follow 1.0.0, not go back to it.
+    c.commit(stage("2.0.0")).unwrap();
+    let before = store_names(&d);
+    let e = c.commit(stage("1.0.0")).unwrap_err();
+    assert!(
+        e.contains("1.0.0 cannot read the state") && e.contains("version 1"),
+        "{e}"
+    );
+    assert_eq!(store_names(&d), before);
+    c.remove("pluxy/tool").unwrap();
+    c.commit(stage("1.0.0")).unwrap();
+    c.commit(stage("2.0.0")).unwrap();
+    // Disabled: refused as a rollback.
+    let e = c.rollback("pluxy/tool").unwrap_err();
+    assert!(e.contains("cannot read the state"), "{e}");
+    // Enabled: refused as a swap, and it stays admitted.
+    let a = candidate(&c, "pluxy/tool", &roots).unwrap();
+    c.admit_checked(&a, &roots).unwrap();
+    let e = c.swap_rollback("pluxy/tool", &roots).unwrap_err();
+    assert!(e.contains("cannot read the state"), "{e}");
+    let e = c.swap_update(stage("1.0.0"), &roots).unwrap_err();
+    assert!(e.contains("cannot read the state"), "{e}");
+    assert_eq!(c.admitted("pluxy/tool", &roots).unwrap(), a);
+    assert_eq!(c.get("pluxy/tool").unwrap().active.version, "2.0.0");
+    done(root);
+}
+
+#[test]
+fn a_swap_is_checked_again_after_its_confirmation_and_one_update_at_a_time_is_held() {
+    let root = temp();
+    let (d, roots) = native_fixture(&root);
+    let mut c = Catalog::open(d.clone(), false, &roots);
+    let stage =
+        |v: &str| stage_from_registry(&d, &roots, "curated", "pluxy/tool", Some(v)).unwrap();
+    c.commit(stage("1.0.0")).unwrap();
+    let a = candidate(&c, "pluxy/tool", &roots).unwrap();
+    c.admit_checked(&a, &roots).unwrap();
+
+    // A second update of the package while the first is held is refused, and keeps its files.
+    let s = c.swap_update(stage("1.1.0"), &roots).unwrap();
+    let dir = s.admitted().dir().to_path_buf();
+    let e = c.swap_update(stage("1.1.0"), &roots).unwrap_err();
+    assert!(e.contains("under way"), "{e}");
+    assert!(dir.exists());
+    c.swap_current(&s, &roots).unwrap();
+    // Disabled while its confirmation was open: the check after it fails.
+    c.set_enabled("pluxy/tool", false, &roots).unwrap();
+    let e = c.swap_current(&s, &roots).unwrap_err();
+    assert!(e.contains("not an enabled native tool"), "{e}");
+    c.end_swap(s);
+    assert!(!dir.exists());
+    // Removed while it was open: the same.
+    let a = candidate(&c, "pluxy/tool", &roots).unwrap();
+    c.admit_checked(&a, &roots).unwrap();
+    let r = c.swap_update(stage("1.1.0"), &roots).unwrap();
+    c.remove("pluxy/tool").unwrap();
+    assert!(c.swap_current(&r, &roots).is_err());
+    c.end_swap(r);
     done(root);
 }

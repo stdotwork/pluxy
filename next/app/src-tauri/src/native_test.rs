@@ -14,7 +14,7 @@
 //! 4. in managed mode, checks this device's extension catalog (`device_native.rs`);
 //!    with `PLUXY_APP_TEST_ADMISSION`, a session checks only signed native-tier admission
 //!    (`admission_native.rs`) and quits; with `PLUXY_APP_TEST_PROGRAM`, only the program host
-//!    (`program_native.rs`);
+//!    (`program_native.rs`, then `swap_native.rs`);
 //! 5. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!
@@ -45,6 +45,9 @@ mod ingress;
 #[cfg(target_os = "linux")]
 #[path = "program_native.rs"]
 mod program;
+#[cfg(target_os = "linux")]
+#[path = "swap_native.rs"]
+mod swap;
 pub use ingress::{
     count as ingress_count, forwarded as ingress_forwarded, operation as ingress_operation,
 };
@@ -206,7 +209,9 @@ fn run(app: &AppHandle) -> Result<(), String> {
     // The program host (program_native.rs), in a session of its own.
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_PROGRAM") {
-        program::run(app, &main, dir.into())?;
+        program::run(app, &main, std::path::PathBuf::from(&dir))?;
+        // Swaps, crashes and calls of unknown outcome (swap_native.rs), on from where it left.
+        swap::run(app, &main, dir.into())?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());
