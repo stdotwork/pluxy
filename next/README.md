@@ -1713,7 +1713,10 @@ In the document, a placeholder stands for the secret it replaced, so a document 
 now. A secret that is not a string has its type in its placeholder, so the number `1234` and the
 string `"1234"` have different placeholders and each goes back as it was written, wherever it is
 moved; one written with an explicit YAML tag (`!!int 0x1F`, `!!binary ...`) goes back with its tag. To change a secret, write the new value in its place. A placeholder is accepted only where a
-secret goes (that of a copy, only where the file holds that copy now), and only while the file still holds that secret and core has not restarted (the
+secret goes (that of a copy only where the file holds that copy now, and only while the document
+still holds the secret it copies: a copy whose key was renamed, that moved to another item of a
+list, or whose secret was changed or removed is refused, naming its line; write the value itself
+there), and only while the file still holds that secret and core has not restarted (the
 placeholders are keyed hashes with a key core picks at start); otherwise the call answers 409
 (read the config again) or refuses the document. Messages in replies never show a secret either,
 however short, except a number shorter than 8 bytes that is a secret only for being in a

@@ -787,6 +787,7 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 	}
 	where := paths(d.root)
 	repl := map[*yaml.Node]*secret{}
+	var copies []copyAt
 	for _, n := range held {
 		s, ok := values[n.Value]
 		switch {
@@ -805,6 +806,9 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 			s = at
 		}
 		repl[n] = s
+		if !allowed[n] && !(!settings && secretURL(s.value)) {
+			copies = append(copies, copyAt{where[n], s.value, d.line(n)})
+		}
 	}
 	want := map[string]int{}
 	texts := map[*yaml.Node]string{}
@@ -824,8 +828,12 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 		}
 	}
 	if inPlace {
-		if out, ok := d.replace(texts); ok && restored(out, isYAML, settings, want) {
-			return out, nil
+		if out, ok := d.replace(texts); ok {
+			if err := restored(out, isYAML, settings, want, copies); err == nil {
+				return out, nil
+			} else if errors.Is(err, errCopy) {
+				return nil, err
+			}
 		}
 	}
 	for n, s := range repl {
@@ -842,11 +850,21 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 	if err != nil {
 		return nil, err
 	}
-	if !restored(out, isYAML, settings, want) {
-		return nil, fmt.Errorf("%w: could not put the redacted secrets back", ErrInvalid)
+	if err := restored(out, isYAML, settings, want, copies); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
+
+// copyAt is where Restore put back a copy of a secret (see found): its path, its value and its
+// line in the edited document.
+type copyAt struct {
+	path, value string
+	line        int
+}
+
+// errCopy marks a copy of a secret that the restored document would show.
+var errCopy = errors.New("a redacted value is a copy of a secret the document no longer holds as it was; write the value itself there")
 
 // paths returns where each node under root is: the keys and list indexes leading to it. A list
 // item that is a scalar has [] for its index, so it may move within its own list, and only there.
@@ -874,26 +892,37 @@ func paths(root *yaml.Node) map[*yaml.Node]string {
 	return out
 }
 
-// restored reports whether a document holds no placeholder and holds each wanted secret value
-// at least as many times as wanted.
-func restored(b []byte, isYAML, strict bool, want map[string]int) bool {
+// restored returns nil when a document holds no placeholder, holds each wanted secret value
+// at least as many times as wanted, and holds a secret of the copy's value at each copy's
+// path, so no copy is shown (a copy whose original was changed or deleted is none); else why
+// not.
+func restored(b []byte, isYAML, strict bool, want map[string]int, copies []copyAt) error {
+	failed := fmt.Errorf("%w: could not put the redacted secrets back", ErrInvalid)
 	d, err := Parse(b, isYAML)
 	if err != nil {
-		return false
+		return failed
 	}
 	have := map[string]int{}
+	where := paths(d.root)
+	at := map[[2]string]bool{}
 	for _, n := range secrets(d.root, strict) {
 		if placeholder.MatchString(n.Value) {
-			return false
+			return failed
 		}
 		have[n.Value]++
+		at[[2]string{where[n], n.Value}] = true
+	}
+	for _, c := range copies {
+		if !at[[2]string{c.path, c.value}] {
+			return fmt.Errorf("%w: line %d: %w", ErrInvalid, c.line, errCopy)
+		}
 	}
 	for v, n := range want {
 		if have[v] < n {
-			return false
+			return failed
 		}
 	}
-	return true
+	return nil
 }
 
 // plain reports whether s can be written as a plain YAML scalar that reads back as the same

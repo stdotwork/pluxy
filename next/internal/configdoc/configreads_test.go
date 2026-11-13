@@ -352,6 +352,45 @@ func TestRedactCopiesOfSecrets(t *testing.T) {
 	}
 }
 
+// A copy's placeholder goes back only while the document still holds the secret it copies as
+// that secret: one whose original was changed or deleted is refused, naming the copy's line, so
+// the copy is never put back where it would be shown.
+func TestRestoreCopyNeedsItsOriginal(t *testing.T) {
+	const key = "sk-real-secret-value-1234"
+	for _, tc := range []struct {
+		name, src, original, changed string
+		isYAML, settings             bool
+	}{
+		{"yaml", "api-key: " + key + "\nnote: " + key + "\n", "api-key: P\n", "api-key: brand-new-key-999999\n", true, false},
+		{"json", "{\n  \"api_key\": \"" + key + "\",\n  \"note\": \"" + key + "\"\n}\n", "  \"api_key\": \"P\",\n", "  \"api_key\": \"brand-new-key-999999\",\n", false, false},
+		{"settings", "{\n  \"api_key\": \"" + key + "\",\n  \"note\": \"" + key + "\"\n}\n", "  \"api_key\": \"P\",\n", "  \"api_key\": \"brand-new-key-999999\",\n", false, true},
+	} {
+		r := NewRedactor()
+		redact, restore := func(b []byte) ([]byte, error) { return r.Redact(b, tc.isYAML) }, func(e, c []byte) ([]byte, error) { return r.Restore(e, c, tc.isYAML) }
+		if tc.settings {
+			redact, restore = r.RedactSettings, r.RestoreSettings
+		}
+		red, err := redact([]byte(tc.src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		original := strings.ReplaceAll(tc.original, "P", r.Placeholder(key))
+		for what, with := range map[string]string{"changed": tc.changed, "deleted": ""} {
+			t.Run(tc.name+"/"+what, func(t *testing.T) {
+				edited := strings.Replace(string(red), original, with, 1)
+				if edited == string(red) {
+					t.Fatalf("the test's edit did not apply to:\n%s", red)
+				}
+				line := 1 + strings.Count(edited[:strings.Index(edited, "note")], "\n")
+				back, err := restore([]byte(edited), []byte(tc.src))
+				if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), fmt.Sprintf("line %d:", line)) || !strings.Contains(err.Error(), "write the value itself") {
+					t.Errorf("Restore = %v\n%s\nwant ErrInvalid naming line %d and saying to write the value itself", err, back, line)
+				}
+			})
+		}
+	}
+}
+
 // A JSON key name is compared as encoding/json matches it when core loads the file, so
 // client_keyſ (with U+017F) and management_\u212aey (with the Kelvin sign) are client_keys and
 // management_key, and their values are hidden.
