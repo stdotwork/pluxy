@@ -22,6 +22,9 @@ const EMAIL_ID = "alice_smith_example_com";
 const IMPORTED = "bob.jones+work@example.com";
 const IMPORTED_ID = "claude-bob.jones-work-example.com";
 const IMPORTED_ID_MASKED = "claude-bo***@e***.com";
+// Two accounts whose IDs mask the same.
+const TWINS = ["aaaa_example_com", "aabb_example_com"];
+const TWIN_MASKED = "a***@e***.com";
 // The masks, worked out by hand from the old app's rules (extensions/app privacyMask.ts):
 // opaque values over 10 characters keep 2 at each end, e-mail addresses keep 2 (local part
 // over 4 characters) and 1 (domain) before ***, and values of 4 characters or fewer are ***.
@@ -34,9 +37,10 @@ const RAW = ["abcdefghijk", "alice.smith", "alice_smith", "bob.jones", "example.
 const keyCanary = `privacy-key-${randomUUID()}`;
 let trace = "";
 
-async function addAccount(id: string, label: string) {
+async function addAccount(id: string, label: string, priority?: number) {
   const started = await core.mgmt<{ login: { id: string } }>("POST", "/accounts", {
     id,
+    priority,
     extension: "test/local",
     method: "api_key",
     input: { api_key: keyCanary, label },
@@ -58,6 +62,7 @@ test.beforeAll(async () => {
   await addAccount("privacy-at", AT);
   await addAccount(EMAIL_ID, EMAIL);
   await addAccount(IMPORTED_ID, IMPORTED);
+  for (const id of TWINS) await addAccount(id, id.replace("_example_com", "@example.com"), 900);
   const accounts = (await core.mgmt<{ accounts: Account[] }>("GET", "/accounts")).body.accounts;
   expect(accounts.find((a) => a.id === "privacy-amp")?.label).toBe(AMP);
   expect(accounts.find((a) => a.id === "privacy-at")?.label).toBe(AT);
@@ -159,6 +164,33 @@ test("privacy mode masks identities, survives a reload, reaches extension pages 
     .click();
   const detail = page.getByRole("complementary", { name: "Details: Error Request Log Details" });
   await expect(detail).toContainText(`ask ${EMAIL_MASKED} about ${AMP_MASKED}`);
+  await expectMasked(page);
+
+  // Routing: two accounts whose masked names are the same keep keyboard focus apart.
+  await goTo(page, "Routing");
+  const twinDown = page.getByRole("button", { name: `Move down a tier: ${TWIN_MASKED}`, exact: true });
+  await expect(twinDown).toHaveCount(2);
+  await twinDown.nth(1).focus();
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(async () => {
+      const all = (await core.mgmt<{ accounts: Account[] }>("GET", "/accounts")).body.accounts;
+      return all.filter((a) => TWINS.includes(a.id) && (a.priority ?? 0) < 900).length;
+    })
+    .toBe(1);
+  // Focus follows the account that moved, to its new tier, not the first button of that name.
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const lists = [...document.querySelectorAll('[data-part="list"]')];
+        const active = document.activeElement;
+        return {
+          tier: lists.indexOf(active?.closest('[data-part="list"]') as Element),
+          name: active?.getAttribute("aria-label"),
+        };
+      }),
+    )
+    .toEqual({ tier: 1, name: `Move down a tier: ${TWIN_MASKED}` });
   await expectMasked(page);
 
   // The System page's models list the accounts that serve them.

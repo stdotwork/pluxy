@@ -101,14 +101,19 @@ export function canMove(tiers: Tier[], priority: number, direction: "up" | "down
   const edge = direction === "up" ? index === 0 : index === tiers.length - 1;
   return !(edge && tier.accounts.length === 1);
 }
-/** What identifies a focused control across a re-render that replaces its element. */
+/**
+ * What identifies a focused control across a re-render that replaces its element: its focus key,
+ * which names the account by ID (privacy mode can give two accounts the same accessible name).
+ */
 const focusKey = (element: Element | null) =>
   element instanceof HTMLElement && element !== document.body
-    ? element.id
-      ? `#${element.id}`
-      : (element.getAttribute("aria-label") ??
-        (element.tagName === "BUTTON" ? element.textContent : "") ??
-        "")
+    ? element.dataset.focusKey
+      ? `key:${element.dataset.focusKey}`
+      : element.id
+        ? `#${element.id}`
+        : (element.getAttribute("aria-label") ??
+          (element.tagName === "BUTTON" ? element.textContent : "") ??
+          "")
     : "";
 /** Puts focus back on the control with this key, or on the row's other button when it is disabled. */
 function focusByKey(key: string) {
@@ -164,6 +169,7 @@ function WeightEditor({ account, save }: { account: Account; save: (weight: numb
       <Button
         disabled={account.source === "config"}
         label={name}
+        focusKey={`weight ${account.id}`}
         onClick={() => {
           setValue(account.weight === undefined ? "" : String(account.weight));
           closed.current = false;
@@ -178,6 +184,7 @@ function WeightEditor({ account, save }: { account: Account; save: (weight: numb
           <input
             type="number"
             aria-label={name}
+            data-focus-key={`weight ${account.id}`}
             min="0"
             step="1"
             value={value}
@@ -387,6 +394,7 @@ export function RoutingPage() {
                               <Button
                                 key={direction}
                                 disabled={a.source === "config" || !canMove(tiers, tier.priority, direction)}
+                                focusKey={`${direction} ${a.id}`}
                                 label={t(direction === "up" ? "upFor" : "downFor", {
                                   id: p.text(a.id, accountIdentities(a)),
                                 })}
