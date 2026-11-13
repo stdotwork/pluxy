@@ -205,52 +205,125 @@ fn same_place(a: &Value, b: &Value) -> bool {
     )
 }
 
-/// A page webview whose document is taller than its page area still covers exactly that area, at
-/// the top of the window and with the window partly scrolled: the place GTK allocates it, not
-/// only the size the app asks for. The document is made taller from outside, then restored.
+/// Waits up to secs for f, without failing anything: None when it never came.
 #[cfg(target_os = "linux")]
-fn tall_page(app: &AppHandle, main: &Webview, wv: &Webview, label: &str) -> Result<Value, String> {
-    let area0 = eval(main, AREA).ok_or("no page area")?;
-    let height = area0["height"].as_f64().ok_or("no page area height")?;
-    let tall = (height * 3.0).round();
-    wv.eval(format!(
-        "for (const e of [document.documentElement, document.body]) {{ \
-         e.style.setProperty('height', '{tall}px', 'important'); \
-         e.style.setProperty('overflow', 'visible', 'important'); }}"
-    ))
-    .map_err(|e| e.to_string())?;
-    // The control: GTK sees the document taller than the area, so a webview given its natural
-    // height would not fit it.
-    let l = label.to_string();
-    let natural = wait_for(
-        "the page webview's natural height to pass its area's",
-        || {
-            let l = l.clone();
-            on_main(app, move || crate::place::natural_height(&l))
-                .flatten()
-                .filter(|n| *n > height + 100.0)
-        },
-    )?;
+fn within<T>(secs: u64, mut f: impl FnMut() -> Option<T>) -> Option<T> {
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    loop {
+        if let Some(v) = f() {
+            return Some(v);
+        }
+        if Instant::now() > deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
 
-    // Where the page webview is once the window has placed it again, against its area.
-    let settled = |what: &str| -> Result<(Value, Value), String> {
-        let mut last = (Value::Null, Value::Null);
-        wait_for(what, || {
-            let area = eval(main, AREA)?;
-            let l = label.to_string();
-            let placed = json!(on_main(app, move || crate::place::allocation(&l)).flatten());
-            last = (area.clone(), placed.clone());
-            same_place(&area, &placed).then_some(())
-        })
-        .map_err(|e| format!("{e}: placed {} for the area {}", last.1, last.0))?;
-        Ok(last)
+/// The page webview is allocated exactly its page area, not the natural size GTK's overlay would
+/// give it. WebKitGTK's natural height is its document's content height. The page document
+/// fills its webview, so that is the height the webview last had, and WebKit does not ask GTK to
+/// measure again when it changes: once the window shrinks, the natural height is still the old,
+/// taller one. Checked after a real window resize, with the window at the top and partly
+/// scrolled; then the window gets its size and scroll back. It never fails the run itself:
+/// run.ts checks the report.
+#[cfg(target_os = "linux")]
+fn shrunk_page(app: &AppHandle, main: &Webview, label: &str) -> Value {
+    let mut r = json!({});
+    let size = app.get_window(WINDOW).and_then(|w| {
+        let s = w.inner_size().ok()?;
+        Some(s.to_logical::<f64>(w.scale_factor().ok()?))
+    });
+    let res = match size {
+        Some(size) => shrunk_page_steps(app, main, label, size, &mut r),
+        None => Err("no window size".into()),
     };
-    main.eval("window.dispatchEvent(new Event('resize'))")
+    let _ = main.eval(
+        "{ document.getElementById('pluxy-test-spacer')?.remove(); \
+         document.scrollingElement.scrollTop = 0; }",
+    );
+    if let (Some(size), Some(w)) = (size, app.get_window(WINDOW)) {
+        let _ = w.set_size(size);
+        let back = r["area_before"]["height"].as_f64();
+        r["restored"] = json!(within(10, || {
+            let h = eval(main, AREA)?["height"].as_f64()?;
+            back.filter(|b| (b - h).abs() <= 2.0)
+        })
+        .is_some());
+    }
+    r["ok"] = json!(res.is_ok());
+    if let Err(e) = res {
+        r["error"] = json!(e);
+    }
+    r
+}
+
+#[cfg(target_os = "linux")]
+fn shrunk_page_steps(
+    app: &AppHandle,
+    main: &Webview,
+    label: &str,
+    size: tauri::LogicalSize<f64>,
+    r: &mut Value,
+) -> Result<(), String> {
+    let natural = |app: &AppHandle| {
+        let l = label.to_string();
+        on_main(app, move || crate::place::natural_height(&l)).flatten()
+    };
+    let placed = |app: &AppHandle| {
+        let l = label.to_string();
+        json!(on_main(app, move || crate::place::allocation(&l)).flatten())
+    };
+    // Where the page webview is against its area once the window placed it again (or the last
+    // seen when it never matched).
+    let settled = |r: &mut Value, key: &str| -> bool {
+        let mut last = (Value::Null, Value::Null);
+        let ok = within(10, || {
+            let area = eval(main, AREA)?;
+            last = (area.clone(), placed(app));
+            same_place(&last.0, &last.1).then_some(())
+        })
+        .is_some();
+        r[key] = json!({"area": last.0, "placed": last.1, "ok": ok});
+        ok
+    };
+
+    let before = eval(main, AREA).ok_or("no page area")?;
+    let height = before["height"].as_f64().ok_or("no page area height")?;
+    r["area_before"] = before.clone();
+    r["natural_before"] = json!(natural(app));
+    r["window"] = json!([size.width, size.height]);
+
+    // The window loses SHRINK pixels of height; the page area (100vh less the page around it,
+    // above its minimum) loses as many.
+    const SHRINK: f64 = 60.0;
+    let w = app.get_window(WINDOW).ok_or("no window")?;
+    w.set_size(tauri::LogicalSize::new(size.width, size.height - SHRINK))
         .map_err(|e| e.to_string())?;
-    let (area, placed) = settled("the tall page webview over its area")?;
+    let shrunk = within(10, || {
+        let a = eval(main, AREA)?;
+        let h = a["height"].as_f64()?;
+        ((height - SHRINK - h).abs() <= 2.0).then_some(a)
+    })
+    .ok_or("the page area did not shrink with the window")?;
+    // The control: the natural height GTK had for it is taller than its new area, so a webview
+    // given its natural height would not fit.
+    let new_height = shrunk["height"].as_f64().unwrap_or(0.0);
+    if !r["natural_before"]
+        .as_f64()
+        .is_some_and(|n| n > new_height + 2.0)
+    {
+        return Err(format!(
+            "the natural height {} is not taller than the shrunk area {new_height}",
+            r["natural_before"]
+        ));
+    }
+    let top = settled(&mut *r, "top");
+    r["natural_after"] = json!(natural(app));
 
     // Partly scrolled: the area moves up by half its distance from the top, still in view.
-    let scroll = (area0["y"].as_f64().ok_or("no page area top")? / 2.0).floor();
+    let y = shrunk["y"].as_f64().unwrap_or(0.0);
+    let scroll = (y / 2.0).floor();
     main.eval(format!(
         "{{ const s = document.createElement('div'); s.id = 'pluxy-test-spacer'; \
          s.style.height = (2 * innerHeight) + 'px'; \
@@ -258,32 +331,19 @@ fn tall_page(app: &AppHandle, main: &Webview, wv: &Webview, label: &str) -> Resu
          document.scrollingElement.scrollTop = {scroll}; }}"
     ))
     .map_err(|e| e.to_string())?;
-    let want_y = area0["y"].as_f64().unwrap_or(0.0) - scroll;
-    wait_for("the window to scroll", || {
+    within(10, || {
         eval(main, AREA)?["y"]
             .as_f64()
-            .filter(|y| (y - want_y).abs() <= 1.0)
-    })?;
-    let (area_scrolled, placed_scrolled) = settled("the tall page webview over its scrolled area")?;
-
-    main.eval(
-        "{ document.getElementById('pluxy-test-spacer')?.remove(); \
-         document.scrollingElement.scrollTop = 0; }",
-    )
-    .map_err(|e| e.to_string())?;
-    wv.eval(
-        "for (const e of [document.documentElement, document.body]) { \
-         e.style.removeProperty('height'); e.style.removeProperty('overflow'); }",
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(json!({
-        "natural": natural,
-        "area": area,
-        "placed": placed,
-        "scroll": scroll,
-        "area_scrolled": area_scrolled,
-        "placed_scrolled": placed_scrolled,
-    }))
+            .filter(|now| (now - (y - scroll)).abs() <= 1.0)
+    })
+    .ok_or("the window did not scroll")?;
+    r["scroll"] = json!(scroll);
+    let scrolled = settled(&mut *r, "scrolled");
+    if top && scrolled {
+        Ok(())
+    } else {
+        Err("the page webview is not allocated its page area".into())
+    }
 }
 
 fn run(app: &AppHandle) -> Result<(), String> {
@@ -368,7 +428,7 @@ fn run(app: &AppHandle) -> Result<(), String> {
         r["placed"] = json!(on_main(app, move || crate::place::allocation(&l)).flatten());
         log("page", r);
         #[cfg(target_os = "linux")]
-        log("page_allocation", tall_page(app, &main, &wv, &label)?);
+        log("page_allocation", shrunk_page(app, &main, &label));
         #[cfg(target_os = "linux")]
         crate::confirmation::native::run(app, &main, &wv)?;
 
