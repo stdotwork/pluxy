@@ -899,9 +899,11 @@ fn device_list(webview: Webview, state: tauri::State<App>) -> Result<device::Vie
 async fn device_registries(webview: Webview) -> Result<Vec<device::RegistryView>, String> {
     trusted(&webview)?;
     let dirs = webview.state::<App>().device_dirs.clone();
-    tauri::async_runtime::spawn_blocking(move || device::offers(&dirs))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        device::offers(&dirs, &trust::TrustStore::current())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Makes a change f to package id on this device, then closes the package's open pages and
@@ -953,7 +955,13 @@ async fn device_install(
     let app = webview.app_handle().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let dirs = app.state::<App>().device_dirs.clone();
-        let c = device::stage_from_registry(&dirs, &registry, &id, version.as_deref())?;
+        let c = device::stage_from_registry(
+            &dirs,
+            &trust::TrustStore::current(),
+            &registry,
+            &id,
+            version.as_deref(),
+        )?;
         device_commit(&app, c)
     })
     .await
@@ -1034,6 +1042,7 @@ async fn device_install_file(webview: Webview) -> Result<device::View, String> {
                 index: None,
             },
             None,
+            &trust::TrustStore::current(),
         )?;
         device_commit(&app, c)
     })
@@ -1050,9 +1059,81 @@ fn device_change(
     device_changed(webview.app_handle(), id, f)
 }
 
+/// Enables or disables package id. Enabling a native tool asks the person in a native
+/// confirmation, which the window cannot answer for them, and waits for its outcome.
 #[tauri::command]
-fn device_enable(webview: Webview, id: String, enabled: bool) -> Result<device::View, String> {
-    device_change(&webview, &id, |c| c.set_enabled(&id, enabled))
+async fn device_enable(
+    webview: Webview,
+    id: String,
+    enabled: bool,
+) -> Result<device::View, String> {
+    trusted(&webview)?;
+    let app = webview.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let native = enabled
+            && app
+                .state::<App>()
+                .device
+                .lock()
+                .unwrap()
+                .get(&id)
+                .is_some_and(|p| p.active.tier == "native");
+        if native {
+            return native_enable(&app, &id);
+        }
+        device_changed(&app, &id, |c| c.set_enabled(&id, enabled))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Enables native tool id once the person confirmed it in a native confirmation that shows
+/// its ID, source, digest, signer and full access to their user account. The catalog admits
+/// it only if it is still the release that was shown.
+#[cfg(target_os = "linux")]
+fn native_enable(app: &AppHandle, id: &str) -> Result<device::View, String> {
+    let st = app.state::<App>();
+    let candidate = st
+        .device
+        .lock()
+        .unwrap()
+        .native_candidate(id, &trust::TrustStore::current())?;
+    let action = {
+        let mut c = st.confirmations.lock().unwrap();
+        let prepared = c.prepare_main(candidate.confirmation())?;
+        c.queue(prepared)?
+    };
+    confirmation::request(app, action.clone())?;
+    // The dialog's own handler leaves the outcome for native code; it expires after a minute.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(75);
+    let outcome = loop {
+        if let Some(r) = st.confirmations.lock().unwrap().take_result(&action) {
+            break r;
+        }
+        if std::time::Instant::now() > deadline {
+            return Err(format!(
+                "the native confirmation for {id} expired; it stays disabled"
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    let token = match outcome {
+        Ok(Some(token)) => token,
+        Ok(None) => return Err(format!("native enable cancelled; {id} stays disabled")),
+        Err(e) => return Err(format!("{e}; {id} stays disabled")),
+    };
+    // Spends the single-use token and checks the program file is the one shown.
+    st.confirmations.lock().unwrap().consume(&action, &token)?;
+    device_changed(app, id, |c| {
+        c.admit(&candidate, &trust::TrustStore::current())
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn native_enable(_app: &AppHandle, id: &str) -> Result<device::View, String> {
+    Err(format!(
+        "{id} is a native tool; native confirmations are supported on Linux only"
+    ))
 }
 
 #[tauri::command]

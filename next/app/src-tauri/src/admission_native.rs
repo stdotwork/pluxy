@@ -14,8 +14,9 @@
 //!   normal profile), `curated`'s `pluxy/tool` is refused and `example/page` installs from it;
 //! - with the profile restored, `pluxy/tool` installs disabled and labelled curated, the Device
 //!   extensions page shows its full-access warning, enabling opens the native confirmation, which
-//!   names full access, the ID and the digest: Cancel leaves it disabled and unauthorized, Confirm
-//!   enables it;
+//!   names full access, the ID and the digest: Cancel leaves it disabled and unauthorized (no
+//!   admitted record), Confirm enables it and the admitted record names its store folder,
+//!   program, curated source and key;
 //! - from `mirror` (another curated source) the installed package is refused; removed and
 //!   installed from `mirror` it starts disabled and unauthorized again.
 //!
@@ -147,6 +148,15 @@ fn refused(main: &Webview, cmd: &str, args: Value, says: &str) -> Result<String,
         format!("{cmd} {args} should be refused with {says:?}: {r}"),
     )?;
     Ok(error)
+}
+
+/// The record the program host would take for id, checked now (`Catalog::admitted`).
+fn admitted(app: &AppHandle, id: &str) -> Result<crate::device::Admitted, String> {
+    app.state::<crate::App>()
+        .device
+        .lock()
+        .unwrap()
+        .admitted(id, &crate::trust::TrustStore::current())
 }
 
 fn install(registry: &str, id: &str) -> Value {
@@ -350,6 +360,9 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         p["enabled"] == false && p["authorized"] == false,
         format!("pluxy/tool after cancel: {p}"),
     )?;
+    out["cancel_record"] = json!(admitted(app, "pluxy/tool")
+        .err()
+        .ok_or("a cancelled native tool is admitted")?);
 
     // Native confirm: enabled and authorized.
     let slot = start(
@@ -366,6 +379,30 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         p["enabled"] == true && p["authorized"] == true && p["active"]["sha256"] == tool,
         format!("pluxy/tool after confirm: {p}"),
     )?;
+    // The record the program host takes: the confirmed release, its signer and its program in
+    // the store, checked again.
+    let a = admitted(app, "pluxy/tool")?;
+    let store_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("device-packages")
+        .join("store")
+        .join(&tool);
+    let curated = fixtures.join("curated.json").display().to_string();
+    require(
+        a.sha256 == tool
+            && a.dir == store_dir
+            && a.program == store_dir.join("bin").join("tool")
+            && a.program.is_file()
+            && a.signed.source == curated
+            && a.signed.publisher == "pluxy"
+            && a.signed.key_id == digest("key_id")
+            && a.public_key == digest("public_key")
+            && a.operations.first().map(|o| o.id.as_str()) == Some("inspect"),
+        format!("the admitted record: {a:?}"),
+    )?;
+    out["admitted"] = json!({"sha256": a.sha256, "program": a.program, "source": a.signed.source, "key_id": a.signed.key_id});
 
     // Another curated source for the installed package is refused; after removal it installs
     // from there with no trust carried over.
@@ -385,6 +422,9 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             && p["authorized"] == false,
         format!("pluxy/tool from mirror: {p}"),
     )?;
+    out["mirror_record"] = json!(admitted(app, "pluxy/tool")
+        .err()
+        .ok_or("a reinstalled native tool is admitted without confirmation")?);
     out["passed"] = json!(true);
     log("admission", out);
     Ok(())

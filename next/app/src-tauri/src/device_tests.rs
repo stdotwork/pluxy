@@ -1,6 +1,30 @@
 use super::*;
 use std::io::Write;
 
+/// No native-tier root: what a normal build has.
+struct NoRoots;
+impl crate::artifact::PublisherKeys for NoRoots {
+    fn publisher_key(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+    ) -> Result<ed25519_dalek::VerifyingKey, String> {
+        Err("native-tier trust not configured".into())
+    }
+}
+impl Roots for NoRoots {
+    fn configured(&self) -> bool {
+        false
+    }
+    fn curated(&self, _: &str) -> bool {
+        false
+    }
+    fn reserved(&self, _: &str) -> bool {
+        false
+    }
+}
+
 fn temp() -> PathBuf {
     let mut rnd = [0u8; 8];
     getrandom::fill(&mut rnd).unwrap();
@@ -76,7 +100,7 @@ fn registry(name: &str, index: &str) -> Source {
 }
 
 fn install(c: &mut Catalog, bytes: &[u8], source: Source) -> Result<(), String> {
-    let cand = stage(&c.dirs, bytes, source, None)?;
+    let cand = stage(&c.dirs, bytes, source, None, &NoRoots)?;
     c.commit(cand)
 }
 
@@ -310,7 +334,7 @@ fn links_devices_and_duplicates_are_refused() {
         b.append(&h, std::io::empty()).unwrap();
         let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
         gz.write_all(&b.into_inner().unwrap()).unwrap();
-        let e = stage(&d, &gz.finish().unwrap(), local("l"), None).unwrap_err();
+        let e = stage(&d, &gz.finish().unwrap(), local("l"), None, &NoRoots).unwrap_err();
         assert!(e.contains("not a regular file or folder"), "{kind:?}: {e}");
     }
     let dup = archive(&[
@@ -318,7 +342,7 @@ fn links_devices_and_duplicates_are_refused() {
         ("pages/index.html", b"a"),
         ("pages/index.html", b"b"),
     ]);
-    assert!(stage(&d, &dup, local("d"), None).is_err());
+    assert!(stage(&d, &dup, local("d"), None, &NoRoots).is_err());
     done(root);
 }
 
@@ -423,24 +447,27 @@ fn registry_pins_reserved_ids_and_paths() {
         .unwrap(),
     )
     .unwrap();
-    let offers = offers(&d).unwrap();
+    let offers = offers(&d, &NoRoots).unwrap();
     assert_eq!(offers[0].packages.len(), 2);
     assert!(offers[0]
         .packages
         .iter()
         .any(|o| o.id == "pluxy/notes" && o.refused.is_some()));
 
-    let e = stage_from_registry(&d, "fixture", "pluxy/notes", None).unwrap_err();
+    let e = stage_from_registry(&d, &NoRoots, "fixture", "pluxy/notes", None).unwrap_err();
     assert!(e.contains("reserved"), "{e}");
     // The archive holds 1.0.0, not the newest release the index lists.
-    let e = stage_from_registry(&d, "fixture", "example/notes", None).unwrap_err();
+    let e = stage_from_registry(&d, &NoRoots, "fixture", "example/notes", None).unwrap_err();
     assert!(e.contains("not example/notes 2.0.0"), "{e}");
-    let e = stage_from_registry(&d, "fixture", "example/notes", Some("0.9.0")).unwrap_err();
+    let e =
+        stage_from_registry(&d, &NoRoots, "fixture", "example/notes", Some("0.9.0")).unwrap_err();
     assert!(e.contains("not the one the registry lists"), "{e}");
-    let e = stage_from_registry(&d, "fixture", "example/notes", Some("0.8.0")).unwrap_err();
+    let e =
+        stage_from_registry(&d, &NoRoots, "fixture", "example/notes", Some("0.8.0")).unwrap_err();
     assert!(e.contains("inside the index's folder"), "{e}");
     let mut c = Catalog::open(d.clone(), false);
-    let cand = stage_from_registry(&d, "fixture", "example/notes", Some("1.0.0")).unwrap();
+    let cand =
+        stage_from_registry(&d, &NoRoots, "fixture", "example/notes", Some("1.0.0")).unwrap();
     assert_eq!(cand.source.kind, "registry");
     c.commit(cand).unwrap();
     assert_eq!(c.get("example/notes").unwrap().active.sha256, digest(&v1));
@@ -478,7 +505,7 @@ fn names_with_a_drive_or_stream_never_reach_the_store() {
             ("pages/index.html", b"x"),
             (name, b"x"),
         ]);
-        let e = stage(&d, &a, local("w"), None).unwrap_err();
+        let e = stage(&d, &a, local("w"), None, &NoRoots).unwrap_err();
         assert!(e.contains("leaves the package folder"), "{name}: {e}");
     }
     // A folder entry too, not only files.
@@ -498,7 +525,7 @@ fn names_with_a_drive_or_stream_never_reach_the_store() {
     b.append(&h, std::io::empty()).unwrap();
     let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
     gz.write_all(&b.into_inner().unwrap()).unwrap();
-    let e = stage(&d, &gz.finish().unwrap(), local("w"), None).unwrap_err();
+    let e = stage(&d, &gz.finish().unwrap(), local("w"), None, &NoRoots).unwrap_err();
     assert!(e.contains("leaves the package folder"), "{e}");
     // The ui folder is checked before it is joined to the staged folder.
     let ui = serde_json::json!({"ui": {"version": 0, "dir": "C:/pages",
@@ -507,10 +534,10 @@ fn names_with_a_drive_or_stream_never_reach_the_store() {
         ("pluxy-extension.json", &manifest("example/w", "1", ui)),
         ("pages/index.html", b"x"),
     ]);
-    let e = stage(&d, &a, local("w"), None).unwrap_err();
+    let e = stage(&d, &a, local("w"), None, &NoRoots).unwrap_err();
     assert!(e.contains("must be a folder inside the package"), "{e}");
     // The positive control on the same route.
-    stage(&d, &package("example/w", "1"), local("w"), None).unwrap();
+    stage(&d, &package("example/w", "1"), local("w"), None, &NoRoots).unwrap();
     done(root);
 }
 
@@ -823,23 +850,26 @@ fn registry_files_must_be_regular_files_in_the_index_folder() {
     };
     let dd = d.clone();
     let e = within(Box::new(move || {
-        stage_from_registry(&dd, "fixture", "example/notes", Some("3.0.0")).unwrap_err()
+        stage_from_registry(&dd, &NoRoots, "fixture", "example/notes", Some("3.0.0")).unwrap_err()
     }));
     assert!(e.contains("not a regular file"), "{e}");
     let dd = d.clone();
     let e = within(Box::new(move || {
-        offers(&dd).unwrap()[1].error.clone().unwrap_or_default()
+        offers(&dd, &NoRoots).unwrap()[1]
+            .error
+            .clone()
+            .unwrap_or_default()
     }));
     assert!(e.contains("not a regular file"), "{e}");
     for v in ["2.0.0", "1.5.0"] {
-        let e = stage_from_registry(&d, "fixture", "example/notes", Some(v)).unwrap_err();
+        let e = stage_from_registry(&d, &NoRoots, "fixture", "example/notes", Some(v)).unwrap_err();
         assert!(
             e.contains("not a file inside the index's folder"),
             "{v}: {e}"
         );
     }
     // The positive control on the same route, through a folder of the index's.
-    stage_from_registry(&d, "fixture", "example/notes", Some("1.0.0")).unwrap();
+    stage_from_registry(&d, &NoRoots, "fixture", "example/notes", Some("1.0.0")).unwrap();
     done(root);
 }
 
