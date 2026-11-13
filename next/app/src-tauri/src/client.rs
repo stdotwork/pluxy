@@ -78,6 +78,40 @@ pub fn path_problem(path: &str) -> Option<String> {
     None
 }
 
+/// Core's route that replaces the management key and returns the new one.
+pub const ROTATE: &str = "/management-key/rotate";
+
+/// Whether path is under the management key's own routes, whose replies hold the key: only
+/// native code calls them, never a webview through core_call. Compared as a server might route
+/// it: percent-decoded, case-folded and without empty or `.` segments.
+pub fn native_only(path: &str) -> bool {
+    let bare = path.split(['?', '#']).next().unwrap_or("");
+    let bytes = bare.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| (b as char).to_digit(16);
+        match (
+            bytes[i],
+            bytes.get(i + 1).copied().and_then(hex),
+            bytes.get(i + 2).copied().and_then(hex),
+        ) {
+            (b'%', Some(hi), Some(lo)) => {
+                decoded.push((hi * 16 + lo) as u8);
+                i += 3;
+            }
+            (b, _, _) => {
+                decoded.push(b);
+                i += 1;
+            }
+        }
+    }
+    decoded
+        .split(|&b| b == b'/')
+        .find(|s| !s.is_empty() && *s != b".")
+        .is_some_and(|s| s.eq_ignore_ascii_case(b"management-key"))
+}
+
 /// The certificates in a PEM file, to trust for one core.
 pub fn certificates(pem: &[u8]) -> Result<Vec<Certificate<'static>>, String> {
     let mut certs = Vec::new();
@@ -156,6 +190,38 @@ impl Client {
 
     /// Calls `method` on path (under `/v0/management`) with key.
     pub fn call(&self, key: &str, method: &str, path: &str, body: Option<&Value>) -> Reply {
+        self.send(key, method, path, body, None)
+    }
+
+    /// Calls as call does, giving up after limit instead of the client's 300 seconds.
+    pub fn call_within(
+        &self,
+        key: &str,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        limit: Duration,
+    ) -> Reply {
+        self.send(key, method, path, body, Some(limit))
+    }
+
+    fn send(
+        &self,
+        key: &str,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        limit: Option<Duration>,
+    ) -> Reply {
+        fn within<B>(
+            r: ureq::RequestBuilder<B>,
+            limit: Option<Duration>,
+        ) -> ureq::RequestBuilder<B> {
+            match limit {
+                Some(l) => r.config().timeout_global(Some(l)).build(),
+                None => r,
+            }
+        }
         if let Some(p) = path_problem(path) {
             return Reply::failed(400, "invalid_request", p);
         }
@@ -170,10 +236,10 @@ impl Client {
             None => None,
         };
         let result = match method {
-            "GET" => self.agent.get(&url).header("Authorization", &auth).call(),
-            "DELETE" => self
-                .agent
-                .delete(&url)
+            "GET" => within(self.agent.get(&url), limit)
+                .header("Authorization", &auth)
+                .call(),
+            "DELETE" => within(self.agent.delete(&url), limit)
                 .header("Authorization", &auth)
                 .call(),
             "POST" | "PATCH" | "PUT" => {
@@ -184,13 +250,16 @@ impl Client {
                         "PUT is only allowed for /config",
                     );
                 }
-                let req = if method == "POST" {
-                    self.agent.post(&url)
-                } else if method == "PUT" {
-                    self.agent.put(&url)
-                } else {
-                    self.agent.patch(&url)
-                }
+                let req = within(
+                    if method == "POST" {
+                        self.agent.post(&url)
+                    } else if method == "PUT" {
+                        self.agent.put(&url)
+                    } else {
+                        self.agent.patch(&url)
+                    },
+                    limit,
+                )
                 .header("Authorization", &auth);
                 match encoded {
                     Some(b) => req.header("Content-Type", "application/json").send(&b[..]),
@@ -256,6 +325,36 @@ mod tests {
             "",
         ] {
             assert!(path_problem(bad).is_some(), "{bad:?} was allowed");
+        }
+    }
+
+    #[test]
+    fn the_management_key_routes_are_native_only_however_spelled() {
+        for path in [
+            ROTATE,
+            "/management-key/%72otate",
+            "/%6Danagement-key/rotate",
+            "/%6danagement%2Dkey%2frotate",
+            "/Management-Key/rotate/",
+            "/management-key/rotate?x=1",
+            "//management-key/rotate",
+            "/./management-key/rotate",
+            "/management-key",
+            "/management-key#x",
+        ] {
+            assert!(native_only(path), "{path:?} was allowed");
+        }
+        for path in [
+            "/status",
+            "/client-keys",
+            "/config",
+            "/management-keys",
+            "/x/management-key/rotate",
+            "/status?next=/management-key/rotate",
+            "/management-key%",
+            "",
+        ] {
+            assert!(!native_only(path), "{path:?} was refused");
         }
     }
 

@@ -8,9 +8,13 @@
 //!    top of that page's webview, calls every app command and some Tauri plugin commands: each
 //!    must be refused by Tauri's command check;
 //! 3. waits for the page's own report (it writes it into its settings through the channel);
+//!    then native key entry and management-key rotation (`key_entry_test.rs`,
+//!    `rotation_test.rs`) in local and remote mode, rotation alone in managed mode; in local and
+//!    remote mode the window closes to the tray during a rotation and opens again;
 //! 4. in managed mode, checks this device's extension catalog (`device_native.rs`);
 //!    with `PLUXY_APP_TEST_ADMISSION`, a session checks only signed native-tier admission
-//!    (`admission_native.rs`) and quits;
+//!    (`admission_native.rs`) and quits; with `PLUXY_APP_TEST_PROGRAM`, only the program host
+//!    (`program_native.rs`);
 //! 5. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!
@@ -36,6 +40,9 @@ mod admission;
 mod device;
 #[path = "native_ingress.rs"]
 mod ingress;
+#[cfg(target_os = "linux")]
+#[path = "program_native.rs"]
+mod program;
 pub use ingress::{
     count as ingress_count, forwarded as ingress_forwarded, operation as ingress_operation,
 };
@@ -81,11 +88,14 @@ const ACTING: &[&str] = &[
     "core_restart",
     "key_entry",
     "confirmation_settings",
+    "management_key_rotate",
     "device_install_file",
 ];
 
 #[path = "key_entry_test.rs"]
 mod key_entry_test;
+#[path = "rotation_test.rs"]
+mod rotation_test;
 
 pub(crate) fn log(step: &str, v: Value) {
     eprintln!("native-test: {step} {v}");
@@ -157,6 +167,9 @@ fn run(app: &AppHandle) -> Result<(), String> {
     if let Ok(stage) = std::env::var("PLUXY_APP_TEST_STARTUP") {
         return startup(app, &stage);
     }
+    if std::env::var("PLUXY_APP_TEST_ROTATION_RESTART").is_ok() {
+        return rotation_test::after_restart(app);
+    }
     let main = wait_for("the window", || app.get_webview(MAIN))?;
     wait_for("the window's shell", || {
         eval(&main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true)
@@ -165,6 +178,14 @@ fn run(app: &AppHandle) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_ADMISSION") {
         admission::run(app, &main, dir.into())?;
+        log("quit", json!({}));
+        crate::quit(app);
+        return Ok(());
+    }
+    // The program host (program_native.rs), in a session of its own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_PROGRAM") {
+        program::run(app, &main, dir.into())?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());
@@ -288,6 +309,8 @@ fn run(app: &AppHandle) -> Result<(), String> {
     }
 
     key_entry_test::check(app, &main)?;
+    // In local and remote mode the window closes to the tray and opens again meanwhile.
+    let main = rotation_test::check(app, &main)?;
     ingress::run(app, &main)?;
 
     // This device's extension catalog (device_native.rs), with fixtures from native/device.ts.
