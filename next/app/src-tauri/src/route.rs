@@ -6,9 +6,11 @@
 //! never the call's. The router sets the call's chain, refuses a call back into the chain and
 //! chains longer than `MAX_CHAIN`, checks the input against the operation's schema, and asks for
 //! a fresh native confirmation of a write- or launch-class call naming the whole chain and the
-//! exact input. A launch from a chain the window started with a native gesture may use the
-//! person's remembered approval of exactly that chain and launch; a chain a page started never
-//! does. The call then goes to the program host pinned to the release it was granted for.
+//! exact input. Only the window's own direct call, with a native gesture, may use the person's
+//! remembered approval of exactly that launch. A call with a tool hop in its chain is prepared as
+//! an import, and one a page started as a page's Start: neither uses or saves a remembered
+//! approval, and their dialogs offer no Remember. The call then goes to the program host pinned
+//! to the release it was granted for.
 //!
 //! A page's call in flight is cancelled when its package's import consent is revoked or its page
 //! closes, and its answer is delivered only if the call is still granted then. A call cancelled
@@ -35,11 +37,9 @@ const CONFIRMATION: Duration = Duration::from_secs(75);
 /// The largest input, as the program host takes it.
 const MAX_INPUT: usize = 64 << 10;
 
-/// The router's record of a call, kept in its `Context`: the page that started its chain, if a
-/// page did, each hop as native confirmations name it, and the native gesture that started it,
-/// until a launch uses it.
+/// The router's record of a call, kept in its `Context`: each hop as native confirmations name
+/// it, and the native gesture the window's own direct call started it with, until a launch uses it.
 struct Origin {
-    page: Option<String>,
     packages: Vec<confirmation::Package>,
     gesture: Arc<Mutex<Option<Gesture>>>,
 }
@@ -79,7 +79,6 @@ pub fn call_main(
             .map_err(refused)
     };
     let origin = Origin {
-        page: None,
         packages: vec![device::main_window()],
         gesture: Arc::new(Mutex::new(gesture)),
     };
@@ -131,9 +130,9 @@ fn outbound(app: &AppHandle, o: Outbound) -> Result<Value, CallError> {
     let mut packages = parent.packages.clone();
     packages.push(caller.package());
     let origin = Origin {
-        page: parent.page.clone(),
         packages,
-        gesture: Arc::clone(&parent.gesture),
+        // A call through a tool never uses a gesture: it is an import.
+        gesture: Arc::new(Mutex::new(None)),
     };
     // Registered like any call, so `cancel_all` reaches it too.
     let call = app.state::<App>().programs.begin_call(None)?;
@@ -217,7 +216,6 @@ fn page_call(app: &AppHandle, label: &str, params: &Value) -> Result<Value, Call
         },
         |(g, requester), cancel| {
             let origin = Origin {
-                page: Some(label.into()),
                 packages: vec![requester],
                 gesture: Arc::new(Mutex::new(None)),
             };
@@ -273,7 +271,15 @@ fn dispatch(
     }
     program::schema::check(&grant.op.input_schema, &input, "input")
         .map_err(|e| fail("invalid_request", e))?;
-    if authorize(app, &grant, &origin, &input, &call.cancelled_by(&cancel))? {
+    let preparation = rules::preparation(&chain);
+    if authorize(
+        app,
+        &grant,
+        &origin,
+        preparation,
+        &input,
+        &call.cancelled_by(&cancel),
+    )? {
         // Asked: the catalog may have changed while the person answered.
         let now = regrant()?;
         if now.target != grant.target || now.op != grant.op {
@@ -335,13 +341,15 @@ fn launch_of(
 }
 
 /// A read goes ahead. A write or launch needs the person's native confirmation of the whole
-/// chain and the exact input, now; a launch from a chain the window started with a native
-/// gesture may use a remembered approval of exactly that instead. A cancel while the
-/// confirmation is open withdraws it. Whether it asked.
+/// chain and the exact input, now; a launch the window made directly, with a native gesture, may
+/// use a remembered approval of exactly that instead. A call with a tool hop is prepared as an
+/// import: it always asks, and its dialog offers no Remember. A cancel while the confirmation is
+/// open withdraws it. Whether it asked.
 fn authorize(
     app: &AppHandle,
     grant: &Grant,
     origin: &Origin,
+    preparation: rules::Preparation,
     input: &Value,
     cancel: &Cancel,
 ) -> Result<bool, CallError> {
@@ -372,7 +380,8 @@ fn authorize(
     };
     let refuse = |e: String| fail("permission", e);
     let st = app.state::<App>();
-    let page = origin.page.is_some();
+    // A page's or an import's confirmation is queued with the page limits and never remembered.
+    let page = preparation != rules::Preparation::Main;
     // The rate and pending limits first, then any executable hashed without the lock.
     st.confirmations
         .lock()
@@ -383,7 +392,7 @@ fn authorize(
         let h = confirmation::Hashed::of(&l.executable).map_err(refuse)?;
         st.confirmations.lock().unwrap().warm(h);
     }
-    let id = if page {
+    let id = if preparation == rules::Preparation::Page {
         let p = st
             .confirmations
             .lock()
@@ -391,6 +400,13 @@ fn authorize(
             .prepare_page(action)
             .map_err(refuse)?;
         confirmation::page_start(app, p).map_err(refuse)?
+    } else if preparation == rules::Preparation::Import {
+        let mut c = st.confirmations.lock().unwrap();
+        let p = c.prepare_import(action).map_err(refuse)?;
+        let id = c.queue(p).map_err(refuse)?;
+        drop(c);
+        confirmation::request(app, id.clone()).map_err(refuse)?;
+        id
     } else {
         let mut c = st.confirmations.lock().unwrap();
         let p = c.prepare_main(action).map_err(refuse)?;
