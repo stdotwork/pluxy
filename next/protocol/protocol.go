@@ -29,8 +29,9 @@ const Version = 0
 // minor 8 adds the request's caller; minor 9 adds a login grant's account settings;
 // minor 10 adds the subscription's end time to quota; minor 11 adds the account's proxy_url;
 // minor 12 adds the account's headers; minor 13 adds upstream capture (Call.Capture and the
-// diagnostic frame); minor 14 adds payload rules (Call.Payload).
-const Minor = 14
+// diagnostic frame); minor 14 adds payload rules (Call.Payload); minor 15 has a session turn
+// carry them too.
+const Minor = 15
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
@@ -137,7 +138,8 @@ type Call struct {
 	// upstream exchanges in a diagnostic frame before its terminal event (minor version 13).
 	Capture bool `json:"capture,omitempty"`
 	// Payload is the config's payload rules that apply to a generate, count_tokens or endpoint
-	// call (minor version 14), for the extension to apply to each JSON body it sends upstream:
+	// call (minor version 14) or a session.turn (minor version 15), for the extension to apply
+	// to each JSON body it sends upstream, and to the message that carries a session turn:
 	// core matched their models to the call already, so each model holds only its body
 	// conditions (payload.Select). Nil: none.
 	Payload *payload.Rules `json:"payload,omitempty"`
@@ -195,7 +197,7 @@ func ParseProxyURL(s string) (*url.URL, error) {
 // (Authorization, X-Api-Key, Cookie, key, ...), so its value is a secret.
 func SecretName(name string) bool {
 	n := strings.ToLower(name)
-	for _, part := range []string{"auth", "key", "token", "secret", "cookie", "session", "password", "signature"} {
+	for _, part := range []string{"auth", "key", "token", "secret", "cookie", "session", "password", "passphrase", "signature"} {
 		if strings.Contains(n, part) {
 			return true
 		}

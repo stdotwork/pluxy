@@ -8,12 +8,22 @@
 //   refused by Tauri's command check, and the app never reaches a command from that webview;
 // - from inside the page's sandboxed frame nothing reaches the app (test/probe reports through
 //   its channel);
+// - in managed mode, this device's extension catalog installs, swaps, rolls back, disables and
+//   removes page-only packages from a local registry and from local files through the native
+//   file chooser, refusing reserved IDs and a failed candidate (device.ts, device_native.rs);
 // - closing the window leaves no webview and no web process, with the app still in the tray;
 // - quitting stops the app's own core, and leaves a local or remote core running;
 // - in a second managed run, a core that exits before the app state exists is recovered.
 //
 // In managed mode it then runs the window checks (window.ts, native_window.rs) in two more
 // sessions, one with a tray watcher and one without.
+// Then, in a session of its own (instances.ts, instances-session.ts), the single-instance
+// scenario: a second launch on the same profile exits and raises the first's window, a launch on
+// another profile runs as its own app, and a killed owner's stale lock is recovered.
+// The signed native-tier admission check (admission.ts, admission_native.rs) runs in one more
+// session, with the app built with artifact-test-trust and a test trust profile in the run's HOME.
+// The other sessions run a build without that feature; its device check shows the same profile
+// admits nothing there.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
 // own (dbus-run-session, xvfb-run), and random ports. Inside that session, before the app,
@@ -25,11 +35,24 @@
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline";
+import { buildAdmissionFixtures } from "./admission";
 import { buildSmokeAppImage } from "./appimage";
+import { buildDeviceFixtures } from "./device";
+import { runInstances } from "./instances";
 import { descendants, webProcesses } from "./processes";
 import { missingPrerequisites } from "./services";
 
@@ -154,7 +177,8 @@ type Suite = "window" | "window-no-tray";
 /** Runs the app once with connection as its saved connection, and checks what it reports. With
  * suite, the session runs window.ts, which runs the app through the window checks' stages.
  * earlyExit: the app's setup waits for its core's exit callback before the app state exists
- * (PLUXY_APP_TEST_EARLY_EXIT), and only the recovery of that core is checked. */
+ * (PLUXY_APP_TEST_EARLY_EXIT), and only the recovery of that core is checked. admission: the
+ * session checks only signed native-tier admission. */
 async function runApp(
   mode: Mode,
   bin: string,
@@ -165,6 +189,7 @@ async function runApp(
   key?: string,
   suite?: Suite,
   earlyExit = false,
+  admission = false,
 ): Promise<string[]> {
   const root = mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
   const problems: string[] = [];
@@ -193,6 +218,28 @@ async function runApp(
         { mode: 0o600 },
       );
     const quit = join(root, "quit");
+    // This device's extension catalog is the same in every mode: check it once, in managed mode.
+    const device = mode === "managed" && !admission ? join(root, "device") : undefined;
+    // A test trust profile in HOME naming curated registries: the admission session's build
+    // honours it; the device check's normal build must not.
+    const curated = device || admission ? join(root, "curated") : undefined;
+    let nonce: string | undefined;
+    if (curated) {
+      mkdirSync(curated);
+      if (device) mkdirSync(device);
+      const a = buildAdmissionFixtures(curated, dirs.home);
+      nonce = a.nonce;
+      const registries = admission
+        ? a.registries
+        : [
+            ...(buildDeviceFixtures(device as string) as { registries: object[] }).registries,
+            ...a.registries.filter((r) => r.name === "curated"),
+          ];
+      writeFileSync(
+        join(dirs.config, identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries }),
+      );
+    }
     const keyFile = join(root, "key-input");
     const wrongKey = randomUUID();
     if (key) writeFileSync(keyFile, JSON.stringify({ key, wrong: wrongKey }), { mode: 0o600 });
@@ -216,6 +263,9 @@ async function runApp(
       PLUXY_APP_TEST_QUIT: quit,
       PLUXY_APP_TEST_STATE: join(root, "state.json"),
       PLUXY_APP_TEST_TRAY_HOLD: join(root, "tray-hold"),
+      ...(device ? { PLUXY_APP_TEST_DEVICE: device, PLUXY_APP_TEST_CURATED: curated as string } : {}),
+      ...(admission ? { PLUXY_APP_TEST_ADMISSION: curated as string } : {}),
+      ...(nonce ? { PLUXY_TEST_TRUST_NONCE: nonce } : {}),
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: identifier } : {}),
       ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
       ...(key ? { PLUXY_APP_TEST_KEY_FILE: keyFile } : {}),
@@ -247,6 +297,7 @@ async function runApp(
     });
     const steps = new Map<string, Step>();
     const reached: string[] = [];
+    const assets: { label: string; path: string; status: number }[] = [];
     let before = 0;
     let after = -1;
     const pid = proc.pid ?? 0;
@@ -292,6 +343,10 @@ async function runApp(
       const value = JSON.parse(json);
       if (step === "reached") {
         reached.push(value.webview);
+        return;
+      }
+      if (step === "asset") {
+        assets.push(value);
         return;
       }
       steps.set(step, value);
@@ -359,6 +414,15 @@ async function runApp(
         console.log(
           `  ${mode} | native-recovery: a core that exited before the app state existed was recovered`,
         );
+      return problems;
+    }
+
+    if (admission) {
+      const a = steps.get("admission");
+      check(a?.passed === true, "the native admission check did not complete");
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} admission ${JSON.stringify(a ?? {})}`);
+      console.log(`${mode}: admission ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
 
@@ -469,6 +533,42 @@ async function runApp(
 
     check(steps.get("confirmations")?.passed === true, "native confirmation checks did not complete");
 
+    // This device's catalog: the driver's own checks passed, and the asset scheme served the
+    // swapped-in release to its page webview and refused that webview the replaced one's files.
+    if (device) {
+      const d = steps.get("device") as
+        | { passed?: boolean; v2_label?: string; digests?: Record<string, string>; normal_build?: string }
+        | undefined;
+      // Without its line, the app's failed step says where the check stopped and why.
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(d?.passed === true, `the device catalog check did not complete: ${failure}`);
+      // This normal build refused the curated registry's signed native tool despite the HOME's
+      // valid test trust profile, for want of roots.
+      check(
+        d?.normal_build?.includes("not configured"),
+        `the normal build did not refuse the curated native tool: ${JSON.stringify(d?.normal_build)}`,
+      );
+      const dg = d?.digests ?? {};
+      const served = (label: string | undefined, digest: string | undefined, status: number) =>
+        assets.some((a) => a.label === label && a.path.includes(`/${digest}/`) && a.status === status);
+      check(
+        dg.notes2 && served(d?.v2_label, dg.notes2, 200),
+        `the asset scheme did not serve 2.0.0 to ${d?.v2_label}`,
+      );
+      check(
+        dg.notes1 && served(d?.v2_label, dg.notes1, 404),
+        `the asset scheme did not refuse 1.0.0 to ${d?.v2_label}`,
+      );
+      for (const k of ["spoof", "pluxy_local", "notes3"])
+        check(
+          dg[k] && !assets.some((a) => a.path.includes(`/${dg[k]}/`) && a.status === 200),
+          `the asset scheme served refused package ${k}`,
+        );
+      console.log(
+        `${mode} device ${JSON.stringify(d ?? { failed: failure })} (${assets.length} asset requests)`,
+      );
+    }
+
     // Closing the window frees its webviews; the app stays in the tray.
     const closed = steps.get("closed") as
       | { webviews: string[]; tray: boolean; core_pid?: number }
@@ -491,9 +591,31 @@ async function runApp(
         `${reached.length} commands reached, all from main: ${reached.every((w) => w === "main")})`,
     );
   } finally {
-    await removeRun(root);
+    // A folder left behind is a problem of its own; it must not hide this run's report.
+    await removeRun(root).catch((e) => problems.push(`the run folder ${root} was not removed: ${e}`));
   }
   return problems;
+}
+
+/** Lets this user remove the device's package store the app left in its run folder, after the
+ * app has quit: the store keeps its installed folders read-only, so they cannot be emptied as
+ * they are. Only folders under the app's `device-packages` change. They are path-based changes,
+ * safe here because the app made that tree, holds no links or mounts in it (archives with links
+ * are refused), and no longer runs. */
+function makeRemovable(root: string) {
+  const walk = (dir: string) => {
+    let entries: string[];
+    try {
+      const st = lstatSync(dir);
+      if (!st.isDirectory()) return;
+      if ((st.mode & 0o700) !== 0o700) chmodSync(dir, 0o700);
+      entries = readdirSync(dir);
+    } catch {
+      return; // gone: rmSync reports what it cannot remove
+    }
+    for (const e of entries) walk(join(dir, e));
+  };
+  walk(join(root, "data", identifier, "device-packages"));
 }
 
 /** Removes a run's folder. A desktop service the run's bus started (such as the document portal,
@@ -501,6 +623,7 @@ async function runApp(
 async function removeRun(root: string) {
   for (let i = 0; ; i++) {
     try {
+      makeRemovable(root);
       rmSync(root, { recursive: true, force: true });
       return;
     } catch (e) {
@@ -531,8 +654,22 @@ run(
   tauri,
 );
 const targetDir = resolvePath(tauri, process.env.CARGO_TARGET_DIR ?? "target");
-const bin = join(targetDir, "debug", "pluxy-app");
 const probe = join(targetDir, "debug", "examples", "session_probe");
+// The build without artifact-test-trust, kept aside before the build with it replaces it.
+const binDir = mkdtempSync(join(tmpdir(), "pluxy-app-native-bin-"));
+const bin = join(binDir, "pluxy-app");
+try {
+  copyFileSync(join(targetDir, "debug", "pluxy-app"), bin);
+  run(
+    "cargo",
+    ["build", "--locked", "--features", "native-test,artifact-test-trust", "--bin", "pluxy-app"],
+    tauri,
+  );
+} catch (e) {
+  rmSync(binDir, { recursive: true, force: true });
+  throw e;
+}
+const trustBin = join(targetDir, "debug", "pluxy-app");
 const appImageDir = mkdtempSync(join(tmpdir(), "pluxy-app-native-appimage-"));
 const problems: string[] = [];
 let appImage = ""; // the smoke AppImage the sessions run
@@ -546,6 +683,20 @@ try {
     const p = await runApp("managed", bin, { mode: "managed", core_path: core });
     p.push(...(await runApp("managed", bin, { mode: "managed", core_path: core }, undefined, true)));
     p.push(...(await runApp("managed", bin, { mode: "managed", core_path: core }, undefined, true, true)));
+    p.push(
+      ...(await runApp(
+        "managed",
+        trustBin,
+        { mode: "managed", core_path: core },
+        undefined,
+        false,
+        false,
+        undefined,
+        undefined,
+        false,
+        true,
+      )),
+    );
     for (const suite of ["window", "window-no-tray"] as const)
       p.push(
         ...(await runApp(
@@ -580,6 +731,21 @@ try {
       true,
     );
     problems.push(...e.map((x) => `managed, early exit: ${x}`));
+
+    // Two launches of the app on one profile: one app, one core, the first one's window raised.
+    const inst = await runInstances({
+      bin,
+      probe,
+      appImage,
+      core,
+      identifier,
+      timeoutMs: TIMEOUT,
+      sessions,
+      stopSession,
+      removeRun,
+    });
+    if (inst.setup !== undefined) throw new SetupError(inst.setup);
+    problems.push(...inst.problems.map((x) => `instances: ${x}`));
   } finally {
     rmSync(prepared, { recursive: true, force: true });
   }
@@ -603,6 +769,7 @@ try {
   setupFailure = e.message;
 } finally {
   rmSync(appImageDir, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
 }
 
 if (setupFailure !== undefined) {
@@ -613,4 +780,4 @@ if (problems.length > 0) {
   console.error(`\n${problems.length} problems:\n- ${problems.join("\n- ")}`);
   process.exit(1);
 }
-console.log("native test passed in all three modes");
+console.log("native test passed in all three modes and the single-instance scenario");

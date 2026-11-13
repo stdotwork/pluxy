@@ -82,3 +82,20 @@ extensions:
 		})
 	}
 }
+
+// A header named like a passphrase is a secret header everywhere, as GET /config reads it: GET
+// /accounts (Redactor.Headers) shows the placeholder GET /config shows in its place, and the
+// header rule extensions and the request log use (upheader.Secret) counts it.
+func TestPassphraseHeaderIsSecret(t *testing.T) {
+	const value = "fake-header-passphrase-1"
+	src := "listen: 127.0.0.1:0\naccess:\n  api-keys: [fake-client-key-1]\nextensions:\n  pluxy/x:\n    accounts:\n      - id: a\n        headers:\n          X-Passphrase: " + value + "\n"
+	r := NewRedactor()
+	red, err := r.Redact([]byte(src), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shown := r.Headers(map[string]string{"X-Passphrase": value})["X-Passphrase"]
+	if shown != r.Placeholder(value) || !strings.Contains(string(red), "X-Passphrase: "+shown) {
+		t.Errorf("GET /accounts shows %q; GET /config:\n%s", shown, red)
+	}
+}
