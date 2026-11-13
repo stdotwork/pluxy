@@ -103,12 +103,14 @@ mod gtk_overlay {
     }
 
     /// The height the page webview asks for itself, without its margins: for a webview, its
-    /// document's height.
+    /// document's content height. WebKit does not tell GTK when that changes, so GTK is made to
+    /// measure it again first (as any new layout would).
     #[cfg(feature = "native-test")]
     pub fn natural_height(label: &str) -> Option<f64> {
         PLACED.with(|p| {
             let p = p.borrow();
             let w = p.get(label)?;
+            w.queue_resize();
             let (_, natural) = w.preferred_height();
             Some((natural - w.margin_top() - w.margin_bottom()) as f64)
         })
