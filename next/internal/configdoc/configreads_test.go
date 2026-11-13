@@ -1,9 +1,12 @@
 package configdoc
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"runtime"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"testing"
@@ -62,12 +65,39 @@ func TestRedactSecretValueAlsoPlainElsewhere(t *testing.T) {
 	})
 }
 
-// Scrub leaves a secret shorter than MinTextSecret in a message, as substring redaction does.
-func TestScrubLeavesShortSecrets(t *testing.T) {
-	r := NewRedactor()
-	got := r.Scrub("retry out of range 1-3, key fake-scrub-secret-1", []string{"3", "1234567", "fake-scrub-secret-1"})
-	if want := "retry out of range 1-3, key " + r.Placeholder("fake-scrub-secret-1"); got != want {
-		t.Errorf("Scrub = %q, want %q", got, want)
+// Text keeps a value shorter than MinTextSecret that is a secret only for being in a mapping
+// below a secret key, and loses every other secret, however short: a secret key's value, its
+// list's items, and a value that is also one of those through an alias.
+func TestTextSecretsLeaveShortNestedValues(t *testing.T) {
+	for _, tc := range []struct {
+		name, src string
+		isYAML    bool
+		gone      []string
+	}{
+		{"json", `{"management_key": "mk", "client_keys": ["ck", ["ck-deep"]],
+  "extension": {"accounts": [{"id": "a", "settings": {"client_secret": {"value": "fake-nested-secret-1", "rotate_after_days": 3, "mode": "auto"}}}]}}`,
+			false, []string{"mk", "ck", "ck-deep", "fake-nested-secret-1"}},
+		{"yaml", "request-retry: 3\nbedrock-api-key:\n  - api-key: fake-bedrock-key-1\n    priority: 3\n    mode: auto\n    region: &r eu-1\nremote-management:\n  secret-key: *r\n",
+			true, []string{"fake-bedrock-key-1", "eu-1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := mustParse(t, tc.src, tc.isYAML)
+			for _, s := range []string{"3", "auto"} {
+				if !slices.Contains(d.Secrets(), s) {
+					t.Fatalf("Secrets() = %q, want %q among them", d.Secrets(), s)
+				}
+			}
+			r := NewRedactor()
+			msg := "line 3: mode auto"
+			want := msg
+			for _, s := range tc.gone {
+				msg += ", " + s
+				want += ", " + r.Placeholder(s)
+			}
+			if got := r.Scrub(msg, d.TextSecrets()); got != want {
+				t.Errorf("Scrub(TextSecrets) = %q, want %q", got, want)
+			}
+		})
 	}
 }
 
@@ -154,41 +184,83 @@ func TestSettingsSecretsHoldURLParts(t *testing.T) {
 	}
 }
 
-// Reading and restoring a config file takes time in proportion to its size: 60,000 client keys,
-// about the 1 MiB body limit, each take well under the bound, in JSON and in a config.yaml.
-func TestRedactAndRestoreManySecrets(t *testing.T) {
-	for _, isYAML := range []bool{false, true} {
+// Reading and restoring a config file, and finding the secrets of settings, take time in
+// proportion to the document's size: eight times the secrets take about eight times as long, not
+// the 64 times a reading that goes over the document once for each secret takes. The best of
+// three runs at each size is compared, so a busy machine slows both alike and decides nothing.
+func TestRedactAndRestoreTimeGrowsWithSize(t *testing.T) {
+	const small, large, most = 1000, 16000, 64.0
+	doc := func(isYAML bool, n int) []byte {
 		var b strings.Builder
 		if isYAML {
 			b.WriteString("access:\n  api-keys:\n")
-			for i := range 60000 {
+			for i := range n {
 				fmt.Fprintf(&b, "    - \"sk-many-%06d\"\n", i)
 			}
-		} else {
-			b.WriteString(`{"listen": "127.0.0.1:8317", "client_keys": [`)
-			for i := range 60000 {
-				if i > 0 {
-					b.WriteString(", ")
-				}
-				fmt.Fprintf(&b, `"sk-many-%06d"`, i)
+			return []byte(b.String())
+		}
+		b.WriteString(`{"client_keys": [`)
+		for i := range n {
+			if i > 0 {
+				b.WriteString(", ")
 			}
-			b.WriteString("]}\n")
+			fmt.Fprintf(&b, `"sk-many-%06d"`, i)
 		}
-		src := b.String()
-		bound := 5 * time.Second
-		if raceDetector {
-			bound = 30 * time.Second
-		}
-		r := NewRedactor()
+		b.WriteString("]}\n")
+		return []byte(b.String())
+	}
+	// timed runs f with the garbage collector off, which would otherwise run more often the more
+	// memory f takes, and make a larger document slower than its size alone makes it.
+	timed := func(f func()) time.Duration {
+		runtime.GC()
+		defer debug.SetGCPercent(debug.SetGCPercent(-1))
 		start := time.Now()
-		red, err := r.Redact([]byte(src), isYAML)
-		if took := time.Since(start); err != nil || took > bound {
-			t.Fatalf("yaml %v: Redact took %v (bound %v): %v", isYAML, took, bound, err)
+		f()
+		return time.Since(start)
+	}
+	r := NewRedactor()
+	for _, isYAML := range []bool{false, true} {
+		steps := map[string]func(src []byte) func(){
+			"Redact": func(src []byte) func() {
+				return func() {
+					if _, err := r.Redact(src, isYAML); err != nil {
+						t.Fatal(err)
+					}
+				}
+			},
+			"Restore": func(src []byte) func() {
+				red, err := r.Redact(src, isYAML)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return func() {
+					if back, err := r.Restore(red, src, isYAML); err != nil || !bytes.Equal(back, src) {
+						t.Fatalf("Restore: %v", err)
+					}
+				}
+			},
 		}
-		start = time.Now()
-		back, err := r.Restore(red, []byte(src), isYAML)
-		if took := time.Since(start); err != nil || took > bound || string(back) != src {
-			t.Fatalf("yaml %v: Restore took %v (bound %v), same document %v: %v", isYAML, took, bound, string(back) == src, err)
+		if !isYAML {
+			steps["SettingsSecrets"] = func(src []byte) func() {
+				return func() {
+					if got := SettingsSecrets(src); len(got) == 0 {
+						t.Fatal("SettingsSecrets found none")
+					}
+				}
+			}
+		}
+		for name, step := range steps {
+			few, many := step(doc(isYAML, small)), step(doc(isYAML, large))
+			best := [2]time.Duration{time.Hour, time.Hour}
+			for range 3 {
+				best[0] = min(best[0], timed(few))
+				best[1] = min(best[1], timed(many))
+			}
+			if ratio := float64(best[1]) / float64(best[0]); ratio > most {
+				t.Errorf("yaml %v: %s of %d secrets took %v, of %d took %v: %.1f times as long, want at most %.0f", isYAML, name, small, best[0], large, best[1], ratio, most)
+			} else {
+				t.Logf("yaml %v: %s: %v, %v: %.1f times", isYAML, name, best[0], best[1], ratio)
+			}
 		}
 	}
 }
@@ -200,14 +272,16 @@ func TestRedactUnknownV8Section(t *testing.T) {
 	redactRoundTrip(t, src, true, []string{"fake-codex-key-1", "fake-misplaced-client-key-1"}, []string{"base-url: https://codex.example.com"})
 }
 
-// Names are compared without regard to letter case and to how words are joined (camelCase,
-// snake_case, kebab-case), and a mapping named like headers is read by the header rules.
+// Names are compared without regard to letter case and to how words are joined, if they are
+// (camelCase, snake_case, kebab-case, written together), and a mapping named headers or ending
+// in headers is read by the header rules.
 func TestSecretNames(t *testing.T) {
 	for _, name := range []string{
 		"api_key", "apiKey", "API-KEY", "accessToken", "access_token", "refreshToken", "id-token",
 		"client_secret", "clientSecret", "aws_secret_access_key", "AWS_SECRET_ACCESS_KEY", "secretAccessKey",
 		"password", "dbPassword", "private_key", "privateKey", "secret_key", "management_key", "client_keys",
-		"passphrase", "token", "secret",
+		"passphrase", "token", "secret", "accesstoken", "apitoken", "clientsecret", "secretkey", "privatekey",
+		"awssecretaccesskey", "dbpassword", "x-apikey",
 	} {
 		if !secretName(name) {
 			t.Errorf("%q is not a secret name", name)
@@ -216,16 +290,16 @@ func TestSecretNames(t *testing.T) {
 	for _, name := range []string{
 		"max_tokens", "maxTokens", "max-output-tokens", "token_count_estimate", "prompt_cache_key",
 		"cache-key", "partition_key", "key_id", "keys", "secretary", "base_url", "model", "kind",
-		"passthrough-headers", "tokenizer", "monkey",
+		"passthrough-headers", "tokenizer", "monkey", "tokens", "api_key_id", "max_token_count", "secret_name",
 	} {
 		if secretName(name) {
 			t.Errorf("%q is a secret name", name)
 		}
 	}
 	src := `{"settings": {"extra_headers": {"Authorization": "Bearer fake-extra-header-1", "X-Title": "kept-title"},
-  "customHeaders": {"X-Api-Key": "fake-custom-header-1"}}}`
+  "customHeaders": {"X-Api-Key": "fake-custom-header-1"}, "upstreamheaders": {"Cookie": "fake-joined-header-1"}}}`
 	got := SettingsSecrets([]byte(src))
-	for _, want := range []string{"Bearer fake-extra-header-1", "fake-custom-header-1"} {
+	for _, want := range []string{"Bearer fake-extra-header-1", "fake-custom-header-1", "fake-joined-header-1"} {
 		if !slices.Contains(got, want) {
 			t.Errorf("SettingsSecrets lacks %q: %q", want, got)
 		}

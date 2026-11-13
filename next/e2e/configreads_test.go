@@ -9,7 +9,8 @@ import (
 
 // A config whose secret below a secret key is also written in plain elsewhere (a 3 below an
 // account's client_secret and a quarantine count of 3) is written by PUT /config, shown by its
-// reply and by GET /config with the secret hidden and the plain 3 kept.
+// reply and by GET /config with the secret hidden and the plain 3 kept; core's messages keep
+// their 3s.
 func TestManageConfigSecretValueAlsoPlain(t *testing.T) {
 	const nested = "fake-nested-secret-1"
 	for _, f := range formats() {
@@ -48,6 +49,16 @@ func TestManageConfigSecretValueAlsoPlain(t *testing.T) {
 				if !strings.Contains(text, plain3) {
 					t.Errorf("%s lacks %q:\n%s", what, plain3, text)
 				}
+			}
+			// The 3 below the secret key is too short to take out of messages, which keep
+			// their 3s.
+			broken, says := "a: 1\nb: 2\nc: [\n", "line 3:"
+			if !f.yaml {
+				broken, says = `{"a": 3 3}`, "'3'"
+			}
+			code, body = c.call(t, http.MethodPut, "/config", map[string]string{"content": broken})
+			if code != http.StatusUnprocessableEntity || !strings.Contains(string(body), says) {
+				t.Errorf("PUT /config of a broken document: %d %s, want 422 saying %q", code, body, says)
 			}
 		})
 	}

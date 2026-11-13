@@ -14,7 +14,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
@@ -79,8 +78,9 @@ func (r *Redactor) placeholderOf(n *yaml.Node, texts map[*yaml.Node]string) stri
 }
 
 // The rules that say which values are secrets. They go by key name, compared in lower case
-// whatever joins its words (accessToken, access_token and access-token are one name), so they
-// hold in both layouts of a config.yaml, in the JSON config and in settings:
+// whatever joins its words, or none (accessToken, access_token, access-token and accesstoken
+// are one name), so they hold in both layouts of a config.yaml, in the JSON config and in
+// settings:
 //   - the value of a key named like a secret (api-key, secret-key, management_key,
 //     client_keys, password, *-token, *_secret_access_key, ...), or each item when it is a list;
 //   - every value under a "credential" (an account's credential), except its kind;
@@ -97,17 +97,16 @@ func (r *Redactor) placeholderOf(n *yaml.Node, texts map[*yaml.Node]string) stri
 // null and the empty string are never secrets: they carry none, and hiding them would hide what a
 // setting is.
 var secretNames = map[string]bool{
-	"api-key": true, "api-keys": true, "apikey": true, "secret-key": true, "management-key": true,
-	"client-keys": true, "password": true, "secret": true, "token": true, "private-key": true,
-	"secret-access-key": true, "passphrase": true,
+	"apikeys": true, "managementkey": true, "clientkeys": true,
 }
 
-// secretSuffixes end the other names of secrets: refresh-token, client-secret, db-password, ...
-var secretSuffixes = []string{"-token", "-secret", "-password", "-api-key", "-secret-key", "-private-key",
-	"-secret-access-key", "-passphrase"}
+// secretSuffixes end the other names of secrets, and are names of secrets themselves:
+// refreshtoken, clientsecret, dbpassword, awssecretaccesskey, ...
+var secretSuffixes = []string{"token", "secret", "password", "apikey", "secretkey", "privatekey",
+	"secretaccesskey", "passphrase"}
 
 func secretName(key string) bool {
-	k := normName(key)
+	k := joinedName(key)
 	if secretNames[k] {
 		return true
 	}
@@ -121,32 +120,13 @@ func secretName(key string) bool {
 
 // headersName reports whether a key names a mapping of HTTP headers: headers, extra_headers,
 // customHeaders, ...
-func headersName(key string) bool {
-	k := normName(key)
-	return k == "headers" || strings.HasSuffix(k, "-headers")
-}
+func headersName(key string) bool { return strings.HasSuffix(joinedName(key), "headers") }
 
-// normName returns a key name in lower case with its words joined by "-": accessToken,
-// ACCESS_TOKEN, access.token and access-token are all access-token, and APIKey is api-key.
-func normName(key string) string {
-	r := []rune(key)
-	var b strings.Builder
-	for i, c := range r {
-		switch {
-		case c == '_' || c == '-' || c == '.' || c == ' ':
-			b.WriteByte('-')
-			continue
-		case unicode.IsUpper(c) && i > 0:
-			prev := r[i-1]
-			next := i+1 < len(r) && unicode.IsLower(r[i+1])
-			if unicode.IsLower(prev) || unicode.IsDigit(prev) || unicode.IsUpper(prev) && next {
-				b.WriteByte('-')
-			}
-		}
-		b.WriteRune(unicode.ToLower(c))
-	}
-	return b.String()
-}
+// joinedName returns a key name in lower case with its words written together: accessToken,
+// ACCESS_TOKEN, access.token, access-token and accesstoken are all accesstoken.
+func joinedName(key string) string { return strings.ToLower(wordJoins.Replace(key)) }
+
+var wordJoins = strings.NewReplacer("_", "", "-", "", ".", "", " ", "")
 
 func secretHeader(name string) bool { return upheader.Secret(name) }
 
@@ -241,52 +221,70 @@ func keyName(n *yaml.Node) string { return resolved(n).Value }
 // secrets returns the scalar nodes of the tree under n that hold secrets. strict: n is an
 // account's settings, not a config file, so it has no provider sections.
 func secrets(n *yaml.Node, strict bool) []*yaml.Node {
-	out, _ := found(n, strict)
+	out, _, _ := found(n, strict)
 	return out
 }
 
 // found is secrets, with the text core reads from each secret header value of a provider section
-// (legacy.HeaderText), which core reads as text without the spaces around it.
-func found(n *yaml.Node, strict bool) (out []*yaml.Node, texts map[*yaml.Node]string) {
+// (legacy.HeaderText), which core reads as text without the spaces around it, and the secrets
+// that are ones only for being in a mapping below a secret key (nested: the 3 of
+// client_secret: {rotate_after_days: 3}), not a secret key's value or one of its list's items.
+func found(n *yaml.Node, strict bool) (out []*yaml.Node, texts map[*yaml.Node]string, nested map[*yaml.Node]bool) {
 	// add records v as a secret, unless it is true, false, null or empty (see the rules above).
-	added := map[*yaml.Node]bool{}
-	add := func(v *yaml.Node) {
-		if v.Kind == yaml.ScalarNode && v.Tag != "!!null" && v.Tag != "!!bool" && v.Value != "" && !added[v] {
-			added[v] = true
-			out = append(out, v)
+	added, direct := map[*yaml.Node]bool{}, map[*yaml.Node]bool{}
+	add := func(v *yaml.Node, inMapping bool) {
+		if v.Kind == yaml.ScalarNode && v.Tag != "!!null" && v.Tag != "!!bool" && v.Value != "" {
+			if !added[v] {
+				added[v] = true
+				out = append(out, v)
+			}
+			if !inMapping {
+				direct[v] = true
+			}
 		}
 	}
 	// all adds every scalar under v; with kind false, except the values of keys named "kind" (a
-	// credential's kind). Each node is read at most once in each way, so an alias back into its
-	// own anchor, or anchors that nest aliases many times over, cost no more than the document's
-	// size.
+	// credential's kind). below: v is a secret key's value, so a value in a mapping under it is
+	// a secret only for being there (see nested). Each node is read at most once in each way, so
+	// an alias back into its own anchor, or anchors that nest aliases many times over, cost no
+	// more than the document's size.
+	type place int
+	const (
+		anywhere  place = iota // a credential: each value is a secret by itself
+		below                  // a secret key's value
+		inMapping              // in a mapping under a secret key's value
+	)
 	type allReading struct {
 		n    *yaml.Node
 		kind bool
+		at   place
 	}
 	allRead := map[allReading]bool{}
-	var all func(v *yaml.Node, kind bool)
-	all = func(v *yaml.Node, kind bool) {
-		k := allReading{v, kind}
+	var all func(v *yaml.Node, kind bool, at place)
+	all = func(v *yaml.Node, kind bool, at place) {
+		k := allReading{v, kind, at}
 		if allRead[k] {
 			return
 		}
 		allRead[k] = true
 		switch v.Kind {
 		case yaml.ScalarNode:
-			add(v)
+			add(v, at == inMapping)
 		case yaml.AliasNode:
 			if v.Alias != nil {
-				all(v.Alias, kind)
+				all(v.Alias, kind, at)
 			}
 		case yaml.SequenceNode:
 			for _, c := range v.Content {
-				all(c, kind)
+				all(c, kind, at)
 			}
 		case yaml.MappingNode:
+			if at == below {
+				at = inMapping
+			}
 			for i := 0; i+1 < len(v.Content); i += 2 {
 				if kind || keyName(v.Content[i]) != "kind" {
-					all(v.Content[i+1], kind)
+					all(v.Content[i+1], kind, at)
 				}
 			}
 		}
@@ -336,7 +334,7 @@ func found(n *yaml.Node, strict bool) (out []*yaml.Node, texts map[*yaml.Node]st
 		plain := ctx{section: c.section}
 		switch {
 		case c.role == roleSecret:
-			all(v, true)
+			all(v, true, below)
 			return
 		case c.role == roleSections && v.Kind == yaml.MappingNode:
 			// Each section is a list of provider entries, read by the rules; any other key is
@@ -345,7 +343,7 @@ func found(n *yaml.Node, strict bool) (out []*yaml.Node, texts map[*yaml.Node]st
 				if slices.Contains(sectionNames, name) {
 					walk(val, ctx{section: true})
 				} else {
-					all(val, true)
+					all(val, true, below)
 				}
 			})
 			return
@@ -353,14 +351,14 @@ func found(n *yaml.Node, strict bool) (out []*yaml.Node, texts map[*yaml.Node]st
 			// An entry is read by the rules; anything else in the list is a key.
 			for _, x := range v.Content {
 				if resolved(x).Kind != yaml.MappingNode {
-					all(x, true)
+					all(x, true, below)
 				} else {
 					walk(x, ctx{section: true})
 				}
 			}
 			return
 		case c.role == roleSections || c.role == roleEntries:
-			all(v, true)
+			all(v, true, below)
 			return
 		case c.role == roleHeaders && v.Kind == yaml.MappingNode:
 			pairs(v, c, func(name string, val *yaml.Node) {
@@ -376,7 +374,7 @@ func found(n *yaml.Node, strict bool) (out []*yaml.Node, texts map[*yaml.Node]st
 							}
 						}
 					}
-					all(val, true)
+					all(val, true, anywhere)
 				} else {
 					walk(val, plain)
 				}
@@ -386,7 +384,7 @@ func found(n *yaml.Node, strict bool) (out []*yaml.Node, texts map[*yaml.Node]st
 		switch v.Kind {
 		case yaml.ScalarNode:
 			if secretURL(v.Value) {
-				add(v)
+				add(v, false)
 			}
 		case yaml.SequenceNode:
 			for _, x := range v.Content {
@@ -396,7 +394,7 @@ func found(n *yaml.Node, strict bool) (out []*yaml.Node, texts map[*yaml.Node]st
 			pairs(v, c, func(key string, val *yaml.Node) {
 				switch {
 				case strings.EqualFold(key, "credential"):
-					all(val, false)
+					all(val, false, anywhere)
 				case strings.EqualFold(key, "headers"):
 					walk(val, ctx{role: roleHeaders, section: c.section})
 				case headersName(key):
@@ -418,7 +416,15 @@ func found(n *yaml.Node, strict bool) (out []*yaml.Node, texts map[*yaml.Node]st
 	} else {
 		walk(n, ctx{role: roleTop})
 	}
-	return out, texts
+	for _, v := range out {
+		if !direct[v] {
+			if nested == nil {
+				nested = map[*yaml.Node]bool{}
+			}
+			nested[v] = true
+		}
+	}
+	return out, texts, nested
 }
 
 // Secrets returns the secret values the document holds.
@@ -430,9 +436,26 @@ func (d *Doc) Secrets() []string {
 	return out
 }
 
-// MinTextSecret is the length, in bytes, below which SettingsSecrets leaves a secret out: removing
-// every occurrence of a string that short from a reply or a log would mangle unrelated text. A
-// placeholder in a settings document replaces the whole value, so it covers short ones too.
+// TextSecrets returns the secret values to take out of text where they occur, such as core's
+// messages (Redactor.Scrub): those Secrets returns, except one shorter than MinTextSecret that is
+// a secret only for being in a mapping below a secret key (the 3 of client_secret:
+// {rotate_after_days: 3}), which is left in text as SettingsSecrets leaves a short one. The
+// redacted document still shows a placeholder in its place.
+func (d *Doc) TextSecrets() []string {
+	nodes, _, nested := found(d.root, false)
+	var out []string
+	for _, n := range nodes {
+		if !nested[n] || len(n.Value) >= MinTextSecret {
+			out = append(out, n.Value)
+		}
+	}
+	return out
+}
+
+// MinTextSecret is the length, in bytes, below which SettingsSecrets and TextSecrets leave a
+// secret out: removing every occurrence of a string that short from a reply or a log would
+// mangle unrelated text. A placeholder in a document replaces the whole value, so it covers
+// short ones too.
 const MinTextSecret = 8
 
 // SettingsSecrets returns the secret values an account's settings, a JSON object, hold by the
@@ -447,8 +470,10 @@ func SettingsSecrets(b []byte) []string {
 		return nil
 	}
 	var out []string
+	seen := map[string]bool{}
 	add := func(s string) {
-		if len(s) >= MinTextSecret && !slices.Contains(out, s) {
+		if len(s) >= MinTextSecret && !seen[s] {
+			seen[s] = true
 			out = append(out, s)
 		}
 	}
@@ -489,7 +514,7 @@ func (r *Redactor) redact(b []byte, isYAML, strict bool) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	nodes, texts := found(d.root, strict)
+	nodes, texts, _ := found(d.root, strict)
 	if len(nodes) == 0 {
 		return b, nil
 	}
@@ -619,7 +644,7 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 	values := map[string]*secret{}
 	if cur, err := Parse(current, isYAML); err == nil {
 		where := paths(cur.root)
-		nodes, texts := found(cur.root, settings)
+		nodes, texts, _ := found(cur.root, settings)
 		for _, n := range nodes {
 			p := r.placeholderOf(n, texts)
 			this := &secret{value: n.Value, tag: n.Tag, tagged: n.Style&yaml.TaggedStyle != 0}
@@ -908,12 +933,11 @@ func (d *Doc) line(n *yaml.Node) int {
 }
 
 // Scrub returns msg with each of the secrets in it replaced by its placeholder, longest
-// first. A secret shorter than MinTextSecret is left in msg, as substring redaction leaves it:
-// replacing every occurrence of so short a string would garble the message (a retry count of 3
-// in "out of range 1-3"). Secrets are looked for in msg as it was given, never in a placeholder
-// put in it, so one secret cannot alter the placeholder of another.
+// first. A very short secret may garble the message; showing it would be worse. Secrets are
+// looked for in msg as it was given, never in a placeholder put in it, so a short secret
+// (such as "red" or "abc") cannot alter the placeholder of another.
 func (r *Redactor) Scrub(msg string, secrets []string) string {
-	secrets = slices.DeleteFunc(slices.Clone(secrets), func(s string) bool { return len(s) < MinTextSecret })
+	secrets = slices.DeleteFunc(slices.Clone(secrets), func(s string) bool { return s == "" })
 	slices.SortFunc(secrets, func(a, b string) int { return cmp.Or(len(b)-len(a), strings.Compare(a, b)) })
 	secrets = slices.Compact(secrets)
 	type found struct {
