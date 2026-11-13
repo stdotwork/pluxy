@@ -202,7 +202,8 @@ fn same_launch_recipe(a: &ExactAction, b: &ExactAction) -> bool {
             _ => false,
         }
 }
-/// Set only by native entry points, never deserialized from page data.
+/// Set only by native entry points, never deserialized from page data. Page and Import never use
+/// a remembered approval.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)] // Tray and native UI launcher handlers are added by the launcher slice.
 enum Origin {
@@ -537,6 +538,8 @@ impl Confirmations {
     pub fn prepare_page(&mut self, action: Action) -> Result<Prepared, String> {
         self.prepare(action, Origin::Page)
     }
+    /// A call with a tool hop in its chain that no page started: queued with the page limits, it
+    /// never uses or saves a remembered approval, and its dialog offers no Remember.
     pub fn prepare_import(&mut self, action: Action) -> Result<Prepared, String> {
         self.prepare(action, Origin::Import)
     }
@@ -572,8 +575,10 @@ impl Confirmations {
 
     /// For the main window's command handlers only, after their caller check, with an action
     /// native code built from verified records (enabling a native tool, granting a file or
-    /// folder through Access) or from a setting it checked (changing the release feed). Never
-    /// page data. Main origin never reuses a remembered launch: these actions have no launch.
+    /// folder through Access), from a setting it checked (changing the release feed) and, for the
+    /// router, the window's own direct call of a launch. Never page data, and never a call with a
+    /// tool hop (`prepare_import`). Those actions have no launch, except the router's, which may
+    /// use a remembered approval after a native gesture.
     pub(crate) fn prepare_main(&mut self, action: Action) -> Result<Prepared, String> {
         self.prepare(action, Origin::Main)
     }

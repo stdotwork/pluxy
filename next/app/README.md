@@ -569,8 +569,9 @@ local-file check, not a defense against malicious same-user metadata manipulatio
 Each preparation records its native entry point's origin: Main, Tray, NativeUi, Page or Import.
 Page and Import origins cannot use remembered approval, even with a fresh native gesture; this
 rule is tested at the unit level. The router prepares a write or launch from a chain a page
-started through Page Start, and one from any other chain as a Main action naming the whole chain;
-only the latter, started by a native gesture, may use a remembered approval. Gesture construction
+started through Page Start, one with any tool hop in its chain as an Import, and only the
+window's own direct call as a Main action; only the latter, started by a native gesture, may use
+a remembered approval, and only those dialogs offer Remember. Gesture construction
 is private to native handlers and fixtures, and a gesture expires after five seconds.
 
 Page Start uses the separate native entry point, always opens a fresh dialog, permits one pending

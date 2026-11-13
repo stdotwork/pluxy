@@ -404,10 +404,11 @@ A call goes ahead only if all of these hold, checked again for each call:
   five hops long, the requester and four tools.
 - The input is at most 64 KiB and matches the operation's input schema.
 - A `write` call has a fresh native confirmation naming the whole chain and the exact input. A
-  `launch` call has a fresh native confirmation of the exact executable, `argv` and `cwd`. Only a
-  chain the window started from a native gesture (a native button press) may use a remembered
-  approval, and only of exactly that chain and launch; a matching launch from another chain asks
-  again, and a chain a page started always asks, with no "remember" in its dialog. The host
+  `launch` call has a fresh native confirmation of the exact executable, `argv` and `cwd`. Only
+  the window's own direct call, made from a native gesture (a native button press), may use a
+  remembered approval, and only of exactly that launch. A call with a tool hop in its chain is
+  prepared as an import, whoever started it, and never uses or saves a remembered approval; a
+  chain a page started always asks too. Neither dialog offers "remember". The host
   confirms the launch; the operation receives it as its input, as with any call (the host's own
   launcher comes later). The confirmation's rate and pending limits are checked before an
   executable is hashed, and it is hashed without holding the confirmations' lock. A call cancelled
