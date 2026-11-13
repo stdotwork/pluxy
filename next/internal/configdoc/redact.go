@@ -487,14 +487,18 @@ func found(n *yaml.Node, strict bool) (out []*yaml.Node, texts map[*yaml.Node]st
 	} else {
 		walk(n, ctx{role: roleTop})
 	}
-	// A string secret of MinTextSecret bytes or more written again as a whole value anywhere
-	// else (note: <the key>) is a secret there too. A shorter or not string copy is not: it
-	// carries too little of the secret, and the same 3 or "abc" is often written for other
-	// reasons. A placeholder is no secret to copy: in an edited document, one moved elsewhere
-	// is no copy (Restore puts a copy back only where the file holds it).
+	// A string secret of MinTextSecret bytes or more that is one by itself (a secret key's
+	// value or list item, a credential's value, a secret header's value, a URL), written again
+	// as a whole value anywhere else (note: <the key>), is a secret there too: a copy. A shorter
+	// or not string copy is not: it carries too little of the secret, and the same 3 or "abc"
+	// is often written for other reasons. Nor is a copy of a value that is a secret only for
+	// being in a mapping below a secret key (nested): the mode: automatic of a client-secret
+	// mapping says nothing secret about routing's strategy: automatic. A placeholder is no
+	// secret to copy: in an edited document, one moved elsewhere is no copy (Restore puts a
+	// copy back only where the file holds it, and only while the document holds its secret).
 	copied := map[string]bool{}
 	for _, v := range out {
-		if v.Tag == "!!str" && len(v.Value) >= MinTextSecret && !placeholder.MatchString(v.Value) {
+		if direct[v] && v.Tag == "!!str" && len(v.Value) >= MinTextSecret && !placeholder.MatchString(v.Value) {
 			copied[v.Value] = true
 		}
 	}

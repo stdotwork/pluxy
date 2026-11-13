@@ -430,6 +430,16 @@ func TestRestoreAfterRestartIsStale(t *testing.T) {
 	}
 }
 
+// Only a secret by itself (a secret key's value, a credential's, a secret header's) is copied:
+// a value that is a secret only for being in a mapping below a secret key (the mode of
+// client-secret: {mode: automatic}) leaves the same value elsewhere shown.
+func TestRedactCopiesOnlyOfDirectSecrets(t *testing.T) {
+	redactRoundTrip(t, "routing:\n  strategy: automatic\nclient-secret:\n  mode: automatic\n  value: fake-client-secret-1\n", true,
+		[]string{"fake-client-secret-1", "mode: automatic"}, []string{"strategy: automatic"})
+	redactRoundTrip(t, `{"routing": {"strategy": "automatic"}, "client_secret": {"mode": "automatic", "value": "fake-client-secret-1"}}`, false,
+		[]string{"fake-client-secret-1", `"mode": "automatic"`}, []string{`"strategy": "automatic"`})
+}
+
 // A JSON key name is compared as encoding/json matches it when core loads the file, so
 // client_keyſ (with U+017F) and management_\u212aey (with the Kelvin sign) are client_keys and
 // management_key, and their values are hidden.
