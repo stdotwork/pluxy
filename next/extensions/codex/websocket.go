@@ -167,12 +167,19 @@ func (s *wsSession) Turn(ctx context.Context, call sdk.Call, out *sdk.Stream) er
 	var m map[string]json.RawMessage
 	_ = json.Unmarshal(ur.body, &m)
 	m["type"] = raw("response.create")
-	var prev string
-	_ = json.Unmarshal(m["previous_response_id"], &prev)
 	body, err := json.Marshal(m)
 	if err != nil {
 		return err
 	}
+	// The message as it goes out: the config's payload rules apply once to it, after everything
+	// above. A reconnect makes no new message, and an interrupt is no turn. The response it
+	// continues is the one the message names in the end.
+	body = sdk.ApplyPayload(ctx, body)
+	var sent struct {
+		Previous string `json:"previous_response_id"`
+	}
+	_ = json.Unmarshal(body, &sent)
+	prev := sent.Previous
 
 	c := s.current()
 	if c == nil {

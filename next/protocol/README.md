@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.14
+# pluxy extension protocol, version 0.15
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -22,9 +22,10 @@ the account's [`proxy_url`](#accounts): the proxy the call's upstream traffic go
 Version 0.12 adds the account's [`headers`](#headers): extra HTTP headers on that traffic.
 Version 0.13 adds [upstream capture](#upstream-capture): what the extension sent upstream and got
 back, for core's request logs. Version 0.14 adds [payload rules](#payload-rules): fields of the
-upstream JSON body that the config sets, fills in or removes. It is deliberately small; later
-versions add capabilities and more operations without changing what is described here. An
-extension written for version 0 works unchanged with a core that speaks 0.14 (see
+upstream JSON body that the config sets, fills in or removes. Version 0.15 has a session turn carry
+them too. It is deliberately small; later versions add capabilities and more operations without
+changing what is described here. An extension written for version 0 works unchanged with a core
+that speaks 0.15 (see
 [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
@@ -230,7 +231,7 @@ Core opens a connection and writes one call frame:
 | `login` | For `login`: what to sign in with (see [Login and refresh](#login-and-refresh)). |
 | `session` | For `session`: what kind of session to open (see [Sessions](#sessions)). |
 | `capture` | Since 0.13, for `generate`, `count_tokens` and `endpoint`: true when core asks for the call's [upstream capture](#upstream-capture). Absent: false. |
-| `payload` | Since 0.14, for `generate`, `count_tokens` and `endpoint`: the [payload rules](#payload-rules) that apply to the call. Absent: none. |
+| `payload` | Since 0.14, for `generate`, `count_tokens` and `endpoint`, and since 0.15 for a `session.turn`: the [payload rules](#payload-rules) that apply to the call or turn. Absent: none. |
 
 An extension that gets an `op` it does not know replies with an `error` event whose code is
 `unsupported`.
@@ -536,9 +537,14 @@ JSON, URL and base64 forms and as quoted in core's own messages, from everything
 back. Keep values that are not secret,
 especially short ones, out of the credential. Core removes the secrets in the account's
 `settings` the same way: every value below a key named like a secret (such as `api_key`,
-`password` or `*_token`), header values about authentication in a `headers` object, and any URL
+`password`, `*_token`, `accessToken` or `aws_secret_access_key`: names are compared in lower case
+whatever joins their words, or none, and may end in a number or a word such as `value` or
+`pem`), header values about authentication or named like a secret in an object whose name holds
+`header` (`extra_headers`, `headers_override`), and any URL
 with a user name, password or query (a `base_url` with a token in it), as its management API
-hides them. Below a key named like a secret, `true`, `false`, `null` and the empty string are
+hides them; of such a URL also its user name, its password, the two together (in Basic form
+too) and the value of each query parameter named like a secret (`key`, `token`, `sig`, ...), as
+written and decoded, on their own. Below a key named like a secret, `true`, `false`, `null` and the empty string are
 not secrets: they carry none. Unlike a credential's strings, a settings secret shorter than 8
 bytes is left in text, since removing every occurrence of so short a string would mangle
 unrelated text; the management API still shows it as a placeholder. When the settings change,
@@ -588,7 +594,7 @@ the extension's other headers stay. Core never sends `Host`, `Content-Length`,
 or a value with a line break or another control character: its config load refuses them.
 
 The value of a header whose name is about authentication (its name holds `auth`, `key`,
-`token`, `secret`, `cookie`, `session`, `password` or `signature`, letter case aside) is a
+`token`, `secret`, `cookie`, `session`, `password`, `passphrase` or `signature`, letter case aside) is a
 secret: an extension never logs or shows it, and core removes it from everything a call sends
 back, as it does a credential's strings; a value shorter than 8 bytes is removed only next to
 its name, as text shows a header (`Name: value`, `Name:value`, `Name=value`, JSON's
@@ -1013,6 +1019,7 @@ terminal event. A turn's `error` ends that turn, not the session.
 | `account` | Always the account the session opened with (the same `id`). Its `credential` is the newest one core holds, which may have been renewed since the session opened: use it for any new upstream connection. A connection already open stays as it is. |
 | `request` | A model request, as for `generate`. A turn may continue the session's previous response; for `openai.responses`, `native.body.previous_response_id` names it and `items` hold only the new input. A turn that continues nothing carries the whole conversation. |
 | `capture` | Since 0.13: true when core asks for the turn's [upstream capture](#upstream-capture), as for `generate`. |
+| `payload` | Since 0.15: the [payload rules](#payload-rules) that apply to the turn, as for `generate`. Absent: none. |
 
 Core removes every credential the session has carried, in all the forms listed under
 [Errors](#errors), from every event of every turn.
@@ -1058,10 +1065,12 @@ when the connection closes.
 The upstream is a Responses WebSocket (`/v1/responses`, as in
 [OpenAI's WebSocket mode](https://developers.openai.com/api/docs/guides/websocket-mode)). Each turn
 is a Responses request: `native.format` is `openai.responses` and `native.body` is the client's
-`response.create` message. The extension sends it upstream as one `response.create` text message.
+`response.create` message. The extension sends it upstream as one `response.create` text message,
+after applying the turn's [payload rules](#payload-rules) to it.
 
-- `previous_response_id` and `generate` pass through as the client sent them. A warmup
-  (`generate: false`) is answered like any turn.
+- `previous_response_id` and `generate` pass through as the client sent them, unless a payload
+  rule changes them; the response a turn continues is the `previous_response_id` of the message
+  as it goes out, after the rules. A warmup (`generate: false`) is answered like any turn.
 - Every upstream message the turn receives is one event with the message in `raw`, as for a
   streamed Responses reply ([Events](#events)); messages the model has no event for travel as
   `native` events.
@@ -1083,8 +1092,8 @@ removes `previous_response_id`.
 
 Version 0.14. Core's config may hold payload rules (see [the README](../README.md#payload-rules)):
 fields to set, fill in or remove in the JSON body an extension sends upstream, for the requests
-they name. Core works out which rules apply to a `generate`, `count_tokens` or `endpoint` call and
-sends them, and only them, in the call frame's `payload`:
+they name. Core works out which rules apply to a `generate`, `count_tokens` or `endpoint` call, or
+(0.15) a session turn, and sends them, and only them, in the frame's `payload`:
 
 ```json
 "payload": {
@@ -1118,6 +1127,11 @@ Rules:
   extension does to the body, and once: a request the extension sends again is built afresh and
   gets them again; a body that has had them never gets them twice. Leave every other body as it
   is (protobuf, forms), and a body that is not a JSON object or array.
+- A session turn's rules apply to the message the extension sends upstream for the turn (for
+  `openai.responses`, the `response.create` message), once, after everything the extension does to
+  it. A message that is no turn, such as the client's interrupt, gets none. A turn is one
+  message: connecting the upstream socket for it makes no second one, so the rules apply once per
+  turn.
 - Paths are relative to the model request. An extension whose body carries the request inside
   another object applies them inside it: the Antigravity extension's body is
   `{"project": ..., "request": {...}}`, and its rules apply inside `request`, as in today's core.
@@ -1132,16 +1146,22 @@ Rules:
   the way that is neither an object nor an array) and, for an index past an array's end, `null`
   elements up to it.
 
-Core sends `payload` only to an extension whose describe reports `protocol_minor` 14 or more; a
-call that rules apply to on an older extension it fails itself with `unsupported` (scope
-`credential`), so routing moves on and the request never leaves without them. Session turns carry
-no `payload` in this version.
+Core sends `payload` on a `generate`, `count_tokens` or `endpoint` call only to an extension whose
+describe reports `protocol_minor` 14 or more, and on a `session.turn` only to one that reports 15
+or more. A call or turn that rules apply to on an older extension it fails itself with
+`unsupported` (scope `credential`), so routing moves on and the request never leaves without them;
+a refused turn does not end its session. An extension that reports 14 can apply the rules to its
+HTTP requests but would send a session turn without them, which is why turns need 15.
 
 In Go, `sdk.Upstream` applies them to each request made with the handler's context, with the
 engine in `github.com/stdotwork/pluxy/next/sdk/payload`; `sdk.WithPayloadRoot` on a request's
-context names the object that holds the request. As with a proxy, the SDK answers a call that
-carries rules with `unsupported` (scope `credential`, retryable) and never runs the handler when
-the extension process has not created any `sdk.Upstream` transport.
+context names the object that holds the request. A session handler passes the message it sends
+for a turn, made with the turn's context, to `sdk.ApplyPayload`, once, on the final message. A
+message it sends as an HTTP request through `sdk.Upstream` already gets the rules there, so it
+must not pass that message to `sdk.ApplyPayload` too: they would apply twice. As with a proxy,
+the SDK answers a call or turn that carries rules with `unsupported` (scope `credential`,
+retryable) and never runs the handler when the extension process has not created any
+`sdk.Upstream` transport.
 
 ## Upstream capture
 
@@ -1224,7 +1244,7 @@ handler's context.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.14. An extension reports the minor version it
+raise the minor version: this document is version 0.15. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1246,8 +1266,9 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.12 | The account's optional [`headers`](#headers). |
 | 0.13 | [Upstream capture](#upstream-capture): the call's optional `capture` and the `diagnostic` frame. |
 | 0.14 | [Payload rules](#payload-rules): the call's optional `payload`. |
+| 0.15 | The `payload` of a [session turn](#turns). |
 
-## What version 0.14 leaves out
+## What version 0.15 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

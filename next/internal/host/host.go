@@ -48,7 +48,8 @@ type Options struct {
 	// account without one of its own (proxyurl.Resolve). Nil: none.
 	ProxyURL func() string
 	// Payload returns core's payload rules, read at each generate, count_tokens and endpoint
-	// call: the call carries those that match it (protocol minor version 14). Nil: none.
+	// call and each session turn: the call carries those that match it (protocol minor version
+	// 14, 15 for a session turn). Nil: none.
 	Payload func() *payload.Rules
 	// SettingsSecrets returns the secret values in an account's settings, a JSON object. They
 	// are removed from what every call on the account sends back and from the program's
@@ -469,7 +470,7 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 		s.fail(perr)
 		return s
 	}
-	rules, perr := e.payload(ctx, account.ID, req)
+	rules, perr := e.payload(ctx, account.ID, req, payloadMinor)
 	if perr != nil {
 		s := &Stream{}
 		s.fail(perr)

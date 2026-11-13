@@ -327,21 +327,35 @@ fn ensure_open(c: &mut Checks, app: &AppHandle) {
 
 /// A pending login polls while the window shows, not while it is minimized.
 fn polling(c: &mut Checks, app: &AppHandle) {
+    // The page draws every method from one reply, so once one shows, test/alpha's shows too, if
+    // core runs test/alpha. A failure names the step that did not happen.
     let tile = "[...document.querySelectorAll('[data-part=method]')].find((t) => t.textContent.includes('test/alpha') && t.textContent.includes('Test browser'))";
-    let started = goto(app, "add-account", "[data-part=method]")
-        && main_eval(
+    let missing = if !goto(app, "add-account", "[data-part=method]") {
+        Some("Add account shows no sign-in method within 10 s")
+    } else if main_eval(
+        app,
+        &format!("(() => {{ const b = [...({tile})?.querySelectorAll('button') ?? []].find((b) => b.textContent.trim() === 'Test browser'); if (!b || b.disabled) return false; b.click(); return true; }})()"),
+    ) != Some(json!(true))
+    {
+        Some("Add account has no enabled Test browser button from test/alpha")
+    } else if within(10, || {
+        (main_eval(
             app,
-            &format!("(() => {{ const b = [...({tile})?.querySelectorAll('button') ?? []].find((b) => b.textContent.trim() === 'Test browser'); if (!b) return false; b.click(); return true; }})()"),
-        ) == Some(json!(true))
-        && within(10, || {
-            (main_eval(
-                app,
-                "[...document.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Open Link')",
-            ) == Some(json!(true)))
-            .then_some(())
-        })
-        .is_some();
-    if !c.check(started, "a test/alpha browser sign-in is pending") {
+            "[...document.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Open Link')",
+        ) == Some(json!(true)))
+        .then_some(())
+    })
+    .is_none()
+    {
+        Some("no Open Link button within 10 s of clicking Test browser")
+    } else {
+        None
+    };
+    let what = "a test/alpha browser sign-in is pending";
+    if !c.check(
+        missing.is_none(),
+        missing.map_or(what.to_string(), |m| format!("{what}: {m}")),
+    ) {
         return;
     }
     let before = LOGIN_READS.load(SeqCst);
