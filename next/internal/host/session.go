@@ -184,6 +184,10 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 	if perr != nil {
 		return refuse(perr)
 	}
+	rules, perr := s.ext.payload(ctx, account.ID, req, payloadTurnMinor)
+	if perr != nil {
+		return refuse(perr)
+	}
 	s.mu.Lock()
 	switch {
 	case s.closed:
@@ -217,7 +221,7 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 	}
 	t.stop = context.AfterFunc(ctx, s.Close)
 	s.writeMu.Lock()
-	err := protocol.WriteFrame(s.conn, protocol.Call{Type: protocol.TypeSessionTurn, Account: &account, Request: &req, Capture: t.capture != nil})
+	err := protocol.WriteFrame(s.conn, protocol.Call{Type: protocol.TypeSessionTurn, Account: &account, Request: &req, Capture: t.capture != nil, Payload: rules})
 	s.writeMu.Unlock()
 	if err != nil {
 		if errors.Is(err, protocol.ErrFrameTooLarge) {

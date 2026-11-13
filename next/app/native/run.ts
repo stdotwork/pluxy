@@ -15,13 +15,16 @@
 // - quitting stops the app's own core, and leaves a local or remote core running.
 //
 // In managed mode it then runs the window checks (window.ts, native_window.rs) in two more
-// sessions, one with a tray watcher and one without, and the signed native-tier admission check
-// (admission.ts, admission_native.rs) in one more, with the app built with artifact-test-trust
-// and a test trust profile in the run's HOME, and the program host check (program.ts,
-// program_native.rs) in one more with that build: a signed summary tool, started on demand,
-// called and cancelled, stopped when idle, disabled and quit, whose processes are gone after the
-// app quits. The other sessions run a build without that feature; its device check shows the
-// same profile admits nothing there.
+// sessions, one with a tray watcher and one without.
+// Then, in a session of its own (instances.ts, instances-session.ts), the single-instance
+// scenario: a second launch on the same profile exits and raises the first's window, a launch on
+// another profile runs as its own app, and a killed owner's stale lock is recovered.
+// The signed native-tier admission check (admission.ts, admission_native.rs) runs in one more
+// session, with the app built with artifact-test-trust and a test trust profile in the run's HOME,
+// and the program host check (program.ts, program_native.rs) in one more with that build: a signed
+// summary tool, started on demand, called and cancelled, stopped when idle, disabled and quit,
+// whose processes are gone after the app quits. The other sessions run a build without that
+// feature; its device check shows the same profile admits nothing there.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
 // own (dbus-run-session, xvfb-run), and random ports. Inside that session, before the app,
@@ -51,6 +54,7 @@ import { createInterface } from "node:readline";
 import { buildAdmissionFixtures } from "./admission";
 import { buildSmokeAppImage } from "./appimage";
 import { buildDeviceFixtures } from "./device";
+import { runInstances } from "./instances";
 import { descendants, webProcesses } from "./processes";
 import { buildProgramFixtures } from "./program";
 import { missingPrerequisites } from "./services";
@@ -733,6 +737,21 @@ try {
         )),
       );
     problems.push(...p.map((x) => `managed: ${x}`));
+
+    // Two launches of the app on one profile: one app, one core, the first one's window raised.
+    const inst = await runInstances({
+      bin,
+      probe,
+      appImage,
+      core,
+      identifier,
+      timeoutMs: TIMEOUT,
+      sessions,
+      stopSession,
+      removeRun,
+    });
+    if (inst.setup !== undefined) throw new SetupError(inst.setup);
+    problems.push(...inst.problems.map((x) => `instances: ${x}`));
   } finally {
     rmSync(prepared, { recursive: true, force: true });
   }
@@ -767,4 +786,4 @@ if (problems.length > 0) {
   console.error(`\n${problems.length} problems:\n- ${problems.join("\n- ")}`);
   process.exit(1);
 }
-console.log("native test passed in all three modes");
+console.log("native test passed in all three modes and the single-instance scenario");

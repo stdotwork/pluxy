@@ -70,6 +70,34 @@ as `window.damaged-<random>.json` and the defaults used.
 A minimized window's pages are hidden (`document.visibilityState`), so the kit's polling, which
 runs only while its page is visible, stops until the window is restored.
 
+## One app per profile
+
+The app runs once per profile: your user and the app's data folder (on Linux
+`~/.local/share/dev.pluxy.desktop/`), not the place the program is installed. Launching it again
+on that profile, from the app menu, a shortcut or the login autostart entry (Silent Launch applies
+only to a login launch that is the first), shows the first app's window (a new one if it was
+closed to the tray) and exits with status 0, starting no core, tray icon or webview. Another `HOME` or `XDG_*` folder is another
+profile, with its own app and core.
+
+Before anything else, the app takes an exclusive lock on `instance/lock` in the data folder
+(`flock`: the system releases it when the app ends, however it ends, so a killed app leaves nothing
+to recover). The folder must be your user's and not a link; the lock is opened inside it without
+following a link, and used only if it is a plain file of yours with mode 600. The app then listens
+on a socket in a short folder of yours: `pluxy-app/` in `XDG_RUNTIME_DIR`, else `pluxy-app-<uid>/`
+in the temporary folder, so a long data folder path does not matter. The app skips a folder that
+another user could swap for theirs: one with a link above it, or below a folder that belongs to
+another user (other than root) or that others may write in without its sticky bit (as `/tmp` has
+it). The socket's name is a digest
+of the data folder, and the app writes its path to `instance/address`. The folders, the lock, the
+address and the socket are readable by your user only. A later launch reads the address, connects
+without blocking, checks the socket is your user's, and sends it one fixed message; the first app
+accepts only a connection from the same user (peer credentials), reads at most 64 bytes from each
+for at most 2 seconds, serves up to 32 at once, and ignores anything but that message. The launch
+exits once the first app has shown its window, or fails with a message on stderr if the first does
+not answer within 20 seconds, or at once if the first could not listen. A socket a killed app left
+behind is removed by the next app, which holds the lock.
+The lock is not inherited by the app's core.
+
 ## Startup preferences
 
 The Connection page has three startup choices:
@@ -405,6 +433,17 @@ prompt or the setting, quits and stops the app's own core; the next launch opens
 window was. A pending test sign-in's polls are counted while the window shows, while it is
 unmapped (as a window manager minimizes it; GDK then reports it minimized) and once it is mapped
 again. Without a tray watcher, closing quits without asking, with Minimize to Tray or Ask saved.
+
+Then, in a session of its own (`native/instances-session.ts`), it launches the app again and
+again on one profile and checks that each later launch exits 0 within 10 seconds, starts no app or core of its own (it counts the
+app and core processes), and has the first show its window, also after the window was hidden and
+after it was closed to the tray, and for a login launch (`--autostart` with Silent Launch on) as
+well; that the socket is in the runtime folder, where `instance/address`
+says; that a launch with other `HOME` and `XDG_*` folders is an app and
+core of its own; that after the first app is killed with SIGKILL (its lock file and socket stay)
+the next launch becomes the app, starts its core and is the one a later launch raises; and that
+the socket and its address are gone when the app quits. The other profile's data folder is too long
+for a socket path, and a second launch of it still raises it.
 The `native-test` feature is for that test alone; release builds never have it.
 
 In local and remote modes, the test also drives the real GTK dialog with `xdotool`: good keys
@@ -470,6 +509,9 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
   startup without a watcher. It does not check every desktop's tray UI.
 - The tray host is asked about only when the window closes: if it goes away while the app sits
   in the tray, the app stays there with no way back to it but stopping it.
+- Raising the first app's window is Unix only (a Unix socket); where there is none, a second
+  launch exits with an error and the first's window stays as it was. The native test checks that
+  the raised window is shown, not that it has the keyboard focus: that is the desktop's to give.
 - The native test needs the desktop services above, and the pinned AppImage runtime from
   github.com (or a copy in its cache folder), so it does not run offline on a bare machine.
 - Native admission bounds work after a scheme request reaches the handler. They do not bound
