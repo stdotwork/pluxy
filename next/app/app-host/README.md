@@ -97,8 +97,9 @@ JSON string) and `signature` beside `url`, `sha256` and `size`, all four or none
 signature is refused. The desktop app verifies one only for a reserved publisher's package from a
 curated registry, one whose index address equals a trust root's `source` exactly: the key is the
 root's for that publisher and `key_id`, and `public_key` must be that key, or the package is
-refused. Any other listed signature, from a registry no root names or for a publisher no root
-names, is verified with the `public_key` the index names and kept for
+refused. In a curated registry every listed signature is checked so, whatever the package's
+publisher: a key that is not the root's is refused. A signature a registry no root names lists
+is verified with the `public_key` the index names and kept for
 [Access](#access-for-web-packages); the package is Unverified, is never a native tool and never
 has a reserved ID. Detached signature files contain exactly
 64 raw Ed25519 bytes; JSON/index transport encodes them as 128 lower-case hexadecimal digits.

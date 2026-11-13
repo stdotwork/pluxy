@@ -279,8 +279,9 @@ answer `unavailable`. Web packages get files and folders only through Access, be
 A native tool installs only from a curated registry whose index entry carries a descriptor signed
 by the root's key for that publisher and source, and names that key as its `public_key`; the
 signature, then the archive's size and SHA-256, are checked before it is unpacked, and the
-manifest's ID, version and tier after. A signature the index lists for any other package is
-checked the same way with the `public_key` the index names, as a web package's (a native tool
+manifest's ID, version and tier after. A curated registry lists only its root's keys: any other
+signature in it is refused, whatever the package's publisher. A signature another registry lists
+is checked the same way with the `public_key` the index names, as a web package's (a native tool
 signed so is refused), and kept for Access; the package stays **Unverified**. The Device
 extensions page marks an entry the index already shows install would refuse. Its
 program for this computer must be an executable file in the package, and the SHA-256 of every

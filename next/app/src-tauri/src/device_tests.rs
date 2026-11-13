@@ -1330,6 +1330,10 @@ fn only_a_curated_signed_native_tool_installs() {
     }
     let e = refused("curated", "pluxy/webdesc", &roots);
     assert!(e.contains("curated web packages are not admitted"), "{e}");
+    // A curated registry lists only its root's keys: any other signature in it is refused,
+    // whatever the publisher.
+    let e = refused("curated", "example/signedpage", &roots);
+    assert!(e.contains("unknown publisher key"), "{e}");
     // What the registries list says the same, before anything is fetched; whether a package is
     // a native tool only its archive tells.
     let listed = offers(&d, &roots).unwrap();
@@ -1348,6 +1352,7 @@ fn only_a_curated_signed_native_tool_installs() {
     assert_eq!(
         refusals("curated"),
         set(&[
+            "example/signedpage",
             "pluxy/badkey",
             "pluxy/forged",
             "pluxy/longkey",
@@ -1359,9 +1364,10 @@ fn only_a_curated_signed_native_tool_installs() {
         ])
     );
     assert_eq!(refusals("other"), set(&["example/partial", "pluxy/tool"]));
-    // A signature no root vouches for, from either registry, is checked with the index's key
-    // and kept for Access's approved signers; the package stays Unverified.
-    for registry in ["curated", "other"] {
+    // A signature no root vouches for, from a registry no root names, is checked with the
+    // index's key and kept for Access's approved signers; the package stays Unverified.
+    {
+        let registry = "other";
         let mut c = Catalog::open(d.clone(), false, &roots);
         c.commit(stage_from_registry(&d, &roots, registry, "example/signedpage", None).unwrap())
             .unwrap();

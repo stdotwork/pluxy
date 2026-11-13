@@ -2064,8 +2064,9 @@ fn listed<'a>(
 
 /// What install makes of registry r's entry a for id's release version, before anything is
 /// fetched: the signature to verify against r's root, None for a package installed unsigned
-/// or with a signature no root vouches for (Unverified, `unvouched`), or why it is refused. Only
-/// a reserved publisher's package, from a curated registry, is verified against a root.
+/// or with a signature no root vouches for (Unverified, `unvouched`), or why it is refused. Every
+/// signature a curated registry lists, and a reserved publisher's package, which only a curated
+/// registry may list, is verified against the registry's root.
 fn to_verify<'a>(
     roots: &dyn Roots,
     r: &Registry,
@@ -2074,6 +2075,11 @@ fn to_verify<'a>(
     a: &'a Artifact,
 ) -> Result<Option<admission::Listed<'a>>, String> {
     let l = listed(id, version, a)?;
+    // A curated registry is first-party only: a key in it that is not its root's means the
+    // registry is compromised or misconfigured, so verifying against the root refuses it.
+    if l.is_some() && roots.curated(&r.url) {
+        return Ok(l);
+    }
     let Some(why) = reserved(id, roots) else {
         return Ok(None);
     };
@@ -2090,8 +2096,8 @@ fn to_verify<'a>(
 
 /// Fetches and stages package id's release version (the newest with an archive for this
 /// computer, when none is named) from registry name. From a curated registry (one a trust root
-/// names by its index), a reserved publisher's signed artifact is verified against the root
-/// before it is unpacked; any other listed signature is checked with the index's key.
+/// names by its index), a signed artifact is verified against the root before it is unpacked;
+/// a signature another registry lists is checked with the index's key.
 pub fn stage_from_registry(
     dirs: &Dirs,
     roots: &dyn Roots,
