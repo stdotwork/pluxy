@@ -41,6 +41,20 @@ The window calls core through the
 `<core>/v0/management/...` only, following no redirects and, for a core on this computer, no
 proxy from the environment. Path segments that are, or decode to, `.` or `..` are refused.
 
+Rotate on the Config page's Connectivity tab rotates the management key natively, on Linux: the
+app opens its native confirmation, which names the core and how the new key will be kept, then
+calls core's `POST /v0/management/management-key/rotate` itself. It keeps the new key as the old
+one was kept (in `connection.json`, for this session only, or, for the app's own core, in that
+core's config file, which core writes) and shows it once in a native window with Copy and
+Close, for other programs that used the old key and for signing in again. That window stays open
+when the main window closes to the tray, and a later rotation's window replaces it. The window
+gets only how it went: the key never reaches a webview. `core_call` refuses every path under
+`/management-key`, however it is spelled. If the new key cannot be saved, the app keeps using
+it until it quits and says to copy it and enter it again with "Keep the key on this device".
+A call that left with the old key during a rotation is sent once more with the new one. The app
+waits at most 30 seconds for core's reply to a rotation, since other calls and Quit wait for it;
+without a reply it says the key may have changed and where to find it.
+
 Until the app is connected and signed in, the window shows only the Connection page, so a wrong
 address or key can always be fixed there.
 
@@ -69,6 +83,42 @@ as `window.damaged-<random>.json` and the defaults used.
 
 A minimized window's pages are hidden (`document.visibilityState`), so the kit's polling, which
 runs only while its page is visible, stops until the window is restored.
+
+## One app per profile
+
+The app runs once per profile: your user and the app's data folder (on Linux
+`~/.local/share/dev.pluxy.desktop/`), not the place the program is installed. Launching it again
+on that profile, from the app menu, a shortcut or the login autostart entry (Silent Launch applies
+only to a login launch that is the first), shows the first app's window (a new one if it was
+closed to the tray) and exits with status 0, starting no core, tray icon or webview. Another `HOME` or `XDG_*` folder is another
+profile, with its own app and core.
+
+Before anything else, the app takes an exclusive lock on `instance/lock` in the data folder
+(`flock`: the system releases it when the app ends, however it ends, so a killed app leaves nothing
+to recover). The folder must be your user's and not a link; the lock is opened inside it without
+following a link, and used only if it is a plain file of yours with mode 600. The app then listens
+on a socket in a short folder of yours: `pluxy-app/` in `XDG_RUNTIME_DIR`, else `pluxy-app-<uid>/`
+in the temporary folder, so a long data folder path does not matter. The app skips a folder that
+another user could swap for theirs: one with a link above it, or below a folder that belongs to
+another user (other than root) or that others may write in without its sticky bit (as `/tmp` has
+it). The socket's name is a digest
+of the data folder, and the app writes its path to `instance/address`. The folders, the lock, the
+address and the socket are readable by your user only. A later launch reads the address, connects
+without blocking, checks the socket is your user's, and sends it one fixed message; the first app
+accepts only a connection from the same user (peer credentials), reads at most 64 bytes from each
+for at most 2 seconds, serves up to 32 at once, and ignores anything but that message. The launch
+exits once the first app has shown its window, or fails with a message on stderr if the first does
+not answer within 20 seconds, or at once if the first could not listen. A socket a killed app left
+behind is removed by the next app, which holds the lock.
+The lock is not inherited by the app's core.
+
+## Privacy mode
+
+The navigation's **Privacy mode** toggle masks account e-mail addresses and identifiers where
+the kit shows them, as in the panel (`ui/kit/privacy.ts`), and extension pages are told in their
+theme snapshot. The app keeps the choice natively, in `privacy-mode.json` beside
+`connection.json` (readable only by your user), not in the window's storage, so losing that
+storage cannot turn it off. A file that cannot be read or parsed counts as on.
 
 ## Startup preferences
 
@@ -118,7 +168,8 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `connection_set` | Changes connection settings without accepting a key |
 | `key_entry` | Opens native key entry, checks the key against core, and returns only signed-in, wrong-key, cancelled or error status plus the connection without its key |
 | `core_restart` | Starts the app's own core again (managed mode) |
-| `core_call` | One management API call to the connected core |
+| `core_call` | One management API call to the connected core; refuses the management key's own routes |
+| `management_key_rotate` | Rotates the management key natively after the native confirmation, keeps and shows the new key natively, and returns only how it went (200 with how the key is kept, 204 when cancelled) |
 | `sign_out` | Forgets the key (local and remote modes) |
 | `page_open`, `page_place`, `page_close` | Opens an extension page's webview over part of the window, moves it, closes it |
 | `page_send` | Passes the window's channel messages to a page's webview |
@@ -128,14 +179,17 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `device_registries` | What the registries in `device-registries.json` offer this computer |
 | `device_install` | Installs or updates a package from one of those registries |
 | `device_install_file` | Opens the native file chooser and installs or updates the package chosen there (Linux) |
-| `device_enable`, `device_remove`, `device_rollback` | Enables or disables, removes, or rolls back a package on this device |
+| `device_enable`, `device_remove`, `device_rollback` | Enables or disables (a native tool only through its native confirmation), removes, or rolls back a package on this device |
 | `device_page_open` | Opens a webview for a page of a package on this device, at the address its catalog keeps |
 | `access_list` | The approved signers and every grant of Access |
 | `access_signer` | Opens a native confirmation to approve a device package's signer for its source |
 | `access_grant` | Opens the native file chooser for a package's declared resource, then a native confirmation, and keeps the grant |
 | `access_revoke` | Revokes a grant, answering once the reads under it have finished |
+| `program_call`, `program_cancel` | Calls an operation of an admitted native tool, starting it if it is not running; cancels a call by the ticket it was given (Linux) |
+| `program_status` | Whether a native tool runs, its leases, and how it last stopped (Linux) |
 | `window_get`, `window_set` | Reads or saves the Close behavior, and whether there is a usable tray |
 | `window_close` | Answers the close prompt: Exit App or Minimize to Tray, and whether to remember it |
+| `privacy_get`, `privacy_set` | Reads or saves privacy mode |
 
 The window may also listen to the app's events. To add a command: add it to
 `command_names.rs`, to `generate_handler!` in `lib.rs`, and its `allow-<name>` permission to
@@ -179,8 +233,9 @@ Permissions and extension settings still use the shared kit's channel. No page r
 
 ## Extensions on this device
 
-The Device extensions page manages page-only app packages (`app.tier` `web`, see
-[the app package contract](app-host/README.md)) installed on this computer. They are apart from
+The Device extensions page manages app packages (see
+[the app package contract](app-host/README.md)) installed on this computer: page-only packages
+(`app.tier` `web`) and curated native tools (`native`). They are apart from
 the extensions of the core the app is connected to: installing one never installs it in core,
 and core's Extensions page never lists it. Their pages are listed in the navigation with core's
 extension pages.
@@ -202,24 +257,59 @@ signature is checked before the archive is unpacked and kept with the release, f
 
 Before anything is kept, the app checks the archive: regular files and folders only, no links,
 devices or names that leave the folder, at most 10,000 entries and 512 MiB unpacked. The
-manifest must be a valid manifest version 1 with a web app contribution for host contract 0 and
-an existing file for each page. The app unpacks it into a staging folder and moves it into an
+manifest must be a valid manifest version 1 with an app contribution for host contract 0: a web
+one with an existing file for each page, or a curated native one (below). The app unpacks it into a staging folder and moves it into an
 immutable store, `device-packages/store/<archive SHA-256>/` in the app's data folder, with
 read-only files. The catalog (`device-packages/catalog.json`) records each package's source and
-each release's version, digest, sizes, formats, pages and the SHA-256 of each page file.
+each release's version, digest, sizes, formats, pages and the SHA-256 of each page file. A catalog
+holding a native tool is saved as version 1, so an app from before native tools, which reads only
+version 0, moves it aside with a warning instead of reading the tool as a page package.
 
-No source is curated in this build, so every package is labelled **Unverified**, and a package
-whose ID claims a reserved publisher (`pluxy`) is refused from any source, before a registry's
-archive is fetched and again after a local archive is unpacked. A package keeps the source it was
-installed from: a release from another source is refused until the package is removed. Packages
-get no settings or programs here: their pages' settings calls answer `unavailable`, and native
-tools are refused. They get files and folders only through Access, below.
+A registry is curated when its index address equals the `source` of a native-tier trust root
+exactly. This build compiles no roots (production roots are a release decision), so nothing is
+curated outside a test build with a test trust profile. A package from any other source is
+labelled **Unverified**, and one whose ID claims a reserved publisher (`pluxy`, or any publisher a
+root names) is refused, before a registry's archive is fetched and again after a local archive is
+unpacked. A package installed before a root reserved its publisher is disabled when the
+catalog opens, with a warning, and cannot be enabled while the app's roots reserve its
+publisher and its release does not verify as curated against them. A package keeps the source it was installed from: a release from another source is
+refused until the package is removed. Packages get no settings here: their pages' settings calls
+answer `unavailable`. Web packages get files and folders only through Access, below.
+
+A native tool installs only from a curated registry whose index entry carries a descriptor signed
+by the root's key for that publisher and source, and names that key as its `public_key`; the
+signature, then the archive's size and SHA-256, are checked before it is unpacked, and the
+manifest's ID, version and tier after. A signature the index lists for any other package is
+checked the same way with the `public_key` the index names, as a web package's (a native tool
+signed so is refused), and kept for Access; the package stays **Unverified**. The Device
+extensions page marks an entry the index already shows install would refuse. Its
+program for this computer must be an executable file in the package, and the SHA-256 of every
+file is recorded. It is labelled **Curated** and installs disabled. Enabling it opens a native
+confirmation that says it has **full access to your user account** and shows its ID, source,
+digest, signer, contracts, operations and program; only Confirm there enables it, and the catalog
+records that admission against the release, source, signer and key. Disabling, updating, rolling
+back or removing it ends the admission, so a new release asks again.
+
+The program host (`src-tauri/src/program.rs`, Linux) runs an admitted tool only on demand: at its
+first call from the window, from what `Catalog::admitted` returns then, after checking the
+admission, the root, the signature and every installed file again. It opens the program, checks
+its SHA-256 against the record and runs that opened file, in its package folder, with a cleared
+environment, only its three private pipes, a process group of its own and a parent-death signal,
+from a supervisor thread that stays until the tool has been reaped. Calls follow [app program
+contract v0](app-host/README.md#app-program-contract-v0), one at a time. When the last call
+ends, the tool stops after 30 seconds idle; closing the window cancels its calls, so their tools
+stop when idle. Any change to its package (disable, update, roll back, remove) and quitting the
+app stop it at once, and once the app is quitting no call starts a tool. Stopping closes its
+stdin, kills its whole process group after five seconds and reaps it: no process or thread of it
+is left. If the app itself dies, the tool gets SIGTERM and nothing kills its group, so a tool must
+end the processes it started when its input ends and on SIGTERM. Pages, including the tool's own,
+have no program command and no route to its pipes.
 
 Installing a newer release keeps the one it replaces as the last good release. A candidate that
 fails any check leaves the active release, its files and its open pages as they were. **Roll
 back** makes the last good release active again, after checking that its files are unchanged.
 Starting the app with `--safe-mode` lists no page of a package on this device and opens or serves
-none; the Device extensions page still shows and manages them.
+none, and admits no native tool; the Device extensions page still shows and manages them.
 
 A device page opens like a core page, in a page webview with the app's page document, but its
 frame loads from the `pluxy-app:` scheme. That scheme serves a page webview only the files of the
@@ -240,8 +330,9 @@ nothing by itself, and a page core lists gets no Access at all.
 
 Granting takes three things, each in native UI the window can only start:
 
-1. **A signed release.** Only a release whose registry listed a publisher signature can be
-   granted files; one installed from a file, or listed unsigned, is refused.
+1. **A signed web release.** Only a web package's release whose registry listed a publisher
+   signature can be granted files; one installed from a file, or listed unsigned, is refused, and
+   so is a native tool or a package whose publisher a trust root reserves, whoever signed it.
 2. **An approved signer.** The package's detail on the Device extensions page shows the signer
    (publisher, key ID and full public key) and the registry it came from. **Approve signer…**
    opens a native confirmation showing them. The approval holds for that key from that registry
@@ -398,7 +489,34 @@ answering; the asset scheme serves the active release to its page webview and re
 replaced release's files; roll back, disable, enable and remove each leave no page webview behind
 and remove leaves nothing in the store. Through the native file chooser, driven with `xdotool`,
 cancel changes nothing, a reserved-publisher file is refused and an Unverified file installs, and
-its page stays open for the window's close check.
+its page stays open for the window's close check. With a valid test trust profile in its HOME,
+this normal build still refuses a curated registry's signed native tool and installs that
+registry's web package.
+
+One more managed session runs a build with `artifact-test-trust` against a test trust profile
+(`native/admission.ts` generates the publisher key, signs the native fixture and writes the
+profile; `src-tauri/src/admission_native.rs` drives the app). From an uncurated registry the
+curated signed entry and an unsigned lookalike are refused; from the curated one a package signed
+by an unknown key and an unsigned one are refused; with the profile's roots emptied, then with its
+marker removed, the signed tool is refused. Each refusal has an Unverified web install on the same
+route as its positive control. The signed tool then installs disabled, the page shows its
+full-access warning, Cancel in the real GTK confirmation leaves it disabled and not admitted, and
+Confirm enables it with an admitted record naming its store folder, program, source and key.
+Another curated source for it is refused; removed and installed from there, it starts disabled
+again.
+
+One more session with that build checks the program host (`native/program.ts` packs the
+disposable summary tool, `src-tauri/examples/program_fixture`, into a signed package with a page;
+`src-tauri/src/program_native.rs` drives the app and reads `/proc`). Installed and enabled it runs
+no process, and a call while disabled is refused. Three calls from the window at once start it
+once and each gets the expected summary from that one process, which leads its own process group,
+sees only the contract's three environment variables (not a canary the app has) and only stdin,
+stdout and stderr, and runs in its package folder; the command thread that started it has ended
+while it runs on under its supervisor thread; its pipes are held by the app and the tool only. A
+call is cancelled and the next call is answered by the same process. From the tool's own page
+webview every program command is refused and none reaches the tool. Left alone it stops after 30
+seconds with its child and the host's threads; the next call starts it again; disabling it stops
+it at once. Enabled and running when the app quits, its process and child are gone afterwards.
 
 In managed mode, another session runs the Access checks (`native/access-suite.ts`, which
 launches the app twice, through the stages in `src-tauri/src/access_native.rs`, with fixtures from
@@ -427,6 +545,17 @@ prompt or the setting, quits and stops the app's own core; the next launch opens
 window was. A pending test sign-in's polls are counted while the window shows, while it is
 unmapped (as a window manager minimizes it; GDK then reports it minimized) and once it is mapped
 again. Without a tray watcher, closing quits without asking, with Minimize to Tray or Ask saved.
+
+Then, in a session of its own (`native/instances-session.ts`), it launches the app again and
+again on one profile and checks that each later launch exits 0 within 10 seconds, starts no app or core of its own (it counts the
+app and core processes), and has the first show its window, also after the window was hidden and
+after it was closed to the tray, and for a login launch (`--autostart` with Silent Launch on) as
+well; that the socket is in the runtime folder, where `instance/address`
+says; that a launch with other `HOME` and `XDG_*` folders is an app and
+core of its own; that after the first app is killed with SIGKILL (its lock file and socket stay)
+the next launch becomes the app, starts its core and is the one a later launch raises; and that
+the socket and its address are gone when the app quits. The other profile's data folder is too long
+for a socket path, and a second launch of it still raises it.
 The `native-test` feature is for that test alone; release builds never have it.
 
 In local and remote modes, the test also drives the real GTK dialog with `xdotool`: good keys
@@ -471,10 +600,13 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
 
 ## Limits
 
-- Device extensions: no curated source, settings or native tools yet; installing from a file
-  needs the Linux file chooser. Safe mode is covered by unit tests, not a native run.
-- Access: Linux only; reads only (no writes or watchers); a signature only from a registry, not
-  for a package installed from a file; document portal grants last one session.
+- Device extensions: no production trust roots (so no curated source outside tests) or settings
+  yet, and native tools run on Linux only (5.11 or later: the program host needs
+  `close_range` with `CLOSE_RANGE_CLOEXEC`), with no crash backoff, swap or routing from pages yet; installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
+  native run.
+- Access: Linux only; web packages only; reads only (no writes or watchers); a signature only
+  from a registry, not for a package installed from a file; document portal grants last one
+  session.
 - Tested on Linux only. On Windows the page document's address is
   `http://pluxy-page.localhost/`; neither Windows nor macOS has been run.
 - No installer or bundled core yet (`bundle.active` is off).
@@ -492,6 +624,9 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
   startup without a watcher. It does not check every desktop's tray UI.
 - The tray host is asked about only when the window closes: if it goes away while the app sits
   in the tray, the app stays there with no way back to it but stopping it.
+- Raising the first app's window is Unix only (a Unix socket); where there is none, a second
+  launch exits with an error and the first's window stays as it was. The native test checks that
+  the raised window is shown, not that it has the keyboard focus: that is the desktop's to give.
 - The native test needs the desktop services above, and the pinned AppImage runtime from
   github.com (or a copy in its cache folder), so it does not run offline on a bare machine.
 - Native admission bounds work after a scheme request reaches the handler. They do not bound

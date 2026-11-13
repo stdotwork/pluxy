@@ -255,6 +255,7 @@ These stay stable within a theme contract version:
 | `data-part="account-edit-row"` | One model or model alias row in the Edit form. |
 | `data-part="account-edit-discard"` | The Edit form's question before unsaved changes are discarded. |
 | `data-part="subscription-end"` | The Quota card's line with the day a subscription ends. |
+| `data-part="privacy-toggle"` | The navigation's privacy mode switch; `aria-pressed="true"` while it masks account e-mail addresses and identifiers, and the root then has `data-privacy="on"`. |
 
 Every other class name, element and attribute can change in any release.
 

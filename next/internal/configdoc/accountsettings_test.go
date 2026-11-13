@@ -99,8 +99,8 @@ extension:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := d.Secrets(); !slices.Equal(got, []string{"fake-loop"}) {
-		t.Errorf("Secrets() of a self-referencing anchor = %q", got)
+	if got := d.TextSecrets(); !slices.Equal(got, []string{"fake-loop"}) {
+		t.Errorf("TextSecrets() of a self-referencing anchor = %q", got)
 	}
 	// Anchors that each use the one before twice: following every use would read 2^40 nodes.
 	var b strings.Builder
@@ -111,13 +111,13 @@ extension:
 	if d, err = Parse([]byte(b.String()), true); err != nil {
 		t.Fatal(err)
 	}
-	if got := d.Secrets(); !slices.Equal(got, []string{"fake-deep"}) {
-		t.Errorf("Secrets() of nested anchors = %q", got)
+	if got := d.TextSecrets(); !slices.Equal(got, []string{"fake-deep"}) {
+		t.Errorf("TextSecrets() of nested anchors = %q", got)
 	}
 }
 
 // An alias below a secret key that leads back into itself, or a chain of anchors that each use
-// the one before twice, is read once: Secrets returns, and quickly.
+// the one before twice, is read once: TextSecrets returns, and quickly.
 func TestSecretsOfAliasLoopsAndChains(t *testing.T) {
 	var chain strings.Builder
 	chain.WriteString("a0: &a0 [fake-chain]\n")
@@ -134,14 +134,14 @@ func TestSecretsOfAliasLoopsAndChains(t *testing.T) {
 			t.Fatalf("%s: %v", name, err)
 		}
 		done := make(chan []string, 1)
-		go func() { done <- d.Secrets() }()
+		go func() { done <- d.TextSecrets() }()
 		select {
 		case got := <-done:
 			if len(got) != 1 {
-				t.Errorf("%s: Secrets() = %q, want the one value once", name, got)
+				t.Errorf("%s: TextSecrets() = %q, want the one value once", name, got)
 			}
 		case <-time.After(2 * time.Second):
-			t.Fatalf("%s: Secrets() did not return in 2s", name)
+			t.Fatalf("%s: TextSecrets() did not return in 2s", name)
 		}
 	}
 }

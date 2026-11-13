@@ -137,7 +137,7 @@ func (c *Core) scrub(msg string, docs ...[]byte) string {
 	}
 	for _, b := range docs {
 		if d, err := configdoc.Parse(b, c.isYAML()); err == nil {
-			secrets = append(secrets, d.Secrets()...)
+			secrets = append(secrets, d.TextSecrets()...)
 		}
 	}
 	if cur := c.cur.Load(); cur != nil { // nil while core starts

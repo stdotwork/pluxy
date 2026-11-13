@@ -3,8 +3,10 @@ package core
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/stdotwork/pluxy/next/internal/configdoc"
 	"github.com/stdotwork/pluxy/next/internal/packages"
@@ -158,14 +160,18 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 // accountRedactor is the config redactor as the management API uses it for accounts' headers
 // and settings (server.AccountRedactor), so they show the placeholders GET /config shows. It
-// only turns a stale settings placeholder into server.ErrStaleSecret, which the server package
-// can match: it cannot import configdoc, whose tests import it.
+// only turns a stale settings placeholder into server.ErrStaleSecret and a refused copy into
+// server.ErrSecretCopy, with the copy's line, which the server package can match: it cannot
+// import configdoc, whose tests import it.
 type accountRedactor struct{ *configdoc.Redactor }
 
 func (r accountRedactor) RestoreSettings(sent, current []byte) ([]byte, error) {
 	b, err := r.Redactor.RestoreSettings(sent, current)
-	if errors.Is(err, configdoc.ErrStale) {
+	switch {
+	case errors.Is(err, configdoc.ErrStale):
 		return nil, server.ErrStaleSecret
+	case errors.Is(err, configdoc.ErrCopy):
+		return nil, fmt.Errorf("%w: %s", server.ErrSecretCopy, strings.TrimPrefix(err.Error(), configdoc.ErrInvalid.Error()+": "))
 	}
 	return b, err
 }

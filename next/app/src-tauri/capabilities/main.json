@@ -16,6 +16,7 @@
     "allow-core-restart",
     "allow-core-call",
     "allow-key-entry",
+    "allow-management-key-rotate",
     "allow-sign-out",
     "allow-page-open",
     "allow-page-place",
@@ -35,8 +36,13 @@
     "allow-access-signer",
     "allow-access-grant",
     "allow-access-revoke",
+    "allow-program-call",
+    "allow-program-cancel",
+    "allow-program-status",
     "allow-window-get",
     "allow-window-set",
-    "allow-window-close"
+    "allow-window-close",
+    "allow-privacy-get",
+    "allow-privacy-set"
   ]
 }

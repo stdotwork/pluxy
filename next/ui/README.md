@@ -7,7 +7,7 @@ pages in the same places.
 
 | Folder | What it holds |
 | --- | --- |
-| `kit/` | What both builds share: the host-services interface (`host.ts`), the management API calls by area (`api/`), the string layer (`strings.ts`), components (`ui.tsx`, `ui.css`), the shell and its layouts (`shell.tsx`, `shell.css`), the stylesheet that puts the kit's CSS in order (`kit.css`), the theme engine (`theme/`) and the pages core offers (`pages/`, listed in `pages/core.ts`) |
+| `kit/` | What both builds share: the host-services interface (`host.ts`), the management API calls by area (`api/`), the string layer (`strings.ts`), privacy mode's masks (`privacy.ts`), components (`ui.tsx`, `ui.css`), the shell and its layouts (`shell.tsx`, `shell.css`), the stylesheet that puts the kit's CSS in order (`kit.css`), the theme engine (`theme/`) and the pages core offers (`pages/`, listed in `pages/core.ts`) |
 | `panel/` | The browser build: its entry page, and `browserHost.ts`, the kit's host in a browser |
 | `themes/` | The theme contract and the built-in themes, as theme files |
 | `extension-pages/` | The extension pages contract, and `pluxy-page.js`, the module an extension's page loads to talk to the panel |
@@ -30,8 +30,17 @@ A build then picks its pages and mounts the shell:
 ```tsx
 const host = browserHost();
 const themes = new ThemeState(host, document, [defaultTheme, terminal, paper]);
-render(<Shell host={host} themes={themes} pages={corePages()} />, document.body);
+const privacy = prefsPrivacy(host);
+render(<Shell host={host} themes={themes} privacy={privacy} pages={corePages()} />, document.body);
 ```
+
+The navigation's **Privacy mode** toggle hides account e-mail addresses and identifiers while the
+person shares their screen (`kit/privacy.ts`). It changes only what pages show: a page passes a
+value through `usePrivacy()`'s masks where it shows it (text, `title`, `aria-label`) and keeps the
+real value for calls, search, filters, copying and downloads. Keys never go through the masks;
+they keep their own handling in both states. The panel keeps the choice in the host's prefs
+(`prefsPrivacy`); the desktop app keeps it natively. Extension pages get it as `privacy` in the
+theme snapshot (`extension-pages/README.md`); the kit cannot hide what a page shows itself.
 
 A page is a `PageDef`: a stable ID (its address is `#/<id>`), a title, a short label for the rail
 navigation, its navigation group, an optional tooltip, and a render function. The navigation shows
@@ -56,6 +65,13 @@ The pages core offers, in navigation order, and the page of the old panel
 (`#/<id>`) and its theme hook `data-page`. Why the pages have these names, and the other
 decisions behind them, is in [docs/panel.md](../../docs/panel.md).
 
+Two pages add to their address. `#/logs/<trace ID>` opens that request's log in the Logs Viewer.
+`#/config/<tab>` opens a tab of the Config Panel: `common` (what `#/config` opens),
+`connectivity`, `network`, `logging`, `advanced` or `source`. `#/config/source?account=<id>`
+opens the Source tab with that account's ID selected; an account's "Edit in Config Panel" leads
+there. An account from a provider key section of `config.yaml` opens the Source tab with nothing
+selected, because the file does not hold its ID: core makes the ID when it reads the file.
+
 | Page (ID) | Group | Replaces (old route) |
 | --- | --- | --- |
 | Dashboard (`status`) | Operate | Dashboard (`/`) |
@@ -78,7 +94,8 @@ lists below do not cover them.
 ### What each page leaves out, and why
 
 These are the old panel's features that the new pages leave out on purpose. Where a page keeps a
-feature, it keeps the old label, unless the label named something this core does differently.
+feature, it keeps the old label, unless the label named something this core does differently or
+[docs/terms.md](../../docs/terms.md) gives another word for it.
 
 **Dashboard**
 
@@ -111,10 +128,17 @@ feature, it keeps the old label, unless the label named something this core does
 - "Use SIWC": a Sign in with ChatGPT account is added with the Codex extension's own sign-in
   method for it.
 - "Note" and tags: core keeps no note or tags on an account.
-- "Rewrite response model to the alias" (`force-mapping`) and "Account error rules"
-  (`request-scoped-errors`): core does not run them yet.
+- "Rewrite response model to the alias" (`force-mapping`): core does not run it yet. "Account
+  error rules" (`request-scoped-errors`): dropped, core already treats a request-scoped error as
+  not the account's fault.
 - The OAuth excluded models and OAuth model alias pages: these rules are now an extension's
   `excluded_models` and `model_alias` settings, written in the Config Panel's Source tab.
+- The OAuth model alias page's "Diagram", which drew each provider's models and their aliases
+  joined by lines: the System page's "Available Models" lists each extension's models with their
+  aliases and the accounts that serve them. A sign-in's own aliases are changed in "Account model
+  aliases" on its Edit form.
+- "Invert page", which flipped the selection on the current page: "Select page", "Select
+  filtered" and "Deselect" cover the selections the batch actions need.
 
 **Add Account**
 
@@ -140,6 +164,9 @@ feature, it keeps the old label, unless the label named something this core does
 - "Reset quota" with Claude's reset grants, and xAI's paid one-token refresh: both spend from the
   account. Nothing in the panel spends from an account behind a click, except an account's "Test".
 - The DEV tier preview: a preview for the old panel's developers.
+- The quota timeline, which drew each account's quota windows over the next days: a richer view of
+  the same data, which belongs to the desktop app. Each card shows every limit's use and when it
+  resets.
 
 **Logs Viewer**
 
@@ -160,12 +187,18 @@ feature, it keeps the old label, unless the label named something this core does
 - Settings core does not run (marked Later or Dropped in the config.yaml table in
   [`next/README.md`](../README.md#what-each-setting-does-here)): "Debug Mode", "Commercial Mode",
   "Redis Usage Queue Retention (seconds)", "Auth Auto-refresh Workers", "Pass Through Upstream
-  Headers", "WebSocket Authentication", "Subagent session affinity", every Streaming field (so
-  there is no Streaming tab), every payload rule (so there is no Payload tab), Claude's and Codex's
-  cloaking and header defaults, Codex's response steering and live media relay, the Antigravity
-  and Devin fields, the plugin settings, "Disable Control Panel", and the panel update settings
-  ("Disable Panel Auto Updates", "Panel Repository", "Global GitHub Token"). Any of them can still
-  be written in the Source tab.
+  Headers", "WebSocket Authentication", "Subagent session affinity", "Persist cooldown status"
+  (core keeps cooldowns in memory, where they last through a config reload), "GPT Image 2 Base
+  Model", "Video result credential cache TTL", the "LAN discovery" section, every Streaming field
+  (so there is no Streaming tab), every payload rule (so there is no Payload tab), Claude's and
+  Codex's cloaking and header defaults, Codex's response steering and live media relay, the
+  Antigravity and Devin fields, the plugin settings, "Disable Control Panel", and the panel update
+  settings ("Disable Panel Auto Updates", "Panel Repository", "Global GitHub Token"). Any of them
+  can still be written in the Source tab.
+- "Disable Image Generation": core has no switch for every account. Each Codex account has its own
+  `image_generation_tool` and `images` settings (see [Codex](../README.md#codex)), changed in
+  "Settings (settings)" on a sign-in's Edit form, or in the Source tab. The old key still works in
+  `config.yaml`, where it sets both on the file's Codex accounts.
 - "Host Address", "Port", "OAuth Credential Directory", "Enable TLS" and its paths, "Trusted
   proxies" and "Allow Remote Access": core runs them, but they set where core listens, who may
   reach it, or the folder `-import-auth` reads, and core's settings call does not change them.

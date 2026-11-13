@@ -14,6 +14,10 @@
 //! - local file: the chooser cancelled changes nothing, `pluxy/local` is refused and
 //!   `example/local` installs and shows its page, left open for the window's close check.
 //!
+//! - normal build: with `PLUXY_APP_TEST_CURATED`, the runner's valid test trust marker and roots
+//!   name a curated registry, yet its signed native package is refused (no roots compiled in);
+//!   that registry's web package installs.
+//!
 //! One line on stderr: `native-test: device <JSON>`; the asset scheme adds
 //! `native-test: asset <JSON>` for each request.
 
@@ -256,6 +260,37 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         list["packages"].as_array().is_some_and(|p| p.is_empty()) && list["safe_mode"] == false,
         format!("a fresh device catalog: {list}"),
     )?;
+
+    // A normal build has no native-tier roots, whatever the runner's HOME holds: a valid test
+    // trust marker and roots naming this curated registry do not admit its signed package.
+    // The web package from the same registry is the positive control.
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_CURATED") {
+        let curated: Value = serde_json::from_slice(
+            &std::fs::read(Path::new(&dir).join("expect.json")).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+        out["normal_build"] = json!(refused(
+            main,
+            "device_install",
+            json!({"registry": "curated", "id": "pluxy/tool", "version": "1.0.0"}),
+            "not configured",
+        )?);
+        ok(
+            main,
+            "device_install",
+            json!({"registry": "curated", "id": "example/page", "version": "1.0.0"}),
+        )?;
+        let p = listed(main, "example/page")?.ok_or("example/page is not listed")?;
+        require(
+            p["active"]["sha256"] == curated["page"] && p["trust"] == "unverified",
+            format!("example/page from the curated registry: {p}"),
+        )?;
+        ok(main, "device_remove", json!({"id": "example/page"}))?;
+        require(
+            store(app)?.is_empty(),
+            "the store after the normal-build control",
+        )?;
+    }
 
     // Registry route: a reserved publisher is refused, before anything reaches the store.
     out["registry_spoof"] = json!(refused(

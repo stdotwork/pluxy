@@ -38,12 +38,17 @@ pub struct Declared {
     pub operations: Vec<String>,
 }
 
-/// A release's publisher signature, as the catalog keeps it (`device.rs`).
+/// A release's publisher signature, as the catalog keeps it (`device.rs`): the one shape for a
+/// curated root's signature of a native tool (`device_admission.rs`) and for a signature no
+/// root vouches for, which Access uses once the person approved its signer. Which of the two it
+/// is comes from the current roots, never from this record.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Signed {
     pub publisher: String,
+    /// The key's ID: in its root, for a curated signature.
     pub key_id: String,
-    /// The Ed25519 public key the index named, in lower-case hex.
+    /// The Ed25519 public key the index named, in lower-case hex: the root's, for a curated
+    /// signature.
     pub public_key: String,
     /// The registry's index: the trust domain.
     pub source: String,

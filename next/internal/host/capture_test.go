@@ -2,7 +2,9 @@ package host
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -98,6 +100,52 @@ func TestRedactDiagnosticSecretBetweenAdjacentPieces(t *testing.T) {
 		if got.BodySize != int64(len(got.Body)+len(got.BodyEnd)) {
 			t.Errorf("body_size %d: BodySize %d for %d bytes with nothing left out", size, got.BodySize, len(got.Body)+len(got.BodyEnd))
 		}
+	}
+}
+
+// A body whose start and end lie side by side is redacted as one text also where the start makes
+// the redaction give up and replace it whole: the rest of a secret cut between them is removed,
+// also when it is the secret's base64 and the body ends with it.
+func TestRedactDiagnosticAdjacentPiecesAfterCollapse(t *testing.T) {
+	const secret = "sk-body-key-0123456789"
+	key64 := base64.RawStdEncoding.EncodeToString([]byte(secret))
+	collapsing := "model said " + strings.Repeat("\\", 16) + "%25252525 ; upstream: invalid key "
+	for _, c := range []struct{ head, end, rest string }{
+		{collapsing + "sk-", "body-key-0123456789 rejected", "body-key-0123456789"},
+		{collapsing + key64[:1], key64[1:], key64[1:]},
+	} {
+		got := redactedRequestBody(captureRedactor(secret), protocol.CapturedBody{Body: c.head, BodyEnd: c.end})
+		if joined := got.Body + got.BodyEnd; strings.Contains(joined, c.rest) || !strings.HasSuffix(joined, strings.TrimPrefix(c.end, c.rest)) {
+			t.Errorf("end %q: joined body %q holds the rest of the secret or loses the text after it", c.end, joined)
+		}
+	}
+}
+
+// A body whose start and end lie side by side is redacted as one text also where the start ends
+// with a secret spelled with an escape whose last character starts another secret: no part of the
+// second secret, cut between them, is logged.
+func TestRedactDiagnosticAdjacentPiecesAfterEscapeFallback(t *testing.T) {
+	r := protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "my-api-keys"},
+		&protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "3x-other-secret"})
+	head := "err my-api-key" + fmt.Sprintf(`\u%04x`, 's') + "x-oth"
+	got := redactedRequestBody(r, protocol.CapturedBody{Body: head, BodyEnd: "er-secret rejected"})
+	if joined := got.Body + got.BodyEnd; joined != "err [redacted][redacted] rejected" {
+		t.Errorf("joined body %q, want %q", joined, "err [redacted][redacted] rejected")
+	}
+}
+
+// A start and an end with nothing left out between them, each as long as the request log keeps,
+// still fit what it keeps once redacted, so it logs them whole rather than report a gap.
+func TestRedactDiagnosticAdjacentPiecesFitTheLog(t *testing.T) {
+	const secret = "sk-fake-credential-value-0123456789abcdef"
+	head := strings.Repeat("a", protocol.CapturedHead-len("word sk-")) + "word sk-"
+	end := "xyz tail " + strings.Repeat("b", protocol.CapturedEnd-len("xyz tail "))
+	got := redactedRequestBody(captureRedactor(secret), protocol.CapturedBody{Body: head, BodyEnd: end, BodySize: int64(len(head) + len(end))})
+	fits := got.BodyEnd == "" && len(got.Body) <= protocol.CapturedHead+protocol.CapturedEnd ||
+		len(got.Body) <= protocol.CapturedHead && len(got.BodyEnd) <= protocol.CapturedEnd
+	if !fits || got.Body+got.BodyEnd != head+end || got.BodySize != int64(len(head)+len(end)) {
+		t.Errorf("body %d bytes, end %d bytes, size %d; want the same %d bytes within %d and %d, or one part within %d",
+			len(got.Body), len(got.BodyEnd), got.BodySize, len(head)+len(end), protocol.CapturedHead, protocol.CapturedEnd, protocol.CapturedHead+protocol.CapturedEnd)
 	}
 }
 

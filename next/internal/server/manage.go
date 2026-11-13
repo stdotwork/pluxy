@@ -172,13 +172,18 @@ type AccountRedactor interface {
 	// RedactSettings returns settings, a JSON object, with a placeholder in place of each secret.
 	RedactSettings(settings []byte) ([]byte, error)
 	// RestoreSettings returns sent with each placeholder replaced by the secret it stands for in
-	// current. A placeholder that matches no secret in current is an ErrStaleSecret; any other
-	// error means a placeholder is where no secret goes.
+	// current. A placeholder that matches no secret in current is an ErrStaleSecret; a copy of
+	// a secret's placeholder whose secret sent no longer holds as it was is an ErrSecretCopy; any
+	// other error means a placeholder is where no secret goes.
 	RestoreSettings(sent, current []byte) ([]byte, error)
 }
 
 // ErrStaleSecret marks a placeholder that matches no secret the account's settings hold now.
 var ErrStaleSecret = errors.New("a redacted value matches no secret the account's settings hold now")
+
+// ErrSecretCopy marks settings holding a copy of a secret's placeholder whose secret they no
+// longer hold as it was; the error's text after it names the copy's line and says what to do.
+var ErrSecretCopy = errors.New("settings")
 
 // NewManagement returns the management API with its account and login calls. cfg returns the
 // active config; state is the routing state accounts' cooldowns are read from (nil: none).
@@ -686,6 +691,8 @@ func (m *Management) restoreSettings(a *route.Account, sent json.RawMessage) err
 	switch {
 	case errors.Is(err, ErrStaleSecret):
 		return fmt.Errorf("%w: settings: a redacted value matches no secret the account's settings hold now; read the account again", cred.ErrConflict)
+	case errors.Is(err, ErrSecretCopy):
+		return fmt.Errorf("%w: %v", cred.ErrInvalid, err)
 	case err != nil:
 		return fmt.Errorf("%w: settings: a redacted value is where no secret goes; write the value itself there", cred.ErrInvalid)
 	}
