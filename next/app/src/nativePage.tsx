@@ -3,12 +3,14 @@
 // webview holds a small app document (page/) that shows the extension's page in a sandboxed
 // frame, as the panel does, and passes the page's channel messages to this webview through the
 // native side. This webview answers them with the kit's channel, for the extension core lists
-// the page under: the same checks, permissions and limits as in the panel.
+// the page under: the same checks, permissions and limits as in the panel. A page of a package
+// installed on this device (device prop) opens the same way, from the address the native
+// catalog keeps, and its settings calls are answered as unavailable.
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useLayoutEffect, useRef, useState } from "preact/hooks";
-import { type Channel, isHello, pickVersion, serve } from "../../ui/kit/extensions/channel";
+import { type Channel, isHello, type Outcome, pickVersion, serve } from "../../ui/kit/extensions/channel";
 import { type ExtensionPageProps, settingsOutcome, themeSnapshot } from "../../ui/kit/extensions/page";
 import { pageProblem } from "../../ui/kit/extensions/site";
 import { Button, Notice, PageHead, useKit } from "../../ui/kit/ui";
@@ -40,14 +42,19 @@ function rectOf(el: Element): Rect {
 
 type Phase = "loading" | "connected" | "closed" | "failed";
 
-export function NativeExtensionPage(props: ExtensionPageProps) {
+/** Settings of packages on this device are not served yet. */
+const noDeviceSettings = async (): Promise<Outcome> => ({
+  error: { code: "unavailable", message: "settings of extensions on this device are not available yet" },
+});
+
+export function NativeExtensionPage(props: ExtensionPageProps & { device?: boolean }) {
   const { api, themes, unauthorized } = useKit();
-  const { ext, page } = props;
+  const { ext, page, device } = props;
   const area = useRef<HTMLElement>(null);
   const [mount, setMount] = useState(0); // a new webview, and a new channel, each time it changes
   const [phase, setPhase] = useState<Phase>("loading");
   const [error, setError] = useState<string>();
-  const problem = props.pagesError ?? pageProblem(page.url, props.pagesOrigin);
+  const problem = device ? undefined : (props.pagesError ?? pageProblem(page.url, props.pagesOrigin));
 
   const permissions = ext.permissions.join(" ");
   useLayoutEffect(() => {
@@ -100,8 +107,10 @@ export function NativeExtensionPage(props: ExtensionPageProps) {
         { extension: ext.id, permissions: permissions ? permissions.split(" ") : [] },
         {
           theme: () => themeSnapshot(themes.resolved),
-          configGet: () => settingsOutcome(api.settings(ext.id), unauthorized),
-          configSet: (values) => settingsOutcome(api.changeSettings(ext.id, values), unauthorized),
+          configGet: device ? noDeviceSettings : () => settingsOutcome(api.settings(ext.id), unauthorized),
+          configSet: device
+            ? noDeviceSettings
+            : (values) => settingsOutcome(api.changeSettings(ext.id, values), unauthorized),
         },
       );
       ports.port2.onmessage = (e) => send({ type: "message", data: e.data });
@@ -126,14 +135,16 @@ export function NativeExtensionPage(props: ExtensionPageProps) {
     const resize = new ResizeObserver(place);
     listenOnce()
       .then(() =>
-        invoke<string>("page_open", {
-          extension: ext.id,
-          page: page.id,
-          title: page.title,
-          url: page.url,
-          pagesOrigin: props.pagesOrigin,
-          rect: rectOf(el),
-        }),
+        device
+          ? invoke<string>("device_page_open", { id: ext.id, page: page.id, rect: rectOf(el) })
+          : invoke<string>("page_open", {
+              extension: ext.id,
+              page: page.id,
+              title: page.title,
+              url: page.url,
+              pagesOrigin: props.pagesOrigin,
+              rect: rectOf(el),
+            }),
       )
       .then(
         (l) => {
@@ -168,6 +179,7 @@ export function NativeExtensionPage(props: ExtensionPageProps) {
   }, [
     mount,
     problem,
+    device,
     ext.id,
     permissions,
     page.id,

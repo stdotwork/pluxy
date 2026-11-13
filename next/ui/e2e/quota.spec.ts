@@ -15,6 +15,13 @@ test("quota shows when the subscription ends", async ({ page }) => {
   }
 });
 
+// The accounts' settings set what the test extension reports: quota-a has a manual-resets limit,
+// and quota-b's five-hour window ends before quota-a's.
+const settings: Record<string, Record<string, unknown>> = {
+  "quota-a": { manual_resets: 3 },
+  "quota-b": { five_hour_resets_at: 1990000000 },
+};
+
 test.beforeAll(async () => {
   for (const id of ["quota-a", "quota-b"]) {
     const started = await core.mgmt<{ login: { id: string } }>("POST", "/accounts", {
@@ -22,6 +29,7 @@ test.beforeAll(async () => {
       extension: "test/alpha",
       method: "api_key",
       input: { api_key: `test-${id}` },
+      settings: settings[id],
     });
     expect(started.status).toBe(202);
     await expect
@@ -83,13 +91,23 @@ test("quota is read on request and shows plan, limits and reset times", async ({
   await page.getByRole("button", { name: "Refresh all credentials", exact: true }).click();
   const b = items.filter({ hasText: "quota-b" });
   await expect(b.getByText("Test plan", { exact: true })).toBeVisible();
+  await expect(b.locator('time[datetime="2033-01-22T09:46:40.000Z"]')).toBeVisible();
   await expect(page.getByRole("button", { name: "Refresh all credentials" })).toBeEnabled();
-  await page.getByLabel("Sort", { exact: true }).selectOption("soonest");
-  // testext gives both accounts the same reset times: ties retain the default account order.
   const ids = await items.allTextContents();
   expect(ids.findIndex((text) => text.includes("quota-a"))).toBeLessThan(
     ids.findIndex((text) => text.includes("quota-b")),
   );
+  await page.getByLabel("Sort", { exact: true }).selectOption("soonest");
+  // quota-b's five-hour window ends first, so Soonest recovery moves it ahead of quota-a.
+  await expect
+    .poll(async () => {
+      const shown = await items.allTextContents();
+      return (
+        shown.findIndex((text) => text.includes("quota-b")) <
+        shown.findIndex((text) => text.includes("quota-a"))
+      );
+    })
+    .toBe(true);
   await page.getByLabel("Search accounts", { exact: true }).fill("quota-b");
   await expect(items).toHaveCount(1);
   await expect(items.first()).toContainText("quota-b");
@@ -107,4 +125,21 @@ test("quota is read on request and shows plan, limits and reset times", async ({
       await page.screenshot({ path: `${process.env.QUOTA_SHOTS}/${theme}.png`, fullPage: true });
     }
   }
+});
+
+test("manual resets show their count only for the account that reports them", async ({ page }) => {
+  await openPanel(page, core);
+  await signIn(page, core);
+  await goTo(page, "Quota Management");
+  const items = page.locator('[data-part="item"]');
+  const a = items.filter({ hasText: "quota-a" });
+  const b = items.filter({ hasText: "quota-b" });
+  await a.getByRole("button", { name: "Refresh Quota", exact: true }).click();
+  await expect(a.getByText("Test plan", { exact: true })).toBeVisible();
+  const manual = a.getByText("Manual resets", { exact: true });
+  await expect(manual).toBeVisible();
+  await expect(manual.locator("xpath=following-sibling::dd")).toHaveText("3");
+  await b.getByRole("button", { name: "Refresh Quota", exact: true }).click();
+  await expect(b.getByText("Test plan", { exact: true })).toBeVisible();
+  await expect(b.getByText("Manual resets", { exact: true })).toHaveCount(0);
 });

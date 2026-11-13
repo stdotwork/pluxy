@@ -8,6 +8,9 @@
 //   refused by Tauri's command check, and the app never reaches a command from that webview;
 // - from inside the page's sandboxed frame nothing reaches the app (test/probe reports through
 //   its channel);
+// - in managed mode, this device's extension catalog installs, swaps, rolls back, disables and
+//   removes page-only packages from a local registry and from local files through the native
+//   file chooser, refusing reserved IDs and a failed candidate (device.ts, device_native.rs);
 // - closing the window leaves no webview and no web process, with the app still in the tray;
 // - quitting stops the app's own core, and leaves a local or remote core running;
 // - the management key rotates natively (native_test.rs, rotation_test.rs): core_call refuses
@@ -18,6 +21,9 @@
 //
 // In managed mode it then runs the window checks (window.ts, native_window.rs) in two more
 // sessions, one with a tray watcher and one without.
+// Then, in a session of its own (instances.ts, instances-session.ts), the single-instance
+// scenario: a second launch on the same profile exits and raises the first's window, a launch on
+// another profile runs as its own app, and a killed owner's stale lock is recovered.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
 // own (dbus-run-session, xvfb-run), and random ports. Inside that session, before the app,
@@ -29,11 +35,23 @@
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline";
 import { buildSmokeAppImage } from "./appimage";
+import { buildDeviceFixtures } from "./device";
+import { runInstances } from "./instances";
 import { descendants, webProcesses } from "./processes";
 import { missingPrerequisites } from "./services";
 
@@ -210,6 +228,15 @@ async function runApp(
         { mode: 0o600 },
       );
     const quit = join(root, "quit");
+    // This device's extension catalog is the same in every mode: check it once, in managed mode.
+    const device = mode === "managed" ? join(root, "device") : undefined;
+    if (device) {
+      mkdirSync(device);
+      writeFileSync(
+        join(dirs.config, identifier, "device-registries.json"),
+        JSON.stringify(buildDeviceFixtures(device)),
+      );
+    }
     const keyFile = join(root, "key-input");
     // Every key the rotation check sees, for the log audit below; it is native-test output.
     const rotatedFile = join(root, "rotated-keys");
@@ -233,6 +260,7 @@ async function runApp(
       APPIMAGE_EXTRACT_AND_RUN: "1",
       PLUXY_APP_TEST_PAGE: PAGE,
       PLUXY_APP_TEST_QUIT: quit,
+      ...(device ? { PLUXY_APP_TEST_DEVICE: device } : {}),
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: identifier } : {}),
       ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
       ...(key ? { PLUXY_APP_TEST_KEY_FILE: keyFile } : {}),
@@ -266,6 +294,7 @@ async function runApp(
     });
     const steps = new Map<string, Step>();
     const reached: string[] = [];
+    const assets: { label: string; path: string; status: number }[] = [];
     let before = 0;
     let after = -1;
     const pid = proc.pid ?? 0;
@@ -307,6 +336,10 @@ async function runApp(
       const value = JSON.parse(json);
       if (step === "reached") {
         reached.push(value.webview);
+        return;
+      }
+      if (step === "asset") {
+        assets.push(value);
         return;
       }
       steps.set(step, value);
@@ -499,6 +532,35 @@ async function runApp(
     // The key the app started with and each rotated one (two in managed mode, four otherwise).
     check(rotated.length === (managed ? 2 : 4), `the rotation check recorded ${rotated.length} keys`);
     console.log(`  ${mode} | native rotation: ${JSON.stringify(rotationStep ?? {})}`);
+    // This device's catalog: the driver's own checks passed, and the asset scheme served the
+    // swapped-in release to its page webview and refused that webview the replaced one's files.
+    if (device) {
+      const d = steps.get("device") as
+        | { passed?: boolean; v2_label?: string; digests?: Record<string, string> }
+        | undefined;
+      // Without its line, the app's failed step says where the check stopped and why.
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(d?.passed === true, `the device catalog check did not complete: ${failure}`);
+      const dg = d?.digests ?? {};
+      const served = (label: string | undefined, digest: string | undefined, status: number) =>
+        assets.some((a) => a.label === label && a.path.includes(`/${digest}/`) && a.status === status);
+      check(
+        dg.notes2 && served(d?.v2_label, dg.notes2, 200),
+        `the asset scheme did not serve 2.0.0 to ${d?.v2_label}`,
+      );
+      check(
+        dg.notes1 && served(d?.v2_label, dg.notes1, 404),
+        `the asset scheme did not refuse 1.0.0 to ${d?.v2_label}`,
+      );
+      for (const k of ["spoof", "pluxy_local", "notes3"])
+        check(
+          dg[k] && !assets.some((a) => a.path.includes(`/${dg[k]}/`) && a.status === 200),
+          `the asset scheme served refused package ${k}`,
+        );
+      console.log(
+        `${mode} device ${JSON.stringify(d ?? { failed: failure })} (${assets.length} asset requests)`,
+      );
+    }
 
     // Closing the window frees its webviews; the app stays in the tray.
     const closed = steps.get("closed") as
@@ -519,9 +581,32 @@ async function runApp(
         `${reached.length} commands reached, all from main: ${reached.every((w) => w === "main")})`,
     );
   } finally {
-    if (!rotation.root) await removeRun(root);
+    // A folder left behind is a problem of its own; it must not hide this run's report.
+    if (!rotation.root)
+      await removeRun(root).catch((e) => problems.push(`the run folder ${root} was not removed: ${e}`));
   }
   return problems;
+}
+
+/** Lets this user remove the device's package store the app left in its run folder, after the
+ * app has quit: the store keeps its installed folders read-only, so they cannot be emptied as
+ * they are. Only folders under the app's `device-packages` change. They are path-based changes,
+ * safe here because the app made that tree, holds no links or mounts in it (archives with links
+ * are refused), and no longer runs. */
+function makeRemovable(root: string) {
+  const walk = (dir: string) => {
+    let entries: string[];
+    try {
+      const st = lstatSync(dir);
+      if (!st.isDirectory()) return;
+      if ((st.mode & 0o700) !== 0o700) chmodSync(dir, 0o700);
+      entries = readdirSync(dir);
+    } catch {
+      return; // gone: rmSync reports what it cannot remove
+    }
+    for (const e of entries) walk(join(dir, e));
+  };
+  walk(join(root, "data", identifier, "device-packages"));
 }
 
 /** Removes a run's folder. A desktop service the run's bus started (such as the document portal,
@@ -529,6 +614,7 @@ async function runApp(
 async function removeRun(root: string) {
   for (let i = 0; ; i++) {
     try {
+      makeRemovable(root);
       rmSync(root, { recursive: true, force: true });
       return;
     } catch (e) {
@@ -588,6 +674,21 @@ try {
         )),
       );
     problems.push(...p.map((x) => `managed: ${x}`));
+
+    // Two launches of the app on one profile: one app, one core, the first one's window raised.
+    const inst = await runInstances({
+      bin,
+      probe,
+      appImage,
+      core,
+      identifier,
+      timeoutMs: TIMEOUT,
+      sessions,
+      stopSession,
+      removeRun,
+    });
+    if (inst.setup !== undefined) throw new SetupError(inst.setup);
+    problems.push(...inst.problems.map((x) => `instances: ${x}`));
   } finally {
     rmSync(prepared, { recursive: true, force: true });
   }
@@ -634,4 +735,4 @@ if (problems.length > 0) {
   console.error(`\n${problems.length} problems:\n- ${problems.join("\n- ")}`);
   process.exit(1);
 }
-console.log("native test passed in all three modes");
+console.log("native test passed in all three modes and the single-instance scenario");

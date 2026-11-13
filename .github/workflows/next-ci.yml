@@ -33,6 +33,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # The checkout is mounted read-write into the Playwright container, and no step needs
+          # git credentials, so the job token is not stored in .git/config.
+          persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -101,12 +105,17 @@ jobs:
           bun_dir="$(dirname "$bun")"
           # Docker would create a missing mount source owned by root, which the test user can't write.
           mkdir -p "$gomodcache" "$gocache"
+          # Unlike the Test step, cgo is off here: the image has no C compiler, and next/ has no cgo code.
+          # playwright test runs on the image's own Node (26 in 1.65.0), not on the Node 24 this job sets up.
+          # .git is mounted read-only over the checkout: the checkout's post-step runs git there with
+          # the job token in its environment, so the image must not be able to change git's config.
           docker run --rm --init --ipc=host \
             --user "$(id -u):$(id -g)" \
-            -e CI -e HOME=/tmp \
+            -e CI -e HOME=/tmp -e CGO_ENABLED=0 \
             -e PATH="$goroot/bin:$bun_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
             -e GOMODCACHE="$gomodcache" -e GOCACHE="$gocache" \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v "$GITHUB_WORKSPACE/.git:$GITHUB_WORKSPACE/.git:ro" \
             -v "$goroot:$goroot:ro" -v "$bun_dir:$bun_dir:ro" \
             -v "$gomodcache:$gomodcache" -v "$gocache:$gocache" \
             -w "$PWD" \
