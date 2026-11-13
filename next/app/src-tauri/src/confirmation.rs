@@ -185,6 +185,9 @@ impl Origin {
 /// Immutable native preparation, including open identities. Never returned to JavaScript.
 pub struct Prepared {
     origin: Origin,
+    /// The app's own action (prepare_app): no package, file or launch to show, so its review is
+    /// its description alone, and no launch notice follows it.
+    own: bool,
     exact: ExactAction,
     files: Vec<OpenTarget>,
     executable: Option<OpenTarget>,
@@ -222,6 +225,15 @@ impl Prepared {
         ))
     }
     pub fn review(&self) -> Result<String, String> {
+        if self.own {
+            return Ok(self
+                .exact
+                .what
+                .split('\n')
+                .map(escape_format_characters)
+                .collect::<Vec<_>>()
+                .join("\n"));
+        }
         // JSON quoting makes argv boundaries, newlines and control characters unambiguous.
         let mut s = review_text(&self.exact)?;
         if self.exact.native_tool {
@@ -492,6 +504,36 @@ impl Confirmations {
     pub fn prepare_import(&mut self, action: Action) -> Result<Prepared, String> {
         self.prepare(action, Origin::Import)
     }
+    /// The app's own action, started in the app's window: no package, file or launch. The
+    /// requester is the app itself; generation ties the review to the state it describes.
+    pub(crate) fn prepare_app(
+        &mut self,
+        what: String,
+        generation: u64,
+    ) -> Result<Prepared, String> {
+        let app = Package {
+            id: "pluxy app".into(),
+            source: "the app's window".into(),
+            digest: String::new(),
+            signer: String::new(),
+            contract: "management API v0".into(),
+            generation,
+        };
+        let mut p = self.prepare(
+            Action {
+                what,
+                chain: vec![app.clone()],
+                executor: app,
+                native_tool: false,
+                files: vec![],
+                launch: None,
+            },
+            Origin::Main,
+        )?;
+        p.own = true;
+        Ok(p)
+    }
+
     /// For the main window's command handlers only, after their caller check, with an action
     /// native code built from verified records (enabling a native tool). Never page data.
     pub(crate) fn prepare_main(&mut self, action: Action) -> Result<Prepared, String> {
@@ -571,6 +613,7 @@ impl Confirmations {
         };
         let p = Prepared {
             origin,
+            own: false,
             exact: ExactAction {
                 what: action.what,
                 chain: action.chain,
@@ -803,7 +846,7 @@ impl Confirmations {
 #[path = "confirmation_ui.rs"]
 mod ui;
 pub use ui::page_start;
-pub(crate) use ui::{notice as ui_notice, request, settings};
+pub(crate) use ui::{confirm_app, notice as ui_notice, request, settings};
 
 #[cfg(test)]
 #[path = "confirmation_tests.rs"]

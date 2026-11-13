@@ -12,7 +12,12 @@
 //   removes page-only packages from a local registry and from local files through the native
 //   file chooser, refusing reserved IDs and a failed candidate (device.ts, device_native.rs);
 // - closing the window leaves no webview and no web process, with the app still in the tray;
-// - quitting stops the app's own core, and leaves a local or remote core running.
+// - quitting stops the app's own core, and leaves a local or remote core running;
+// - the management key rotates natively (native_test.rs, rotation_test.rs): core_call refuses
+//   it, the app keeps working on the new key as the old one was kept, the key window stays open
+//   when the window closes to the tray and goes when a later rotation shows its own, no webview
+//   (the window's or an extension page's) and no output line holds any key the run rotated; in
+//   local mode the app then starts again on the same folders and signs in with the kept key.
 //
 // In managed mode it then runs the window checks (window.ts, native_window.rs) in two more
 // sessions, one with a tray watcher and one without.
@@ -40,6 +45,7 @@ import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -105,7 +111,7 @@ function run(cmd: string, args: string[], cwd: string) {
 /** A core from panelcore, running until its stdin closes. */
 async function startCore(
   tls: boolean,
-): Promise<{ proc: ChildProcess; base: string; key: string; ca?: string }> {
+): Promise<{ proc: ChildProcess; base: string; key: string; config: string; ca?: string }> {
   const proc = spawn("go", ["run", "./e2e/panelcore", "-probe", ...(tls ? ["-tls"] : [])], {
     cwd: next,
     stdio: ["pipe", "pipe", "inherit"],
@@ -184,9 +190,23 @@ async function managementStatus(base: string, key: string, ca?: string): Promise
   return r.status;
 }
 
+/** The management key in core's config file: its current one, also after a rotation. */
+function managementKey(config: string): string {
+  return JSON.parse(readFileSync(config, "utf8")).management_key;
+}
+
 /** The window checks (window.ts), with or without a tray watcher in the session, and the privacy
  * mode checks (privacy.ts). */
 type Suite = "window" | "window-no-tray" | "privacy";
+
+/** For a local or remote core, rotation.coreConfig is its config file. rotation.root keeps the
+ * run's folders for the caller to remove; with rotation.restart the app starts again on them,
+ * with the connection an earlier run left. */
+interface Rotation {
+  coreConfig?: string;
+  root?: string;
+  restart?: boolean;
+}
 
 /** Runs the app once with connection as its saved connection, and checks what it reports. With
  * suite, the session runs window.ts, which runs the app through the window checks' stages. */
@@ -199,10 +219,11 @@ async function runApp(
   noTray = false,
   key?: string,
   suite?: Suite,
+  rotation: Rotation = {},
   admission = false,
   program = false,
 ): Promise<string[]> {
-  const root = mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
+  const root = rotation.root ?? mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
   const problems: string[] = [];
   const check = (ok: unknown, what: string) => {
     if (!ok) problems.push(what);
@@ -218,9 +239,10 @@ async function runApp(
     };
     for (const d of Object.values(dirs)) mkdirSync(d, { recursive: true, mode: 0o700 });
     mkdirSync(join(dirs.config, identifier), { recursive: true });
-    writeFileSync(join(dirs.config, identifier, "connection.json"), JSON.stringify(connection), {
-      mode: 0o600,
-    });
+    if (!rotation.restart)
+      writeFileSync(join(dirs.config, identifier, "connection.json"), JSON.stringify(connection), {
+        mode: 0o600,
+      });
     // The main checks close the window to the tray; the window suite starts with Ask every time.
     if (!suite)
       writeFileSync(
@@ -263,6 +285,8 @@ async function runApp(
       );
     }
     const keyFile = join(root, "key-input");
+    // Every key the rotation check sees, for the log audit below; it is native-test output.
+    const rotatedFile = join(root, "rotated-keys");
     const wrongKey = randomUUID();
     if (key) writeFileSync(keyFile, JSON.stringify({ key, wrong: wrongKey }), { mode: 0o600 });
     // Only what the app needs: no display or session bus but the run's own.
@@ -291,6 +315,9 @@ async function runApp(
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: identifier } : {}),
       ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
       ...(key ? { PLUXY_APP_TEST_KEY_FILE: keyFile } : {}),
+      PLUXY_APP_TEST_ROTATED_FILE: rotatedFile,
+      ...(rotation.coreConfig ? { PLUXY_APP_TEST_CORE_CONFIG: rotation.coreConfig } : {}),
+      ...(rotation.restart ? { PLUXY_APP_TEST_ROTATION_RESTART: "1" } : {}),
       ...(suite
         ? {
             PLUXY_APP_TEST_WINDOW_BIN: bin,
@@ -327,8 +354,10 @@ async function runApp(
     if (!proc.stderr || !proc.stdout) throw new Error("the app's output is not piped");
     const log: string[] = []; // the app's last lines, shown when the run fails
     const setup: string[] = []; // session.ts's report of what failed at setup
+    const output: string[] = []; // every line, for the rotated-key audit once the run ends
     let suitePassed = false;
     const onLine = (line: string) => {
+      output.push(line);
       if (key && [key, wrongKey].some((canary) => line.includes(canary))) {
         problems.push("management key appeared on stdout/stderr");
         return;
@@ -399,6 +428,15 @@ async function runApp(
       );
     }
     check(code === 0, `the app exited with ${code}`);
+    const rotated = existsSync(rotatedFile)
+      ? readFileSync(rotatedFile, "utf8")
+          .split("\n")
+          .filter((k) => k.length > 0)
+      : [];
+    check(
+      !output.some((line) => rotated.some((k) => line.includes(k))),
+      "a management key from the rotation check appeared on stdout/stderr",
+    );
     if (suite) {
       check(suitePassed, `the ${suite} checks failed`);
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
@@ -406,6 +444,17 @@ async function runApp(
       return problems;
     }
     check(!steps.has("failed"), `the app's test steps failed: ${JSON.stringify(steps.get("failed"))}`);
+
+    if (rotation.restart) {
+      const restarted = steps.get("rotation_restart");
+      check(
+        restarted?.signed_in === true && restarted?.status === 200 && Number(restarted?.refused) > 0,
+        `the restart after rotation did not sign in on the kept key: ${JSON.stringify(restarted)}`,
+      );
+      console.log(`  ${mode} | after restart: ${JSON.stringify(restarted ?? {})}`);
+      console.log(`${mode}: restart ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
 
     if (program) {
       const p = steps.get("program") as
@@ -539,6 +588,32 @@ async function runApp(
 
     check(steps.get("confirmations")?.passed === true, "native confirmation checks did not complete");
 
+    const rotationStep = steps.get("rotation");
+    const managed = mode === "managed";
+    const wanted = {
+      refused: true,
+      control: true,
+      cancelled: true,
+      rotated: true,
+      old_refused: true,
+      new_works: true,
+      kept: managed ? "core" : "device",
+      session: !managed,
+      recovery: !managed,
+      webviews_clean: true,
+      page_audited: !managed,
+      outlived_window: !managed,
+      replaced: !managed,
+      connection_shown: !managed,
+      no_launch_notice: true,
+    };
+    check(
+      rotationStep && Object.entries(wanted).every(([k, want]) => rotationStep[k] === want),
+      `native rotation evidence missing or wrong: ${JSON.stringify(rotationStep)}`,
+    );
+    // The key the app started with and each rotated one (two in managed mode, four otherwise).
+    check(rotated.length === (managed ? 2 : 4), `the rotation check recorded ${rotated.length} keys`);
+    console.log(`  ${mode} | native rotation: ${JSON.stringify(rotationStep ?? {})}`);
     // This device's catalog: the driver's own checks passed, and the asset scheme served the
     // swapped-in release to its page webview and refused that webview the replaced one's files.
     if (device) {
@@ -595,7 +670,8 @@ async function runApp(
     );
   } finally {
     // A folder left behind is a problem of its own; it must not hide this run's report.
-    await removeRun(root).catch((e) => problems.push(`the run folder ${root} was not removed: ${e}`));
+    if (!rotation.root)
+      await removeRun(root).catch((e) => problems.push(`the run folder ${root} was not removed: ${e}`));
   }
   return problems;
 }
@@ -709,6 +785,7 @@ try {
         false,
         undefined,
         undefined,
+        {},
         true,
       )),
     );
@@ -722,6 +799,7 @@ try {
         false,
         undefined,
         undefined,
+        {},
         false,
         true,
       )),
@@ -761,14 +839,27 @@ try {
 
   for (const mode of ["local", "remote"] as const) {
     const c = await startCore(mode === "remote");
+    const kept = mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
     try {
       const conn = { mode, url: c.base, key: c.key, ...(c.ca ? { ca_file: c.ca } : {}) };
-      const p = await runApp(mode, bin, conn, c.base, false, false, c.key);
-      p.push(...(await runApp(mode, bin, conn, c.base, true)));
+      const rotation = { coreConfig: c.config, root: kept };
+      const p = await runApp(mode, bin, conn, c.base, false, false, c.key, undefined, rotation);
+      // Rotated and kept: the app starts again on the same folders, signed in on the new key.
+      if (mode === "local")
+        p.push(
+          ...(await runApp(mode, bin, conn, c.base, false, false, undefined, undefined, {
+            ...rotation,
+            restart: true,
+          })),
+        );
+      const current = { ...conn, key: managementKey(c.config) };
+      p.push(...(await runApp(mode, bin, current, c.base, true)));
       // The app only connected: its quitting leaves this core running.
-      if ((await managementStatus(c.base, c.key, c.ca)) !== 200) p.push("the core stopped when the app quit");
+      if ((await managementStatus(c.base, current.key, c.ca)) !== 200)
+        p.push("the core stopped when the app quit");
       problems.push(...p.map((x) => `${mode}: ${x}`));
     } finally {
+      await removeRun(kept);
       c.proc.stdin?.end();
       await new Promise((r) => c.proc.once("exit", r));
     }

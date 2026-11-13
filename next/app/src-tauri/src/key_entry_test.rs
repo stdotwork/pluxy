@@ -8,7 +8,7 @@ use std::sync::Mutex;
 static DIALOG_SHOWN: Mutex<Option<Instant>> = Mutex::new(None);
 static CANCEL_SENT: Mutex<Option<Instant>> = Mutex::new(None);
 
-fn xdotool(args: &[&str]) -> Result<String, String> {
+pub(super) fn xdotool(args: &[&str]) -> Result<String, String> {
     let out = Command::new("xdotool")
         .args(args)
         .output()
@@ -121,7 +121,7 @@ fn answer(
 
 // Capture native callbacks (including events), DOM/input values and storage without teaching
 // any webview the canaries. Comparison stays native; output is booleans only.
-fn watch(w: &Webview) -> Result<(), String> {
+pub(super) fn watch(w: &Webview) -> Result<(), String> {
     w.eval(r#"(() => {
       window.__keyAudit = [];
       const record = (v) => {
@@ -161,7 +161,7 @@ fn clean(app: &AppHandle, canaries: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
-fn clean_webview(w: &Webview, canaries: &[&str]) -> Result<(), String> {
+pub(super) fn clean_webview(w: &Webview, canaries: &[&str]) -> Result<(), String> {
     let audit =
         eval(w, "(window.__keySnapshot(), window.__keyAudit)").ok_or("missing secret audit")?;
     let text = serde_json::to_string(&audit).map_err(|_| "invalid secret audit")?;
@@ -171,7 +171,7 @@ fn clean_webview(w: &Webview, canaries: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
-fn enter(
+pub(super) fn enter(
     app: &AppHandle,
     main: &Webview,
     key: &str,

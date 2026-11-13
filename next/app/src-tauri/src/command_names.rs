@@ -8,6 +8,7 @@ pub const COMMANDS: &[&str] = &[
     "core_restart",
     "core_call",
     "key_entry",
+    "management_key_rotate",
     "sign_out",
     "page_open",
     "page_place",
