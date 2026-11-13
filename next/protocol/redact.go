@@ -724,24 +724,27 @@ func (r *Redactor) Body() *BodyRedactor {
 // It follows the listed forms (encodings) as String's replacer does: at each position the longest
 // form that starts there is replaced, and the search goes on after it. Write returns the text up
 // to the first position where more text could change that, and holds back the rest: fewer bytes
-// than the longest form; when a form could be part of a JSON number, also a number at the end and
-// what stands before it, up to maxNumberHold more, and the form that position falls in. So a body
-// of any length passes through in bounded memory, and a stream is delayed only where a piece ends
-// with what could start a form, or such a number. Each text it returns is redacted with String, so
-// a credential spelled with escapes is found within it, and a number holding one becomes 0.
+// than the longest form. When a form could be part of a JSON number, it also holds back a colon,
+// bracket or comma at the end and any number after it (or a number alone there), with the spaces
+// between, when they take at most maxNumberHold bytes, and where they start inside a form, that
+// form. So a body of any length passes through in bounded memory, and a stream is delayed only
+// where a piece ends with what could start a form, or such a number. Each text it returns is
+// redacted with String, so a credential spelled with escapes is found within it, and a number in
+// JSON that holds one becomes 0.
 //
-// It is never worse than redacting each piece on its own: where holding back would cut what
-// String finds in the text whole (a credential spelled with escapes that ends like the start of
-// a form, or text String gives up on and replaces whole), Write returns all of the text it has,
-// redacted whole. It still remembers the end it would have held: a form that began there and the
-// next piece completes is removed from the next piece, so the rest of a cut credential is never
-// sent; what was sent before the cut, at most that start, stays sent.
+// It is never worse than redacting each piece on its own: where holding back would change what
+// String finds in the text whole (for example a credential spelled with escapes that ends like the
+// start of a form, or text String gives up on and replaces whole), Write returns all of the text it
+// has, redacted whole. It still keeps the end it would have held, marked as sent: a form that
+// starts there and that later pieces complete is replaced in them, so the rest of a credential in
+// one of its forms cut there is not sent; what was sent of it before the cut stays sent.
 //
 // shortcut: a credential spelled with escapes outside its listed forms (\u0073 for s, %73)
 // that a piece cuts in two is not found, as when each piece is redacted on its own; holding back
-// for those would need far more than the longest form. A number longer than maxNumberHold cut
-// between pieces may be redacted as text ([redacted]) where String would write 0. Upgrade either
-// if an upstream is seen to write credentials that way in a streamed body.
+// for those would need far more than the longest form. A number that, with what stands before it,
+// takes more than maxNumberHold bytes and is cut between pieces may be redacted as text
+// ([redacted], which leaves JSON invalid) where String would write 0. Upgrade either if an
+// upstream is seen to write credentials that way in a streamed body.
 type BodyRedactor struct {
 	r       *Redactor
 	byFirst [256][]string // the forms by their first byte, longest first
@@ -776,10 +779,12 @@ func (b *BodyRedactor) Flush() string {
 func (b *BodyRedactor) emit(s string, final bool) string {
 	skip, cut := b.parse(s, b.sent, final)
 	if !final {
-		cut = max(b.numberStart(s, cut), skip)
+		cut = b.numberStart(s, cut)
 	}
 	if cut <= b.sent {
-		// Nothing new is decided: hold it all.
+		// Nothing new is decided: hold it all from cut, also what was sent of it, so that a form
+		// that starts there is still found once more text comes. A cut is never inside a form,
+		// so past sent it is also past skip.
 		b.held, b.sent = strings.Clone(s[cut:]), b.sent-cut
 		return ""
 	}

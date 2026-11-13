@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -226,17 +227,30 @@ func formsIn(r *Redactor, x string) []string {
 }
 
 // A secret cut between pieces is removed also where the text before the cut makes String give up
-// and replace it whole: the rest of the secret in the next piece is not sent either.
+// and replace it whole: the rest of the secret in the next piece is not sent either. That holds
+// for every form of every secret, cut at every byte, also when the next piece is empty or still
+// leaves the secret undecided (a base64 form can go on with its padding) and the body ends there.
 func TestBodyRedactorCutSecretAfterCollapse(t *testing.T) {
 	r := bodyRedactor()
-	const key = "sk-body-key-0123456789"
 	if r.String(collapsing+"sk-") != Redacted {
 		t.Fatalf("the test text does not collapse: %q", r.String(collapsing+"sk-"))
 	}
-	for _, k := range []int{3, 4, 8} {
-		got := redactPieces(t, r, []string{collapsing + key[:k], key[k:] + " rejected"})
-		if strings.Contains(got, key[k:]) || len(formsIn(r, got)) > 0 || !strings.HasSuffix(got, " rejected") {
-			t.Errorf("cut after %d bytes: got %q, which holds the rest of the secret or loses the text after it", k, got)
+	for _, f := range slices.Compact(slices.Sorted(slices.Values(r.forms))) {
+		for k := 1; k < len(f); k++ {
+			for _, c := range []struct {
+				pieces []string
+				want   string
+			}{
+				// The text before the cut becomes [redacted], and so does the rest of the secret.
+				{[]string{collapsing + f[:k], f[k:] + " rejected"}, Redacted + Redacted + " rejected"},
+				{[]string{collapsing + f[:k], f[k:], " rejected"}, Redacted + Redacted + " rejected"},
+				{[]string{collapsing + f[:k], "", f[k:] + " rejected"}, Redacted + Redacted + " rejected"},
+				{[]string{collapsing + f[:k], f[k:]}, Redacted + Redacted},
+			} {
+				if got := redactPieces(t, r, c.pieces); got != c.want {
+					t.Errorf("%q: got %q, want %q", c.pieces[1:], got, c.want)
+				}
+			}
 		}
 	}
 }

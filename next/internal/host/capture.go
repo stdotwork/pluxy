@@ -65,8 +65,10 @@ func redactBody(r *protocol.Redactor, b protocol.CapturedBody) protocol.Captured
 		head = r.String(head)
 	} else {
 		// Nothing lies between the start and the end, so they are one text, as the request
-		// log writes them: a secret cut between them is redacted whole, and the two are sent
-		// on joined, so that neither grows past what the log keeps of it and seems cut.
+		// log writes them: a secret in one of the forms core removes that is cut between them is
+		// removed (protocol.BodyRedactor). They are sent on joined: bytes held back from the
+		// start and sent with the end could make the end longer than the log keeps of it, which
+		// would log a gap that is not there.
 		br := r.Body()
 		head = br.Write(head) + br.Write(end) + br.Flush()
 		end = ""

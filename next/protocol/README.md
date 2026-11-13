@@ -470,18 +470,21 @@ The body is text: send it as it should reach the client. Core removes the accoun
 removes (as they are, escaped in JSON or a URL, base64; see [Errors](#errors)): a secret in one of
 those forms that one piece ends partway through and the next goes on with is removed too. To do so,
 core holds back the end of a piece that could be the start of one, fewer bytes than the longest of
-those forms, until the next piece shows whether it is one; when a secret could be part of a JSON
-number, it also holds back a number at the end of a piece and the colon, bracket or comma before
-it, up to 64 bytes more, so that the number becomes `0` as a whole. Where holding back would hide a
-secret core finds in the piece whole (one spelled with other escapes, or text so heavily escaped
-that core replaces it whole with `[redacted]`), core sends the piece at once, redacted whole, and
-removes from the next piece the rest of any secret that began in what it would have held; what it
-sent of that start stays sent. It sends what it holds once the body ends with `finish`, and drops
-it when the body breaks off with an error or is cancelled: the body is broken there anyway, and
-what it held could be part of a secret. Two limits remain: a secret spelled with escapes outside
-those forms (`\u0073` for `s`, `%73`) that a cut splits is not found, as when each piece is
-redacted alone; and a number longer than that cut between pieces may become `[redacted]` rather
-than `0`.
+those forms, until the next piece shows whether it is one. When a secret could be part of a JSON
+number, core also holds back a colon, bracket or comma at the end of a piece and any number after
+it (or a number alone there), when they take 64 bytes or fewer, so that a number holding the
+secret becomes `0` as a whole; where they start inside one of those forms, it holds back that form
+too. Where holding back would change what core finds in the text whole (for example a secret
+spelled with other escapes, or text so heavily escaped that core replaces all of it with
+`[redacted]`), core sends at once all it has, redacted whole. It then replaces with `[redacted]`
+the rest of a secret in one of those forms that began in what it would have held and that later
+pieces complete; what it sent of that start stays sent. It sends what it still holds once the body
+ends with `finish`, and drops it when the body breaks off with an error or is cancelled: the body
+is broken there anyway, and what it held could be part of a secret. Two limits remain: a secret
+spelled with escapes outside those forms (`\u0073` for `s`, `%73`) that a cut splits is not found,
+as when each piece is redacted alone; and a number that, with what stands before it, takes more
+than 64 bytes and is cut between pieces may become `[redacted]` rather than `0`, which leaves the
+JSON invalid.
 
 Except for the direct `codex.models` call above, an `error` before `response.start` is
 routed as for `generate`: core tries another account when it is retryable, and otherwise answers

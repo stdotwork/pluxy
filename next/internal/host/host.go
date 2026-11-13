@@ -425,9 +425,10 @@ func ServesEndpoints(info protocol.Info) bool {
 }
 
 // Endpoint starts an endpoint call, answered as a generate call is (see Generate). The reply's
-// body is redacted as one text, also where a secret is cut between its pieces
-// (protocol.BodyRedactor). An extension that serves no endpoints answers at once with an
-// unsupported error about the account, so routing moves on to another account.
+// body is redacted across its pieces: a secret in one of the forms core removes is found also
+// where it is cut between them (protocol.BodyRedactor). An extension that serves no endpoints
+// answers at once with an unsupported error about the account, so routing moves on to another
+// account.
 func (e *Extension) Endpoint(ctx context.Context, account protocol.Account, req llm.Request) *Stream {
 	if !ServesEndpoints(e.info) {
 		return servesNoEndpoints(e.manifest.ID, req)
@@ -510,7 +511,7 @@ type Stream struct {
 	ext    *Extension
 	redact *protocol.Redactor
 	// body is an endpoint call's: it redacts the reply's body across its pieces, holding back
-	// the end of a piece that could be the start of a secret (protocol.BodyRedactor). Its secrets
+	// the end of a piece that could be part of a secret (protocol.BodyRedactor). Its secrets
 	// are redact's, those the call was sent with; a refresh or a settings change while the reply
 	// runs reaches later calls, not this one, so they do not change mid-body.
 	body  *protocol.BodyRedactor
@@ -586,7 +587,7 @@ func (s *Stream) Next() llm.Event {
 // last returns what Next returns once the call has ended: first the end of an endpoint reply's
 // body that was held back, if any, when the body ended with finish, then the terminal event,
 // again and again. A body that breaks off (an error, a cancel) drops what was held back: it was
-// held only because it could be the start of a secret, and the body is broken there anyway.
+// held only because it could be part of a secret, and the body is broken there anyway.
 func (s *Stream) last() llm.Event {
 	if rest := s.body.Flush(); rest != "" && s.final.Type == llm.EventFinish {
 		return llm.Event{Type: llm.EventNative, Raw: bodyPiece(rest)}
@@ -595,7 +596,8 @@ func (s *Stream) last() llm.Event {
 }
 
 // bodyPiece returns a body piece as the JSON string a native event carries. BodyRedactor cuts
-// a body only where a form of a secret starts, which is where a character starts, so the piece
+// a body only where a form of a secret starts or ends, or before an ASCII byte (a number, or the
+// colon, bracket or comma before one), each of which is where a character starts, so the piece
 // is valid UTF-8 as the decoded string it came from was, and encodes exactly.
 func bodyPiece(text string) json.RawMessage {
 	b, _ := json.Marshal(text)
