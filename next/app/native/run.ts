@@ -25,9 +25,11 @@
 // scenario: a second launch on the same profile exits and raises the first's window, a launch on
 // another profile runs as its own app, and a killed owner's stale lock is recovered.
 // The signed native-tier admission check (admission.ts, admission_native.rs) runs in one more
-// session, with the app built with artifact-test-trust and a test trust profile in the run's HOME.
-// The other sessions run a build without that feature; its device check shows the same profile
-// admits nothing there.
+// session, with the app built with artifact-test-trust and a test trust profile in the run's HOME,
+// and the program host check (program.ts, program_native.rs) in one more with that build: a signed
+// summary tool, started on demand, called and cancelled, stopped when idle, disabled and quit,
+// whose processes are gone after the app quits. The other sessions run a build without that
+// feature; its device check shows the same profile admits nothing there.
 // The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
@@ -49,6 +51,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -60,6 +63,7 @@ import { buildSmokeAppImage } from "./appimage";
 import { buildDeviceFixtures } from "./device";
 import { runInstances } from "./instances";
 import { descendants, webProcesses } from "./processes";
+import { buildProgramFixtures } from "./program";
 import { missingPrerequisites } from "./services";
 
 const app = join(import.meta.dir, "..");
@@ -169,6 +173,15 @@ function alive(pid: number): boolean {
   }
 }
 
+/** Whether pid runs the program at path (and is not some later process with its number). */
+function runs(pid: number, path: string): boolean {
+  try {
+    return alive(pid) && readlinkSync(`/proc/${pid}/exe`).startsWith(path);
+  } catch {
+    return false;
+  }
+}
+
 async function managementStatus(base: string, key: string, ca?: string): Promise<number> {
   const r = await fetch(`${base}/v0/management/status`, {
     headers: { Authorization: `Bearer ${key}` },
@@ -208,6 +221,7 @@ async function runApp(
   suite?: Suite,
   rotation: Rotation = {},
   admission = false,
+  program = false,
 ): Promise<string[]> {
   const root = rotation.root ?? mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
   const problems: string[] = [];
@@ -238,11 +252,22 @@ async function runApp(
       );
     const quit = join(root, "quit");
     // This device's extension catalog is the same in every mode: check it once, in managed mode.
-    const device = mode === "managed" && !admission ? join(root, "device") : undefined;
+    const device = mode === "managed" && !admission && !program ? join(root, "device") : undefined;
     // A test trust profile in HOME naming curated registries: the admission session's build
     // honours it; the device check's normal build must not.
     const curated = device || admission ? join(root, "curated") : undefined;
     let nonce: string | undefined;
+    // The program host check's signed summary tool, its curated registry and trust profile.
+    const programDir = program ? join(root, "program") : undefined;
+    if (programDir) {
+      mkdirSync(programDir);
+      const f = buildProgramFixtures(programDir, dirs.home, programFixture);
+      nonce = f.nonce;
+      writeFileSync(
+        join(dirs.config, identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
     if (curated) {
       mkdirSync(curated);
       if (device) mkdirSync(device);
@@ -284,6 +309,8 @@ async function runApp(
       PLUXY_APP_TEST_QUIT: quit,
       ...(device ? { PLUXY_APP_TEST_DEVICE: device, PLUXY_APP_TEST_CURATED: curated as string } : {}),
       ...(admission ? { PLUXY_APP_TEST_ADMISSION: curated as string } : {}),
+      // In the app's environment, never in the tool's (program_native.rs checks its names).
+      ...(programDir ? { PLUXY_APP_TEST_PROGRAM: programDir, PLUXY_TEST_PROGRAM_CANARY: randomUUID() } : {}),
       ...(nonce ? { PLUXY_TEST_TRUST_NONCE: nonce } : {}),
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: identifier } : {}),
       ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
@@ -426,6 +453,27 @@ async function runApp(
       );
       console.log(`  ${mode} | after restart: ${JSON.stringify(restarted ?? {})}`);
       console.log(`${mode}: restart ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
+    if (program) {
+      const p = steps.get("program") as
+        | { passed?: boolean; program?: string; quit_pids?: number[] }
+        | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(p?.passed === true, `the program host check did not complete: ${failure}`);
+      // After the app quit, neither the tool nor the child in its process group runs.
+      await Bun.sleep(1000);
+      const left = (p?.quit_pids ?? []).filter((pid) => runs(pid, p?.program ?? ""));
+      check(
+        p?.quit_pids?.length === 2,
+        `the program check named no processes to watch: ${JSON.stringify(p)}`,
+      );
+      check(left.length === 0, `the tool's processes ${left.join(", ")} still run after the app quit`);
+      for (const pid of left) killTree(pid);
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} program ${JSON.stringify(p ?? {})}`);
+      console.log(`${mode}: program ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
 
@@ -681,11 +729,24 @@ run("bun", ["run", "build"], app);
 // The app, and the probe the session uses to check the desktop services (examples/session_probe.rs).
 run(
   "cargo",
-  ["build", "--locked", "--features", "native-test", "--bin", "pluxy-app", "--example", "session_probe"],
+  [
+    "build",
+    "--locked",
+    "--features",
+    "native-test",
+    "--bin",
+    "pluxy-app",
+    "--example",
+    "session_probe",
+    "--example",
+    "program_fixture",
+  ],
   tauri,
 );
 const targetDir = resolvePath(tauri, process.env.CARGO_TARGET_DIR ?? "target");
 const probe = join(targetDir, "debug", "examples", "session_probe");
+// The disposable summary tool the program host check packs into a signed package.
+const programFixture = join(targetDir, "debug", "examples", "program_fixture");
 // The build without artifact-test-trust, kept aside before the build with it replaces it.
 const binDir = mkdtempSync(join(tmpdir(), "pluxy-app-native-bin-"));
 const bin = join(binDir, "pluxy-app");
@@ -725,6 +786,21 @@ try {
         undefined,
         undefined,
         {},
+        true,
+      )),
+    );
+    p.push(
+      ...(await runApp(
+        "managed",
+        trustBin,
+        { mode: "managed", core_path: core },
+        undefined,
+        false,
+        false,
+        undefined,
+        undefined,
+        {},
+        false,
         true,
       )),
     );
