@@ -24,17 +24,21 @@
 //! A tool that exits unexpectedly, or breaks its pipe, has crashed: its calls fail. A call after
 //! a backoff starts it again (one second, doubling to a minute; a call during it is refused);
 //! nothing restarts it on its own. Five crashes in a row quarantine it until its package changes;
-//! a run of ten minutes starts a new count. A call that reached the tool and ended without its
-//! answer has an unknown outcome: it may or may not have run. It is never sent again; the host
-//! records it and reports it in the describe of the tool's next start, whichever release that
-//! is, so the tool can reconcile it before it takes work.
+//! a clean stop (idle, or one the host asked for) or a run of ten minutes starts a new count. A
+//! call that reached the tool and ended without its answer has an unknown outcome: it may or may
+//! not have run. It is never sent again; the host records it and reports it in the describe of
+//! the package's next start, whichever release that is, on the package's turn, so the tool can
+//! reconcile it before it takes work. A swap's candidate is told of none. A start that fails after
+//! its describe is told again at the next one: delivery may repeat.
 //!
 //! A swap replaces a running release's tool by another's (`prepare`, then `switch`): the new one
 //! is started and described first, with no call; only once it is ready do new calls go to it.
 //! The old one drains: the calls that hold its leases finish on it (until the drain limit, ten
 //! minutes, when it is stopped), then it stops. A candidate that fails leaves the old one as it
-//! was. Calls to a package run one at a time across its releases, so the old release's work ends
-//! before the new release's starts.
+//! was. Calls to a package run one at a time, whichever release they reach: the new release's
+//! first call waits for the call running on the old one, and calls still waiting their turn on
+//! either release go in no set order. A swap is refused once its package was stopped (changed)
+//! since the swap was staged (`stops`).
 //!
 //! Its stderr is logged, one bounded line at a time, at most `LOG_RATE` lines a second, with
 //! control and format characters escaped and the values the tool must not show removed; the last
@@ -301,6 +305,8 @@ struct Slot {
     /// Crashed: no start before then.
     retry_at: Option<Instant>,
     unknown: Vec<Unknown>,
+    /// `stop` calls so far (`Host::stops`).
+    stops: u64,
     /// A call is starting it: other calls wait until that start has ended, however the tool's
     /// phase changes meanwhile.
     starting: bool,
@@ -476,8 +482,6 @@ impl Drop for Lease {
 pub struct Prepared {
     inner: Arc<Inner>,
     run: Arc<Run>,
-    /// The calls of unknown outcome its describe reported.
-    reported: Vec<String>,
 }
 
 impl Drop for Prepared {
@@ -877,6 +881,8 @@ impl Host {
     /// start.
     pub fn stop(&self, id: &str) {
         let mut slots = self.0.slots();
+        // Counted even for a tool that never ran: a swap staged before it is refused.
+        slots.entry(id.to_string()).or_default().stops += 1;
         if let Some(slot) = slots.get_mut(id) {
             for r in slot.candidate.iter().chain(slot.old.iter().map(|o| &o.run)) {
                 r.finish(End::Stopped, false);
@@ -985,16 +991,26 @@ impl Host {
     /// its package (a swap): hello and describe, with no call and no lease. The running one
     /// serves on meanwhile; a candidate that fails leaves it as it was. `switch` makes the
     /// candidate the one that serves. Once the app is quitting, no candidate starts.
-    pub fn prepare(&self, admitted: &crate::device::Admitted) -> Result<Prepared, CallError> {
-        self.prepare_spec(Spec::from(admitted))
+    pub fn prepare(
+        &self,
+        admitted: &crate::device::Admitted,
+        stops: u64,
+    ) -> Result<Prepared, CallError> {
+        self.prepare_spec(Spec::from(admitted), stops)
     }
 
     /// `prepare`, from a record: the unit tests' own, or an admitted one.
-    fn prepare_spec(&self, spec: Spec) -> Result<Prepared, CallError> {
-        self.prepare_inner(spec).map_err(escaped)
+    fn prepare_spec(&self, spec: Spec, stops: u64) -> Result<Prepared, CallError> {
+        self.prepare_inner(spec, stops).map_err(escaped)
     }
 
-    fn prepare_inner(&self, spec: Spec) -> Result<Prepared, CallError> {
+    /// How many times tool id has been stopped (`stop`): a swap staged at one count is refused
+    /// by `prepare` once its package has changed since.
+    pub fn stops(&self, id: &str) -> u64 {
+        self.0.slots().get(id).map_or(0, |s| s.stops)
+    }
+
+    fn prepare_inner(&self, spec: Spec, stops: u64) -> Result<Prepared, CallError> {
         let inner = &self.0;
         let id = spec.id.clone();
         let unavailable = |e: String| fail("extension_unavailable", e);
@@ -1007,6 +1023,11 @@ impl Host {
                 return Err(unavailable("the app is quitting".into()));
             }
             let slot = slots.entry(id.clone()).or_default();
+            if slot.stops != stops {
+                return Err(unavailable(format!(
+                    "{id} changed since the swap was staged"
+                )));
+            }
             if slot.candidate.is_some() {
                 return Err(unavailable(format!("a swap of {id} is under way already")));
             }
@@ -1019,13 +1040,12 @@ impl Host {
             }
             return Err(unavailable(format!("starting {id}: {e}")));
         }
-        let prepared = |reported| Prepared {
-            inner: Arc::clone(inner),
-            run: Arc::clone(&run),
-            reported,
-        };
-        match handshake(inner, &run, hello_rx) {
-            Ok(reported) if !run.ending() => Ok(prepared(reported)),
+        // A candidate may never serve: its describe carries no call of unknown outcome.
+        match handshake(inner, &run, hello_rx, false) {
+            Ok(_) if !run.ending() => Ok(Prepared {
+                inner: Arc::clone(inner),
+                run: Arc::clone(&run),
+            }),
             Ok(_) => {
                 wait_reaped(inner, &run);
                 Err(unavailable(format!("{id} was stopped while it started")))
@@ -1082,7 +1102,6 @@ impl Host {
         slot.crashes = 0;
         slot.retry_at = None;
         slot.last = None;
-        slot.unknown.retain(|u| !p.reported.contains(&u.call));
         self.0.changed.notify_all();
         Ok(())
     }
@@ -1117,6 +1136,26 @@ impl Drop for Call {
 
 /// The turn of the call holding it, given up when it ends.
 struct Turn<'a>(&'a Run);
+
+/// Run's package's turn, waited for at most within, or while run is not ending.
+fn take_turn(run: &Run, within: Duration) -> Option<Turn<'_>> {
+    let until = Instant::now() + within;
+    let mut turn = run.gate.turn.lock().unwrap();
+    while turn.0 {
+        let left = until.saturating_duration_since(Instant::now());
+        if left.is_zero() || run.ending() {
+            return None;
+        }
+        turn = run
+            .gate
+            .turned
+            .wait_timeout(turn, left.min(TICK))
+            .unwrap()
+            .0;
+    }
+    turn.0 = true;
+    Some(Turn(run))
+}
 
 impl Drop for Turn<'_> {
     fn drop(&mut self) {
@@ -1295,7 +1334,7 @@ fn start(
         }
         return Err(failed(format!("starting {id}: {e}")));
     }
-    match handshake(inner, &run, hello_rx) {
+    match handshake(inner, &run, hello_rx, true) {
         Ok(reported) => {
             let mut slots = inner.slots();
             let slot = slots.entry(id.to_string()).or_default();
@@ -1365,13 +1404,16 @@ fn compatible(spec: &Spec) -> Result<(), String> {
     Ok(())
 }
 
-/// Hello, then describe, within the startup limit. Describe reports the package's calls of
-/// unknown outcome; the IDs reported are returned, for the caller to clear once this tool serves.
+/// Hello, then describe, within the startup limit. With unknown, describe reports the package's
+/// calls of unknown outcome, on the package's turn (no call of it runs meanwhile); if that turn
+/// does not come within the startup limit, it reports none, and they wait for a later start. The
+/// IDs reported are returned, for the caller to clear once this tool serves.
 /// An "incompatible" error means the tool answered but does not match its record.
 fn handshake(
     inner: &Inner,
     run: &Run,
     hello: mpsc::Receiver<Value>,
+    unknown: bool,
 ) -> Result<Vec<String>, CallError> {
     let spec = &run.spec;
     let id = &spec.id;
@@ -1418,17 +1460,29 @@ fn handshake(
             h["id"], h["sha256"], spec.id, spec.sha256
         )));
     }
-    let unknown: Vec<Unknown> = inner
-        .slots()
-        .get(id)
-        .map(|s| s.unknown.clone())
-        .unwrap_or_default();
+    let pending = |inner: &Inner| -> Vec<Unknown> {
+        inner
+            .slots()
+            .get(id)
+            .map(|s| s.unknown.clone())
+            .unwrap_or_default()
+    };
+    // The describe's own time, besides any wait for the turn.
+    let describe = left();
+    let turn = (unknown && !pending(inner).is_empty())
+        .then(|| take_turn(run, inner.limits.startup))
+        .flatten();
+    let unknown = if turn.is_some() {
+        pending(inner)
+    } else {
+        Vec::new()
+    };
     let cid = call_id();
     let (tx, rx) = mpsc::channel();
     run.pending.lock().unwrap().insert(cid.clone(), tx);
     run.send(&json!({"type": "call", "id": cid, "op": "describe", "contract_version": CONTRACT,
         "unknown": unknown.iter().map(|u| json!({"id": u.call, "op": u.op, "generation": u.generation})).collect::<Vec<_>>()}))?;
-    let d = match rx.recv_timeout(left()) {
+    let d = match rx.recv_timeout(describe) {
         Ok(Reply::Result(d)) => d,
         Ok(Reply::Error(e)) => return Err(incompatible(format!("describe failed: {e}"))),
         Err(RecvTimeoutError::Timeout) => return Err(timeout()),
@@ -1631,7 +1685,8 @@ fn supervise(
                     ),
                 ),
             };
-            // A crash: backoff before the next start, or quarantine after too many in a row.
+            // A crash: backoff before the next start, or quarantine after too many in a row. A
+            // clean stop (idle, or one the host asked for) ends the crashes in a row.
             slot.phase = if phase == Phase::Crashed {
                 if run.started.elapsed() >= inner.limits.stable {
                     slot.crashes = 0;
@@ -1645,6 +1700,10 @@ fn supervise(
                     Phase::Crashed
                 }
             } else {
+                if matches!(phase, Phase::Idle | Phase::Stopped) {
+                    slot.crashes = 0;
+                    slot.retry_at = None;
+                }
                 phase
             };
             slot.last = Some(why);

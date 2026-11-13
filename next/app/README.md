@@ -287,11 +287,12 @@ Updating or rolling back a native tool that is enabled swaps it while it serves 
 release is staged and shown in its own native confirmation; once confirmed, the program host
 starts and describes it, with no call. Only then is it committed, enabled and admitted, and do new
 calls go to it, while the old release's tool finishes the calls it has (for at most ten minutes)
-and stops. Calls to one tool run one at a time across its releases. A cancelled confirmation, or a
-release that fails to start or describe itself, installs nothing and leaves the old release
-enabled and running. A tool that crashes is started again only by a call after a backoff (one
-second, doubling to a minute); five crashes in a row quarantine it until it is disabled and
-enabled again, or updated. A call the tool took and never answered has an unknown outcome: it is
+and stops. Calls to one tool run one at a time, whichever release they reach. A cancelled
+confirmation, a package disabled or removed while it was open, or a release that fails to start
+or describe itself, installs nothing and leaves the old release as it was. A tool that crashes is
+started again only by a call after a backoff (one second, doubling to a minute); five crashes in a
+row, with no clean stop between them, quarantine it until it is disabled and enabled again, or
+updated. A call the tool took and never answered has an unknown outcome: it is
 never sent again, and the tool's next start is told of it.
 
 Installing a newer release keeps the one it replaces as the last good release. A candidate that
@@ -451,8 +452,9 @@ confirmed 1.2.0 is refused as incompatible and deleted, and 1.1.0 serves on in t
 Five crash calls in a row each fail with an unknown outcome; a call during each backoff is
 refused and starts nothing; the next call after it is the restarted tool's first, and its describe
 was told of the crash call; the fifth crash quarantines it until it is disabled and enabled
-again. A call is cancelled, the tool stops after 30 seconds idle, and a rollback to 1.0.0 asks
-again and runs it. Running when the app quits, its process and child are gone afterwards.
+again. A call is cancelled, the tool stops after 30 seconds idle; a cancelled rollback changes
+nothing, one confirmed after the tool was disabled from the window while its confirmation was
+open is refused and starts nothing, and a rollback to 1.0.0 asks again and runs it. Running when the app quits, its process and child are gone afterwards.
 
 In managed mode, two more sessions run the window checks (`native/window.ts`, which launches
 the app through the stages in `src-tauri/src/native_window.rs`), one with a tray watcher and

@@ -131,8 +131,12 @@ impl Catalog {
             return Err(format!("{id} {} is already installed", c.release.version));
         }
         state_readable(id, &p.active, &c.release)?;
+        // Each update holds its own folder: a second one would share it.
+        if self.holding.contains_key(id) {
+            return Err(format!("an update of {id} is under way already"));
+        }
         self.place(c)?;
-        self.holding.insert(c.release.sha256.clone());
+        self.holding.insert(id.clone(), c.release.sha256.clone());
         let mut s = self.swap(id, c.release.clone(), c.source.clone(), false, roots)?;
         s.held = Some(c.release.sha256.clone());
         Ok(s)
@@ -160,7 +164,14 @@ impl Catalog {
         result
     }
 
-    fn commit_swap_inner(&mut self, s: &Swap, roots: &dyn Roots) -> Result<(), String> {
+    /// Checks swap s still replaces its package's active, admitted release, as it was staged:
+    /// after its native confirmation, before its release starts, the package may have been
+    /// disabled, removed or changed meanwhile.
+    pub fn swap_current(&self, s: &Swap, roots: &dyn Roots) -> Result<(), String> {
+        self.current(s, roots).map(|_| ())
+    }
+
+    fn current(&self, s: &Swap, roots: &dyn Roots) -> Result<&Package, String> {
         let id = &s.id;
         let p = self.swapping(id)?;
         if (&p.active.sha256, p.active.installed_at) != (&s.from.0, s.from.1)
@@ -172,7 +183,12 @@ impl Catalog {
         if now != s.admitted {
             return Err(format!("{id} changed during the swap; try again"));
         }
-        let previous = p.clone();
+        Ok(p)
+    }
+
+    fn commit_swap_inner(&mut self, s: &Swap, roots: &dyn Roots) -> Result<(), String> {
+        let id = &s.id;
+        let previous = self.current(s, roots)?.clone();
         let p = self.packages.get_mut(id).unwrap();
         let replaced = std::mem::replace(&mut p.active, s.release.clone());
         p.last_good = Some(replaced);
@@ -190,8 +206,8 @@ impl Catalog {
     /// Ends a swap that did not commit: an update's folder leaves the store unless a release
     /// names it.
     pub fn end_swap(&mut self, s: Swap) {
-        if let Some(sha) = &s.held {
-            self.holding.remove(sha);
+        if s.held.is_some() {
+            self.holding.remove(&s.id);
             self.collect();
         }
     }

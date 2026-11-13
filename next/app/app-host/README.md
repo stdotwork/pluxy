@@ -244,25 +244,34 @@ anything a caller passes. On top of the rules above:
   Nothing restarts it on its own: a call after the backoff (one second, doubling with each crash
   in a row, up to a minute) starts it, and a call during the backoff is refused. Five crashes in a
   row make it **quarantined**: calls are refused until its package changes (disabled and enabled
-  again, updated, rolled back). A run of ten minutes starts a new count. A crash of a release
-  that is draining is not counted.
+  again, updated, rolled back). A clean stop (when idle, or a stop the host asked for, such as a
+  disable) or a run of ten minutes starts a new count: with the 30-second idle stop, crashes in a
+  row are those with no clean stop between them. A crash of a release that is draining is not
+  counted.
 - A call the tool received and did not answer (it crashed, was stopped, left a cancel unanswered
   or reached the drain limit) has an **unknown outcome**: its error says so, and it is never sent
   again. The host keeps it until the package's next start, which carries the list in describe,
   as `{"type":"call","id":"c-9","op":"describe","contract_version":0,"unknown":[{"id":"c-7","op":"apply","generation":1700000000}]}`
   (`generation` is the release's install time). A tool that writes must reconcile those calls
-  with its own records before it answers describe; whichever release starts next gets them,
-  then the host forgets them. A call refused before it was sent, an `error` frame and a
+  with its own records before it answers describe. The describe that carries them waits for the
+  package's turn, so no call of the package runs while the tool reconciles; if the turn does not
+  come within the startup limit, that describe carries none. Whichever release starts next gets
+  them, except a swap's candidate, which gets none; once that start serves, the host forgets them.
+  Delivery may repeat (a start that fails after its describe is told again at the next one), so
+  reconciliation must be idempotent. A call refused before it was sent, an `error` frame and a
   cancel the tool answered all have known outcomes.
 - **Swaps.** Updating or rolling back an enabled native tool stages the release and asks for
   its own native confirmation. Once confirmed, the host starts the release's tool and runs hello
-  and describe with no call; it fails as any start does. Then the catalog commits it as active,
+  and describe with no call; it fails as any start does. It does not start if the package was
+  disabled, removed or changed while the confirmation was open, and a second update of a package
+  is refused while one is under way. Then the catalog commits it as active,
   enabled and admitted, only if the release it replaces is still the active, admitted one, and
   new calls and leases go to the new tool. The old one **drains**: calls holding its leases,
   including those waiting their turn, finish on it; then its stdin closes as for any stop. After
   ten minutes (the drain limit) it is stopped and its unanswered calls have unknown outcomes.
-  Calls of one package run one at a time across its releases, so the new release's first call
-  waits for the old release's. The package's pages close at the switch. A cancelled confirmation
+  Calls of one package run one at a time, whichever release they reach: the new release's first
+  call waits for the call running on the old one, and calls still waiting their turn on either
+  release go in no set order. The package's pages close at the switch. A cancelled confirmation
   or a candidate that fails installs nothing; the old release stays active and serving.
 
 Still to come: calls routed from pages, jobs, secrets, and Windows and macOS.

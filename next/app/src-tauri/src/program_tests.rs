@@ -756,7 +756,7 @@ fn a_swap_drains_the_old_release_and_serializes_calls_across_releases() {
     let held = h.lease(ID).unwrap();
 
     // Prepared: started and described, but no call reaches it and the old one serves.
-    let p = h.prepare_spec(v2).unwrap();
+    let p = h.prepare_spec(v2, h.stops(ID)).unwrap();
     let new = u64::from(p.run.pid().unwrap());
     assert!(alive(new));
     let slow = call_in_thread(&h, "slow", json!({"ms": 1500}));
@@ -809,7 +809,7 @@ fn a_failed_or_abandoned_candidate_leaves_the_old_release_serving() {
     // Incompatible: refused, reaped, and the old release serves on.
     let mut bad = release(json!({"extra_operation": "more"}), "1.2.0", 3);
     bad.sha256 = "ab".repeat(32);
-    let e = h.prepare_spec(bad).err().expect("refused");
+    let e = h.prepare_spec(bad, h.stops(ID)).err().expect("refused");
     assert!(e.message.contains("incompatible"), "{e}");
     let s = h.status(ID);
     assert_eq!(
@@ -819,7 +819,7 @@ fn a_failed_or_abandoned_candidate_leaves_the_old_release_serving() {
     // Silent until its startup limit: refused the same way.
     let t = Instant::now();
     let e = h
-        .prepare_spec(release(json!({"silent": true}), "1.2.0", 3))
+        .prepare_spec(release(json!({"silent": true}), "1.2.0", 3), h.stops(ID))
         .err()
         .expect("refused");
     assert!(
@@ -827,12 +827,16 @@ fn a_failed_or_abandoned_candidate_leaves_the_old_release_serving() {
         "{e}"
     );
     // Abandoned (dropped without a switch): stopped.
-    let p = h.prepare_spec(release(Value::Null, "1.1.0", 2)).unwrap();
+    let p = h
+        .prepare_spec(release(Value::Null, "1.1.0", 2), h.stops(ID))
+        .unwrap();
     let cand = u64::from(p.run.pid().unwrap());
     drop(p);
     until("the abandoned candidate to go", 5, || !alive(cand));
     // Stopped by a package change before its switch: the switch is refused.
-    let p = h.prepare_spec(release(Value::Null, "1.1.0", 2)).unwrap();
+    let p = h
+        .prepare_spec(release(Value::Null, "1.1.0", 2), h.stops(ID))
+        .unwrap();
     let cand = u64::from(p.run.pid().unwrap());
     h.stop(ID);
     let e = h.switch(p).unwrap_err();
@@ -858,7 +862,9 @@ fn a_draining_release_is_stopped_at_the_drain_limit() {
     let (old, _) = pids(&summary(&h, &[]).unwrap());
     let waiting = call_in_thread(&h, "wait", json!({}));
     until("the wait call", 5, || h.status(ID).state == "active");
-    let p = h.prepare_spec(release(Value::Null, "1.1.0", 2)).unwrap();
+    let p = h
+        .prepare_spec(release(Value::Null, "1.1.0", 2), h.stops(ID))
+        .unwrap();
     let t = Instant::now();
     h.switch(p).unwrap();
     let e = waiting.join().unwrap().unwrap_err();
@@ -1219,14 +1225,16 @@ fn a_tool_that_exits_after_describe_backs_off_and_is_quarantined() {
 fn after_stop_all_no_candidate_starts_and_a_prepared_one_is_reaped() {
     let h = host(Value::Null);
     summary(&h, &[]).unwrap();
-    let p = h.prepare_spec(release(Value::Null, "1.1.0", 2)).unwrap();
+    let p = h
+        .prepare_spec(release(Value::Null, "1.1.0", 2), h.stops(ID))
+        .unwrap();
     let candidate = u64::from(p.run.pid().unwrap());
     h.stop_all();
     assert!(!alive(candidate));
     let e = h.switch(p).unwrap_err();
     assert_eq!(e.code, "extension_unavailable", "{e}");
     let e = h
-        .prepare_spec(release(Value::Null, "1.1.0", 3))
+        .prepare_spec(release(Value::Null, "1.1.0", 3), h.stops(ID))
         .err()
         .expect("refused");
     assert!(e.message.contains("quitting"), "{e}");
@@ -1241,7 +1249,9 @@ fn cancel_all_reaches_a_call_on_a_draining_release() {
     let (old, _) = pids(&summary(&h, &[]).unwrap());
     let waiting = call_in_thread(&h, "wait", json!({}));
     until("the wait call", 5, || h.status(ID).state == "active");
-    let p = h.prepare_spec(release(Value::Null, "1.1.0", 2)).unwrap();
+    let p = h
+        .prepare_spec(release(Value::Null, "1.1.0", 2), h.stops(ID))
+        .unwrap();
     h.switch(p).unwrap();
     assert_eq!(h.status(ID).draining.len(), 1);
     h.cancel_all();
@@ -1259,12 +1269,92 @@ fn what_a_candidate_says_reaches_the_caller_escaped() {
     let h = host(Value::Null);
     summary(&h, &[]).unwrap();
     let e = h
-        .prepare_spec(release(json!({"hello_sha256": "\u{202e}"}), "1.1.0", 2))
+        .prepare_spec(
+            release(json!({"hello_sha256": "\u{202e}"}), "1.1.0", 2),
+            h.stops(ID),
+        )
         .err()
         .expect("refused");
     assert!(
         e.message.contains("\\u202e") && !e.message.contains('\u{202e}'),
         "{e}"
     );
+    h.stop_all();
+}
+
+#[test]
+fn a_stop_after_a_swap_was_staged_refuses_its_candidate() {
+    let h = host(Value::Null);
+    let (old, _) = pids(&summary(&h, &[]).unwrap());
+    // Staged at this count; then the package changed (disabled, removed) and it was stopped.
+    let stops = h.stops(ID);
+    h.stop(ID);
+    until("the stop", 5, || !alive(old));
+    let e = h
+        .prepare_spec(release(Value::Null, "1.1.0", 2), stops)
+        .err()
+        .expect("refused");
+    assert!(e.message.contains("changed"), "{e}");
+    assert!(h.0.slots()[ID].candidate.is_none());
+    // A stop of a package that never ran counts too.
+    let before = h.stops("pluxy/other");
+    h.stop("pluxy/other");
+    assert_ne!(h.stops("pluxy/other"), before);
+    h.stop_all();
+}
+
+#[test]
+fn unknown_outcomes_go_to_no_candidate_and_wait_for_the_package_turn() {
+    let h = Arc::new(host(json!({"crash_on": "crash"})));
+    summary(&h, &[]).unwrap();
+    let e = h.call(ID, "crash", json!({}), None).unwrap_err();
+    assert!(e.unknown, "{e}");
+    until("the crash", 5, || h.status(ID).pid.is_none());
+    let call = h.status(ID).unknown[0].call.clone();
+    // A swap's candidate may never serve: its describe carries none, and they stay.
+    let p = h
+        .prepare_spec(
+            release(json!({"crash_on": "crash"}), "1.1.0", 2),
+            h.stops(ID),
+        )
+        .unwrap();
+    h.switch(p).unwrap();
+    assert_eq!(summary(&h, &[]).unwrap()["reported"], json!([]));
+    assert_eq!(h.status(ID).unknown.len(), 1);
+    // The next start's describe carries them only on the package's turn.
+    h.stop(ID);
+    until("the stop", 5, || h.status(ID).pid.is_none());
+    h.0.slots()[ID].gate.turn.lock().unwrap().0 = true;
+    let waiting = spawn_summary(&h);
+    std::thread::sleep(Duration::from_millis(800));
+    assert_eq!(h.status(ID).state, "starting");
+    {
+        let slots = h.0.slots();
+        let gate = &slots[ID].gate;
+        gate.turn.lock().unwrap().0 = false;
+        gate.turned.notify_all();
+    }
+    let r = joined(waiting, 5, "the call").unwrap();
+    assert_eq!(r["reported"][0]["id"], json!(call));
+    assert!(h.status(ID).unknown.is_empty());
+    h.stop_all();
+}
+
+#[test]
+fn a_clean_stop_ends_the_crashes_in_a_row() {
+    let h = host(json!({"crash_on": "crash"}));
+    summary(&h, &[]).unwrap();
+    h.call(ID, "crash", json!({}), None).unwrap_err();
+    until("the crash", 5, || h.status(ID).pid.is_none());
+    assert_eq!(h.status(ID).crashes, 1);
+    std::thread::sleep(retry_in(&h) + Duration::from_millis(50));
+    summary(&h, &[]).unwrap();
+    // Stopped when idle, with no crash: the next crash is the first in a row.
+    until("the idle stop", 5, || h.status(ID).state == "idle");
+    assert_eq!(h.status(ID).crashes, 0);
+    summary(&h, &[]).unwrap();
+    h.call(ID, "crash", json!({}), None).unwrap_err();
+    until("the crash", 5, || h.status(ID).pid.is_none());
+    assert_eq!(h.status(ID).crashes, 1);
     h.stop_all();
 }

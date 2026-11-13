@@ -23,6 +23,8 @@
 //!   start nothing until it is disabled and enabled again;
 //! - a call is cancelled; then, left alone, 1.1.0 stops after the idle delay, with no process or
 //!   host thread left;
+//! - a cancelled rollback changes nothing; one confirmed after the tool was disabled from the
+//!   window while its confirmation was open is refused, and 1.0.0 never starts;
 //! - rolled back to 1.0.0 through a native confirmation, 1.0.0 runs and answers; its process and
 //!   child are named for the runner, which checks they are gone once the app has quit.
 //!
@@ -175,8 +177,12 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         swapped_at.elapsed() < Duration::from_millis(SLOW_MS) + Duration::from_secs(10),
         "the slow call took too long",
     )?;
+    // Gone from /proc once it exits; listed as draining until it is reaped and its last lines
+    // are read.
     wait_for("1.0.0 to be reaped after its drain", || {
-        processes(&p1).is_empty().then_some(())
+        let s = status(main).ok()?;
+        (processes(&p1).is_empty() && s["draining"].as_array().is_some_and(|a| a.is_empty()))
+            .then_some(())
     })?;
     let s = status(main)?;
     let names = threads();
@@ -357,6 +363,51 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             idle.elapsed()
         ),
     )?;
+
+    // A cancelled rollback changes nothing and starts nothing.
+    let unchanged = |what: &str| -> Result<(), String> {
+        let p = package(main)?;
+        require(
+            p["active"]["version"] == "1.1.0"
+                && p["last_good"]["version"] == "1.0.0"
+                && processes(&p1).is_empty(),
+            format!("{ID} after {what}: {p}"),
+        )
+    };
+    let slot = start(main, "device_rollback", json!({"id": ID}))?;
+    dialog_text(app)?;
+    press("alt+c")?;
+    let r = settle(main, &slot)?;
+    require(
+        r["ok"] == false && r["error"].as_str().is_some_and(|e| e.contains("cancelled")),
+        format!("the cancelled rollback: {r}"),
+    )?;
+    unchanged("the cancelled rollback")?;
+    require(
+        package(main)?["authorized"] == true,
+        "the cancelled rollback disabled 1.1.0",
+    )?;
+    out["rollback_cancelled"] = r["error"].clone();
+
+    // Disabled from the window while the rollback's confirmation is open: confirmed, the
+    // rollback is refused, and 1.0.0 never starts.
+    let slot = start(main, "device_rollback", json!({"id": ID}))?;
+    dialog_text(app)?;
+    ok(main, "device_enable", json!({"id": ID, "enabled": false}))?;
+    press("alt+o")?;
+    let r = settle(main, &slot)?;
+    let e = r["error"].as_str().unwrap_or_default();
+    require(
+        r["ok"] == false && e.contains("not an enabled native tool"),
+        format!("the rollback of a tool disabled meanwhile: {r}"),
+    )?;
+    unchanged("the refused rollback")?;
+    require(
+        package(main)?["enabled"] == false,
+        "the refused rollback enabled 1.1.0",
+    )?;
+    out["rollback_refused"] = json!(e);
+    enable(app, main)?;
 
     // Rolled back to 1.0.0 through its native confirmation.
     let slot = start(main, "device_rollback", json!({"id": ID}))?;

@@ -1624,3 +1624,37 @@ fn a_release_that_cannot_read_the_state_is_refused() {
     assert_eq!(c.get("pluxy/tool").unwrap().active.version, "2.0.0");
     done(root);
 }
+
+#[test]
+fn a_swap_is_checked_again_after_its_confirmation_and_one_update_at_a_time_is_held() {
+    let root = temp();
+    let (d, roots) = native_fixture(&root);
+    let mut c = Catalog::open(d.clone(), false, &roots);
+    let stage =
+        |v: &str| stage_from_registry(&d, &roots, "curated", "pluxy/tool", Some(v)).unwrap();
+    c.commit(stage("1.0.0")).unwrap();
+    let a = candidate(&c, "pluxy/tool", &roots).unwrap();
+    c.admit_checked(&a, &roots).unwrap();
+
+    // A second update of the package while the first is held is refused, and keeps its files.
+    let s = c.swap_update(stage("1.1.0"), &roots).unwrap();
+    let dir = s.admitted().dir().to_path_buf();
+    let e = c.swap_update(stage("1.1.0"), &roots).unwrap_err();
+    assert!(e.contains("under way"), "{e}");
+    assert!(dir.exists());
+    c.swap_current(&s, &roots).unwrap();
+    // Disabled while its confirmation was open: the check after it fails.
+    c.set_enabled("pluxy/tool", false, &roots).unwrap();
+    let e = c.swap_current(&s, &roots).unwrap_err();
+    assert!(e.contains("not an enabled native tool"), "{e}");
+    c.end_swap(s);
+    assert!(!dir.exists());
+    // Removed while it was open: the same.
+    let a = candidate(&c, "pluxy/tool", &roots).unwrap();
+    c.admit_checked(&a, &roots).unwrap();
+    let r = c.swap_update(stage("1.1.0"), &roots).unwrap();
+    c.remove("pluxy/tool").unwrap();
+    assert!(c.swap_current(&r, &roots).is_err());
+    c.end_swap(r);
+    done(root);
+}

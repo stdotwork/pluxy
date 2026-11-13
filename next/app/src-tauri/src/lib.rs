@@ -1041,7 +1041,13 @@ fn native_swap(
 ) -> Result<device::View, String> {
     let st = app.state::<App>();
     let roots = trust::TrustStore::current();
-    let swap = stage(&mut st.device.lock().unwrap(), &roots)?;
+    // The tool's stop count as it is staged: a change to the package since (disable, remove)
+    // stopped it, and the swap's release does not start.
+    let (swap, stops) = {
+        let mut catalog = st.device.lock().unwrap();
+        let swap = stage(&mut catalog, &roots)?;
+        (swap, st.programs.stops(id))
+    };
     let (from, to) = (
         swap.from_version().to_string(),
         swap.admitted().version().to_string(),
@@ -1059,12 +1065,14 @@ fn native_swap(
             return Err("the update was cancelled".to_string());
         }
         swap.verify()?;
+        // The package may have been disabled, removed or changed while the confirmation was open.
+        st.device.lock().unwrap().swap_current(&swap, &roots)?;
         // On a thread of its own that ends with the start: the tool is held by the host's
         // supervisor thread, never by the thread that started it.
         std::thread::scope(|s| {
             std::thread::Builder::new()
                 .name("pluxy-prog-swap".into())
-                .spawn_scoped(s, || st.programs.prepare(swap.admitted()))
+                .spawn_scoped(s, || st.programs.prepare(swap.admitted(), stops))
                 .map_err(|e| e.to_string())?
                 .join()
                 .map_err(|_| "the swap's thread failed".to_string())?

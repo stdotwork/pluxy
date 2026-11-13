@@ -191,8 +191,9 @@ pub struct Catalog {
     /// What went wrong after a change was made, since the last `take_cleanup`: folders that
     /// could not be deleted, a catalog that could not be flushed to disk.
     cleanup: Vec<String>,
-    /// Store folders of releases being swapped in (`device_swap.rs`), kept until the swap ends.
-    holding: BTreeSet<String>,
+    /// Store folders of releases being swapped in (`device_swap.rs`), by package ID, kept until
+    /// the swap ends: one update of a package at a time.
+    holding: BTreeMap<String, String>,
 }
 
 /// A page as the window lists it.
@@ -514,7 +515,7 @@ impl Catalog {
             packages,
             warning,
             keep_store,
-            holding: BTreeSet::new(),
+            holding: BTreeMap::new(),
             locked,
             cleanup: vec![],
         };
@@ -623,7 +624,7 @@ impl Catalog {
             .values()
             .flat_map(|p| std::iter::once(&p.active).chain(p.last_good.as_ref()))
             .map(|r| r.sha256.clone())
-            .chain(self.holding.iter().cloned())
+            .chain(self.holding.values().cloned())
             .collect();
         let store = self.dirs.store();
         let entries = match fs::read_dir(&store) {
