@@ -27,8 +27,9 @@
 //!   next call is refused;
 //! - launch: a launch-class call started by a native click asks, and with "remember" ticked, the
 //!   next identical one from a native click runs without asking; the same launch through relay
-//!   (another chain) asks again, as does one from the window without a native click; through a web
-//!   package's import it asks each time and offers no "remember".
+//!   (a call with a tool hop is an import) asks each time and offers no "remember", as does one
+//!   from the window without a native click; through a web package's import it asks each time and
+//!   offers no "remember" either.
 //!
 //! One line on stderr: `native-test: routing <JSON>`.
 
@@ -725,24 +726,29 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 r["launched"] == argv && !showing(),
                 format!("the remembered launch ran without asking: {r}"),
             )?;
-            // The same launch through relay is another chain: it asks again.
-            let rx = clicked(
-                app,
-                RELAY,
-                "relay",
-                json!({"package": TARGET, "op": "launch", "input": launch}),
-            )?;
-            let text = dialog_text(app)?;
-            require(
-                text.contains(RELAY),
-                format!("the relayed launch's confirmation: {text}"),
-            )?;
-            press("alt+c")?;
-            let r = answer(&rx)?.map_err(|e| format!("relay's own call: {e}"))?;
-            require(
-                r["answer"]["error"]["code"] == "cancelled",
-                format!("the relayed launch, cancelled: {r}"),
-            )?;
+            // The same launch through relay is an import: it asks, offers no "remember", and the
+            // next one asks again though the first was confirmed (the dialog's Confirm waits a
+            // second, and one import a second is taken).
+            for round in ["first", "second"] {
+                let rx = clicked(
+                    app,
+                    RELAY,
+                    "relay",
+                    json!({"package": TARGET, "op": "launch", "input": launch}),
+                )?;
+                let text = dialog_text(app)?;
+                require(
+                    text.contains(RELAY) && !text.contains(REMEMBER),
+                    format!("the {round} relayed launch's confirmation: {text}"),
+                )?;
+                std::thread::sleep(Duration::from_millis(1100));
+                press("alt+o")?;
+                let r = answer(&rx)?.map_err(|e| format!("relay's own call: {e}"))?;
+                require(
+                    r["answer"]["output"]["launched"] == argv,
+                    format!("the {round} relayed launch, confirmed: {r}"),
+                )?;
+            }
             // The window's call without a native gesture asks.
             let slot = start(
                 main,
