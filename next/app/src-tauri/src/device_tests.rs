@@ -242,7 +242,7 @@ fn install_swap_failed_candidate_rollback_and_remove() {
 
     c.remove("example/notes").unwrap();
     assert!(c.get("example/notes").is_none() && store_names(&d).is_empty());
-    assert!(Catalog::open(d, false).view().packages.is_empty());
+    assert!(Catalog::open(d, false).view(&NoRoots).packages.is_empty());
     done(root);
 }
 
@@ -396,7 +396,7 @@ fn safe_mode_lists_but_never_serves() {
     let v1 = package("example/notes", "1.0.0");
     install(&mut c, &v1, local("n")).unwrap();
     let safe = Catalog::open(d, true);
-    let v = safe.view();
+    let v = safe.view(&NoRoots);
     assert!(v.safe_mode && v.packages.len() == 1);
     assert!(safe
         .page("example/notes", "p")
@@ -416,7 +416,7 @@ fn a_damaged_catalog_is_moved_aside() {
     fs::write(d.catalog(), b"{not json").unwrap();
     let c = Catalog::open(d.clone(), false);
     assert!(c.warning.as_deref().is_some_and(|w| w.contains("moved")));
-    assert!(c.view().packages.is_empty());
+    assert!(c.view(&NoRoots).packages.is_empty());
     assert!(!d.catalog().exists());
     done(root);
 }
@@ -640,7 +640,7 @@ fn a_catalog_that_cannot_be_read_keeps_the_store() {
         "{:?}",
         c.warning
     );
-    assert!(c.view().packages.is_empty());
+    assert!(c.view(&NoRoots).packages.is_empty());
     assert_eq!(store_names(&d), BTreeSet::from([digest(&v1)]));
     // Still kept at the next start, while the damaged catalog is kept aside.
     let mut c = Catalog::open(d.clone(), false);
@@ -1124,13 +1124,16 @@ fn only_a_curated_signed_native_tool_installs() {
     let mut c = Catalog::open(d.clone(), false);
     c.commit(stage_from_registry(&d, &roots, "curated", "pluxy/tool", Some("1.0.0")).unwrap())
         .unwrap();
-    let v = c.view();
+    let v = c.view(&roots);
     let p = v.packages.iter().find(|p| p.id == "pluxy/tool").unwrap();
     assert_eq!(
         (p.trust, p.tier.as_str(), p.enabled, p.authorized),
         ("curated", "native", false, false)
     );
     assert_eq!(p.active.signer.as_deref(), Some("pluxy key k1"));
+    // The label follows the roots this app has now: without the root it is not curated.
+    let v = c.view(&NoRoots);
+    assert_eq!(v.packages[0].trust, "unverified");
     let e = c.admitted("pluxy/tool", &roots).unwrap_err();
     assert!(e.contains("disabled"), "{e}");
     let e = c.set_enabled("pluxy/tool", true).unwrap_err();
@@ -1186,7 +1189,7 @@ fn admission_is_confirmed_per_release_and_checked_each_time() {
     assert!(c.admitted("pluxy/tool", &roots).is_err());
     c.admit(&a, &roots).unwrap();
     assert_eq!(c.admitted("pluxy/tool", &roots).unwrap(), a);
-    assert!(c.view().packages[0].authorized);
+    assert!(c.view(&roots).packages[0].authorized);
     // Admitted is checked again each time: against the roots and in safe mode.
     let e = c.admitted("pluxy/tool", &NoRoots).unwrap_err();
     assert!(e.contains("not configured"), "{e}");

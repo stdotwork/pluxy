@@ -89,6 +89,44 @@ impl Admission {
 }
 
 impl Package {
+    /// The active release's curated signature and its root's key, when it verifies against
+    /// roots now, from the source it was signed for, and names that release.
+    pub(super) fn curated_signature(
+        &self,
+        id: &str,
+        roots: &dyn Roots,
+    ) -> Result<(&Signed, ed25519_dalek::VerifyingKey), String> {
+        let r = &self.active;
+        let s = r
+            .signed
+            .as_ref()
+            .ok_or_else(|| format!("{id} {} has no curated signature", r.version))?;
+        if self.source.kind != "registry" || self.source.index.as_deref() != Some(s.source.as_str())
+        {
+            return Err(format!(
+                "{id} is not installed from the curated source it was signed for"
+            ));
+        }
+        let key = roots
+            .publisher_key(&s.source, &s.key_id, &s.publisher)
+            .map_err(|e| format!("{id}: {e}"))?;
+        let sig = artifact::decode_hex::<64>(&s.signature)?;
+        let v = artifact::verify_descriptor(&key, s.descriptor.as_bytes(), &sig, &platform())
+            .map_err(|e| format!("{id}: {e}"))?;
+        let d = v.descriptor();
+        if d.id != id
+            || d.version != r.version
+            || d.tier != Tier::Native
+            || d.size != r.size
+            || d.sha256 != r.sha256
+        {
+            return Err(format!(
+                "{id}: its signed descriptor does not name the installed release"
+            ));
+        }
+        Ok((s, key))
+    }
+
     /// A native tool the person confirmed for its active release, while it stays enabled.
     pub fn authorized(&self) -> bool {
         self.enabled
@@ -383,32 +421,7 @@ impl Catalog {
         if r.tier != "native" {
             return Err(format!("{id} is not a native tool"));
         }
-        let s = r
-            .signed
-            .as_ref()
-            .ok_or_else(|| format!("{id} {} has no curated signature", r.version))?;
-        if p.source.kind != "registry" || p.source.index.as_deref() != Some(s.source.as_str()) {
-            return Err(format!(
-                "{id} is not installed from the curated source it was signed for"
-            ));
-        }
-        let key = roots
-            .publisher_key(&s.source, &s.key_id, &s.publisher)
-            .map_err(|e| format!("{id}: {e}"))?;
-        let sig = artifact::decode_hex::<64>(&s.signature)?;
-        let v = artifact::verify_descriptor(&key, s.descriptor.as_bytes(), &sig, &platform())
-            .map_err(|e| format!("{id}: {e}"))?;
-        let d = v.descriptor();
-        if d.id != id
-            || d.version != r.version
-            || d.tier != Tier::Native
-            || d.size != r.size
-            || d.sha256 != r.sha256
-        {
-            return Err(format!(
-                "{id}: its signed descriptor does not name the installed release"
-            ));
-        }
+        let (s, key) = p.curated_signature(id, roots)?;
         if !r.host_versions.contains(&HOST_CONTRACT) {
             return Err(format!(
                 "{id} {} needs app host contract {:?}; this app speaks host contract {HOST_CONTRACT}",

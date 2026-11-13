@@ -525,7 +525,7 @@ impl Catalog {
         (!self.cleanup.is_empty()).then(|| std::mem::take(&mut self.cleanup).join("; "))
     }
 
-    pub fn view(&self) -> View {
+    pub fn view(&self, roots: &dyn Roots) -> View {
         View {
             safe_mode: self.safe_mode,
             warning: self.warning.clone(),
@@ -535,7 +535,8 @@ impl Catalog {
                 .map(|(id, p)| PackageView {
                     id: id.clone(),
                     enabled: p.enabled,
-                    trust: if p.active.signed.is_some() {
+                    // Against the roots this app has now, not the ones it was installed with.
+                    trust: if p.curated_signature(id, roots).is_ok() {
                         "curated"
                     } else {
                         "unverified"

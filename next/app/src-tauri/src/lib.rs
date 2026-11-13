@@ -891,7 +891,11 @@ fn confirmation_settings(webview: Webview) -> Result<(), String> {
 #[tauri::command]
 fn device_list(webview: Webview, state: tauri::State<App>) -> Result<device::View, String> {
     trusted(&webview)?;
-    Ok(state.device.lock().unwrap().view())
+    Ok(state
+        .device
+        .lock()
+        .unwrap()
+        .view(&trust::TrustStore::current()))
 }
 
 /// What the registries in `device-registries.json` offer this computer.
@@ -926,7 +930,7 @@ fn device_changed(
             pages.unbind(l);
         }
         let left: Vec<String> = catalog.take_cleanup().into_iter().collect();
-        (labels, catalog.view(), left)
+        (labels, catalog.view(&trust::TrustStore::current()), left)
     };
     left.extend(close_webviews(app, labels));
     let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-device", ());
