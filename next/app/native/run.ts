@@ -84,8 +84,8 @@ interface Probe {
   placed?: Box;
 }
 
-function run(cmd: string, args: string[], cwd: string) {
-  const r = spawnSync(cmd, args, { cwd, stdio: ["ignore", "pipe", "inherit"], encoding: "utf8" });
+function run(cmd: string, args: string[], cwd: string, env?: NodeJS.ProcessEnv) {
+  const r = spawnSync(cmd, args, { cwd, env, stdio: ["ignore", "pipe", "inherit"], encoding: "utf8" });
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(" ")} exited with ${r.status}`);
   return r.stdout;
 }
@@ -376,8 +376,15 @@ const CORE_STEPS: [string, Record<string, unknown>][] = [
 /** The window checks (window.ts), with or without a tray watcher in the session. */
 type Suite = "window" | "window-no-tray";
 
+/** A signed release from a core source, installed before the app starts. */
+interface Release {
+  from: CoreSource;
+  version: string;
+}
+
 /** Runs the app once with connection as its saved connection, and checks what it reports. With
- * suite, the session runs window.ts, which runs the app through the window checks' stages. */
+ * suite, the session runs window.ts, which runs the app through the window checks' stages. With
+ * release, the app starts with that release installed and selected. */
 async function runApp(
   mode: Mode,
   bin: string,
@@ -388,6 +395,7 @@ async function runApp(
   key?: string,
   suite?: Suite,
   core?: CoreSource,
+  release?: Release,
 ): Promise<string[]> {
   const root = mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
   const problems: string[] = [];
@@ -413,6 +421,20 @@ async function runApp(
     const corePath = (connection as { core_path?: string }).core_path;
     if (mode === "managed" && !core && corePath)
       run(probe, ["adopt-core", join(dirs.data, identifier, "cores"), corePath], app);
+    // A release is installed the way a confirmed core_install would, trusting the run's root from
+    // a HOME of its own: the app's HOME keeps no trust profile.
+    if (mode === "managed" && !core && release) {
+      const trustHome = join(root, "install-home");
+      mkdirSync(trustHome, { mode: 0o700 });
+      const nonce = writeTrust(trustHome, [release.from.root]);
+      run(
+        probe,
+        ["install-core", join(dirs.data, identifier, "cores"), release.from.index, release.version],
+        app,
+        { ...process.env, HOME: trustHome, PLUXY_TEST_TRUST_NONCE: nonce },
+      );
+      rmSync(trustHome, { recursive: true, force: true });
+    }
     // The main checks close the window to the tray; the window suite starts with Ask every time.
     if (!suite)
       writeFileSync(
@@ -830,7 +852,10 @@ try {
       sentinel.proc.kill("SIGTERM");
       await new Promise((r) => sentinel.proc.once("exit", r));
     }
-    // The startup and window checks run the app's own core: core_path, adopted before each run.
+    // The startup and window checks run the app's own core. The startup checks adopt the
+    // core_path program before each run. The window checks sign in with the bundled test/alpha
+    // package, which only a core's folder holds (an adopted program is copied alone), so they run
+    // release 2.0.0, installed before each run.
     const more = await runApp("managed", bin, { mode: "managed", core_path: core }, undefined, true);
     more.push(...(await runApp("managed", bin, { mode: "managed", core_path: core }, undefined, true, true)));
     for (const suite of ["window", "window-no-tray"] as const)
@@ -838,12 +863,14 @@ try {
         ...(await runApp(
           "managed",
           bin,
-          { mode: "managed", core_path: core },
+          { mode: "managed", core_source: source.index },
           undefined,
           false,
           suite === "window-no-tray",
           undefined,
           suite,
+          undefined,
+          { from: source, version: "2.0.0" },
         )),
       );
     problems.push(...more.map((x) => `managed: ${x}`));

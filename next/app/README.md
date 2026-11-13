@@ -348,7 +348,9 @@ renderer-process count used by silent launches.
 
 In managed mode, two more sessions run the window checks (`native/window.ts`, which launches
 the app through the stages in `src-tauri/src/native_window.rs`), one with a tray watcher and
-one without. They close the window as its window manager would (a GTK delete event) and answer
+one without. Their core is the signed test release 2.0.0, installed before each session
+(`session_probe install-core`, as a confirmed install would), because the sign-in below needs the
+bundled test packages beside the core's program and an adopted program is copied alone. They close the window as its window manager would (a GTK delete event) and answer
 the prompt in the window: Cancel keeps it, Minimize to Tray and the remembered choices close it
 with no webview or web process left, and the app's own tray item (through the watcher and its
 menu, `session_probe tray`) opens it again at the size and place it had; Exit App, from the
