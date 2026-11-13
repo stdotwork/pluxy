@@ -1386,10 +1386,13 @@ translated to the upstream's format: a field the extension fills in itself count
 as the Claude extension's `max_tokens` of 32000 for a client that sets none. To replace such a
 value, use `override`, as today's example config does for `max_tokens`.
 
-Rules do not reach Devin, whose upstream body is protobuf, nor turns on an upstream WebSocket
-session (a Codex Responses WebSocket); a client WebSocket turn that goes upstream as an HTTP
-request gets them. An extension older than protocol 0.14 cannot apply rules, so a request that
-rules apply to is not sent to it: it goes to other accounts, and the error says why.
+A turn on an upstream WebSocket (a Codex Responses WebSocket) gets them too: they apply once to
+the `response.create` message the extension sends for the turn, selected for that turn as for any
+request. A message that is no turn, such as the client's interrupt, goes upstream as it is. A
+client WebSocket turn that goes upstream as an HTTP request gets them as an HTTP request does.
+Rules do not reach Devin, whose upstream body is protobuf. An extension older than protocol 0.14
+cannot apply rules (0.15 for a turn on an upstream WebSocket), so a request that rules apply to is
+not sent to it: it goes to other accounts, and the error says why.
 
 ### Account checks
 
@@ -2080,16 +2083,16 @@ are accepted silently.
 | `management.disable-auto-update-panel`, `management.panel-github-repository`, `server.github-token` (`github-token`) | The panel is built into core; nothing is downloaded. | Dropped: no panel download |
 | `management.base-url` | | Dropped: no terminal UI |
 | `server.max-request-body-bytes` | Request bodies are capped at 24 MiB. | Dropped: core needs a fixed cap for its request frame |
-| `server.response-compression.*` | | Later |
+| `server.response-compression.*` | | Dropped: a reverse proxy compresses replies |
 | `server.tls.enable`, `.cert`, `.key` (`tls`) | `tls`, the same three keys. Relative paths are relative to the config file, where today's core reads them relative to the folder it was started in. | Supported |
 | `server.trusted-proxies` (`trusted-proxies`) | `trusted_proxies`; a change applies on reload. | Supported |
 | `server.commercial-mode` (`commercial-mode`) | | Dropped: it turns off features this core does not have |
-| `server.discovery.*` (`discovery`) | | Later |
+| `server.discovery.*` (`discovery`) | | Dropped: no client here reads the advertisement |
 | `server.discovery.advertise-management` | | Dead |
 | `routing.strategy` | `routing.strategy`: `round-robin`, `fill-first` (also `fillfirst`, `ff`), `weighted-round-robin` (also `weightedroundrobin`, `wrr`; this core's `weighted`); this core's `weighted` and `least-active` work too. A name today's core does not know is `round-robin`, as there, and the log says so. | Supported |
 | `routing.session-affinity`, `routing.session-affinity-ttl` | `routing.session_affinity` with `ttl_ms` from the duration (default `1h`). | Supported |
 | `routing.session-affinity-subagents` | A Claude Code subagent sends its session's `X-Claude-Code-Session-Id`, so with `routing.session-affinity` it stays on the session's account, as today's default `true` keeps it. `false` (spread subagents over the pool) is not built. | Later (`false`) |
-| `routing.session-affinity-rebind-on` | | Later |
+| `routing.session-affinity-rebind-on` | | Dropped: no need found |
 | `routing.force-model-prefix` (`force-model-prefix`) | `routing.force_model_prefix`. | Supported |
 | `routing.retry.max-retry-credentials` (`max-retry-credentials`) | `routing.max_accounts`. | Supported |
 | `routing.retry.request-retry` (`request-retry`) | `routing.request_retry`: rounds after the first, run as today's core runs them. Default 0, as in today's core (its example config's 3 is only an example). | Supported |
@@ -2120,18 +2123,23 @@ are accepted silently.
 | `oauth.auth-auto-refresh-workers` (`auth-auto-refresh-workers`) | Each account is renewed shortly before it expires. | Dropped: no need for a pool size |
 | `oauth.model-alias` (`oauth-model-alias`), `oauth.excluded-models` (`oauth-excluded-models`) | Each channel's rules become the `model_alias` and `excluded_models` of the package that serves its accounts, for the accounts added to it by a sign-in (not with an API key): `codex` is `pluxy/codex`, `claude` is `pluxy/claude`, `vertex` is `pluxy/gemini`, `kimi` (and `kimi-ai`, `kimi.ai`, `kimi.com`) is `pluxy/kimi`, `xai` is `pluxy/xai`, `meta` is `pluxy/meta`, `antigravity` is `pluxy/antigravity`, `devin` is `pluxy/devin`. Rules for another channel are named in the log and ignored. An alias's `force-mapping` and `openapi` are later. | Supported |
 | `oauth.settings` (`oauth-settings`) | | Dropped: needs a model catalog, and no page uses it |
-| `oauth.request-scoped-errors` (`oauth-request-scoped-errors`) and every `request-scoped-errors` | | Later |
-| `oauth.providers.aistudio.ws-auth` (`ws-auth`) | | Later: the AI Studio relay is not built |
+| `oauth.request-scoped-errors` (`oauth-request-scoped-errors`) and every `request-scoped-errors` | | Dropped: a request-scoped error is already not the account's fault |
+| `oauth.providers.aistudio.ws-auth` (`ws-auth`) | | Dropped: the AI Studio relay needs a long-lived listener the extension protocol does not have |
 | `oauth.providers.codex.live-media-relay.*` | | Dropped: realtime and WebRTC are out of scope |
 | `oauth.providers.codex.signin-with-chatgpt-identifier` (`codex.signin-with-chatgpt-identifier`) | `signin_with_chatgpt_identifier` on the Sign in with ChatGPT (SIWC) accounts `-import-auth` adds. Left unset, they use the extension's default, `pluxy`. | Supported when importing |
-| `oauth.providers.antigravity.*` (`antigravity`, `antigravity-signature-*`, `quota-exceeded.antigravity-credits`), `oauth.providers.devin.*` (`devin`) | | Later |
-| `api-keys.meta` (`meta-api-key`) | | Later |
+| `oauth.providers.antigravity.*` (`antigravity`, `antigravity-signature-*`, `quota-exceeded.antigravity-credits`) | | Dropped: no need found; the credits fallback would spend paid credits unasked |
+| `oauth.providers.devin.*` (`devin`) | Only `sensitive-words`. | Dropped: rewriting words to get past a content filter is out of scope |
+| `api-keys.meta` (`meta-api-key`) | | Dropped: the login is built; no need for a bare key |
 | Every `headers` on a group or key | The account's [`headers`](#upstream-headers): a key's own, else its group's (a key's `headers: {}` sends none), and an `openai-compatibility` group's for all its keys. Names and values are trimmed and empty ones dropped, as in today's core. A header whose value today's core takes from the client's request (`$` and a header name, or `$CPA-SESSION-ID`) is named in the log and not imported. A header this core refuses (`Host`, `Content-Length`, `Transfer-Encoding`, `Connection`) fails the load, where today's core sends it. | Supported |
-| Every `connection-pool` | | Later |
+| Every `connection-pool` | | Dropped: extensions own their connections |
 | Every `disable-cooling` on a group or key | The account's `disable_cooling`. | Supported |
 | Every `request-retry` on a group or key | The account's `request_retry`: a key's own, else its group's (an `openai-compatibility` group's for all its keys, which have none of their own there). A negative one inherits `routing.retry.request-retry`, as in today's core. | Supported |
-| The keys' `models[]` catalog fields (`display-name`, `max-context-length`, `force-mapping`, `is-compat`, `thinking`, `image`, `input-modalities`, `output-modalities`, `use-max-completion-tokens`, `support-configuration-update`, `openapi`) | A model's display name in lists is its upstream name. | Later |
-| Vertex keys' `openapi`, `openapi-location`; openai-compatibility's `support-prompt-cache-key`; xAI keys' `websockets` | | Later |
+| The keys' `models[]` `display-name`, `max-context-length`, `input-modalities`, `output-modalities` | A model's display name in lists is its upstream name; use `model_alias` for a different one. | Dropped: list metadata only, no need found |
+| The keys' `models[]` `thinking` | The thinking suffix and the extensions cover it. | Dropped: no need found |
+| The keys' `models[]` `is-compat`, `use-max-completion-tokens` | | Dropped: single-provider quirks, no need found |
+| The keys' `models[]` `force-mapping`, `image`, `support-configuration-update`, `openapi` | | Later |
+| Vertex keys' `openapi`, `openapi-location`; xAI keys' `websockets` | | Later |
+| openai-compatibility's `support-prompt-cache-key` | A [payload rule](#payload-rules) can set a fixed `prompt_cache_key`. | Dropped: no need found |
 | `multimedia.disable-image-generation` (`disable-image-generation`) | `true`, `"chat"` and `"passthrough"` are `image_generation_tool: false` on Codex accounts from the file and on those `-import-auth` adds; `true` is also `images: false` there, which turns the Images API off on them (today's core answers its image routes 404). | Supported |
 | `multimedia.gpt-image-2-base-model`, `multimedia.video-result-auth-cache-ttl` (each also at the top level) | Images are served through the Codex upstream's Images API, the path today's core takes for its built-in image models; the Responses-based path this model sets is not built, and there are no video routes yet. | Later |
 | `observability.logs.logging-to-file` (`logging-to-file`), `observability.logs.logs-max-total-size-mb` (`logs-max-total-size-mb`) | `logs.to_file` and `logs.max_total_size_mb`: [log files](#log-files). A negative cap is none, as in today's core. | Supported |
