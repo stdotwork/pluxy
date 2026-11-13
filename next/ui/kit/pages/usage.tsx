@@ -46,9 +46,9 @@ const EXPORT_LIMIT = 10000;
 export function UsagePage() {
   const { api, unauthorized } = useKit();
   const p = usePrivacy();
-  const labels = useAccountLabels();
   const [filters, setFilters] = useState<UsageFilters>(initial);
   const [events, setEvents] = useState<UsageEvent[]>([]);
+  const mask = p.masker(useAccountLabels(events));
   const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
@@ -191,7 +191,7 @@ export function UsagePage() {
           </select>
         </label>
       </div>
-      {error && <Notice tone="danger">{p.text(error, labels)}</Notice>}
+      {error && <Notice tone="danger">{mask(error)}</Notice>}
       {lost && <Notice tone="muted">{t("lost")}</Notice>}
       {capped && <Notice tone="muted">{t("capped", { count: EXPORT_LIMIT })}</Notice>}
       {loading ? (
@@ -207,7 +207,7 @@ export function UsagePage() {
             columns={[
               { label: t("time"), value: (e) => <time dateTime={e.timestamp}>{when(e.timestamp)}</time> },
               { label: t("model"), value: (e) => e.model },
-              { label: t("account"), value: (e) => p.text(e.account, labels) || t("missing") },
+              { label: t("account"), value: (e) => mask(e.account) || t("missing") },
               {
                 label: t("status"),
                 value: (e) =>

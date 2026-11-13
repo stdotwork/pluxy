@@ -173,11 +173,15 @@ export interface Privacy {
   /** A name or free text: e-mail addresses, URL credentials and the given identities masked. */
   text(value: string, identities?: readonly (string | undefined)[]): string;
   text(value: string | undefined, identities?: readonly (string | undefined)[]): string | undefined;
-  /** text's masking for many texts about the same identities, built once. */
-  masker(identities: readonly (string | undefined)[]): Masker;
+  /**
+   * text's masking for many texts about the same identities, built once. Without identities
+   * (useAccountLabels has not loaded them), while privacy mode is on, it hides each text whole.
+   */
+  masker(identities: readonly (string | undefined)[] | undefined): Masker;
 }
 
 const unchanged = ((text: string | undefined) => text) as Masker;
+const hidden = ((text: string | undefined) => (text ? MASK : text)) as Masker;
 const known = (identities: readonly (string | undefined)[]) => identities.filter((i): i is string => !!i);
 
 export function privacyMasks(on: boolean): Privacy {
@@ -186,7 +190,7 @@ export function privacyMasks(on: boolean): Privacy {
     id: ((value: string | undefined) => (on && value ? maskIdentifier(value) : value)) as Privacy["id"],
     text: ((value: string | undefined, identities: readonly (string | undefined)[] = []) =>
       on && value ? maskSensitiveText(value, known(identities)) : value) as Privacy["text"],
-    masker: (identities) => (on ? textMasker(known(identities)) : unchanged),
+    masker: (identities) => (!on ? unchanged : identities ? textMasker(known(identities)) : hidden),
   };
 }
 
@@ -198,27 +202,37 @@ export function usePrivacy(): Privacy {
 }
 
 /**
- * The labels of core's accounts while privacy mode is on (none while it is off), for text that
- * names accounts only by ID or shows what a request carried, such as usage records and logs.
+ * The identities of core's accounts while privacy mode is on (none while it is off), for text
+ * that names accounts only by ID or shows what a request carried, such as usage records and logs.
+ * Undefined while privacy mode is on and they have not loaded (or could not be): pass it to
+ * masker, which then hides each text whole. They load again whenever version changes, such as
+ * the data the page shows, so accounts added since are known.
  */
 const NONE: string[] = [];
 
-export function useAccountLabels(): string[] {
+export function useAccountLabels(version?: unknown): string[] | undefined {
   const { api } = useKit();
   const { on } = usePrivacy();
-  const [labels, setLabels] = useState<string[]>([]);
+  const [labels, setLabels] = useState<string[]>();
   useEffect(() => {
-    if (!on) return;
+    if (!on) {
+      setLabels(undefined);
+      return;
+    }
     let live = true;
+    // A failed load keeps what loaded before, or none: masker then hides each text whole.
     api.accounts().then(
       (r) => {
-        if (live && r.body) setLabels(r.body.accounts.flatMap(accountIdentities));
+        if (!live || r.status !== 200 || !r.body) return;
+        const next = r.body.accounts.flatMap(accountIdentities);
+        // The same identities keep the same array, so what was masked with them stays.
+        setLabels((old) => (old && old.join("\n") === next.join("\n") ? old : next));
       },
       () => {},
     );
     return () => {
       live = false;
     };
-  }, [on, api]);
+  }, [on, api, version]);
   return on ? labels : NONE;
 }

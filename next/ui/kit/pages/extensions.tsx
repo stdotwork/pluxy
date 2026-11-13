@@ -54,9 +54,9 @@ const t = strings("extensions", {
 
 function PackageDetail(props: { p: Package; onClose: () => void; onChanged: () => void }) {
   const { api } = useKit();
-  const mask = usePrivacy().masker(useAccountLabels());
   const { p } = props;
   const status = useLoad(api.status);
+  const mask = usePrivacy().masker(useAccountLabels(status.data));
   const act = useAction(props.onChanged);
   const remove = useAction(() => {
     props.onClose();

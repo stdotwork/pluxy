@@ -115,9 +115,9 @@ function clientAddresses(origin: string): ClientAddress[] {
 export function SystemPage() {
   const { api, host } = useKit();
   const privacy = usePrivacy();
-  const mask = privacy.masker(useAccountLabels());
   const status = useLoad(api.status);
   const models = useLoad(api.servedModels);
+  const mask = privacy.masker(useAccountLabels(models.data));
   const s = status.data;
   const connection = status.loading && !s ? t("connecting") : s ? t("connected") : t("disconnected");
   const list = models.data?.models;

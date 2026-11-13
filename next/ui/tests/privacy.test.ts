@@ -2,7 +2,14 @@
 // with its two bugs fixed: `$&` in an identity and an identity starting with `@`.
 import { expect, test } from "bun:test";
 import { join } from "node:path";
-import { accountIdentities, maskEmail, maskIdentifier, maskSensitiveText, textMasker } from "../kit/privacy";
+import {
+  accountIdentities,
+  maskEmail,
+  maskIdentifier,
+  maskSensitiveText,
+  privacyMasks,
+  textMasker,
+} from "../kit/privacy";
 
 test("masks emails while keeping enough shape to tell accounts apart", () => {
   expect(maskEmail("alice.smith@example.com")).toBe("al***@e***.com");
@@ -149,4 +156,17 @@ test("a log's lines are masked with one masker per set of labels", () => {
   expect(masked[3]).toBe('[info ] credentials: account "us***@e***.com" added');
   expect(masked[35]).toBe(lines[35]);
   for (const i of [0, 7, 29, 31]) expect(masked[i]).toBe(maskSensitiveText(lines[i] as string, labels));
+});
+
+test("until the account identities load, privacy mode hides text that may name accounts whole", () => {
+  // A log line can name an account only by an ID that holds its e-mail address in another form;
+  // without the labels the patterns cannot see it.
+  expect(privacyMasks(true).masker(undefined)('account "claude-alice.smith-example.com" added')).toBe("***");
+  expect(privacyMasks(true).masker(undefined)("")).toBe("");
+  expect(privacyMasks(true).masker(["alice.smith@example.com"])("claude-alice.smith-example.com")).toBe(
+    "claude-al***@e***.com",
+  );
+  expect(privacyMasks(false).masker(undefined)("claude-alice.smith-example.com")).toBe(
+    "claude-alice.smith-example.com",
+  );
 });

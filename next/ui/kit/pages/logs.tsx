@@ -87,10 +87,10 @@ export function LogsPage() {
   const { api, unauthorized } = useKit();
   // Privacy mode masks what the views show; search, downloads and the files keep the real text.
   const p = usePrivacy();
-  const labels = useAccountLabels();
-  const mask = useMemo(() => p.masker(labels), [p, labels]);
   const files = useLoad(api.errorLogs);
   const [lines, setLines] = useState<string[]>([]);
+  const labels = useAccountLabels(lines);
+  const mask = useMemo(() => p.masker(labels), [p, labels]);
   const [error, setError] = useState<string>();
   const [off, setOff] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -135,6 +135,8 @@ export function LogsPage() {
       latest.current = r.body["latest-timestamp"];
       const incoming = r.body.lines;
       setLines((old) => {
+        // Nothing new: the same lines, so nothing is masked again.
+        if (append && incoming.length === 0) return old;
         const next = append ? [...old, ...incoming] : incoming;
         if (next.length > 10000) setTrimmed(true);
         else if (!append) setTrimmed(false);
