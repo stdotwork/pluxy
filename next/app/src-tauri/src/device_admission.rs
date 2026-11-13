@@ -450,6 +450,9 @@ impl Catalog {
     /// Enables the native tool a, after its native confirmation, when it is still the release,
     /// source and signer the person confirmed and still checks out.
     pub fn admit(&mut self, a: &Admitted, roots: &dyn Roots) -> Result<(), String> {
+        if self.safe_mode {
+            return Err("the app runs in safe mode: no native tool is enabled".into());
+        }
         let now = self.check_native(&a.id, roots)?;
         if now != *a {
             return Err(format!(

@@ -1179,9 +1179,10 @@ fn admission_is_confirmed_per_release_and_checked_each_time() {
     // Admitted is checked again each time: against the roots and in safe mode.
     let e = c.admitted("pluxy/tool", &NoRoots).unwrap_err();
     assert!(e.contains("not configured"), "{e}");
-    let e = Catalog::open(d.clone(), true)
-        .admitted("pluxy/tool", &roots)
-        .unwrap_err();
+    let mut safe = Catalog::open(d.clone(), true);
+    let e = safe.admitted("pluxy/tool", &roots).unwrap_err();
+    assert!(e.contains("safe mode"), "{e}");
+    let e = safe.admit(&a, &roots).unwrap_err();
     assert!(e.contains("safe mode"), "{e}");
     // The admission is kept with the catalog.
     assert_eq!(
