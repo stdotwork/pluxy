@@ -8,18 +8,18 @@ import (
 )
 
 // The same secret written as a number in one place and as a string in another goes back to each
-// place as it was written there, also after its placeholder moved to another key of the file.
+// place as it was written there, also after its placeholder moved within its list.
 func TestRestoreKeepsEachPlacesType(t *testing.T) {
 	for _, tc := range []struct {
 		name, src string
 		isYAML    bool
-		// move is where src holds the string; want, what the file holds once that key is renamed.
-		move, want string
+		// want is what the file holds once the two items of its list are swapped.
+		want string
 	}{
 		{"json", `{"api_key": 1234, "secret_key": "1234", "access": {"api_keys": ["1234", 1234]}}`, false,
-			`"secret_key": "1234"`, `"other_token": "1234"`},
+			`"api_keys": [1234, "1234"]`},
 		{"yaml", "api-key: 1234\nsecret-key: \"1234\"\naccess:\n  api-keys: [\"1234\", 1234]\n", true,
-			`secret-key: "1234"`, `other-token: "1234"`},
+			`api-keys: [1234, "1234"]`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := NewRedactor()
@@ -34,13 +34,13 @@ func TestRestoreKeepsEachPlacesType(t *testing.T) {
 			if err != nil || string(back) != tc.src {
 				t.Errorf("round trip = %s, %v; want %s", back, err, tc.src)
 			}
-			// Rename the key that holds the string's placeholder: the placeholder moves with it.
-			key, _, _ := strings.Cut(tc.move, ":")
-			newKey, _, _ := strings.Cut(tc.want, ":")
-			if !strings.Contains(string(red), key+":") {
-				t.Fatalf("no %s in the redacted document:\n%s", key, red)
+			// Swap the list's two items, its last two placeholders: each goes back with its type.
+			at := regexp.MustCompile(PlaceholderPrefix+`[0-9a-f]{24}`).FindAllStringIndex(string(red), -1)
+			if len(at) != 4 {
+				t.Fatalf("want 4 placeholders in the redacted document:\n%s", red)
 			}
-			moved := strings.Replace(string(red), key+":", newKey+":", 1)
+			s, x, y := string(red), at[2], at[3]
+			moved := s[:x[0]] + s[y[0]:y[1]] + s[x[1]:y[0]] + s[x[0]:x[1]] + s[y[1]:]
 			back, err = r.Restore([]byte(moved), []byte(tc.src), tc.isYAML)
 			if err != nil || !strings.Contains(string(back), tc.want) {
 				t.Errorf("moved placeholder restores to %s, %v; want it to hold %s", back, err, tc.want)

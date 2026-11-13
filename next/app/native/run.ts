@@ -13,6 +13,7 @@
 //   file chooser, refusing reserved IDs and a failed candidate (device.ts, device_native.rs);
 // - closing the window leaves no webview and no web process, with the app still in the tray;
 // - quitting stops the app's own core, and leaves a local or remote core running;
+// - in a second managed run, a core that exits before the app state exists is recovered.
 // - the management key rotates natively (native_test.rs, rotation_test.rs): core_call refuses
 //   it, the app keeps working on the new key as the old one was kept, the key window stays open
 //   when the window closes to the tray and goes when a later rotation shows its own, no webview
@@ -28,8 +29,10 @@
 // The signed native-tier admission check (admission.ts, admission_native.rs) runs in one more
 // session, with the app built with artifact-test-trust and a test trust profile in the run's HOME,
 // and the program host check (program.ts, program_native.rs) in one more with that build: a signed
-// summary tool, started on demand, called and cancelled, stopped when idle, disabled and quit,
-// whose processes are gone after the app quits. The other sessions run a build without that
+// summary tool, started on demand, called and cancelled, stopped when idle and disabled, then
+// (swap_native.rs) swapped to a new release while a call drains on the old one, kept when a
+// candidate is incompatible, crashed into backoff and quarantine, and rolled back; its processes
+// are gone after the app quits. The other sessions run a build without that
 // feature; its device check shows the same profile admits nothing there.
 // The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
 //
@@ -211,7 +214,10 @@ interface Rotation {
 }
 
 /** Runs the app once with connection as its saved connection, and checks what it reports. With
- * suite, the session runs window.ts, which runs the app through the window checks' stages. */
+ * suite, the session runs window.ts, which runs the app through the window checks' stages.
+ * earlyExit: the app's setup waits for its core's exit callback before the app state exists
+ * (PLUXY_APP_TEST_EARLY_EXIT), and only the recovery of that core is checked. admission: the
+ * session checks only signed native-tier admission. */
 async function runApp(
   mode: Mode,
   bin: string,
@@ -224,6 +230,7 @@ async function runApp(
   rotation: Rotation = {},
   admission = false,
   program = false,
+  earlyExit = false,
 ): Promise<string[]> {
   const root = rotation.root ?? mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
   const problems: string[] = [];
@@ -319,6 +326,8 @@ async function runApp(
       APPIMAGE_EXTRACT_AND_RUN: "1",
       PLUXY_APP_TEST_PAGE: PAGE,
       PLUXY_APP_TEST_QUIT: quit,
+      PLUXY_APP_TEST_STATE: join(root, "state.json"),
+      PLUXY_APP_TEST_TRAY_HOLD: join(root, "tray-hold"),
       ...(device ? { PLUXY_APP_TEST_DEVICE: device, PLUXY_APP_TEST_CURATED: curated as string } : {}),
       ...(access ? { PLUXY_APP_TEST_ACCESS: access, PLUXY_APP_TEST_ACCESS_HOLD: join(access, "hold") } : {}),
       ...(admission ? { PLUXY_APP_TEST_ADMISSION: curated as string } : {}),
@@ -338,6 +347,7 @@ async function runApp(
             PLUXY_APP_TEST_IDENTIFIER: identifier,
           }
         : {}),
+      ...(earlyExit ? { PLUXY_APP_TEST_EARLY_EXIT: "1" } : {}),
     };
     // The session script starts and checks the desktop services, then runs the app.
     const session = [
@@ -369,6 +379,7 @@ async function runApp(
     const pid = proc.pid ?? 0;
     sessions.add(pid);
     let ready = false; // session.ts said its setup is done and the app starts
+    let attempts = 0; // the app's recovery attempts
     if (!proc.stderr || !proc.stdout) throw new Error("the app's output is not piped");
     const log: string[] = []; // the app's last lines, shown when the run fails
     const setup: string[] = []; // session.ts's report of what failed at setup
@@ -388,6 +399,10 @@ async function runApp(
         return;
       }
       // The session's service checks are always shown: they say what this run stood on.
+      if (line.startsWith("native-recovery: ")) {
+        console.log(`  ${mode} | ${line}`);
+        return;
+      }
       if (line.startsWith("native-prereq: ")) {
         console.log(`  ${mode} | ${line}`);
         if (line === "native-prereq: ready") ready = true;
@@ -395,6 +410,7 @@ async function runApp(
           setup.push(line.slice("native-prereq: FAILED ".length));
         return;
       }
+      if (line.startsWith("native-test: recovery-attempt ")) attempts++;
       const m = /^native-test: (\w+) (.*)$/.exec(line);
       if (!m) {
         if (process.env.PLUXY_APP_TEST_VERBOSE) console.error(`  ${mode} | ${line}`);
@@ -419,7 +435,6 @@ async function runApp(
         // Give the web processes a moment to exit, then let the app quit.
         setTimeout(() => {
           after = webProcesses(pid);
-          writeFileSync(quit, "");
         }, 3000);
       }
     };
@@ -462,6 +477,33 @@ async function runApp(
       return problems;
     }
     check(!steps.has("failed"), `the app's test steps failed: ${JSON.stringify(steps.get("failed"))}`);
+    if (earlyExit) {
+      // Without this the run would not test the early exit: the callback could have found the state.
+      const held = steps.get("early_exit_held");
+      check(
+        held?.callback_ran === true,
+        `the core's exit callback did not run first: ${JSON.stringify(held)}`,
+      );
+      const end = steps.get("early_exit") as
+        | { view?: { core?: { state?: string; pid?: number } } }
+        | undefined;
+      const core = end?.view?.core;
+      check(
+        core?.state === "running" && core.pid,
+        `a core that exited before the app state existed was not recovered: ${JSON.stringify(end)}`,
+      );
+      check(attempts === 1, `${attempts} recovery attempts, want 1`);
+      await Bun.sleep(1000);
+      // Only a recovered core can outlive the app; its absence is the check above.
+      check(!core?.pid || !alive(core.pid), `the recovered core ${core?.pid} still runs after the app quit`);
+      if (problems.length > 0)
+        console.log(`${mode} early exit: the app's last lines:\n  ${log.join("\n  ")}`);
+      else
+        console.log(
+          `  ${mode} | native-recovery: a core that exited before the app state existed was recovered`,
+        );
+      return problems;
+    }
 
     if (rotation.restart) {
       const restarted = steps.get("rotation_restart");
@@ -480,17 +522,26 @@ async function runApp(
         | undefined;
       const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
       check(p?.passed === true, `the program host check did not complete: ${failure}`);
-      // After the app quit, neither the tool nor the child in its process group runs.
+      // The swap check runs on from where the program check left (swap_native.rs).
+      const w = steps.get("swap") as typeof p;
+      check(w?.passed === true, `the swap check did not complete: ${failure}`);
+      // After the app quit, neither tool the checks left running nor its child runs.
       await Bun.sleep(1000);
-      const left = (p?.quit_pids ?? []).filter((pid) => runs(pid, p?.program ?? ""));
-      check(
-        p?.quit_pids?.length === 2,
-        `the program check named no processes to watch: ${JSON.stringify(p)}`,
-      );
-      check(left.length === 0, `the tool's processes ${left.join(", ")} still run after the app quit`);
-      for (const pid of left) killTree(pid);
+      for (const [what, r] of [
+        ["program", p],
+        ["swap", w],
+      ] as const) {
+        const left = (r?.quit_pids ?? []).filter((pid) => runs(pid, r?.program ?? ""));
+        check(
+          r?.quit_pids?.length === 2,
+          `the ${what} check named no processes to watch: ${JSON.stringify(r)}`,
+        );
+        check(left.length === 0, `the tool's processes ${left.join(", ")} still run after the app quit`);
+        for (const pid of left) killTree(pid);
+      }
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode} program ${JSON.stringify(p ?? {})}`);
+      console.log(`${mode} swap ${JSON.stringify(w ?? {})}`);
       console.log(`${mode}: program ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
@@ -513,6 +564,11 @@ async function runApp(
       for (const line of log) console.log(line);
       return problems;
     }
+
+    check(
+      steps.get("recovery")?.ok === true,
+      `tray/recovery check: ${JSON.stringify(steps.get("recovery"))}`,
+    );
 
     if (key) {
       const entry = steps.get("keyentry");
@@ -678,8 +734,11 @@ async function runApp(
     check(after === 0, `${after} web processes left after closing the window`);
     if (mode === "managed") {
       check(closed?.core_pid, "the app ran no core");
+      // The tray checks killed that core; the one they left running must not outlive the app.
+      const last = (steps.get("recovery") as { core_pid?: number } | undefined)?.core_pid;
+      check(last, "the tray checks left no owned core running before quit");
       await Bun.sleep(1000);
-      check(closed?.core_pid && !alive(closed.core_pid), "the app's core still runs after it quit");
+      check(last && !alive(last), `the app's core ${last} still runs after it quit`);
     }
     if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
     console.log(
@@ -836,6 +895,29 @@ try {
         )),
       );
     problems.push(...p.map((x) => `managed: ${x}`));
+    // The first start runs a stand-in that says where it listens and exits at once; the next
+    // start, recovery's, runs the real core.
+    const early = join(prepared, "early-exit.sh");
+    writeFileSync(
+      early,
+      `#!/bin/sh\nif [ ! -e "$0.ran" ]; then\n  : > "$0.ran"\n  echo 'pluxy: listening on http://127.0.0.1:1' >&2\n  exit 7\nfi\nexec '${core}' "$@"\n`,
+      { mode: 0o755 },
+    );
+    const e = await runApp(
+      "managed",
+      bin,
+      { mode: "managed", core_path: early },
+      undefined,
+      false,
+      false,
+      undefined,
+      undefined,
+      {},
+      false,
+      false,
+      true,
+    );
+    problems.push(...e.map((x) => `managed, early exit: ${x}`));
 
     // Two launches of the app on one profile: one app, one core, the first one's window raised.
     const inst = await runInstances({

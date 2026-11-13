@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { appHost, type Connection } from "../src/host";
+import { appHost, type Connection, coreAction, coreRestart, coreStart } from "../src/host";
 
 const connection = (over: Partial<Connection> = {}): Connection => ({
   signed_in: true,
@@ -15,4 +15,12 @@ test("its address is the core the app talks to, without a trailing slash", () =>
 test("with no target, it has no address", () => {
   const host = appHost(connection({ mode: "managed" }), () => {});
   expect(host.address).toBeUndefined();
+});
+
+test("the core button restarts only a running core, and otherwise starts one without replacing it", () => {
+  const managed = (state: NonNullable<Connection["core"]>["state"]) =>
+    connection({ mode: "managed", core: { state } });
+  expect(coreAction(managed("running"))).toBe(coreRestart);
+  for (const state of ["stopped", "recovering", "paused"] as const)
+    expect(coreAction(managed(state))).toBe(coreStart);
 });

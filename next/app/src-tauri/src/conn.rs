@@ -10,12 +10,13 @@
 
 use crate::client::{certificates, Client, Reply, ROTATE};
 use crate::managed::{core_program, write_private, ManagedCore, OnExit};
+use crate::recovery::Recovery;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use url::{Host, Url};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,7 +77,7 @@ pub struct Change {
 }
 
 /// The connection as the window sees it: never the key.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct View {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<Mode>,
@@ -94,6 +95,41 @@ pub struct View {
     pub core: Option<CoreView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Taken under the connection lock: a later view has a higher version, so the tray can
+    /// drop a view that reaches it after a newer one.
+    #[serde(skip)]
+    pub version: u64,
+}
+
+/// Two views are equal when they show the same connection: `version` only orders them.
+impl PartialEq for View {
+    fn eq(&self, other: &Self) -> bool {
+        let View {
+            mode,
+            target,
+            signed_in,
+            remembered,
+            url,
+            ca_file,
+            core_path,
+            core,
+            error,
+            version: _,
+        } = self;
+        (
+            mode, target, signed_in, remembered, url, ca_file, core_path, core, error,
+        ) == (
+            &other.mode,
+            &other.target,
+            &other.signed_in,
+            &other.remembered,
+            &other.url,
+            &other.ca_file,
+            &other.core_path,
+            &other.core,
+            &other.error,
+        )
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -183,7 +219,9 @@ pub struct Connection {
     key: Option<String>,
     managed: Option<ManagedCore>,
     on_core_exit: Option<OnExit>,
+    recovery: Recovery,
     error: Option<String>,
+    views: u64,
 }
 
 /// Validated native destination, frozen before asking for a secret.
@@ -338,7 +376,9 @@ impl Connection {
             key: None,
             managed: None,
             on_core_exit,
+            recovery: Recovery::default(),
             error,
+            views: 0,
         };
         if c.error.is_none() && (start_core || c.settings.mode != Some(Mode::Managed)) {
             c.connect();
@@ -395,14 +435,71 @@ impl Connection {
         self.client = Some(Client::new(core.base(), None));
         self.key = Some(core.key().to_string());
         self.managed = Some(core);
+        self.recovery.running();
+        self.error = None;
         Ok(())
     }
 
     /// Stops the app's own core, if it runs one. A local or remote core is never stopped.
     pub fn stop_core(&mut self) {
+        self.recovery.cancel();
+        if self.settings.mode == Some(Mode::Managed) {
+            self.client = None;
+            self.key = None;
+            self.error = None;
+        }
         if let Some(mut core) = self.managed.take() {
             core.stop();
         }
+    }
+
+    /// Starts only an owned core; a live process is never replaced by Start.
+    pub fn resume_core(&mut self) -> Result<(), String> {
+        if self.settings.mode != Some(Mode::Managed) {
+            return Err("the app runs no core of its own in this mode".into());
+        }
+        if self.managed.as_ref().is_some_and(|m| m.exited().is_none()) {
+            return Ok(());
+        }
+        self.stop_core();
+        let result = self.start_core();
+        if let Err(e) = &result {
+            self.error = Some(e.clone());
+        }
+        result
+    }
+
+    /// Observe only the child we own. Exit callbacks from an older child cannot affect it.
+    pub fn core_exited(&mut self) -> Option<(u64, Instant)> {
+        if self.settings.mode != Some(Mode::Managed) || !self.recovery.armed() {
+            return None;
+        }
+        let why = self.managed.as_ref().and_then(ManagedCore::exited)?;
+        if self.recovery.plan().is_none() {
+            self.client = None;
+            self.key = None;
+            self.recovery.schedule(Instant::now(), why);
+        }
+        self.recovery.plan()
+    }
+
+    pub fn recover_core(&mut self, generation: u64) -> Option<(u64, Instant)> {
+        if self.settings.mode != Some(Mode::Managed)
+            || !self.recovery.begin(generation, Instant::now())
+        {
+            return None;
+        }
+        #[cfg(feature = "native-test")]
+        eprintln!("native-test: recovery-attempt {{\"generation\":{generation}}}");
+        // The supervisor has already reaped this child. Never signal a PID found by address.
+        self.managed.take();
+        if let Err(e) = self.start_core() {
+            self.error = Some(e.clone());
+            self.recovery.schedule(Instant::now(), e);
+            return self.recovery.plan();
+        }
+        // A child can die during startup, before the connection lock is released.
+        self.core_exited()
     }
 
     /// Starts the app's own core again, in managed mode.
@@ -700,29 +797,40 @@ impl Connection {
 
     /// The app's own core, if it runs one: its process ID.
     pub fn core_pid(&self) -> Option<u32> {
-        self.managed.as_ref().map(ManagedCore::pid)
+        self.managed
+            .as_ref()
+            .filter(|m| m.exited().is_none())
+            .map(ManagedCore::pid)
     }
 
     pub fn view(&mut self) -> View {
         let core = if self.settings.mode == Some(Mode::Managed) {
-            Some(match self.managed.as_ref() {
-                Some(m) => match m.exited() {
-                    None => CoreView {
-                        state: "running",
-                        pid: Some(m.pid()),
-                        detail: None,
+            Some(if let Some((state, detail)) = self.recovery.status() {
+                CoreView {
+                    state,
+                    pid: None,
+                    detail: Some(detail),
+                }
+            } else {
+                match self.managed.as_ref() {
+                    Some(m) => match m.exited() {
+                        None => CoreView {
+                            state: "running",
+                            pid: Some(m.pid()),
+                            detail: None,
+                        },
+                        Some(why) => CoreView {
+                            state: "stopped",
+                            pid: None,
+                            detail: Some(why),
+                        },
                     },
-                    Some(why) => CoreView {
+                    None => CoreView {
                         state: "stopped",
                         pid: None,
-                        detail: Some(why),
+                        detail: self.error.clone(),
                     },
-                },
-                None => CoreView {
-                    state: "stopped",
-                    pid: None,
-                    detail: self.error.clone(),
-                },
+                }
             })
         } else {
             None
@@ -737,6 +845,10 @@ impl Connection {
             core_path: self.settings.core_path.clone(),
             core,
             error: self.error.clone(),
+            version: {
+                self.views += 1;
+                self.views
+            },
         }
     }
 }
@@ -1301,9 +1413,110 @@ mod tests {
         let mut c = Connection::open(dirs, None);
         let v = c.view();
         assert!(v.signed_in && v.remembered);
+        // Each view is newer than the last, so the tray can drop one that arrives late.
+        assert!(c.view().version > v.version);
         assert!(!serde_json::to_string(&v)
             .unwrap()
             .contains("secret-key-123"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Start leaves a running core alone and Restart replaces it. The window's Start and the
+    /// tray's use Start, so a click that races a recovery keeps the recovered core.
+    #[cfg(unix)]
+    #[test]
+    fn start_leaves_a_live_core_alone_and_restart_replaces_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir =
+            std::env::temp_dir().join(format!("pluxy-app-start-{}", crate::managed::random_key()));
+        fs::create_dir_all(&dir).unwrap();
+        let dirs = Dirs {
+            config: dir.join("config"),
+            core: dir.join("core"),
+        };
+        let program = dir.join("core.sh");
+        fs::write(
+            &program,
+            "#!/bin/sh\necho 'pluxy: listening on http://127.0.0.1:1' >&2\nexec sleep 30\n",
+        )
+        .unwrap();
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        Settings {
+            mode: Some(Mode::Managed),
+            core_path: Some(program.display().to_string()),
+            ..Settings::default()
+        }
+        .save(&dirs.settings())
+        .unwrap();
+        let mut c = Connection::open(dirs, None);
+        let first = c.core_pid().expect("the fixture core runs");
+        c.resume_core().unwrap();
+        assert_eq!(c.core_pid(), Some(first), "Start replaced a running core");
+        // The same measure sees a replaced core.
+        c.restart_core().unwrap();
+        let second = c.core_pid().expect("Restart runs a core");
+        assert_ne!(second, first, "Restart kept the old core");
+        c.stop_core();
+        assert_eq!(c.core_pid(), None);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A core can exit while the app is still starting, before anything can act on its exit
+    /// callback. Asking the connection afterwards, as the app's setup does, schedules recovery.
+    #[cfg(unix)]
+    #[test]
+    fn a_core_that_exits_before_anyone_watches_is_recovered() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::Duration;
+        let dir =
+            std::env::temp_dir().join(format!("pluxy-app-early-{}", crate::managed::random_key()));
+        fs::create_dir_all(&dir).unwrap();
+        let dirs = Dirs {
+            config: dir.join("config"),
+            core: dir.join("core"),
+        };
+        // Says where it listens, then exits at once.
+        let program = dir.join("core.sh");
+        fs::write(
+            &program,
+            "#!/bin/sh\necho 'pluxy: listening on http://127.0.0.1:1' >&2\nexit 7\n",
+        )
+        .unwrap();
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        Settings {
+            mode: Some(Mode::Managed),
+            core_path: Some(program.display().to_string()),
+            ..Settings::default()
+        }
+        .save(&dirs.settings())
+        .unwrap();
+        // Like the app's callback before its state exists: it reaches no connection.
+        let (exited, exit) = std::sync::mpsc::channel();
+        let on_exit: OnExit = std::sync::Arc::new(move || {
+            let _ = exited.send(());
+        });
+        let mut c = Connection::open(dirs, Some(on_exit));
+        assert_eq!(c.view().error, None, "the fixture core started");
+        exit.recv_timeout(Duration::from_secs(10))
+            .expect("the fixture core exited");
+
+        let asked = Instant::now();
+        let (_, due) = c.core_exited().expect("the early exit is recovered");
+        let core = c.view().core.expect("a managed core view");
+        assert_eq!(core.state, "recovering");
+        assert!(
+            core.detail
+                .as_deref()
+                .is_some_and(|d| d.contains("exit status: 7")),
+            "{:?}",
+            core.detail
+        );
+        // The first of the 2, 5 and 15 second delays.
+        let delay = due.duration_since(asked);
+        assert!(
+            delay >= Duration::from_millis(1900) && delay <= Duration::from_secs(3),
+            "{delay:?}"
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 }

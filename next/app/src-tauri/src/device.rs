@@ -29,6 +29,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+pub use swap::Swap;
 
 /// The scheme that serves device pages' files to their page webviews.
 pub const ASSET_SCHEME: &str = "pluxy-app";
@@ -197,6 +198,9 @@ pub struct Catalog {
     /// What went wrong after a change was made, since the last `take_cleanup`: folders that
     /// could not be deleted, a catalog that could not be flushed to disk.
     cleanup: Vec<String>,
+    /// Store folders of releases being swapped in (`device_swap.rs`), by package ID, kept until
+    /// the swap ends: one update of a package at a time.
+    holding: BTreeMap<String, String>,
 }
 
 /// A page as the window lists it.
@@ -533,6 +537,7 @@ impl Catalog {
             packages,
             warning,
             keep_store,
+            holding: BTreeMap::new(),
             locked,
             cleanup: vec![],
         };
@@ -669,6 +674,7 @@ impl Catalog {
             .values()
             .flat_map(|p| std::iter::once(&p.active).chain(p.last_good.as_ref()))
             .map(|r| r.sha256.clone())
+            .chain(self.holding.values().cloned())
             .collect();
         let store = self.dirs.store();
         let entries = match fs::read_dir(&store) {
@@ -724,24 +730,10 @@ impl Catalog {
                 return Err(format!("{id} {} is already installed", c.release.version));
             }
         }
-        let store = self.dirs.store();
-        private_dir(&store)?;
-        let dest = store.join(&c.release.sha256);
-        // A folder of this digest already in the store (the last good release, installed
-        // again) is used only while its files are unchanged; otherwise the checked copy
-        // replaces it.
-        if !dest.exists()
-            || verify(&dest, &c.release).is_err()
-            || (c.release.tier == "native"
-                && admission::verify_tree(&dest, &c.release.tree).is_err())
-        {
-            if dest.exists() {
-                remove_tree(&dest)?;
-            }
-            fs::rename(&c.staged, &dest).map_err(|e| format!("{}: {e}", dest.display()))?;
-            sync_dir(&store)?;
+        if let Some(p) = &previous {
+            swap::state_readable(id, &p.active, &c.release)?;
         }
-        freeze(&dest, true)?;
+        self.place(c)?;
         // A native tool's admission names one release: any new release waits, disabled, for a
         // fresh native confirmation.
         let native = c.release.tier == "native";
@@ -772,6 +764,28 @@ impl Catalog {
         }
         self.collect();
         Ok(())
+    }
+
+    /// Puts candidate c's checked folder in the store, read-only.
+    fn place(&mut self, c: &Candidate) -> Result<(), String> {
+        let store = self.dirs.store();
+        private_dir(&store)?;
+        let dest = store.join(&c.release.sha256);
+        // A folder of this digest already in the store (the last good release, installed
+        // again) is used only while its files are unchanged; otherwise the checked copy
+        // replaces it.
+        if !dest.exists()
+            || verify(&dest, &c.release).is_err()
+            || (c.release.tier == "native"
+                && admission::verify_tree(&dest, &c.release.tree).is_err())
+        {
+            if dest.exists() {
+                remove_tree(&dest)?;
+            }
+            fs::rename(&c.staged, &dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+            sync_dir(&store)?;
+        }
+        freeze(&dest, true)
     }
 
     /// Enables or disables package id. A native tool is enabled only by `admit`, after a
@@ -832,6 +846,7 @@ impl Catalog {
         if last.tier == "native" {
             admission::verify_tree(&self.dirs.store().join(&last.sha256), &last.tree)?;
         }
+        swap::state_readable(id, &p.active, &last)?;
         let p = self.packages.get_mut(id).unwrap();
         let active = std::mem::replace(&mut p.active, last);
         p.last_good = Some(active);
@@ -2175,6 +2190,8 @@ pub fn stage_from_registry(
 
 #[path = "device_admission.rs"]
 mod admission;
+#[path = "device_swap.rs"]
+mod swap;
 use admission::Signing;
 
 #[cfg(test)]
