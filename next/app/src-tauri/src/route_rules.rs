@@ -45,6 +45,25 @@ pub fn extend(chain: &[Hop], caller: &Hop, target: &str) -> Result<Vec<Hop>, Cal
     Ok(chain)
 }
 
+/// How a write or launch call is prepared for its native confirmation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Preparation {
+    /// The chain a page started: a fresh Page Start, never remembered.
+    Page,
+    /// A chain with a tool hop that no page started: an import, never remembered.
+    Import,
+    /// The window's own direct call: may use a remembered approval after a native gesture.
+    Main,
+}
+
+/// How the call of a chain is prepared.
+pub fn preparation(chain: &[Hop]) -> Preparation {
+    match chain.first() {
+        Some(Hop::Page { .. }) => Preparation::Page,
+        _ => Preparation::Main,
+    }
+}
+
 /// Waits, at most within, for the outcome take gives of a native confirmation. Once cancel is
 /// set (the call was cancelled, its page closed or its consent revoked), withdraw takes the
 /// confirmation back and the wait ends.
@@ -195,6 +214,32 @@ mod tests {
         let four = vec![Hop::Main, tool("pluxy/a"), tool("pluxy/b"), tool("pluxy/c")];
         let e = extend(&four, &tool("pluxy/d"), "pluxy/e").unwrap_err();
         assert!(e.message.contains("longer than 5"), "{e}");
+    }
+
+    #[test]
+    fn only_the_windows_own_call_may_use_a_remembered_approval() {
+        let page = Hop::Page {
+            id: "pluxy/guide".into(),
+            sha256: "cd".repeat(32),
+            page: "page".into(),
+        };
+        // The control: the window's direct call keeps the remembered approval.
+        assert_eq!(preparation(&[Hop::Main]), Preparation::Main);
+        // A page's chain asks fresh, with or without tool hops.
+        assert_eq!(preparation(&[page.clone()]), Preparation::Page);
+        assert_eq!(
+            preparation(&[page, tool("pluxy/relay")]),
+            Preparation::Page
+        );
+        // A tool hop after the window makes it an import, at any depth.
+        assert_eq!(
+            preparation(&[Hop::Main, tool("pluxy/relay")]),
+            Preparation::Import
+        );
+        assert_eq!(
+            preparation(&[Hop::Main, tool("pluxy/a"), tool("pluxy/b")]),
+            Preparation::Import
+        );
     }
 
     #[test]
