@@ -545,8 +545,26 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     step(
         "stale",
         (|| {
-            install(main, "curated", TARGET, "2.0.0")?;
-            enable(app, main, TARGET)?;
+            // The target is enabled, so its update is a swap with its own native confirmation;
+            // confirmed, 2.0.0 serves, enabled and admitted.
+            let (text, slot) = asked(
+                app,
+                main,
+                "device_install",
+                json!({"registry": "curated", "id": TARGET, "version": "2.0.0"}),
+            )?;
+            require(
+                text.contains(TARGET) && text.contains("2.0.0"),
+                format!("the update's confirmation: {text}"),
+            )?;
+            press("alt+o")?;
+            let r = settle(main, &slot)?;
+            require(r["ok"] == true, format!("the confirmed update: {r}"))?;
+            let t = package_view(main, TARGET)?;
+            require(
+                t["active"]["version"] == "2.0.0" && t["enabled"] == true && t["authorized"] == true,
+                format!("the target after its update: {t}"),
+            )?;
             let r = page.call(TARGET, "summary", json!({"items": items}))?;
             forbidden(&r, "the guide's call after the target changed")?;
             let a = relay(
