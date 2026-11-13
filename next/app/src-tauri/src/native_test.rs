@@ -308,6 +308,64 @@ fn run(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// The window as the instance scenario sees it.
+fn window_state(app: &AppHandle) -> Value {
+    match app.get_window(WINDOW) {
+        Some(w) => json!({
+            "exists": true,
+            "visible": w.is_visible().unwrap_or(false),
+            "minimized": w.is_minimized().unwrap_or(false),
+            "focused": w.is_focused().unwrap_or(false),
+        }),
+        None => json!({"exists": false}),
+    }
+}
+
+/// The single-instance scenario (`native/instances-session.ts`, which sets
+/// `PLUXY_APP_TEST_INSTANCES`): reports once the window is up (`up`), then answers each line on
+/// stdin, one command per line, with the window's state (`state`): `state`, `hide`, `close`, or
+/// `quit`, which quits (stopping the app's own core) and answers nothing. If stdin closes, the
+/// app quits.
+fn instances(app: &AppHandle) -> Result<(), String> {
+    wait_for("the window", || app.get_webview(MAIN))?;
+    log(
+        "up",
+        json!({
+            "window": window_state(app),
+            "tray": app.state::<App>().has_tray.load(std::sync::atomic::Ordering::SeqCst),
+            "core_pid": app.state::<App>().conn.lock().unwrap().core_pid(),
+        }),
+    );
+    for line in std::io::stdin().lines() {
+        let line = line.map_err(|e| e.to_string())?;
+        match line.trim() {
+            "state" => {}
+            "hide" => app
+                .get_window(WINDOW)
+                .ok_or("no window")?
+                .hide()
+                .map_err(|e| e.to_string())?,
+            "close" => {
+                app.get_window(WINDOW)
+                    .ok_or("no window")?
+                    .close()
+                    .map_err(|e| e.to_string())?;
+                wait_for("the window to close", || {
+                    app.get_window(WINDOW).is_none().then_some(())
+                })?;
+            }
+            "quit" => {
+                crate::quit(app);
+                return Ok(());
+            }
+            other => return Err(format!("unknown command {other:?}")),
+        }
+        log("state", window_state(app));
+    }
+    crate::quit(app);
+    Ok(())
+}
+
 fn startup(app: &AppHandle, stage: &str) -> Result<(), String> {
     if stage == "enable" || stage == "disable" {
         let main = wait_for("the startup settings window", || app.get_webview(MAIN))?;
@@ -349,7 +407,12 @@ fn startup(app: &AppHandle, stage: &str) -> Result<(), String> {
 
 pub fn start(app: AppHandle) {
     std::thread::spawn(move || {
-        if let Err(e) = run(&app) {
+        let result = if std::env::var_os("PLUXY_APP_TEST_INSTANCES").is_some() {
+            instances(&app)
+        } else {
+            run(&app)
+        };
+        if let Err(e) = result {
             // What the window showed, to tell why.
             let shown = app.get_webview(MAIN).and_then(|m| {
                 eval(

@@ -146,6 +146,74 @@ for (const theme of ["default", "terminal", "paper"]) {
   });
 }
 
+test("the Network tab sets, keeps and clears the global proxy URL", async ({ page }) => {
+  const settings = async () => (await core.mgmt<CoreSettings>("GET", "/settings")).body;
+  // The config as GET /config shows it: the proxy URL's secret part is a placeholder keyed by the
+  // value, so the same placeholder means the same stored URL.
+  const storedProxy = async () =>
+    (await core.mgmt<{ content: string }>("GET", "/config")).body.content.match(
+      /"proxy_url":\s*"([^"]*)"/,
+    )?.[1];
+  expect((await settings())["proxy-url"]).toBe("");
+
+  const patches: Record<string, unknown>[] = [];
+  page.on("request", (r) => {
+    if (r.method() === "PATCH" && new URL(r.url()).pathname.endsWith("/v0/management/settings"))
+      patches.push(r.postDataJSON());
+  });
+  await openPanel(page, core);
+  await signIn(page, core);
+  await goTo(page, "Config Panel");
+  await page.getByRole("tab", { name: "Network", exact: true }).click();
+  const proxy = page.getByRole("textbox", { name: "Proxy URL", exact: true });
+  const save = page.getByRole("button", { name: "Save changes", exact: true });
+  const saved = page.getByText("Configuration saved successfully", { exact: true });
+  await expect(proxy).toHaveValue("");
+  await expect(proxy).toHaveAttribute("placeholder", "socks5://user:pass@127.0.0.1:1080/");
+  if (process.env.P7_SHOTS) await page.screenshot({ path: `${process.env.P7_SHOTS}/config-proxy-empty.png` });
+
+  // A URL with a user name and password: core holds it and shows it with `redacted` in their place.
+  await proxy.fill("socks5://alice:s3cretpass@127.0.0.1:1080/");
+  await save.click();
+  await expect(saved).toBeVisible();
+  expect(patches).toEqual([{ "proxy-url": "socks5://alice:s3cretpass@127.0.0.1:1080/" }]);
+  expect((await settings())["proxy-url"]).toBe("socks5://redacted@127.0.0.1:1080");
+  await expect(proxy).toHaveValue("socks5://redacted@127.0.0.1:1080");
+  const held = await storedProxy();
+  expect(held).toMatch(/^pluxy-redacted-/);
+  if (process.env.P7_SHOTS) await page.screenshot({ path: `${process.env.P7_SHOTS}/config-proxy-set.png` });
+
+  // Saving another setting sends no proxy, so the password stays: the stored URL is the same one.
+  await page.getByRole("switch", { name: "Force Model Prefix", exact: true }).check();
+  await save.click();
+  await expect(page.getByText("Configuration saved successfully", { exact: true })).toBeVisible();
+  expect(patches).toHaveLength(2);
+  expect(patches[1]).toEqual({ routing: { "force-model-prefix": true } });
+  expect((await settings())["proxy-url"]).toBe("socks5://redacted@127.0.0.1:1080");
+  expect(await storedProxy()).toBe(held);
+
+  // A URL core refuses shows as other settings errors do, and changes nothing.
+  await proxy.fill("ftp://proxy.example:21");
+  await save.click();
+  await expect(page.getByRole("alert")).toContainText("proxy-url");
+  await expect(saved).toHaveCount(0);
+  expect((await settings())["proxy-url"]).toBe("socks5://redacted@127.0.0.1:1080");
+  expect(await storedProxy()).toBe(held);
+
+  // Clearing the field removes the proxy.
+  await proxy.fill("");
+  await save.click();
+  await expect(saved).toBeVisible();
+  expect(patches.at(-1)).toEqual({ "proxy-url": "" });
+  expect((await settings())["proxy-url"]).toBe("");
+  expect(await storedProxy()).toBeUndefined();
+  await expect(proxy).toHaveValue("");
+
+  // The field is found by search, by its label and its settings name.
+  await page.getByPlaceholder("Search settings (label or YAML key)").fill("proxy-url");
+  await expect(proxy).toBeVisible();
+});
+
 test("review: fractional duration readbacks do not block unrelated saves or hide refusals", async ({
   page,
 }) => {
@@ -287,4 +355,111 @@ test("review: unavailable config source leaves settings usable and shows its err
   await expect(page.getByRole("alert")).toContainText("cannot be shown with its secrets hidden");
   await expect(page.getByText("Loading configuration...", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "Configuration source", exact: true })).toHaveCount(0);
+});
+
+test("the Config Panel's tab is in its address: opened, typed, clicked and Back", async ({ page }) => {
+  await openPanel(page, core, "/panel/#/config/source");
+  await signIn(page, core);
+  const tab = (name: string) => page.getByRole("tab", { name, exact: true });
+  const editor = page.getByRole("textbox", { name: "Configuration source", exact: true });
+  await expect(tab("Source")).toHaveAttribute("aria-selected", "true");
+  await expect(editor).not.toHaveValue("");
+
+  await tab("Network").click();
+  await expect(page).toHaveURL(/#\/config\/network$/);
+  await tab("Common").click();
+  await expect(page).toHaveURL(/#\/config$/);
+
+  await page.evaluate(() => {
+    location.hash = "#/config/logging";
+  });
+  await expect(tab("Logging")).toHaveAttribute("aria-selected", "true");
+  await expect(page).toHaveURL(/#\/config\/logging$/);
+  await page.evaluate(() => {
+    location.hash = "#/config/source";
+  });
+  await expect(tab("Source")).toHaveAttribute("aria-selected", "true");
+  await expect(editor).not.toHaveValue("");
+
+  await page.goBack();
+  await expect(tab("Logging")).toHaveAttribute("aria-selected", "true");
+  await page.goBack();
+  await expect(tab("Common")).toHaveAttribute("aria-selected", "true");
+  await expect(page).toHaveURL(/#\/config$/);
+
+  // A tab the page does not have opens the first.
+  await page.evaluate(() => {
+    location.hash = "#/config/nope";
+  });
+  await expect(tab("Network")).toHaveAttribute("aria-selected", "false");
+  await expect(tab("Common")).toHaveAttribute("aria-selected", "true");
+});
+
+test("moving between the page's tabs does not ask about unsaved settings, except to and from Source", async ({
+  page,
+}) => {
+  await openPanel(page, core, "/panel/#/config");
+  await signIn(page, core);
+  const logToFile = page.getByRole("switch", { name: "Log to File", exact: true });
+  const before = await logToFile.isChecked();
+  await logToFile.setChecked(!before);
+  const question = page.getByRole("dialog", { name: "Unsaved changes", exact: true });
+  const tab = (name: string) => page.getByRole("tab", { name, exact: true });
+
+  await tab("Network").click();
+  await page.evaluate(() => {
+    location.hash = "#/config/logging";
+  });
+  await expect(tab("Logging")).toHaveAttribute("aria-selected", "true");
+  await expect(question).toHaveCount(0);
+  await tab("Common").click();
+  await expect(logToFile).toBeChecked({ checked: !before });
+
+  // Source is its own text, so a move to it asks, as its tab does; Stay keeps the tab and address.
+  await page.evaluate(() => {
+    location.hash = "#/config/source";
+  });
+  await expect(question).toBeVisible();
+  await expect(page).toHaveURL(/#\/config$/);
+  await question.getByRole("button", { name: "Stay", exact: true }).click();
+  await expect(tab("Common")).toHaveAttribute("aria-selected", "true");
+  await expect(logToFile).toBeChecked({ checked: !before });
+  await page.evaluate(() => {
+    location.hash = "#/config/source";
+  });
+  await question.getByRole("button", { name: "Leave", exact: true }).click();
+  await expect(tab("Source")).toHaveAttribute("aria-selected", "true");
+  await expect(page).toHaveURL(/#\/config\/source$/);
+  await expect(page.getByRole("textbox", { name: "Configuration source", exact: true })).not.toHaveValue("");
+  await tab("Common").click();
+  await expect(logToFile).toBeChecked({ checked: before });
+});
+
+test("a typed Source address with an account scrolls a long file to the account", async ({ page }) => {
+  const current = await core.mgmt<{ hash: string; content: string }>("GET", "/config");
+  expect(
+    (
+      await core.mgmt("PUT", "/config", {
+        base_hash: current.body.hash,
+        content: `${JSON.stringify(JSON.parse(current.body.content), null, 2)}\n`,
+      })
+    ).status,
+  ).toBe(200);
+  await openPanel(page, core, "/panel/#/config/source?account=alpha-2");
+  await signIn(page, core);
+  const editor = page.getByRole("textbox", { name: "Configuration source", exact: true });
+  await expect(editor).not.toHaveValue("");
+  const view = () =>
+    editor.evaluate((e: HTMLTextAreaElement) => {
+      const lineHeight = Number.parseFloat(getComputedStyle(e).lineHeight);
+      const row = e.value.slice(0, e.selectionStart).split("\n").length - 1;
+      return {
+        text: e.value.slice(e.selectionStart, e.selectionEnd),
+        row,
+        shown: row * lineHeight >= e.scrollTop && (row + 1) * lineHeight <= e.scrollTop + e.clientHeight,
+        scrolled: e.scrollTop > 0,
+      };
+    });
+  await expect.poll(view).toMatchObject({ text: "alpha-2", shown: true, scrolled: true });
+  expect((await view()).row).toBeGreaterThan(20); // below the first screen, so the scroll was needed
 });

@@ -1,0 +1,284 @@
+{
+  "description": "A custom tool other than apply_patch is sent to xAI as a function; xAI's streamed function call to it comes back to the client.",
+  "source": [
+    "core/internal/runtime/executor/xai_executor_request.go",
+    "core/internal/runtime/executor/xai_executor_response.go",
+    "core/internal/runtime/executor/helps/apply_patch_responses.go",
+    "core/internal/translator/common/apply_patch_responses.go"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "body": {
+      "model": "grok-4.6",
+      "stream": true,
+      "input": [{"role":"user","content":"List the files."}],
+      "tools": [
+        {
+          "type": "custom",
+          "name": "run_shell",
+          "description": "run a shell command",
+          "format": {"type":"grammar","syntax":"lark","definition":"start: /.+/"}
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"event":"response.created","data":{"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"in_progress","model":"grok-test-upstream","output":[],"usage":null},"type":"response.created","sequence_number":0}},
+        {"event":"response.output_item.added","data":{"output_index":0,"item":{"id":"fc_shell","type":"function_call","status":"in_progress","call_id":"call_shell","name":"run_shell","arguments":""},"type":"response.output_item.added","sequence_number":1}},
+        {"event":"response.function_call_arguments.delta","data":{"item_id":"fc_shell","output_index":0,"delta":"{\"input\": \"ls -la ","type":"response.function_call_arguments.delta","sequence_number":2}},
+        {"event":"response.function_call_arguments.delta","data":{"item_id":"fc_shell","output_index":0,"delta":"\\\"src dir\\\"\\necho \\u4e","type":"response.function_call_arguments.delta","sequence_number":3}},
+        {"event":"response.function_call_arguments.delta","data":{"item_id":"fc_shell","output_index":0,"delta":"2d\\ud83d\\ude00\"}","type":"response.function_call_arguments.delta","sequence_number":4}},
+        {"event":"response.function_call_arguments.done","data":{"item_id":"fc_shell","output_index":0,"arguments":"{\"input\": \"ls -la \\\"src dir\\\"\\necho \\u4e2d\\ud83d\\ude00\"}","type":"response.function_call_arguments.done","sequence_number":5}},
+        {"event":"response.output_item.done","data":{"output_index":0,"item":{"id":"fc_shell","type":"function_call","status":"completed","call_id":"call_shell","name":"run_shell","arguments":"{\"input\": \"ls -la \\\"src dir\\\"\\necho \\u4e2d\\ud83d\\ude00\"}"},"type":"response.output_item.done","sequence_number":6}},
+        {"event":"response.completed","data":{"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"completed","model":"grok-test-upstream","output":[{"id":"fc_shell","type":"function_call","status":"completed","call_id":"call_shell","name":"run_shell","arguments":"{\"input\": \"ls -la \\\"src dir\\\"\\necho \\u4e2d\\ud83d\\ude00\"}"}],"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}},"type":"response.completed","sequence_number":7}}
+      ]
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[0].body.instructions",
+      "kind": "intended",
+      "reason": "Today's core's Codex translator sends empty instructions on every Responses request; the extension sends the request's instructions as the client wrote them.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.parallel_tool_calls",
+      "kind": "intended",
+      "reason": "Today's core's Codex translator adds this default to every Responses request with tools (tool_choice, parallel_tool_calls, strict false, additionalProperties false); the extension sends the client's tools and choices as the client wrote them.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.prompt_cache_key",
+      "kind": "gap",
+      "reason": "Today's core derives a session ID per conversation and sends it as prompt_cache_key; the extension has no session identity to derive from, so it sends only the client's own prompt_cache_key.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.X-Grok-Conv-Id",
+      "kind": "gap",
+      "reason": "Today's core sends its session ID as the x-grok-conv-id header; the extension sends the header only when the client's body carries a prompt_cache_key, since it has no session identity of its own.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.User-Agent",
+      "kind": "intended",
+      "reason": "The xAI extension names itself in its User-Agent (pluxy-xai and its version) and does not copy the Grok CLI's identity; today's core sends the Grok workspace's User-Agent unless the client sent one.",
+      "want": "pluxy-xai/0.1.0"
+    },
+    {
+      "path": "upstream[0].body.tools[0].description",
+      "kind": "intended",
+      "reason": "The extension sends every custom tool the client declares as a function with one input string, because a client cannot run a function call for a tool it declared custom (the Codex CLI ends the turn with an incompatible payload error). The description tells xAI to put the tool's text in input and carries the grammar that the format field held. Today's core sends the client's description unchanged and gives a custom tool other than apply_patch no input field.",
+      "want": "run a shell command\n\nCall this function with a JSON object whose input field contains the complete input text for the tool.\n\nThe input must follow this lark grammar:\nstart: /.+/"
+    },
+    {
+      "path": "upstream[0].body.tools[0].format",
+      "kind": "intended",
+      "reason": "A function tool has no format field, so the extension moves the custom tool's lark grammar into its description. Today's core sends the format field as it came on the function it makes for a custom tool other than apply_patch.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.tools[0].parameters",
+      "kind": "intended",
+      "reason": "The extension sends every custom tool the client declares as a function with one required string argument, input, because a client cannot run a function call for a tool it declared custom (the Codex CLI ends the turn with an incompatible payload error). Today's core sends an empty-object schema for a custom tool other than apply_patch.",
+      "want": {
+        "additionalProperties": false,
+        "properties": {
+          "input": {"description":"The complete input text for the tool.","type":"string"}
+        },
+        "required": ["input"],
+        "type": "object"
+      }
+    },
+    {
+      "path": "client.events[*].data.response.usage.input_tokens_details",
+      "kind": "gap",
+      "reason": "Today's core fills in zero cached and reasoning token counts when the upstream reports usage without them (EnsureResponsesUsageDetails); the new core reports xAI's usage as it comes. Whether to keep it is open.",
+      "absent": true
+    },
+    {
+      "path": "client.events[*].data.response.usage.output_tokens_details",
+      "kind": "gap",
+      "reason": "Today's core fills in zero cached and reasoning token counts when the upstream reports usage without them (EnsureResponsesUsageDetails); the new core reports xAI's usage as it comes. Whether to keep it is open.",
+      "absent": true
+    },
+    {
+      "path": "client.events[1]",
+      "kind": "intended",
+      "reason": "The call's item is announced as a custom_tool_call with an empty input, where today's core announces a function_call with empty arguments. A client cannot run a function call for a tool it declared custom (the Codex CLI ends the turn with an incompatible payload error), so the extension returns xAI's call to a custom tool as a custom_tool_call with the call's text as its input. Today's core does this for apply_patch only and returns a function_call for any other custom tool.",
+      "want": {
+        "data": {
+          "type": "response.output_item.added",
+          "sequence_number": 1,
+          "item": {
+            "call_id": "call_shell",
+            "id": "fc_shell",
+            "input": "",
+            "name": "run_shell",
+            "status": "in_progress",
+            "type": "custom_tool_call"
+          },
+          "output_index": 0
+        },
+        "event": "response.output_item.added"
+      }
+    },
+    {
+      "path": "client.events[2]",
+      "kind": "intended",
+      "reason": "The call's argument deltas arrive as custom_tool_call_input deltas carrying the text of the input field, with the call's ID; today's core forwards xAI's raw function_call_arguments deltas, the JSON text with its escapes. A client cannot run a function call for a tool it declared custom (the Codex CLI ends the turn with an incompatible payload error), so the extension returns xAI's call to a custom tool as a custom_tool_call with the call's text as its input. Today's core does this for apply_patch only and returns a function_call for any other custom tool.",
+      "want": {
+        "data": {
+          "type": "response.custom_tool_call_input.delta",
+          "sequence_number": 2,
+          "call_id": "call_shell",
+          "delta": "ls -la ",
+          "item_id": "fc_shell",
+          "output_index": 0
+        },
+        "event": "response.custom_tool_call_input.delta"
+      }
+    },
+    {
+      "path": "client.events[3]",
+      "kind": "intended",
+      "reason": "Same as the first delta. A client cannot run a function call for a tool it declared custom (the Codex CLI ends the turn with an incompatible payload error), so the extension returns xAI's call to a custom tool as a custom_tool_call with the call's text as its input. Today's core does this for apply_patch only and returns a function_call for any other custom tool.",
+      "want": {
+        "data": {
+          "type": "response.custom_tool_call_input.delta",
+          "sequence_number": 3,
+          "call_id": "call_shell",
+          "delta": "\"src dir\"\necho ",
+          "item_id": "fc_shell",
+          "output_index": 0
+        },
+        "event": "response.custom_tool_call_input.delta"
+      }
+    },
+    {
+      "path": "client.events[4]",
+      "kind": "intended",
+      "reason": "Same as the first delta. A client cannot run a function call for a tool it declared custom (the Codex CLI ends the turn with an incompatible payload error), so the extension returns xAI's call to a custom tool as a custom_tool_call with the call's text as its input. Today's core does this for apply_patch only and returns a function_call for any other custom tool.",
+      "want": {
+        "data": {
+          "type": "response.custom_tool_call_input.delta",
+          "sequence_number": 4,
+          "call_id": "call_shell",
+          "delta": "中😀",
+          "item_id": "fc_shell",
+          "output_index": 0
+        },
+        "event": "response.custom_tool_call_input.delta"
+      }
+    },
+    {
+      "path": "client.events[5]",
+      "kind": "intended",
+      "reason": "The end of the call's input is a custom_tool_call_input.done event with the whole input text, where today's core forwards function_call_arguments.done with the JSON arguments. A client cannot run a function call for a tool it declared custom (the Codex CLI ends the turn with an incompatible payload error), so the extension returns xAI's call to a custom tool as a custom_tool_call with the call's text as its input. Today's core does this for apply_patch only and returns a function_call for any other custom tool.",
+      "want": {
+        "data": {
+          "type": "response.custom_tool_call_input.done",
+          "sequence_number": 5,
+          "call_id": "call_shell",
+          "input": "ls -la \"src dir\"\necho 中😀",
+          "item_id": "fc_shell",
+          "output_index": 0
+        },
+        "event": "response.custom_tool_call_input.done"
+      }
+    },
+    {
+      "path": "client.events[6]",
+      "kind": "intended",
+      "reason": "The finished item is a custom_tool_call with the input text, where today's core finishes a function_call with JSON arguments. A client cannot run a function call for a tool it declared custom (the Codex CLI ends the turn with an incompatible payload error), so the extension returns xAI's call to a custom tool as a custom_tool_call with the call's text as its input. Today's core does this for apply_patch only and returns a function_call for any other custom tool.",
+      "want": {
+        "data": {
+          "type": "response.output_item.done",
+          "sequence_number": 6,
+          "item": {
+            "call_id": "call_shell",
+            "id": "fc_shell",
+            "input": "ls -la \"src dir\"\necho 中😀",
+            "name": "run_shell",
+            "status": "completed",
+            "type": "custom_tool_call"
+          },
+          "output_index": 0
+        },
+        "event": "response.output_item.done"
+      }
+    },
+    {
+      "path": "client.events[7].data.response.output[0]",
+      "kind": "intended",
+      "reason": "The completed response lists the call as a custom_tool_call with the input text, where today's core lists a function_call with JSON arguments. A client cannot run a function call for a tool it declared custom (the Codex CLI ends the turn with an incompatible payload error), so the extension returns xAI's call to a custom tool as a custom_tool_call with the call's text as its input. Today's core does this for apply_patch only and returns a function_call for any other custom tool.",
+      "want": {
+        "call_id": "call_shell",
+        "id": "fc_shell",
+        "input": "ls -la \"src dir\"\necho 中😀",
+        "name": "run_shell",
+        "status": "completed",
+        "type": "custom_tool_call"
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"response":{"created_at":1700000000,"id":"resp_corpus","model":"grok-test-upstream","object":"response","output":[],"status":"in_progress","usage":null},"sequence_number":0,"type":"response.created"},"event":"response.created"},
+        {"data":{"item":{"arguments":"","call_id":"call_shell","id":"fc_shell","name":"run_shell","status":"in_progress","type":"function_call"},"output_index":0,"sequence_number":1,"type":"response.output_item.added"},"event":"response.output_item.added"},
+        {"data":{"delta":"{\"input\": \"ls -la ","item_id":"fc_shell","output_index":0,"sequence_number":2,"type":"response.function_call_arguments.delta"},"event":"response.function_call_arguments.delta"},
+        {"data":{"delta":"\\\"src dir\\\"\\necho \\u4e","item_id":"fc_shell","output_index":0,"sequence_number":3,"type":"response.function_call_arguments.delta"},"event":"response.function_call_arguments.delta"},
+        {"data":{"delta":"2d\\ud83d\\ude00\"}","item_id":"fc_shell","output_index":0,"sequence_number":4,"type":"response.function_call_arguments.delta"},"event":"response.function_call_arguments.delta"},
+        {"data":{"arguments":"{\"input\": \"ls -la \\\"src dir\\\"\\necho \\u4e2d\\ud83d\\ude00\"}","item_id":"fc_shell","output_index":0,"sequence_number":5,"type":"response.function_call_arguments.done"},"event":"response.function_call_arguments.done"},
+        {"data":{"item":{"arguments":"{\"input\": \"ls -la \\\"src dir\\\"\\necho \\u4e2d\\ud83d\\ude00\"}","call_id":"call_shell","id":"fc_shell","name":"run_shell","status":"completed","type":"function_call"},"output_index":0,"sequence_number":6,"type":"response.output_item.done"},"event":"response.output_item.done"},
+        {"data":{"response":{"created_at":1700000000,"id":"resp_corpus","model":"grok-test-upstream","object":"response","output":[{"arguments":"{\"input\": \"ls -la \\\"src dir\\\"\\necho \\u4e2d\\ud83d\\ude00\"}","call_id":"call_shell","id":"fc_shell","name":"run_shell","status":"completed","type":"function_call"}],"status":"completed","usage":{"input_tokens":11,"input_tokens_details":{"cached_tokens":0},"output_tokens":7,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":18}},"sequence_number":7,"type":"response.completed"},"event":"response.completed"}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": ["reasoning.encrypted_content"],
+          "input": [{"content":"List the files.","role":"user"}],
+          "instructions": "",
+          "model": "grok-4.6",
+          "parallel_tool_calls": true,
+          "prompt_cache_key": "e406ddd1-f804-5c84-ba5b-25c814a9ab84",
+          "store": false,
+          "stream": true,
+          "tools": [
+            {
+              "description": "run a shell command",
+              "format": {"definition":"start: /.+/","syntax":"lark","type":"grammar"},
+              "name": "run_shell",
+              "parameters": {"properties":{},"type":"object"},
+              "type": "function"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0",
+          "X-Grok-Conv-Id": "e406ddd1-f804-5c84-ba5b-25c814a9ab84"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      }
+    ]
+  }
+}

@@ -33,6 +33,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # The checkout is mounted read-write into the Playwright container, and no step needs
+          # git credentials, so the job token is not stored in .git/config.
+          persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -77,17 +81,42 @@ jobs:
         env:
           PLUXY_REQUIRE_PANEL: '1'
         run: go test -race -count=1 ./...
-      # The runner image already has Chrome's system libraries, so only the browser is fetched.
-      # Firefox and WebKit run the extension pages test and need their system libraries too.
-      - name: Install Chromium for the browser tests
-        working-directory: next/ui
-        timeout-minutes: 5
-        run: ./node_modules/.bin/playwright install chromium
-      - name: Install Firefox and WebKit for the extension pages test
+      # Firefox and WebKit need about 185 system packages the runner image lacks, and installing
+      # them with apt fails whenever the Ubuntu archives are unreachable. Microsoft's Playwright
+      # image for the installed Playwright version already has all three browsers and their
+      # libraries, so the browser tests run in it, with this job's checkout, Go, Bun and Go caches
+      # mounted at the same paths.
+      - name: Pull the Playwright image for the browser tests
         working-directory: next/ui
         timeout-minutes: 10
-        run: ./node_modules/.bin/playwright install --with-deps firefox webkit
+        run: |
+          version="$(jq -r .version node_modules/@playwright/test/package.json)"
+          image="mcr.microsoft.com/playwright:v${version}-resolute"
+          docker pull "$image"
+          echo "PLAYWRIGHT_IMAGE=$image" >> "$GITHUB_ENV"
       - name: Browser tests
         working-directory: next/ui
         timeout-minutes: 15
-        run: bun run test:browser
+        run: |
+          goroot="$(go env GOROOT)"
+          gomodcache="$(go env GOMODCACHE)"
+          gocache="$(go env GOCACHE)"
+          bun="$(readlink -f "$(command -v bun)")"
+          bun_dir="$(dirname "$bun")"
+          # Docker would create a missing mount source owned by root, which the test user can't write.
+          mkdir -p "$gomodcache" "$gocache"
+          # Unlike the Test step, cgo is off here: the image has no C compiler, and next/ has no cgo code.
+          # playwright test runs on the image's own Node (26 in 1.65.0), not on the Node 24 this job sets up.
+          # .git is mounted read-only over the checkout: the checkout's post-step runs git there with
+          # the job token in its environment, so the image must not be able to change git's config.
+          docker run --rm --init --ipc=host \
+            --user "$(id -u):$(id -g)" \
+            -e CI -e HOME=/tmp -e CGO_ENABLED=0 \
+            -e PATH="$goroot/bin:$bun_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+            -e GOMODCACHE="$gomodcache" -e GOCACHE="$gocache" \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v "$GITHUB_WORKSPACE/.git:$GITHUB_WORKSPACE/.git:ro" \
+            -v "$goroot:$goroot:ro" -v "$bun_dir:$bun_dir:ro" \
+            -v "$gomodcache:$gomodcache" -v "$gocache:$gocache" \
+            -w "$PWD" \
+            "$PLAYWRIGHT_IMAGE" bun run test:browser
