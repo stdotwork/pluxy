@@ -23,8 +23,9 @@ moves, so later upstream merges stay easy. `core/`'s Go module path stays
 
 A folder's own `AGENTS.md` (`core/AGENTS.md`, `extensions/panel/AGENTS.md`) holds that folder's
 coding rules and applies to work inside it. The app has no `AGENTS.md`; follow nearby code.
-`next/` has no `AGENTS.md` either: follow nearby code, prefer the standard library, and change
-the extension protocol only together with its README (`next/protocol/README.md`).
+`next/` has no `AGENTS.md` either: follow nearby code, prefer the standard library (its only
+other dependencies are `github.com/coder/websocket` and `gopkg.in/yaml.v3`), and change the
+extension protocol only together with its README (`next/protocol/README.md`).
 
 The upstream process rules in those files and in upstream tooling do not apply in pluxy:
 
@@ -62,8 +63,8 @@ before assuming your change caused it.
 
 ### `next/`
 
-Go version comes from `next/go.mod` (currently `go 1.26.10`). The module has no dependencies
-outside the standard library.
+Go version comes from `next/go.mod` (currently `go 1.26.10`). Besides the standard library, the
+module depends on `github.com/coder/websocket` and `gopkg.in/yaml.v3`.
 
 ```bash
 go build ./...
