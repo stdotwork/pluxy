@@ -368,20 +368,21 @@ Granting takes three things, each in native UI the window can only start:
    only: the same package, key and bytes from another registry start with no approval and no
    grants.
 3. **A grant.** **Grant…** next to a resource opens the native file chooser (the desktop portal's
-   when GTK uses portals) for a file or a folder. A whole home folder or the root folder is
-   refused. A native confirmation then shows the package with its source, digest and signer, the
+   when GTK uses portals) for a file or a folder. A folder that is or holds the root folder,
+   your home folder or the document portal's store is refused. A native confirmation then shows the package with its source, digest and signer, the
    resource and its operations, what you chose and what it resolves to, and says the package's
    pages can send what they read anywhere they can reach. Cancelling the chooser or the
    confirmation grants nothing.
 
 A grant binds the package, its source, its release digest, its signer and the resource to what
-you confirmed: the path you chose, the file or folder it resolves to and that target's device and
-inode, and, when you chose a link (as stow and chezmoi make), the link's own identity and text.
+you confirmed: the path you chose, the file or folder it resolves to and that target's device,
+inode and mount (Linux's mount ID), and, when you chose a link (as stow and chezmoi make), the link's own identity and text.
 Each read checks all of it again. A newer release, a rollback to another release, or the same
 release from another source is not granted what the first was; granting again replaces the
 grant. A link that points elsewhere, or a target replaced (as editors save, by rename), refuses
-reads with `changed` until you grant it again, even if it is put back. Removing the package
-removes its grants.
+reads with `changed` until you grant it again, even if it is put back. An error that may pass
+(permissions, an I/O error, too many open files) answers `unavailable` and ends nothing.
+Removing the package removes its grants.
 
 Pages read with three channel methods, answered by native code, never by the window, so the
 bytes never reach the window: `resources.status`, `resources.read` and `resources.list`
@@ -389,8 +390,10 @@ bytes never reach the window: `resources.status`, `resources.read` and `resource
 native binding names the package and release; nothing in the call can name another. A file
 grant reads that file only. A folder grant reads through a folder handle (`cap-std`) opened on
 the granted folder: `..`, absolute paths, empty parts and links that leave the folder are
-refused, while links inside it are followed. Only regular files are read, at most 1 MiB per
-call. Hard links inside a granted folder disclose the files they name.
+refused, while links inside it are followed. Nothing on another mount is read or listed, such as
+a filesystem mounted inside the granted folder. Only regular files are read, at most 1 MiB per
+call. A listing stops after 1,000 entries and says it was cut. Hard links inside a granted
+folder disclose the files they name.
 
 **Revoke** removes a grant and bumps a revision every read checks before it answers. A read
 already under way answers `revoked`, not its bytes, and the revocation answers only once such
@@ -715,7 +718,7 @@ There is no updater yet; the signed-update slice calls this gate.
   yet, and native tools run on Linux only (5.11 or later: the program host needs
   `close_range` with `CLOSE_RANGE_CLOEXEC`), with no routing from pages yet; installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
   native run.
-- Access: Linux only; web packages only; reads only (no writes or watchers); a signature only
+- Access: Linux only (5.8 or later: grants record the `statx` mount ID); web packages only; reads only (no writes or watchers); a signature only
   from a registry, not for a package installed from a file; document portal grants last one
   session.
 - Tested on Linux only. On Windows the page document's address is

@@ -163,7 +163,8 @@ function AccessDetail(props: { p: DevicePackage }) {
   const { p } = props;
   const grants = useLoad(access.list);
   const act = useAction(grants.reload);
-  const signer = p.active.signer;
+  // Only a signature Access may use is offered for approval and grants (src-tauri/src/device.rs).
+  const signer = p.active.signer?.access ? p.active.signer : null;
   if (p.active.declared.length === 0) return null;
   const mine = (grants.data?.grants ?? []).filter((g) => g.package === p.id);
   return (

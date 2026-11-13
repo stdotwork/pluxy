@@ -58,6 +58,9 @@ pub struct Grant {
     pub target: PathBuf,
     pub dev: u64,
     pub ino: u64,
+    /// The target's mount (Linux `statx` mount ID): reads never cross onto another mount.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mount: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<Link>,
     /// A document portal file: never saved, so it ends with this run of the app.
@@ -125,6 +128,7 @@ pub struct Resolved {
     pub target: PathBuf,
     pub dev: u64,
     pub ino: u64,
+    pub mount: Option<u64>,
     pub link: Option<Link>,
     pub portal: bool,
 }
@@ -142,6 +146,44 @@ fn portal_mount() -> PathBuf {
 pub fn is_portal(target: &Path) -> bool {
     let mount = portal_mount();
     target.starts_with(&mount) || fs::canonicalize(&mount).is_ok_and(|m| target.starts_with(m))
+}
+
+/// The mount an open file or folder is on: Linux's `statx` mount ID, which tells bind mounts of
+/// one filesystem apart (the device number does not).
+#[cfg(target_os = "linux")]
+fn mount_of(fd: &impl std::os::fd::AsRawFd) -> Option<u64> {
+    let mut stx = std::mem::MaybeUninit::<libc::statx>::zeroed();
+    // SAFETY: fd is open for the call, the path is an empty C string with AT_EMPTY_PATH, and
+    // stx is a valid buffer for statx to fill.
+    let rc = unsafe {
+        libc::statx(
+            fd.as_raw_fd(),
+            c"".as_ptr(),
+            libc::AT_EMPTY_PATH,
+            libc::STATX_MNT_ID,
+            stx.as_mut_ptr(),
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+    // SAFETY: statx succeeded, so it filled stx.
+    let stx = unsafe { stx.assume_init() };
+    (stx.stx_mask & libc::STATX_MNT_ID != 0).then_some(stx.stx_mnt_id)
+}
+
+/// Whether fd is on the mount g was granted on: never another mount, such as one mounted
+/// inside a granted folder. Grants made where the mount cannot be told (outside Linux) skip it.
+fn same_mount(g: &Grant, fd: &impl std::os::fd::AsRawFd) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        g.mount.is_none() || mount_of(fd) == g.mount
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = fd;
+        g.mount.is_none()
+    }
 }
 
 fn link_of(selected: &Path) -> Result<Option<Link>, String> {
@@ -162,9 +204,20 @@ fn link_of(selected: &Path) -> Result<Option<Link>, String> {
 }
 
 /// Resolves what the person chose for a resource of kind: an absolute UTF-8 path to a regular
-/// file (`file`) or a folder (`subtree`), following a link once. A whole home folder or the
-/// root folder is refused.
+/// file (`file`) or a folder (`subtree`), following a link once. A folder that is or holds the
+/// root folder, this user's home folder or the document portal's store is refused.
 pub fn resolve(selected: &Path, kind: &str) -> Result<Resolved, String> {
+    let home = std::env::var_os("HOME").and_then(|h| fs::canonicalize(h).ok());
+    resolve_with(selected, kind, home.as_deref(), &portal_mount())
+}
+
+/// `resolve`, with this user's home folder and the document portal's mount given.
+fn resolve_with(
+    selected: &Path,
+    kind: &str,
+    home: Option<&Path>,
+    portal: &Path,
+) -> Result<Resolved, String> {
     if !selected.is_absolute() || selected.to_str().is_none() {
         return Err("choose a file by an absolute UTF-8 path".into());
     }
@@ -178,10 +231,13 @@ pub fn resolve(selected: &Path, kind: &str) -> Result<Resolved, String> {
         "file" if m.is_file() => {}
         "file" => return Err(format!("{} is not a regular file", target.display())),
         "subtree" if m.is_dir() => {
-            let home = std::env::var_os("HOME").and_then(|h| fs::canonicalize(h).ok());
-            if target == Path::new("/") || home.as_deref() == Some(target.as_path()) {
+            let portal = fs::canonicalize(portal).unwrap_or_else(|_| portal.to_path_buf());
+            if target == Path::new("/")
+                || home.is_some_and(|h| h.starts_with(&target))
+                || portal.starts_with(&target)
+            {
                 return Err(
-                    "a whole home folder or the root folder cannot be granted: choose a folder inside it"
+                    "a folder holding a whole home folder, the root folder or the document portal's store cannot be granted: choose a folder inside it"
                         .into(),
                 );
             }
@@ -189,8 +245,23 @@ pub fn resolve(selected: &Path, kind: &str) -> Result<Resolved, String> {
         "subtree" => return Err(format!("{} is not a folder", target.display())),
         _ => return Err(format!("resources of kind {kind} cannot be granted")),
     }
+    #[cfg(target_os = "linux")]
+    let mount = Some(
+        fs::File::open(&target)
+            .ok()
+            .and_then(|f| mount_of(&f))
+            .ok_or_else(|| {
+                format!(
+                    "{}: which mount it is on cannot be told (Linux 5.8 or later is needed)",
+                    target.display()
+                )
+            })?,
+    );
+    #[cfg(not(target_os = "linux"))]
+    let mount = None;
     Ok(Resolved {
         selected: selected.into(),
+        mount,
         portal: is_portal(&target),
         target,
         dev: m.dev(),
@@ -201,29 +272,29 @@ pub fn resolve(selected: &Path, kind: &str) -> Result<Resolved, String> {
 
 /// Whether what g names is still what was reviewed: the chosen path's link, where it resolves
 /// and the target's identity.
+/// Only a change of the link, of where it resolves or of the target's identity is `Changed`
+/// (and ends the grant); an error that may pass (permissions, I/O, too many open files, a
+/// gone file) is `Unavailable` and ends nothing.
 fn current(g: &Grant) -> Result<(), Denial> {
-    let gone = |e: std::io::Error| {
-        if e.kind() == ErrorKind::NotFound {
-            Denial::Unavailable
-        } else {
-            Denial::Changed
-        }
+    let m = fs::symlink_metadata(&g.selected).map_err(|_| Denial::Unavailable)?;
+    let link = if m.file_type().is_symlink() {
+        let text = fs::read_link(&g.selected).map_err(|_| Denial::Unavailable)?;
+        Some((m.dev(), m.ino(), text))
+    } else {
+        None
     };
-    let link = link_of(&g.selected).map_err(|_| {
-        if fs::symlink_metadata(&g.selected).is_err() {
-            Denial::Unavailable
-        } else {
-            Denial::Changed
-        }
-    })?;
-    if link != g.link {
+    let reviewed = g
+        .link
+        .as_ref()
+        .map(|l| (l.dev, l.ino, PathBuf::from(&l.text)));
+    if link != reviewed {
         return Err(Denial::Changed);
     }
-    let target = fs::canonicalize(&g.selected).map_err(gone)?;
+    let target = fs::canonicalize(&g.selected).map_err(|_| Denial::Unavailable)?;
     if target != g.target {
         return Err(Denial::Changed);
     }
-    let m = fs::metadata(&target).map_err(gone)?;
+    let m = fs::metadata(&target).map_err(|_| Denial::Unavailable)?;
     if (m.dev(), m.ino()) != (g.dev, g.ino) {
         return Err(Denial::Changed);
     }
@@ -236,24 +307,24 @@ pub enum Handle {
     Dir(Dir),
 }
 
-fn log_open(path: &Path) {
+/// For the native test: the real path of what the broker opened, read from the open file
+/// itself (`/proc/self/fd`), not the path it asked for.
+fn log_open(f: &impl std::os::fd::AsRawFd) {
     #[cfg(feature = "native-test")]
-    eprintln!("native-test: access_io {}", json!({ "path": path }));
+    {
+        let path = fs::read_link(format!("/proc/self/fd/{}", f.as_raw_fd()))
+            .unwrap_or_else(|e| PathBuf::from(format!("unknown: {e}")));
+        eprintln!("native-test: access_io {}", json!({ "path": path }));
+    }
     #[cfg(not(feature = "native-test"))]
-    let _ = path;
+    let _ = f;
 }
 
 const NO_BLOCK: i32 = libc::O_NONBLOCK | libc::O_NOCTTY;
 
 /// Opens g's target and checks it is the one reviewed.
 fn open(g: &Grant) -> Result<Handle, Denial> {
-    let map = |e: std::io::Error| {
-        if e.kind() == ErrorKind::NotFound {
-            Denial::Unavailable
-        } else {
-            Denial::Changed
-        }
-    };
+    let map = |_| Denial::Unavailable;
     if g.kind == "subtree" {
         let d = Dir::open_ambient_dir(&g.target, cap_std::ambient_authority()).map_err(map)?;
         let m = d.dir_metadata().map_err(map)?;
@@ -261,6 +332,7 @@ fn open(g: &Grant) -> Result<Handle, Denial> {
             cap_std::fs::MetadataExt::dev(&m),
             cap_std::fs::MetadataExt::ino(&m),
         ) != (g.dev, g.ino)
+            || !same_mount(g, &d)
         {
             return Err(Denial::Changed);
         }
@@ -271,9 +343,9 @@ fn open(g: &Grant) -> Result<Handle, Denial> {
             .custom_flags(NO_BLOCK)
             .open(&g.target)
             .map_err(map)?;
-        log_open(&g.target);
+        log_open(&f);
         let m = f.metadata().map_err(map)?;
-        if !m.is_file() || (m.dev(), m.ino()) != (g.dev, g.ino) {
+        if !m.is_file() || (m.dev(), m.ino()) != (g.dev, g.ino) || !same_mount(g, &f) {
             return Err(Denial::Changed);
         }
         Ok(Handle::File(f))
@@ -370,7 +442,7 @@ pub fn run(b: &Begun) -> (Result<Value, Denial>, Option<Arc<Handle>>) {
                 offset,
             },
         ) => read_in(&b.grant, d, p, *offset),
-        (Handle::Dir(d), Op::List { path }) => list_in(d, path),
+        (Handle::Dir(d), Op::List { path }) => list_in(&b.grant, d, path),
         _ => Err(Denial::BadRequest),
     };
     (result, opened)
@@ -382,23 +454,36 @@ fn read_in(g: &Grant, d: &Dir, p: &str, offset: u64) -> Result<Value, Denial> {
         .open_with(&rel, OpenOptions::new().read(true).custom_flags(NO_BLOCK))
         .map_err(open_error)?
         .into_std();
-    log_open(&g.target.join(&rel));
-    if !f.metadata().map_err(|_| Denial::Unavailable)?.is_file() {
+    log_open(&f);
+    if !same_mount(g, &f) || !f.metadata().map_err(|_| Denial::Unavailable)?.is_file() {
         return Err(Denial::Refused);
     }
     read_chunk(&f, offset)
 }
 
-fn list_in(d: &Dir, p: &str) -> Result<Value, Denial> {
+/// Lists a folder in the grant: at most `MAX_ENTRIES` entries, and the scan stops there, so a
+/// listing of a bigger folder holds the first entries the folder gives, sorted, with
+/// `truncated` set.
+fn list_in(g: &Grant, d: &Dir, p: &str) -> Result<Value, Denial> {
     let rel = relative(p, true)?;
-    let entries = if rel == Path::new(".") {
-        d.entries()
+    let sub;
+    let folder = if rel == Path::new(".") {
+        d
     } else {
-        d.read_dir(&rel)
-    }
-    .map_err(open_error)?;
+        sub = d.open_dir(&rel).map_err(open_error)?;
+        if !same_mount(g, &sub) {
+            return Err(Denial::Refused);
+        }
+        &sub
+    };
+    let entries = folder.entries().map_err(open_error)?;
     let mut out = Vec::new();
-    for e in entries {
+    let mut truncated = false;
+    for (scanned, e) in entries.enumerate() {
+        if scanned == MAX_ENTRIES {
+            truncated = true;
+            break;
+        }
         let Ok(e) = e else { continue };
         let Some(name) = e.file_name().to_str().map(String::from) else {
             continue;
@@ -417,8 +502,6 @@ fn list_in(d: &Dir, p: &str) -> Result<Value, Denial> {
         out.push((name, entry));
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
-    let truncated = out.len() > MAX_ENTRIES;
-    out.truncate(MAX_ENTRIES);
     let entries: Vec<Value> = out.into_iter().map(|(_, e)| e).collect();
     Ok(json!({"entries": entries, "truncated": truncated}))
 }
@@ -684,6 +767,7 @@ impl Store {
             target: r.target.clone(),
             dev: r.dev,
             ino: r.ino,
+            mount: r.mount,
             link: r.link.clone(),
             session_only: r.portal,
             changed: false,
@@ -737,6 +821,17 @@ impl Store {
             return Err(e);
         }
         Ok(self.in_flight(id))
+    }
+
+    /// After a begun call's answer went to the page: a revocation waits until then.
+    pub fn delivered(&mut self, b: &Begun) {
+        let id = &b.grant.id;
+        if let Some(n) = self.inflight.get_mut(id) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                self.inflight.remove(id);
+            }
+        }
     }
 
     pub fn in_flight(&self, id: &str) -> usize {
@@ -844,7 +939,8 @@ impl Store {
     }
 
     /// Ends a begun call: the result stands only if its grant is still there at the revision it
-    /// began with. A changed link or target ends the grant until it is granted again.
+    /// began with. A changed link or target ends the grant until it is granted again. The call
+    /// stays in flight until `delivered`.
     pub fn finish(
         &mut self,
         b: &Begun,
@@ -852,12 +948,6 @@ impl Store {
         opened: Option<Arc<Handle>>,
     ) -> Result<Value, Denial> {
         let id = &b.grant.id;
-        if let Some(n) = self.inflight.get_mut(id) {
-            *n = n.saturating_sub(1);
-            if *n == 0 {
-                self.inflight.remove(id);
-            }
-        }
         let live = self
             .grants()
             .any(|g| g.id == *id && g.revision == b.grant.revision);

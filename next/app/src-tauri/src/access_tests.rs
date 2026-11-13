@@ -66,7 +66,9 @@ fn grant(s: &mut Store, f: &Facts, resource: &str, path: &Path) -> Grant {
 fn call(s: &mut Store, f: &Facts, method: &str, params: Value) -> Result<Value, Denial> {
     let b = s.begin(f, &f.sha256, method, &params)?;
     let (r, opened) = run(&b);
-    s.finish(&b, r, opened)
+    let out = s.finish(&b, r, opened);
+    s.delivered(&b);
+    out
 }
 
 fn text(v: &Value) -> String {
@@ -348,6 +350,8 @@ fn revoking_answers_calls_in_flight_revoked() {
     assert!(r.is_ok());
     assert_eq!(s.revoke(&g.id).unwrap(), 1);
     assert_eq!(s.finish(&b, r, opened).unwrap_err(), Denial::Revoked);
+    assert_eq!(s.in_flight(&g.id), 1);
+    s.delivered(&b);
     assert_eq!(s.in_flight(&g.id), 0);
     assert!(s.revoke(&g.id).is_err());
     assert_eq!(
@@ -367,6 +371,7 @@ fn revoking_answers_calls_in_flight_revoked() {
     grant(&mut s, &f, "config", &t.0.join("file"));
     let (r, opened) = run(&b);
     assert_eq!(s.finish(&b, r, opened).unwrap_err(), Denial::Revoked);
+    s.delivered(&b);
     assert_eq!(s.in_flight(&g.id), 0);
 }
 
@@ -485,4 +490,215 @@ fn s_without_ops() -> String {
     let mut f = facts();
     f.declared[0].operations = vec!["write".into()];
     s.may_grant(&f, "config").unwrap_err()
+}
+
+#[test]
+fn a_folder_holding_the_home_folder_or_the_portal_store_is_refused() {
+    // The process's own HOME: its parent holds it, so granting the parent grants all of it.
+    let home = fs::canonicalize(std::env::var_os("HOME").expect("HOME")).unwrap();
+    let parent = home.parent().unwrap();
+    assert!(resolve(parent, "subtree")
+        .unwrap_err()
+        .contains("whole home"));
+    assert!(resolve(&home, "subtree")
+        .unwrap_err()
+        .contains("whole home"));
+    // The document portal's store, and every folder holding it.
+    let t = tmp();
+    let runtime = t.0.join("runtime");
+    let doc = runtime.join("doc");
+    fs::create_dir_all(doc.join("abc")).unwrap();
+    fs::create_dir_all(t.0.join("work")).unwrap();
+    for (target, refused) in [
+        (&runtime, true),
+        (&doc, true),
+        (&t.0, true),
+        (&doc.join("abc"), false),
+        (&t.0.join("work"), false),
+    ] {
+        let r = resolve_with(target, "subtree", Some(&home), &doc);
+        assert_eq!(r.is_err(), refused, "{}: {r:?}", target.display());
+    }
+    // With home inside the temporary folder: it and its parents are refused, a folder in it is
+    // not.
+    let fake_home = t.0.join("work").join("me");
+    fs::create_dir_all(fake_home.join("projects")).unwrap();
+    for (target, refused) in [
+        (fake_home.clone(), true),
+        (t.0.join("work"), true),
+        (fake_home.join("projects"), false),
+    ] {
+        let r = resolve_with(&target, "subtree", Some(&fake_home), &doc);
+        assert_eq!(r.is_err(), refused, "{}: {r:?}", target.display());
+    }
+}
+
+#[test]
+fn revoking_waits_until_a_read_is_delivered() {
+    let t = tmp();
+    fs::write(t.0.join("file"), "bytes").unwrap();
+    let (mut s, f) = (store(&t.0), facts());
+    let g = grant(&mut s, &f, "config", &t.0.join("file"));
+    let b = s
+        .begin(
+            &f,
+            &f.sha256,
+            "resources.read",
+            &json!({"resource": "config"}),
+        )
+        .unwrap();
+    let (r, opened) = run(&b);
+    assert!(s.finish(&b, r, opened).is_ok());
+    // Read, not yet delivered to the page: a revocation still waits for it.
+    assert_eq!(s.in_flight(&g.id), 1);
+    s.delivered(&b);
+    assert_eq!(s.in_flight(&g.id), 0);
+}
+
+#[test]
+fn a_passing_error_does_not_end_a_grant() {
+    if unsafe { libc::geteuid() } == 0 {
+        // Permissions do not stop root.
+        return;
+    }
+    let t = tmp();
+    let dir = t.0.join("dir");
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("file"), "bytes").unwrap();
+    let (mut s, f) = (store(&t.0), facts());
+    let g = grant(&mut s, &f, "config", &dir.join("file"));
+    let outer = t.0.join("outer");
+    fs::create_dir_all(outer.join("tree")).unwrap();
+    fs::write(outer.join("tree").join("in"), "in").unwrap();
+    grant(&mut s, &f, "tree", &outer.join("tree"));
+    // The folder holding the file cannot be searched for now (EACCES): unavailable, not changed.
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o000)).unwrap();
+    let e = call(&mut s, &f, "resources.read", json!({"resource": "config"})).unwrap_err();
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(e, Denial::Unavailable);
+    let r = call(&mut s, &f, "resources.read", json!({"resource": "config"})).unwrap();
+    assert_eq!(text(&r), "bytes");
+    assert!(s.grants().all(|x| !x.changed), "{:?}", g.id);
+    // The same for a granted folder whose own folder cannot be searched for now.
+    fs::set_permissions(&outer, fs::Permissions::from_mode(0o000)).unwrap();
+    let e = call(
+        &mut s,
+        &f,
+        "resources.read",
+        json!({"resource": "tree", "path": "in"}),
+    )
+    .unwrap_err();
+    fs::set_permissions(&outer, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(e, Denial::Unavailable);
+    let r = call(
+        &mut s,
+        &f,
+        "resources.read",
+        json!({"resource": "tree", "path": "in"}),
+    )
+    .unwrap();
+    assert_eq!(text(&r), "in");
+    assert!(s.grants().all(|x| !x.changed));
+    assert!(!fs::read_to_string(t.0.join("app").join(FILE))
+        .unwrap()
+        .contains("\"changed\": true"));
+}
+
+/// Records mount for every grant of the store, as if the targets were granted on that mount.
+fn granted_on(s: &mut Store, mount: Option<u64>) {
+    for g in s.saved.grants.iter_mut() {
+        g.mount = mount;
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn reads_never_cross_onto_another_mount() {
+    let t = tmp();
+    fs::write(t.0.join("file"), "bytes").unwrap();
+    fs::create_dir(t.0.join("tree")).unwrap();
+    fs::write(t.0.join("tree").join("in"), "in").unwrap();
+    let (mut s, f) = (store(&t.0), facts());
+    let g = grant(&mut s, &f, "config", &t.0.join("file"));
+    let mount = g.mount.expect("a Linux grant records its mount");
+    let read_in = json!({"resource": "tree", "path": "in"});
+    grant(&mut s, &f, "tree", &t.0.join("tree"));
+    // The positive control: on the mount they were granted on, both read.
+    assert_eq!(
+        text(&call(&mut s, &f, "resources.read", read_in.clone()).unwrap()),
+        "in"
+    );
+    // The folder is open now; a file in it on another mount than the grant's is refused.
+    granted_on(&mut s, Some(mount + 1));
+    assert_eq!(
+        call(&mut s, &f, "resources.read", read_in.clone()).unwrap_err(),
+        Denial::Refused
+    );
+    // Opening a target on another mount than the one granted: changed.
+    assert_eq!(
+        call(&mut s, &f, "resources.read", json!({"resource": "config"})).unwrap_err(),
+        Denial::Changed
+    );
+    let mut fresh = store(&t.0);
+    grant(&mut fresh, &f, "tree", &t.0.join("tree"));
+    granted_on(&mut fresh, Some(mount + 1));
+    assert_eq!(
+        call(
+            &mut fresh,
+            &f,
+            "resources.list",
+            json!({"resource": "tree", "path": ""})
+        )
+        .unwrap_err(),
+        Denial::Changed
+    );
+}
+
+#[test]
+fn a_listing_stops_at_its_limit_and_says_so() {
+    let t = tmp();
+    let tree = t.0.join("tree");
+    fs::create_dir(&tree).unwrap();
+    for i in 0..MAX_ENTRIES {
+        fs::write(tree.join(format!("f{i:04}")), "").unwrap();
+    }
+    let (mut s, f) = (store(&t.0), facts());
+    grant(&mut s, &f, "tree", &tree);
+    let list = |s: &mut Store| {
+        call(
+            s,
+            &f,
+            "resources.list",
+            json!({"resource": "tree", "path": ""}),
+        )
+        .unwrap()
+    };
+    let r = list(&mut s);
+    assert_eq!(
+        (r["entries"].as_array().unwrap().len(), &r["truncated"]),
+        (MAX_ENTRIES, &json!(false))
+    );
+    fs::write(tree.join("one-more"), "").unwrap();
+    let r = list(&mut s);
+    assert_eq!(
+        (r["entries"].as_array().unwrap().len(), &r["truncated"]),
+        (MAX_ENTRIES, &json!(true))
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn the_person_asks_in_the_main_window() {
+    let f = facts();
+    let a = super::super::confirmation(&f, "Grant".into(), vec![PathBuf::from("/x")]);
+    // The request comes from the app's main window, never from the package itself; the package
+    // is what the action is for.
+    assert_eq!(a.chain.len(), 1);
+    assert_eq!(a.chain[0].id, "main window");
+    assert_eq!(a.chain[0].digest, "");
+    assert_eq!(a.executor.id, "example/files");
+    assert_eq!(a.executor.digest, f.sha256);
+    assert!(a.executor.signer.contains(&"ab".repeat(32)));
+    assert!(!a.native_tool && a.launch.is_none());
+    assert_eq!(a.files, [PathBuf::from("/x")]);
 }

@@ -1415,6 +1415,16 @@ fn only_a_curated_signed_native_tool_installs() {
             .unwrap()
             .signed
             .is_none());
+        // The window shows the signer, and offers Access for it only while Access may use it.
+        let shown = |roots: &dyn Roots| {
+            c.view(roots).packages[0]
+                .active
+                .signer
+                .as_ref()
+                .map(|s| s.access)
+        };
+        assert_eq!(shown(&roots), Some(true));
+        assert_eq!(shown(&reserving), Some(false));
         c.remove("example/signedpage").unwrap();
     }
     // Such a signature never makes a native tool, whatever tier its descriptor names.
@@ -1497,9 +1507,11 @@ fn admission_is_confirmed_per_release_and_checked_each_time() {
     };
     install(&mut c, "1.0.0").unwrap();
     let sha = c.get("pluxy/tool").unwrap().active.sha256.clone();
-    // A native tool's curated signature never goes to Access.
+    // A native tool's curated signature never goes to Access, and the window offers none.
     assert!(c.get("pluxy/tool").unwrap().active.signed.is_some());
     assert!(c.facts("pluxy/tool", &roots).unwrap().signed.is_none());
+    let v = c.view(&roots);
+    assert!(!v.packages[0].active.signer.as_ref().unwrap().access);
 
     // What the native confirmation shows, then the admission it confirms.
     let a = candidate(&c, "pluxy/tool", &roots).unwrap();

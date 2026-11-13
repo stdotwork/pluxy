@@ -53,6 +53,9 @@ export interface DeviceSigner {
   /** The registry's index this signer is approved for, or would be. */
   source: string;
   approved: boolean;
+  /** Whether Access may use this signature: a web package whose publisher no trust root
+   * reserves. Otherwise no signer approval or grant is offered for it. */
+  access: boolean;
 }
 
 /** A file or folder the person granted to a package (src-tauri/src/access.rs). */

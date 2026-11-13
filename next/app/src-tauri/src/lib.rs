@@ -1640,28 +1640,6 @@ fn device_remove(webview: Webview, id: String) -> Result<device::View, String> {
 // grants and signers, and the broker that answers device pages' `resources.*` calls. Grants
 // start only here, from the window; pages can only read what was granted.
 
-/// A package as native confirmations name it.
-#[cfg(target_os = "linux")]
-fn access_package(f: &access::Facts) -> confirmation::Package {
-    confirmation::Package {
-        id: f.id.clone(),
-        source: f.source.clone().unwrap_or_else(|| "a local file".into()),
-        digest: f.sha256.clone(),
-        signer: f
-            .signed
-            .as_ref()
-            .map(|s| {
-                format!(
-                    "{} key {} (Ed25519 public key {})",
-                    s.publisher, s.key_id, s.public_key
-                )
-            })
-            .unwrap_or_else(|| "unsigned".into()),
-        contract: format!("app host {}, web tier", device::HOST_CONTRACT),
-        generation: 0,
-    }
-}
-
 /// Asks the person to confirm action in a native confirmation. None: they cancelled.
 #[cfg(target_os = "linux")]
 fn access_confirm(
@@ -1805,18 +1783,14 @@ async fn access_signer(webview: Webview, id: String) -> Result<Value, String> {
             if app.state::<App>().access.lock().unwrap().approved(&s) {
                 return Ok(serde_json::json!({"outcome": "approved"}));
             }
-            let package = access_package(&f);
-            let action = confirmation::Action {
-                what: format!(
+            let action = access::confirmation(
+                &f,
+                format!(
                     "Approve signer {} key {} for packages from {}.\nPublic key (Ed25519): {}\nPackages this key signs from this source may then ask you for files and folders; each grant still asks you. A signature says who signed a package, not that it is safe.",
                     s.publisher, s.key_id, s.source, s.public_key
                 ),
-                chain: vec![package.clone()],
-                executor: package,
-                native_tool: false,
-                files: vec![],
-                launch: None,
-            };
+                vec![],
+            );
             if access_confirm(&app, action)?.is_none() {
                 return Ok(serde_json::json!({"outcome": "cancelled"}));
             }
@@ -1876,28 +1850,26 @@ async fn access_grant(webview: Webview, id: String, resource: String) -> Result<
                 },
                 if folder { "everything in this folder" } else { "this file" },
             );
-            let package = access_package(&f);
-            let action = confirmation::Action {
-                what,
-                chain: vec![package.clone()],
-                executor: package,
-                native_tool: false,
-                files: vec![path.clone()],
-                launch: None,
-            };
+            let action = access::confirmation(&f, what, vec![path.clone()]);
             if access_confirm(&app, action)?.is_none() {
                 return Ok(serde_json::json!({"outcome": "cancelled"}));
             }
             // What was reviewed is what is granted: the package and the chosen path as they
-            // are now.
-            let now = access_facts(&app, &id)?;
+            // are now. The catalog stays locked until the grant is saved, so the package
+            // cannot be removed (and its grants with it) in between.
+            let st = app.state::<App>();
+            let catalog = st.device.lock().unwrap();
+            let now = catalog
+                .facts(&id, &trust::TrustStore::current())
+                .ok_or_else(|| format!("{id} is not installed on this device"))?;
             if now.sha256 != f.sha256 || now.signed != f.signed || now.source != f.source {
                 return Err(format!("{id} changed during review; grant it again"));
             }
             if access::resolve(&path, &d.kind)? != r {
                 return Err("the chosen file changed during review; grant it again".into());
             }
-            let g = app.state::<App>().access.lock().unwrap().add(&now, &d, &r)?;
+            let g = st.access.lock().unwrap().add(&now, &d, &r)?;
+            drop(catalog);
             let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-device", ());
             Ok(serde_json::json!({"outcome": "granted", "grant": grant_view(&g)}))
         }
@@ -1976,6 +1948,8 @@ fn access_call(app: AppHandle, label: String, generation: String, data: Value) {
         let method = data["method"].as_str().unwrap_or_default().to_string();
         let st = app.state::<App>();
         let binding = st.pages.lock().unwrap().get(&label).cloned();
+        // A begun call is in flight until its answer was handed to the page.
+        let mut begun = None;
         let result = (|| -> Result<Value, access::Denial> {
             let (package, digest) = binding
                 .and_then(|b| b.device_release())
@@ -1989,17 +1963,16 @@ fn access_call(app: AppHandle, label: String, generation: String, data: Value) {
             if method == "resources.status" {
                 return Ok(st.access.lock().unwrap().status(&facts, &digest));
             }
-            let begun =
-                st.access
-                    .lock()
-                    .unwrap()
-                    .begin(&facts, &digest, &method, &data["params"])?;
-            let (r, opened) = access::run(&begun);
+            let b = begun.insert(st.access.lock().unwrap().begin(
+                &facts,
+                &digest,
+                &method,
+                &data["params"],
+            )?);
+            let (r, opened) = access::run(b);
             #[cfg(feature = "native-test")]
             access_hold();
-            let out = st.access.lock().unwrap().finish(&begun, r, opened);
-            st.access_done.notify_all();
-            out
+            st.access.lock().unwrap().finish(b, r, opened)
         })();
         let data = match result {
             Ok(v) => serde_json::json!({"v": 0, "id": id, "result": v}),
@@ -2013,6 +1986,11 @@ fn access_call(app: AppHandle, label: String, generation: String, data: Value) {
             &generation,
             serde_json::json!({"type": "message", "data": data}),
         );
+        // A revocation answers only once what was read is with the page (or dropped).
+        if let Some(b) = begun {
+            st.access.lock().unwrap().delivered(&b);
+            st.access_done.notify_all();
+        }
     });
 }
 
@@ -2276,6 +2254,17 @@ fn page_scheme(
         if access {
             #[cfg(unix)]
             access_call(app.clone(), m.label, m.generation, m.data);
+            // No broker off Unix: the call is answered, never left waiting.
+            #[cfg(not(unix))]
+            {
+                let d = serde_json::json!({"v": 0, "id": m.data["id"], "error": {"code": "unavailable", "message": "Access is supported on Linux only"}});
+                let _ = deliver_page(
+                    &app,
+                    &m.label,
+                    &m.generation,
+                    serde_json::json!({"type": "message", "data": d}),
+                );
+            }
         } else {
             let result = app.emit_to(EventTarget::webview(MAIN), "pluxy-page", m);
             #[cfg(feature = "native-test")]

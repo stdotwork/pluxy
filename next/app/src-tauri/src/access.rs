@@ -70,3 +70,46 @@ pub struct Facts {
     pub signed: Option<Signed>,
     pub declared: Vec<Declared>,
 }
+
+/// The native confirmation of an Access action on package f: what it does and the files it
+/// names. The person asked in the app's main window, as for a native tool
+/// (`device_admission.rs`); the package is what the action is for.
+#[cfg(target_os = "linux")]
+pub fn confirmation(
+    f: &Facts,
+    what: String,
+    files: Vec<std::path::PathBuf>,
+) -> crate::confirmation::Action {
+    let package = crate::confirmation::Package {
+        id: f.id.clone(),
+        source: f.source.clone().unwrap_or_else(|| "a local file".into()),
+        digest: f.sha256.clone(),
+        signer: f
+            .signed
+            .as_ref()
+            .map(|s| {
+                format!(
+                    "{} key {} (Ed25519 public key {})",
+                    s.publisher, s.key_id, s.public_key
+                )
+            })
+            .unwrap_or_else(|| "unsigned".into()),
+        contract: format!("app host {}, web tier", crate::device::HOST_CONTRACT),
+        generation: 0,
+    };
+    crate::confirmation::Action {
+        what,
+        chain: vec![crate::confirmation::Package {
+            id: "main window".into(),
+            source: format!("pluxy app {}", env!("CARGO_PKG_VERSION")),
+            digest: String::new(),
+            signer: String::new(),
+            contract: format!("app host {}", crate::device::HOST_CONTRACT),
+            generation: 0,
+        }],
+        executor: package,
+        native_tool: false,
+        files,
+        launch: None,
+    }
+}

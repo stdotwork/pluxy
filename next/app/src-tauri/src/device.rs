@@ -241,6 +241,9 @@ pub struct SignerView {
     pub public_key: String,
     pub source: String,
     pub approved: bool,
+    /// Whether Access may use this signature (`Catalog::facts`): a web release whose publisher
+    /// no root reserves. Otherwise the window offers no signer approval or grants for it.
+    pub access: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -333,7 +336,21 @@ fn now() -> u64 {
         .unwrap_or(0)
 }
 
-fn release_view(id: &str, r: &Release, approved: &dyn Fn(&Signed) -> bool) -> ReleaseView {
+/// The signature of release r of package id that Access may use: a web release's, whose
+/// publisher no root reserves now. A native tool or a reserved publisher's package is never
+/// granted files, whoever signed it.
+fn for_access<'a>(id: &str, r: &'a Release, roots: &dyn Roots) -> Option<&'a Signed> {
+    r.signed
+        .as_ref()
+        .filter(|_| r.tier == "web" && reserved(id, roots).is_none())
+}
+
+fn release_view(
+    id: &str,
+    r: &Release,
+    roots: &dyn Roots,
+    approved: &dyn Fn(&Signed) -> bool,
+) -> ReleaseView {
     ReleaseView {
         version: r.version.clone(),
         sha256: r.sha256.clone(),
@@ -368,6 +385,7 @@ fn release_view(id: &str, r: &Release, approved: &dyn Fn(&Signed) -> bool) -> Re
             public_key: s.public_key.clone(),
             source: s.source.clone(),
             approved: approved(s),
+            access: for_access(id, r, roots).is_some(),
         }),
     }
 }
@@ -602,16 +620,18 @@ impl Catalog {
                     tier: p.active.tier.clone(),
                     authorized: p.authorized(),
                     source: p.source.clone(),
-                    active: release_view(id, &p.active, approved),
-                    last_good: p.last_good.as_ref().map(|r| release_view(id, r, approved)),
+                    active: release_view(id, &p.active, roots, approved),
+                    last_good: p
+                        .last_good
+                        .as_ref()
+                        .map(|r| release_view(id, r, roots, approved)),
                 })
                 .collect(),
         }
     }
 
-    /// What Access needs to know about package id. Its signature goes to Access only for a web
-    /// release whose publisher no root reserves: a native tool or a reserved publisher's
-    /// package is never granted files, whoever signed it.
+    /// What Access needs to know about package id, with the signature Access may use
+    /// (`for_access`).
     pub fn facts(&self, id: &str, roots: &dyn Roots) -> Option<crate::access::Facts> {
         let p = self.packages.get(id)?;
         Some(crate::access::Facts {
@@ -623,11 +643,7 @@ impl Catalog {
                 .clone()
                 .filter(|_| p.source.kind == "registry"),
             sha256: p.active.sha256.clone(),
-            signed: p
-                .active
-                .signed
-                .clone()
-                .filter(|_| p.active.tier == "web" && reserved(id, roots).is_none()),
+            signed: for_access(id, &p.active, roots).cloned(),
             declared: p.active.declared.clone(),
         })
     }

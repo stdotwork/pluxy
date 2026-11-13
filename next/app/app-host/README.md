@@ -141,7 +141,7 @@ Access section); a page cannot ask for one.
 | --- | --- | --- |
 | `resources.status` | `null` | `{"resources": [{"id", "kind", "operations", "granted", "session_only"}]}`: each resource this release declares, and whether it is granted to it now |
 | `resources.read` | `{"resource", "path"?, "offset"?}` | `{"data", "size", "offset", "eof"}`: up to 1 MiB of a regular file from `offset` (default 0), as base64 in `data`; `size` is the file's size |
-| `resources.list` | `{"resource", "path"?}` | `{"entries": [{"name", "kind", "size"?}], "truncated"}`: a folder's entries sorted by name, at most 1,000; `kind` is `file` (with `size`), `folder`, `link` or `other` |
+| `resources.list` | `{"resource", "path"?}` | `{"entries": [{"name", "kind", "size"?}], "truncated"}`: a folder's entries sorted by name, at most 1,000; `kind` is `file` (with `size`), `folder`, `link` or `other`. The app reads no further than 1,000 entries: for a bigger folder, `truncated` is true and the entries are the first 1,000 the folder gave |
 
 A `file` resource is read with no `path`. A `subtree` resource takes `path`, slash-separated parts
 inside the granted folder; for `resources.list`, empty or absent means the folder itself. A
@@ -151,9 +151,9 @@ inside the granted folder; for `resources.list`, empty or absent means the folde
 | --- | --- |
 | `bad_request` | Parameters of the wrong shape or unknown, an undeclared resource or operation, a `path` with a `file` resource |
 | `not_granted` | No grant for this package, release, source and signer, or the operation is not granted |
-| `refused` | An absolute path, `..`, `.` or empty parts, a link leaving the folder, or not a regular file |
-| `changed` | The chosen link or the target changed since it was granted; it stays refused until granted again |
-| `unavailable` | The file is gone, or the document portal no longer offers it |
+| `refused` | An absolute path, `..`, `.` or empty parts, a link leaving the folder, a file or folder on another mount than the granted folder (such as one mounted inside it), or not a regular file |
+| `changed` | The chosen link, where it resolves, or the target (its identity or its mount) changed since it was granted; it stays refused until granted again |
+| `unavailable` | The file is gone, cannot be reached for now (permissions, an I/O error, too many open files), or the document portal no longer offers it; the grant stays, and a later call may read |
 | `revoked` | The grant was revoked while the call was in flight |
 
 The native ingress limits of every page channel call apply to these too. Grants are bound to the
