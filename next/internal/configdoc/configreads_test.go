@@ -188,6 +188,18 @@ func TestSettingsSecretsHoldURLParts(t *testing.T) {
 			t.Errorf("SettingsSecrets holds %q, no secret: %q", plain, got)
 		}
 	}
+	// Parameters named like a password, a signed token or an assertion count too.
+	var params []string
+	names := []string{"pwd", "pass", "passwd", "passcode", "jwt", "client_assertion", "code_verifier", "sas", "credential", "credentials"}
+	for _, name := range names {
+		params = append(params, name+"=fake-"+strings.ReplaceAll(name, "_", "-")+"-value")
+	}
+	more := SettingsSecrets([]byte(`{"base_url": "https://up.example/v1?` + strings.Join(params, "&") + `"}`))
+	for _, name := range names {
+		if want := "fake-" + strings.ReplaceAll(name, "_", "-") + "-value"; !slices.Contains(more, want) {
+			t.Errorf("SettingsSecrets lacks the value of %s: %q", name, more)
+		}
+	}
 	// As core removes them from text (host and request log), the Basic form included.
 	data, _ := json.Marshal(got)
 	r := protocol.NewRedactor(&protocol.Credential{Kind: "settings", Data: data})

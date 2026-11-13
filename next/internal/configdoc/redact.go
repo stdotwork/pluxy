@@ -546,10 +546,13 @@ const MinTextSecret = 8
 
 // secretParam reports whether a URL's query parameter is named like a secret: by the rule for
 // header and query parameter names (protocol.SecretName: key, token, auth, signature, ...), by
-// the rules for key names, or sig (a signature) or code (an OAuth code).
+// the rules for key names, or as a signature (sig, sas), a password (pwd, pass, passwd,
+// passcode), a signed token or assertion (jwt, client_assertion, credential), or an OAuth code
+// or its verifier.
 func secretParam(name string) bool {
 	switch joinedName(name) {
-	case "sig", "code":
+	case "sig", "sas", "code", "codeverifier", "pwd", "pass", "passwd", "passcode", "jwt", "clientassertion",
+		"credential", "credentials":
 		return true
 	}
 	return protocol.SecretName(name) || secretName(name)
