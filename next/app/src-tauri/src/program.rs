@@ -60,7 +60,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
@@ -73,6 +73,9 @@ const MAX_FRAME: usize = 1 << 20;
 const MAX_INPUT: usize = 64 << 10;
 /// Calls per package at once, the one running and those waiting their turn.
 const MAX_PENDING: usize = 8;
+/// Frames waiting for a tool's stdin beyond which a refusal of its own call breaks the pipe: it
+/// sends calls and does not read their answers.
+const MAX_QUEUED: usize = 64;
 /// The longest stderr line logged; a longer one is left out, with a note.
 const MAX_LOG_LINE: usize = 8 << 10;
 /// Stderr lines kept, to say why a tool stopped.
@@ -227,6 +230,7 @@ pub struct Context {
 
 impl Context {
     /// A call from the window with nothing else: what `Host::call` uses.
+    #[cfg(test)]
     pub fn main() -> Context {
         Context {
             chain: vec![Hop::Main],
@@ -441,6 +445,8 @@ struct Run {
     pid: AtomicU64,
     /// To the writer thread; taken to close the tool's stdin.
     tx: Mutex<Option<Sender<Vec<u8>>>>,
+    /// Frames sent to the writer thread and not yet written.
+    queued: Arc<AtomicUsize>,
     hello: Mutex<Option<Sender<Value>>>,
     pending: Mutex<HashMap<String, Sender<Reply>>>,
     /// Its package's turn.
@@ -476,7 +482,10 @@ impl Run {
         let mut frame = (body.len() as u32).to_be_bytes().to_vec();
         frame.extend(body);
         match self.tx.lock().unwrap().as_ref() {
-            Some(tx) if tx.send(frame).is_ok() => Ok(()),
+            Some(tx) if tx.send(frame).is_ok() => {
+                self.queued.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
             _ => Err(fail(
                 "extension_unavailable",
                 format!("{} is stopping", self.spec.id),
@@ -789,7 +798,9 @@ impl Host {
     }
 
     /// Calls op of tool id with input, from the window with nothing else. With a ticket,
-    /// `cancel` can cancel it.
+    /// `cancel` can cancel it. The unit tests' own: the app's calls go through the router
+    /// (`route.rs`), which decides each one and calls `run_call_with`.
+    #[cfg(test)]
     pub fn call(
         &self,
         id: &str,
@@ -828,7 +839,9 @@ impl Host {
         })
     }
 
-    /// Calls op of tool id with input, as call, from the window with nothing else.
+    /// Calls op of tool id with input, as call, from the window with nothing else. Test-only,
+    /// as `call`.
+    #[cfg(test)]
     pub fn run_call(
         &self,
         call: Call,
@@ -1273,6 +1286,14 @@ pub struct Call {
     cancel: Arc<AtomicBool>,
 }
 
+impl Call {
+    /// also with this call's own flag: what cancels it, for work done for it before it runs
+    /// (such as a wait for its native confirmation).
+    pub fn cancelled_by(&self, also: &Cancel) -> Cancel {
+        also.with(&self.cancel)
+    }
+}
+
 impl Drop for Call {
     fn drop(&mut self) {
         self.inner.calls.lock().unwrap().remove(&self.n);
@@ -1402,6 +1423,7 @@ fn new_run(
         spec,
         pid: AtomicU64::new(0),
         tx: Mutex::new(None),
+        queued: Arc::new(AtomicUsize::new(0)),
         hello: Mutex::new(Some(hello_tx)),
         pending: Mutex::new(HashMap::new()),
         gate,
@@ -1716,7 +1738,10 @@ fn supervise(
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
     *run.tx.lock().unwrap() = Some(tx);
     let threads = [
-        spawn_named("pluxy-prog-in", move || write_frames(stdin, rx)),
+        spawn_named("pluxy-prog-in", {
+            let queued = Arc::clone(&run.queued);
+            move || write_frames(stdin, rx, &queued)
+        }),
         spawn_named("pluxy-prog-out", {
             let r = Arc::clone(&run);
             move || read_frames(&r, stdout)
@@ -1871,9 +1896,11 @@ fn spawn_named(
     std::thread::Builder::new().name(name.into()).spawn(f)
 }
 
-fn write_frames(mut stdin: ChildStdin, rx: mpsc::Receiver<Vec<u8>>) {
+fn write_frames(mut stdin: ChildStdin, rx: mpsc::Receiver<Vec<u8>>, queued: &AtomicUsize) {
     for frame in rx {
-        if stdin.write_all(&frame).and_then(|_| stdin.flush()).is_err() {
+        let written = stdin.write_all(&frame).and_then(|_| stdin.flush());
+        queued.fetch_sub(1, Ordering::SeqCst);
+        if written.is_err() {
             break;
         }
     }
@@ -1981,6 +2008,15 @@ fn deliver(run: &Arc<Run>, frame: &[u8], said_hello: &mut bool) -> Result<(), St
 /// thread of its own, and its answer goes back on the tool's stdin.
 fn outbound(run: &Arc<Run>, id: &str, v: &Value) {
     let refuse = |code: &str, message: String| {
+        if run.ending() {
+            return;
+        }
+        // A tool that keeps calling and reads no answer would queue refusals without end.
+        if run.queued.load(Ordering::SeqCst) >= MAX_QUEUED {
+            return run.violation(format!(
+                "sent calls faster than it read the answers ({MAX_QUEUED} frames waited for its stdin)"
+            ));
+        }
         let _ = run.send(&json!({"type": "error", "id": id,
             "error": {"code": code, "message": message}}));
     };

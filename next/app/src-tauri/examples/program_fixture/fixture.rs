@@ -15,7 +15,8 @@
 //! - `relay` by calling another package's operation through the host, as the input says, and
 //!   answering with the host's answer to that;
 //! - `slow` after `ms` milliseconds, with its version, process and when it answered;
-//! - `crash` never: it exits at once with status 3.
+//! - `crash` never: it exits at once with status 3;
+//! - `flood` never: it sends 2000 call frames the host refuses, and reads nothing more.
 //!
 //! Each answer of summary, store, launch and relay also carries the `chain` the host's call named.
 //!
@@ -434,6 +435,17 @@ pub fn main() -> ! {
                         );
                     }
                     "crash" => std::process::exit(3),
+                    "flood" => {
+                        for i in 0..2000 {
+                            write_frame(
+                                &mut output,
+                                &json!({"type": "call", "id": format!("f-{i}"), "for": id,
+                                    "package": "pluxy/other", "op": "read", "input": {},
+                                    "chain": []}),
+                            );
+                        }
+                        sleep_forever();
+                    }
                     _ => write_frame(
                         &mut output,
                         &error(&id, "unsupported", &format!("no operation {op}")),

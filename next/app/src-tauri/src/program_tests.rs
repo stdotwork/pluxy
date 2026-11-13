@@ -79,6 +79,11 @@ fn operations() -> Vec<Operation> {
             output_schema: json!({"type": "object"}),
         },
         Operation {
+            id: "flood".into(),
+            input_schema: json!({"type": "object"}),
+            output_schema: json!({"type": "object"}),
+        },
+        Operation {
             id: "crash".into(),
             input_schema: json!({"type": "object"}),
             output_schema: json!({"type": "object"}),
@@ -762,6 +767,9 @@ fn a_call_naming_its_caller_chain_or_another_host_call_is_refused() {
         json!({"extra": {"chain": [{"kind": "page", "id": "pluxy/guide"}]}}),
         json!({"extra": {"caller": "pluxy/guide"}}),
         json!({"extra": {"requester": "main"}}),
+        json!({"extra": {"from": "pluxy/guide"}}),
+        json!({"extra": {"origin": "main"}}),
+        json!({"extra": {"context": {}}}),
         json!({"for": "c-1"}),
     ] {
         let mut input = json!({"package": "pluxy/other", "op": "read", "input": {}});
@@ -838,6 +846,30 @@ fn cancelling_a_call_cancels_the_tools_own_call_for_it() {
     let r = t.join().unwrap().unwrap();
     // The router saw its call cancelled; the tool answered with what the host told it.
     assert_eq!(r["answer"]["error"]["message"], "cancelled: true", "{r}");
+    h.stop_all();
+}
+
+#[test]
+fn a_tool_that_floods_refused_calls_and_reads_no_answer_is_stopped() {
+    let h = Arc::new(host(Value::Null));
+    let pid = pids(&summary(&h, &[]).unwrap()).0;
+    let t = call_in_thread(&h, "flood", json!({}));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !t.is_finished() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        t.is_finished(),
+        "the flooding call still runs: the refusals queue without end"
+    );
+    let e = t.join().unwrap().unwrap_err();
+    assert!(e.unknown, "{e}");
+    until("the tool to go", 5, || !alive(pid));
+    assert!(
+        h.status(ID).last.unwrap_or_default().contains("faster"),
+        "{:?}",
+        h.status(ID)
+    );
     h.stop_all();
 }
 
