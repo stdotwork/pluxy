@@ -13,6 +13,7 @@
     "core:event:allow-unlisten",
     "allow-connection-get",
     "allow-connection-set",
+    "allow-core-start",
     "allow-core-restart",
     "allow-core-call",
     "allow-key-entry",

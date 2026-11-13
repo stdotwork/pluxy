@@ -20,11 +20,15 @@
 //!
 //! With `PLUXY_APP_TEST_WINDOW` or `PLUXY_APP_TEST_PRIVACY` it runs that stage of the window or
 //! privacy mode checks instead (`native_window.rs`, `native_privacy.rs`).
+//! With `PLUXY_APP_TEST_EARLY_EXIT` set it does none of that: the app's setup waits for its
+//! core's exit callback before the app state exists, then the run waits for the app to start
+//! that core again and quits.
 //!
 //! Each step prints one line on stderr: `native-test: <step> <JSON>`.
 
 use crate::{App, COMMANDS, MAIN, WINDOW};
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Webview};
@@ -62,7 +66,7 @@ pub fn window_call(method: &str, path: &str) {
     let _ = (method, path);
 }
 
-const WAIT: Duration = Duration::from_secs(60);
+const WAIT: Duration = Duration::from_secs(120);
 
 /// Tauri's own commands a page webview might try.
 const PLUGINS: &[&str] = &[
@@ -80,6 +84,7 @@ const PLUGINS: &[&str] = &[
 /// Commands the window's probe leaves out: they take no arguments and would act.
 const ACTING: &[&str] = &[
     "sign_out",
+    "core_start",
     "core_restart",
     "key_entry",
     "confirmation_settings",
@@ -335,9 +340,18 @@ fn run(app: &AppHandle) -> Result<(), String> {
     );
 
     if let Ok(f) = std::env::var("PLUXY_APP_TEST_QUIT") {
-        wait_for("the quit file", || {
-            std::path::Path::new(&f).exists().then_some(())
-        })?;
+        // The session's tray and recovery checks run now, through crash-loop delays.
+        let deadline = Instant::now() + Duration::from_secs(300);
+        loop {
+            write_state(app);
+            if std::path::Path::new(&f).exists() {
+                break;
+            }
+            if Instant::now() > deadline {
+                return Err("timed out waiting for the quit file".into());
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
     }
     log("quit", json!({}));
     crate::quit(app);
@@ -433,7 +447,9 @@ fn startup(app: &AppHandle, stage: &str) -> Result<(), String> {
         }),
     );
     if let Ok(file) = std::env::var("PLUXY_APP_TEST_STARTUP_CONTINUE") {
+        // The startup suite reads the connection from the state file meanwhile.
         wait_for("startup process and tray inspection", || {
+            write_state(app);
             std::path::Path::new(&file).exists().then_some(())
         })?;
     }
@@ -441,9 +457,83 @@ fn startup(app: &AppHandle, stage: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Writes the app's connection, webviews and window to `PLUXY_APP_TEST_STATE`, for the session's
+/// tray and recovery checks.
+fn write_state(app: &AppHandle) {
+    let Ok(path) = std::env::var("PLUXY_APP_TEST_STATE") else {
+        return;
+    };
+    let view = app.state::<App>().conn.lock().unwrap().view();
+    let snapshot = json!({"app_pid": std::process::id(), "view": view,
+        "webviews": app.webviews().len(), "window": app.get_window(WINDOW).is_some()});
+    crate::managed::write_private(
+        std::path::Path::new(&path),
+        &serde_json::to_vec(&snapshot).unwrap(),
+    )
+    .expect("write test state");
+}
+
+/// Holds a tray action while the session's hold file exists, so the test can see the tray
+/// busy and click it again meanwhile.
+pub(crate) fn tray_hold(action: &str) {
+    let Ok(f) = std::env::var("PLUXY_APP_TEST_TRAY_HOLD") else {
+        return;
+    };
+    let f = std::path::Path::new(&f);
+    if !f.exists() {
+        return;
+    }
+    log("tray-held", json!({"action": action}));
+    let deadline = Instant::now() + WAIT;
+    while f.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// How many times the app's core exit callback has run.
+static CORE_EXITS: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) fn core_exit_seen() {
+    CORE_EXITS.fetch_add(1, Ordering::SeqCst);
+}
+
+/// With `PLUXY_APP_TEST_EARLY_EXIT` set, holds the app's setup before its state exists until the
+/// core's exit callback has run: the callback then finds no state to recover the core with.
+pub(crate) fn hold_for_early_exit() {
+    if std::env::var_os("PLUXY_APP_TEST_EARLY_EXIT").is_none() {
+        return;
+    }
+    let seen = wait_for("the core's exit callback", || {
+        (CORE_EXITS.load(Ordering::SeqCst) > 0).then_some(())
+    });
+    log("early_exit_held", json!({"callback_ran": seen.is_ok()}));
+}
+
+/// The early-exit run: the core exited before the app state existed. Waits past the first
+/// recovery delay for the app to run its core again, then quits.
+fn early_exit(app: &AppHandle) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let view = loop {
+        let v = app.state::<App>().conn.lock().unwrap().view();
+        let running = v
+            .core
+            .as_ref()
+            .is_some_and(|c| c.state == "running" && c.pid.is_some());
+        if running || Instant::now() > deadline {
+            break v;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    log("early_exit", json!({"view": view}));
+    crate::quit(app);
+    Ok(())
+}
+
 pub fn start(app: AppHandle) {
     std::thread::spawn(move || {
-        let result = if std::env::var_os("PLUXY_APP_TEST_INSTANCES").is_some() {
+        let result = if std::env::var_os("PLUXY_APP_TEST_EARLY_EXIT").is_some() {
+            early_exit(&app)
+        } else if std::env::var_os("PLUXY_APP_TEST_INSTANCES").is_some() {
             instances(&app)
         } else {
             run(&app)

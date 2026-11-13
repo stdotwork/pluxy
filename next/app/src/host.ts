@@ -21,7 +21,7 @@ export interface Connection {
   ca_file?: string;
   core_path?: string;
   /** The core this app runs, in managed mode. */
-  core?: { state: "running" | "stopped"; pid?: number; detail?: string };
+  core?: { state: "running" | "stopped" | "recovering" | "paused"; pid?: number; detail?: string };
   /** Why the app is not connected, when it is not. */
   error?: string;
 }
@@ -43,6 +43,10 @@ export interface KeyEntryResult {
 export const keyEntry = (change?: ConnectionChange) =>
   invoke<KeyEntryResult>("key_entry", { change: change ?? null });
 export const coreRestart = () => invoke<Connection>("core_restart");
+/** Starts the app's own core only if it is not running; a running one is left alone. */
+export const coreStart = () => invoke<Connection>("core_start");
+/** The Connection page's core button: Restart while the core runs, Start otherwise. */
+export const coreAction = (c: Connection) => (c.core?.state === "running" ? coreRestart : coreStart);
 
 /** Core's rotation route. The window never calls it: the native side rotates the key itself. */
 const ROTATE = "/management-key/rotate";
