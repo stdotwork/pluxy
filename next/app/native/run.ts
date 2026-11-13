@@ -69,7 +69,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline";
-import { buildAdmissionFixtures, PROFILE_FILE } from "./admission";
+import { buildAdmissionFixtures, MARKER_FILE, PROFILE_FILE } from "./admission";
 import { appImageHeader, buildSmokeAppImage, packAppImage } from "./appimage";
 import { buildDeviceFixtures } from "./device";
 import { runInstances } from "./instances";
@@ -344,6 +344,10 @@ async function runApp(
         join(dirs.config, artifact.identifier, "device-registries.json"),
         JSON.stringify({ version: 0, registries }),
       );
+    } else if (rotation.restart) {
+      // The app starts again on the first run's HOME: its marker and profile stay, and so does
+      // the nonce the marker holds.
+      nonce = JSON.parse(readFileSync(join(dirs.home, MARKER_FILE), "utf8")).nonce;
     } else if (!programDir) {
       try {
         nonce = /^nonce=([0-9a-f]{64})$/m.exec(run(probe, ["trust-marker", dirs.home], app))?.[1] ?? "";
@@ -352,11 +356,12 @@ async function runApp(
         check(false, `the test trust marker was not written: ${(e as Error).message}`);
       }
     }
-    writeFileSync(
-      join(dirs.home, PROFILE_FILE),
-      JSON.stringify({ roots, updater: { kind: "test", public_key: updaterKey } }),
-      { mode: 0o600 },
-    );
+    if (!rotation.restart)
+      writeFileSync(
+        join(dirs.home, PROFILE_FILE),
+        JSON.stringify({ roots, updater: { kind: "test", public_key: updaterKey } }),
+        { mode: 0o600 },
+      );
     const keyFile = join(root, "key-input");
     // Every key the rotation check sees, for the log audit below; it is native-test output.
     const rotatedFile = join(root, "rotated-keys");
@@ -1143,8 +1148,13 @@ async function main(): Promise<number> {
       const c = await startCore(false);
       try {
         const conn = { mode: "local", url: c.base, key: c.key };
-        const p = await runApp("local", packaged, updaterKey, conn, c.base, false, false, c.key);
-        if ((await managementStatus(c.base, c.key)) !== 200) p.push("the core stopped when the app quit");
+        // The same checks as the dev app's local run, including the key rotation, which needs
+        // the core's config file; the key it rotated to is the one that must still work.
+        const p = await runApp("local", packaged, updaterKey, conn, c.base, false, false, c.key, undefined, {
+          coreConfig: c.config,
+        });
+        if ((await managementStatus(c.base, managementKey(c.config))) !== 200)
+          p.push("the core stopped when the app quit");
         problems.push(...p.map((x) => `packaged: ${x}`));
       } finally {
         c.proc.stdin?.end();
