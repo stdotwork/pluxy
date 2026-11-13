@@ -20,6 +20,7 @@ import { type DeviceCatalog, device, newest } from "./device";
 import { DevicePage, devicePage } from "./devicePage";
 import { appHost, type Connection, connectionGet, privacyGet, privacySet } from "./host";
 import { NativeExtensionPage } from "./nativePage";
+import { UpdatesPage } from "./updates";
 import { ClosePrompt } from "./window";
 
 function brand(c: Connection): string {
@@ -108,6 +109,14 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
         short: "Conn",
         group: "control",
         render: () => <ConnectionPage connection={shown} onChange={changed} />,
+      },
+      {
+        id: "versions",
+        title: "Version Management",
+        short: "Vers",
+        group: "control",
+        tip: "App and core versions, and release notes",
+        render: () => <UpdatesPage />,
       },
       devicePage(loadDevice),
       ...devicePages(catalog),

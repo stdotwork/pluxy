@@ -517,6 +517,12 @@ fn run(app: &AppHandle) -> Result<(), String> {
     // In local and remote mode the window closes to the tray and opens again meanwhile.
     let main = rotation_test::check(app, &main)?;
     ingress::run(app, &main)?;
+    #[cfg(target_os = "linux")]
+    {
+        let mut all: Vec<&str> = COMMANDS.to_vec();
+        all.extend(PLUGINS);
+        crate::release_native::run(app, &main, |w| probe(w, &all))?;
+    }
 
     // This device's extension catalog (device_native.rs), with fixtures from native/device.ts.
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_DEVICE") {

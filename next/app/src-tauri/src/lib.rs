@@ -27,18 +27,23 @@ mod key_entry;
 pub mod managed;
 #[cfg(feature = "native-test")]
 mod native_test;
+pub mod notes;
 pub mod pages;
 mod place;
 mod privacy;
 #[cfg(target_os = "linux")]
 pub mod program;
 pub mod recovery;
+pub mod release;
 #[cfg(debug_assertions)]
 pub mod release_config;
+#[cfg(all(target_os = "linux", feature = "native-test"))]
+mod release_native;
 #[cfg(target_os = "linux")]
 pub mod route;
 mod startup;
 pub mod trust;
+mod updates;
 pub mod window;
 
 pub use command_names::COMMANDS;
@@ -72,6 +77,10 @@ struct App {
     /// The page webviews' own web context's folder: nothing shared with the window's.
     pages_dir: std::path::PathBuf,
     pages: Mutex<Pages>,
+    releases: Mutex<release::Releases>,
+    notes: Mutex<notes::Notes>,
+    /// The release notes webviews' own web context's folder, like pages_dir.
+    notes_dir: std::path::PathBuf,
     /// Page webviews being closed, unbound already, until they are destroyed: one that could
     /// not be closed is closed again at the next close, so none is forgotten while it may run.
     closing: Mutex<Vec<String>>,
@@ -339,8 +348,11 @@ fn close_pages(app: &AppHandle) {
     let labels = {
         let st = app.state::<App>();
         let mut pages = st.pages.lock().unwrap();
-        let l = pages.labels();
+        let mut l = pages.labels();
         pages.clear();
+        let mut notes = st.notes.lock().unwrap();
+        l.extend(notes.labels());
+        notes.clear();
         l
     };
     // Each one that cannot be closed stays in `closing`.
@@ -1080,7 +1092,7 @@ fn add_page(webview: &Webview, label: String, site: Binding, rect: Rect) -> Resu
             LogicalSize::new(b.width.max(1.0), b.height.max(1.0)),
         )
         .map_err(|e| e.to_string())
-        .and_then(|_| place::adopt(&window, &label, b));
+        .and_then(|_| place::adopt(&window, &label, Some(b)));
     // Unbound while it was made (its package changed, or the window closed its pages): the
     // webview must not stay.
     let placed = placed.and_then(|_| {
@@ -1120,7 +1132,10 @@ fn page_webview(app: &AppHandle, label: &str) -> Result<Webview, String> {
 #[tauri::command]
 fn page_place(webview: Webview, label: String, rect: Rect) -> Result<(), String> {
     trusted(&webview)?;
-    place::place(&page_webview(webview.app_handle(), &label)?, rect.bounds())
+    place::place(
+        &page_webview(webview.app_handle(), &label)?,
+        Some(rect.bounds()),
+    )
 }
 
 #[tauri::command]
@@ -2405,6 +2420,14 @@ pub fn run() {
             page_send,
             confirmation_request,
             confirmation_settings,
+            updates::release_get,
+            updates::release_check,
+            updates::release_channel_set,
+            updates::release_source_set,
+            updates::release_notes_open,
+            updates::release_notes_place,
+            updates::release_notes_close,
+            updates::release_notes_full,
             device_list,
             device_registries,
             device_install,
@@ -2428,6 +2451,7 @@ pub fn run() {
             privacy_set,
         ])
         .register_asynchronous_uri_scheme_protocol(pages::SCHEME, page_scheme)
+        .register_uri_scheme_protocol(notes::SCHEME, updates::notes_scheme)
         .register_asynchronous_uri_scheme_protocol(device::ASSET_SCHEME, asset_scheme)
         .setup(|app| {
             // First, before the core, the tray or any webview: one app per profile. A later launch
@@ -2467,6 +2491,7 @@ pub fn run() {
             #[cfg(target_os = "linux")]
             let confirmations =
                 confirmation::Confirmations::open(config.join("remembered-launches.json"))?;
+            let release_settings = release::settings_path(&config);
             let device_dirs = device::Dirs {
                 root: app.path().app_data_dir()?.join("device-packages"),
                 registries: config.join("device-registries.json"),
@@ -2518,6 +2543,12 @@ pub fn run() {
             // The page webviews keep nothing from one run to the next.
             let pages_dir = app.path().app_cache_dir()?.join("pages");
             let _ = std::fs::remove_dir_all(&pages_dir);
+            let notes_dir = app.path().app_cache_dir()?.join("notes");
+            let _ = std::fs::remove_dir_all(&notes_dir);
+            let releases = release::Releases::open(
+                release_settings,
+                app.path().app_cache_dir()?.join("release-feed.json"),
+            );
             app.manage(App {
                 startup: Mutex::new((startup_store, preferences)),
                 conn: Mutex::new(conn),
@@ -2525,6 +2556,9 @@ pub fn run() {
                 confirmations: Mutex::new(confirmations),
                 pages_dir,
                 pages: Mutex::new(Pages::default()),
+                releases: Mutex::new(releases),
+                notes: Mutex::new(notes::Notes::default()),
+                notes_dir,
                 closing: Mutex::new(Vec::new()),
                 device: Mutex::new(catalog),
                 device_dirs,
@@ -2635,6 +2669,7 @@ pub fn run() {
                     app.state::<App>().programs.cancel_all();
                     // Its webviews went with it.
                     app.state::<App>().pages.lock().unwrap().clear();
+                    app.state::<App>().notes.lock().unwrap().clear();
                     place::forget_all();
                     eprintln!("pluxy-app: window closed");
                 }
@@ -2780,7 +2815,7 @@ mod tests {
         let end = start + src[start..].find(']').unwrap();
         let mut handled: Vec<&str> = src[start + "generate_handler![".len()..end]
             .split(',')
-            .map(str::trim)
+            .map(|s| s.trim().trim_start_matches("updates::"))
             .filter(|s| !s.is_empty())
             .collect();
         let mut listed = COMMANDS.to_vec();
