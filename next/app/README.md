@@ -183,9 +183,10 @@ current core version is what the connected core reports in `GET /v0/management/s
 The app has no built-in feed address and reads nothing until the person sets one. Setting,
 changing or removing the address opens the native confirmation (below), with the old and the
 new address; only its confirmed, one-use token applies the change, and cancelling, closing the
-window or letting it expire keeps the old address. While a change waits, the channel cannot be
-changed; a confirmed change the settings outran (they changed while it waited) or that cannot be
-saved is not applied, and the page shows why. The address must be `https://`, with a host
+window or letting it expire keeps the old address. While a change waits, the page does not let
+the channel be changed (the `release_channel_set` command itself still accepts a channel); a
+confirmed change the settings outran (they changed while it waited, as a direct channel change
+does) or that cannot be saved is not applied, and the page shows why. The address must be `https://`, with a host
 and no user name or password. The choice is kept in `release.json` next to `connection.json`,
 readable only by your user. A file the app cannot use (unreadable, larger than 64 KiB, or with an
 address that fails the checks above) is shown as an error saying to fix or delete it, and is never
