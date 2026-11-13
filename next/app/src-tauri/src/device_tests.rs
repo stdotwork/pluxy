@@ -1342,6 +1342,42 @@ fn admission_is_confirmed_per_release_and_checked_each_time() {
     c.admit(&a, &roots).unwrap();
     c.admitted("pluxy/tool", &roots).unwrap();
 
+    // Hashing the files without the catalog's lock gives the same records, and admit_checked
+    // enables only the record that was checked.
+    let m = std::sync::Mutex::new(c);
+    assert_eq!(admitted_unlocked(&m, "pluxy/tool", &roots).unwrap(), a);
+    m.lock()
+        .unwrap()
+        .set_enabled("pluxy/tool", false, &roots)
+        .unwrap();
+    assert!(admitted_unlocked(&m, "pluxy/tool", &roots)
+        .unwrap_err()
+        .contains("disabled"));
+    let a = native_candidate_unlocked(&m, "pluxy/tool", &roots).unwrap();
+    let mut changed = a.clone();
+    changed.installed_at += 1;
+    let e = m
+        .lock()
+        .unwrap()
+        .admit_checked(&changed, &roots)
+        .unwrap_err();
+    assert!(e.contains("changed while it was being confirmed"), "{e}");
+    m.lock().unwrap().admit_checked(&a, &roots).unwrap();
+    assert_eq!(admitted_unlocked(&m, "pluxy/tool", &roots).unwrap(), a);
+    // A record that changes while the files are hashed is refused.
+    let reads = std::cell::Cell::new(0);
+    let e = admission::checked_unlocked(&m, |c| {
+        reads.set(reads.get() + 1);
+        let (mut r, tree) = c.admitted_record("pluxy/tool", &roots)?;
+        if reads.get() == 2 {
+            r.installed_at += 1;
+        }
+        Ok((r, tree))
+    })
+    .unwrap_err();
+    assert!(e.contains("changed while its files were checked"), "{e}");
+    let c = m.into_inner().unwrap();
+
     // A changed file in the store: no longer admitted.
     #[cfg(unix)]
     {
@@ -1351,6 +1387,8 @@ fn admission_is_confirmed_per_release_and_checked_each_time() {
         fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
         fs::write(&tool, "#!/bin/sh\necho changed\n").unwrap();
         let e = c.admitted("pluxy/tool", &roots).unwrap_err();
+        assert!(e.contains("changed since they were installed"), "{e}");
+        let e = admitted_unlocked(&std::sync::Mutex::new(c), "pluxy/tool", &roots).unwrap_err();
         assert!(e.contains("changed since they were installed"), "{e}");
     }
     done(root);

@@ -1110,11 +1110,9 @@ async fn device_enable(
 #[cfg(target_os = "linux")]
 fn native_enable(app: &AppHandle, id: &str) -> Result<device::View, String> {
     let st = app.state::<App>();
-    let candidate = st
-        .device
-        .lock()
-        .unwrap()
-        .native_candidate(id, &trust::TrustStore::current())?;
+    // Its files are hashed without holding the catalog (`checked_unlocked`).
+    let candidate =
+        device::native_candidate_unlocked(&st.device, id, &trust::TrustStore::current())?;
     let action = {
         let mut c = st.confirmations.lock().unwrap();
         let prepared = c.prepare_main(candidate.confirmation())?;
@@ -1141,8 +1139,15 @@ fn native_enable(app: &AppHandle, id: &str) -> Result<device::View, String> {
     };
     // Spends the single-use token and checks the program file is the one shown.
     st.confirmations.lock().unwrap().consume(&action, &token)?;
+    // Its files once more, then the record under the catalog's lock: still the one shown.
+    let now = device::native_candidate_unlocked(&st.device, id, &trust::TrustStore::current())?;
+    if now != candidate {
+        return Err(format!(
+            "{id} changed while it was being confirmed; enable it again"
+        ));
+    }
     device_changed(app, id, |c| {
-        c.admit(&candidate, &trust::TrustStore::current())
+        c.admit_checked(&candidate, &trust::TrustStore::current())
     })
 }
 
@@ -1169,12 +1174,12 @@ fn device_rollback(webview: Webview, id: String) -> Result<device::View, String>
 #[cfg(target_os = "linux")]
 fn program_resolver(app: AppHandle) -> program::Resolve {
     Box::new(move |id| {
-        let a = app
-            .state::<App>()
-            .device
-            .lock()
-            .unwrap()
-            .admitted(id, &trust::TrustStore::current())?;
+        // Its files are hashed without holding the catalog (`checked_unlocked`).
+        let a = device::admitted_unlocked(
+            &app.state::<App>().device,
+            id,
+            &trust::TrustStore::current(),
+        )?;
         Ok(program::Spec::from(&a))
     })
 }
