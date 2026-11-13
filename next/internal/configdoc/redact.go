@@ -81,15 +81,19 @@ func (r *Redactor) placeholderOf(n *yaml.Node, texts map[*yaml.Node]string) stri
 
 // The rules that say which values are secrets. They go by key name, compared in lower case
 // whatever joins its words, or none (accessToken, access_token, access-token and accesstoken
-// are one name), so they hold in both layouts of a config.yaml, in the JSON config and in
-// settings:
+// are one name), with letters folded as encoding/json folds them and a trailing number or word
+// saying how the value is written left out (apiKey2, api_key_value), so they hold in both
+// layouts of a config.yaml, in the JSON config and in settings:
 //   - the value of a key named like a secret (api-key, secret-key, management_key,
 //     client_keys, password, *-token, *_secret_access_key, ...), or each item when it is a list;
 //   - every value under a "credential" (an account's credential), except its kind;
 //   - the value of a header whose name is about authentication (Authorization, X-Api-Key,
 //     Cookie, ...) or is named like a secret, in any mapping whose name holds header
-//     (headers, extra_headers, headers_override);
-//   - a URL with a user name, password or query, anywhere.
+//     (headers, extra_headers, headers_override); a mapping there is read by these rules;
+//   - a URL with a user name, password or query, anywhere;
+//   - a copy: a string of MinTextSecret bytes or more, written as a whole value, that is also
+//     the value of a secret by one of the rules above by itself (not only for being in a
+//     mapping below a secret key), as note: <the key> (see found).
 //
 // Everything below a key named like a secret is a secret too, however deep, except in the provider
 // sections today's core reads at the top of a config.yaml: the sections of the v8 api-keys
@@ -300,6 +304,7 @@ func secrets(n *yaml.Node, strict bool) []*yaml.Node {
 // (legacy.HeaderText), which core reads as text without the spaces around it, and the secrets
 // that are ones only for being in a mapping below a secret key (nested: the 3 of
 // client_secret: {rotate_after_days: 3}), not a secret key's value or one of its list's items.
+// Its secrets include the copies of secrets (see the rules above), last.
 func found(n *yaml.Node, strict bool) (out []*yaml.Node, texts map[*yaml.Node]string, nested map[*yaml.Node]bool) {
 	// add records v as a secret, unless it is true, false, null or empty (see the rules above).
 	added, direct := map[*yaml.Node]bool{}, map[*yaml.Node]bool{}
@@ -738,9 +743,10 @@ func eachScalar(n *yaml.Node, f func(*yaml.Node)) {
 }
 
 // Restore returns an edited document with each placeholder replaced by the secret it stands
-// for in current, the config file as it is now. A placeholder may only be where a secret
-// goes; one that matches no secret in current is an ErrStale. A document without placeholders
-// comes back as it is.
+// for in current, the config file as it is now. One that matches no secret in current is an
+// ErrStale, wherever it is. Otherwise a placeholder may only be where a secret goes: that of a
+// copy (see found) only where current holds that copy, and only while the restored document
+// still holds the secret it copies. A document without placeholders comes back as it is.
 func (r *Redactor) Restore(edited, current []byte, isYAML bool) ([]byte, error) {
 	return r.restore(edited, current, isYAML, false)
 }
