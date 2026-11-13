@@ -72,7 +72,10 @@ const OUTCOMES = { done: "Done", cancelled: "Cancelled: nothing changed", failed
 function CoreVersions(props: { connection: Connection }) {
   const c = props.connection;
   const [v, setV] = useState<Versions>();
-  const [error, setError] = useState<string>();
+  // Why the versions could not be read, and why the app refused the last change asked for: a
+  // later successful read clears only the first.
+  const [loadError, setLoadError] = useState<string>();
+  const [refused, setRefused] = useState<string>();
   // The last outcome's number when a change was asked for: the change waits for its
   // confirmation until a later outcome arrives.
   const [waiting, setWaiting] = useState<number>();
@@ -85,27 +88,27 @@ function CoreVersions(props: { connection: Connection }) {
       (next) => {
         if (n !== latest.current) return;
         setV(next);
-        setError(undefined);
+        setLoadError(undefined);
       },
-      (e) => n === latest.current && setError(String(e)),
+      (e) => n === latest.current && setLoadError(String(e)),
     );
   }, [c]);
   const seq = v?.outcome?.seq ?? 0;
   const asked = waiting !== undefined && seq <= waiting;
   async function ask(run: () => Promise<void>) {
-    setError(undefined);
+    setRefused(undefined);
     setWaiting(seq);
     try {
       await run();
     } catch (e) {
       setWaiting(undefined);
-      setError(String(e));
+      setRefused(String(e));
     }
   }
   if (!v)
-    return error ? (
+    return loadError ? (
       <Card title="Core versions">
-        <Notice tone="danger">{error}</Notice>
+        <Notice tone="danger">{loadError}</Notice>
       </Card>
     ) : null;
   const running = c.core?.state === "running" ? c.core.version : undefined;
@@ -177,7 +180,8 @@ function CoreVersions(props: { connection: Connection }) {
           {v.outcome.detail ? `: ${v.outcome.detail}` : ""}
         </Notice>
       )}
-      {error && <Notice tone="danger">{error}</Notice>}
+      {loadError && <Notice tone="danger">{loadError}</Notice>}
+      {refused && <Notice tone="danger">{refused}</Notice>}
     </Card>
   );
 }
