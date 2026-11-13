@@ -487,25 +487,27 @@ func (d *Doc) Secrets() []string {
 }
 
 // TextSecrets returns the secret values to take out of text where they occur, such as core's
-// messages (Redactor.Scrub): those Secrets returns, except one shorter than MinTextSecret that is
-// a secret only for being in a mapping below a secret key (the 3 of client_secret:
-// {rotate_after_days: 3}), which is left in text as SettingsSecrets leaves a short one. The
-// redacted document still shows a placeholder in its place.
+// messages (Redactor.Scrub): every secret of the document, except a number shorter than
+// MinTextSecret that is a secret only for being in a mapping below a secret key (the 3 of
+// client_secret: {rotate_after_days: 3}), which is left in text: taking every 3 out of a message
+// would garble it. A string is taken out however short. The redacted document still shows a
+// placeholder in the number's place.
 func (d *Doc) TextSecrets() []string {
 	nodes, _, nested := found(d.root, false)
 	var out []string
 	for _, n := range nodes {
-		if !nested[n] || len(n.Value) >= MinTextSecret {
+		number := n.Tag == "!!int" || n.Tag == "!!float"
+		if !nested[n] || !number || len(n.Value) >= MinTextSecret {
 			out = append(out, n.Value)
 		}
 	}
 	return out
 }
 
-// MinTextSecret is the length, in bytes, below which SettingsSecrets and TextSecrets leave a
-// secret out: removing every occurrence of a string that short from a reply or a log would
-// mangle unrelated text. A placeholder in a document replaces the whole value, so it covers
-// short ones too.
+// MinTextSecret is the length, in bytes, below which SettingsSecrets leaves a secret out, and
+// TextSecrets a number: removing every occurrence of a string that short from a reply or a log
+// would mangle unrelated text. A placeholder in a document replaces the whole value, so it
+// covers short ones too.
 const MinTextSecret = 8
 
 // secretParam reports whether a URL's query parameter is named like a secret: by the rule for

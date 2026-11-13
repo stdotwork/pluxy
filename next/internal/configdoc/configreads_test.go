@@ -65,30 +65,33 @@ func TestRedactSecretValueAlsoPlainElsewhere(t *testing.T) {
 	})
 }
 
-// Text keeps a value shorter than MinTextSecret that is a secret only for being in a mapping
-// below a secret key, and loses every other secret, however short: a secret key's value, its
-// list's items, and a value that is also one of those through an alias.
-func TestTextSecretsLeaveShortNestedValues(t *testing.T) {
+// Text keeps a number shorter than MinTextSecret that is a secret only for being in a mapping
+// below a secret key (the 3 of rotate_after_days: 3), and loses every other secret, however
+// short: a string there (hunter2), a secret key's value, its list's items, and a value that is
+// also one of those through an alias.
+func TestTextSecretsLeaveShortNestedNumbers(t *testing.T) {
 	for _, tc := range []struct {
 		name, src string
 		isYAML    bool
 		gone      []string
 	}{
 		{"json", `{"management_key": "mk", "client_keys": ["ck", ["ck-deep"]],
-  "extension": {"accounts": [{"id": "a", "settings": {"client_secret": {"value": "fake-nested-secret-1", "rotate_after_days": 3, "mode": "auto"}}}]}}`,
-			false, []string{"mk", "ck", "ck-deep", "fake-nested-secret-1"}},
-		{"yaml", "request-retry: 3\nbedrock-api-key:\n  - api-key: fake-bedrock-key-1\n    priority: 3\n    mode: auto\n    region: &r eu-1\nremote-management:\n  secret-key: *r\n",
-			true, []string{"fake-bedrock-key-1", "eu-1"}},
+  "extension": {"accounts": [{"id": "a", "settings": {"client_secret": {"value": "fake-nested-secret-1", "rotate_after_days": 3, "ratio": 1.5, "mode": "auto"},
+    "password": {"value": "hunter2"}}}]}}`,
+			false, []string{"mk", "ck", "ck-deep", "fake-nested-secret-1", "auto", "hunter2"}},
+		{"yaml", "request-retry: 3\nbedrock-api-key:\n  - api-key: fake-bedrock-key-1\n    priority: 3\n    ratio: 1.5\n    mode: auto\n    region: &r eu-1\nremote-management:\n  secret-key: *r\n",
+			true, []string{"fake-bedrock-key-1", "auto", "eu-1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := mustParse(t, tc.src, tc.isYAML)
-			for _, s := range []string{"3", "auto"} {
-				if !slices.Contains(d.Secrets(), s) {
-					t.Fatalf("Secrets() = %q, want %q among them", d.Secrets(), s)
+			nodes, _ := d.secretNodes()
+			for _, s := range []string{"3", "1.5"} {
+				if !slices.ContainsFunc(nodes, func(n *yaml.Node) bool { return n.Value == s }) {
+					t.Fatalf("%s is no secret of the document", s)
 				}
 			}
 			r := NewRedactor()
-			msg := "line 3: mode auto"
+			msg := "line 3: ratio 1.5"
 			want := msg
 			for _, s := range tc.gone {
 				msg += ", " + s

@@ -1716,10 +1716,9 @@ moved; one written with an explicit YAML tag (`!!int 0x1F`, `!!binary ...`) goes
 secret goes, and only while the file still holds that secret and core has not restarted (the
 placeholders are keyed hashes with a key core picks at start); otherwise the call answers 409
 (read the config again) or refuses the document. Messages in replies never show a secret either,
-however short, except a value shorter than 8 bytes that is a secret only for being in a mapping
-below a secret key (the `3` of `client_secret: {rotate_after_days: 3}`), which is left in text
-as a short secret of account settings is: replacing every occurrence of so short a value would
-garble the message.
+however short, except a number shorter than 8 bytes that is a secret only for being in a
+mapping below a secret key (the `3` of `client_secret: {rotate_after_days: 3}`), which is left
+in text: replacing every `3` in a message would garble it.
 
 A `config.yaml` keeps each setting under the name it already has there: the v8 name, or the
 older spelling when only that is in the file. New client keys go to `access.api-keys`, or to the
