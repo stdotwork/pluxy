@@ -791,16 +791,17 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 	for _, n := range held {
 		s, ok := values[n.Value]
 		switch {
-		case settings && ok && s.paths[where[n]] == nil:
-			return nil, fmt.Errorf("%w: line %d: a redacted value is not where its secret is; write the value itself there", ErrInvalid, d.line(n))
-		// A copy of a secret (see found) goes back only where the file holds that copy now.
-		case settings && !allowed[n] && !(ok && s.paths[where[n]] != nil),
-			// A URL that is a secret is one wherever it is, so in a config file its placeholder
-			// may go anywhere.
-			!settings && !allowed[n] && !(ok && (secretURL(s.value) || s.paths[where[n]] != nil)):
-			return nil, fmt.Errorf("%w: line %d: a redacted value is where no secret goes; write the value itself there", ErrInvalid, d.line(n))
+		// One that stands for no secret is stale wherever it is, so the answer does not
+		// depend on which placeholder comes first.
 		case !ok:
 			return nil, fmt.Errorf("line %d: %w", d.line(n), ErrStale)
+		case settings && s.paths[where[n]] == nil:
+			return nil, fmt.Errorf("%w: line %d: a redacted value is not where its secret is; write the value itself there", ErrInvalid, d.line(n))
+		// A copy of a secret (see found) goes back only where the file holds that copy now.
+		// A URL that is a secret is one wherever it is, so in a config file its placeholder may
+		// go anywhere.
+		case !settings && !allowed[n] && !secretURL(s.value) && s.paths[where[n]] == nil:
+			return nil, fmt.Errorf("%w: line %d: a redacted value is where no secret goes; write the value itself there", ErrInvalid, d.line(n))
 		}
 		if at := s.paths[where[n]]; at != nil {
 			s = at

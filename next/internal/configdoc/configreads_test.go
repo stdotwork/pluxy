@@ -345,10 +345,10 @@ func TestRedactCopiesOfSecrets(t *testing.T) {
 	if back, err := r.RestoreSettings(red, []byte(src)); err != nil || string(back) != src {
 		t.Errorf("RestoreSettings: %v\n%s", err, back)
 	}
-	// A placeholder that stands for no secret, where no secret goes, is refused.
+	// A placeholder that stands for no secret, where no secret goes, is stale.
 	stale := `{"api_key": "` + key + `", "note": "` + r.Placeholder("no-such-secret-1234") + `"}`
-	if _, err := r.RestoreSettings([]byte(stale), []byte(src)); !errors.Is(err, ErrInvalid) {
-		t.Errorf("RestoreSettings of an unknown placeholder on a plain key: %v, want ErrInvalid", err)
+	if _, err := r.RestoreSettings([]byte(stale), []byte(src)); !errors.Is(err, ErrStale) {
+		t.Errorf("RestoreSettings of an unknown placeholder on a plain key: %v, want ErrStale", err)
 	}
 }
 
@@ -388,6 +388,45 @@ func TestRestoreCopyNeedsItsOriginal(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// After core restarts, a placeholder of the old key stands for no secret: it is stale, whether
+// a copy comes before its original or after it.
+func TestRestoreAfterRestartIsStale(t *testing.T) {
+	const key = "sk-real-secret-value-1234"
+	for _, tc := range []struct {
+		name, src        string
+		isYAML, settings bool
+	}{
+		{"yaml copy first", "note: " + key + "\napi-key: " + key + "\n", true, false},
+		{"yaml copy after", "api-key: " + key + "\nnote: " + key + "\n", true, false},
+		{"json copy first", `{"note": "` + key + `", "api_key": "` + key + `"}`, false, false},
+		{"json copy after", `{"api_key": "` + key + `", "note": "` + key + `"}`, false, false},
+		{"settings copy first", `{"note": "` + key + `", "api_key": "` + key + `"}`, false, true},
+		{"settings copy after", `{"api_key": "` + key + `", "note": "` + key + `"}`, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before, after := NewRedactor(), NewRedactor()
+			var red []byte
+			var err error
+			if tc.settings {
+				red, err = before.RedactSettings([]byte(tc.src))
+			} else {
+				red, err = before.Redact([]byte(tc.src), tc.isYAML)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.settings {
+				_, err = after.RestoreSettings(red, []byte(tc.src))
+			} else {
+				_, err = after.Restore(red, []byte(tc.src), tc.isYAML)
+			}
+			if !errors.Is(err, ErrStale) {
+				t.Errorf("Restore after a restart: %v, want ErrStale", err)
+			}
+		})
 	}
 }
 
