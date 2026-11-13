@@ -165,7 +165,7 @@ fn ids_versions_and_paths() {
 fn install_swap_failed_candidate_rollback_and_remove() {
     let root = temp();
     let d = dirs(&root);
-    let mut c = Catalog::open(d.clone(), false);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
     let v1 = package("example/notes", "1.0.0");
     let v2 = package("example/notes", "2.0.0");
     install(&mut c, &v1, local("notes-1.tar.gz")).unwrap();
@@ -227,22 +227,25 @@ fn install_swap_failed_candidate_rollback_and_remove() {
     assert!(fs::read_dir(d.staging()).unwrap().next().is_none());
 
     // The catalog persists; roll back makes 1.0.0 active again.
-    let mut c = Catalog::open(d.clone(), false);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
     c.rollback("example/notes").unwrap();
     let p = c.get("example/notes").unwrap();
     assert_eq!(p.active.sha256, digest(&v1));
     assert_eq!(p.last_good.as_ref().unwrap().sha256, digest(&v2));
 
-    c.set_enabled("example/notes", false).unwrap();
+    c.set_enabled("example/notes", false, &NoRoots).unwrap();
     assert!(c.page("example/notes", "p").is_err());
     assert!(c
         .asset("example/notes", &digest(&v1), "index.html")
         .is_none());
-    c.set_enabled("example/notes", true).unwrap();
+    c.set_enabled("example/notes", true, &NoRoots).unwrap();
 
     c.remove("example/notes").unwrap();
     assert!(c.get("example/notes").is_none() && store_names(&d).is_empty());
-    assert!(Catalog::open(d, false).view(&NoRoots).packages.is_empty());
+    assert!(Catalog::open(d, false, &NoRoots)
+        .view(&NoRoots)
+        .packages
+        .is_empty());
     done(root);
 }
 
@@ -250,7 +253,7 @@ fn install_swap_failed_candidate_rollback_and_remove() {
 fn reserved_native_and_other_packages_are_refused_before_the_store() {
     let root = temp();
     let d = dirs(&root);
-    let mut c = Catalog::open(d.clone(), false);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
     let e = install(&mut c, &package("pluxy/notes", "1.0.0"), local("x.tar.gz")).unwrap_err();
     assert!(e.contains("reserved"), "{e}");
     // The positive control on the same route.
@@ -350,7 +353,7 @@ fn links_devices_and_duplicates_are_refused() {
 fn changed_files_are_not_served_or_rolled_back_to() {
     let root = temp();
     let d = dirs(&root);
-    let mut c = Catalog::open(d.clone(), false);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
     let v1 = package("example/notes", "1.0.0");
     install(&mut c, &v1, local("n")).unwrap();
     install(&mut c, &package("example/notes", "2.0.0"), local("n")).unwrap();
@@ -392,10 +395,10 @@ fn changed_files_are_not_served_or_rolled_back_to() {
 fn safe_mode_lists_but_never_serves() {
     let root = temp();
     let d = dirs(&root);
-    let mut c = Catalog::open(d.clone(), false);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
     let v1 = package("example/notes", "1.0.0");
     install(&mut c, &v1, local("n")).unwrap();
-    let safe = Catalog::open(d, true);
+    let safe = Catalog::open(d, true, &NoRoots);
     let v = safe.view(&NoRoots);
     assert!(v.safe_mode && v.packages.len() == 1);
     assert!(safe
@@ -414,7 +417,7 @@ fn a_damaged_catalog_is_moved_aside() {
     let d = dirs(&root);
     fs::create_dir_all(&d.root).unwrap();
     fs::write(d.catalog(), b"{not json").unwrap();
-    let c = Catalog::open(d.clone(), false);
+    let c = Catalog::open(d.clone(), false, &NoRoots);
     assert!(c.warning.as_deref().is_some_and(|w| w.contains("moved")));
     assert!(c.view(&NoRoots).packages.is_empty());
     assert!(!d.catalog().exists());
@@ -465,7 +468,7 @@ fn registry_pins_reserved_ids_and_paths() {
     let e =
         stage_from_registry(&d, &NoRoots, "fixture", "example/notes", Some("0.8.0")).unwrap_err();
     assert!(e.contains("inside the index's folder"), "{e}");
-    let mut c = Catalog::open(d.clone(), false);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
     let cand =
         stage_from_registry(&d, &NoRoots, "fixture", "example/notes", Some("1.0.0")).unwrap();
     assert_eq!(cand.source.kind, "registry");
@@ -545,7 +548,7 @@ fn names_with_a_drive_or_stream_never_reach_the_store() {
 fn page_files_with_spaces_and_unicode_are_served_at_their_address() {
     let root = temp();
     let d = dirs(&root);
-    let mut c = Catalog::open(d.clone(), false);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
     let name = "my page #1 é.html";
     let ui = serde_json::json!({"ui": {"version": 0, "dir": "pages",
         "pages": [{"id": "p", "title": "P", "short": "P", "path": name}]}});
@@ -594,7 +597,7 @@ fn installed_releases_are_read_only_to_their_top_folder() {
     use std::os::unix::fs::PermissionsExt;
     let root = temp();
     let d = dirs(&root);
-    let mut c = Catalog::open(d.clone(), false);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
     // No folder entries: `pages/` is made for its file.
     let v1 = archive(&[
         (
@@ -629,12 +632,12 @@ fn installed_releases_are_read_only_to_their_top_folder() {
 fn a_catalog_that_cannot_be_read_keeps_the_store() {
     let root = temp();
     let d = dirs(&root);
-    let mut c = Catalog::open(d.clone(), false);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
     let v1 = package("example/notes", "1.0.0");
     install(&mut c, &v1, local("n")).unwrap();
     drop(c);
     fs::write(d.catalog(), b"{not json").unwrap();
-    let c = Catalog::open(d.clone(), false);
+    let c = Catalog::open(d.clone(), false, &NoRoots);
     assert!(
         c.warning.as_deref().is_some_and(|w| w.contains("moved")),
         "{:?}",
@@ -643,7 +646,7 @@ fn a_catalog_that_cannot_be_read_keeps_the_store() {
     assert!(c.view(&NoRoots).packages.is_empty());
     assert_eq!(store_names(&d), BTreeSet::from([digest(&v1)]));
     // Still kept at the next start, while the damaged catalog is kept aside.
-    let mut c = Catalog::open(d.clone(), false);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
     assert!(
         c.warning.as_deref().is_some_and(|w| w.contains("kept at")),
         "{:?}",
@@ -657,12 +660,12 @@ fn a_catalog_that_cannot_be_read_keeps_the_store() {
     // A catalog that is not a file at all: kept the same way.
     let root = temp();
     let d = dirs(&root);
-    let mut c = Catalog::open(d.clone(), false);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
     install(&mut c, &v1, local("n")).unwrap();
     drop(c);
     fs::remove_file(d.catalog()).unwrap();
     fs::create_dir(d.catalog()).unwrap();
-    let c = Catalog::open(d.clone(), false);
+    let c = Catalog::open(d.clone(), false, &NoRoots);
     assert!(c.warning.is_some());
     assert_eq!(store_names(&d), BTreeSet::from([digest(&v1)]));
     done(root);
@@ -681,7 +684,7 @@ fn a_catalog_that_cannot_be_moved_aside_is_not_replaced() {
     fs::create_dir_all(&d.root).unwrap();
     fs::write(d.catalog(), b"{not json").unwrap();
     fs::set_permissions(&d.root, fs::Permissions::from_mode(0o500)).unwrap();
-    let mut c = Catalog::open(d.clone(), false);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
     assert!(
         c.warning
             .as_deref()
@@ -702,7 +705,7 @@ fn a_catalog_that_cannot_be_moved_aside_is_not_replaced() {
 fn a_damaged_release_folder_is_replaced_when_installed_again() {
     let root = temp();
     let d = dirs(&root);
-    let mut c = Catalog::open(d.clone(), false);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
     let v1 = package("example/notes", "1.0.0");
     install(&mut c, &v1, local("n")).unwrap();
     install(&mut c, &package("example/notes", "2.0.0"), local("n")).unwrap();
@@ -731,7 +734,7 @@ fn a_damaged_release_folder_is_replaced_when_installed_again() {
 fn a_local_package_updates_from_a_file_of_another_name() {
     let root = temp();
     let d = dirs(&root);
-    let mut c = Catalog::open(d.clone(), false);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
     install(
         &mut c,
         &package("example/notes", "1.0.0"),
@@ -786,7 +789,7 @@ fn folders_that_cannot_be_deleted_are_reported() {
     }
     let root = temp();
     let d = dirs(&root);
-    let mut c = Catalog::open(d.clone(), false);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
     let v1 = package("example/notes", "1.0.0");
     install(&mut c, &v1, local("n")).unwrap();
     assert!(c.take_cleanup().is_none());
@@ -882,14 +885,14 @@ fn a_catalog_folder_that_cannot_be_listed_keeps_the_store() {
     }
     let root = temp();
     let d = dirs(&root);
-    let mut c = Catalog::open(d.clone(), false);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
     let v1 = package("example/notes", "1.0.0");
     install(&mut c, &v1, local("n")).unwrap();
     drop(c);
     fs::write(d.catalog(), b"{not json").unwrap();
     // The damaged catalog can be moved aside, but the folder cannot be listed.
     fs::set_permissions(&d.root, fs::Permissions::from_mode(0o300)).unwrap();
-    let c = Catalog::open(d.clone(), false);
+    let c = Catalog::open(d.clone(), false, &NoRoots);
     fs::set_permissions(&d.root, fs::Permissions::from_mode(0o700)).unwrap();
     assert!(
         c.warning.as_deref().is_some_and(|w| w.contains("moved")),
@@ -909,7 +912,7 @@ fn a_store_that_cannot_be_listed_is_reported() {
     }
     let root = temp();
     let d = dirs(&root);
-    let mut c = Catalog::open(d.clone(), false);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
     install(&mut c, &package("example/notes", "1.0.0"), local("n")).unwrap();
     fs::set_permissions(d.store(), fs::Permissions::from_mode(0o300)).unwrap();
     c.remove("example/notes").unwrap();
@@ -1121,7 +1124,7 @@ fn only_a_curated_signed_native_tool_installs() {
     assert!(store_names(&d).is_empty());
 
     // The positive control on the same route: installed, disabled, not admitted.
-    let mut c = Catalog::open(d.clone(), false);
+    let mut c = Catalog::open(d.clone(), false, &roots);
     c.commit(stage_from_registry(&d, &roots, "curated", "pluxy/tool", Some("1.0.0")).unwrap())
         .unwrap();
     let v = c.view(&roots);
@@ -1142,13 +1145,15 @@ fn only_a_curated_signed_native_tool_installs() {
         serde_json::from_slice::<Value>(&fs::read(d.catalog()).unwrap()).unwrap()["version"].clone()
     };
     assert_eq!(version(&d), 1);
-    assert!(Catalog::open(d.clone(), false).get("pluxy/tool").is_some());
+    assert!(Catalog::open(d.clone(), false, &roots)
+        .get("pluxy/tool")
+        .is_some());
     install(&mut c, &package("example/page", "1"), local("p")).unwrap();
     c.remove("pluxy/tool").unwrap();
     assert_eq!(version(&d), 0);
     c.commit(stage_from_registry(&d, &roots, "curated", "pluxy/tool", Some("1.0.0")).unwrap())
         .unwrap();
-    let e = c.set_enabled("pluxy/tool", true).unwrap_err();
+    let e = c.set_enabled("pluxy/tool", true, &roots).unwrap_err();
     assert!(e.contains("native confirmation"), "{e}");
     done(root);
 }
@@ -1157,7 +1162,7 @@ fn only_a_curated_signed_native_tool_installs() {
 fn admission_is_confirmed_per_release_and_checked_each_time() {
     let root = temp();
     let (d, roots) = native_fixture(&root);
-    let mut c = Catalog::open(d.clone(), false);
+    let mut c = Catalog::open(d.clone(), false, &roots);
     let install = |c: &mut Catalog, v: &str| {
         c.commit(stage_from_registry(&d, &roots, "curated", "pluxy/tool", Some(v)).unwrap())
     };
@@ -1205,14 +1210,14 @@ fn admission_is_confirmed_per_release_and_checked_each_time() {
     // Admitted is checked again each time: against the roots and in safe mode.
     let e = c.admitted("pluxy/tool", &NoRoots).unwrap_err();
     assert!(e.contains("not configured"), "{e}");
-    let mut safe = Catalog::open(d.clone(), true);
+    let mut safe = Catalog::open(d.clone(), true, &roots);
     let e = safe.admitted("pluxy/tool", &roots).unwrap_err();
     assert!(e.contains("safe mode"), "{e}");
     let e = safe.admit(&a, &roots).unwrap_err();
     assert!(e.contains("safe mode"), "{e}");
     // The admission is kept with the catalog.
     assert_eq!(
-        Catalog::open(d.clone(), false)
+        Catalog::open(d.clone(), false, &roots)
             .admitted("pluxy/tool", &roots)
             .unwrap(),
         a
@@ -1234,7 +1239,7 @@ fn admission_is_confirmed_per_release_and_checked_each_time() {
     assert_eq!(c.admitted("pluxy/tool", &roots).unwrap(), a);
 
     // Disabling ends it.
-    c.set_enabled("pluxy/tool", false).unwrap();
+    c.set_enabled("pluxy/tool", false, &roots).unwrap();
     assert!(c.get("pluxy/tool").unwrap().admission.is_none());
     assert!(c.admitted("pluxy/tool", &roots).is_err());
     let a = c.native_candidate("pluxy/tool", &roots).unwrap();
@@ -1269,5 +1274,38 @@ fn admission_is_confirmed_per_release_and_checked_each_time() {
         let e = c.admitted("pluxy/tool", &roots).unwrap_err();
         assert!(e.contains("changed since they were installed"), "{e}");
     }
+    done(root);
+}
+
+#[test]
+fn a_package_whose_publisher_a_root_now_reserves_is_disabled() {
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
+    install(&mut c, &package("acme/page", "1"), local("a")).unwrap();
+    install(&mut c, &package("example/page", "1"), local("e")).unwrap();
+    c.page("acme/page", "p").unwrap();
+    // A later build's root names acme: its lookalike is no longer served or enabled.
+    let acme = TestRoots {
+        publisher: "acme".into(),
+        ..native_fixture(&root.join("roots")).1
+    };
+    let mut c = Catalog::open(d.clone(), false, &acme);
+    assert!(!c.get("acme/page").unwrap().enabled);
+    let e = c.page("acme/page", "p").unwrap_err();
+    assert!(e.contains("disabled"), "{e}");
+    let sha = c.get("acme/page").unwrap().active.sha256.clone();
+    assert!(c.asset_file("acme/page", &sha, "index.html").is_none());
+    let w = c.view(&acme).warning.unwrap_or_default();
+    assert!(w.contains("acme/page") && w.contains("reserved"), "{w}");
+    let e = c.set_enabled("acme/page", true, &acme).unwrap_err();
+    assert!(e.contains("reserved"), "{e}");
+    // The positive control: a publisher no root names stays as it was.
+    assert!(c.get("example/page").unwrap().enabled);
+    c.page("example/page", "p").unwrap();
+    c.set_enabled("example/page", false, &acme).unwrap();
+    c.set_enabled("example/page", true, &acme).unwrap();
+    // Removing it still works.
+    c.remove("acme/page").unwrap();
     done(root);
 }

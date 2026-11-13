@@ -209,7 +209,8 @@ exactly. This build compiles no roots (production roots are a release decision),
 curated outside a test build with a test trust profile. A package from any other source is
 labelled **Unverified**, and one whose ID claims a reserved publisher (`pluxy`, or any publisher a
 root names) is refused, before a registry's archive is fetched and again after a local archive is
-unpacked. A package keeps the source it was installed from: a release from another source is
+unpacked. A package installed before a root reserved its publisher is disabled when the
+catalog opens, with a warning, and cannot be enabled again until it is removed. A package keeps the source it was installed from: a release from another source is
 refused until the package is removed. Packages get no resources or settings here: their pages'
 settings calls answer `unavailable`.
 

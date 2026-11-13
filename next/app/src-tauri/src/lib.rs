@@ -1085,7 +1085,9 @@ async fn device_enable(
         if native {
             return native_enable(&app, &id);
         }
-        device_changed(&app, &id, |c| c.set_enabled(&id, enabled))
+        device_changed(&app, &id, |c| {
+            c.set_enabled(&id, enabled, &trust::TrustStore::current())
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1366,7 +1368,11 @@ pub fn run() {
             };
             // `--safe-mode`: no page of a package on this device is listed, opened or served.
             let safe_mode = std::env::args().skip(1).any(|a| a == "--safe-mode");
-            let catalog = device::Catalog::open(device_dirs.clone(), safe_mode);
+            let catalog = device::Catalog::open(
+                device_dirs.clone(),
+                safe_mode,
+                &trust::TrustStore::current(),
+            );
             if let Some(w) = &catalog.warning {
                 eprintln!("pluxy-app: {w}");
             }

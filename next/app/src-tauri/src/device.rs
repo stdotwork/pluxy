@@ -441,7 +441,7 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<Option<String>, String> {
 
 impl Catalog {
     /// Opens the catalog in dirs. Staging leftovers and store folders no release names go.
-    pub fn open(dirs: Dirs, safe_mode: bool) -> Catalog {
+    pub fn open(dirs: Dirs, safe_mode: bool, roots: &dyn Roots) -> Catalog {
         let mut warning = None;
         let mut locked = None;
         let read = match fs::read(dirs.catalog()) {
@@ -511,6 +511,24 @@ impl Catalog {
             locked,
             cleanup: vec![],
         };
+        // A root this build has may reserve a publisher a package was installed under before:
+        // such a package stays disabled, so nothing of it is served, until it is removed.
+        let held: Vec<String> = c
+            .packages
+            .iter_mut()
+            .filter_map(|(id, p)| {
+                let why = held(id, p, roots).filter(|_| p.enabled)?;
+                p.enabled = false;
+                Some(why)
+            })
+            .collect();
+        if !held.is_empty() {
+            let held = held.join("; ");
+            c.warning = Some(match c.warning.take() {
+                Some(w) => format!("{w}; {held}"),
+                None => held,
+            });
+        }
         if let Err(e) = remove_tree(&c.dirs.staging()) {
             c.cleanup.push(format!("could not delete {e}"));
         }
@@ -705,7 +723,12 @@ impl Catalog {
 
     /// Enables or disables package id. A native tool is enabled only by `admit`, after a
     /// native confirmation; disabling it ends its admission.
-    pub fn set_enabled(&mut self, id: &str, enabled: bool) -> Result<(), String> {
+    pub fn set_enabled(
+        &mut self,
+        id: &str,
+        enabled: bool,
+        roots: &dyn Roots,
+    ) -> Result<(), String> {
         let p = self
             .packages
             .get_mut(id)
@@ -714,6 +737,9 @@ impl Catalog {
             return Err(format!(
                 "{id} is a native tool: enabling it needs a native confirmation"
             ));
+        }
+        if let Some(why) = held(id, p, roots).filter(|_| enabled) {
+            return Err(why);
         }
         let was = (p.enabled, p.admission.take());
         p.enabled = enabled;
@@ -1228,6 +1254,17 @@ fn validate(m: &Manifest) -> Result<Option<App>, String> {
         c.validate()?;
     }
     Ok(app)
+}
+
+/// Why installed package p may not be enabled, if it may not: its ID claims a reserved
+/// publisher, and its active release has no curated signature that verifies against roots now.
+fn held(id: &str, p: &Package, roots: &dyn Roots) -> Option<String> {
+    reserved(id, roots)?;
+    p.curated_signature(id, roots).is_err().then(|| {
+        format!(
+            "{id} is disabled: its publisher is reserved for a curated source, and its release has no curated signature this app can verify; remove it"
+        )
+    })
 }
 
 /// Why a package from a source that is not curated may not claim id, if it may not: its
