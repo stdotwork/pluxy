@@ -65,6 +65,10 @@ func fakeExtension(mode string) {
 		refreshOddReply()
 		return
 	}
+	if mode == "split-body" {
+		splitBody()
+		return
+	}
 	if mode == "capture-settings" {
 		captureSettings()
 		return

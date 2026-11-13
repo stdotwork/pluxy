@@ -49,6 +49,179 @@ a message channel, never with the management key. The Extensions page draws each
 settings form from its schema. The contract for both, and the module pages use, are in
 [extension-pages](extension-pages/README.md).
 
+## The panel's pages
+
+The pages core offers, in navigation order, and the page of the old panel
+([`extensions/panel`](../../extensions/panel)) that each one replaces. A page's ID is its address
+(`#/<id>`) and its theme hook `data-page`. Why the pages have these names, and the other
+decisions behind them, is in [docs/panel.md](../../docs/panel.md).
+
+Two pages add to their address. `#/logs/<trace ID>` opens that request's log in the Logs Viewer.
+`#/config/<tab>` opens a tab of the Config Panel: `common` (what `#/config` opens),
+`connectivity`, `network`, `logging`, `advanced` or `source`. `#/config/source?account=<id>`
+opens the Source tab with that account's ID selected; an account's "Edit in Config Panel" leads
+there. An account from a provider key section of `config.yaml` opens the Source tab with nothing
+selected, because the file does not hold its ID: core makes the ID when it reads the file.
+
+| Page (ID) | Group | Replaces (old route) |
+| --- | --- | --- |
+| Dashboard (`status`) | Operate | Dashboard (`/`) |
+| Accounts (`accounts`) | Gateway | Auth Files (`/auth-files`) and AI Providers (`/ai-providers`), with the OAuth excluded models and OAuth model alias pages (`/auth-files/oauth-excluded`, `/auth-files/oauth-model-alias`) |
+| Add Account (`add-account`) | Gateway | OAuth Login (`/oauth`) |
+| Routing (`routing`) | Gateway | Routing (`/routing`) |
+| Quota Management (`quota`) | Observe | Quota Management (`/quota`) |
+| Logs Viewer (`logs`) | Observe | Logs Viewer (`/logs`) |
+| Usage (`usage`) | Observe | No old panel page: the old desktop app's list of recorded requests |
+| Config Panel (`config`) | Control | Config Panel (`/config`; `/settings` and `/api-keys` led there) |
+| System (`system`) | Control | Management Center Info (`/system`) |
+| Extensions (`extensions`) | Control | Plugins (`/plugins`) and Plugin Store (`/plugin-store`) |
+| Themes (`themes`) | Control | No old page |
+
+The pages of running extensions (`#/ext/<publisher>/<name>/<page>`, group Extension pages) take
+the place of the old plugin pages (`/plugin-pages/...`). The Extensions and Themes pages and the
+extension pages were built before the old panel's features were compared page by page, and the
+lists below do not cover them.
+
+### What each page leaves out, and why
+
+These are the old panel's features that the new pages leave out on purpose. Where a page keeps a
+feature, it keeps the old label, unless the label named something this core does differently or
+[docs/terms.md](../../docs/terms.md) gives another word for it.
+
+**Dashboard**
+
+- The "Live" badge: the old page showed it whenever it was connected, but did not refresh on its
+  own. The Dashboard refreshes every 60 seconds while it is visible and shows when it last did.
+- "Management keys", a count of client keys: the Config Panel lists the client keys.
+- "Debug" and "WebSocket auth": core has neither setting (see the config.yaml table in
+  [`next/README.md`](../README.md#what-each-setting-does-here)).
+- "Server version" and "Build date": on the System page, as "Core version" and "Build Time".
+- "Provider keys", a count of the keys in the config's provider sections: "Credentials" counts
+  every account, from the config or from a sign-in.
+- The six "Where to go from here" cards, and the "Manage providers" and "Inspect logs" links: the
+  navigation leads to the same pages.
+
+**Accounts**
+
+- "Download", "Download selected" and "Auth file JSON (preview)": core never hands a credential
+  back out. Only the extension that created an account receives its credential.
+- "Delete All", "Delete filtered results" and "Delete Problem Files": "Select filtered" and then
+  "Delete" do the same, with the status filter set to "Problem" for problem accounts.
+- Provider tabs for providers this core has no extension for (Qwen, iFlow, AIStudio, "Empty"): the
+  tabs are the running extensions.
+- "Card layout": a theme's `list` layout option (`table` or `cards`) sets it.
+- OpenAI-compatible provider groups (one name and base URL holding several keys): each key is an
+  account of its own, with the same base URL.
+- The connection test "Hi" with its "Test model" field: the old test built the upstream request
+  in the browser, with the account's key in it, and sent it through a general relay call that
+  this core does not have. The account's "Test" sends the request from core, and its label says
+  that it spends a request.
+- "Use SIWC": a Sign in with ChatGPT account is added with the Codex extension's own sign-in
+  method for it.
+- "Note" and tags: core keeps no note or tags on an account.
+- "Rewrite response model to the alias" (`force-mapping`): core does not run it yet. "Account
+  error rules" (`request-scoped-errors`): dropped, core already treats a request-scoped error as
+  not the account's fault.
+- The OAuth excluded models and OAuth model alias pages: these rules are now an extension's
+  `excluded_models` and `model_alias` settings, written in the Config Panel's Source tab.
+- The OAuth model alias page's "Diagram", which drew each provider's models and their aliases
+  joined by lines: the System page's "Available Models" lists each extension's models with their
+  aliases and the accounts that serve them. A sign-in's own aliases are changed in "Account model
+  aliases" on its Edit form.
+- "Invert page", which flipped the selection on the current page: "Select page", "Select
+  filtered" and "Deselect" cover the selections the batch actions need.
+
+**Add Account**
+
+- Sign-in cards written for each provider: one flow serves every login method that a running
+  extension offers. "Cancel" works for every method.
+- "Bind SIWC": a Sign in with ChatGPT account is added with the Codex extension's own sign-in
+  method for it.
+- The Kimi China and International sponsor tiles and "Join Open Platform": promotion, not a
+  feature.
+- The "Requires CLI Proxy API v7.3.1 or later" notes: the panel is built into core, so the two
+  always match.
+
+**Routing**
+
+- Drag and drop, and "Drop here to make a new tier": "Move up a tier" and "Move down a tier" move
+  an account into the next tier, or into a new tier past the first or the last.
+- The review dialog before saving: each change saves at once.
+- The route preview for a model: the browser guessed the route without seeing cooldowns or session
+  bindings, so it could be wrong.
+
+**Quota Management**
+
+- "Reset quota" with Claude's reset grants, and xAI's paid one-token refresh: both spend from the
+  account. Nothing in the panel spends from an account behind a click, except an account's "Test".
+- The DEV tier preview: a preview for the old panel's developers.
+- The quota timeline, which drew each account's quota windows over the next days: a richer view of
+  the same data, which belongs to the desktop app. Each card shows every limit's use and when it
+  resets.
+
+**Logs Viewer**
+
+- The "Method", "Status" and "Path" filters, and "Show Raw Logs": core's log holds no request
+  lines. Requests are on the Usage page and in the request logs.
+- "Full Screen": a theme's `width` layout option `full` does it.
+- New lines every second: "Continuous reading" reads new lines every 2 seconds while the page is
+  visible.
+
+**Usage**
+
+- Prices and price sync: core records tokens, not prices. Cost views belong to the desktop app.
+- The storage cap and repair of the old app's database: core keeps its record in memory, limited
+  by `usage.max_events` and `usage.max_age_ms`.
+
+**Config Panel**
+
+- Settings core does not run (marked Later or Dropped in the config.yaml table in
+  [`next/README.md`](../README.md#what-each-setting-does-here)): "Debug Mode", "Commercial Mode",
+  "Redis Usage Queue Retention (seconds)", "Auth Auto-refresh Workers", "Pass Through Upstream
+  Headers", "WebSocket Authentication", "Subagent session affinity", "Persist cooldown status"
+  (core keeps cooldowns in memory, where they last through a config reload), "GPT Image 2 Base
+  Model", "Video result credential cache TTL", the "LAN discovery" section, every Streaming field
+  (so there is no Streaming tab), every payload rule (so there is no Payload tab), Claude's and
+  Codex's cloaking and header defaults, Codex's response steering and live media relay, the
+  Antigravity and Devin fields, the plugin settings, "Disable Control Panel", and the panel update
+  settings ("Disable Panel Auto Updates", "Panel Repository", "Global GitHub Token"). Any of them
+  can still be written in the Source tab.
+- "Disable Image Generation": core has no switch for every account. Each Codex account has its own
+  `image_generation_tool` and `images` settings (see [Codex](../README.md#codex)), changed in
+  "Settings (settings)" on a sign-in's Edit form, or in the Source tab. The old key still works in
+  `config.yaml`, where it sets both on the file's Codex accounts.
+- "Host Address", "Port", "OAuth Credential Directory", "Enable TLS" and its paths, "Trusted
+  proxies" and "Allow Remote Access": core runs them, but they set where core listens, who may
+  reach it, or the folder `-import-auth` reads, and core's settings call does not change them.
+  They are edited in the Source tab.
+- Typing or pasting a client key, "Generate" and the "API key strength" meter: core makes every
+  new key itself, at random. A specific key that a client already uses can be written in the
+  Source tab.
+- Key names ("Name / description (optional)"): the old panel kept them only in that browser's
+  storage, so no other browser saw them.
+- "Edit", and copying a key made earlier: core shows a key in full only once, when it is made.
+- "Set management key": "Rotate" makes a new random key, shows it once and signs the panel in
+  with it. The desktop app shows no "Rotate" yet.
+
+**System**
+
+- "Management UI Version" and "CLI Proxy API Version": one "Core version", since the panel is
+  built into core.
+- "Check for updates" and "Quick Links": they compared with and linked to the upstream project's
+  releases and repositories.
+- "Local Login Data" and "Clear login data": "Sign out" forgets the key.
+- The hidden "Request Logging" dialog, opened by tapping the version seven times: "Enable request
+  logging" is a plain switch on the Config Panel's Logging tab.
+- The "CLI Proxy API Management Center" title: the upstream panel's product name.
+
+**Across the panel**
+
+- Locales other than English: the string layer is ready for them (see
+  [Texts and locales](#texts-and-locales)), and only English ships today.
+- Page transitions, reveal effects and the dot-matrix hero; sponsor forms; community and upstream
+  links.
+- The panel updater: the panel is built into core, and nothing is downloaded.
+
 ## Texts and locales
 
 Every text the kit shows goes through `kit/strings.ts`. Each page or part declares its English
