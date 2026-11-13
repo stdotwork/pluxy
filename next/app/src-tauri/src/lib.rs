@@ -583,7 +583,13 @@ async fn with_conn(
     tauri::async_runtime::spawn_blocking(move || {
         let st = app.state::<App>();
         let mut c = st.conn.lock().unwrap();
-        let r = f(&mut c);
+        // Checked under the lock, as tray actions do: once Quit has begun, nothing the window
+        // asks for may start a core that would outlive the app.
+        let r = if st.quitting.load(Ordering::SeqCst) {
+            Err("the app is quitting".to_string())
+        } else {
+            f(&mut c)
+        };
         let mut v = c.view();
         if let Err(e) = r {
             v.error = Some(e);
