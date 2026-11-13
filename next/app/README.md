@@ -130,6 +130,8 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `device_install_file` | Opens the native file chooser and installs or updates the package chosen there (Linux) |
 | `device_enable`, `device_remove`, `device_rollback` | Enables or disables (a native tool only through its native confirmation), removes, or rolls back a package on this device |
 | `device_page_open` | Opens a webview for a page of a package on this device, at the address its catalog keeps |
+| `program_call`, `program_cancel` | Calls an operation of an admitted native tool, starting it if it is not running; cancels a call by the ticket it was given (Linux) |
+| `program_status` | Whether a native tool runs, its leases, and how it last stopped (Linux) |
 | `window_get`, `window_set` | Reads or saves the Close behavior, and whether there is a usable tray |
 | `window_close` | Answers the close prompt: Exit App or Minimize to Tray, and whether to remember it |
 
@@ -219,9 +221,19 @@ file is recorded. It is labelled **Curated** and installs disabled. Enabling it 
 confirmation that says it has **full access to your user account** and shows its ID, source,
 digest, signer, contracts, operations and program; only Confirm there enables it, and the catalog
 records that admission against the release, source, signer and key. Disabling, updating, rolling
-back or removing it ends the admission, so a new release asks again. Nothing here runs the
-program; the program host takes only what `Catalog::admitted` returns, after checking the
-admission, the root, the signature and every installed file again.
+back or removing it ends the admission, so a new release asks again.
+
+The program host (`src-tauri/src/program.rs`, Linux) runs an admitted tool only on demand: at its
+first call from the window, from what `Catalog::admitted` returns then, after checking the
+admission, the root, the signature and every installed file again. It opens the program, checks
+its SHA-256 against the record and runs that opened file, in its package folder, with a cleared
+environment, only its three private pipes, a process group of its own and a parent-death signal,
+from a supervisor thread that stays until the tool has been reaped. Calls follow [app program
+contract v0](app-host/README.md#app-program-contract-v0), one at a time. When the last call
+ends, the tool stops after 30 seconds idle; any change to its package (disable, update, roll back,
+remove) and quitting the app stop it at once. Stopping closes its stdin, kills its whole process
+group after five seconds and reaps it: no process or thread of it is left. Pages, including the
+tool's own, have no program command and no route to its pipes.
 
 Installing a newer release keeps the one it replaces as the last good release. A candidate that
 fails any check leaves the active release, its files and its open pages as they were. **Roll
@@ -360,6 +372,19 @@ Confirm enables it with an admitted record naming its store folder, program, sou
 Another curated source for it is refused; removed and installed from there, it starts disabled
 again.
 
+One more session with that build checks the program host (`native/program.ts` packs the
+disposable summary tool, `src-tauri/examples/program_fixture`, into a signed package with a page;
+`src-tauri/src/program_native.rs` drives the app and reads `/proc`). Installed and enabled it runs
+no process, and a call while disabled is refused. Three calls from the window at once start it
+once and each gets the expected summary from that one process, which leads its own process group,
+sees only the contract's three environment variables (not a canary the app has) and only stdin,
+stdout and stderr, and runs in its package folder; the command thread that started it has ended
+while it runs on under its supervisor thread; its pipes are held by the app and the tool only. A
+call is cancelled and the next call is answered by the same process. From the tool's own page
+webview every program command is refused and none reaches the tool. Left alone it stops after 30
+seconds with its child and the host's threads; the next call starts it again; disabling it stops
+it at once. Enabled and running when the app quits, its process and child are gone afterwards.
+
 In managed mode, two more sessions run the window checks (`native/window.ts`, which launches
 the app through the stages in `src-tauri/src/native_window.rs`), one with a tray watcher and
 one without. They close the window as its window manager would (a GTK delete event) and answer
@@ -414,8 +439,9 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
 
 ## Limits
 
-- Device extensions: no production trust roots (so no curated source outside tests), resources,
-  settings or native program host yet; installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
+- Device extensions: no production trust roots (so no curated source outside tests), resources
+  or settings yet, and native tools run on Linux only, with no crash backoff, swap or routing
+  from pages yet; installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
   native run.
 - Tested on Linux only. On Windows the page document's address is
   `http://pluxy-page.localhost/`; neither Windows nor macOS has been run.

@@ -31,6 +31,9 @@
     "allow-device-remove",
     "allow-device-rollback",
     "allow-device-page-open",
+    "allow-program-call",
+    "allow-program-cancel",
+    "allow-program-status",
     "allow-window-get",
     "allow-window-set",
     "allow-window-close"
