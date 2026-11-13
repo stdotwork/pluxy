@@ -22,7 +22,9 @@
 //	"browser"  shows a link and waits for the pasted redirect URL: code=ok signs in, code=bad is
 //	           refused with a fixed reason, any other address is asked for again
 //	"device"   shows the user code TEST-1234 and signs in 3 seconds later
-//	"api_key"  signs in with the key it is given, and refuses the key "bad"
+//	"api_key"  signs in with the key it is given, and refuses the key "bad"; an input "label",
+//	           which the method does not ask for, names the account in place of "Test account"
+//	           (the privacy mode tests' identities)
 //
 // A login's accounts serve the models fake-model, rate-limited and server-error; config accounts
 // keep serving whatever their config names, or any model. Every account answers check, and quota
@@ -259,7 +261,11 @@ func login(ctx context.Context, call sdk.LoginCall, s *sdk.LoginSession) (*proto
 		if key == refusedKey {
 			return nil, &llm.Error{Code: llm.CodeAuth, Message: "the test provider refused this key", Status: http.StatusUnauthorized, Scope: llm.ScopeCredential}
 		}
-		return grant(call.Account.ID, &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: key, Data: json.RawMessage(loginMarker)}), nil
+		g := grant(call.Account.ID, &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: key, Data: json.RawMessage(loginMarker)})
+		if label := call.Input["label"]; label != "" {
+			g.Label = label
+		}
+		return g, nil
 	}
 	return nil, &llm.Error{Code: llm.CodeUnsupported, Message: "unknown login method " + call.Method, Scope: llm.ScopeRequest}
 }

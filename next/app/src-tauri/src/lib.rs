@@ -815,8 +815,14 @@ fn deliver_page(app: &AppHandle, label: &str, generation: &str, msg: Value) -> R
     let callback_label = label.to_string();
     let callback_generation = generation.to_string();
     let callback_msg = serde_json::json!({"type":msg["type"],"data":{"id":msg["data"]["id"],"event":msg["data"]["event"],"error":{"code":msg["data"]["error"]["code"]}}});
+    #[cfg(feature = "native-test")]
+    let sent = msg.clone();
     let result = target
         .eval_with_callback(js, move |result| {
+            #[cfg(feature = "native-test")]
+            if result == "true" {
+                native_test::privacy::delivered(&sent);
+            }
             finish_page_delivery(
                 &callback_app,
                 &callback_label,

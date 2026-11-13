@@ -12,6 +12,9 @@
 //! 5. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!
+//! With `PLUXY_APP_TEST_WINDOW` or `PLUXY_APP_TEST_PRIVACY` it runs that stage of the window or
+//! privacy mode checks instead (`native_window.rs`, `native_privacy.rs`).
+//!
 //! Each step prints one line on stderr: `native-test: <step> <JSON>`.
 
 use crate::{App, COMMANDS, MAIN, WINDOW};
@@ -27,6 +30,8 @@ mod ingress;
 pub use ingress::{
     count as ingress_count, forwarded as ingress_forwarded, operation as ingress_operation,
 };
+#[path = "native_privacy.rs"]
+pub mod privacy;
 #[cfg(target_os = "linux")]
 #[path = "native_window.rs"]
 pub mod window;
@@ -135,6 +140,9 @@ fn run(app: &AppHandle) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if let Ok(stage) = std::env::var("PLUXY_APP_TEST_WINDOW") {
         return window::run(app, &stage);
+    }
+    if let Ok(stage) = std::env::var("PLUXY_APP_TEST_PRIVACY") {
+        return privacy::run(app, &stage);
     }
     if let Ok(stage) = std::env::var("PLUXY_APP_TEST_STARTUP") {
         return startup(app, &stage);
