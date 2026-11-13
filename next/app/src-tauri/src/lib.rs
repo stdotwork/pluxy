@@ -28,9 +28,9 @@ pub mod managed;
 mod native_test;
 pub mod pages;
 mod place;
+mod privacy;
 #[cfg(target_os = "linux")]
 pub mod program;
-mod privacy;
 #[cfg(debug_assertions)]
 pub mod release_config;
 mod startup;
