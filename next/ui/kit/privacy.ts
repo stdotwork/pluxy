@@ -48,7 +48,8 @@ export function maskIdentifier(value: string): string {
 }
 
 // Names often hold an address with `@` and `.` replaced (alice_example_com), which the e-mail
-// pattern alone misses.
+// pattern alone misses; core's own rule for account IDs it makes from imported file names
+// (next/internal/legacy AccountID) turns every character an ID cannot hold into "-".
 function identityVariants(identity: string): string[] {
   const value = identity.trim();
   if (value.length < 3) return [];
@@ -58,6 +59,7 @@ function identityVariants(identity: string): string[] {
     variants.add(value.replace(/[@.]/g, "-"));
     variants.add(value.replace("@", "_"));
   }
+  variants.add(value.replace(/[^A-Za-z0-9._-]/g, "-"));
   return [...variants].sort((a, b) => b.length - a.length);
 }
 

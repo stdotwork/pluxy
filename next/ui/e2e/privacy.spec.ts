@@ -18,6 +18,10 @@ const AT = "@x";
 const EMAIL = "alice.smith@example.com";
 // An account ID holding the e-mail address in a file-name form.
 const EMAIL_ID = "alice_smith_example_com";
+// The ID core gives an account imported from today's core's claude-bob.jones+work@example.com.json.
+const IMPORTED = "bob.jones+work@example.com";
+const IMPORTED_ID = "claude-bob.jones-work-example.com";
+const IMPORTED_ID_MASKED = "claude-bo***@e***.com";
 // The masks, worked out by hand from the old app's rules (extensions/app privacyMask.ts):
 // opaque values over 10 characters keep 2 at each end, e-mail addresses keep 2 (local part
 // over 4 characters) and 1 (domain) before ***, and values of 4 characters or fewer are ***.
@@ -25,7 +29,7 @@ const AMP_MASKED = "$&***77";
 const AT_MASKED = "***";
 const EMAIL_MASKED = "al***@e***.com";
 /** What must never be shown, or be in a tooltip or an accessible name, while masking. */
-const RAW = ["abcdefghijk", "alice.smith", "alice_smith", "example.com", AT];
+const RAW = ["abcdefghijk", "alice.smith", "alice_smith", "bob.jones", "example.com", AT];
 
 const keyCanary = `privacy-key-${randomUUID()}`;
 let trace = "";
@@ -53,6 +57,7 @@ test.beforeAll(async () => {
   await addAccount("privacy-amp", AMP);
   await addAccount("privacy-at", AT);
   await addAccount(EMAIL_ID, EMAIL);
+  await addAccount(IMPORTED_ID, IMPORTED);
   const accounts = (await core.mgmt<{ accounts: Account[] }>("GET", "/accounts")).body.accounts;
   expect(accounts.find((a) => a.id === "privacy-amp")?.label).toBe(AMP);
   expect(accounts.find((a) => a.id === "privacy-at")?.label).toBe(AT);
@@ -128,6 +133,7 @@ test("privacy mode masks identities, survives a reload, reaches extension pages 
   const at = list.locator('[data-part="item"]').filter({ hasText: "privacy-at" });
   await expect(at).toContainText(AT_MASKED);
   await expect(list.locator('[data-part="item"]').filter({ hasText: EMAIL_MASKED })).toHaveCount(1);
+  await expect(list.getByRole("button", { name: IMPORTED_ID_MASKED, exact: true })).toBeVisible();
   await expectMasked(page);
   // Tooltips and accessible names are masked too: the row's checkbox and its details.
   await expect(page.getByRole("checkbox", { name: `Select ${EMAIL_MASKED}`, exact: true })).toBeVisible();

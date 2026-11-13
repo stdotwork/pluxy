@@ -103,3 +103,15 @@ test("an identity inside an address does not break the address's mask", () => {
   expect(maskSensitiveText("alice.smith@example.com", ["smith"])).toBe("al***@e***.com");
   expect(maskSensitiveText("socks5://smith:pw@proxy.local", ["smith"])).toBe("socks5://***@proxy.local");
 });
+
+test("account IDs core makes from imported file names are masked", () => {
+  // Core's legacy AccountID: each character an ID cannot hold becomes "-"
+  // (claude-alice.smith@example.com.json is account claude-alice.smith-example.com).
+  expect(maskSensitiveText("claude-alice.smith-example.com", ["alice.smith@example.com"])).toBe(
+    "claude-al***@e***.com",
+  );
+  expect(maskSensitiveText("kimi-upload-example.com", ["upload@example.com"])).toBe("kimi-up***@e***.com");
+  expect(maskSensitiveText("codex-bob.jones-work-example.com", ["bob.jones+work@example.com"])).toBe(
+    "codex-bo***@e***.com",
+  );
+});
