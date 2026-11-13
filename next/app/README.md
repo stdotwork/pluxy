@@ -219,8 +219,9 @@ Collapse hides them and closes their webview, Expand opens a new one. The notes 
 navigates: following a link opens it in the browser,
 only when the notes link to that exact address (as the rendered link writes it), and at most one
 address a second, notes links and "View full release notes" together; the code that starts the
-browser refuses anything but `https://` itself. The notes webview saves no downloads and shows
-no context menu. Since the document runs no script, only a person
+browser refuses anything but `https://` itself. The notes webview refuses every download, on every platform,
+and, on Linux only (the code that turns the menu off does nothing elsewhere), shows no context
+menu. Since the document runs no script, only a person
 activating a link navigates it.
 
 ### Release feed format
