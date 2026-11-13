@@ -918,7 +918,9 @@ func valueSpan(src []byte, start int, value string, style yaml.Style) (span, boo
 }
 
 // offset returns the byte offset of a 1-based line and column (in characters, as yaml.v3
-// counts them), or -1. Where each line starts is found once per document.
+// counts them), or -1. Where each line starts is found once per document, and where each
+// character of a line beyond ASCII starts once per line, so many values on one long line cost
+// no more than reading it once.
 func (d *Doc) offset(line, col int) int {
 	if d.lines == nil {
 		d.lines = []int{0}
@@ -927,22 +929,32 @@ func (d *Doc) offset(line, col int) int {
 				d.lines = append(d.lines, i+1)
 			}
 		}
+		d.chars = map[int][]int{}
 	}
-	if line < 1 || line > len(d.lines) {
+	if line < 1 || line > len(d.lines) || col < 1 {
 		return -1
 	}
-	src, off := d.src, d.lines[line-1]
-	for c := 1; c < col; c++ {
-		if off >= len(src) || src[off] == '\n' {
-			return -1
+	start, end := d.lines[line-1], len(d.src)
+	if line < len(d.lines) {
+		end = d.lines[line] - 1 // its newline
+	}
+	text := d.src[start:end]
+	chars, read := d.chars[line]
+	if !read {
+		if slices.ContainsFunc(text, func(c byte) bool { return c >= utf8.RuneSelf }) {
+			for i := range string(text) {
+				chars = append(chars, i)
+			}
 		}
-		_, size := utf8.DecodeRune(src[off:])
-		off += size
+		d.chars[line] = chars
 	}
-	if off >= len(src) {
-		return -1
+	switch {
+	case chars == nil && col <= len(text):
+		return start + col - 1
+	case chars != nil && col <= len(chars):
+		return start + chars[col-1]
 	}
-	return off
+	return -1
 }
 
 // line returns the line a node is on, for messages.

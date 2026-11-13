@@ -195,29 +195,59 @@ func TestSettingsSecretsHoldURLParts(t *testing.T) {
 }
 
 // Reading and restoring a config file, and finding the secrets of settings, take time in
-// proportion to the document's size: eight times the secrets take about eight times as long, not
-// the 64 times a reading that goes over the document once for each secret takes. The best of
-// three runs at each size is compared, so a busy machine slows both alike and decides nothing.
+// proportion to the document's size: 16 times the secrets take about 16 times as long, not the
+// 256 times a reading that goes over the document once for each secret takes. A config.yaml is
+// read with a key on each line and with all of them on one line (a flow list), with and without
+// characters beyond ASCII. The best of three runs at each size is compared, so a busy machine
+// slows both alike and decides nothing.
 func TestRedactAndRestoreTimeGrowsWithSize(t *testing.T) {
-	const small, large, most = 1000, 16000, 64.0
-	doc := func(isYAML bool, n int) []byte {
-		var b strings.Builder
-		if isYAML {
-			b.WriteString("access:\n  api-keys:\n")
+	const small, large, most = 1000, 16000, 96.0
+	type layout struct {
+		name   string
+		isYAML bool
+		doc    func(n int) []byte
+	}
+	yamlList := func(flow bool, key string) func(n int) []byte {
+		return func(n int) []byte {
+			var b strings.Builder
+			if flow {
+				b.WriteString("access:\n  api-keys: [")
+			} else {
+				b.WriteString("access:\n  api-keys:\n")
+			}
 			for i := range n {
-				fmt.Fprintf(&b, "    - \"sk-many-%06d\"\n", i)
+				switch {
+				case !flow:
+					fmt.Fprintf(&b, "    - \"%s-%06d\"\n", key, i)
+				case i > 0:
+					b.WriteString(", ")
+					fallthrough
+				default:
+					fmt.Fprintf(&b, "\"%s-%06d\"", key, i)
+				}
+			}
+			if flow {
+				b.WriteString("]\n")
 			}
 			return []byte(b.String())
 		}
-		b.WriteString(`{"client_keys": [`)
-		for i := range n {
-			if i > 0 {
-				b.WriteString(", ")
+	}
+	layouts := []layout{
+		{"json", false, func(n int) []byte {
+			var b strings.Builder
+			b.WriteString(`{"client_keys": [`)
+			for i := range n {
+				if i > 0 {
+					b.WriteString(", ")
+				}
+				fmt.Fprintf(&b, `"sk-many-%06d"`, i)
 			}
-			fmt.Fprintf(&b, `"sk-many-%06d"`, i)
-		}
-		b.WriteString("]}\n")
-		return []byte(b.String())
+			b.WriteString("]}\n")
+			return []byte(b.String())
+		}},
+		{"yaml", true, yamlList(false, "sk-many")},
+		{"yaml on one line", true, yamlList(true, "sk-many")},
+		{"yaml on one line, not ASCII", true, yamlList(true, "sk-mäny")},
 	}
 	// timed runs f with the garbage collector off, which would otherwise run more often the more
 	// memory f takes, and make a larger document slower than its size alone makes it.
@@ -229,28 +259,28 @@ func TestRedactAndRestoreTimeGrowsWithSize(t *testing.T) {
 		return time.Since(start)
 	}
 	r := NewRedactor()
-	for _, isYAML := range []bool{false, true} {
+	for _, l := range layouts {
 		steps := map[string]func(src []byte) func(){
 			"Redact": func(src []byte) func() {
 				return func() {
-					if _, err := r.Redact(src, isYAML); err != nil {
+					if _, err := r.Redact(src, l.isYAML); err != nil {
 						t.Fatal(err)
 					}
 				}
 			},
 			"Restore": func(src []byte) func() {
-				red, err := r.Redact(src, isYAML)
+				red, err := r.Redact(src, l.isYAML)
 				if err != nil {
 					t.Fatal(err)
 				}
 				return func() {
-					if back, err := r.Restore(red, src, isYAML); err != nil || !bytes.Equal(back, src) {
+					if back, err := r.Restore(red, src, l.isYAML); err != nil || !bytes.Equal(back, src) {
 						t.Fatalf("Restore: %v", err)
 					}
 				}
 			},
 		}
-		if !isYAML {
+		if !l.isYAML {
 			steps["SettingsSecrets"] = func(src []byte) func() {
 				return func() {
 					if got := SettingsSecrets(src); len(got) == 0 {
@@ -260,16 +290,16 @@ func TestRedactAndRestoreTimeGrowsWithSize(t *testing.T) {
 			}
 		}
 		for name, step := range steps {
-			few, many := step(doc(isYAML, small)), step(doc(isYAML, large))
+			few, many := step(l.doc(small)), step(l.doc(large))
 			best := [2]time.Duration{time.Hour, time.Hour}
 			for range 3 {
 				best[0] = min(best[0], timed(few))
 				best[1] = min(best[1], timed(many))
 			}
 			if ratio := float64(best[1]) / float64(best[0]); ratio > most {
-				t.Errorf("yaml %v: %s of %d secrets took %v, of %d took %v: %.1f times as long, want at most %.0f", isYAML, name, small, best[0], large, best[1], ratio, most)
+				t.Errorf("%s: %s of %d secrets took %v, of %d took %v: %.1f times as long, want at most %.0f", l.name, name, small, best[0], large, best[1], ratio, most)
 			} else {
-				t.Logf("yaml %v: %s: %v, %v: %.1f times", isYAML, name, best[0], best[1], ratio)
+				t.Logf("%s: %s: %v, %v: %.1f times", l.name, name, best[0], best[1], ratio)
 			}
 		}
 	}
