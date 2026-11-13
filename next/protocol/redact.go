@@ -725,9 +725,9 @@ func (r *Redactor) Body() *BodyRedactor {
 // form that starts there is replaced, and the search goes on after it. Write returns the text up
 // to the first position where more text could change that, and holds back the rest: fewer bytes
 // than the longest form. When a form could be part of a JSON number, it also holds back a colon,
-// bracket or comma at the end and any number after it (or a number alone there), with the spaces
-// between, when they take at most maxNumberHold bytes, and where they start inside a form, that
-// form. So a body of any length passes through in bounded memory, and a stream is delayed only
+// bracket or comma at the end, with any spaces after it and the number that follows, if any (a run
+// of the bytes of numbers that starts with a digit or a minus), when they take at most
+// maxNumberHold bytes, and where they start inside a form, that form. So a body of any length passes through in bounded memory, and a stream is delayed only
 // where a piece ends with what could start a form, or such a number. Each text it returns is
 // redacted with String, so a credential spelled with escapes is found within it, and a number in
 // JSON that holds one becomes 0.
@@ -835,9 +835,11 @@ func (b *BodyRedactor) parse(s string, sent int, final bool) (skip, cut int) {
 
 // numberStart returns where to cut s instead of at cut, a position parse stopped at, so that a
 // JSON number is not cut from its digits or from the colon, bracket or comma before it, which
-// String needs to read it as a number (jsonNumbers): the start of that run when the Redactor has
-// a form that could be part of a number, it is within maxNumberHold and parse passed through it;
-// cut otherwise.
+// String needs to read it as a number (jsonNumbers). When the Redactor has a form that could be
+// part of a number and s[:cut] ends with such a character, any spaces, and either nothing more or
+// a run of the bytes of numbers that starts with a minus or a digit, it returns the position of
+// that character (or of the form it falls in) if that is within maxNumberHold of cut; cut
+// otherwise. Other runs of those bytes, such as the "e" ending "there", are never a number.
 func (b *BodyRedactor) numberStart(s string, cut int) int {
 	if !b.r.numeric {
 		return cut
@@ -846,12 +848,14 @@ func (b *BodyRedactor) numberStart(s string, cut int) int {
 	for c > 0 && strings.IndexByte(numberChars, s[c-1]) >= 0 {
 		c--
 	}
-	if t := strings.TrimRight(s[:c], " \t\r\n"); t != "" && strings.IndexByte(":[,", t[len(t)-1]) >= 0 {
-		c = len(t) - 1
-	}
-	if c == cut || cut-c > maxNumberHold {
+	if c < cut && s[c] != '-' && (s[c] < '0' || s[c] > '9') {
 		return cut
 	}
+	t := strings.TrimRight(s[:c], " \t\r\n")
+	if t == "" || strings.IndexByte(":[,", t[len(t)-1]) < 0 || cut-(len(t)-1) > maxNumberHold {
+		return cut
+	}
+	c = len(t) - 1
 	// c must be a position parse stops at, not inside a form.
 	last := 0
 	for i := 0; i <= c && i < len(s); {

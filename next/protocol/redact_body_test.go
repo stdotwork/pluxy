@@ -326,6 +326,28 @@ func TestBodyRedactorNumericMatchesStringAtEveryCut(t *testing.T) {
 	}
 }
 
+// With a numeric secret, Write holds back only what String could still read as a JSON number
+// holding it: a number after a colon, bracket or comma, or such a character at the end. Other
+// text made of the characters of numbers is sent on at once.
+func TestBodyRedactorNumericHoldsOnlyANumber(t *testing.T) {
+	r := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: "12345678"})
+	for _, c := range []struct{ piece, want string }{
+		{"hello there", "hello there"},
+		{"see", "see"},
+		{"x-", "x-"},
+		{"v1.2.3", "v1.2.3"},
+		{"e3", "e3"},
+		{`{"a": `, `{"a"`},
+		{`{"a":-`, `{"a"`},
+		{`[1,2`, `[1`},
+		{`{"a": 1.5e`, `{"a"`},
+	} {
+		if got := r.Body().Write(c.piece); got != c.want {
+			t.Errorf("Write(%q) = %q, want %q", c.piece, got, c.want)
+		}
+	}
+}
+
 // cutTail returns the part after a cut of a form that whole holds across a cut between pieces,
 // when got holds it and it is long enough (6 bytes) not to be there by chance; else "".
 func cutTail(r *Redactor, whole string, pieces []string, got string) string {
