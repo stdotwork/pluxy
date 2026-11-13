@@ -220,7 +220,9 @@ and cleared at each start. It may show only the app's page document and the page
 
 On Linux, Tauri stacks a window's webviews one under another in a box and ignores where they
 should be, so the app lays them out itself: it moves the window's webview into a GTK overlay and
-puts each page webview over it at the page area (`src-tauri/src/place.rs`).
+puts each page webview over it at the page area (`src-tauri/src/place.rs`). GTK would give each
+one its natural size, its document's, so the app's handler for the overlay's
+`get-child-position` signal gives it exactly the page area instead.
 
 That webview loads one app document from the `pluxy-page:` scheme (`page/`). The document shows
 the extension's page in a frame with `sandbox="allow-scripts"`, from core's pages site, as the
@@ -521,7 +523,9 @@ invalid schema, repeated hello, wrong generation, explicit close and frame navig
 the wrapper's close message is suppressed. A separate real HTTP pages-site probe records whether
 that frame can reach the scheme, and navigation of that real frame closes native admission. It compares native handler arrivals,
 admissions, forwarding and real core settings operations, with a successful call on the same page.
-It checks that the page webview covers the page area, that
+It checks that the page webview covers the page area, also after the window shrinks (when GTK
+would still give it its old, taller natural height), with the window at the top and partly
+scrolled, that
 closing the window leaves no webview and
 no web process, and that quitting stops only the app's own core. With the window closed, it
 finds the app's real StatusNotifierItem through the session's tray watcher and sends the actual

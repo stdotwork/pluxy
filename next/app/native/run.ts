@@ -756,6 +756,16 @@ async function runApp(
       area && placed && (["x", "y", "width", "height"] as const).every((k) => near(area[k], placed[k])),
       `the page webview is at ${JSON.stringify(placed)}, the page area at ${JSON.stringify(area)}`,
     );
+    // The page webview keeps exactly its area after the window shrinks, at the top and partly
+    // scrolled (native_test.rs shrunk_page; its report says what it saw).
+    const allocation = steps.get("page_allocation") as
+      | { ok?: boolean; top?: { ok?: boolean }; scrolled?: { ok?: boolean } }
+      | undefined;
+    check(
+      allocation?.ok === true && allocation.top?.ok === true && allocation.scrolled?.ok === true,
+      `the page webview after the window shrank: ${JSON.stringify(allocation)}`,
+    );
+    console.log(`${mode} page_allocation ${JSON.stringify(allocation)}`);
     for (const cmd of commands) check(page?.calls[cmd], `the page webview's probe did not try ${cmd}`);
     for (const [cmd, c] of Object.entries(page?.calls ?? {})) {
       check(!c.ok && REFUSED.test(c.detail), `${cmd} from the page webview: ${JSON.stringify(c)}`);
