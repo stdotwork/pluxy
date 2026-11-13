@@ -373,6 +373,7 @@ func found(n *yaml.Node, strict bool) (out []*yaml.Node, texts map[*yaml.Node]st
 	}
 	read := map[reading]bool{}
 	var walk func(v *yaml.Node, c ctx)
+	var keyRule func(key string, val *yaml.Node, c ctx)
 	// pairs reads the key-value pairs of the mapping m, and those of the mappings merged into it.
 	var pairs func(m *yaml.Node, c ctx, each func(key string, val *yaml.Node))
 	pairs = func(m *yaml.Node, c ctx, each func(key string, val *yaml.Node)) {
@@ -433,7 +434,15 @@ func found(n *yaml.Node, strict bool) (out []*yaml.Node, texts map[*yaml.Node]st
 			return
 		case c.role == roleHeaders && v.Kind == yaml.MappingNode:
 			pairs(v, c, func(name string, val *yaml.Node) {
-				if secretHeader(name) || secretName(name) {
+				switch {
+				case resolved(val).Kind == yaml.MappingNode && secretHeader(name):
+					// No header value: a mapping below a name about authentication is below
+					// a secret key.
+					walk(val, ctx{role: roleSecret, section: c.section})
+				case resolved(val).Kind == yaml.MappingNode:
+					// No header value: read by the rules for keys (a credential, a secret key).
+					keyRule(name, val, plain)
+				case secretHeader(name) || secretName(name):
 					if s := resolved(val); c.section && s.Kind == yaml.ScalarNode {
 						var v any
 						if s.Decode(&v) == nil {
@@ -446,7 +455,7 @@ func found(n *yaml.Node, strict bool) (out []*yaml.Node, texts map[*yaml.Node]st
 						}
 					}
 					all(val, true, anywhere)
-				} else {
+				default:
 					walk(val, plain)
 				}
 			})
@@ -462,24 +471,27 @@ func found(n *yaml.Node, strict bool) (out []*yaml.Node, texts map[*yaml.Node]st
 				walk(x, plain)
 			}
 		case yaml.MappingNode:
-			pairs(v, c, func(key string, val *yaml.Node) {
-				switch {
-				case strings.EqualFold(key, "credential"):
-					all(val, false, anywhere)
-				case strings.EqualFold(key, "headers"):
-					walk(val, ctx{role: roleHeaders, section: c.section})
-				case headersName(key):
-					walk(val, ctx{role: roleHeaders})
-				case c.role == roleTop && key == "api-keys" && resolved(val).Kind == yaml.MappingNode:
-					walk(val, ctx{role: roleSections})
-				case c.role == roleTop && slices.Contains(sectionLists, key):
-					walk(val, ctx{role: roleEntries})
-				case secretName(key):
-					walk(val, ctx{role: roleSecret, section: c.section})
-				default:
-					walk(val, plain)
-				}
-			})
+			pairs(v, c, func(key string, val *yaml.Node) { keyRule(key, val, c) })
+		}
+	}
+	// keyRule reads the value of a key of a mapping in the place c, by the rules for key names.
+	keyRule = func(key string, val *yaml.Node, c ctx) {
+		plain := ctx{section: c.section}
+		switch {
+		case strings.EqualFold(key, "credential"):
+			all(val, false, anywhere)
+		case strings.EqualFold(key, "headers"):
+			walk(val, ctx{role: roleHeaders, section: c.section})
+		case headersName(key):
+			walk(val, ctx{role: roleHeaders})
+		case c.role == roleTop && key == "api-keys" && resolved(val).Kind == yaml.MappingNode:
+			walk(val, ctx{role: roleSections})
+		case c.role == roleTop && slices.Contains(sectionLists, key):
+			walk(val, ctx{role: roleEntries})
+		case secretName(key):
+			walk(val, ctx{role: roleSecret, section: c.section})
+		default:
+			walk(val, plain)
 		}
 	}
 	if strict {

@@ -452,6 +452,19 @@ func TestRedactCopiesOnlyOfDirectSecrets(t *testing.T) {
 		[]string{"fake-client-secret-1", `"mode": "automatic"`}, []string{`"strategy": "automatic"`})
 }
 
+// Inside a header mapping, a value that is a mapping is read by the rules for keys: a
+// credential there is hidden but for its kind, and a mapping below a secret key's name holds
+// secrets only for being there, so its short numbers stay in text.
+func TestHeaderMappingsKeepKeyRules(t *testing.T) {
+	src := `{"settings": {"extra_headers": {"credential": {"kind": "api_key", "value": "fake-header-credential-1"},
+  "client_secret": {"value": "fake-header-nested-1", "rotate_after_days": 3}}}}`
+	redactRoundTrip(t, src, false, []string{"fake-header-credential-1", "fake-header-nested-1"}, []string{`"kind": "api_key"`})
+	d := mustParse(t, src, false)
+	if got := d.TextSecrets(); slices.Contains(got, "3") || !slices.Contains(got, "fake-header-nested-1") {
+		t.Errorf("TextSecrets = %q, want the nested secret and not the 3", got)
+	}
+}
+
 // A JSON key name is compared as encoding/json matches it when core loads the file, so
 // client_keyſ (with U+017F) and management_\u212aey (with the Kelvin sign) are client_keys and
 // management_key, and their values are hidden.
