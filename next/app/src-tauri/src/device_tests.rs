@@ -1168,6 +1168,17 @@ fn admission_is_confirmed_per_release_and_checked_each_time() {
     assert_eq!(a.operations[0].id, "inspect");
     // The program's digest at install, from the fixture's own bytes.
     assert_eq!(a.program_sha256(), digest(b"#!/bin/sh\n# 1.0.0\n"));
+    // The person asks in the main window; the tool is what runs.
+    #[cfg(target_os = "linux")]
+    {
+        let action = a.confirmation();
+        assert_eq!(action.chain.len(), 1);
+        assert_eq!(action.chain[0].id, "main window");
+        assert_eq!(action.executor.id, "pluxy/tool");
+        assert_eq!(action.executor.digest, sha);
+        assert!(action.native_tool);
+        assert_eq!(action.files, vec![dir.join("bin").join("tool")]);
+    }
     let mut changed = a.clone();
     changed.version = "9".into();
     let e = c.admit(&changed, &roots).unwrap_err();

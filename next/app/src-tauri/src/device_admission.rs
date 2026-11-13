@@ -184,8 +184,9 @@ impl Admitted {
     pub fn host_contract(&self) -> i64 {
         self.host_contract
     }
-    /// The native confirmation enabling it shows: its ID, source, digest, signer and key,
-    /// contracts, operations and program, and that it has full access to your user account.
+    /// The native confirmation enabling it shows: the main window as the requester; the tool,
+    /// as the executor, with its ID, source, digest, signer and key, contracts, operations and
+    /// program; and that it has full access to your user account.
     #[cfg(target_os = "linux")]
     pub fn confirmation(&self) -> crate::confirmation::Action {
         let package = crate::confirmation::Package {
@@ -217,7 +218,15 @@ impl Admitted {
                 self.version,
                 operations.join(", ")
             ),
-            chain: vec![package.clone()],
+            // The person asked in the app's main window; the tool is what would run.
+            chain: vec![crate::confirmation::Package {
+                id: "main window".into(),
+                source: format!("pluxy app {}", env!("CARGO_PKG_VERSION")),
+                digest: String::new(),
+                signer: String::new(),
+                contract: format!("app host {HOST_CONTRACT}"),
+                generation: 0,
+            }],
             executor: package,
             native_tool: true,
             files: vec![self.program.clone()],
