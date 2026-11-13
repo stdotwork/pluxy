@@ -11,9 +11,10 @@
 // - closing the window leaves no webview and no web process, with the app still in the tray;
 // - quitting stops the app's own core, and leaves a local or remote core running;
 // - the management key rotates natively (native_test.rs, rotation_test.rs): core_call refuses
-//   it, the app keeps working on the new key as the old one was kept, and no output line holds
-//   any key the run rotated; in local mode the app then starts again on the same folders and
-//   signs in with the kept key.
+//   it, the app keeps working on the new key as the old one was kept, the key window stays open
+//   when the window closes to the tray and goes when a later rotation shows its own, no webview
+//   (the window's or an extension page's) and no output line holds any key the run rotated; in
+//   local mode the app then starts again on the same folders and signs in with the kept key.
 //
 // In managed mode it then runs the window checks (window.ts, native_window.rs) in two more
 // sessions, one with a tray watcher and one without.
@@ -485,6 +486,11 @@ async function runApp(
       session: !managed,
       recovery: !managed,
       webviews_clean: true,
+      page_audited: !managed,
+      outlived_window: !managed,
+      replaced: !managed,
+      connection_shown: !managed,
+      no_launch_notice: true,
     };
     check(
       rotationStep && Object.entries(wanted).every(([k, want]) => rotationStep[k] === want),

@@ -9,7 +9,8 @@
 //!    must be refused by Tauri's command check;
 //! 3. waits for the page's own report (it writes it into its settings through the channel);
 //!    then native key entry and management-key rotation (`key_entry_test.rs`,
-//!    `rotation_test.rs`) in local and remote mode, rotation alone in managed mode;
+//!    `rotation_test.rs`) in local and remote mode, rotation alone in managed mode; in local and
+//!    remote mode the window closes to the tray during a rotation and opens again;
 //! 4. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!
@@ -266,7 +267,8 @@ fn run(app: &AppHandle) -> Result<(), String> {
     }
 
     key_entry_test::check(app, &main)?;
-    rotation_test::check(app, &main)?;
+    // In local and remote mode the window closes to the tray and opens again meanwhile.
+    let main = rotation_test::check(app, &main)?;
     ingress::run(app, &main)?;
 
     // For screenshots: keep the window open until this file exists.

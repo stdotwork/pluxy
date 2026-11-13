@@ -932,6 +932,129 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    /// A fake core on a free port that reads one rotation request, then answers with body, or,
+    /// with None, holds the connection without answering until the sender is dropped (two
+    /// minutes at most). Returns its address.
+    fn one_rotation(
+        body: Option<String>,
+    ) -> (
+        String,
+        std::sync::mpsc::Sender<()>,
+        std::thread::JoinHandle<()>,
+    ) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let (done, held) = std::sync::mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut head = Vec::new();
+            let mut byte = [0];
+            while !head.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).unwrap();
+                head.push(byte[0]);
+            }
+            assert!(head.starts_with(b"POST /v0/management/management-key/rotate HTTP/1.1\r\n"));
+            match body {
+                Some(body) => {
+                    let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                    stream.write_all(response.as_bytes()).unwrap();
+                }
+                None => {
+                    let _ = held.recv_timeout(std::time::Duration::from_secs(120));
+                }
+            }
+        });
+        (base, done, server)
+    }
+
+    /// A connection in local mode on base whose key old is kept in connection.json.
+    fn kept_local(base: &str, old: &str) -> (PathBuf, Dirs, Connection) {
+        let dir =
+            std::env::temp_dir().join(format!("pluxy-rotate-{}", crate::managed::random_key()));
+        let dirs = Dirs {
+            config: dir.join("config"),
+            core: dir.join("core"),
+        };
+        Settings {
+            mode: Some(Mode::Local),
+            url: Some(base.to_string()),
+            key: Some(old.to_string()),
+            ..Settings::default()
+        }
+        .save(&dirs.settings())
+        .unwrap();
+        let c = Connection::open(dirs.clone(), None);
+        (dir, dirs, c)
+    }
+
+    /// Core took the rotation and never answered: the app gives up long before the 300 seconds
+    /// other calls may take, since the connection's lock is held meanwhile, and changes nothing.
+    #[test]
+    fn a_rotation_core_never_answers_gives_up_early_and_changes_nothing() {
+        let (base, done, server) = one_rotation(None);
+        let old = crate::managed::random_key();
+        let (dir, dirs, mut c) = kept_local(&base, &old);
+        let saved = fs::read(dirs.settings()).unwrap();
+        let started = std::time::Instant::now();
+        let r = c
+            .rotate_key()
+            .err()
+            .expect("a rotation without a reply succeeded");
+        let waited = started.elapsed();
+        assert!(
+            waited < std::time::Duration::from_secs(60),
+            "waited {waited:?} for a core that never answered"
+        );
+        assert_eq!(r.status, 0);
+        assert!(r.error.unwrap().message.contains("may have changed"));
+        assert_eq!(c.key.as_deref(), Some(old.as_str()));
+        assert_eq!(fs::read(dirs.settings()).unwrap(), saved);
+        drop(done);
+        server.join().unwrap();
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// After a rotated key could not be kept, saving the same connection again keeps the key
+    /// the app uses, not the old one core no longer accepts.
+    #[test]
+    fn saving_the_connection_after_a_failed_save_keeps_the_rotated_key() {
+        use std::os::unix::fs::PermissionsExt;
+        let new = crate::managed::random_key();
+        let (base, _done, server) = one_rotation(Some(format!(r#"{{"value":"{new}"}}"#)));
+        let old = crate::managed::random_key();
+        let (dir, dirs, mut c) = kept_local(&base, &old);
+        // Saving fails while the settings folder is read-only.
+        let folder = dirs.settings().parent().unwrap().to_path_buf();
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o500)).unwrap();
+        let kept = c.rotate_key().map(|r| r.kept);
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o700)).unwrap();
+        server.join().unwrap();
+        assert!(
+            matches!(kept, Ok(Kept::NotSaved(_))),
+            "the rotated key was saved in a read-only folder"
+        );
+        assert_eq!(
+            Settings::load(&dirs.settings()).unwrap().key.as_deref(),
+            Some(old.as_str())
+        );
+        c.change(Change {
+            mode: Some(Mode::Local),
+            url: Some(base),
+            ca_file: None,
+            core_path: None,
+        })
+        .unwrap();
+        assert_eq!(
+            Settings::load(&dirs.settings()).unwrap().key.as_deref(),
+            Some(new.as_str()),
+            "saving the connection again kept the key core no longer accepts"
+        );
+        assert_eq!(c.key.as_deref(), Some(new.as_str()));
+        assert!(c.view().remembered && c.view().error.is_none());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn key_preparation_validates_and_describes_the_destination_without_changing_state() {
         let dir =

@@ -9,6 +9,12 @@ use std::path::{Path, PathBuf};
 
 const CONFIRM: &str = "pluxy native confirmation";
 const REVEAL: &str = "pluxy new management key";
+const LAUNCH_NOTICE: &str = "pluxy launch notice";
+
+/// How each rotation's confirmation must end, by how the key is kept.
+const SAYS_CORE: &str = "The app's core saves the new key in its config file. The app shows the new key once in a window of its own.";
+const SAYS_DEVICE: &str = "The app keeps the new key on this device, as it kept the old one. The app shows the new key once in a window of its own.";
+const SAYS_SESSION: &str = "The app uses the new key until it quits; like the old one, it is not kept on this device. The app shows the new key once in a window of its own.";
 
 fn require(ok: bool, what: &str) -> Result<(), String> {
     if ok {
@@ -24,8 +30,15 @@ fn visible(title: &str) -> Option<String> {
         .and_then(|s| s.lines().last().map(String::from))
 }
 
+/// The one visible window titled title, once there is exactly one.
+fn only(title: &str) -> Option<String> {
+    let found = xdotool(&["search", "--onlyvisible", "--name", &format!("^{title}$")]).ok()?;
+    let ids: Vec<&str> = found.lines().filter(|l| !l.is_empty()).collect();
+    (ids.len() == 1).then(|| ids[0].to_string())
+}
+
 fn press(title: &str, keys: &str) -> Result<(), String> {
-    let id = wait_for(title, || visible(title))?;
+    let id = wait_for(title, || only(title))?;
     xdotool(&["windowfocus", "--sync", &id])?;
     xdotool(&["key", "--clearmodifiers", keys])?;
     Ok(())
@@ -33,6 +46,12 @@ fn press(title: &str, keys: &str) -> Result<(), String> {
 
 /// The text of every label in the visible native window titled title, read on the GTK thread.
 fn labels(app: &AppHandle, title: &'static str) -> Result<String, String> {
+    Ok(windows(app, title)?.join("\n"))
+}
+
+/// For each visible native window titled title, the text of its labels, read on the GTK thread
+/// after every earlier request to it.
+fn windows(app: &AppHandle, title: &'static str) -> Result<Vec<String>, String> {
     let (tx, rx) = mpsc::channel();
     app.run_on_main_thread(move || {
         use gtk::prelude::*;
@@ -46,15 +65,17 @@ fn labels(app: &AppHandle, title: &'static str) -> Result<String, String> {
                 }
             }
         }
-        let mut out = Vec::new();
+        let mut shown = Vec::new();
         for widget in gtk::Window::list_toplevels() {
             if let Ok(window) = widget.downcast::<gtk::Window>() {
                 if window.title().as_deref() == Some(title) && window.is_visible() {
+                    let mut out = Vec::new();
                     inspect(window.upcast_ref(), &mut out);
+                    shown.push(out.join("\n"));
                 }
             }
         }
-        let _ = tx.send(out.join("\n"));
+        let _ = tx.send(shown);
     })
     .map_err(|_| "could not inspect a native window")?;
     rx.recv_timeout(Duration::from_secs(5))
@@ -151,39 +172,79 @@ fn rotation_outcome(main: &Webview) -> Result<Value, String> {
     })
 }
 
-/// Answers the native confirmation with keys, after checking it names the rotation and core.
-fn answer(app: &AppHandle, target: &str, keys: &str) -> Result<(), String> {
+/// Answers the native confirmation with keys, after checking it names the rotation and core,
+/// ends with says, and shows no launch fields.
+fn answer(app: &AppHandle, target: &str, says: &str, keys: &str) -> Result<(), String> {
     wait_for(CONFIRM, || visible(CONFIRM))?;
+    let text = labels(app, CONFIRM)?;
     require(
-        labels(app, CONFIRM)?.contains(&format!("Rotate the management key of {target}")),
+        text.contains(&format!("Rotate the management key of {target}")),
         "the native confirmation did not name the rotation and its core",
+    )?;
+    require(
+        text.contains(says),
+        "the native confirmation did not say how the new key is kept and shown",
+    )?;
+    require(
+        !["digest", "signer", "generation", "launch"]
+            .iter()
+            .any(|f| text.contains(f)),
+        "the native confirmation showed launch fields",
     )?;
     press(CONFIRM, keys)
 }
 
-/// The key the native key window shows, checked against core's config file, copied with its
-/// Copy button and closed; says must be in its text.
-fn revealed(app: &AppHandle, core: &Core, says: &str) -> Result<String, String> {
-    wait_for(REVEAL, || visible(REVEAL))?;
-    let key = core.key()?;
-    let text = labels(app, REVEAL)?;
+/// No launch notice tells of a rotation: one is the app's own action, not a launch.
+fn no_launch_notice(app: &AppHandle) -> Result<(), String> {
     require(
-        text.lines().any(|l| l == key),
-        "the key window did not show core's new key",
+        !labels(app, LAUNCH_NOTICE)?.contains("management key"),
+        "a launch notice appeared for a rotation",
+    )
+}
+
+/// Waits for the key window of the rotation that replaced before: core's new key, from its config
+/// file, in the only key window open (an earlier rotation's window must be gone), saying says.
+fn new_key_window(
+    app: &AppHandle,
+    core: &Core,
+    before: &str,
+    says: &str,
+) -> Result<String, String> {
+    let key = wait_for("core's new key", || core.key().ok().filter(|k| k != before))?;
+    record(&key)?;
+    let shown = wait_for("the key window with core's new key", || {
+        windows(app, REVEAL)
+            .ok()
+            .filter(|w| w.iter().any(|t| t.lines().any(|l| l == key)))
+    })?;
+    require(
+        shown.len() == 1,
+        "the key window of an earlier rotation is still open",
     )?;
     require(
-        text.contains(says),
+        shown[0].contains(says),
         "the key window did not say how the key is kept",
     )?;
+    Ok(key)
+}
+
+/// Copies the key with the key window's Copy button.
+fn copy(app: &AppHandle, key: &str) -> Result<(), String> {
     press(REVEAL, "alt+p")?;
     wait_for("the copied key", || {
-        clipboard(app).filter(|t| *t == key).map(|_| ())
-    })?;
+        clipboard(app).filter(|t| t == key).map(|_| ())
+    })
+}
+
+/// The key the native key window shows for the rotation that replaced before, checked against
+/// core's config file, copied with its Copy button and closed; says must be in its text.
+fn revealed(app: &AppHandle, core: &Core, before: &str, says: &str) -> Result<String, String> {
+    let key = new_key_window(app, core, before, says)?;
+    copy(app, &key)?;
     press(REVEAL, "alt+c")?;
     wait_for("the key window to close", || {
         visible(REVEAL).is_none().then_some(())
     })?;
-    record(&key)?;
     Ok(key)
 }
 
@@ -236,7 +297,34 @@ const REFUSALS: &str = r#"(async () => {
   window.__rotationRefusals = out;
 })()"#;
 
-pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
+/// The window's webview, ready, and watched for keys.
+fn window_ready(app: &AppHandle) -> Result<Webview, String> {
+    let main = wait_for("the window", || app.get_webview(MAIN))?;
+    wait_for("the window's shell", || {
+        eval(&main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true)
+    })?;
+    watch(&main)?;
+    Ok(main)
+}
+
+/// Opens the Config page's Connectivity tab and presses Rotate.
+fn press_rotate(main: &Webview) -> Result<(), String> {
+    main.eval("location.hash = '#/config'")
+        .map_err(|_| "could not open Config")?;
+    wait_for("the Connectivity tab", || {
+        eval(main, "(() => { const t = [...document.querySelectorAll('[role=tab]')].find((t) => t.textContent === 'Connectivity'); if (t) t.click(); return !!t; })()")
+            .filter(|v| v == true)
+    })?;
+    wait_for("the Rotate button", || {
+        eval(main, "(() => { const b = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Rotate' && !b.disabled); if (b) b.click(); return !!b; })()")
+            .filter(|v| v == true)
+    })
+    .map(|_| ())
+}
+
+/// Returns the window's webview: a new one in local and remote mode, where the window closes to
+/// the tray while a key window is open, and opens again.
+pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<Webview, String> {
     let core = Core::of(app)?;
     let view = app.state::<App>().conn.lock().unwrap().view();
     let managed = view.mode == Some(Mode::Managed);
@@ -261,14 +349,14 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
         refusals["plain"]["status"] == 403 && refusals["plain"]["error"]["code"] == "native_only",
         "core_call did not refuse the rotation as native-only",
     )?;
-    for (path, reply) in refusals["variants"]
+    let variants = refusals["variants"]
         .as_object()
-        .ok_or("no variants tried")?
-    {
-        let status = reply["status"].as_u64().ok_or("a variant got no reply")?;
+        .ok_or("no variants tried")?;
+    require(variants.len() == 5, "not every spelling was tried")?;
+    for (path, reply) in variants {
         require(
-            !(200..300).contains(&status),
-            &format!("core_call accepted the rotation as {path}"),
+            reply["status"] == 403 && reply["error"]["code"] == "native_only",
+            &format!("core_call did not refuse the rotation as {path} as native-only"),
         )?;
     }
     require(
@@ -286,15 +374,21 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
         }
     }
 
-    // Cancel: nothing changes.
+    // Cancel: nothing changes, and no launch notice follows.
+    require(
+        managed || view.remembered,
+        "the rotation check expects a kept key",
+    )?;
+    let says = if managed { SAYS_CORE } else { SAYS_DEVICE };
     let disk = std::fs::read(&settings).ok();
     start_rotation(main)?;
-    answer(app, &target, "alt+c")?;
+    answer(app, &target, says, "alt+c")?;
     let cancelled = rotation_outcome(main)?;
     require(
         cancelled["status"] == 204 && cancelled.get("body").is_none(),
         "a cancelled rotation did not answer 204",
     )?;
+    no_launch_notice(app)?;
     require(
         core.key()? == old && core.status(&old) == 200 && app_status(app) == 200,
         "a cancelled rotation changed the key",
@@ -305,30 +399,19 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
     )?;
 
     // Rotate from the Config page's Rotate button, keeping the key as the old one was kept.
-    require(
-        managed || view.remembered,
-        "the rotation check expects a kept key",
-    )?;
-    main.eval("location.hash = '#/config'")
-        .map_err(|_| "could not open Config")?;
-    wait_for("the Connectivity tab", || {
-        eval(main, "(() => { const t = [...document.querySelectorAll('[role=tab]')].find((t) => t.textContent === 'Connectivity'); if (t) t.click(); return !!t; })()")
-            .filter(|v| v == true)
-    })?;
-    wait_for("the Rotate button", || {
-        eval(main, "(() => { const b = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Rotate' && !b.disabled); if (b) b.click(); return !!b; })()")
-            .filter(|v| v == true)
-    })?;
-    answer(app, &target, "alt+o")?;
+    press_rotate(main)?;
+    answer(app, &target, says, "alt+o")?;
     let first = revealed(
         app,
         &core,
+        &old,
         if managed {
             "saved this management key in its config file"
         } else {
             "keeps it on this device"
         },
     )?;
+    no_launch_notice(app)?;
     wait_for("the Config page's rotation notice", || {
         eval(
             main,
@@ -355,14 +438,35 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
         "the kept key was not replaced as it was kept",
     )?;
     let mut keys = vec![old, first.clone()];
+    let mut main = main.clone();
+    let mut audited = 0;
 
     if !managed {
-        // Not kept: it lasts for this session, and the person gets it to sign in again.
-        sign_in(app, main, &first, false)?;
-        start_rotation(main)?;
-        answer(app, &target, "alt+o")?;
-        let second = revealed(app, &core, "not kept on this device")?;
-        let outcome = rotation_outcome(main)?;
+        // Not kept: it lasts for this session, and the person gets it to sign in again. An
+        // extension page is open meanwhile, so its webview is audited too.
+        sign_in(app, &main, &first, false)?;
+        let page = std::env::var("PLUXY_APP_TEST_PAGE").map_err(|_| "no extension page")?;
+        main.eval(format!("location.hash = {}", json!(format!("#/{page}"))))
+            .map_err(|_| "could not open the extension page")?;
+        let label = wait_for("the extension page's webview", || {
+            app.state::<App>()
+                .pages
+                .lock()
+                .unwrap()
+                .labels()
+                .first()
+                .cloned()
+        })?;
+        let page_view = wait_for("the extension page", || app.get_webview(&label))?;
+        wait_for("the extension page's frame", || {
+            eval(&page_view, "document.querySelector('iframe')?.src ?? null")
+                .filter(|v| v.is_string())
+        })?;
+        watch(&page_view)?;
+        start_rotation(&main)?;
+        answer(app, &target, SAYS_SESSION, "alt+o")?;
+        let second = new_key_window(app, &core, &first, "not kept on this device")?;
+        let outcome = rotation_outcome(&main)?;
         require(
             outcome["status"] == 200 && outcome["body"]["kept"] == "session",
             "a session-only rotation did not say so",
@@ -372,17 +476,52 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
             "the app did not switch to the session-only key",
         )?;
         require(kept(&settings)?.is_none(), "a session-only key was saved")?;
+        keys.push(second.clone());
+        {
+            let canaries: Vec<&str> = keys.iter().map(String::as_str).collect();
+            clean_webview(&main, &canaries)?;
+            clean_webview(&page_view, &canaries)?;
+            audited += 2;
+        }
 
-        // A failed save: the app keeps working on the new key and says what to do.
-        sign_in(app, main, &second, true)?;
+        // The window closes to the tray with the key window open: the key window, the only
+        // place the session-only key is shown, stays, and its Copy still works.
+        app.get_window(WINDOW)
+            .ok_or("no window")?
+            .close()
+            .map_err(|e| e.to_string())?;
+        wait_for("the window to close to the tray", || {
+            app.get_window(WINDOW).is_none().then_some(())
+        })?;
+        let shown = windows(app, REVEAL)?;
+        require(
+            shown.len() == 1 && shown[0].lines().any(|l| l == second),
+            "the key window closed with the main window",
+        )?;
+        copy(app, &second)?;
+        let reopen = app.clone();
+        app.run_on_main_thread(move || {
+            let _ = crate::open_window(&reopen);
+        })
+        .map_err(|_| "could not open the window again")?;
+        main = window_ready(app)?;
+
+        // A failed save, rotated from the Config page while the last key window is still open:
+        // that window goes, and the app keeps working on the new key and says what to do, on
+        // the Config page and on the Connection page.
+        sign_in(app, &main, &second, true)?;
         let dir = settings.parent().ok_or("no settings folder")?;
         let third = {
             let _locked = ReadOnly::new(dir)?;
-            start_rotation(main)?;
-            answer(app, &target, "alt+o")?;
-            revealed(app, &core, "could not be kept on this device")?
+            press_rotate(&main)?;
+            answer(app, &target, SAYS_DEVICE, "alt+o")?;
+            revealed(app, &core, &second, "could not be kept on this device")?
         };
-        let outcome = rotation_outcome(main)?;
+        // The reply the Config page got, from the audit's record of the window's callbacks.
+        let outcome = wait_for("the Config page's rotation reply", || {
+            eval(&main, "(window.__keyAudit ?? []).filter((s) => s.startsWith('{\"status\"')).map((s) => JSON.parse(s)).find((v) => v.body?.kept !== undefined) ?? null")
+                .filter(|v| !v.is_null())
+        })?;
         let why = outcome["error"]["message"].as_str().unwrap_or_default();
         require(
             outcome["status"] == 200
@@ -391,6 +530,17 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
                 && why.contains("could not be kept on this device"),
             "a failed save did not explain the recovery",
         )?;
+        wait_for("the Config page's recovery notice", || {
+            eval(&main, "document.body.innerText.includes('Management key rotated') && document.body.innerText.includes('could not be kept on this device')")
+                .filter(|v| v == true)
+        })?;
+        require(
+            eval(
+                &main,
+                "document.querySelector('[data-part=key-value]') === null",
+            ) == Some(json!(true)),
+            "the Config page showed a key",
+        )?;
         let view = app.state::<App>().conn.lock().unwrap().view();
         require(
             view.error
@@ -398,6 +548,15 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
                 .is_some_and(|e| e.contains("could not be kept on this device")),
             "the connection does not show the recovery state",
         )?;
+        main.eval("location.hash = '#/connection'")
+            .map_err(|_| "could not open Connection")?;
+        wait_for("the Connection page's recovery state", || {
+            eval(
+                &main,
+                "document.body.innerText.includes('could not be kept on this device')",
+            )
+            .filter(|v| v == true)
+        })?;
         require(
             kept(&settings)? == Some(second.clone()),
             "a failed save changed saved settings",
@@ -407,7 +566,7 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
             "the app did not keep working on the unsaved key",
         )?;
         // The recovery the app gives: enter the shown key again, kept, without signing out.
-        let recovered = enter(app, main, &third, true, false)?;
+        let recovered = enter(app, &main, &third, true, false)?;
         require(
             recovered["status"] == "signed_in" && kept(&settings)? == Some(third.clone()),
             "the recovered key was not kept",
@@ -422,11 +581,10 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
                 .is_none(),
             "the recovery state outlived the recovery",
         )?;
-        keys.extend([second, third]);
+        keys.push(third);
     }
 
     let canaries: Vec<&str> = keys.iter().map(String::as_str).collect();
-    let mut audited = 0;
     for w in app.webviews().values() {
         if eval(w, "typeof window.__keySnapshot === 'function'") == Some(json!(true)) {
             clean_webview(w, &canaries)?;
@@ -440,9 +598,11 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
             "refused": true, "control": true, "cancelled": true, "rotated": true,
             "old_refused": true, "new_works": true, "kept": if managed { "core" } else { "device" },
             "session": !managed, "recovery": !managed, "webviews_clean": true, "audited": audited,
+            "page_audited": !managed, "outlived_window": !managed, "replaced": !managed,
+            "connection_shown": !managed, "no_launch_notice": true,
         }),
     );
-    Ok(())
+    Ok(main)
 }
 
 /// After a restart on the folders of a run that rotated and kept the key: signed in on core's
