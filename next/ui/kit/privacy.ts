@@ -11,9 +11,12 @@ import type { Host } from "./host";
 import { useKit } from "./ui";
 
 const MASK = "***";
-const EMAIL_PATTERN = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
+// Each pattern starts only where its first run of characters starts (the lookbehind), so a long
+// run without a match is read once, not again from each of its positions.
+const EMAIL_PATTERN =
+  /(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
 // Login credentials in a proxy or upstream URL.
-const URL_USERINFO_PATTERN = /([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^\s/@]+@/g;
+const URL_USERINFO_PATTERN = /(?<![A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^\s/@]+@/g;
 
 const keepPrefix = (value: string, visible: number) => value.slice(0, Math.min(visible, value.length));
 

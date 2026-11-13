@@ -68,3 +68,29 @@ test("replacement patterns in an identity do not leak it", () => {
   const other = "$'abcdefghijk-project-88";
   expect(maskSensitiveText(`project ${other} failed`, [other])).toBe("project $'***88 failed");
 });
+
+test("long runs of address characters are masked in linear time", async () => {
+  // A request body in an error log can hold such a run; a regular expression that retries it
+  // from every position takes seconds and freezes the page. A child process, as a test timeout
+  // cannot stop a synchronous loop.
+  const modulePath = join(import.meta.dir, "..", "kit", "privacy");
+  const script = `import { maskSensitiveText } from ${JSON.stringify(modulePath)};
+const run = "a.b-c_d+e%".repeat(20000);
+const start = performance.now();
+const out = [maskSensitiveText(run), maskSensitiveText("http://" + run), maskSensitiveText(run + " bob@test.io")];
+console.log(JSON.stringify({ ms: performance.now() - start, same: out[0] === run && out[1] === "http://" + run, tail: out[2].slice(-13) }));`;
+  const child = Bun.spawn([process.execPath, "-e", script], {
+    stdout: "pipe",
+    stderr: "pipe",
+    timeout: 20000,
+  });
+  const output = await new Response(child.stdout).text();
+  await child.exited;
+  expect(child.signalCode).toBeNull();
+  const r = JSON.parse(output);
+  expect(r.same).toBe(true);
+  expect(r.tail).toBe(" b***@t***.io");
+  // 200,000 characters three times: linear work takes milliseconds; the quadratic form took
+  // seconds for 80,000.
+  expect(r.ms).toBeLessThan(2000);
+}, 30000);
