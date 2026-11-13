@@ -302,8 +302,9 @@ operation's input schema must require `executable`, `argv` and `cwd`.
 A native tool is enabled only when each required import's target is an enabled, admitted native
 tool that exports those operations under a contract the import accepts, and when its imports,
 required or optional, do not lead back to it through other enabled tools (no cycles). Its native
-confirmation lists its imports. A missing optional target is not an error at enable: a call to it
-fails as `extension_unavailable`. The host never installs or picks a replacement for a missing
+confirmation lists its imports. The same checks apply to an update or rollback of an enabled tool
+(a swap), when it is staged and again when it commits. A missing optional target is not an error
+at enable: a call to it fails as `extension_unavailable`. The host never installs or picks a replacement for a missing
 target. Enabling the tool is the person's consent to its imports.
 
 ### Web packages: native consent
@@ -313,9 +314,12 @@ imports are refused until the person allows them on the Device extensions page, 
 `device_imports {id, allowed: true}` (main window only) and opens a native confirmation listing
 the caller's source, digest and signer and each target operation with its effect. The consent
 is bound to the caller's release and to each target's release, export contract and operations.
-Disabling, updating, rolling back or removing the caller clears it; updating a target makes it
-stale, so those calls are refused until the person allows them again. `allowed: false` revokes
-it and cancels the package's page calls still running; their answers are never delivered.
+Disabling, updating, rolling back or removing the caller clears it, and so does disabling,
+updating, rolling back, swapping or removing any target it names: enabling that target again is a
+new decision, so those calls are refused until the person allows them again. `allowed: false`
+revokes it and cancels the package's page calls still running; their answers are never
+delivered. A page call is registered before it is granted, so a revocation at any point after
+the grant reaches it.
 
 ### Frames
 
@@ -366,8 +370,13 @@ A call goes ahead only if all of these hold, checked again for each call:
   `launch` call has a fresh native confirmation of the exact executable, `argv` and `cwd`. Only a
   chain the window started from a native gesture (a native button press) may use a remembered
   approval, and only of exactly that chain and launch; a matching launch from another chain asks
-  again, and a chain a page started always asks. The host confirms the launch; the operation
-  receives it as its input, as with any call (the host's own launcher comes later).
+  again, and a chain a page started always asks, with no "remember" in its dialog. The host
+  confirms the launch; the operation receives it as its input, as with any call (the host's own
+  launcher comes later). The confirmation's rate and pending limits are checked before an
+  executable is hashed, and it is hashed without holding the confirmations' lock. A call cancelled
+  while its confirmation is open (its ticket, the window closing, its page closing or its consent
+  revoked) withdraws it, and the dialog closes. Once confirmed, the call is granted again and runs
+  only if the target release and operation are the ones confirmed.
 
 A routed call is then a call like any other: it is registered so a cancel and the window's
 closing reach it, and it goes through the same limits, per-package turn, backoff, quarantine and
