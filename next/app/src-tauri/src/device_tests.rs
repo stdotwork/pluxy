@@ -1166,6 +1166,8 @@ fn admission_is_confirmed_per_release_and_checked_each_time() {
     );
     assert_eq!(a.public_key, hex(roots.key.as_bytes()));
     assert_eq!(a.operations[0].id, "inspect");
+    // The program's digest at install, from the fixture's own bytes.
+    assert_eq!(a.program_sha256(), digest(b"#!/bin/sh\n# 1.0.0\n"));
     let mut changed = a.clone();
     changed.version = "9".into();
     let e = c.admit(&changed, &roots).unwrap_err();

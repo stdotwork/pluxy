@@ -70,7 +70,11 @@ a native program.
 
 The program host takes a native tool only as `device::Admitted`
 (`src-tauri/src/device_admission.rs`), from `Catalog::admitted`, which checks the confirmation,
-the root, the signature and every installed file again each time it is called.
+the root, the signature and every installed file again each time it is called. Only the
+catalog builds one; it offers, read-only: ID, version, archive SHA-256 and size, install time,
+source, signature, the root's public key, store folder, program path and the program's SHA-256
+(check the opened file against it before running it), operations, state versions, app
+contribution version and host contract.
 
 ### Signed descriptor bytes
 

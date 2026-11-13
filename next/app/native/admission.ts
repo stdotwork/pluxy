@@ -3,7 +3,7 @@
 // for this run, three local registry indexes (two the run's trust profile names as curated
 // sources, one it does not), and the run's test trust profile in its HOME. The private key never
 // leaves this process: only the public key is written, into the trust profile. expect.json holds
-// each archive's SHA-256, computed here from the archive bytes.
+// each archive's SHA-256, computed here from the archive bytes, and the native program's.
 
 import { spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync, type KeyObject, randomBytes, sign } from "node:crypto";
@@ -14,6 +14,8 @@ import { join } from "node:path";
 export const MARKER_FILE = ".pluxy-test-trust-profile.json";
 export const PROFILE_FILE = ".pluxy-test-trust-roots.json";
 const KEY_ID = "fixture";
+/** The native fixtures' program (bin/tool). */
+const PROGRAM = "#!/bin/sh\nexit 0\n";
 
 /** Go's platform name for this machine, as registry artifacts are keyed. */
 function platform(): string {
@@ -64,7 +66,7 @@ function pack(root: string, f: Fixture): string {
   );
   if (f.tier === "native") {
     // Never run by this slice: admission starts no process.
-    writeFileSync(join(dir, "bin", "tool"), "#!/bin/sh\nexit 0\n");
+    writeFileSync(join(dir, "bin", "tool"), PROGRAM);
     chmodSync(join(dir, "bin", "tool"), 0o755);
   } else {
     mkdirSync(join(dir, "pages"));
@@ -171,6 +173,7 @@ export function buildAdmissionFixtures(root: string, home: string): Admission {
       page: page.sha256,
       public_key: publicHex(publicKey),
       key_id: KEY_ID,
+      program: createHash("sha256").update(PROGRAM).digest("hex"),
     }),
   );
 

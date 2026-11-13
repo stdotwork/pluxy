@@ -391,18 +391,19 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         .join(&tool);
     let curated = fixtures.join("curated.json").display().to_string();
     require(
-        a.sha256 == tool
-            && a.dir == store_dir
-            && a.program == store_dir.join("bin").join("tool")
-            && a.program.is_file()
-            && a.signed.source == curated
-            && a.signed.publisher == "pluxy"
-            && a.signed.key_id == digest("key_id")
-            && a.public_key == digest("public_key")
-            && a.operations.first().map(|o| o.id.as_str()) == Some("inspect"),
+        a.sha256() == tool
+            && a.dir() == store_dir
+            && a.program() == store_dir.join("bin").join("tool")
+            && a.program().is_file()
+            && a.program_sha256() == digest("program")
+            && a.signed().source == curated
+            && a.signed().publisher == "pluxy"
+            && a.signed().key_id == digest("key_id")
+            && a.public_key() == digest("public_key")
+            && a.operations().first().map(|o| o.id.as_str()) == Some("inspect"),
         format!("the admitted record: {a:?}"),
     )?;
-    out["admitted"] = json!({"sha256": a.sha256, "program": a.program, "source": a.signed.source, "key_id": a.signed.key_id});
+    out["admitted"] = json!({"sha256": a.sha256(), "program": a.program(), "program_sha256": a.program_sha256(), "source": a.signed().source, "key_id": a.signed().key_id});
 
     // Another curated source for the installed package is refused; after removal it installs
     // from there with no trust carried over.

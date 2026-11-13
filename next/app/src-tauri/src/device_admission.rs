@@ -102,39 +102,88 @@ impl Package {
 /// An admitted native tool, checked: the only record the program host may start a program
 /// from (`Catalog::admitted`, called again before each start), and what the native confirmation
 /// enabling it shows (`Catalog::native_candidate`). It holds no signer logic for the host to redo.
+/// Only `device` builds or changes one; everyone else reads it through the methods below.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Admitted {
-    /// Package ID, `publisher/name`.
-    pub id: String,
-    /// The active release's version.
-    pub version: String,
-    /// SHA-256 of the release archive, in lower-case hex; also its store folder's name.
-    pub sha256: String,
-    /// The archive's byte count.
-    pub size: u64,
-    /// When this release was installed (Unix seconds): its generation.
-    pub installed_at: u64,
-    /// The registry it was installed from.
-    pub source: Source,
-    /// The curated signature: publisher, key ID, source and the exact signed bytes.
-    pub signed: Signed,
-    /// The root's public key, in lower-case hex.
-    pub public_key: String,
-    /// The release's immutable store folder.
-    pub dir: PathBuf,
-    /// The program for this computer, inside dir.
-    pub program: PathBuf,
-    /// The operations the package declares.
-    pub operations: Vec<OperationDecl>,
-    /// The state versions it writes and reads.
-    pub state: StateDecl,
-    /// The app contribution's format version (`app.version`).
-    pub app_version: i64,
-    /// The app host contract it was admitted for.
-    pub host_contract: i64,
+    pub(super) id: String,
+    pub(super) version: String,
+    pub(super) sha256: String,
+    pub(super) size: u64,
+    pub(super) installed_at: u64,
+    pub(super) source: Source,
+    pub(super) signed: Signed,
+    pub(super) public_key: String,
+    pub(super) dir: PathBuf,
+    pub(super) program: PathBuf,
+    pub(super) program_sha256: String,
+    pub(super) operations: Vec<OperationDecl>,
+    pub(super) state: StateDecl,
+    pub(super) app_version: i64,
+    pub(super) host_contract: i64,
 }
 
 impl Admitted {
+    /// Package ID, `publisher/name`.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+    /// The active release's version.
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+    /// SHA-256 of the release archive, in lower-case hex; also its store folder's name.
+    pub fn sha256(&self) -> &str {
+        &self.sha256
+    }
+    /// The archive's byte count.
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+    /// When this release was installed (Unix seconds): its generation.
+    pub fn installed_at(&self) -> u64 {
+        self.installed_at
+    }
+    /// The registry it was installed from.
+    pub fn source(&self) -> &Source {
+        &self.source
+    }
+    /// The curated signature: publisher, key ID, source and the exact signed bytes.
+    pub fn signed(&self) -> &Signed {
+        &self.signed
+    }
+    /// The root's public key, in lower-case hex.
+    pub fn public_key(&self) -> &str {
+        &self.public_key
+    }
+    /// The release's immutable store folder.
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+    /// The program for this computer, inside dir.
+    pub fn program(&self) -> &Path {
+        &self.program
+    }
+    /// The SHA-256 the program had at install, in lower-case hex: check the opened file against
+    /// it before running it, since the path can change after this record was checked.
+    pub fn program_sha256(&self) -> &str {
+        &self.program_sha256
+    }
+    /// The operations the package declares.
+    pub fn operations(&self) -> &[OperationDecl] {
+        &self.operations
+    }
+    /// The state versions it writes and reads.
+    pub fn state(&self) -> &StateDecl {
+        &self.state
+    }
+    /// The app contribution's format version (`app.version`).
+    pub fn app_version(&self) -> i64 {
+        self.app_version
+    }
+    /// The app host contract it was admitted for.
+    pub fn host_contract(&self) -> i64 {
+        self.host_contract
+    }
     /// The native confirmation enabling it shows: its ID, source, digest, signer and key,
     /// contracts, operations and program, and that it has full access to your user account.
     #[cfg(target_os = "linux")]
@@ -361,10 +410,10 @@ impl Catalog {
             .state
             .clone()
             .ok_or_else(|| format!("{id} {} declares no state versions", r.version))?;
-        let program = r
+        let (program, program_sha256) = r
             .program
             .as_ref()
-            .filter(|x| r.tree.contains_key(*x))
+            .and_then(|x| r.tree.get(x).map(|h| (x, h.clone())))
             .ok_or_else(|| format!("{id} {} has no program for this computer", r.version))?;
         let dir = self.dirs.store().join(&r.sha256);
         verify_tree(&dir, &r.tree)?;
@@ -378,6 +427,7 @@ impl Catalog {
             signed: s.clone(),
             public_key: hex(key.as_bytes()),
             program: dir.join(program),
+            program_sha256,
             dir,
             operations: r.operations.clone(),
             state,
