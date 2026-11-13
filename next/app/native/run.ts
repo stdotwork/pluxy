@@ -216,6 +216,7 @@ async function runApp(
     let nonce: string | undefined;
     if (curated) {
       mkdirSync(curated);
+      if (device) mkdirSync(device);
       const a = buildAdmissionFixtures(curated, dirs.home);
       nonce = a.nonce;
       const registries = admission
@@ -224,7 +225,6 @@ async function runApp(
             ...(buildDeviceFixtures(device as string) as { registries: object[] }).registries,
             ...a.registries.filter((r) => r.name === "curated"),
           ];
-      if (device) mkdirSync(device);
       writeFileSync(
         join(dirs.config, identifier, "device-registries.json"),
         JSON.stringify({ version: 0, registries }),
