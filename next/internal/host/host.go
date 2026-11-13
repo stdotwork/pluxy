@@ -425,10 +425,10 @@ func ServesEndpoints(info protocol.Info) bool {
 }
 
 // Endpoint starts an endpoint call, answered as a generate call is (see Generate). The reply's
-// body is redacted across its pieces: a secret in one of the forms core removes is found also
-// where it is cut between them (protocol.BodyRedactor). An extension that serves no endpoints
-// answers at once with an unsupported error about the account, so routing moves on to another
-// account.
+// body is redacted across its pieces: a secret in one of the forms core removes that is cut between
+// them is removed, but for any part of its start that a piece redacted whole had already sent
+// (protocol.BodyRedactor). An extension that serves no endpoints answers at once with an
+// unsupported error about the account, so routing moves on to another account.
 func (e *Extension) Endpoint(ctx context.Context, account protocol.Account, req llm.Request) *Stream {
 	if !ServesEndpoints(e.info) {
 		return servesNoEndpoints(e.manifest.ID, req)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -117,6 +118,19 @@ func TestRedactDiagnosticAdjacentPiecesAfterCollapse(t *testing.T) {
 		if joined := got.Body + got.BodyEnd; strings.Contains(joined, c.rest) || !strings.HasSuffix(joined, strings.TrimPrefix(c.end, c.rest)) {
 			t.Errorf("end %q: joined body %q holds the rest of the secret or loses the text after it", c.end, joined)
 		}
+	}
+}
+
+// A body whose start and end lie side by side is redacted as one text also where the start ends
+// with a secret spelled with an escape whose last character starts another secret: no part of the
+// second secret, cut between them, is logged.
+func TestRedactDiagnosticAdjacentPiecesAfterEscapeFallback(t *testing.T) {
+	r := protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "my-api-keys"},
+		&protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "3x-other-secret"})
+	head := "err my-api-key" + fmt.Sprintf(`\u%04x`, 's') + "x-oth"
+	got := redactedRequestBody(r, protocol.CapturedBody{Body: head, BodyEnd: "er-secret rejected"})
+	if joined := got.Body + got.BodyEnd; joined != "err [redacted][redacted] rejected" {
+		t.Errorf("joined body %q, want %q", joined, "err [redacted][redacted] rejected")
 	}
 }
 

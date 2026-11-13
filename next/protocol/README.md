@@ -477,7 +477,8 @@ with a digit or `-`), when they take 64 bytes or fewer, so that a number holding
 becomes `0` as a whole; where they start inside one of those forms, it holds back that form too.
 Other text is not held back for this, such as the `e` that ends `there`. Where holding back would change what core finds in the text whole (for example a secret
 spelled with other escapes, or text so heavily escaped that core replaces all of it with
-`[redacted]`), core sends at once all it has, redacted whole. It then replaces with `[redacted]`
+`[redacted]`), core sends at once all it has, redacted whole, but for the end of what it would have
+held that this left as it was, which it goes on holding back. It then replaces with `[redacted]`
 the rest of a secret in one of those forms that began in what it would have held and that later
 pieces complete; what it sent of that start stays sent. It sends what it still holds once the body
 ends with `finish`, and drops it when the body breaks off with an error or is cancelled: the body

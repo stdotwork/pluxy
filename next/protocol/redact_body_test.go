@@ -168,6 +168,32 @@ func TestBodyRedactorEscapedSecretInOnePiece(t *testing.T) {
 	}
 }
 
+// Where Write sends text whole because a secret spelled with an escape ends where a form of
+// another secret starts (the "3" of \u0073 starts "3x-other-secret"), it keeps holding the end of
+// that form the text whole left as it was: no part of the second secret reaches the client before
+// a later piece shows whether it is one, and a body that breaks off there sends none of it.
+func TestBodyRedactorFallbackKeepsHoldingTheUnchangedEnd(t *testing.T) {
+	r := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: "my-api-keys"}, &Credential{Kind: CredentialAPIKey, APIKey: "3x-other-secret"})
+	first := "err my-api-key" + fmt.Sprintf(`\u%04x`, 's') + "x-oth"
+	if got := r.Body().Write(first); got != "err [redacted]" {
+		t.Errorf("Write(%q) = %q, want %q", first, got, "err [redacted]")
+	}
+	for _, c := range []struct {
+		pieces []string
+		want   string
+	}{
+		{[]string{first, "er-secret rejected"}, "err [redacted][redacted] rejected"},
+		{[]string{first, "er-sec", "", "ret rejected"}, "err [redacted][redacted] rejected"},
+		// The second secret never completes: what was held goes out once the body ends.
+		{[]string{first, "er"}, "err [redacted]x-other"},
+		{[]string{first}, "err [redacted]x-oth"},
+	} {
+		if got := redactPieces(t, r, c.pieces); got != c.want {
+			t.Errorf("%q: got %q, want %q", c.pieces, got, c.want)
+		}
+	}
+}
+
 // Wherever a body is cut, the client never gets a secret that redacting each piece on its own
 // would have removed: here secrets written with an escape outside the listed forms, which a
 // piece holds whole or which a cut splits.

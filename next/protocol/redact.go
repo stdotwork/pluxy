@@ -727,17 +727,19 @@ func (r *Redactor) Body() *BodyRedactor {
 // than the longest form. When a form could be part of a JSON number, it also holds back a colon,
 // bracket or comma at the end, with any spaces after it and the number that follows, if any (a run
 // of the bytes of numbers that starts with a digit or a minus), when they take at most
-// maxNumberHold bytes, and where they start inside a form, that form. So a body of any length passes through in bounded memory, and a stream is delayed only
-// where a piece ends with what could start a form, or such a number. Each text it returns is
-// redacted with String, so a credential spelled with escapes is found within it, and a number in
-// JSON that holds one becomes 0.
+// maxNumberHold bytes, and where they start inside a form, that form. So a body of any length
+// passes through in bounded memory, and a stream is delayed only where a piece ends with what
+// could start a form, or such a number. Each text it returns is redacted with String, so a
+// credential spelled with escapes is found within it, and a number in JSON that holds one
+// becomes 0.
 //
 // It is never worse than redacting each piece on its own: where holding back would change what
 // String finds in the text whole (for example a credential spelled with escapes that ends like the
 // start of a form, or text String gives up on and replaces whole), Write returns all of the text it
-// has, redacted whole. It still keeps the end it would have held, marked as sent: a form that
-// starts there and that later pieces complete is replaced in them, so the rest of a credential in
-// one of its forms cut there is not sent; what was sent of it before the cut stays sent.
+// has, redacted whole, but for the end of what it would have held that this left as it was, which
+// it goes on holding back. It keeps the rest of that end too, marked as sent: a form that starts
+// there and that later pieces complete is replaced in them, so the rest of a credential in one of
+// its forms cut there is not sent; what was sent of it before the cut stays sent.
 //
 // shortcut: a credential spelled with escapes outside its listed forms (\u0073 for s, %73)
 // that a piece cuts in two is not found, as when each piece is redacted on its own; holding back
@@ -753,7 +755,7 @@ type BodyRedactor struct {
 	r       *Redactor
 	byFirst [256][]string // the forms by their first byte, longest first
 	// held is the end of the body so far, which more text could still change; its first sent
-	// bytes were already returned, redacted, by a Write that could not hold them back.
+	// bytes were already returned, redacted whole, by a Write that could not hold them back.
 	held string
 	sent int
 }
@@ -801,10 +803,16 @@ func (b *BodyRedactor) emit(s string, final bool) string {
 	b.held, b.sent = strings.Clone(s[cut:]), 0 // not keeping all of a large piece alive
 	if cut < len(s) {
 		if whole := b.r.String(s[skip:]); whole != out+b.r.String(s[cut:]) {
-			// The cut would hide what String finds in the text whole: send it whole, and remember
-			// the end as sent, so that a form starting there is still removed from what follows.
-			b.sent = len(b.held)
-			return lead + whole
+			// The cut would hide what String finds in the text whole: send it whole, and keep the
+			// end, so that a form starting there is still removed from what follows. Of that end,
+			// what the text whole changed counts as sent; the rest, which the text whole ends with
+			// as it was, is held back as before rather than sent.
+			j := 0
+			for j < len(b.held) && !(utf8.RuneStart(b.held[j]) && strings.HasSuffix(whole, b.held[j:])) {
+				j++
+			}
+			b.sent = j
+			return lead + whole[:len(whole)-(len(b.held)-j)]
 		}
 	}
 	return lead + out
