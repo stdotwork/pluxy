@@ -1,0 +1,454 @@
+//! Signed native-tier admission for this device's catalog (`../app-host/README.md`). A native
+//! tool installs only from a curated registry (one a trust root names by its index), with a
+//! descriptor signed by that root's first-party key and verified (`artifact.rs`) before its
+//! archive is unpacked. It installs disabled. Enabling it takes a native confirmation that says
+//! it has full access to your user account; the confirmed admission is bound to the active
+//! release's digest, its source, its signer and key. A new release, a rollback, disabling or
+//! removing it ends the admission.
+//!
+//! `Catalog::admitted` is the record the program host takes: it checks the admission, the root
+//! and signature again, and every file of the installed package, each time. Nothing here starts
+//! a process.
+
+use super::*;
+use crate::artifact::{self, PublisherKeys, Tier, VerifiedDescriptor};
+
+/// Native-tier trust, as admission needs it (`trust::TrustStore`).
+pub trait Roots: PublisherKeys {
+    /// Whether any native-tier root is configured.
+    fn configured(&self) -> bool;
+    /// Whether a root names source, a registry's index, as a curated source.
+    fn curated(&self, source: &str) -> bool;
+    /// Whether a root names publisher: then only a curated source may use it.
+    fn reserved(&self, publisher: &str) -> bool;
+}
+
+impl Roots for crate::trust::TrustStore {
+    fn configured(&self) -> bool {
+        self.require_native().is_ok()
+    }
+    fn curated(&self, source: &str) -> bool {
+        self.curated_source(source)
+    }
+    fn reserved(&self, publisher: &str) -> bool {
+        self.root_publisher(publisher)
+    }
+}
+
+/// The curated signature a release was installed with.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Signed {
+    pub publisher: String,
+    /// The key's ID in its root.
+    pub key_id: String,
+    /// The curated registry's index the root names: the trust domain.
+    pub source: String,
+    /// The exact signed descriptor bytes, UTF-8 JSON as the index gave them.
+    pub descriptor: String,
+    /// The detached Ed25519 signature, in lower-case hex.
+    pub signature: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OperationDecl {
+    pub id: String,
+    pub description: String,
+    pub input_schema: Value,
+    pub output_schema: Value,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StateDecl {
+    pub version: i64,
+    pub readable_versions: Vec<i64>,
+}
+
+/// What the person confirmed in the native confirmation: this release, from this source,
+/// signed with this key, for this host contract.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Admission {
+    pub sha256: String,
+    pub installed_at: u64,
+    pub source: String,
+    pub publisher: String,
+    pub key_id: String,
+    /// The root's public key at confirmation, in lower-case hex.
+    pub public_key: String,
+    pub host_contract: i64,
+    pub confirmed_at: u64,
+}
+
+impl Admission {
+    fn names(&self, r: &Release) -> bool {
+        self.sha256 == r.sha256
+            && self.installed_at == r.installed_at
+            && r.signed.as_ref().is_some_and(|s| {
+                s.source == self.source && s.publisher == self.publisher && s.key_id == self.key_id
+            })
+    }
+}
+
+impl Package {
+    /// A native tool the person confirmed for its active release, while it stays enabled.
+    pub fn authorized(&self) -> bool {
+        self.enabled
+            && self
+                .admission
+                .as_ref()
+                .is_some_and(|a| a.names(&self.active))
+    }
+}
+
+/// An admitted native tool, checked: what the program host may run, and what the native
+/// confirmation shows.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Admitted {
+    pub id: String,
+    pub version: String,
+    pub sha256: String,
+    pub size: u64,
+    pub installed_at: u64,
+    pub source: Source,
+    pub signed: Signed,
+    /// The root's public key, in lower-case hex.
+    pub public_key: String,
+    /// The release's immutable store folder.
+    pub dir: PathBuf,
+    /// The program for this computer, inside dir.
+    pub program: PathBuf,
+    pub operations: Vec<OperationDecl>,
+    pub state: StateDecl,
+    pub app_version: i64,
+    pub host_contract: i64,
+}
+
+impl Admitted {
+    /// The native confirmation enabling it shows: its ID, source, digest, signer and key,
+    /// contracts, operations and program, and that it has full access to your user account.
+    #[cfg(target_os = "linux")]
+    pub fn confirmation(&self) -> crate::confirmation::Action {
+        let package = crate::confirmation::Package {
+            id: self.id.clone(),
+            source: format!("registry {} ({})", self.source.name, self.signed.source),
+            digest: self.sha256.clone(),
+            signer: format!(
+                "{} key {} ({})",
+                self.signed.publisher, self.signed.key_id, self.public_key
+            ),
+            contract: format!(
+                "app host {}; app {}; state {}, reads {:?}",
+                self.host_contract,
+                self.app_version,
+                self.state.version,
+                self.state.readable_versions
+            ),
+            generation: self.installed_at,
+        };
+        let operations: Vec<String> = self
+            .operations
+            .iter()
+            .map(|o| format!("{} ({})", o.id, o.description))
+            .collect();
+        crate::confirmation::Action {
+            what: format!(
+                "Enable native tool {} {}. It has full access to your user account. Operations: {}",
+                self.id,
+                self.version,
+                operations.join(", ")
+            ),
+            chain: vec![package.clone()],
+            executor: package,
+            native_tool: true,
+            files: vec![self.program.clone()],
+            launch: None,
+        }
+    }
+}
+
+/// A registry entry's signature, verified against a curated root.
+pub struct Signing {
+    pub verified: VerifiedDescriptor,
+    pub signed: Signed,
+}
+
+/// Verifies a curated registry's signature over descriptor with source's root key for its
+/// publisher, then bytes against the signed size and digest, before anything is unpacked.
+/// Returns the checked bytes.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn verify(
+    roots: &dyn Roots,
+    source: &str,
+    key_id: &str,
+    descriptor: &str,
+    signature: &str,
+    platform: &str,
+    (id, version): (&str, &str),
+    bytes: Vec<u8>,
+) -> Result<(Signing, Vec<u8>), String> {
+    let sig = artifact::decode_hex::<64>(signature)
+        .map_err(|_| format!("{id} {version}: its signature is not 128 lower-case hex digits"))?;
+    let checked = artifact::verify_trusted_archive(
+        &Keys(roots),
+        source,
+        key_id,
+        descriptor.as_bytes(),
+        &sig,
+        platform,
+        std::io::Cursor::new(bytes),
+    )
+    .map_err(|e| format!("{id} {version}: {e}"))?;
+    let d = checked.descriptor();
+    if d.id != id || d.version != version {
+        return Err(format!(
+            "{id} {version}: its signed descriptor names {} {}",
+            d.id, d.version
+        ));
+    }
+    let publisher = d.id.split('/').next().unwrap_or_default().to_string();
+    let (verified, archive) = checked.into_parts();
+    Ok((
+        Signing {
+            verified,
+            signed: Signed {
+                publisher,
+                key_id: key_id.into(),
+                source: source.into(),
+                descriptor: descriptor.into(),
+                signature: signature.into(),
+            },
+        },
+        archive.into_inner(),
+    ))
+}
+
+/// `PublisherKeys` for a `dyn Roots`.
+struct Keys<'a>(&'a dyn Roots);
+impl PublisherKeys for Keys<'_> {
+    fn publisher_key(
+        &self,
+        source: &str,
+        key_id: &str,
+        publisher: &str,
+    ) -> Result<ed25519_dalek::VerifyingKey, String> {
+        self.0.publisher_key(source, key_id, publisher)
+    }
+}
+
+/// Fills in a signed native release staged in staged: its program for this computer, which
+/// must be an executable file in the package, its declarations and the digest of every file.
+pub(super) fn native_release(
+    r: &mut Release,
+    app: &App,
+    staged: &Path,
+    signed: Signed,
+) -> Result<(), String> {
+    let platform = platform();
+    let program = app
+        .programs
+        .as_ref()
+        .and_then(|p| p.get(&platform))
+        .ok_or_else(|| format!("{} has no program for {platform}", r.version))?;
+    if !store_path(program) {
+        return Err(format!(
+            "program {program:?} must be a file inside the package"
+        ));
+    }
+    r.tree = hash_files(staged, MAX_ENTRIES, MAX_UNPACKED, "the package")?;
+    let meta = fs::symlink_metadata(staged.join(program));
+    #[cfg(unix)]
+    let executable = meta.is_ok_and(|m| {
+        use std::os::unix::fs::PermissionsExt;
+        m.is_file() && m.permissions().mode() & 0o111 != 0
+    });
+    #[cfg(not(unix))]
+    let executable = meta.is_ok_and(|m| m.is_file());
+    if !r.tree.contains_key(program) || !executable {
+        return Err(format!(
+            "program {program} is not an executable file in the package"
+        ));
+    }
+    r.tier = "native".into();
+    r.signed = Some(signed);
+    r.program = Some(program.clone());
+    r.operations = app
+        .operations
+        .iter()
+        .flatten()
+        .map(|o| OperationDecl {
+            id: o.id.clone(),
+            description: o.description.clone(),
+            input_schema: o.input_schema.clone(),
+            output_schema: o.output_schema.clone(),
+        })
+        .collect();
+    r.state = app.state.as_ref().map(|s| StateDecl {
+        version: s.version,
+        readable_versions: s.readable_versions.clone(),
+    });
+    Ok(())
+}
+
+/// Checks that dir holds exactly the files of want, each with its digest.
+pub(super) fn verify_tree(dir: &Path, want: &BTreeMap<String, String>) -> Result<(), String> {
+    let got = hash_files(dir, MAX_ENTRIES, MAX_UNPACKED, "the installed package")?;
+    if got != *want {
+        return Err(format!(
+            "the files in {} changed since they were installed",
+            dir.display()
+        ));
+    }
+    Ok(())
+}
+
+impl Catalog {
+    /// Package id as an admitted native tool would be run: a native release with a curated
+    /// signature that verifies against its root now, from the source it was signed for, for
+    /// this host contract, with every file unchanged.
+    fn check_native(&self, id: &str, roots: &dyn Roots) -> Result<Admitted, String> {
+        let p = self
+            .packages
+            .get(id)
+            .ok_or_else(|| format!("{id} is not installed on this device"))?;
+        let r = &p.active;
+        if r.tier != "native" {
+            return Err(format!("{id} is not a native tool"));
+        }
+        let s = r
+            .signed
+            .as_ref()
+            .ok_or_else(|| format!("{id} {} has no curated signature", r.version))?;
+        if p.source.kind != "registry" || p.source.index.as_deref() != Some(s.source.as_str()) {
+            return Err(format!(
+                "{id} is not installed from the curated source it was signed for"
+            ));
+        }
+        let key = roots
+            .publisher_key(&s.source, &s.key_id, &s.publisher)
+            .map_err(|e| format!("{id}: {e}"))?;
+        let sig = artifact::decode_hex::<64>(&s.signature)?;
+        let v = artifact::verify_descriptor(&key, s.descriptor.as_bytes(), &sig, &platform())
+            .map_err(|e| format!("{id}: {e}"))?;
+        let d = v.descriptor();
+        if d.id != id
+            || d.version != r.version
+            || d.tier != Tier::Native
+            || d.size != r.size
+            || d.sha256 != r.sha256
+        {
+            return Err(format!(
+                "{id}: its signed descriptor does not name the installed release"
+            ));
+        }
+        if !r.host_versions.contains(&HOST_CONTRACT) {
+            return Err(format!(
+                "{id} {} needs app host contract {:?}; this app speaks host contract {HOST_CONTRACT}",
+                r.version, r.host_versions
+            ));
+        }
+        let state = r
+            .state
+            .clone()
+            .ok_or_else(|| format!("{id} {} declares no state versions", r.version))?;
+        let program = r
+            .program
+            .as_ref()
+            .filter(|x| r.tree.contains_key(*x))
+            .ok_or_else(|| format!("{id} {} has no program for this computer", r.version))?;
+        let dir = self.dirs.store().join(&r.sha256);
+        verify_tree(&dir, &r.tree)?;
+        Ok(Admitted {
+            id: id.into(),
+            version: r.version.clone(),
+            sha256: r.sha256.clone(),
+            size: r.size,
+            installed_at: r.installed_at,
+            source: p.source.clone(),
+            signed: s.clone(),
+            public_key: hex(key.as_bytes()),
+            program: dir.join(program),
+            dir,
+            operations: r.operations.clone(),
+            state,
+            app_version: r.app_version,
+            host_contract: HOST_CONTRACT,
+        })
+    }
+
+    /// The native tool id as the native confirmation enabling it shows it, checked.
+    pub fn native_candidate(&self, id: &str, roots: &dyn Roots) -> Result<Admitted, String> {
+        if self.safe_mode {
+            return Err("the app runs in safe mode: no native tool is enabled".into());
+        }
+        if self.packages.get(id).is_some_and(|p| p.enabled) {
+            return Err(format!("{id} is enabled already"));
+        }
+        self.check_native(id, roots)
+    }
+
+    /// Enables the native tool a, after its native confirmation, when it is still the release,
+    /// source and signer the person confirmed and still checks out.
+    pub fn admit(&mut self, a: &Admitted, roots: &dyn Roots) -> Result<(), String> {
+        let now = self.check_native(&a.id, roots)?;
+        if now != *a {
+            return Err(format!(
+                "{} changed while it was being confirmed; enable it again",
+                a.id
+            ));
+        }
+        let p = self
+            .packages
+            .get_mut(&a.id)
+            .ok_or_else(|| format!("{} is not installed on this device", a.id))?;
+        let was = (p.enabled, p.admission.take());
+        p.enabled = true;
+        p.admission = Some(Admission {
+            sha256: a.sha256.clone(),
+            installed_at: a.installed_at,
+            source: a.signed.source.clone(),
+            publisher: a.signed.publisher.clone(),
+            key_id: a.signed.key_id.clone(),
+            public_key: a.public_key.clone(),
+            host_contract: a.host_contract,
+            confirmed_at: super::now(),
+        });
+        if let Err(e) = self.save() {
+            if let Some(p) = self.packages.get_mut(&a.id) {
+                (p.enabled, p.admission) = was;
+            }
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// The admitted native tool id, for the program host: enabled, confirmed for its active
+    /// release, signer and key, and checked again now (root, signature, files).
+    pub fn admitted(&self, id: &str, roots: &dyn Roots) -> Result<Admitted, String> {
+        if self.safe_mode {
+            return Err("the app runs in safe mode: no native tool is admitted".into());
+        }
+        let p = self
+            .packages
+            .get(id)
+            .ok_or_else(|| format!("{id} is not installed on this device"))?;
+        if !p.enabled {
+            return Err(format!("{id} is disabled"));
+        }
+        let admission = p
+            .admission
+            .as_ref()
+            .filter(|a| a.names(&p.active))
+            .ok_or_else(|| {
+                format!(
+                    "{id} {} has no native confirmation for its active release",
+                    p.active.version
+                )
+            })?;
+        let a = self.check_native(id, roots)?;
+        if admission.public_key != a.public_key || admission.host_contract != a.host_contract {
+            return Err(format!(
+                "{id}'s signing key or host contract changed since it was confirmed; enable it again"
+            ));
+        }
+        Ok(a)
+    }
+}

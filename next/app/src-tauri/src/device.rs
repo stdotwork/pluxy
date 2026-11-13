@@ -6,12 +6,16 @@
 //! archive's SHA-256, and serves a page's files only while each still has the digest it had at
 //! install.
 //!
-//! No source is curated in this build: every package is Unverified, and a package claiming a
-//! reserved publisher (`pluxy`) is refused. No package gets resources, settings or native
-//! programs here. The previous release stays as the last good one, so a failed candidate keeps
-//! the active release and the person can roll back. With `--safe-mode`, no device page is
-//! listed, opened or served; the catalog can still be managed.
+//! A package from a source that is not curated is Unverified, and one claiming a reserved
+//! publisher (`pluxy`, or a publisher a trust root names) is refused. A native tool (`app.tier`
+//! `native`) is admitted only from a curated registry with a first-party signature, and runs
+//! only after the person enabled it in a native confirmation (`device_admission.rs`). No package
+//! gets resources or settings here. The previous release stays as the last good one, so a
+//! failed candidate keeps the active release and the person can roll back. With `--safe-mode`,
+//! no device page is listed, opened or served and no native tool is admitted; the catalog can
+//! still be managed.
 
+pub use admission::{Admission, Admitted, OperationDecl, Roots, Signed, StateDecl};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -25,7 +29,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub const ASSET_SCHEME: &str = "pluxy-app";
 /// The app host contract major version this app speaks.
 pub const HOST_CONTRACT: i64 = 0;
-/// Publishers only a curated source may install. This build has no curated source.
+/// Publishers only a curated source may install, besides those trust roots name.
 const RESERVED: &[&str] = &["pluxy"];
 /// The protocol's archive limits (protocol README, release archives).
 const MAX_UNPACKED: u64 = 512 << 20;
@@ -99,6 +103,29 @@ pub struct Release {
     /// Whether the package declares settings. They are not served in this build.
     #[serde(default)]
     pub settings: bool,
+    /// `web` or `native`.
+    #[serde(default = "web")]
+    pub tier: String,
+    /// The curated signature it was installed with, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed: Option<Signed>,
+    /// Native: the program for this computer, by its path in the package.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program: Option<String>,
+    /// Native: the operations it declares.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub operations: Vec<OperationDecl>,
+    /// Native: the state versions it writes and reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<StateDecl>,
+    /// Native: SHA-256 of every file in the package, by slash-separated path, checked again
+    /// before it is admitted.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tree: BTreeMap<String, String>,
+}
+
+fn web() -> String {
+    "web".into()
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -108,6 +135,9 @@ pub struct Package {
     pub active: Release,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_good: Option<Release>,
+    /// A native tool's confirmed admission, bound to its active release and signer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission: Option<Admission>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -176,14 +206,22 @@ pub struct ReleaseView {
     pub pages: Vec<PageView>,
     pub resources: Vec<String>,
     pub settings: bool,
+    pub tier: String,
+    /// Native: the declared operations, by ID and description.
+    pub operations: Vec<(String, String)>,
+    /// The signer of a curated release: publisher and key ID.
+    pub signer: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct PackageView {
     pub id: String,
     pub enabled: bool,
-    /// Always `unverified` in this build: no source is curated.
+    /// `curated` for a release signed by a curated root, otherwise `unverified`.
     pub trust: &'static str,
+    pub tier: String,
+    /// A native tool: whether the person confirmed it for its active release.
+    pub authorized: bool,
     pub source: Source,
     pub active: ReleaseView,
     pub last_good: Option<ReleaseView>,
@@ -287,6 +325,16 @@ fn release_view(id: &str, r: &Release) -> ReleaseView {
             .collect(),
         resources: r.resources.clone(),
         settings: r.settings,
+        tier: r.tier.clone(),
+        operations: r
+            .operations
+            .iter()
+            .map(|o| (o.id.clone(), o.description.clone()))
+            .collect(),
+        signer: r
+            .signed
+            .as_ref()
+            .map(|s| format!("{} key {}", s.publisher, s.key_id)),
     }
 }
 
@@ -487,7 +535,13 @@ impl Catalog {
                 .map(|(id, p)| PackageView {
                     id: id.clone(),
                     enabled: p.enabled,
-                    trust: "unverified",
+                    trust: if p.active.signed.is_some() {
+                        "curated"
+                    } else {
+                        "unverified"
+                    },
+                    tier: p.active.tier.clone(),
+                    authorized: p.authorized(),
                     source: p.source.clone(),
                     active: release_view(id, &p.active),
                     last_good: p.last_good.as_ref().map(|r| release_view(id, r)),
@@ -594,7 +648,11 @@ impl Catalog {
         // A folder of this digest already in the store (the last good release, installed
         // again) is used only while its files are unchanged; otherwise the checked copy
         // replaces it.
-        if !dest.exists() || verify(&dest, &c.release).is_err() {
+        if !dest.exists()
+            || verify(&dest, &c.release).is_err()
+            || (c.release.tier == "native"
+                && admission::verify_tree(&dest, &c.release.tree).is_err())
+        {
             if dest.exists() {
                 remove_tree(&dest)?;
             }
@@ -602,19 +660,24 @@ impl Catalog {
             sync_dir(&store)?;
         }
         freeze(&dest, true)?;
+        // A native tool's admission names one release: any new release waits, disabled, for a
+        // fresh native confirmation.
+        let native = c.release.tier == "native";
         let package = match previous.clone() {
             Some(p) => Package {
-                enabled: p.enabled,
+                enabled: p.enabled && !native && p.active.tier != "native",
                 // The same source; a local release's file name labels the new release.
                 source: c.source.clone(),
                 last_good: Some(p.active),
                 active: c.release.clone(),
+                admission: None,
             },
             None => Package {
-                enabled: true,
+                enabled: !native,
                 source: c.source.clone(),
                 active: c.release.clone(),
                 last_good: None,
+                admission: None,
             },
         };
         self.packages.insert(id.clone(), package);
@@ -629,16 +692,23 @@ impl Catalog {
         Ok(())
     }
 
+    /// Enables or disables package id. A native tool is enabled only by `admit`, after a
+    /// native confirmation; disabling it ends its admission.
     pub fn set_enabled(&mut self, id: &str, enabled: bool) -> Result<(), String> {
         let p = self
             .packages
             .get_mut(id)
             .ok_or_else(|| format!("{id} is not installed on this device"))?;
-        let was = p.enabled;
+        if enabled && p.active.tier == "native" {
+            return Err(format!(
+                "{id} is a native tool: enabling it needs a native confirmation"
+            ));
+        }
+        let was = (p.enabled, p.admission.take());
         p.enabled = enabled;
         if let Err(e) = self.save() {
             if let Some(p) = self.packages.get_mut(id) {
-                p.enabled = was;
+                (p.enabled, p.admission) = was;
             }
             return Err(e);
         }
@@ -669,13 +739,22 @@ impl Catalog {
             .clone()
             .ok_or_else(|| format!("{id} has no earlier release to roll back to"))?;
         verify(&self.dirs.store().join(&last.sha256), &last)?;
+        if last.tier == "native" {
+            admission::verify_tree(&self.dirs.store().join(&last.sha256), &last.tree)?;
+        }
         let p = self.packages.get_mut(id).unwrap();
         let active = std::mem::replace(&mut p.active, last);
         p.last_good = Some(active);
+        // A native tool's admission named the release that is no longer active.
+        let was = (p.enabled, p.admission.take());
+        if p.active.tier == "native" || p.last_good.as_ref().is_some_and(|r| r.tier == "native") {
+            p.enabled = false;
+        }
         if let Err(e) = self.save() {
             let p = self.packages.get_mut(id).unwrap();
             let last = std::mem::replace(&mut p.active, p.last_good.take().unwrap());
             p.last_good = Some(last);
+            (p.enabled, p.admission) = was;
             return Err(e);
         }
         Ok(())
@@ -1140,13 +1219,20 @@ fn validate(m: &Manifest) -> Result<Option<App>, String> {
     Ok(app)
 }
 
-/// Why a package from a source that is not curated may not claim id, if it may not.
-fn reserved(id: &str) -> Option<String> {
+/// Why a package from a source that is not curated may not claim id, if it may not: its
+/// publisher is `pluxy` or one a trust root names.
+fn reserved(id: &str, roots: &dyn Roots) -> Option<String> {
     let publisher = id.split('/').next().unwrap_or_default();
-    RESERVED.contains(&publisher).then(|| {
-        format!(
-            "{id}: the publisher {publisher} is reserved for pluxy's curated index, and this source is not curated"
-        )
+    (RESERVED.contains(&publisher) || roots.reserved(publisher)).then(|| {
+        if roots.configured() {
+            format!(
+                "{id}: the publisher {publisher} is reserved for pluxy's curated index, and this source is not curated"
+            )
+        } else {
+            format!(
+                "{id}: the publisher {publisher} is reserved for pluxy's curated index, and native-tier trust is not configured in this build, so no source is curated"
+            )
+        }
     })
 }
 
@@ -1218,8 +1304,19 @@ fn unpack(archive: &[u8], dest: &Path) -> Result<(), String> {
     freeze(dest, false)
 }
 
-/// The files under dir, by slash-separated path, with their SHA-256 digests.
+/// The files under the ui folder dir, by slash-separated path, with their SHA-256 digests.
 fn hash_tree(dir: &Path) -> Result<BTreeMap<String, String>, String> {
+    hash_files(dir, MAX_UI_FILES, MAX_UI_BYTES, "the ui folder")
+}
+
+/// The files under dir, by slash-separated path, with their SHA-256 digests: at most max_files
+/// regular files of max_bytes in all, nothing else (no link, device or socket).
+fn hash_files(
+    dir: &Path,
+    max_files: usize,
+    max_bytes: u64,
+    what: &str,
+) -> Result<BTreeMap<String, String>, String> {
     let mut out = BTreeMap::new();
     let mut total = 0u64;
     let mut todo = vec![(dir.to_path_buf(), String::new())];
@@ -1235,17 +1332,17 @@ fn hash_tree(dir: &Path) -> Result<BTreeMap<String, String>, String> {
             if t.is_dir() {
                 todo.push((e.path(), format!("{rel}/")));
             } else if t.is_file() {
-                let b = read_bounded(&e.path(), MAX_UI_BYTES)?;
+                let b = read_bounded(&e.path(), max_bytes)?;
                 total += b.len() as u64;
                 out.insert(rel, hex(&Sha256::digest(&b)));
-                if out.len() > MAX_UI_FILES || total > MAX_UI_BYTES {
+                if out.len() > max_files || total > max_bytes {
                     return Err(format!(
-                        "the ui folder holds more than {MAX_UI_FILES} files or {} MiB",
-                        MAX_UI_BYTES >> 20
+                        "{what} holds more than {max_files} files or {} MiB",
+                        max_bytes >> 20
                     ));
                 }
             } else {
-                return Err(format!("{rel} in the ui folder is not a regular file"));
+                return Err(format!("{rel} in {what} is not a regular file"));
             }
         }
     }
@@ -1277,14 +1374,28 @@ impl Drop for Candidate {
     }
 }
 
-/// Checks an archive and stages it in dirs, before the catalog is touched: its pinned size and
-/// digest, if an index gave them; its entries; its manifest, which must be a page-only app
-/// package this app can host, not claiming a reserved publisher.
+/// Checks an archive with no curated signature and stages it in dirs, before the catalog is
+/// touched: its pinned size and digest, if an index gave them; its entries; its manifest, which
+/// must be a page-only app package this app can host, not claiming a reserved publisher.
 pub fn stage(
     dirs: &Dirs,
     archive: &[u8],
     source: Source,
     expect: Option<&Expect>,
+    roots: &dyn Roots,
+) -> Result<Candidate, String> {
+    stage_signed(dirs, archive, source, expect, None, roots)
+}
+
+/// `stage`, for an archive whose descriptor signing verified against a curated root: it may
+/// claim the root's publisher, and only such an archive may be a native tool.
+fn stage_signed(
+    dirs: &Dirs,
+    archive: &[u8],
+    source: Source,
+    expect: Option<&Expect>,
+    signing: Option<Signing>,
+    roots: &dyn Roots,
 ) -> Result<Candidate, String> {
     let sha256 = hex(&Sha256::digest(archive));
     if let Some(x) = expect {
@@ -1316,6 +1427,12 @@ pub fn stage(
             files: BTreeMap::new(),
             resources: vec![],
             settings: false,
+            tier: web(),
+            signed: None,
+            program: None,
+            operations: vec![],
+            state: None,
+            tree: BTreeMap::new(),
         },
         staged: staged.clone(),
     };
@@ -1324,8 +1441,15 @@ pub fn stage(
         .map_err(|_| format!("the archive has no {MANIFEST} at its top"))?;
     let m: Manifest = serde_json::from_slice(&bytes).map_err(|e| format!("{MANIFEST}: {e}"))?;
     let app = validate(&m)?;
-    if let Some(why) = reserved(&m.id) {
-        return Err(why);
+    match &signing {
+        // The descriptor's root names this publisher; its ID, version and tier are the
+        // manifest's.
+        Some(s) => s.verified.check_manifest(&bytes)?,
+        None => {
+            if let Some(why) = reserved(&m.id, roots) {
+                return Err(why);
+            }
+        }
     }
     if let Some(x) = expect {
         if m.id != x.id || m.version != x.version {
@@ -1341,11 +1465,20 @@ pub fn stage(
             m.id, m.version
         )
     })?;
-    if app.tier != "web" {
-        return Err(format!(
-            "{} {} is a native tool; native tools need curated admission, which this app does not have yet",
-            m.id, m.version
-        ));
+    match (app.tier.as_str(), &signing) {
+        ("native", None) => {
+            return Err(format!(
+                "{} {} is a native tool; native tools are admitted only from a curated source with a first-party signature",
+                m.id, m.version
+            ))
+        }
+        ("web", Some(_)) => {
+            return Err(format!(
+                "{} {}: curated web packages are not admitted by this app yet",
+                m.id, m.version
+            ))
+        }
+        _ => {}
     }
     if !app.host_versions.contains(&HOST_CONTRACT) {
         return Err(format!(
@@ -1365,6 +1498,9 @@ pub fn stage(
         .map(|x| x.id.clone())
         .collect();
     r.settings = app.config.is_some();
+    if let Some(s) = signing {
+        admission::native_release(r, &app, &staged, s.signed)?;
+    }
     if let Some(ui) = &app.ui {
         if !store_path(&ui.dir) {
             return Err(format!(
@@ -1456,6 +1592,14 @@ struct Artifact {
     url: String,
     sha256: String,
     size: u64,
+    /// A curated registry's signature (app host README, signed descriptor bytes): the key's ID
+    /// in the root, the exact descriptor text and the detached signature in lower-case hex.
+    #[serde(default)]
+    key_id: Option<String>,
+    #[serde(default)]
+    descriptor: Option<String>,
+    #[serde(default)]
+    signature: Option<String>,
 }
 
 /// Go's platform name for this computer, as registry artifacts are keyed.
@@ -1631,7 +1775,7 @@ pub struct RegistryView {
 
 /// What each registry offers for this computer. A registry that cannot be read says why; the
 /// installed packages stay as they are.
-pub fn offers(dirs: &Dirs) -> Result<Vec<RegistryView>, String> {
+pub fn offers(dirs: &Dirs, roots: &dyn Roots) -> Result<Vec<RegistryView>, String> {
     let platform = platform();
     Ok(registries(dirs)?
         .into_iter()
@@ -1642,7 +1786,9 @@ pub fn offers(dirs: &Dirs) -> Result<Vec<RegistryView>, String> {
                     .into_iter()
                     .filter(|(id, _)| valid_id(id))
                     .map(|(id, p)| Offer {
-                        refused: reserved(&id),
+                        refused: (!roots.curated(&r.url))
+                            .then(|| reserved(&id, roots))
+                            .flatten(),
                         versions: p
                             .releases
                             .iter()
@@ -1668,21 +1814,26 @@ pub fn offers(dirs: &Dirs) -> Result<Vec<RegistryView>, String> {
 }
 
 /// Fetches and stages package id's release version (the newest with an archive for this
-/// computer, when none is named) from registry name.
+/// computer, when none is named) from registry name. From a curated registry (one a trust root
+/// names by its index), a signed artifact is verified against the root before it is unpacked.
 pub fn stage_from_registry(
     dirs: &Dirs,
+    roots: &dyn Roots,
     name: &str,
     id: &str,
     version: Option<&str>,
 ) -> Result<Candidate, String> {
-    // Refused before anything is fetched: the index's listing is no provenance.
-    if let Some(why) = reserved(id) {
-        return Err(why);
-    }
     let r = registries(dirs)?
         .into_iter()
         .find(|r| r.name == name)
         .ok_or_else(|| format!("no registry {name} in {}", dirs.registries.display()))?;
+    let curated = roots.curated(&r.url);
+    // Refused before anything is fetched: an index's listing is no provenance.
+    if !curated {
+        if let Some(why) = reserved(id, roots) {
+            return Err(why);
+        }
+    }
     let (index, base) = read_index(&r)?;
     let platform = platform();
     let p = index
@@ -1701,8 +1852,33 @@ pub fn stage_from_registry(
             )
         })?;
     let a = &release.artifacts[&platform];
-    let bytes = fetch_artifact(&base, a)?;
-    stage(
+    let mut bytes = fetch_artifact(&base, a)?;
+    let signing = match (&a.key_id, &a.descriptor, &a.signature) {
+        (Some(key_id), Some(descriptor), Some(signature)) if curated => {
+            let (s, archive) = admission::verify(
+                roots,
+                &r.url,
+                key_id,
+                descriptor,
+                signature,
+                &platform,
+                (id, &release.version),
+                bytes,
+            )?;
+            bytes = archive;
+            Some(s)
+        }
+        _ if curated && reserved(id, roots).is_some() => {
+            return Err(format!(
+                "{id}: a reserved publisher's package needs a curated first-party signature, and registry {name} lists none for {id} {}",
+                release.version
+            ))
+        }
+        // From a source that is not curated a signature proves nothing here: the package is
+        // Unverified, and a native tool is refused.
+        _ => None,
+    };
+    stage_signed(
         dirs,
         &bytes,
         Source {
@@ -1716,8 +1892,14 @@ pub fn stage_from_registry(
             sha256: a.sha256.to_ascii_lowercase(),
             size: a.size,
         }),
+        signing,
+        roots,
     )
 }
+
+#[path = "device_admission.rs"]
+mod admission;
+use admission::Signing;
 
 #[cfg(test)]
 #[path = "device_tests.rs"]

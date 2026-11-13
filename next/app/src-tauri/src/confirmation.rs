@@ -492,6 +492,11 @@ impl Confirmations {
     pub fn prepare_import(&mut self, action: Action) -> Result<Prepared, String> {
         self.prepare(action, Origin::Import)
     }
+    /// For the main window's command handlers only, after their caller check, with an action
+    /// native code built from verified records (enabling a native tool). Never page data.
+    pub(crate) fn prepare_main(&mut self, action: Action) -> Result<Prepared, String> {
+        self.prepare(action, Origin::Main)
+    }
     // Trusted preparations are created only by native main/tray/UI handlers in this module.
     fn prepare(&mut self, action: Action, origin: Origin) -> Result<Prepared, String> {
         if action.chain.is_empty() {
