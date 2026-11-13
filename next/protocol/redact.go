@@ -743,8 +743,12 @@ func (r *Redactor) Body() *BodyRedactor {
 // that a piece cuts in two is not found, as when each piece is redacted on its own; holding back
 // for those would need far more than the longest form. A number that, with what stands before it,
 // takes more than maxNumberHold bytes and is cut between pieces may be redacted as text
-// ([redacted], which leaves JSON invalid) where String would write 0. Upgrade either if an
-// upstream is seen to write credentials that way in a streamed body.
+// ([redacted]) or as two numbers (0 and the rest of its digits) where String would write 0, either
+// of which leaves JSON invalid. String reads text that is JSON as JSON, and Write calls it on each
+// text it returns, so where a cut makes a text JSON that the whole body is not (a JSON string on
+// its own), or the other way round, a number holding a credential may become 0 where String on the
+// whole body writes [redacted], or the other way round; the credential is removed either way.
+// Upgrade the first two if an upstream is seen to write credentials that way in a streamed body.
 type BodyRedactor struct {
 	r       *Redactor
 	byFirst [256][]string // the forms by their first byte, longest first

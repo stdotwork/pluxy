@@ -481,11 +481,14 @@ spelled with other escapes, or text so heavily escaped that core replaces all of
 the rest of a secret in one of those forms that began in what it would have held and that later
 pieces complete; what it sent of that start stays sent. It sends what it still holds once the body
 ends with `finish`, and drops it when the body breaks off with an error or is cancelled: the body
-is broken there anyway, and what it held could be part of a secret. Two limits remain: a secret
+is broken there anyway, and what it held could be part of a secret. Three limits remain. A secret
 spelled with escapes outside those forms (`\u0073` for `s`, `%73`) that a cut splits is not found,
-as when each piece is redacted alone; and a number that, with what stands before it, takes more
-than 64 bytes and is cut between pieces may become `[redacted]` rather than `0`, which leaves the
-JSON invalid.
+as when each piece is redacted alone. A number that, with what stands before it, takes more than 64
+bytes and is cut between pieces may become `[redacted]`, or `0` followed by the rest of its digits,
+rather than `0`, which leaves the JSON invalid. And core reads as JSON each text that is JSON on its
+own, so where a cut makes a piece JSON on its own that the whole body is not (such as a JSON
+string), or the other way round, a number holding a secret may become `0` rather than `[redacted]`,
+or the other way round. In the last two the secret is still removed.
 
 Except for the direct `codex.models` call above, an `error` before `response.start` is
 routed as for `generate`: core tries another account when it is retryable, and otherwise answers
