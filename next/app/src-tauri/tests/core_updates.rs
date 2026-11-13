@@ -708,6 +708,76 @@ fn a_custom_program_runs_only_once_adopted() {
     );
 }
 
+/// Adopting the program of the selected adopted version again, when the switch then fails before
+/// it runs: an intact copy, kept as it was, runs again; a damaged one, copied in again, never
+/// ran, so the version before it runs.
+#[test]
+fn adopting_the_selected_program_again_falls_back_only_when_it_was_copied_in() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut f = fixture("adopt-again");
+    f.install("2.0.0").unwrap();
+    let custom = f.root.join("custom/pluxy");
+    std::fs::create_dir_all(custom.parent().unwrap()).unwrap();
+    std::fs::copy(built().join("1.0.0/pluxy"), &custom).unwrap();
+    f.conn
+        .change(Change {
+            mode: Some(Mode::Managed),
+            core_path: Some(custom.display().to_string()),
+            core_source: Some(f.index.display().to_string()),
+            ..Change::default()
+        })
+        .unwrap();
+    let adopt = |c: &mut Connection| {
+        let (path, sha256, size) = c.prepare_adopt().unwrap();
+        (
+            c.apply(CoreChange::Adopt {
+                path,
+                sha256: sha256.clone(),
+                size,
+            }),
+            format!("custom-{sha256}"),
+        )
+    };
+    let (r, id) = adopt(&mut f.conn);
+    r.unwrap();
+    assert_eq!(f.reported(), (200, Some("1.0.0".into())));
+    // From here keeping a copy of the config fails, before the candidate runs.
+    std::fs::create_dir(f.root.join("cores/config-last-good.absent")).unwrap();
+    let store = Store::open(&f.root.join("cores")).unwrap();
+
+    // The adopted copy is intact: adopting the program again keeps it, and it runs again.
+    f.conn
+        .change(Change {
+            mode: Some(Mode::Managed),
+            core_path: Some(custom.display().to_string()),
+            core_source: Some(f.index.display().to_string()),
+            ..Change::default()
+        })
+        .unwrap();
+    let err = adopt(&mut f.conn).0.unwrap_err();
+    assert!(err.contains("could not keep a copy of the config"), "{err}");
+    assert_eq!(f.reported(), (200, Some("1.0.0".into())), "{err}");
+    assert_eq!(
+        store.state().unwrap().selected.as_deref(),
+        Some(id.as_str())
+    );
+
+    // The adopted copy is damaged: adopting the program again copies it in, so 2.0.0 runs.
+    f.conn.stop_core();
+    let copy = f.root.join(format!("cores/versions/{id}/pluxy"));
+    std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut bytes = std::fs::read(&copy).unwrap();
+    bytes.push(0);
+    std::fs::write(&copy, bytes).unwrap();
+    std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let err = adopt(&mut f.conn).0.unwrap_err();
+    assert!(err.contains("core 2.0.0 runs again"), "{err}");
+    assert_eq!(f.reported(), (200, Some("2.0.0".into())));
+    let st = store.state().unwrap();
+    assert_eq!(st.selected.as_deref(), Some("2.0.0"));
+    assert_eq!(st.previous.as_deref(), Some(id.as_str()));
+}
+
 /// The management key in the managed core's config.
 fn management_key(root: &Path) -> String {
     let cfg: Value =
