@@ -15,6 +15,7 @@ use serde_json::Value;
 use std::fs;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use url::{Host, Url};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -248,6 +249,13 @@ pub struct Rotation {
     pub kept: Kept,
 }
 
+/// How long the app waits for core's reply to a rotation. The connection's lock is held while it
+/// waits, which keeps tray Quit and every other call waiting too, so it is far below the 300
+/// seconds other calls get; core only writes its config file before it replies, which 30 seconds
+/// covers also behind another config change or over a slow link. A rotation that times out is
+/// reported as a lost reply, with how to find the current key.
+const ROTATION_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Whether a key core sent can be used: what a bearer token can carry, of a sane length.
 fn usable_key(k: &str) -> bool {
     !k.is_empty() && k.len() <= 1024 && k.bytes().all(|b| b.is_ascii_graphic())
@@ -262,10 +270,21 @@ pub struct Caller {
 
 impl Caller {
     pub fn call(&self, method: &str, path: &str, body: Option<&Value>) -> Reply {
-        match (&self.client, &self.key) {
-            (Some(c), Some(k)) => c.call(k, method, path, body),
-            (None, _) => Reply::failed(0, "unavailable", "the app is not connected to a core"),
-            (_, None) => Reply::failed(401, "unauthorized", "not signed in"),
+        self.send(method, path, body, None)
+    }
+
+    fn send(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        limit: Option<Duration>,
+    ) -> Reply {
+        match (&self.client, &self.key, limit) {
+            (Some(c), Some(k), None) => c.call(k, method, path, body),
+            (Some(c), Some(k), Some(l)) => c.call_within(k, method, path, body, l),
+            (None, _, _) => Reply::failed(0, "unavailable", "the app is not connected to a core"),
+            (_, None, _) => Reply::failed(401, "unauthorized", "not signed in"),
         }
     }
 
@@ -567,9 +586,10 @@ impl Connection {
     }
 
     /// Rotates the management key on the core target was prepared for and adopts the new one,
-    /// kept as the old one was. Its caller holds the connection's lock throughout, so nothing
-    /// else changes the connection between core's reply and the new key taking effect. On an
-    /// error the connection is unchanged; the reply never holds a key.
+    /// kept as the old one was. Its caller holds the connection's lock throughout (waiting at
+    /// most ROTATION_TIMEOUT for core), so nothing else changes the connection between core's
+    /// reply and the new key taking effect. On an error the connection is unchanged; the reply
+    /// never holds a key.
     pub(crate) fn finish_rotation(&mut self, target: RotationTarget) -> Result<Rotation, Reply> {
         if self.revision != target.revision {
             return Err(Reply::failed(
@@ -578,7 +598,9 @@ impl Connection {
                 "The connection changed. Rotate again.",
             ));
         }
-        let reply = self.caller().call("POST", ROTATE, None);
+        let reply = self
+            .caller()
+            .send("POST", ROTATE, None, Some(ROTATION_TIMEOUT));
         let lost = || {
             let recover = if self.settings.mode == Some(Mode::Managed) {
                 "Restart the core on the Connection page: the app then reads the current key from its config file."

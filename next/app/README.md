@@ -49,7 +49,9 @@ Close, for other programs that used the old key and for signing in again. The wi
 how it went: the key never reaches a webview. `core_call` refuses every path under
 `/management-key`, however it is spelled. If the new key cannot be saved, the app keeps using
 it until it quits and says to copy it and enter it again with "Keep the key on this device".
-A call that left with the old key during a rotation is sent once more with the new one.
+A call that left with the old key during a rotation is sent once more with the new one. The app
+waits at most 30 seconds for core's reply to a rotation, since other calls and Quit wait for it;
+without a reply it says the key may have changed and where to find it.
 
 Until the app is connected and signed in, the window shows only the Connection page, so a wrong
 address or key can always be fixed there.
