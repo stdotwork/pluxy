@@ -177,6 +177,8 @@ pub struct Admitted {
     pub(super) host_contract: i64,
     pub(super) imports: Vec<ImportDecl>,
     pub(super) exports: Option<ExportDecl>,
+    pub(super) produces: Vec<ProduceDecl>,
+    pub(super) consumes: Vec<ConsumeDecl>,
 }
 
 impl Admitted {
@@ -249,6 +251,14 @@ impl Admitted {
     pub fn exports(&self) -> Option<&ExportDecl> {
         self.exports.as_ref()
     }
+    /// The kinds it produces as jobs.
+    pub fn produces(&self) -> &[ProduceDecl] {
+        &self.produces
+    }
+    /// The kinds it consumes, and the operations it takes their deliveries with.
+    pub fn consumes(&self) -> &[ConsumeDecl] {
+        &self.consumes
+    }
     /// It, as native confirmations name a package: ID, source, digest, signer and key,
     /// contracts and generation.
     #[cfg(target_os = "linux")]
@@ -293,7 +303,7 @@ impl Admitted {
                 self.version,
                 operations.join(", "),
                 imports::listing(&self.imports)
-            ),
+            ) + &jobs::listing(&self.produces, &self.consumes),
             // The person asked in the app's main window; the tool is what would run.
             chain: vec![main_window()],
             executor: package,
@@ -561,6 +571,8 @@ impl Catalog {
             host_contract: HOST_CONTRACT,
             imports: r.imports.clone(),
             exports: r.exports.clone(),
+            produces: r.produces.clone(),
+            consumes: r.consumes.clone(),
         };
         Ok((a, r.tree.clone()))
     }

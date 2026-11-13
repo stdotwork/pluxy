@@ -881,6 +881,7 @@ fn a_call_allowed_for_another_release_is_refused() {
             chain: vec![Hop::Main],
             expect: Some((sha.into(), generation)),
             extra: Box::new(()),
+            feed: None,
         })
     };
     let e = h

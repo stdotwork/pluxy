@@ -50,6 +50,11 @@
 //! sending a `call` frame on its stdout for the host call it serves (`for`); the host hands it to
 //! the router (`Host::set_route`) and writes the answer to the tool's stdin. A frame naming its own
 //! caller or chain is refused: the host sets them.
+//!
+//! A job's call (`Context::feed`, the router's `jobs.rs`) carries the job in its frame; the tool's
+//! `progress` frames for it are the job's batches, handed to the feed, and the host acknowledges
+//! each batch the job's consumer took with an `ack` frame. A tool asks the host's job service with
+//! a `jobs` frame, for a host call it serves, which goes to the router as its calls do.
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -226,6 +231,18 @@ pub struct Context {
     pub expect: Option<(String, u64)>,
     /// The router's own record of the call, opaque to the host.
     pub extra: Box<dyn std::any::Any + Send + Sync>,
+    /// A job's call: where its batches go.
+    pub feed: Option<Arc<dyn Feed>>,
+}
+
+/// Where a job's call's batches go (the router's `jobs.rs`).
+pub trait Feed: Send + Sync {
+    /// The job, as its call's frame names it.
+    fn job(&self) -> Value;
+    /// A `progress` frame the tool sent for the call: a batch.
+    fn batch(&self, frame: &Value);
+    /// How to acknowledge a batch to the tool, while the call runs; None once it has ended.
+    fn attach(&self, ack: Option<Box<dyn Fn(u64) + Send + Sync>>);
 }
 
 impl Context {
@@ -236,6 +253,7 @@ impl Context {
             chain: vec![Hop::Main],
             expect: None,
             extra: Box::new(()),
+            feed: None,
         }
     }
 }
@@ -268,6 +286,8 @@ pub struct Outbound {
     pub input: Value,
     /// Cancelled when the tool cancels it, or the call it serves is cancelled or ends.
     pub cancel: Cancel,
+    /// A request to the host's job service (a `jobs` frame: op and input), not a call of package.
+    pub jobs: bool,
 }
 
 /// Decides and makes a tool's call (`Host::set_route`).
@@ -974,9 +994,22 @@ impl Host {
             message: format!("{why}; its outcome is unknown, and it is not sent again"),
             unknown: true,
         };
+        // A job's batches are acknowledged on the tool's stdin while the call runs.
+        if let Some(f) = &context.feed {
+            let (r, c) = (Arc::downgrade(run), cid.clone());
+            f.attach(Some(Box::new(move |seq| {
+                if let Some(r) = r.upgrade() {
+                    let _ = r.send(&json!({"type": "ack", "id": c, "seq": seq}));
+                }
+            })));
+        }
         let result = (|| {
-            run.send(&json!({"type": "call", "id": cid, "op": op, "input": input,
-                "chain": context.chain}))?;
+            let mut frame = json!({"type": "call", "id": cid, "op": op, "input": input,
+                "chain": context.chain});
+            if let Some(f) = &context.feed {
+                frame["job"] = f.job();
+            }
+            run.send(&frame)?;
             let mut cancelled: Option<Instant> = None;
             loop {
                 match rx.recv_timeout(TICK) {
@@ -1016,6 +1049,9 @@ impl Host {
         run.pending.lock().unwrap().remove(&cid);
         run.serving.lock().unwrap().remove(&cid);
         ended.store(true, Ordering::SeqCst);
+        if let Some(f) = &context.feed {
+            f.attach(None);
+        }
         if let Err(e) = &result {
             if e.unknown {
                 let mut slots = self.0.slots();
@@ -1977,9 +2013,21 @@ fn deliver(run: &Arc<Run>, frame: &[u8], said_hello: &mut bool) -> Result<(), St
         .as_str()
         .ok_or_else(|| format!("sent a {kind:?} frame with no call ID"))?;
     let reply = match kind.as_str() {
-        // Progress goes nowhere yet; reading it keeps the pipe flowing.
-        "progress" => return Ok(()),
-        "call" => {
+        // A job's call's progress is its batches; other progress goes nowhere yet, and reading it
+        // keeps the pipe flowing.
+        "progress" => {
+            let feed = run
+                .serving
+                .lock()
+                .unwrap()
+                .get(id)
+                .and_then(|s| s.0.feed.clone());
+            if let Some(f) = feed {
+                f.batch(&v);
+            }
+            return Ok(());
+        }
+        "call" | "jobs" => {
             outbound(run, id, &v);
             return Ok(());
         }
@@ -2005,7 +2053,8 @@ fn deliver(run: &Arc<Run>, frame: &[u8], said_hello: &mut bool) -> Result<(), St
 
 /// A tool's own call, frame v with ID id: refused at once when it names its caller or chain, a
 /// host call it is not serving, or an ID in use; otherwise the router decides and makes it, on a
-/// thread of its own, and its answer goes back on the tool's stdin.
+/// thread of its own, and its answer goes back on the tool's stdin. A `jobs` frame, a request to
+/// the host's job service, names no package and goes the same way.
 fn outbound(run: &Arc<Run>, id: &str, v: &Value) {
     let refuse = |code: &str, message: String| {
         if run.ending() {
@@ -2032,9 +2081,12 @@ fn outbound(run: &Arc<Run>, id: &str, v: &Value) {
             format!("a call may not name its {f}: the host sets a call's caller and chain"),
         );
     }
-    let (Some(package), Some(op), Some(serves)) =
-        (v["package"].as_str(), v["op"].as_str(), v["for"].as_str())
-    else {
+    let jobs = v["type"] == "jobs";
+    let (Some(package), Some(op), Some(serves)) = (
+        v["package"].as_str().or(jobs.then_some("")),
+        v["op"].as_str(),
+        v["for"].as_str(),
+    ) else {
         return refuse(
             "invalid_request",
             "a call names the package, op and the host call it is for".into(),
@@ -2077,6 +2129,7 @@ fn outbound(run: &Arc<Run>, id: &str, v: &Value) {
         op: op.into(),
         input: v["input"].clone(),
         cancel: cancel.with(&flag),
+        jobs,
     };
     let (r, rid) = (Arc::clone(run), id.to_string());
     let spawned = spawn_named("pluxy-prog-route", move || {

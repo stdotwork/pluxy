@@ -17,6 +17,14 @@
 //! while its native confirmation is open withdraws the confirmation; a confirmed call is granted
 //! again before it runs. The rules that need no app are in `route_rules.rs`.
 //!
+//! A tool's `jobs` frame asks the host's job service (`jobs.rs`) for the call it serves: the
+//! registrations of a kind it consumes (`device::Catalog::registrations`), to start a job of one
+//! (`job_grant`), or to cancel one of its jobs. A start is decided as a call of the producer's
+//! operation with the consumer as caller: the same chain, input and confirmation rules, pinned to
+//! the producer's release. It is answered with the job's ID at once; the producer's call and the
+//! deliveries to the consumer's deliver operation then run on a thread of the job's own, each
+//! batch granted again first, and the consumer is leased until the job ends.
+//!
 //! Linux only, as the program host.
 
 use crate::confirmation::{self, Gesture};
@@ -29,6 +37,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
+#[path = "jobs.rs"]
+mod jobs;
 #[path = "route_rules.rs"]
 mod rules;
 pub use rules::Routes;
@@ -117,6 +127,9 @@ fn outbound(app: &AppHandle, o: Outbound) -> Result<Value, CallError> {
             "only a tool's run makes calls of its own",
         ));
     };
+    if o.jobs {
+        return jobs_request(app, &o, parent, (id, sha256, *generation));
+    }
     let chain = rules::extend(&o.context.chain, &o.caller, &o.package)?;
     let grant = || {
         app.state::<App>()
@@ -263,23 +276,53 @@ fn dispatch(
     input: Value,
     cancel: Cancel,
 ) -> Result<Value, CallError> {
-    if serde_json::to_vec(&input).map_or(usize::MAX, |b| b.len()) > MAX_INPUT {
+    checked(
+        app,
+        &grant,
+        regrant,
+        &chain,
+        &origin,
+        &input,
+        &call.cancelled_by(&cancel),
+    )?;
+    let context = Context {
+        chain,
+        expect: Some((grant.target.sha256().into(), grant.target.installed_at())),
+        extra: Box::new(origin),
+        feed: None,
+    };
+    app.state::<App>().programs.run_call_with(
+        call,
+        grant.target.id(),
+        &grant.op.id,
+        input,
+        Arc::new(context),
+        cancel,
+    )
+}
+
+/// Checks input against grant's operation, has a write or launch confirmed (a cancel withdraws
+/// the confirmation), and grants it again once confirmed: regrant must give the same release and
+/// operation.
+fn checked(
+    app: &AppHandle,
+    grant: &Grant,
+    regrant: &dyn Fn() -> Result<Grant, CallError>,
+    chain: &[Hop],
+    origin: &Origin,
+    input: &Value,
+    cancel: &Cancel,
+) -> Result<(), CallError> {
+    if serde_json::to_vec(input).map_or(usize::MAX, |b| b.len()) > MAX_INPUT {
         return Err(fail(
             "invalid_request",
             format!("the input is larger than {MAX_INPUT} bytes"),
         ));
     }
-    program::schema::check(&grant.op.input_schema, &input, "input")
+    program::schema::check(&grant.op.input_schema, input, "input")
         .map_err(|e| fail("invalid_request", e))?;
-    let preparation = rules::preparation(&chain);
-    if authorize(
-        app,
-        &grant,
-        &origin,
-        preparation,
-        &input,
-        &call.cancelled_by(&cancel),
-    )? {
+    let preparation = rules::preparation(chain);
+    if authorize(app, grant, origin, preparation, input, cancel)? {
         // Asked: the catalog may have changed while the person answered.
         let now = regrant()?;
         if now.target != grant.target || now.op != grant.op {
@@ -293,19 +336,214 @@ fn dispatch(
             ));
         }
     }
-    let context = Context {
-        chain,
-        expect: Some((grant.target.sha256().into(), grant.target.installed_at())),
-        extra: Box::new(origin),
+    Ok(())
+}
+
+/// Consumer caller's request to the host's job service, as o names it.
+fn jobs_request(
+    app: &AppHandle,
+    o: &Outbound,
+    parent: &Origin,
+    caller: (&str, &str, u64),
+) -> Result<Value, CallError> {
+    let st = app.state::<App>();
+    match o.op.as_str() {
+        "registrations" => {
+            let kind = o.input["kind"].as_str().unwrap_or_default();
+            let regs = st
+                .device
+                .lock()
+                .unwrap()
+                .registrations(caller, kind, &roots())
+                .map_err(refused)?;
+            Ok(json!({"registrations": regs}))
+        }
+        "start" => start_job(app, o, parent, caller),
+        "cancel" => {
+            let job = o.input["job"].as_str().unwrap_or_default();
+            st.routes.jobs.cancel(caller.0, job)?;
+            Ok(json!({"cancelled": job}))
+        }
+        op => Err(fail(
+            "unsupported",
+            format!("the host's job service has no request {op:?}"),
+        )),
+    }
+}
+
+/// Consumer caller's start of a job of `kind`, of the registration o's input names (`package`,
+/// `sha256`, `generation`), with `input`: granted and confirmed as a call of the producer's
+/// operation, then answered with the job's ID while the job runs on a thread of its own.
+fn start_job(
+    app: &AppHandle,
+    o: &Outbound,
+    parent: &Origin,
+    caller: (&str, &str, u64),
+) -> Result<Value, CallError> {
+    let st = app.state::<App>();
+    let i = &o.input;
+    let kind = i["kind"].as_str().unwrap_or_default().to_string();
+    let (producer, sha256, generation) = (
+        i["package"].as_str().unwrap_or_default(),
+        i["sha256"].as_str().unwrap_or_default(),
+        i["generation"].as_u64().unwrap_or_default(),
+    );
+    let grant = || {
+        st.device
+            .lock()
+            .unwrap()
+            .job_grant(caller, &kind, (producer, sha256, generation), &roots())
+            .map_err(refused)
     };
-    app.state::<App>().programs.run_call_with(
-        call,
-        grant.target.id(),
-        &grant.op.id,
-        input,
-        Arc::new(context),
-        cancel,
+    let g = grant()?;
+    let chain = rules::extend(&o.context.chain, &o.caller, producer)?;
+    // Counted before it is confirmed, so the bounds hold for the confirmations too.
+    let job = st.routes.jobs.add(caller.0, producer, &kind)?;
+    let mut packages = parent.packages.clone();
+    packages.push(g.consumer.package());
+    let origin = Origin {
+        packages,
+        // A job is started by a tool: it never uses a gesture.
+        gesture: Arc::new(Mutex::new(None)),
+    };
+    let input = i["input"].clone();
+    let ready = checked(
+        app,
+        &g.producer,
+        &|| grant().map(|g| g.producer),
+        &chain,
+        &origin,
+        &input,
+        &o.cancel,
     )
+    // The consumer stays up for the job's deliveries.
+    .and_then(|_| st.programs.lease(caller.0));
+    let lease = match ready {
+        Ok(lease) => lease,
+        Err(e) => {
+            st.routes.jobs.remove(&job);
+            return Err(e);
+        }
+    };
+    let id = job.id.clone();
+    let (a, j) = (app.clone(), Arc::clone(&job));
+    let spawned = std::thread::Builder::new()
+        .name("pluxy-job".into())
+        .spawn(move || {
+            run_job(&a, &j, g, chain, origin, input, &kind);
+            drop(lease);
+            a.state::<App>().routes.jobs.remove(&j);
+        });
+    if let Err(e) = spawned {
+        st.routes.jobs.remove(&job);
+        return Err(fail("unavailable", format!("starting the job: {e}")));
+    }
+    Ok(json!({"job": id}))
+}
+
+/// Runs job of kind: the producer's call, as g grants it in chain, beside the pump delivering
+/// its batches and its end to the consumer's deliver operation, each delivery pinned to the
+/// consumer's release, with the job's chain and then the producer as its chain.
+fn run_job(
+    app: &AppHandle,
+    job: &Arc<jobs::Job>,
+    g: device::JobGrant,
+    chain: Vec<Hop>,
+    origin: Origin,
+    input: Value,
+    kind: &str,
+) {
+    let st = app.state::<App>();
+    let programs = &st.programs;
+    let source = serde_json::to_value(&g.registration).unwrap_or(Value::Null);
+    let c = (
+        g.consumer.id().to_string(),
+        g.consumer.sha256().to_string(),
+        g.consumer.installed_at(),
+    );
+    let p = (
+        g.producer.target.id().to_string(),
+        g.producer.target.sha256().to_string(),
+        g.producer.target.installed_at(),
+    );
+    let mut delivery_chain = chain.clone();
+    delivery_chain.push(Hop::Package {
+        id: p.0.clone(),
+        sha256: p.1.clone(),
+        generation: p.2,
+    });
+    let mut delivery_packages = origin.packages.clone();
+    delivery_packages.push(g.producer.target.package());
+    let call = Context {
+        chain,
+        expect: Some((p.1.clone(), p.2)),
+        extra: Box::new(origin),
+        feed: Some(Arc::clone(job) as Arc<dyn program::Feed>),
+    };
+    let op = g.producer.op.id.clone();
+    let producer = p.0.clone();
+    // Both sides still the releases it was granted for.
+    let valid = || {
+        st.device
+            .lock()
+            .unwrap()
+            .job_grant((&c.0, &c.1, c.2), kind, (&p.0, &p.1, p.2), &roots())
+            .map(|_| ())
+            .map_err(refused)
+    };
+    let consumer_valid = || {
+        st.device
+            .lock()
+            .unwrap()
+            .consumer((&c.0, &c.1, c.2), kind, &roots())
+            .is_ok()
+    };
+    let deliver = |envelope: Value, end: bool| {
+        let context = Context {
+            chain: delivery_chain.clone(),
+            expect: Some((c.1.clone(), c.2)),
+            extra: Box::new(Origin {
+                packages: delivery_packages.clone(),
+                gesture: Arc::new(Mutex::new(None)),
+            }),
+            feed: None,
+        };
+        // A batch's delivery ends with the job; its end is delivered after.
+        let cancel = if end {
+            Cancel::default()
+        } else {
+            Cancel::default().with(&job.cancel)
+        };
+        programs
+            .begin_call(None)
+            .and_then(|call| {
+                programs.run_call_with(
+                    call,
+                    &c.0,
+                    &g.deliver.id,
+                    envelope,
+                    Arc::new(context),
+                    cancel,
+                )
+            })
+            .map(|_| ())
+    };
+    std::thread::scope(|s| {
+        s.spawn(move || {
+            let r = programs.begin_call(None).and_then(|registered| {
+                programs.run_call_with(
+                    registered,
+                    &producer,
+                    &op,
+                    input,
+                    Arc::new(call),
+                    Cancel::default().with(&job.cancel),
+                )
+            });
+            job.finished(r);
+        });
+        jobs::pump(job, &source, deliver, valid, consumer_valid);
+    });
 }
 
 /// The launch a launch-class input names.

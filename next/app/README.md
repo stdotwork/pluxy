@@ -342,6 +342,14 @@ back into the chain or a chain of more than five, and asks a native confirmation
 chain for each `write` or `launch` call. [Calls between packages](app-host/README.md#calls-between-packages)
 has the manifest fields, frames and rules.
 
+A native tool may also produce and consume declared kinds of data as jobs (`produces`,
+`consumes`). A consumer lists the registrations of a kind it consumes, which the catalog gives as
+the producers it admitted (package, release digest, generation, source, signer), and starts a job
+of one through the router, as a call; the host then delivers the producer's batches to the
+consumer's deliver operation with their source, at most four unacknowledged, and cancels the job
+when either package changes (`src-tauri/src/jobs.rs`). [Jobs](app-host/README.md#jobs) has the
+rules.
+
 Updating or rolling back a native tool that is enabled swaps it while it serves on. The new
 release is staged and shown in its own native confirmation; once confirmed, the program host
 starts and describes it, with no call. Only then is it committed, enabled and admitted, and do new
