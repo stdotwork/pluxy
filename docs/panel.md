@@ -11,7 +11,8 @@ The new panel replaces the old one (`extensions/panel`). Parity means that it lo
 like the old panel: where a feature is kept, it keeps the old page, section, setting and button
 names, in a similar place, so someone who knows the old panel finds each thing where they expect
 it. A label changes only where it named something this core does differently, such as a file, a
-relay or a mislabelled setting.
+relay or a mislabelled setting, or where [docs/terms.md](terms.md), the repo's list of words for
+the UI, gives another word: the Quota Management card's "Renewal time" reads "Subscription ends".
 
 Parity does not mean the same logic. The new core does things its own way, and the panel shows
 what it does. Old features are carried over only where they are worth keeping. Each one left out
