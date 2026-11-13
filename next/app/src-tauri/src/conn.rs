@@ -287,10 +287,13 @@ impl Caller {
     pub fn call(&self, method: &str, path: &str, body: Option<&Value>) -> Reply {
         // The app's own core is stopping or has exited: whatever listens on its address now
         // may not be it. Still open: a call that passed this check just before a stop or exit
-        // goes out; and after a crash, the kernel frees the port as the core exits, a moment
-        // before the app sees the exit (its pidfd) and sets the flag, so a program that binds
-        // the port in that moment can receive a call with the key. Only a socket the app holds
-        // and hands to the core, or calls without a bearer key, close that.
+        // goes out; after a crash, the kernel frees the port as the core exits, a moment
+        // before the app sees the exit (its pidfd) and sets the flag; and when something other
+        // than the app stops the core (SIGTERM or SIGINT from outside), the core closes its
+        // listener at once and drains its calls for up to 10 seconds before it exits, all with
+        // the flag unset. A program that binds the freed port in either window can receive a
+        // call with the key. Only a socket the app holds and hands to the core, or calls without
+        // a bearer key, close that.
         if self
             .gone
             .as_ref()
