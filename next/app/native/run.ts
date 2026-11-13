@@ -12,7 +12,13 @@
 //   removes page-only packages from a local registry and from local files through the native
 //   file chooser, refusing reserved IDs and a failed candidate (device.ts, device_native.rs);
 // - closing the window leaves no webview and no web process, with the app still in the tray;
-// - quitting stops the app's own core, and leaves a local or remote core running.
+// - quitting stops the app's own core, and leaves a local or remote core running;
+// - in a second managed run, a core that exits before the app state exists is recovered.
+// - the management key rotates natively (native_test.rs, rotation_test.rs): core_call refuses
+//   it, the app keeps working on the new key as the old one was kept, the key window stays open
+//   when the window closes to the tray and goes when a later rotation shows its own, no webview
+//   (the window's or an extension page's) and no output line holds any key the run rotated; in
+//   local mode the app then starts again on the same folders and signs in with the kept key.
 //
 // The packaged app too: the test package (package.ts test, an AppImage with the test identifier,
 // product name and compiled test marker) runs through the same checks in local mode, as the
@@ -28,9 +34,11 @@
 // scenario: a second launch on the same profile exits and raises the first's window, a launch on
 // another profile runs as its own app, and a killed owner's stale lock is recovered.
 // The signed native-tier admission check (admission.ts, admission_native.rs) runs in one more
-// session, with the app built with artifact-test-trust and a test trust profile in the run's HOME.
-// The other sessions run a build without that feature; its device check shows the same profile
-// admits nothing there.
+// session, with the app built with artifact-test-trust and a test trust profile in the run's HOME,
+// and the program host check (program.ts, program_native.rs) in one more with that build: a signed
+// summary tool, started on demand, called and cancelled, stopped when idle, disabled and quit,
+// whose processes are gone after the app quits. The other sessions run a build without that
+// feature; its device check shows the same profile admits nothing there.
 // The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
@@ -46,11 +54,13 @@ import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -62,6 +72,7 @@ import { appImageHeader, buildSmokeAppImage, packAppImage } from "./appimage";
 import { buildDeviceFixtures } from "./device";
 import { runInstances } from "./instances";
 import { descendants, webProcesses } from "./processes";
+import { buildProgramFixtures } from "./program";
 import { missingPrerequisites } from "./services";
 
 const app = join(import.meta.dir, "..");
@@ -140,7 +151,7 @@ function runShown(cmd: string, args: string[], cwd: string) {
 /** A core from panelcore, running until its stdin closes. */
 async function startCore(
   tls: boolean,
-): Promise<{ proc: ChildProcess; base: string; key: string; ca?: string }> {
+): Promise<{ proc: ChildProcess; base: string; key: string; config: string; ca?: string }> {
   const proc = spawn("go", ["run", "./e2e/panelcore", "-probe", ...(tls ? ["-tls"] : [])], {
     cwd: next,
     stdio: ["pipe", "pipe", "inherit"],
@@ -205,6 +216,15 @@ function alive(pid: number): boolean {
   }
 }
 
+/** Whether pid runs the program at path (and is not some later process with its number). */
+function runs(pid: number, path: string): boolean {
+  try {
+    return alive(pid) && readlinkSync(`/proc/${pid}/exe`).startsWith(path);
+  } catch {
+    return false;
+  }
+}
+
 async function managementStatus(base: string, key: string, ca?: string): Promise<number> {
   const r = await fetch(`${base}/v0/management/status`, {
     headers: { Authorization: `Bearer ${key}` },
@@ -213,14 +233,30 @@ async function managementStatus(base: string, key: string, ca?: string): Promise
   return r.status;
 }
 
+/** The management key in core's config file: its current one, also after a rotation. */
+function managementKey(config: string): string {
+  return JSON.parse(readFileSync(config, "utf8")).management_key;
+}
+
 /** The window checks (window.ts), with or without a tray watcher in the session, and the privacy
  * mode checks (privacy.ts). */
 type Suite = "window" | "window-no-tray" | "privacy";
 
+/** For a local or remote core, rotation.coreConfig is its config file. rotation.root keeps the
+ * run's folders for the caller to remove; with rotation.restart the app starts again on them,
+ * with the connection an earlier run left. */
+interface Rotation {
+  coreConfig?: string;
+  root?: string;
+  restart?: boolean;
+}
+
 /** Runs the app once with connection as its saved connection, and checks what it reports.
  * updaterKey goes into the run's test trust profile; with key, the run also drives native key
  * entry. With suite, the session runs window.ts, which runs the app through the window checks'
- * stages. */
+ * stages. earlyExit: the app's setup waits for its core's exit callback before the app state
+ * exists (PLUXY_APP_TEST_EARLY_EXIT), and only the recovery of that core is checked. admission:
+ * the session checks only signed native-tier admission; program: only the program host. */
 async function runApp(
   mode: Mode,
   artifact: Artifact,
@@ -231,10 +267,13 @@ async function runApp(
   noTray = false,
   key?: string,
   suite?: Suite,
+  rotation: Rotation = {},
   admission = false,
+  program = false,
+  earlyExit = false,
 ): Promise<string[]> {
   const { label, bin } = artifact;
-  const root = mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
+  const root = rotation.root ?? mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
   const problems: string[] = [];
   const check = (ok: unknown, what: string) => {
     if (!ok) problems.push(what);
@@ -252,9 +291,10 @@ async function runApp(
     };
     for (const d of Object.values(dirs)) mkdirSync(d, { recursive: true, mode: 0o700 });
     mkdirSync(join(dirs.config, artifact.identifier), { recursive: true });
-    writeFileSync(join(dirs.config, artifact.identifier, "connection.json"), JSON.stringify(connection), {
-      mode: 0o600,
-    });
+    if (!rotation.restart)
+      writeFileSync(join(dirs.config, artifact.identifier, "connection.json"), JSON.stringify(connection), {
+        mode: 0o600,
+      });
     // The main checks close the window to the tray; the window suite starts with Ask every time.
     if (!suite)
       writeFileSync(
@@ -264,15 +304,28 @@ async function runApp(
       );
     const quit = join(root, "quit");
     // This device's extension catalog is the same in every mode: check it once, in managed mode.
-    const device = mode === "managed" && !admission ? join(root, "device") : undefined;
+    const device = mode === "managed" && !admission && !program ? join(root, "device") : undefined;
     // A test trust profile in HOME naming curated registries: the admission session's build
     // honours it; the device check's normal build must not.
     const curated = device || admission ? join(root, "curated") : undefined;
     // The test trust profile in HOME: its marker and nonce, and the updater key, the same in
-    // every run. With curated registries the fixtures write the marker and the publisher roots;
-    // otherwise the app's own code writes the marker (session_probe trust-marker), with no roots.
+    // every run. With curated registries or the program host's fixtures, they write the marker
+    // and the publisher roots; otherwise the app's own code writes the marker (session_probe
+    // trust-marker), with no roots.
     let nonce = "";
     let roots: object[] = [];
+    // The program host check's signed summary tool, its curated registry and trust profile.
+    const programDir = program ? join(root, "program") : undefined;
+    if (programDir) {
+      mkdirSync(programDir);
+      const f = buildProgramFixtures(programDir, dirs.home, programFixture);
+      nonce = f.nonce;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
     if (curated) {
       mkdirSync(curated);
       if (device) mkdirSync(device);
@@ -289,7 +342,7 @@ async function runApp(
         join(dirs.config, artifact.identifier, "device-registries.json"),
         JSON.stringify({ version: 0, registries }),
       );
-    } else {
+    } else if (!programDir) {
       try {
         nonce = /^nonce=([0-9a-f]{64})$/m.exec(run(probe, ["trust-marker", dirs.home], app))?.[1] ?? "";
         if (!nonce) throw new Error("it printed no nonce");
@@ -303,6 +356,8 @@ async function runApp(
       { mode: 0o600 },
     );
     const keyFile = join(root, "key-input");
+    // Every key the rotation check sees, for the log audit below; it is native-test output.
+    const rotatedFile = join(root, "rotated-keys");
     const wrongKey = randomUUID();
     if (key) writeFileSync(keyFile, JSON.stringify({ key, wrong: wrongKey }), { mode: 0o600 });
     // Only what the app needs: no display or session bus but the run's own.
@@ -325,11 +380,18 @@ async function runApp(
       APPIMAGE_EXTRACT_AND_RUN: "1",
       PLUXY_APP_TEST_PAGE: PAGE,
       PLUXY_APP_TEST_QUIT: quit,
+      PLUXY_APP_TEST_STATE: join(root, "state.json"),
+      PLUXY_APP_TEST_TRAY_HOLD: join(root, "tray-hold"),
       ...(device ? { PLUXY_APP_TEST_DEVICE: device, PLUXY_APP_TEST_CURATED: curated as string } : {}),
       ...(admission ? { PLUXY_APP_TEST_ADMISSION: curated as string } : {}),
+      // In the app's environment, never in the tool's (program_native.rs checks its names).
+      ...(programDir ? { PLUXY_APP_TEST_PROGRAM: programDir, PLUXY_TEST_PROGRAM_CANARY: randomUUID() } : {}),
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: artifact.identifier } : {}),
       ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
       ...(key ? { PLUXY_APP_TEST_KEY_FILE: keyFile } : {}),
+      PLUXY_APP_TEST_ROTATED_FILE: rotatedFile,
+      ...(rotation.coreConfig ? { PLUXY_APP_TEST_CORE_CONFIG: rotation.coreConfig } : {}),
+      ...(rotation.restart ? { PLUXY_APP_TEST_ROTATION_RESTART: "1" } : {}),
       ...(suite
         ? {
             PLUXY_APP_TEST_WINDOW_BIN: bin,
@@ -337,6 +399,7 @@ async function runApp(
             PLUXY_APP_TEST_IDENTIFIER: artifact.identifier,
           }
         : {}),
+      ...(earlyExit ? { PLUXY_APP_TEST_EARLY_EXIT: "1" } : {}),
     };
     // The session script starts and checks the desktop services, then runs the app.
     const session = [
@@ -364,11 +427,14 @@ async function runApp(
     const pid = proc.pid ?? 0;
     sessions.add(pid);
     let ready = false; // session.ts said its setup is done and the app starts
+    let attempts = 0; // the app's recovery attempts
     if (!proc.stderr || !proc.stdout) throw new Error("the app's output is not piped");
     const log: string[] = []; // the app's last lines, shown when the run fails
     const setup: string[] = []; // session.ts's report of what failed at setup
+    const output: string[] = []; // every line, for the rotated-key audit once the run ends
     let suitePassed = false;
     const onLine = (line: string) => {
+      output.push(line);
       if (key && [key, wrongKey].some((canary) => line.includes(canary))) {
         problems.push("management key appeared on stdout/stderr");
         return;
@@ -381,6 +447,10 @@ async function runApp(
         return;
       }
       // The session's service checks are always shown: they say what this run stood on.
+      if (line.startsWith("native-recovery: ")) {
+        console.log(`  ${mode} | ${line}`);
+        return;
+      }
       if (line.startsWith("native-prereq: ")) {
         console.log(`  ${label} | ${line}`);
         if (line === "native-prereq: ready") ready = true;
@@ -388,6 +458,7 @@ async function runApp(
           setup.push(line.slice("native-prereq: FAILED ".length));
         return;
       }
+      if (line.startsWith("native-test: recovery-attempt ")) attempts++;
       const m = /^native-test: (\w+) (.*)$/.exec(line);
       if (!m) {
         if (process.env.PLUXY_APP_TEST_VERBOSE) console.error(`  ${label} | ${line}`);
@@ -414,7 +485,6 @@ async function runApp(
         // Give the web processes a moment to exit, then let the app quit.
         setTimeout(() => {
           after = webProcesses(pid);
-          writeFileSync(quit, "");
         }, 3000);
       }
     };
@@ -441,6 +511,15 @@ async function runApp(
       );
     }
     check(code === 0, `the app exited with ${code}`);
+    const rotated = existsSync(rotatedFile)
+      ? readFileSync(rotatedFile, "utf8")
+          .split("\n")
+          .filter((k) => k.length > 0)
+      : [];
+    check(
+      !output.some((line) => rotated.some((k) => line.includes(k))),
+      "a management key from the rotation check appeared on stdout/stderr",
+    );
     if (suite) {
       check(suitePassed, `the ${suite} checks failed`);
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
@@ -448,6 +527,65 @@ async function runApp(
       return problems;
     }
     check(!steps.has("failed"), `the app's test steps failed: ${JSON.stringify(steps.get("failed"))}`);
+    if (earlyExit) {
+      // Without this the run would not test the early exit: the callback could have found the state.
+      const held = steps.get("early_exit_held");
+      check(
+        held?.callback_ran === true,
+        `the core's exit callback did not run first: ${JSON.stringify(held)}`,
+      );
+      const end = steps.get("early_exit") as
+        | { view?: { core?: { state?: string; pid?: number } } }
+        | undefined;
+      const core = end?.view?.core;
+      check(
+        core?.state === "running" && core.pid,
+        `a core that exited before the app state existed was not recovered: ${JSON.stringify(end)}`,
+      );
+      check(attempts === 1, `${attempts} recovery attempts, want 1`);
+      await Bun.sleep(1000);
+      // Only a recovered core can outlive the app; its absence is the check above.
+      check(!core?.pid || !alive(core.pid), `the recovered core ${core?.pid} still runs after the app quit`);
+      if (problems.length > 0)
+        console.log(`${mode} early exit: the app's last lines:\n  ${log.join("\n  ")}`);
+      else
+        console.log(
+          `  ${mode} | native-recovery: a core that exited before the app state existed was recovered`,
+        );
+      return problems;
+    }
+
+    if (rotation.restart) {
+      const restarted = steps.get("rotation_restart");
+      check(
+        restarted?.signed_in === true && restarted?.status === 200 && Number(restarted?.refused) > 0,
+        `the restart after rotation did not sign in on the kept key: ${JSON.stringify(restarted)}`,
+      );
+      console.log(`  ${mode} | after restart: ${JSON.stringify(restarted ?? {})}`);
+      console.log(`${mode}: restart ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
+    if (program) {
+      const p = steps.get("program") as
+        | { passed?: boolean; program?: string; quit_pids?: number[] }
+        | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(p?.passed === true, `the program host check did not complete: ${failure}`);
+      // After the app quit, neither the tool nor the child in its process group runs.
+      await Bun.sleep(1000);
+      const left = (p?.quit_pids ?? []).filter((pid) => runs(pid, p?.program ?? ""));
+      check(
+        p?.quit_pids?.length === 2,
+        `the program check named no processes to watch: ${JSON.stringify(p)}`,
+      );
+      check(left.length === 0, `the tool's processes ${left.join(", ")} still run after the app quit`);
+      for (const pid of left) killTree(pid);
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} program ${JSON.stringify(p ?? {})}`);
+      console.log(`${mode}: program ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
 
     // The updater gate, reported before any other step: it read the compiled marker, identifier
     // and product name, and with the same profile passes only the test package.
@@ -497,6 +635,10 @@ async function runApp(
     }
 
     checkGate();
+    check(
+      steps.get("recovery")?.ok === true,
+      `tray/recovery check: ${JSON.stringify(steps.get("recovery"))}`,
+    );
 
     if (key) {
       const entry = steps.get("keyentry");
@@ -590,6 +732,32 @@ async function runApp(
 
     check(steps.get("confirmations")?.passed === true, "native confirmation checks did not complete");
 
+    const rotationStep = steps.get("rotation");
+    const managed = mode === "managed";
+    const wanted = {
+      refused: true,
+      control: true,
+      cancelled: true,
+      rotated: true,
+      old_refused: true,
+      new_works: true,
+      kept: managed ? "core" : "device",
+      session: !managed,
+      recovery: !managed,
+      webviews_clean: true,
+      page_audited: !managed,
+      outlived_window: !managed,
+      replaced: !managed,
+      connection_shown: !managed,
+      no_launch_notice: true,
+    };
+    check(
+      rotationStep && Object.entries(wanted).every(([k, want]) => rotationStep[k] === want),
+      `native rotation evidence missing or wrong: ${JSON.stringify(rotationStep)}`,
+    );
+    // The key the app started with and each rotated one (two in managed mode, four otherwise).
+    check(rotated.length === (managed ? 2 : 4), `the rotation check recorded ${rotated.length} keys`);
+    console.log(`  ${mode} | native rotation: ${JSON.stringify(rotationStep ?? {})}`);
     // This device's catalog: the driver's own checks passed, and the asset scheme served the
     // swapped-in release to its page webview and refused that webview the replaced one's files.
     if (device) {
@@ -636,8 +804,11 @@ async function runApp(
     check(after === 0, `${after} web processes left after closing the window`);
     if (mode === "managed") {
       check(closed?.core_pid, "the app ran no core");
+      // The tray checks killed that core; the one they left running must not outlive the app.
+      const last = (steps.get("recovery") as { core_pid?: number } | undefined)?.core_pid;
+      check(last, "the tray checks left no owned core running before quit");
       await Bun.sleep(1000);
-      check(closed?.core_pid && !alive(closed.core_pid), "the app's core still runs after it quit");
+      check(last && !alive(last), `the app's core ${last} still runs after it quit`);
     }
     if (problems.length > 0) console.log(`${label}: the app's last lines:\n  ${log.join("\n  ")}`);
     console.log(
@@ -646,7 +817,8 @@ async function runApp(
     );
   } finally {
     // A folder left behind is a problem of its own; it must not hide this run's report.
-    await removeRun(root).catch((e) => problems.push(`the run folder ${root} was not removed: ${e}`));
+    if (!rotation.root)
+      await removeRun(root).catch((e) => problems.push(`the run folder ${root} was not removed: ${e}`));
   }
   return problems;
 }
@@ -703,6 +875,8 @@ if (missing.length > 0) {
 const targetDir = resolvePath(tauri, process.env.CARGO_TARGET_DIR ?? "target");
 /** The probe the session uses to check the desktop services. */
 const probe = join(targetDir, "debug", "examples", "session_probe");
+/** The disposable summary tool the program host check packs into a signed package. */
+const programFixture = join(targetDir, "debug", "examples", "program_fixture");
 let appImage = ""; // the smoke AppImage the sessions run
 const problems: string[] = [];
 
@@ -761,11 +935,22 @@ async function main(): Promise<number> {
     problems.push(`the test package was not built: ${(e as Error).message}`);
   }
 
-  // The dev app, and the probe the session uses to check the desktop services
-  // (examples/session_probe.rs).
+  // The dev app, the probe the session uses to check the desktop services
+  // (examples/session_probe.rs) and the program host check's summary tool.
   run(
     "cargo",
-    ["build", "--locked", "--features", "native-test", "--bin", "pluxy-app", "--example", "session_probe"],
+    [
+      "build",
+      "--locked",
+      "--features",
+      "native-test",
+      "--bin",
+      "pluxy-app",
+      "--example",
+      "session_probe",
+      "--example",
+      "program_fixture",
+    ],
     tauri,
   );
   // The build without artifact-test-trust, kept aside before the build with it replaces it. The
@@ -806,6 +991,8 @@ async function main(): Promise<number> {
       const p = await runApp("managed", dev("managed"), updaterKey, managed);
       p.push(...(await runApp("managed", dev("managed"), updaterKey, managed, undefined, true)));
       p.push(...(await runApp("managed", dev("managed"), updaterKey, managed, undefined, true, true)));
+      // The signed native-tier admission check, then the program host check, on the build with
+      // artifact-test-trust.
       p.push(
         ...(await runApp(
           "managed",
@@ -817,6 +1004,23 @@ async function main(): Promise<number> {
           false,
           undefined,
           undefined,
+          {},
+          true,
+        )),
+      );
+      p.push(
+        ...(await runApp(
+          "managed",
+          trusted,
+          updaterKey,
+          managed,
+          undefined,
+          false,
+          false,
+          undefined,
+          undefined,
+          {},
+          false,
           true,
         )),
       );
@@ -835,6 +1039,30 @@ async function main(): Promise<number> {
           )),
         );
       problems.push(...p.map((x) => `managed: ${x}`));
+      // The first start runs a stand-in that says where it listens and exits at once; the next
+      // start, recovery's, runs the real core.
+      const early = join(prepared, "early-exit.sh");
+      writeFileSync(
+        early,
+        `#!/bin/sh\nif [ ! -e "$0.ran" ]; then\n  : > "$0.ran"\n  echo 'pluxy: listening on http://127.0.0.1:1' >&2\n  exit 7\nfi\nexec '${core}' "$@"\n`,
+        { mode: 0o755 },
+      );
+      const e = await runApp(
+        "managed",
+        dev("managed"),
+        updaterKey,
+        { mode: "managed", core_path: early },
+        undefined,
+        false,
+        false,
+        undefined,
+        undefined,
+        {},
+        false,
+        false,
+        true,
+      );
+      problems.push(...e.map((x) => `managed, early exit: ${x}`));
 
       // Two launches of the app on one profile: one app, one core, the first one's window raised.
       const inst = await runInstances({
@@ -856,15 +1084,38 @@ async function main(): Promise<number> {
 
     for (const mode of ["local", "remote"] as const) {
       const c = await startCore(mode === "remote");
+      const kept = mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
       try {
         const conn = { mode, url: c.base, key: c.key, ...(c.ca ? { ca_file: c.ca } : {}) };
-        const p = await runApp(mode, dev(mode), updaterKey, conn, c.base, false, false, c.key);
-        p.push(...(await runApp(mode, dev(mode), updaterKey, conn, c.base, true)));
+        const rotation = { coreConfig: c.config, root: kept };
+        const p = await runApp(
+          mode,
+          dev(mode),
+          updaterKey,
+          conn,
+          c.base,
+          false,
+          false,
+          c.key,
+          undefined,
+          rotation,
+        );
+        // Rotated and kept: the app starts again on the same folders, signed in on the new key.
+        if (mode === "local")
+          p.push(
+            ...(await runApp(mode, dev(mode), updaterKey, conn, c.base, false, false, undefined, undefined, {
+              ...rotation,
+              restart: true,
+            })),
+          );
+        const current = { ...conn, key: managementKey(c.config) };
+        p.push(...(await runApp(mode, dev(mode), updaterKey, current, c.base, true)));
         // The app only connected: its quitting leaves this core running.
-        if ((await managementStatus(c.base, c.key, c.ca)) !== 200)
+        if ((await managementStatus(c.base, current.key, c.ca)) !== 200)
           p.push("the core stopped when the app quit");
         problems.push(...p.map((x) => `${mode}: ${x}`));
       } finally {
+        await removeRun(kept);
         c.proc.stdin?.end();
         await new Promise((r) => c.proc.once("exit", r));
       }

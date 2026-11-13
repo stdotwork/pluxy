@@ -281,21 +281,14 @@ mod linux {
         use std::collections::HashMap;
         let pid: u32 = pid.parse().map_err(|_| "invalid app pid")?;
         let conn = session()?;
-        let entries = MainContext::default().block_on(registered_items(&conn))?;
-        let mut item = None;
-        for entry in entries {
-            let Some((name, suffix)) = entry.split_once('/') else {
-                continue;
-            };
-            if owner_pid(&conn, name).ok() == Some(pid) {
-                item = Some((name.to_string(), format!("/{suffix}")));
-                break;
-            }
-        }
-        let (name, path) = item.ok_or("the watcher lists no item owned by the app")?;
+        let item = MainContext::default().block_on(app_item(&conn, pid))?;
+        let (name, suffix) = item
+            .split_once('/')
+            .ok_or_else(|| format!("the app's tray item {item} has no object path"))?;
+        let path = format!("/{suffix}");
         let (menu,) = call(
             &conn,
-            &name,
+            name,
             &path,
             "org.freedesktop.DBus.Properties",
             "Get",
@@ -310,7 +303,7 @@ mod linux {
         let interface = "com.canonical.dbusmenu";
         let layout = call(
             &conn,
-            &name,
+            name,
             menu.as_str(),
             interface,
             "GetLayout",
@@ -351,7 +344,7 @@ mod linux {
             // Send even if disabled: the native action must refuse foreign-process control too.
             call(
                 &conn,
-                &name,
+                name,
                 menu.as_str(),
                 interface,
                 "Event",
@@ -389,21 +382,26 @@ mod linux {
     pub fn tray_pid(pid: &str) -> Lines {
         let pid: u32 = pid.parse().map_err(|_| "invalid app pid")?;
         let conn = session()?;
-        MainContext::default().block_on(async {
-            let deadline = Instant::now() + Duration::from_secs(10);
-            loop {
-                for item in registered_items(&conn).await? {
-                    let name = item.split('/').next().unwrap_or("");
-                    if owner_pid(&conn, name).ok() == Some(pid) {
-                        return Ok(vec![format!("app_tray_pid={pid}"), format!("item={item}")]);
-                    }
+        let item = MainContext::default().block_on(app_item(&conn, pid))?;
+        Ok(vec![format!("app_tray_pid={pid}"), format!("item={item}")])
+    }
+
+    /// The watcher's registered item whose bus name the app's process owns, such as
+    /// `:1.42/StatusNotifierItem`, waiting up to 10 seconds for the app to register it.
+    async fn app_item(conn: &DBusConnection, pid: u32) -> Result<String, String> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            for item in registered_items(conn).await? {
+                let name = item.split('/').next().unwrap_or("");
+                if owner_pid(conn, name).ok() == Some(pid) {
+                    return Ok(item);
                 }
-                if Instant::now() >= deadline {
-                    return Err(format!("no registered tray item belongs to app pid {pid}"));
-                }
-                timeout_future(Duration::from_millis(100)).await;
             }
-        })
+            if Instant::now() >= deadline {
+                return Err(format!("no registered tray item belongs to app pid {pid}"));
+            }
+            timeout_future(Duration::from_millis(100)).await;
+        }
     }
 
     /// Owns a status notifier item, registers it with the watcher and waits until the watcher

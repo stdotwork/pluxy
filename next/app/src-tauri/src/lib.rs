@@ -29,6 +29,9 @@ mod native_test;
 pub mod pages;
 mod place;
 mod privacy;
+#[cfg(target_os = "linux")]
+pub mod program;
+pub mod recovery;
 #[cfg(debug_assertions)]
 pub mod release_config;
 mod startup;
@@ -72,13 +75,23 @@ struct App {
     /// This device's extension catalog. Installs check and stage a release without it.
     device: Mutex<device::Catalog>,
     device_dirs: device::Dirs,
+    /// The admitted native tools that run, on demand (`program.rs`).
+    #[cfg(target_os = "linux")]
+    programs: program::Host,
     status: Mutex<Option<MenuItem<Wry>>>,
+    /// Start, Stop and Restart, in that order.
+    core_actions: Mutex<Vec<MenuItem<Wry>>>,
+    /// The newest view the tray shows. Only the main thread touches it.
+    shown: Mutex<Shown>,
+    /// A tray Start, Stop or Restart is running; the tray refuses another until it ends.
+    busy: AtomicBool,
     /// What closing the window does, and its size and place (`window.rs`).
     window: Mutex<window::Store>,
     has_tray: AtomicBool,
     quitting: AtomicBool,
     key_entry_open: AtomicBool,
     key_entry_after: Mutex<Option<std::time::Instant>>,
+    rotation_open: AtomicBool,
 }
 
 /// Every command checks its caller too: the capability already allows only the window.
@@ -101,6 +114,12 @@ fn status_text(v: &View) -> String {
         (Some(Mode::Managed), Some(t), Some(c)) if c.state == "running" => {
             format!("Core running at {t}")
         }
+        (Some(Mode::Managed), _, Some(c)) if c.state == "paused" => {
+            "Core recovery paused — Start core to try again".into()
+        }
+        (Some(Mode::Managed), _, Some(c)) if c.state == "recovering" => {
+            "Core stopped — waiting to restart".into()
+        }
         (Some(Mode::Managed), _, _) => "Core stopped".into(),
         (Some(Mode::Local), Some(t), _) => format!("Connected to {t}"),
         (Some(Mode::Remote), Some(t), _) => format!("Remote core {t}"),
@@ -108,10 +127,153 @@ fn status_text(v: &View) -> String {
     }
 }
 
-fn show_status(app: &AppHandle, v: &View) {
-    if let Some(item) = app.state::<App>().status.lock().unwrap().as_ref() {
-        let _ = item.set_text(status_text(v));
+/// The newest view given to the tray. Views come from several threads; one that arrives after
+/// a newer one is dropped.
+#[derive(Default)]
+struct Shown {
+    view: Option<View>,
+}
+
+impl Shown {
+    fn offer(&mut self, v: View) -> bool {
+        if self
+            .view
+            .as_ref()
+            .is_some_and(|old| old.version > v.version)
+        {
+            return false;
+        }
+        self.view = Some(v);
+        true
     }
+}
+
+const CORE_ACTIONS: [&str; 3] = ["core-start", "core-stop", "core-restart"];
+
+/// The tray's status line, and whether Start, Stop and Restart are enabled. While a tray action
+/// runs, all three are off.
+fn tray_presentation(v: &View, busy: bool) -> (String, [bool; 3]) {
+    let managed = v.mode == Some(Mode::Managed);
+    if managed && busy {
+        return ("Core working…".into(), [false; 3]);
+    }
+    let state = v.core.as_ref().map(|c| c.state);
+    let running = state == Some("running");
+    let recovering = state == Some("recovering");
+    (
+        status_text(v),
+        [
+            managed && !running,
+            managed && (running || recovering),
+            managed && running,
+        ],
+    )
+}
+
+/// Shows v in the tray, unless it already shows a newer view. The update runs on the main
+/// thread, so two updates never interleave.
+fn show_status(app: &AppHandle, v: &View) {
+    let handle = app.clone();
+    let v = v.clone();
+    let _ = app.run_on_main_thread(move || {
+        let st = handle.state::<App>();
+        let mut shown = st.shown.lock().unwrap();
+        if shown.offer(v) {
+            apply_tray(&handle, &shown);
+        }
+    });
+}
+
+/// Shows the tray's newest view again, as the busy flag now says.
+fn refresh_tray(app: &AppHandle) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let st = handle.state::<App>();
+        let shown = st.shown.lock().unwrap();
+        apply_tray(&handle, &shown);
+    });
+}
+
+fn apply_tray(app: &AppHandle, shown: &Shown) {
+    let Some(v) = shown.view.as_ref() else {
+        return;
+    };
+    let st = app.state::<App>();
+    let (text, enabled) = tray_presentation(v, st.busy.load(Ordering::SeqCst));
+    if let Some(item) = st.status.lock().unwrap().as_ref() {
+        let _ = item.set_text(text);
+    }
+    for item in st.core_actions.lock().unwrap().iter() {
+        if let Some(i) = CORE_ACTIONS.iter().position(|a| item.id().as_ref() == *a) {
+            let _ = item.set_enabled(enabled[i]);
+        }
+    }
+}
+
+/// A tray Start, Stop or Restart, one at a time. It acts only if its item would be enabled now,
+/// so a click on a disabled item (a desktop may still deliver one) changes nothing.
+fn tray_action(app: &AppHandle, action: &str) {
+    let Some(index) = CORE_ACTIONS.iter().position(|a| *a == action) else {
+        return;
+    };
+    let st = app.state::<App>();
+    if st
+        .busy
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        // Refused without reading the connection: this runs on the main thread, and the running
+        // action may hold the connection for seconds.
+        tray_refused(action, None, "busy");
+        return;
+    }
+    refresh_tray(app);
+    let app = app.clone();
+    let action = action.to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(feature = "native-test")]
+        native_test::tray_hold(&action);
+        let st = app.state::<App>();
+        let mut c = st.conn.lock().unwrap();
+        let before = c.view();
+        if st.quitting.load(Ordering::SeqCst) {
+            tray_refused(&action, before.mode, "quitting");
+        } else if !tray_presentation(&before, false).1[index] {
+            tray_refused(&action, before.mode, "disabled");
+        } else {
+            #[cfg(feature = "native-test")]
+            native_test::log(
+                "tray-action",
+                serde_json::json!({"action": action, "mode": before.mode}),
+            );
+            match index {
+                0 => {
+                    let _ = c.resume_core();
+                }
+                1 => c.stop_core(),
+                _ => {
+                    let _ = c.restart_core();
+                }
+            }
+        }
+        let v = c.view();
+        drop(c);
+        st.busy.store(false, Ordering::SeqCst);
+        show_status(&app, &v);
+        // A newer view (from the core's exit, say) may have reached the tray while busy was set,
+        // so v is dropped as older: draw the newest view again without the busy state.
+        refresh_tray(&app);
+        let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-connection", ());
+    });
+}
+
+fn tray_refused(action: &str, mode: Option<Mode>, reason: &str) {
+    #[cfg(feature = "native-test")]
+    native_test::log(
+        "tray-refused",
+        serde_json::json!({"action": action, "mode": mode, "reason": reason}),
+    );
+    let _ = (action, mode, reason);
 }
 
 /// The app's own address, which the window may show; it navigates nowhere else.
@@ -235,8 +397,15 @@ fn quit(app: &AppHandle) {
     remember_window(app);
     #[cfg(target_os = "linux")]
     st.confirmations.lock().unwrap().invalidate();
-    st.conn.lock().unwrap().stop_core();
-    app.exit(0);
+    // Off the calling thread, which may be the main one: a recovery or a tray action can hold
+    // the connection for seconds while a core starts or stops. Tray actions refuse to start now.
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "linux")]
+        app.state::<App>().programs.stop_all();
+        app.state::<App>().conn.lock().unwrap().stop_core();
+        app.exit(0);
+    });
 }
 
 /// Saves the window's size and place, as it is now if it is open.
@@ -324,7 +493,15 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         None::<&str>,
     )?;
     let sep = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&status, &sep, &open, &access, &quit_item])?;
+    let start = MenuItem::with_id(app, "core-start", "Start core", false, None::<&str>)?;
+    let stop = MenuItem::with_id(app, "core-stop", "Stop core", false, None::<&str>)?;
+    let restart = MenuItem::with_id(app, "core-restart", "Restart core", false, None::<&str>)?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &status, &start, &stop, &restart, &sep, &open, &access, &quit_item,
+        ],
+    )?;
     let mut tray = TrayIconBuilder::with_id("pluxy")
         .tooltip("pluxy")
         .menu(&menu)
@@ -332,6 +509,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             "open" => {
                 let _ = open_window(app);
             }
+            "core-start" | "core-stop" | "core-restart" => tray_action(app, e.id().as_ref()),
             "quit" => quit(app),
             #[cfg(target_os = "linux")]
             "launch-settings" => {
@@ -354,6 +532,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     }
     tray.build(app)?;
     *app.state::<App>().status.lock().unwrap() = Some(status);
+    *app.state::<App>().core_actions.lock().unwrap() = vec![start, stop, restart];
     Ok(())
 }
 
@@ -501,7 +680,13 @@ async fn with_conn(
     tauri::async_runtime::spawn_blocking(move || {
         let st = app.state::<App>();
         let mut c = st.conn.lock().unwrap();
-        let r = f(&mut c);
+        // Checked under the lock, as tray actions do: once Quit has begun, nothing the window
+        // asks for may start a core that would outlive the app.
+        let r = if st.quitting.load(Ordering::SeqCst) {
+            Err("the app is quitting".to_string())
+        } else {
+            f(&mut c)
+        };
         let mut v = c.view();
         if let Err(e) = r {
             v.error = Some(e);
@@ -522,6 +707,13 @@ async fn connection_set(webview: Webview, change: Change) -> Result<View, String
         return Err("finish native key entry first".into());
     }
     with_conn(&webview, move |c| c.change(change)).await
+}
+
+/// Starts the app's own core only if it is not running, as the tray's Start does: a click that
+/// races a recovery leaves the recovered core alone.
+#[tauri::command]
+async fn core_start(webview: Webview) -> Result<View, String> {
+    with_conn(&webview, |c| c.resume_core()).await
 }
 
 #[tauri::command]
@@ -630,10 +822,109 @@ async fn core_call(
     native_test::ingress_operation(&method, &path);
     #[cfg(feature = "native-test")]
     native_test::window_call(&method, &path);
+    if client::native_only(&path) {
+        return Ok(client::Reply::failed(
+            403,
+            "native_only",
+            "the management key is rotated only by the app itself: use Rotate on the Config page",
+        ));
+    }
     let caller = state.conn.lock().unwrap().caller();
-    tauri::async_runtime::spawn_blocking(move || caller.call(&method, &path, body.as_ref()))
-        .await
-        .map_err(|e| e.to_string())
+    let app = webview.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        caller.call_or_retry(&method, &path, body.as_ref(), || {
+            app.state::<App>().conn.lock().unwrap().caller()
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Rotates the management key natively: the person confirms in the native confirmation, the app
+/// calls core's rotation route itself, keeps the new key as the old one was kept and shows it
+/// once in a native window. The window gets only how it went and how the key is kept: 200 with
+/// `kept`, plus an error when it could not be saved; 204 when the person cancelled.
+#[tauri::command]
+async fn management_key_rotate(webview: Webview) -> Result<client::Reply, String> {
+    trusted(&webview)?;
+    let app = webview.app_handle().clone();
+    let st = app.state::<App>();
+    if st.key_entry_open.load(Ordering::SeqCst) {
+        return Err("finish native key entry first".into());
+    }
+    if st.rotation_open.swap(true, Ordering::SeqCst) {
+        return Err("a rotation is already in progress".into());
+    }
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        struct Pending(AppHandle);
+        impl Drop for Pending {
+            fn drop(&mut self) {
+                self.0
+                    .state::<App>()
+                    .rotation_open
+                    .store(false, Ordering::SeqCst);
+            }
+        }
+        let _pending = Pending(handle.clone());
+        rotate(&handle)
+    })
+    .await
+    .map_err(|_| "native rotation failed".into())
+}
+
+#[cfg(target_os = "linux")]
+fn rotate(app: &AppHandle) -> client::Reply {
+    let st = app.state::<App>();
+    let prepared = st.conn.lock().unwrap().prepare_rotation();
+    let target = match prepared {
+        Ok(target) => target,
+        Err(reply) => return reply,
+    };
+    match confirmation::confirm_app(app, target.summary.clone(), target.revision()) {
+        Ok(true) => {}
+        Ok(false) => {
+            return client::Reply {
+                status: 204,
+                body: None,
+                error: None,
+            }
+        }
+        Err(e) => return client::Reply::failed(409, "not_confirmed", e),
+    }
+    let mut c = st.conn.lock().unwrap();
+    let result = c.finish_rotation(target);
+    let view = c.view();
+    drop(c);
+    show_status(app, &view);
+    match result {
+        Err(reply) => reply,
+        Ok(rotation) => {
+            let error = match &rotation.kept {
+                conn::Kept::NotSaved(why) => Some(client::ApiError {
+                    code: "not_saved".into(),
+                    message: why.clone(),
+                }),
+                _ => None,
+            };
+            let body = serde_json::json!({"kept": rotation.kept.name()});
+            key_entry::reveal(app, rotation.key, rotation.kept.notice());
+            client::Reply {
+                status: 200,
+                body: Some(body),
+                error,
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn rotate(_: &AppHandle) -> client::Reply {
+    client::Reply::failed(
+        501,
+        "unsupported",
+        "native key rotation is currently supported on Linux only",
+    )
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -978,6 +1269,10 @@ fn device_changed(
         (labels, catalog.view(&trust::TrustStore::current()), left)
     };
     left.extend(close_webviews(app, labels));
+    // A native tool runs only as the release it was admitted as: any change stops it, and its
+    // next call starts it from its record then, if it still has one.
+    #[cfg(target_os = "linux")]
+    st.programs.stop(id);
     let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-device", ());
     if left.is_empty() {
         Ok(view)
@@ -1144,11 +1439,9 @@ async fn device_enable(
 #[cfg(target_os = "linux")]
 fn native_enable(app: &AppHandle, id: &str) -> Result<device::View, String> {
     let st = app.state::<App>();
-    let candidate = st
-        .device
-        .lock()
-        .unwrap()
-        .native_candidate(id, &trust::TrustStore::current())?;
+    // Its files are hashed without holding the catalog (`checked_unlocked`).
+    let candidate =
+        device::native_candidate_unlocked(&st.device, id, &trust::TrustStore::current())?;
     let action = {
         let mut c = st.confirmations.lock().unwrap();
         let prepared = c.prepare_main(candidate.confirmation())?;
@@ -1175,8 +1468,15 @@ fn native_enable(app: &AppHandle, id: &str) -> Result<device::View, String> {
     };
     // Spends the single-use token and checks the program file is the one shown.
     st.confirmations.lock().unwrap().consume(&action, &token)?;
+    // Its files once more, then the record under the catalog's lock: still the one shown.
+    let now = device::native_candidate_unlocked(&st.device, id, &trust::TrustStore::current())?;
+    if now != candidate {
+        return Err(format!(
+            "{id} changed while it was being confirmed; enable it again"
+        ));
+    }
     device_changed(app, id, |c| {
-        c.admit(&candidate, &trust::TrustStore::current())
+        c.admit_checked(&candidate, &trust::TrustStore::current())
     })
 }
 
@@ -1196,6 +1496,96 @@ fn device_remove(webview: Webview, id: String) -> Result<device::View, String> {
 #[tauri::command]
 fn device_rollback(webview: Webview, id: String) -> Result<device::View, String> {
     device_change(&webview, &id, |c| c.rollback(&id))
+}
+
+/// What the program host starts tool id from: its admitted record, checked now
+/// (`Catalog::admitted`).
+#[cfg(target_os = "linux")]
+fn program_resolver(app: AppHandle) -> program::Resolve {
+    Box::new(move |id| {
+        // Its files are hashed without holding the catalog (`checked_unlocked`).
+        device::admitted_unlocked(
+            &app.state::<App>().device,
+            id,
+            &trust::TrustStore::current(),
+        )
+    })
+}
+
+/// Calls operation op of the native tool package with input, starting the tool if it is not
+/// running. With a ticket, `program_cancel` cancels the call.
+#[tauri::command]
+async fn program_call(
+    webview: Webview,
+    package: String,
+    op: String,
+    input: Value,
+    ticket: Option<String>,
+) -> Result<Value, String> {
+    trusted(&webview)?;
+    #[cfg(target_os = "linux")]
+    {
+        let app = webview.app_handle().clone();
+        // Registered now, before it can wait, so a cancel or the window's closing reaches it.
+        let call = app
+            .state::<App>()
+            .programs
+            .begin_call(ticket.as_deref())
+            .map_err(|e| e.to_string())?;
+        tauri::async_runtime::spawn_blocking(move || {
+            // On a thread of its own that ends with the call: a tool this call starts is held by
+            // the host's supervisor thread, never by the thread that started it.
+            std::thread::Builder::new()
+                .name("pluxy-prog-call".into())
+                .spawn(move || {
+                    app.state::<App>()
+                        .programs
+                        .run_call(call, &package, &op, input)
+                        .map_err(|e| e.to_string())
+                })
+                .map_err(|e| e.to_string())?
+                .join()
+                .map_err(|_| "the call's thread failed".to_string())?
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (package, op, input, ticket);
+        Err("native tools run on Linux only for now".into())
+    }
+}
+
+/// Cancels the native tool call with ticket.
+#[tauri::command]
+fn program_cancel(webview: Webview, ticket: String) -> Result<(), String> {
+    trusted(&webview)?;
+    #[cfg(target_os = "linux")]
+    {
+        webview.state::<App>().programs.cancel(&ticket)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = ticket;
+        Err("native tools run on Linux only for now".into())
+    }
+}
+
+/// Whether the native tool package runs, and how it last stopped.
+#[tauri::command]
+fn program_status(webview: Webview, package: String) -> Result<Value, String> {
+    trusted(&webview)?;
+    #[cfg(target_os = "linux")]
+    {
+        serde_json::to_value(webview.state::<App>().programs.status(&package))
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = package;
+        Err("native tools run on Linux only for now".into())
+    }
 }
 
 /// The `pluxy-app:` scheme: a device page's files, served only to the page webview bound to
@@ -1372,9 +1762,11 @@ pub fn run() {
             startup_set,
             connection_get,
             connection_set,
+            core_start,
             core_restart,
             core_call,
             key_entry,
+            management_key_rotate,
             sign_out,
             page_open,
             page_place,
@@ -1390,6 +1782,9 @@ pub fn run() {
             device_remove,
             device_rollback,
             device_page_open,
+            program_call,
+            program_cancel,
+            program_status,
             window_get,
             window_set,
             window_close,
@@ -1458,9 +1853,15 @@ pub fn run() {
                 let app = handle.clone();
                 std::thread::spawn(move || {
                     if let Some(st) = app.try_state::<App>() {
-                        let v = st.conn.lock().unwrap().view();
+                        let mut c = st.conn.lock().unwrap();
+                        let plan = c.core_exited();
+                        let v = c.view();
+                        drop(c);
                         show_status(&app, &v);
+                        recovery::schedule(app.clone(), plan);
                     }
+                    #[cfg(feature = "native-test")]
+                    native_test::core_exit_seen();
                     let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-connection", ());
                 });
             });
@@ -1470,6 +1871,8 @@ pub fn run() {
                 Some(on_exit),
                 preferences.start_core_on_launch,
             );
+            #[cfg(feature = "native-test")]
+            native_test::hold_for_early_exit();
             // The page webviews keep nothing from one run to the next.
             let pages_dir = app.path().app_cache_dir()?.join("pages");
             let _ = std::fs::remove_dir_all(&pages_dir);
@@ -1483,12 +1886,21 @@ pub fn run() {
                 closing: Mutex::new(Vec::new()),
                 device: Mutex::new(catalog),
                 device_dirs,
+                #[cfg(target_os = "linux")]
+                programs: program::Host::new(
+                    program_resolver(app.handle().clone()),
+                    Default::default(),
+                ),
                 status: Mutex::new(None),
+                core_actions: Mutex::new(Vec::new()),
+                shown: Mutex::new(Shown::default()),
+                busy: AtomicBool::new(false),
                 window: Mutex::new(window_prefs),
                 has_tray: AtomicBool::new(false),
                 quitting: AtomicBool::new(false),
                 key_entry_open: AtomicBool::new(false),
                 key_entry_after: Mutex::new(None),
+                rotation_open: AtomicBool::new(false),
             });
             let handle = app.handle().clone();
             #[cfg(target_os = "linux")]
@@ -1507,8 +1919,14 @@ pub fn run() {
                 // No tray: closing the window quits the app.
                 Err(e) => eprintln!("pluxy-app: no tray icon: {e}"),
             }
-            let v = handle.state::<App>().conn.lock().unwrap().view();
+            // A core that exited before the app state existed had no one to recover it.
+            let (plan, v) = {
+                let st = handle.state::<App>();
+                let mut c = st.conn.lock().unwrap();
+                (c.core_exited(), c.view())
+            };
             show_status(&handle, &v);
+            recovery::schedule(handle.clone(), plan);
             if let Some(pid) = handle.state::<App>().conn.lock().unwrap().core_pid() {
                 eprintln!("pluxy-app: core started, pid {pid}");
             }
@@ -1558,6 +1976,9 @@ pub fn run() {
                         .lock()
                         .unwrap()
                         .invalidate();
+                    // Its native tool calls end, so their tools stop when idle.
+                    #[cfg(target_os = "linux")]
+                    app.state::<App>().programs.cancel_all();
                     // Its webviews went with it.
                     app.state::<App>().pages.lock().unwrap().clear();
                     place::forget_all();
@@ -1580,6 +2001,8 @@ pub fn run() {
         }
         RunEvent::Exit => {
             if let Some(st) = app.try_state::<App>() {
+                #[cfg(target_os = "linux")]
+                st.programs.stop_all();
                 st.conn.lock().unwrap().stop_core();
             }
             if let Some(i) = app.try_state::<instance::Instance>() {
@@ -1593,6 +2016,66 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn managed(state: &'static str, version: u64) -> View {
+        View {
+            mode: Some(Mode::Managed),
+            core: Some(conn::CoreView {
+                state,
+                pid: None,
+                detail: None,
+            }),
+            version,
+            ..View::default()
+        }
+    }
+
+    /// Start, Stop and Restart as the old app enabled them: Restart only while running, none
+    /// while a tray action runs, none outside managed mode.
+    #[test]
+    fn tray_actions_follow_the_core_state() {
+        for (state, want) in [
+            ("running", [false, true, true]),
+            ("stopped", [true, false, false]),
+            ("recovering", [true, true, false]),
+            ("paused", [true, false, false]),
+        ] {
+            assert_eq!(
+                tray_presentation(&managed(state, 1), false).1,
+                want,
+                "{state}"
+            );
+            assert_eq!(
+                tray_presentation(&managed(state, 1), true),
+                ("Core working…".to_string(), [false; 3]),
+                "{state} while busy"
+            );
+        }
+        for mode in [Mode::Local, Mode::Remote] {
+            let v = View {
+                mode: Some(mode),
+                ..View::default()
+            };
+            assert_eq!(tray_presentation(&v, false).1, [false; 3]);
+            assert_eq!(tray_presentation(&v, true).1, [false; 3]);
+        }
+    }
+
+    #[test]
+    fn the_tray_drops_a_view_older_than_the_one_it_shows() {
+        let mut shown = Shown::default();
+        assert!(shown.offer(managed("running", 2)));
+        assert!(!shown.offer(managed("stopped", 1)));
+        assert_eq!(
+            shown.view.as_ref().unwrap().core.as_ref().unwrap().state,
+            "running"
+        );
+        assert!(shown.offer(managed("stopped", 3)));
+        assert_eq!(
+            shown.view.as_ref().unwrap().core.as_ref().unwrap().state,
+            "stopped"
+        );
+    }
 
     /// Every command the app handles is in the manifest, and the window's capability grants
     /// each to the window's webview only: no window-wide grant (which would cover the page

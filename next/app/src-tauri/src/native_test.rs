@@ -8,9 +8,13 @@
 //!    top of that page's webview, calls every app command and some Tauri plugin commands: each
 //!    must be refused by Tauri's command check;
 //! 3. waits for the page's own report (it writes it into its settings through the channel);
+//!    then native key entry and management-key rotation (`key_entry_test.rs`,
+//!    `rotation_test.rs`) in local and remote mode, rotation alone in managed mode; in local and
+//!    remote mode the window closes to the tray during a rotation and opens again;
 //! 4. in managed mode, checks this device's extension catalog (`device_native.rs`);
 //!    with `PLUXY_APP_TEST_ADMISSION`, a session checks only signed native-tier admission
-//!    (`admission_native.rs`) and quits;
+//!    (`admission_native.rs`) and quits; with `PLUXY_APP_TEST_PROGRAM`, only the program host
+//!    (`program_native.rs`);
 //! 5. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!
@@ -18,10 +22,15 @@
 //! privacy mode checks instead (`native_window.rs`, `native_privacy.rs`).
 //! Before these, as the app starts, it reports its updater gate (`updater_gate`).
 //!
+//! With `PLUXY_APP_TEST_EARLY_EXIT` set it does none of that: the app's setup waits for its
+//! core's exit callback before the app state exists, then the run waits for the app to start
+//! that core again and quits.
+//!
 //! Each step prints one line on stderr: `native-test: <step> <JSON>`.
 
 use crate::{App, COMMANDS, MAIN, WINDOW};
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Webview};
@@ -33,6 +42,9 @@ mod admission;
 mod device;
 #[path = "native_ingress.rs"]
 mod ingress;
+#[cfg(target_os = "linux")]
+#[path = "program_native.rs"]
+mod program;
 pub use ingress::{
     count as ingress_count, forwarded as ingress_forwarded, operation as ingress_operation,
 };
@@ -56,7 +68,7 @@ pub fn window_call(method: &str, path: &str) {
     let _ = (method, path);
 }
 
-const WAIT: Duration = Duration::from_secs(60);
+const WAIT: Duration = Duration::from_secs(120);
 
 /// Tauri's own commands a page webview might try.
 const PLUGINS: &[&str] = &[
@@ -74,14 +86,18 @@ const PLUGINS: &[&str] = &[
 /// Commands the window's probe leaves out: they take no arguments and would act.
 const ACTING: &[&str] = &[
     "sign_out",
+    "core_start",
     "core_restart",
     "key_entry",
     "confirmation_settings",
+    "management_key_rotate",
     "device_install_file",
 ];
 
 #[path = "key_entry_test.rs"]
 mod key_entry_test;
+#[path = "rotation_test.rs"]
+mod rotation_test;
 
 /// Reports the updater gate (`trust::updater_gate`) with what it read: the compiled test marker,
 /// identifier and product name. The app calls this first among the test's steps, right after the
@@ -172,6 +188,9 @@ fn run(app: &AppHandle) -> Result<(), String> {
     if let Ok(stage) = std::env::var("PLUXY_APP_TEST_STARTUP") {
         return startup(app, &stage);
     }
+    if std::env::var("PLUXY_APP_TEST_ROTATION_RESTART").is_ok() {
+        return rotation_test::after_restart(app);
+    }
     let main = wait_for("the window", || app.get_webview(MAIN))?;
     wait_for("the window's shell", || {
         eval(&main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true)
@@ -180,6 +199,14 @@ fn run(app: &AppHandle) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_ADMISSION") {
         admission::run(app, &main, dir.into())?;
+        log("quit", json!({}));
+        crate::quit(app);
+        return Ok(());
+    }
+    // The program host (program_native.rs), in a session of its own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_PROGRAM") {
+        program::run(app, &main, dir.into())?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());
@@ -303,6 +330,8 @@ fn run(app: &AppHandle) -> Result<(), String> {
     }
 
     key_entry_test::check(app, &main)?;
+    // In local and remote mode the window closes to the tray and opens again meanwhile.
+    let main = rotation_test::check(app, &main)?;
     ingress::run(app, &main)?;
 
     // This device's extension catalog (device_native.rs), with fixtures from native/device.ts.
@@ -332,9 +361,18 @@ fn run(app: &AppHandle) -> Result<(), String> {
     );
 
     if let Ok(f) = std::env::var("PLUXY_APP_TEST_QUIT") {
-        wait_for("the quit file", || {
-            std::path::Path::new(&f).exists().then_some(())
-        })?;
+        // The session's tray and recovery checks run now, through crash-loop delays.
+        let deadline = Instant::now() + Duration::from_secs(300);
+        loop {
+            write_state(app);
+            if std::path::Path::new(&f).exists() {
+                break;
+            }
+            if Instant::now() > deadline {
+                return Err("timed out waiting for the quit file".into());
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
     }
     log("quit", json!({}));
     crate::quit(app);
@@ -430,7 +468,9 @@ fn startup(app: &AppHandle, stage: &str) -> Result<(), String> {
         }),
     );
     if let Ok(file) = std::env::var("PLUXY_APP_TEST_STARTUP_CONTINUE") {
+        // The startup suite reads the connection from the state file meanwhile.
         wait_for("startup process and tray inspection", || {
+            write_state(app);
             std::path::Path::new(&file).exists().then_some(())
         })?;
     }
@@ -438,9 +478,83 @@ fn startup(app: &AppHandle, stage: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Writes the app's connection, webviews and window to `PLUXY_APP_TEST_STATE`, for the session's
+/// tray and recovery checks.
+fn write_state(app: &AppHandle) {
+    let Ok(path) = std::env::var("PLUXY_APP_TEST_STATE") else {
+        return;
+    };
+    let view = app.state::<App>().conn.lock().unwrap().view();
+    let snapshot = json!({"app_pid": std::process::id(), "view": view,
+        "webviews": app.webviews().len(), "window": app.get_window(WINDOW).is_some()});
+    crate::managed::write_private(
+        std::path::Path::new(&path),
+        &serde_json::to_vec(&snapshot).unwrap(),
+    )
+    .expect("write test state");
+}
+
+/// Holds a tray action while the session's hold file exists, so the test can see the tray
+/// busy and click it again meanwhile.
+pub(crate) fn tray_hold(action: &str) {
+    let Ok(f) = std::env::var("PLUXY_APP_TEST_TRAY_HOLD") else {
+        return;
+    };
+    let f = std::path::Path::new(&f);
+    if !f.exists() {
+        return;
+    }
+    log("tray-held", json!({"action": action}));
+    let deadline = Instant::now() + WAIT;
+    while f.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// How many times the app's core exit callback has run.
+static CORE_EXITS: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) fn core_exit_seen() {
+    CORE_EXITS.fetch_add(1, Ordering::SeqCst);
+}
+
+/// With `PLUXY_APP_TEST_EARLY_EXIT` set, holds the app's setup before its state exists until the
+/// core's exit callback has run: the callback then finds no state to recover the core with.
+pub(crate) fn hold_for_early_exit() {
+    if std::env::var_os("PLUXY_APP_TEST_EARLY_EXIT").is_none() {
+        return;
+    }
+    let seen = wait_for("the core's exit callback", || {
+        (CORE_EXITS.load(Ordering::SeqCst) > 0).then_some(())
+    });
+    log("early_exit_held", json!({"callback_ran": seen.is_ok()}));
+}
+
+/// The early-exit run: the core exited before the app state existed. Waits past the first
+/// recovery delay for the app to run its core again, then quits.
+fn early_exit(app: &AppHandle) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let view = loop {
+        let v = app.state::<App>().conn.lock().unwrap().view();
+        let running = v
+            .core
+            .as_ref()
+            .is_some_and(|c| c.state == "running" && c.pid.is_some());
+        if running || Instant::now() > deadline {
+            break v;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    log("early_exit", json!({"view": view}));
+    crate::quit(app);
+    Ok(())
+}
+
 pub fn start(app: AppHandle) {
     std::thread::spawn(move || {
-        let result = if std::env::var_os("PLUXY_APP_TEST_INSTANCES").is_some() {
+        let result = if std::env::var_os("PLUXY_APP_TEST_EARLY_EXIT").is_some() {
+            early_exit(&app)
+        } else if std::env::var_os("PLUXY_APP_TEST_INSTANCES").is_some() {
             instances(&app)
         } else {
             run(&app)

@@ -6,8 +6,9 @@
 // the page the desktop app's native test shows (fixtures/probe).
 //
 // Once core listens and test/beta is disabled, it prints one line of JSON on stdout,
-// {"base":"http://127.0.0.1:port","key":"<management key>","client_key":"<client key>"}, and
-// nothing else on stdout. Core writes its log to files (logs.to_file). It runs until stdin reaches
+// {"base":"http://127.0.0.1:port","key":"<management key>","client_key":"<client key>",
+// "config":"<core's config file>"}, and nothing else on stdout. The config file holds core's
+// current management key, also after a rotation. Core writes its log to files (logs.to_file). It runs until stdin reaches
 // EOF or it gets SIGINT or SIGTERM, then stops core and removes its files.
 //
 // With -tls, core's API is reached through an https proxy whose certificate comes from a new
@@ -160,7 +161,7 @@ func serve(withTLS bool) error {
 	if err := disablePackage(base, mgmtKey, "test/beta"); err != nil {
 		return err
 	}
-	ready := map[string]string{"base": base, "key": mgmtKey, "client_key": clientKey}
+	ready := map[string]string{"base": base, "key": mgmtKey, "client_key": clientKey, "config": cfgPath}
 	if withTLS {
 		tlsBase, caFile, closeTLS, err := serveTLS(dir, base)
 		if err != nil {
