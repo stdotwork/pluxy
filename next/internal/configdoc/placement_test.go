@@ -2,9 +2,12 @@ package configdoc
 
 import (
 	"errors"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // The secrets of the placement documents. In a document below, <name> stands for the secret
@@ -37,6 +40,18 @@ func placement(r *Redactor, doc string, placeholders, isYAML bool) string {
 		doc = strings.ReplaceAll(doc, "<"+name+">", s)
 	}
 	return doc
+}
+
+// sameDoc reports whether two documents are the same text or, in YAML, read the same to core's
+// loader: a document with an anchored secret is written out again, not edited in place (see
+// Doc.span), which may change its quotes.
+func sameDoc(got, want string, isYAML bool) bool {
+	if got == want {
+		return true
+	}
+	var g, w any
+	return isYAML && strings.Contains(want, "&") && yaml.Unmarshal([]byte(got), &g) == nil &&
+		yaml.Unmarshal([]byte(want), &w) == nil && reflect.DeepEqual(g, w)
 }
 
 // Config files of each layout, as they are now.
@@ -116,6 +131,28 @@ api-keys:
     base-url: "https://two.example/v1"
     api-key-entries:
       - api-key: "<k2>"
+`
+	// Account a's key is anchored and aliased into its own header, and account c merges a in:
+	// core reads a's key in each of those four places.
+	placeAliased = `management:
+  secret-key: "<mgmt>"
+extension:
+  accounts:
+    - &A
+      id: a
+      credential:
+        kind: api_key
+        api_key: &ka "<a>"
+      headers:
+        X-Api-Key: *ka
+    - <<: *A
+      id: c
+      settings:
+        base_url: "https://c.example/v1"
+    - id: b
+      credential:
+        kind: api_key
+        api_key: "<b>"
 `
 )
 
@@ -229,6 +266,26 @@ func TestRestorePlacesEachSecretInItsOwnSlot(t *testing.T) {
 
 		{"config.yaml: keys swapped between named openai-compatibility entries", placeCompat, true,
 			[]string{`api-key: "<k1>"`, `api-key: "<x>"`, `api-key: "<k2>"`, `api-key: "<k1>"`, `api-key: "<x>"`, `api-key: "<k2>"`}, 5},
+
+		// In YAML, a secret is where core reads it, with aliases and merge keys resolved as core's
+		// loader resolves them: a refusal names the alias or the merge key.
+		{"yaml: another account's key, by an alias", placeYAML, true,
+			[]string{`api_key: "<a>"`, `api_key: &ka "<a>"`, `api_key: "<b>"`, `api_key: *ka`}, 12},
+		{"yaml: the management key in an account's header, by an alias", placeYAML, true,
+			[]string{`secret-key: "<mgmt>"`, `secret-key: &mk "<mgmt>"`, "    - id: b\n", "    - id: b\n      headers:\n        X-Api-Key: *mk\n"}, 11},
+		{"yaml: an account merged into a new account", placeYAML, true,
+			[]string{"    - id: a\n", "    - &A\n      id: a\n",
+				"api_key: \"<b>\"\n", "api_key: \"<b>\"\n    - <<: *A\n      id: c\n      settings:\n        base_url: \"https://c.example/v1\"\n"}, 14},
+		{"config.yaml: a provider key in another section, by an alias", placeOld, true,
+			[]string{`api-key: "<k1>"`, `api-key: &k1 "<k1>"`, `api-key: "<k3>"`, `api-key: *k1`}, 9},
+		{"config.yaml: a provider entry in another section, by an alias", placeOld, true,
+			[]string{"  - api-key: \"<k1>\"\n", "  - &E\n    api-key: \"<k1>\"\n", "  - api-key: \"<k3>\"\n", "  - *E\n"}, 10},
+		{"yaml: a file that aliases a key, sent back as it is", placeAliased, true, nil, 0},
+		{"yaml: a file that aliases a key, its accounts reordered", placeAliased, true,
+			[]string{"    - id: b\n      credential:\n        kind: api_key\n        api_key: \"<b>\"\n", "",
+				"  accounts:\n", "  accounts:\n    - id: b\n      credential:\n        kind: api_key\n        api_key: \"<b>\"\n"}, 0},
+		{"yaml: a file's aliased key in another account's header", placeAliased, true,
+			[]string{"    - id: b\n", "    - id: b\n      headers:\n        X-Api-Key: *ka\n"}, 18},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := NewRedactor()
@@ -241,12 +298,12 @@ func TestRestorePlacesEachSecretInItsOwnSlot(t *testing.T) {
 			}
 			current := placement(r, tc.current, false, tc.isYAML)
 			// The document sent back is what GET /config shows, edited.
-			if red, err := r.Redact([]byte(current), tc.isYAML); err != nil || string(red) != placement(r, tc.current, true, tc.isYAML) {
+			if red, err := r.Redact([]byte(current), tc.isYAML); err != nil || !sameDoc(string(red), placement(r, tc.current, true, tc.isYAML), tc.isYAML) {
 				t.Fatalf("redacted = %s, %v; want\n%s", red, err, placement(r, tc.current, true, tc.isYAML))
 			}
 			out, err := r.Restore([]byte(placement(r, edited, true, tc.isYAML)), []byte(current), tc.isYAML)
 			if tc.line == 0 {
-				if want := placement(r, edited, false, tc.isYAML); err != nil || string(out) != want {
+				if want := placement(r, edited, false, tc.isYAML); err != nil || !sameDoc(string(out), want, tc.isYAML) {
 					t.Errorf("Restore = %s, %v; want\n%s", out, err, want)
 				}
 				return

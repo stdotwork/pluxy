@@ -778,6 +778,11 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 	if len(held) == 0 {
 		return edited, nil
 	}
+	// Where core reads each placeholder is found with its aliases followed, which is only sound,
+	// and costs no more than core's own reading, for a document core's loader reads.
+	if err := d.loads(); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
 	// Each placeholder goes back as the secret's text in current, so it keeps its quotes, or
 	// in JSON its type. It goes back only where its secret is in current (paths; in a config
 	// file, slots), so no one who can edit the file but not read its secrets can put a secret
@@ -790,15 +795,24 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 		paths            map[string]*secret // where the placeholder's secrets are, and which is there
 	}
 	values := map[string]*secret{}
-	var curWhere map[*yaml.Node]string
-	curMarks := map[*yaml.Node]string{} // the placeholder of each secret of current
+	// current as core reads it: its aliases followed unless core's loader does not read it, in
+	// which case each node is read only where it is written.
+	cr := curReading{lists: map[string]*yaml.Node{}, marks: map[*yaml.Node]string{}}
 	if cur, err := Parse(current, isYAML); err == nil {
-		where := paths(cur.root)
-		curWhere = where
+		cr.follow = cur.loads() == nil
+		where := map[*yaml.Node][]string{}
+		readNodes(cur.root, cr.follow, listPlaces, func(n *yaml.Node, at readAt) {
+			switch n.Kind {
+			case yaml.ScalarNode:
+				where[n] = append(where[n], at.at)
+			case yaml.SequenceNode:
+				cr.lists[at.at] = n
+			}
+		})
 		nodes, texts, _ := found(cur.root, settings)
 		for _, n := range nodes {
 			p := r.placeholderOf(n, texts)
-			curMarks[n] = p
+			cr.marks[n] = p
 			this := &secret{value: n.Value, tag: n.Tag, tagged: n.Style&yaml.TaggedStyle != 0}
 			if sp, ok := cur.span(n); ok {
 				this.text = string(cur.src[sp.start:sp.end])
@@ -809,8 +823,10 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 				s.paths = map[string]*secret{}
 				values[p] = s
 			}
-			if s.paths[where[n]] == nil {
-				s.paths[where[n]] = this
+			for _, at := range where[n] {
+				if s.paths[at] == nil {
+					s.paths[at] = this
+				}
 			}
 		}
 	}
@@ -818,31 +834,48 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 	for _, n := range secrets(d.root, settings) {
 		allowed[n] = true
 	}
-	// In a config file, a list item stands for the item of current it is paired with (slots).
+	// Where core reads each placeholder: in settings, where it is; in a config file, as slots
+	// says, where a list item stands for the item of current it is paired with.
 	own := paths(d.root)
-	where := own
-	if !settings {
+	reads := map[*yaml.Node][]readAt{}
+	if settings {
+		for _, n := range held {
+			if at, ok := own[n]; ok {
+				reads[n] = []readAt{{at: at}}
+			}
+		}
+	} else {
 		marks := map[*yaml.Node]string{}
 		for _, n := range held {
 			marks[n] = n.Value
 		}
-		where = slots(d.root, curWhere, marks, curMarks)
+		reads = slots(d.root, marks, cr)
 	}
 	repl := map[*yaml.Node]*secret{}
 	var copies []copyAt
 	for _, n := range held {
 		s, ok := values[n.Value]
-		switch {
 		// One that stands for no secret is stale wherever it is, so the answer does not
 		// depend on which placeholder comes first.
-		case !ok:
+		if !ok {
 			return nil, fmt.Errorf("line %d: %w", d.line(n), ErrStale)
-		// It goes back only where its own secret, or a copy of it (see found), is in current
-		// (paths; in a config file, slots), a secret URL too, which is one by its value.
-		case s.paths[where[n]] == nil:
+		}
+		// It goes back only when each place core reads it at is one where its own secret, or a
+		// copy of it (see found), is in current, a secret URL too, which is one by its value. One
+		// core reads nowhere (a mapping's key) goes back nowhere.
+		if len(reads[n]) == 0 {
 			return nil, fmt.Errorf("%w: line %d: a redacted value is not where its secret is; write the value itself there", ErrInvalid, d.line(n))
 		}
-		repl[n] = s.paths[where[n]]
+		for _, at := range reads[n] {
+			switch {
+			case s.paths[at.at] != nil:
+			case at.via != 0:
+				return nil, fmt.Errorf("%w: line %d: an alias or merge key reads a redacted value where its secret is not; write the value itself there", ErrInvalid, at.via)
+			default:
+				return nil, fmt.Errorf("%w: line %d: a redacted value is not where its secret is; write the value itself there", ErrInvalid, d.line(n))
+			}
+		}
+		repl[n] = s.paths[reads[n][0].at]
 		if !allowed[n] && !(!settings && secretURL(s.value)) {
 			copies = append(copies, copyAt{own[n], s.value, d.line(n)})
 		}
@@ -928,56 +961,194 @@ func paths(root *yaml.Node) map[*yaml.Node]string {
 	return out
 }
 
-// slots is paths for a config document sent back, edited, written as the places of current, the
-// config file as it is now (curWhere, its paths), so that a placeholder goes back only where its
-// own secret is in current. A list item that is not a scalar stands for the item of current's
-// list at the same place it is paired with (pairItems), and for none ([new]) when it is paired
-// with none: an account or a provider entry keeps its secrets when it moves within its list, and
-// a secret never goes back in another. marks and curMarks are the placeholders edited holds and
-// the placeholder of each secret of current.
-func slots(edited *yaml.Node, curWhere map[*yaml.Node]string, marks, curMarks map[*yaml.Node]string) map[*yaml.Node]string {
-	lists := map[string]*yaml.Node{}
-	for n, at := range curWhere {
-		if n.Kind == yaml.SequenceNode {
-			lists[at] = n
+// readAt is a place core reads a node at, and the line of the first alias or merge key on the
+// way there from the top of the document (0: none; it is read where it is written).
+type readAt struct {
+	at  string
+	via int
+}
+
+// loads reports why core's loader, yaml.v3 decoding into any, would not read a config.yaml that
+// holds an alias (an anchor that holds itself, too many aliases, ...), or nil. Only a document
+// it reads has its aliases followed (readNodes): yaml.v3 refuses one whose aliases would make
+// reading it cost too much more than its size.
+func (d *Doc) loads() error {
+	if !d.YAML || !hasAlias(d.root) {
+		return nil
+	}
+	var v any
+	return yaml.Unmarshal(d.src, &v)
+}
+
+func hasAlias(n *yaml.Node) bool {
+	return n.Kind == yaml.AliasNode || slices.ContainsFunc(n.Content, hasAlias)
+}
+
+// isMerge reports whether a mapping's key is a merge key, as yaml.v3 reads one.
+func isMerge(k *yaml.Node) bool {
+	return k.Kind == yaml.ScalarNode && k.Value == "<<" && (k.Tag == "" || k.Tag == "!" || k.ShortTag() == "!!merge")
+}
+
+// pairsRead calls each with the name and value of each pair of the mapping m as core's loader
+// reads them: m's own pairs, then, with follow, the pairs of the mappings merged into m with "<<"
+// whose names m does not have, as yaml.v3 merges them: each merged mapping's own pairs before
+// those merged into it, and before the next merged mapping's; a name already read is not read
+// again. merge is the merge key of m a pair is read through, or nil. Without follow, "<<" is a
+// key like any other.
+func pairsRead(m *yaml.Node, follow bool, each func(name string, val, merge *yaml.Node)) {
+	var seen map[string]bool
+	var read func(m, merge *yaml.Node)
+	read = func(m, merge *yaml.Node) {
+		var key, from *yaml.Node
+		for i := 0; i+1 < len(m.Content); i += 2 {
+			if follow && isMerge(m.Content[i]) {
+				key, from = m.Content[i], m.Content[i+1]
+			}
+		}
+		if key != nil && seen == nil {
+			seen = map[string]bool{}
+		}
+		for i := 0; i+1 < len(m.Content); i += 2 {
+			k := m.Content[i]
+			if follow && isMerge(k) {
+				continue
+			}
+			name := keyName(k)
+			if merge != nil && seen[name] {
+				continue
+			}
+			if seen != nil {
+				seen[name] = true
+			}
+			each(name, m.Content[i+1], merge)
+		}
+		if key == nil {
+			return
+		}
+		if merge == nil {
+			merge = key
+		}
+		sources := []*yaml.Node{from}
+		if from.Kind == yaml.SequenceNode {
+			sources = from.Content
+		}
+		for _, x := range sources {
+			if x = resolved(x); x.Kind == yaml.MappingNode {
+				read(x, merge)
+			}
 		}
 	}
-	out := map[*yaml.Node]string{}
-	var walk func(n *yaml.Node, at string)
-	walk = func(n *yaml.Node, at string) {
-		out[n] = at
+	read(m, nil)
+}
+
+// readNodes walks the tree under root as core's loader reads it: with follow, an alias as its
+// anchor in the alias's place; a mapping's pairs as pairsRead reads them. It calls f with each
+// node and each place it is read at, written as paths writes places, with places giving those of
+// the items of a list at a place. Each node is visited once at each of its places, so an anchor
+// read through many aliases costs one visit for each place it is read at.
+func readNodes(root *yaml.Node, follow bool, places func(list *yaml.Node, at string) []string, f func(n *yaml.Node, at readAt)) {
+	type visit struct {
+		n  *yaml.Node
+		at string
+	}
+	seen := map[visit]bool{}
+	var walk func(n *yaml.Node, at string, via int)
+	walk = func(n *yaml.Node, at string, via int) {
+		if n.Kind == yaml.AliasNode {
+			if !follow || n.Alias == nil {
+				return
+			}
+			if via == 0 {
+				via = n.Line
+			}
+			n = n.Alias
+		}
+		if seen[visit{n, at}] {
+			return
+		}
+		seen[visit{n, at}] = true
+		f(n, readAt{at, via})
 		switch n.Kind {
 		case yaml.MappingNode:
-			for i := 0; i+1 < len(n.Content); i += 2 {
-				walk(n.Content[i+1], at+"."+strconv.Quote(keyName(n.Content[i])))
-			}
-		case yaml.SequenceNode:
-			paired := pairItems(n, lists[at], marks, curMarks)
-			for i, c := range n.Content {
-				switch {
-				case c.Kind == yaml.ScalarNode:
-					walk(c, at+"[]")
-				case paired[i] >= 0:
-					walk(c, at+"["+strconv.Itoa(paired[i])+"]")
-				default:
-					walk(c, at+"[new]")
+			pairsRead(n, follow, func(name string, val, merge *yaml.Node) {
+				v := via
+				if v == 0 && merge != nil {
+					v = merge.Line
 				}
+				walk(val, at+"."+strconv.Quote(name), v)
+			})
+		case yaml.SequenceNode:
+			for i, p := range places(n, at) {
+				walk(n.Content[i], p, via)
 			}
 		}
 	}
-	walk(edited, "")
+	walk(root, "", 0)
+}
+
+// listPlaces gives the items of a list their places as paths does: a scalar's is [], so it may
+// move within its own list, and only there.
+func listPlaces(list *yaml.Node, at string) []string {
+	out := make([]string, len(list.Content))
+	for i, c := range list.Content {
+		if resolved(c).Kind == yaml.ScalarNode {
+			out[i] = at + "[]"
+		} else {
+			out[i] = at + "[" + strconv.Itoa(i) + "]"
+		}
+	}
+	return out
+}
+
+// curReading is the config file as it is now, as core reads it (readNodes): whether its aliases
+// are followed, the list at each place, and the placeholder of each of its secrets.
+type curReading struct {
+	follow bool
+	lists  map[string]*yaml.Node
+	marks  map[*yaml.Node]string
+}
+
+// slots returns where core reads each placeholder (marks: the placeholders edited holds) of a
+// config document sent back, edited, with aliases and merge keys followed (readNodes), in the
+// order read, written as the places of cur, the config file as it is now, so that a placeholder
+// goes back only where its own secret is in cur. A list item that is not a scalar stands for the
+// item of cur's list at the same place it is paired with (pairItems), and for none ([new]) when
+// it is paired with none: an account or a provider entry keeps its secrets when it moves within
+// its list, and a secret never goes back in another.
+func slots(edited *yaml.Node, marks map[*yaml.Node]string, cur curReading) map[*yaml.Node][]readAt {
+	out := map[*yaml.Node][]readAt{}
+	readNodes(edited, true, func(list *yaml.Node, at string) []string {
+		paired := pairItems(list, cur.lists[at], marks, cur)
+		places := make([]string, len(list.Content))
+		for i, c := range list.Content {
+			switch {
+			case resolved(c).Kind == yaml.ScalarNode:
+				places[i] = at + "[]"
+			case paired[i] >= 0:
+				places[i] = at + "[" + strconv.Itoa(paired[i]) + "]"
+			default:
+				places[i] = at + "[new]"
+			}
+		}
+		return places
+	}, func(n *yaml.Node, at readAt) {
+		if _, ok := marks[n]; ok {
+			out[n] = append(out[n], at)
+		}
+	})
 	return out
 }
 
 // pairItems pairs each item of edited, a list, that is not a scalar with an item of current, the
-// list at the same place in the config file as it is now, or with none (-1); no two with the same
-// one. An item with an id, or else a name (an account's id; a provider entry's or a registry's
-// name), is paired with the item of current that has the same one, so a secret never goes back
-// in an item that has another's id or name. An item whose id or name current does not have (a
-// renamed account), or that has neither (a provider entry of a config.yaml, a key of its
-// entry), is paired by the secrets it holds: with an item that no other is paired with and holds,
-// at the same keys, a secret of each of its placeholders.
-func pairItems(edited, current *yaml.Node, marks, curMarks map[*yaml.Node]string) []int {
+// list at the same place in the config file as it is now (cur), or with none (-1); no two with
+// the same one. Each item is read as core reads it, an alias as its anchor and a mapping with
+// the mappings merged into it. An item with an id, or else a name (an account's id; a provider
+// entry's or a registry's name), is paired with the item of current that has the same one, so a
+// secret never goes back in an item that has another's id or name. An item whose id or name
+// current does not have (a renamed account), or that has neither (a provider entry of a
+// config.yaml, a key of its entry), is paired by the secrets it holds: with an item that no
+// other is paired with and holds, at the same keys, a secret of each of its placeholders.
+func pairItems(edited, current *yaml.Node, marks map[*yaml.Node]string, cur curReading) []int {
 	out := make([]int, len(edited.Content))
 	for i := range out {
 		out[i] = -1
@@ -985,20 +1156,26 @@ func pairItems(edited, current *yaml.Node, marks, curMarks map[*yaml.Node]string
 	if current == nil {
 		return out
 	}
+	item := func(n *yaml.Node, follow bool) *yaml.Node {
+		if follow {
+			return resolved(n)
+		}
+		return n
+	}
 	owner := make([]int, len(current.Content)) // the item of edited each is paired with, or -1
 	byName := map[[2]string][]int{}
 	for j, c := range current.Content {
 		owner[j] = -1
-		if k, ok := itemName(c); ok {
+		if k, ok := itemName(item(c, cur.follow), cur.follow); ok {
 			byName[k] = append(byName[k], j)
 		}
 	}
 	var rest []int
 	for i, e := range edited.Content {
-		if e.Kind == yaml.ScalarNode {
+		if resolved(e).Kind == yaml.ScalarNode {
 			continue
 		}
-		k, ok := itemName(e)
+		k, ok := itemName(resolved(e), true)
 		js, known := byName[k]
 		if !ok || !known {
 			rest = append(rest, i)
@@ -1018,11 +1195,11 @@ func pairItems(edited, current *yaml.Node, marks, curMarks map[*yaml.Node]string
 	held := map[mark][]int{} // the items of current, not paired by name, that hold each mark
 	has := make([]map[mark]bool, len(current.Content))
 	for j, c := range current.Content {
-		if owner[j] >= 0 || c.Kind == yaml.ScalarNode {
+		if owner[j] >= 0 || item(c, cur.follow).Kind == yaml.ScalarNode {
 			continue
 		}
 		has[j] = map[mark]bool{}
-		eachMark(c, curMarks, func(at, p string) {
+		eachMark(c, cur.follow, cur.marks, func(at, p string) {
 			m := mark{at, p}
 			if !has[j][m] {
 				has[j][m] = true
@@ -1033,7 +1210,7 @@ func pairItems(edited, current *yaml.Node, marks, curMarks map[*yaml.Node]string
 	candidates := map[int][]int{}
 	for _, i := range rest {
 		var need []mark
-		eachMark(edited.Content[i], marks, func(at, p string) { need = append(need, mark{at, p}) })
+		eachMark(edited.Content[i], true, marks, func(at, p string) { need = append(need, mark{at, p}) })
 		if len(need) == 0 {
 			continue
 		}
@@ -1064,41 +1241,42 @@ func pairItems(edited, current *yaml.Node, marks, curMarks map[*yaml.Node]string
 	return out
 }
 
-// itemName returns a list item's id, or else its name, as a key and its value.
-func itemName(n *yaml.Node) ([2]string, bool) {
+// itemName returns a list item's id, or else its name, as a key and its value, the mapping read
+// as pairsRead reads it.
+func itemName(n *yaml.Node, follow bool) ([2]string, bool) {
 	if n.Kind != yaml.MappingNode {
 		return [2]string{}, false
 	}
-	for _, key := range []string{"id", "name"} {
-		for i := 0; i+1 < len(n.Content); i += 2 {
-			if v := resolved(n.Content[i+1]); keyName(n.Content[i]) == key && v.Kind == yaml.ScalarNode && v.Value != "" {
-				return [2]string{key, v.Value}, true
+	var found [2][2]string
+	pairsRead(n, follow, func(key string, val, _ *yaml.Node) {
+		for i, name := range []string{"id", "name"} {
+			if v := resolved(val); key == name && found[i][1] == "" && v.Kind == yaml.ScalarNode && v.Value != "" {
+				found[i] = [2]string{key, v.Value}
 			}
+		}
+	})
+	for _, k := range found {
+		if k[1] != "" {
+			return k, true
 		}
 	}
 	return [2]string{}, false
 }
 
-// eachMark calls f with the place within n, as paths writes it but with every list index left
+// eachMark calls f with the place within n, as readNodes reads it but with every list index left
 // out, and the placeholder, of each node of the tree under n that marks has.
-func eachMark(n *yaml.Node, marks map[*yaml.Node]string, f func(at, placeholder string)) {
-	var walk func(n *yaml.Node, at string)
-	walk = func(n *yaml.Node, at string) {
+func eachMark(n *yaml.Node, follow bool, marks map[*yaml.Node]string, f func(at, placeholder string)) {
+	readNodes(n, follow, func(list *yaml.Node, at string) []string {
+		out := make([]string, len(list.Content))
+		for i := range out {
+			out[i] = at + "[]"
+		}
+		return out
+	}, func(n *yaml.Node, at readAt) {
 		if p, ok := marks[n]; ok {
-			f(at, p)
+			f(at.at, p)
 		}
-		switch n.Kind {
-		case yaml.MappingNode:
-			for i := 0; i+1 < len(n.Content); i += 2 {
-				walk(n.Content[i+1], at+"."+strconv.Quote(keyName(n.Content[i])))
-			}
-		case yaml.SequenceNode:
-			for _, c := range n.Content {
-				walk(c, at+"[]")
-			}
-		}
-	}
-	walk(n, "")
+	})
 }
 
 // restored returns nil when a document holds no placeholder, holds each wanted secret value

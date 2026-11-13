@@ -379,6 +379,34 @@ func TestConfigPlacementSecretInHeader(t *testing.T) {
 	}
 }
 
+// Case 4, by YAML aliases: core's loader reads an alias as its anchor, so a secret is read where
+// each alias of it is. Every place core reads a secret from after the write must be one where the
+// file has that secret now: account a's key aliased into account b's api_key, and the management
+// key aliased into a header of account b, are refused, and b's upstream never gets either.
+func TestConfigPlacementYAMLAlias(t *testing.T) {
+	for _, c := range []struct {
+		name, secret string
+		edit         func(t *testing.T, content string, m placeMarks) string
+	}{
+		{"account a's key aliased into account b's api_key", placeKeyA, func(t *testing.T, content string, m placeMarks) string {
+			return replaceOnce(t, replaceOnce(t, content, m.a, "&ka "+m.a), m.b, "*ka")
+		}},
+		{"the management key aliased into a header of account b", managementKey, func(t *testing.T, content string, m placeMarks) string {
+			s := replaceOnce(t, content, m.management, "&mk "+m.management)
+			return replaceOnce(t, s, "    - id: b\n", "    - id: b\n      headers:\n        X-Api-Key: *mk\n")
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := startPlacement(t, true)
+			r := p.config(t)
+			p.putRefused(t, c.name, c.edit(t, r.Content, p.marks(t, r.Content)), r.Hash)
+			testAccount(t, p.base, "b")
+			wantReached(t, p.b, "account b")
+			wantNotSent(t, p.b, "account b", c.secret, c.name)
+		})
+	}
+}
+
 // startPlacementLogin is startPlacement with a third account, "login", added through the
 // openai-compatible extension's api-key login, its upstream returned.
 func startPlacementLogin(t *testing.T) (*placeCore, *keyUpstream) {
