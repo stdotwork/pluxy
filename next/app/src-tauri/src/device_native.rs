@@ -29,7 +29,7 @@ use tauri::{AppHandle, Manager, Webview};
 static CALLS: AtomicU64 = AtomicU64::new(0);
 const CHOOSER: &str = "Install an extension package on this device";
 
-fn x(args: &[&str]) -> Result<String, String> {
+pub(super) fn x(args: &[&str]) -> Result<String, String> {
     let out = Command::new("xdotool")
         .args(args)
         .output()
@@ -51,7 +51,7 @@ fn chooser() -> Result<String, String> {
     })
 }
 
-fn require(ok: bool, what: impl Into<String>) -> Result<(), String> {
+pub(super) fn require(ok: bool, what: impl Into<String>) -> Result<(), String> {
     if ok {
         Ok(())
     } else {
@@ -60,7 +60,7 @@ fn require(ok: bool, what: impl Into<String>) -> Result<(), String> {
 }
 
 /// Starts a command in the window's webview; `settle` waits for its outcome.
-fn start(main: &Webview, cmd: &str, args: Value) -> Result<String, String> {
+pub(super) fn start(main: &Webview, cmd: &str, args: Value) -> Result<String, String> {
     let slot = format!("c{}", CALLS.fetch_add(1, Ordering::SeqCst));
     main.eval(format!(
         "(window.__pluxyDevice ??= {{}}, window.__TAURI_INTERNALS__.invoke({cmd}, {args}).then(\
@@ -73,7 +73,7 @@ fn start(main: &Webview, cmd: &str, args: Value) -> Result<String, String> {
     Ok(slot)
 }
 
-fn settle(main: &Webview, slot: &str) -> Result<Value, String> {
+pub(super) fn settle(main: &Webview, slot: &str) -> Result<Value, String> {
     wait_for("a device command", || {
         eval(
             main,
@@ -83,18 +83,23 @@ fn settle(main: &Webview, slot: &str) -> Result<Value, String> {
     })
 }
 
-fn call(main: &Webview, cmd: &str, args: Value) -> Result<Value, String> {
+pub(super) fn call(main: &Webview, cmd: &str, args: Value) -> Result<Value, String> {
     let slot = start(main, cmd, args)?;
     settle(main, &slot)
 }
 
-fn ok(main: &Webview, cmd: &str, args: Value) -> Result<Value, String> {
+pub(super) fn ok(main: &Webview, cmd: &str, args: Value) -> Result<Value, String> {
     let r = call(main, cmd, args.clone())?;
     require(r["ok"] == true, format!("{cmd} {args}: {r}"))?;
     Ok(r["value"].clone())
 }
 
-fn refused(main: &Webview, cmd: &str, args: Value, says: &str) -> Result<String, String> {
+pub(super) fn refused(
+    main: &Webview,
+    cmd: &str,
+    args: Value,
+    says: &str,
+) -> Result<String, String> {
     let r = call(main, cmd, args.clone())?;
     let error = r["error"].as_str().unwrap_or_default().to_string();
     require(
@@ -105,7 +110,7 @@ fn refused(main: &Webview, cmd: &str, args: Value, says: &str) -> Result<String,
 }
 
 /// A package as `device_list` reports it.
-fn listed(main: &Webview, id: &str) -> Result<Option<Value>, String> {
+pub(super) fn listed(main: &Webview, id: &str) -> Result<Option<Value>, String> {
     let list = ok(main, "device_list", json!({}))?;
     Ok(list["packages"]
         .as_array()
@@ -147,7 +152,7 @@ fn nav_entry(main: &Webview, route: &str) -> bool {
 
 /// Opens route in the window and returns the page webview showing digest, once its page
 /// reported marker through the channel.
-fn open_page(
+pub(super) fn open_page(
     app: &AppHandle,
     main: &Webview,
     route: &str,
@@ -163,7 +168,7 @@ fn open_page(
 }
 
 /// The page webview whose frame shows a file of digest, once marker came from its page.
-fn showing(app: &AppHandle, digest: &str, marker: &str) -> Result<String, String> {
+pub(super) fn showing(app: &AppHandle, digest: &str, marker: &str) -> Result<String, String> {
     let label = wait_for(&format!("a page webview showing {digest}"), || {
         app.webviews().into_iter().find_map(|(label, w)| {
             (label != MAIN
@@ -199,7 +204,7 @@ fn marker_from(app: &AppHandle, label: &str, marker: &str) -> Result<(), String>
     Ok(())
 }
 
-fn gone(app: &AppHandle, label: &str) -> Result<(), String> {
+pub(super) fn gone(app: &AppHandle, label: &str) -> Result<(), String> {
     wait_for(&format!("{label} to close"), || {
         app.get_webview(label).is_none().then_some(())
     })

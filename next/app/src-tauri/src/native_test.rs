@@ -9,6 +9,8 @@
 //!    must be refused by Tauri's command check;
 //! 3. waits for the page's own report (it writes it into its settings through the channel);
 //! 4. in managed mode, checks this device's extension catalog (`device_native.rs`);
+//!    Access, the broker for files people grant to device packages, has stages of its own
+//!    (`access_native.rs`, `PLUXY_APP_TEST_ACCESS_STAGE`);
 //! 5. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!
@@ -20,6 +22,9 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Webview};
 
+#[cfg(target_os = "linux")]
+#[path = "access_native.rs"]
+mod access;
 #[path = "device_native.rs"]
 mod device;
 #[path = "native_ingress.rs"]
@@ -132,6 +137,10 @@ fn probe(w: &Webview, calls: &[&str]) -> Result<Value, String> {
 }
 
 fn run(app: &AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    if let Ok(stage) = std::env::var("PLUXY_APP_TEST_ACCESS_STAGE") {
+        return access::run(app, &stage);
+    }
     #[cfg(target_os = "linux")]
     if let Ok(stage) = std::env::var("PLUXY_APP_TEST_WINDOW") {
         return window::run(app, &stage);

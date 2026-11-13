@@ -15,7 +15,8 @@
 // - quitting stops the app's own core, and leaves a local or remote core running.
 //
 // In managed mode it then runs the window checks (window.ts, native_window.rs) in two more
-// sessions, one with a tray watcher and one without.
+// sessions, one with a tray watcher and one without, and the Access checks (access-suite.ts,
+// access_native.rs) in another, with the desktop portal's file chooser (GTK_USE_PORTAL=1).
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
 // own (dbus-run-session, xvfb-run), and random ports. Inside that session, before the app,
@@ -40,6 +41,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline";
+import { buildAccessFixtures } from "./access";
 import { buildSmokeAppImage } from "./appimage";
 import { buildDeviceFixtures } from "./device";
 import { descendants, webProcesses } from "./processes";
@@ -160,8 +162,9 @@ async function managementStatus(base: string, key: string, ca?: string): Promise
   return r.status;
 }
 
-/** The window checks (window.ts), with or without a tray watcher in the session. */
-type Suite = "window" | "window-no-tray";
+/** The window checks (window.ts), with or without a tray watcher in the session, and the Access
+ * checks (access-suite.ts). */
+type Suite = "window" | "window-no-tray" | "access";
 
 /** Runs the app once with connection as its saved connection, and checks what it reports. With
  * suite, the session runs window.ts, which runs the app through the window checks' stages. */
@@ -203,7 +206,15 @@ async function runApp(
       );
     const quit = join(root, "quit");
     // This device's extension catalog is the same in every mode: check it once, in managed mode.
-    const device = mode === "managed" ? join(root, "device") : undefined;
+    const device = mode === "managed" && suite !== "access" ? join(root, "device") : undefined;
+    const access = suite === "access" ? join(root, "access") : undefined;
+    if (access) {
+      mkdirSync(access);
+      writeFileSync(
+        join(dirs.config, identifier, "device-registries.json"),
+        JSON.stringify(buildAccessFixtures(access)),
+      );
+    }
     if (device) {
       mkdirSync(device);
       writeFileSync(
@@ -227,12 +238,14 @@ async function runApp(
       WEBKIT_DISABLE_DMABUF_RENDERER: "1",
       LIBGL_ALWAYS_SOFTWARE: "1",
       NO_AT_BRIDGE: "1",
-      GTK_USE_PORTAL: "0",
+      // GTK's own file chooser, except for the Access checks, which use the desktop portal's.
+      GTK_USE_PORTAL: access ? "1" : "0",
       // The FUSE-free way to run an AppImage, which the session's smoke AppImage uses.
       APPIMAGE_EXTRACT_AND_RUN: "1",
       PLUXY_APP_TEST_PAGE: PAGE,
       PLUXY_APP_TEST_QUIT: quit,
       ...(device ? { PLUXY_APP_TEST_DEVICE: device } : {}),
+      ...(access ? { PLUXY_APP_TEST_ACCESS: access, PLUXY_APP_TEST_ACCESS_HOLD: join(access, "hold") } : {}),
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: identifier } : {}),
       ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
       ...(key ? { PLUXY_APP_TEST_KEY_FILE: keyFile } : {}),
@@ -251,7 +264,7 @@ async function runApp(
       probe,
       appImage,
       randomUUID(),
-      suite ? join(import.meta.dir, "window.ts") : bin,
+      suite ? join(import.meta.dir, access ? "access-suite.ts" : "window.ts") : bin,
     ];
     const xvfb = ["xvfb-run", "-a", "-s", "-screen 0 1280x800x24 -nolisten tcp", ...session];
     const proc = spawn("dbus-run-session", ["--", ...xvfb], {
@@ -278,10 +291,10 @@ async function runApp(
         problems.push("management key appeared on stdout/stderr");
         return;
       }
-      // window.ts's checks, each shown.
-      if (line.startsWith("window: ")) {
+      // window.ts's and access-suite.ts's checks, each shown.
+      if (line.startsWith("window: ") || line.startsWith("access: ")) {
         console.log(`  ${mode} | ${line}`);
-        if (line.startsWith("window: suite passed")) suitePassed = true;
+        if (line.startsWith("window: suite passed") || line === "access: suite passed") suitePassed = true;
         return;
       }
       // The session's service checks are always shown: they say what this run stood on.
@@ -580,7 +593,7 @@ try {
     const p = await runApp("managed", bin, { mode: "managed", core_path: core });
     p.push(...(await runApp("managed", bin, { mode: "managed", core_path: core }, undefined, true)));
     p.push(...(await runApp("managed", bin, { mode: "managed", core_path: core }, undefined, true, true)));
-    for (const suite of ["window", "window-no-tray"] as const)
+    for (const suite of ["window", "window-no-tray", "access"] as const)
       p.push(
         ...(await runApp(
           "managed",
