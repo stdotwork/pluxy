@@ -308,6 +308,14 @@ func TestRedactAndRestoreTimeGrowsWithSize(t *testing.T) {
 	}
 }
 
+// A JSON key name is compared as encoding/json matches it when core loads the file, so
+// client_keyſ (with U+017F) and management_\u212aey (with the Kelvin sign) are client_keys and
+// management_key, and their values are hidden.
+func TestRedactFoldedJSONNames(t *testing.T) {
+	src := "{\"listen\": \"127.0.0.1:0\", \"client_key\u017f\": [\"fake-fold-client-key-1\"], \"management_\u212aey\": \"fake-fold-mk-1\"}\n"
+	redactRoundTrip(t, src, false, []string{"fake-fold-client-key-1", "fake-fold-mk-1"}, nil)
+}
+
 // Below the v8 api-keys mapping, only the provider sections core reads are read by the rules;
 // any other key's values are secrets, as below any secret key.
 func TestRedactUnknownV8Section(t *testing.T) {

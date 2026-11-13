@@ -146,7 +146,9 @@ func headersName(key string) bool { return strings.Contains(joinedName(key), "he
 func joinedName(key string) string { return strings.Join(words(key), "") }
 
 // words returns the words of a key name, in lower case: those between _, -, . and spaces, and
-// those camelCase starts (apiKey2 is api, key2; APIKey is api, key).
+// those camelCase starts (apiKey2 is api, key2; APIKey is api, key). Letters are folded as
+// encoding/json folds them to match a key to a field (fold), so client_keyſ is client_keys, as
+// core loads a JSON config.
 func words(key string) []string {
 	r := []rune(key)
 	var out []string
@@ -154,7 +156,7 @@ func words(key string) []string {
 	for i, c := range r {
 		if c == '_' || c == '-' || c == '.' || c == ' ' {
 			if from >= 0 {
-				out = append(out, strings.ToLower(string(r[from:i])))
+				out = append(out, fold(r[from:i]))
 			}
 			from = -1
 			continue
@@ -164,7 +166,7 @@ func words(key string) []string {
 			upper := unicode.IsUpper(c) && (unicode.IsLower(prev) || unicode.IsDigit(prev) ||
 				unicode.IsUpper(prev) && i+1 < len(r) && unicode.IsLower(r[i+1]))
 			if upper {
-				out = append(out, strings.ToLower(string(r[from:i])))
+				out = append(out, fold(r[from:i]))
 				from = i
 			}
 		}
@@ -173,9 +175,28 @@ func words(key string) []string {
 		}
 	}
 	if from >= 0 {
-		out = append(out, strings.ToLower(string(r[from:])))
+		out = append(out, fold(r[from:]))
 	}
 	return out
+}
+
+// fold returns a word in lower case, each letter first folded as encoding/json does when it
+// matches a key to a field: to the smallest letter it is a case of (unicode.SimpleFold), so ſ
+// (U+017F) is s and the Kelvin sign is k.
+func fold(word []rune) string {
+	out := make([]rune, len(word))
+	for i, c := range word {
+		for {
+			f := unicode.SimpleFold(c)
+			if f <= c {
+				c = f
+				break
+			}
+			c = f
+		}
+		out[i] = unicode.ToLower(c)
+	}
+	return string(out)
 }
 
 func secretHeader(name string) bool { return upheader.Secret(name) }
