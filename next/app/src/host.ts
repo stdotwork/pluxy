@@ -116,6 +116,10 @@ export function appHost(
   };
 }
 
+/** Privacy mode, kept natively (privacy-mode.json), never in the window's storage. */
+export const privacyGet = () => invoke<boolean>("privacy_get");
+export const privacySet = (on: boolean) => invoke<boolean>("privacy_set", { on });
+
 export interface StartupPreferences {
   autostart_enabled: boolean;
   silent_start_enabled: boolean;

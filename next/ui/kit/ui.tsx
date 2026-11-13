@@ -5,6 +5,7 @@ import { type ComponentChildren, createContext } from "preact";
 import { useCallback, useContext, useEffect, useId, useRef, useState } from "preact/hooks";
 import { type Api, problem } from "./api";
 import type { Host, Reply } from "./host";
+import type { PrivacyState } from "./privacy";
 import { strings } from "./strings";
 import type { Layout } from "./theme/contract";
 import type { ThemeState } from "./theme/state";
@@ -20,6 +21,8 @@ export interface Kit {
   host: Host;
   api: Api;
   themes: ThemeState;
+  /** Privacy mode: pages mask with usePrivacy; extension pages are told through the theme event. */
+  privacy: PrivacyState;
   /** Called when core refuses the key: the shell goes back to signing in. */
   unauthorized(): void;
   /** Called after an extension changed (installed, enabled, removed): its pages may differ. */
@@ -101,6 +104,8 @@ export function Button(props: {
   disabled?: boolean;
   type?: "button" | "submit";
   label?: string;
+  /** Names the control for restoring focus after a re-render, when its label may not be unique. */
+  focusKey?: string;
   children: ComponentChildren;
 }) {
   return (
@@ -109,6 +114,7 @@ export function Button(props: {
       class="btn"
       data-part="button"
       data-variant={props.variant ?? "quiet"}
+      data-focus-key={props.focusKey}
       onClick={props.onClick}
       disabled={props.disabled}
       aria-label={props.label}

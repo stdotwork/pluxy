@@ -112,6 +112,14 @@ not answer within 20 seconds, or at once if the first could not listen. A socket
 behind is removed by the next app, which holds the lock.
 The lock is not inherited by the app's core.
 
+## Privacy mode
+
+The navigation's **Privacy mode** toggle masks account e-mail addresses and identifiers where
+the kit shows them, as in the panel (`ui/kit/privacy.ts`), and extension pages are told in their
+theme snapshot. The app keeps the choice natively, in `privacy-mode.json` beside
+`connection.json` (readable only by your user), not in the window's storage, so losing that
+storage cannot turn it off. A file that cannot be read or parsed counts as on.
+
 ## Startup preferences
 
 The Connection page has three startup choices:
@@ -175,6 +183,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `device_page_open` | Opens a webview for a page of a package on this device, at the address its catalog keeps |
 | `window_get`, `window_set` | Reads or saves the Close behavior, and whether there is a usable tray |
 | `window_close` | Answers the close prompt: Exit App or Minimize to Tray, and whether to remember it |
+| `privacy_get`, `privacy_set` | Reads or saves privacy mode |
 
 The window may also listen to the app's events. To add a command: add it to
 `command_names.rs`, to `generate_handler!` in `lib.rs`, and its `allow-<name>` permission to
