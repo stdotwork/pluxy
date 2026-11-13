@@ -13,15 +13,15 @@ import { join } from "node:path";
 /** The trust profile's file names (src-tauri/src/trust.rs). */
 export const MARKER_FILE = ".pluxy-test-trust-profile.json";
 export const PROFILE_FILE = ".pluxy-test-trust-roots.json";
-const KEY_ID = "fixture";
+export const KEY_ID = "fixture";
 
 /** Go's platform name for this machine, as registry artifacts are keyed. */
-function platform(): string {
+export function platform(): string {
   const arch = { x64: "amd64", arm64: "arm64" }[process.arch as string] ?? process.arch;
   return `${process.platform}/${arch}`;
 }
 
-interface Fixture {
+export interface Fixture {
   file: string;
   id: string;
   version: string;
@@ -77,17 +77,17 @@ function pack(root: string, f: Fixture): string {
   return archive;
 }
 
-function hex(b: Uint8Array): string {
+export function hex(b: Uint8Array): string {
   return Buffer.from(b).toString("hex");
 }
 
-function publicHex(key: KeyObject): string {
+export function publicHex(key: KeyObject): string {
   const jwk = key.export({ format: "jwk" });
   return hex(Buffer.from(jwk.x as string, "base64url"));
 }
 
 /** An index artifact for archive, signed with key when given. */
-function artifact(root: string, file: string, f: Fixture, key?: KeyObject) {
+export function artifact(root: string, file: string, f: Fixture, key?: KeyObject) {
   const bytes = readFileSync(join(root, file));
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   const entry: Record<string, unknown> = { url: file, sha256, size: bytes.length };
@@ -106,6 +106,26 @@ function artifact(root: string, file: string, f: Fixture, key?: KeyObject) {
     entry.signature = hex(sign(null, Buffer.from(descriptor, "utf8"), key));
   }
   return { sha256, entry };
+}
+
+/** Writes the run's test trust profile in home: a `pluxy` root with key for each of sources, and
+ * the marker. Returns the marker's nonce, PLUXY_TEST_TRUST_NONCE for the app. */
+export function writeTrustProfile(home: string, sources: string[], key: KeyObject): string {
+  const root = (source: string) => ({
+    kind: "test",
+    publisher: "pluxy",
+    source,
+    key_id: KEY_ID,
+    public_key: publicHex(key),
+  });
+  writeFileSync(join(home, PROFILE_FILE), JSON.stringify({ roots: sources.map(root) }), { mode: 0o600 });
+  const nonce = hex(randomBytes(32));
+  writeFileSync(
+    join(home, MARKER_FILE),
+    JSON.stringify({ format: 1, home: realpathSync(home), purpose: "pluxy-artifact-test-trust", nonce }),
+    { mode: 0o600 },
+  );
+  return nonce;
 }
 
 export interface Admission {
@@ -175,22 +195,7 @@ export function buildAdmissionFixtures(root: string, home: string): Admission {
   );
 
   // The test trust profile: roots for the curated and mirror sources, and the marker.
-  const root_ = (source: string) => ({
-    kind: "test",
-    publisher: "pluxy",
-    source,
-    key_id: KEY_ID,
-    public_key: publicHex(publicKey),
-  });
-  writeFileSync(join(home, PROFILE_FILE), JSON.stringify({ roots: [root_(curated), root_(mirror)] }), {
-    mode: 0o600,
-  });
-  const nonce = hex(randomBytes(32));
-  writeFileSync(
-    join(home, MARKER_FILE),
-    JSON.stringify({ format: 1, home: realpathSync(home), purpose: "pluxy-artifact-test-trust", nonce }),
-    { mode: 0o600 },
-  );
+  const nonce = writeTrustProfile(home, [curated, mirror], publicKey);
   return {
     registries: [
       { name: "curated", url: curated },

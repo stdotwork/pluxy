@@ -27,6 +27,12 @@ artifact-test-trust = []
 name = "session_probe"
 required-features = ["native-test"]
 
+# The native test's disposable summary tool (native/program.ts packs it into a signed test
+# package); the program host's unit tests run its code too. Never part of a release.
+[[example]]
+name = "program_fixture"
+path = "examples/program_fixture/main.rs"
+
 [build-dependencies]
 serde_json = "1"
 json-patch = "4"

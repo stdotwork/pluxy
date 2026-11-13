@@ -34,7 +34,7 @@ static CALLS: AtomicU64 = AtomicU64::new(0);
 const DIALOG: &str = "pluxy native confirmation";
 const FULL_ACCESS: &str = "full access to your user account";
 
-fn x(args: &[&str]) -> Result<String, String> {
+pub(super) fn x(args: &[&str]) -> Result<String, String> {
     let out = Command::new("xdotool")
         .args(args)
         .output()
@@ -48,7 +48,7 @@ fn x(args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().into())
 }
 
-fn dialog() -> Result<String, String> {
+pub(super) fn dialog() -> Result<String, String> {
     wait_for("the native confirmation", || {
         x(&["search", "--onlyvisible", "--name", &format!("^{DIALOG}$")])
             .ok()
@@ -56,7 +56,7 @@ fn dialog() -> Result<String, String> {
     })
 }
 
-fn press(keys: &str) -> Result<(), String> {
+pub(super) fn press(keys: &str) -> Result<(), String> {
     let id = dialog()?;
     x(&["windowfocus", "--sync", &id])?;
     x(&["key", "--clearmodifiers", keys])?;
@@ -64,7 +64,7 @@ fn press(keys: &str) -> Result<(), String> {
 }
 
 /// The text the visible native confirmation shows, read from its GTK labels.
-fn dialog_text(app: &AppHandle) -> Result<String, String> {
+pub(super) fn dialog_text(app: &AppHandle) -> Result<String, String> {
     use gtk::prelude::*;
     fn labels(w: &gtk::Widget, out: &mut String) {
         if let Some(l) = w.downcast_ref::<gtk::Label>() {
@@ -98,7 +98,7 @@ fn dialog_text(app: &AppHandle) -> Result<String, String> {
     })
 }
 
-fn require(ok: bool, what: impl Into<String>) -> Result<(), String> {
+pub(super) fn require(ok: bool, what: impl Into<String>) -> Result<(), String> {
     if ok {
         Ok(())
     } else {
@@ -106,7 +106,7 @@ fn require(ok: bool, what: impl Into<String>) -> Result<(), String> {
     }
 }
 
-fn start(main: &Webview, cmd: &str, args: Value) -> Result<String, String> {
+pub(super) fn start(main: &Webview, cmd: &str, args: Value) -> Result<String, String> {
     let slot = format!("a{}", CALLS.fetch_add(1, Ordering::SeqCst));
     main.eval(format!(
         "(window.__pluxyAdmission ??= {{}}, window.__TAURI_INTERNALS__.invoke({cmd}, {args}).then(\
@@ -119,7 +119,7 @@ fn start(main: &Webview, cmd: &str, args: Value) -> Result<String, String> {
     Ok(slot)
 }
 
-fn settle(main: &Webview, slot: &str) -> Result<Value, String> {
+pub(super) fn settle(main: &Webview, slot: &str) -> Result<Value, String> {
     wait_for("an admission command", || {
         eval(
             main,
@@ -129,18 +129,23 @@ fn settle(main: &Webview, slot: &str) -> Result<Value, String> {
     })
 }
 
-fn call(main: &Webview, cmd: &str, args: Value) -> Result<Value, String> {
+pub(super) fn call(main: &Webview, cmd: &str, args: Value) -> Result<Value, String> {
     let slot = start(main, cmd, args)?;
     settle(main, &slot)
 }
 
-fn ok(main: &Webview, cmd: &str, args: Value) -> Result<Value, String> {
+pub(super) fn ok(main: &Webview, cmd: &str, args: Value) -> Result<Value, String> {
     let r = call(main, cmd, args.clone())?;
     require(r["ok"] == true, format!("{cmd} {args}: {r}"))?;
     Ok(r["value"].clone())
 }
 
-fn refused(main: &Webview, cmd: &str, args: Value, says: &str) -> Result<String, String> {
+pub(super) fn refused(
+    main: &Webview,
+    cmd: &str,
+    args: Value,
+    says: &str,
+) -> Result<String, String> {
     let r = call(main, cmd, args.clone())?;
     let error = r["error"].as_str().unwrap_or_default().to_string();
     require(
@@ -163,7 +168,7 @@ fn install(registry: &str, id: &str) -> Value {
     json!({"registry": registry, "id": id, "version": "1.0.0"})
 }
 
-fn listed(main: &Webview, id: &str) -> Result<Option<Value>, String> {
+pub(super) fn listed(main: &Webview, id: &str) -> Result<Option<Value>, String> {
     let list = ok(main, "device_list", json!({}))?;
     Ok(list["packages"]
         .as_array()
@@ -173,7 +178,7 @@ fn listed(main: &Webview, id: &str) -> Result<Option<Value>, String> {
         .cloned())
 }
 
-fn store(app: &AppHandle) -> Result<BTreeSet<String>, String> {
+pub(super) fn store(app: &AppHandle) -> Result<BTreeSet<String>, String> {
     let dir = app
         .path()
         .app_data_dir()
