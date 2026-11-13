@@ -7,8 +7,10 @@
 //! install.
 //!
 //! No source is curated in this build: every package is Unverified, and a package claiming a
-//! reserved publisher (`pluxy`) is refused. No package gets resources, settings or native
-//! programs here. The previous release stays as the last good one, so a failed candidate keeps
+//! reserved publisher (`pluxy`) is refused. A registry may list a release's publisher
+//! signature; it is checked before the archive is unpacked and kept with the release, for
+//! Access (`access.rs`) to grant files only to packages whose signer the person approved. No
+//! package gets settings or native programs here. The previous release stays as the last good one, so a failed candidate keeps
 //! the active release and the person can roll back. With `--safe-mode`, no device page is
 //! listed, opened or served; the catalog can still be managed.
 
@@ -93,9 +95,15 @@ pub struct Release {
     /// SHA-256 of each file under ui_dir, by slash-separated path: only these are served.
     #[serde(default)]
     pub files: BTreeMap<String, String>,
-    /// Resource IDs the package asks for. None is granted in this build.
+    /// Resource IDs the package asks for.
     #[serde(default)]
     pub resources: Vec<String>,
+    /// The resources it declares, as Access grants them.
+    #[serde(default)]
+    pub declared: Vec<crate::access::Declared>,
+    /// The publisher signature a registry listed for it, checked at install.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed: Option<crate::access::Signed>,
     /// Whether the package declares settings. They are not served in this build.
     #[serde(default)]
     pub settings: bool,
@@ -175,7 +183,19 @@ pub struct ReleaseView {
     pub ui_version: Option<i64>,
     pub pages: Vec<PageView>,
     pub resources: Vec<String>,
+    pub declared: Vec<crate::access::Declared>,
     pub settings: bool,
+    /// Who signed it, and whether the person approved that signer for its source.
+    pub signer: Option<SignerView>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SignerView {
+    pub publisher: String,
+    pub key_id: String,
+    pub public_key: String,
+    pub source: String,
+    pub approved: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -265,7 +285,11 @@ fn now() -> u64 {
         .unwrap_or(0)
 }
 
-fn release_view(id: &str, r: &Release) -> ReleaseView {
+fn release_view(
+    id: &str,
+    r: &Release,
+    approved: &dyn Fn(&crate::access::Signed) -> bool,
+) -> ReleaseView {
     ReleaseView {
         version: r.version.clone(),
         sha256: r.sha256.clone(),
@@ -286,7 +310,15 @@ fn release_view(id: &str, r: &Release) -> ReleaseView {
             })
             .collect(),
         resources: r.resources.clone(),
+        declared: r.declared.clone(),
         settings: r.settings,
+        signer: r.signed.as_ref().map(|s| SignerView {
+            publisher: s.publisher.clone(),
+            key_id: s.key_id.clone(),
+            public_key: s.public_key.clone(),
+            source: s.source.clone(),
+            approved: approved(s),
+        }),
     }
 }
 
@@ -478,6 +510,11 @@ impl Catalog {
     }
 
     pub fn view(&self) -> View {
+        self.view_with(&|_| false)
+    }
+
+    /// The catalog as the window shows it, with each signer's approval as approved says.
+    pub fn view_with(&self, approved: &dyn Fn(&crate::access::Signed) -> bool) -> View {
         View {
             safe_mode: self.safe_mode,
             warning: self.warning.clone(),
@@ -489,11 +526,28 @@ impl Catalog {
                     enabled: p.enabled,
                     trust: "unverified",
                     source: p.source.clone(),
-                    active: release_view(id, &p.active),
-                    last_good: p.last_good.as_ref().map(|r| release_view(id, r)),
+                    active: release_view(id, &p.active, approved),
+                    last_good: p.last_good.as_ref().map(|r| release_view(id, r, approved)),
                 })
                 .collect(),
         }
+    }
+
+    /// What Access needs to know about package id.
+    pub fn facts(&self, id: &str) -> Option<crate::access::Facts> {
+        let p = self.packages.get(id)?;
+        Some(crate::access::Facts {
+            id: id.into(),
+            enabled: p.enabled,
+            source: p
+                .source
+                .index
+                .clone()
+                .filter(|_| p.source.kind == "registry"),
+            sha256: p.active.sha256.clone(),
+            signed: p.active.signed.clone(),
+            declared: p.active.declared.clone(),
+        })
     }
 
     pub fn get(&self, id: &str) -> Option<&Package> {
@@ -1315,6 +1369,8 @@ pub fn stage(
             pages: vec![],
             files: BTreeMap::new(),
             resources: vec![],
+            declared: vec![],
+            signed: None,
             settings: false,
         },
         staged: staged.clone(),
@@ -1363,6 +1419,16 @@ pub fn stage(
         .iter()
         .flatten()
         .map(|x| x.id.clone())
+        .collect();
+    r.declared = app
+        .resources
+        .iter()
+        .flatten()
+        .map(|x| crate::access::Declared {
+            id: x.id.clone(),
+            kind: x.kind.clone(),
+            operations: x.operations.clone(),
+        })
         .collect();
     r.settings = app.config.is_some();
     if let Some(ui) = &app.ui {
@@ -1456,6 +1522,83 @@ struct Artifact {
     url: String,
     sha256: String,
     size: u64,
+    /// A publisher signature (app host README, signed descriptor bytes): the key's ID, its
+    /// Ed25519 public key and the detached signature in lower-case hex, and the exact
+    /// descriptor text signed. All four or none.
+    #[serde(default)]
+    key_id: Option<String>,
+    #[serde(default)]
+    public_key: Option<String>,
+    #[serde(default)]
+    descriptor: Option<String>,
+    #[serde(default)]
+    signature: Option<String>,
+}
+
+/// Checks the publisher signature a registry lists for package id's release version against
+/// the archive, before it is unpacked: the descriptor's signature with the key the index names,
+/// then its ID, version, web tier, platform, size and SHA-256 against the index and the
+/// archive. A signature proves who signed, not that the package is safe; Access grants files
+/// only once the person approved that signer for this source.
+fn check_signature(
+    index: &str,
+    id: &str,
+    version: &str,
+    a: &Artifact,
+    archive: &[u8],
+) -> Result<Option<crate::access::Signed>, String> {
+    use crate::artifact::{decode_hex, verify_archive, Tier};
+    let (key_id, public_key, descriptor, signature) =
+        match (&a.key_id, &a.public_key, &a.descriptor, &a.signature) {
+            (None, None, None, None) => return Ok(None),
+            (Some(k), Some(p), Some(d), Some(s)) => (k, p, d, s),
+            _ => {
+                return Err(format!(
+                    "{id} {version}: the registry lists part of a signature (key_id, public_key, descriptor and signature go together)"
+                ))
+            }
+        };
+    if key_id.is_empty()
+        || key_id.len() > 64
+        || !key_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+    {
+        return Err(format!(
+            "{id} {version}: the signature's key_id is not valid"
+        ));
+    }
+    let bad = |e: String| format!("{id} {version}: the registry's signature does not hold: {e}");
+    let key = ed25519_dalek::VerifyingKey::from_bytes(&decode_hex::<32>(public_key).map_err(bad)?)
+        .map_err(|_| bad("public_key is not an Ed25519 key".into()))?;
+    let sig = decode_hex::<64>(signature).map_err(bad)?;
+    let verified = verify_archive(
+        &key,
+        descriptor.as_bytes(),
+        &sig,
+        &platform(),
+        std::io::Cursor::new(archive),
+    )
+    .map_err(bad)?;
+    let d = verified.descriptor();
+    if d.id != id || d.version != version || d.tier != Tier::Web {
+        return Err(bad(
+            "the signed descriptor names another package, version or tier".into(),
+        ));
+    }
+    if d.size != a.size || d.sha256 != a.sha256.to_ascii_lowercase() {
+        return Err(bad(
+            "the signed descriptor names another archive than the index".into(),
+        ));
+    }
+    Ok(Some(crate::access::Signed {
+        publisher: id.split('/').next().unwrap_or_default().into(),
+        key_id: key_id.clone(),
+        public_key: public_key.clone(),
+        source: index.into(),
+        descriptor: descriptor.clone(),
+        signature: signature.clone(),
+    }))
 }
 
 /// Go's platform name for this computer, as registry artifacts are keyed.
@@ -1702,7 +1845,8 @@ pub fn stage_from_registry(
         })?;
     let a = &release.artifacts[&platform];
     let bytes = fetch_artifact(&base, a)?;
-    stage(
+    let signed = check_signature(&r.url, id, &release.version, a, &bytes)?;
+    let mut c = stage(
         dirs,
         &bytes,
         Source {
@@ -1716,7 +1860,9 @@ pub fn stage_from_registry(
             sha256: a.sha256.to_ascii_lowercase(),
             size: a.size,
         }),
-    )
+    )?;
+    c.release.signed = signed;
+    Ok(c)
 }
 
 #[cfg(test)]

@@ -891,3 +891,117 @@ fn a_store_that_cannot_be_listed_is_reported() {
     );
     done(root);
 }
+
+#[test]
+fn registry_signatures_are_checked_before_unpacking_and_kept() {
+    use ed25519_dalek::{Signer, SigningKey};
+    let root = temp();
+    let d = dirs(&root);
+    let reg = root.join("reg");
+    fs::create_dir_all(&reg).unwrap();
+    let m = manifest(
+        "example/files",
+        "1.0.0",
+        serde_json::json!({"resources": [{"id": "config", "kind": "file", "operations": ["read"]}]}),
+    );
+    let v1 = archive(&[("pluxy-extension.json", &m), ("pages/index.html", b"<p>1")]);
+    fs::write(reg.join("f1.tar.gz"), &v1).unwrap();
+    // A key made for this test only.
+    let mut seed = [0u8; 32];
+    getrandom::fill(&mut seed).unwrap();
+    let key = SigningKey::from_bytes(&seed);
+    let public = hex(key.verifying_key().as_bytes());
+    let p = platform();
+    let descriptor = |version: &str, sha: &str| {
+        format!(
+            r#"{{"id":"example/files","version":"{version}","tier":"web","platform":"{p}","size":{},"sha256":"{sha}"}}"#,
+            v1.len()
+        )
+    };
+    let signed = |desc: &str| {
+        serde_json::json!({"url": "f1.tar.gz", "sha256": digest(&v1), "size": v1.len(),
+            "key_id": "k1", "public_key": public, "descriptor": desc,
+            "signature": hex(&key.sign(desc.as_bytes()).to_bytes())})
+    };
+    let good = descriptor("1.0.0", &digest(&v1));
+    let mut tampered = signed(&good);
+    tampered["descriptor"] = serde_json::json!(good.replace("\"size\"", " \"size\""));
+    let mut partial = signed(&good);
+    partial.as_object_mut().unwrap().remove("signature");
+    let mut bad_key = signed(&good);
+    bad_key["key_id"] = serde_json::json!("k 1");
+    let other_digest = descriptor("1.0.0", &"0".repeat(64));
+    let index = serde_json::json!({"registry_version": 0, "packages": {
+        "example/files": {"releases": [
+            {"version": "1.6.0", "artifacts": {p.clone(): bad_key}},
+            {"version": "1.5.0", "artifacts": {p.clone(): signed(&other_digest)}},
+            {"version": "1.4.0", "artifacts": {p.clone(): signed(&descriptor("1.4.0", &digest(&v1)))}},
+            {"version": "1.3.0", "artifacts": {p.clone(): signed(&good)}},
+            {"version": "1.2.0", "artifacts": {p.clone(): partial}},
+            {"version": "1.1.0", "artifacts": {p.clone(): tampered}},
+            {"version": "1.0.0", "artifacts": {p.clone(): signed(&good)}}
+        ]}
+    }});
+    fs::write(reg.join("index.json"), serde_json::to_vec(&index).unwrap()).unwrap();
+    let url = reg.join("index.json").display().to_string();
+    fs::write(
+        &d.registries,
+        serde_json::to_vec(&serde_json::json!({"version": 0, "registries": [
+            {"name": "fixture", "url": url}]}))
+        .unwrap(),
+    )
+    .unwrap();
+    for (v, says) in [
+        ("1.6.0", "key_id is not valid"),
+        // The descriptor names an archive the index does not.
+        ("1.5.0", "does not hold"),
+        // Signed for 1.4.0, listed (and holding) another version: the archive holds 1.0.0.
+        ("1.4.0", "not example/files 1.4.0"),
+        // A valid signature of 1.0.0's descriptor offered as 1.3.0.
+        ("1.3.0", "another package, version or tier"),
+        ("1.2.0", "part of a signature"),
+        ("1.1.0", "invalid descriptor signature"),
+    ] {
+        let e = stage_from_registry(&d, "fixture", "example/files", Some(v)).unwrap_err();
+        assert!(e.contains(says), "{v}: {e}");
+    }
+    let c = stage_from_registry(&d, "fixture", "example/files", Some("1.0.0")).unwrap();
+    let s = c.release.signed.clone().unwrap();
+    assert_eq!(
+        (
+            s.publisher.as_str(),
+            s.key_id.as_str(),
+            s.public_key.as_str(),
+            s.source.as_str(),
+            s.descriptor.as_str()
+        ),
+        (
+            "example",
+            "k1",
+            public.as_str(),
+            url.as_str(),
+            good.as_str()
+        )
+    );
+    assert_eq!(c.release.declared[0].id, "config");
+    let mut cat = Catalog::open(d.clone(), false);
+    cat.commit(c).unwrap();
+    let f = cat.facts("example/files").unwrap();
+    assert_eq!(f.source.as_deref(), Some(url.as_str()));
+    assert_eq!(f.signed, Some(s.clone()));
+    let v = cat.view_with(&|x| x == &s);
+    assert!(v.packages[0].active.signer.as_ref().unwrap().approved);
+    let unapproved = cat.view();
+    assert!(
+        !unapproved.packages[0]
+            .active
+            .signer
+            .as_ref()
+            .unwrap()
+            .approved
+    );
+    // Kept across a restart, exactly.
+    let again = Catalog::open(d.clone(), false);
+    assert_eq!(again.facts("example/files").unwrap().signed, Some(s));
+    done(root);
+}
