@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Webview};
 
-const ID: &str = "pluxy/summary";
+pub(super) const ID: &str = "pluxy/summary";
 /// The program commands a page webview must be refused.
 const PROGRAM_COMMANDS: &[&str] = &["program_call", "program_cancel", "program_status"];
 /// The environment app program contract v0 gives a tool, and nothing else.
@@ -41,7 +41,7 @@ const CONTRACT_ENV: &[&str] = &[
 ];
 
 /// The processes running program, by /proc: the tool and the child it started.
-fn processes(program: &Path) -> BTreeSet<u32> {
+pub(super) fn processes(program: &Path) -> BTreeSet<u32> {
     std::fs::read_dir("/proc")
         .map(|d| {
             d.filter_map(|e| e.ok())
@@ -55,7 +55,7 @@ fn processes(program: &Path) -> BTreeSet<u32> {
 }
 
 /// Whether pid runs and is not a zombie.
-fn alive(pid: u64) -> bool {
+pub(super) fn alive(pid: u64) -> bool {
     std::fs::read_to_string(format!("/proc/{pid}/stat"))
         .ok()
         .and_then(|s| {
@@ -66,7 +66,7 @@ fn alive(pid: u64) -> bool {
 }
 
 /// The names of this app's threads.
-fn threads() -> Vec<String> {
+pub(super) fn threads() -> Vec<String> {
     std::fs::read_dir("/proc/self/task")
         .map(|d| {
             d.filter_map(|e| e.ok())
@@ -116,12 +116,12 @@ fn summary(main: &Webview, items: &Value) -> Result<Value, String> {
     )
 }
 
-fn status(main: &Webview) -> Result<Value, String> {
+pub(super) fn status(main: &Webview) -> Result<Value, String> {
     ok(main, "program_status", json!({"package": ID}))
 }
 
 /// Enables the tool through its native confirmation, confirmed.
-fn enable(app: &AppHandle, main: &Webview) -> Result<(), String> {
+pub(super) fn enable(app: &AppHandle, main: &Webview) -> Result<(), String> {
     let slot = start(main, "device_enable", json!({"id": ID, "enabled": true}))?;
     dialog_text(app)?;
     press("alt+o")?;

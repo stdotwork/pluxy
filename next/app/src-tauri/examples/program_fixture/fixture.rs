@@ -9,7 +9,12 @@
 //! - `summary` with what it was given (`count`, `longest`) and what it sees of itself: its process
 //!   and group, the child it started, the calls it has had, its environment's names, its open
 //!   file descriptors and its working folder;
-//! - `wait` only once it is cancelled.
+//! - `wait` only once it is cancelled;
+//! - `slow` after `ms` milliseconds, with its version, process and when it answered;
+//! - `crash` never: it exits at once with status 3.
+//!
+//! `summary` also says its release's version, when it answered (milliseconds since the Unix
+//! epoch) and the calls of unknown outcome the host reported in describe (`reported`).
 //!
 //! At start it starts one child, itself again, which sleeps in its process group until killed, so
 //! the checks can see the host stop the whole group. It exits at the end of its input. A
@@ -168,10 +173,19 @@ pub fn main() -> ! {
     );
     let mut calls = 0u64;
     let mut waiting: Option<Value> = None;
+    let mut reported = Value::Null;
+    let version = manifest["version"].clone();
+    let at = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    };
     while let Some(f) = read_frame(&mut input) {
         let id = f["id"].clone();
         match (f["type"].as_str(), f["op"].as_str()) {
             (Some("call"), Some("describe")) => {
+                reported = f["unknown"].clone();
                 let mut ops = manifest["app"]["operations"].clone();
                 if let (Some(extra), Some(list)) = (&mode.extra_operation, ops.as_array_mut()) {
                     list.push(json!({"id": extra, "description": "Not in the manifest",
@@ -218,6 +232,9 @@ pub fn main() -> ! {
                                 "env": names,
                                 "fds": fds(),
                                 "cwd": std::env::current_dir().ok(),
+                                "version": version,
+                                "at": at(),
+                                "reported": reported,
                             })
                         });
                         write_frame(
@@ -232,6 +249,16 @@ pub fn main() -> ! {
                         );
                         waiting = Some(id);
                     }
+                    "slow" => {
+                        let ms = f["input"]["ms"].as_u64().unwrap_or(0);
+                        std::thread::sleep(Duration::from_millis(ms));
+                        write_frame(
+                            &mut output,
+                            &json!({"type": "result", "id": id, "output": {
+                                "version": version, "pid": std::process::id(), "at": at()}}),
+                        );
+                    }
+                    "crash" => std::process::exit(3),
                     _ => write_frame(
                         &mut output,
                         &error(&id, "unsupported", &format!("no operation {op}")),
