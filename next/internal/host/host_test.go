@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,7 +46,11 @@ func fakeExtension(mode string) {
 		return
 	}
 	if mode == "session-bad-frame" {
-		sessionBadFrame()
+		sessionBadFrame(1)
+		return
+	}
+	if mode == "session-bad-frame-14" {
+		sessionBadFrame(14)
 		return
 	}
 	if mode == "echo-proxy" {
@@ -113,6 +118,7 @@ func fakeExtension(mode string) {
 			}}
 		if mode == "session" {
 			ext.Session = openFakeSession
+			_ = sdk.Upstream(&http.Transport{}) // a turn with payload rules needs a wrapped client
 		}
 		err := sdk.Serve(ext)
 		if mode == "slow-exit" {

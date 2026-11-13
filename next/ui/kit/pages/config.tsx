@@ -9,20 +9,17 @@ import { ConfigDialog } from "./configDialog";
 import { ConfigConnectivity, keyCards, useConfigKeys } from "./configKeys";
 import { ConfigSettings, type SettingsTab, settingsChange } from "./configSettings";
 import { ConfigSource } from "./configSource";
+import { configAddress, configTabIds, parseConfigAddress } from "./configSource.helpers";
 import { configText as t } from "./configStrings";
 
-const configTabs = () => [
-  { id: "common", label: t("common") },
-  { id: "connectivity", label: t("connectivity") },
-  { id: "network", label: t("network") },
-  { id: "logging", label: t("logging") },
-  { id: "advanced", label: t("advanced") },
-  { id: "source", label: t("source") },
-];
+const configTabs = () => configTabIds.map((id) => ({ id, label: t(id) }));
 
 export function ConfigPage() {
   const { api, unauthorized } = useKit();
-  const [tab, setTab] = useState("common");
+  // The tab, and the account Source opens at, are in the page's address: #/config/<tab>.
+  const [opened] = useState(() => parseConfigAddress(location.hash));
+  const [tab, setTab] = useState<string>(opened?.tab ?? configTabIds[0]);
+  const [account, setAccount] = useState(opened?.account);
   const [search, setSearch] = useState("");
   const [baseSettings, setBaseSettings] = useState<CoreSettings>();
   const [settings, setSettings] = useState<CoreSettings>();
@@ -38,6 +35,7 @@ export function ConfigPage() {
   const dirty = dirtySettings || (!!doc && doc.content !== text);
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
+  const switchRef = useRef<(tab: string, account?: string) => boolean>(() => false);
   const load = async () => {
     setBusy(true);
     setError(undefined);
@@ -89,6 +87,10 @@ export function ConfigPage() {
     document.addEventListener("click", click, true);
     // Back and a typed #/… address change the hash; the shell asks its guards before it follows.
     const unguard = guardLeave((go) => {
+      // An address of this page moves between its tabs, which are not leaving it. Staying is
+      // answered when the tab did not change: the page asks first, or is busy.
+      const to = parseConfigAddress(location.hash);
+      if (to) return !switchRef.current(to.tab, to.account);
       if (!dirtyRef.current) return false;
       setLeave({ run: go });
       return true;
@@ -99,23 +101,35 @@ export function ConfigPage() {
       unguard();
     };
   }, []);
-  const switchTab = (next: string) => {
-    if (next === tab || busy) return;
+  /** Shows a tab, with Source at an account. False when it did not, or not yet: it is asking first. */
+  const switchTab = (next: string, nextAccount?: string): boolean => {
+    if (busy) return false;
     const change = () => {
       setTab(next);
+      setAccount(nextAccount);
       setSearch("");
       setError(undefined);
       setSaved(false);
+      // The shell is not asked: a replaced address is no change of the hash.
+      history.replaceState(null, "", configAddress(next, nextAccount));
     };
-    if (dirty && (next === "source" || tab === "source"))
+    if (next === tab && nextAccount === account) {
+      history.replaceState(null, "", configAddress(next, nextAccount));
+      return true;
+    }
+    if (next !== tab && dirty && (next === "source" || tab === "source")) {
       setLeave({
         run: () => {
           void load();
           change();
         },
       });
-    else change();
+      return false;
+    }
+    change();
+    return true;
   };
+  switchRef.current = switchTab;
   const saveSettings = async () => {
     if (!baseSettings || !settings) return;
     setError(undefined);
@@ -170,7 +184,14 @@ export function ConfigPage() {
       {!settings ? (
         <Notice tone="muted">{t("loading")}</Notice>
       ) : (
-        <Tabs label={t("title")} tabs={configTabs()} active={tab} onChange={switchTab}>
+        <Tabs
+          label={t("title")}
+          tabs={configTabs()}
+          active={tab}
+          onChange={(next) => {
+            if (next !== tab) switchTab(next);
+          }}
+        >
           {tab === "source" ? (
             !doc ? (
               <div class="stack">
@@ -185,6 +206,7 @@ export function ConfigPage() {
                 loading={busy}
                 setBusy={setBusy}
                 base={doc}
+                account={account}
                 text={text}
                 setText={setText}
                 reload={load}

@@ -36,6 +36,12 @@ export interface CoreSettings {
   };
   /** This core's own setting. */
   token_count_estimate: boolean;
+  /**
+   * The outbound proxy of every account without its own, shown with `redacted` in place of a user
+   * name and password; "" for none. A PATCH that sends it back as shown keeps the hidden password;
+   * "" removes it; core answers 400 for a value that is not a proxy URL.
+   */
+  "proxy-url": string;
 }
 
 type Change<T> = { [K in keyof T]?: T[K] extends Record<string, unknown> ? Change<T[K]> : T[K] };
