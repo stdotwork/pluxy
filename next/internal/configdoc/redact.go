@@ -838,6 +838,7 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 	// says, where a list item stands for the item of current it is paired with.
 	own := paths(d.root)
 	reads := map[*yaml.Node][]readAt{}
+	var dup *yaml.Node
 	if settings {
 		for _, n := range held {
 			if at, ok := own[n]; ok {
@@ -849,7 +850,7 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 		for _, n := range held {
 			marks[n] = n.Value
 		}
-		reads = slots(d.root, marks, cr)
+		reads, dup = slots(d.root, marks, cr)
 	}
 	repl := map[*yaml.Node]*secret{}
 	var copies []copyAt
@@ -879,6 +880,9 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 		if !allowed[n] && !(!settings && secretURL(s.value)) {
 			copies = append(copies, copyAt{own[n], s.value, d.line(n)})
 		}
+	}
+	if dup != nil {
+		return nil, fmt.Errorf("%w: line %d: an item with a redacted value has its id or name twice (core reads names in any case); keep one, or write the value itself there", ErrInvalid, d.line(dup))
 	}
 	want := map[string]int{}
 	texts := map[*yaml.Node]string{}
@@ -1114,11 +1118,15 @@ type curReading struct {
 // goes back only where its own secret is in cur. A list item that is not a scalar stands for the
 // item of cur's list at the same place it is paired with (pairItems), and for none ([new]) when
 // it is paired with none: an account or a provider entry keeps its secrets when it moves within
-// its list, and a secret never goes back in another.
-func slots(edited *yaml.Node, marks map[*yaml.Node]string, cur curReading) map[*yaml.Node][]readAt {
-	out := map[*yaml.Node][]readAt{}
+// its list, and a secret never goes back in another. dup is as pairItems returns it, for the
+// first list that has one.
+func slots(edited *yaml.Node, marks map[*yaml.Node]string, cur curReading) (out map[*yaml.Node][]readAt, dup *yaml.Node) {
+	out = map[*yaml.Node][]readAt{}
 	readNodes(edited, true, func(list *yaml.Node, at string) []string {
-		paired := pairItems(list, cur.lists[at], marks, cur)
+		paired, d := pairItems(list, cur.lists[at], marks, cur)
+		if dup == nil {
+			dup = d
+		}
 		places := make([]string, len(list.Content))
 		for i, c := range list.Content {
 			switch {
@@ -1136,7 +1144,7 @@ func slots(edited *yaml.Node, marks map[*yaml.Node]string, cur curReading) map[*
 			out[n] = append(out[n], at)
 		}
 	})
-	return out
+	return out, dup
 }
 
 // pairItems pairs each item of edited, a list, that holds a placeholder and is not a scalar with
@@ -1149,14 +1157,15 @@ func slots(edited *yaml.Node, marks map[*yaml.Node]string, cur curReading) map[*
 // be; else by its secrets alone, as an item that has neither (a provider entry of a config.yaml,
 // a key of its entry) is: an account renamed, or given the id of another, is the account whose
 // secrets it holds. One item may take another's when that one can take a third (a maximum
-// matching), so the order of the items decides nothing.
-func pairItems(edited, current *yaml.Node, marks map[*yaml.Node]string, cur curReading) []int {
-	out := make([]int, len(edited.Content))
+// matching), so the order of the items decides nothing. dup is the second id or name (itemName)
+// of the first item that holds a placeholder and has its id or name twice, if any.
+func pairItems(edited, current *yaml.Node, marks map[*yaml.Node]string, cur curReading) (out []int, dup *yaml.Node) {
+	out = make([]int, len(edited.Content))
 	for i := range out {
 		out[i] = -1
 	}
 	if current == nil {
-		return out
+		return out, nil
 	}
 	item := func(n *yaml.Node, follow bool) *yaml.Node {
 		if follow {
@@ -1174,7 +1183,7 @@ func pairItems(edited, current *yaml.Node, marks map[*yaml.Node]string, cur curR
 		if item(c, cur.follow).Kind == yaml.ScalarNode {
 			continue
 		}
-		if k, ok := itemName(item(c, cur.follow), cur.follow); ok {
+		if k, ok, _ := itemName(item(c, cur.follow), cur.follow); ok {
 			byName[k] = append(byName[k], j)
 		}
 		has[j] = map[mark]bool{}
@@ -1245,7 +1254,11 @@ func pairItems(edited, current *yaml.Node, marks map[*yaml.Node]string, cur curR
 		}
 		g.items = append(g.items, i)
 		groupOf[i] = g
-		if k, ok := itemName(resolved(e), true); ok {
+		k, ok, d := itemName(resolved(e), true)
+		if dup == nil {
+			dup = d
+		}
+		if ok {
 			for _, j := range byName[k] {
 				if owner[j] < 0 && fits(need, j) {
 					owner[j], out[i] = i, j
@@ -1302,24 +1315,32 @@ func pairItems(edited, current *yaml.Node, marks map[*yaml.Node]string, cur curR
 	// An item left with none is refused either way; one with an id or name is paired with the
 	// item that has it, so the refusal names the placeholder that is not that item's.
 	for i, e := range edited.Content {
-		if k, ok := itemName(resolved(e), true); ok && out[i] < 0 && groupOf[i] != nil {
+		if k, ok, _ := itemName(resolved(e), true); ok && out[i] < 0 && groupOf[i] != nil {
 			if j := slices.IndexFunc(byName[k], func(j int) bool { return owner[j] < 0 }); j >= 0 {
 				owner[byName[k][j]], out[i] = i, byName[k][j]
 			}
 		}
 	}
-	return out
+	return out, dup
 }
 
 // itemName returns a list item's id, or else its name, as a key and its value, the mapping read
-// as pairsRead reads it.
-func itemName(n *yaml.Node, follow bool) ([2]string, bool) {
+// as pairsRead reads it. dup is the value of a second key that is id, or name, in any case, if
+// the item has one: core's JSON reader takes the last of them, in any case (fold), so the item
+// is not surely the one its first id or name says.
+func itemName(n *yaml.Node, follow bool) (k [2]string, ok bool, dup *yaml.Node) {
 	if n.Kind != yaml.MappingNode {
-		return [2]string{}, false
+		return [2]string{}, false, nil
 	}
 	var found [2][2]string
+	var count [2]int
 	pairsRead(n, follow, func(key string, val, _ *yaml.Node) {
 		for i, name := range []string{"id", "name"} {
+			if fold([]rune(key)) == name {
+				if count[i]++; count[i] == 2 && dup == nil {
+					dup = val
+				}
+			}
 			if v := resolved(val); key == name && found[i][1] == "" && v.Kind == yaml.ScalarNode && v.Value != "" {
 				found[i] = [2]string{key, v.Value}
 			}
@@ -1327,10 +1348,10 @@ func itemName(n *yaml.Node, follow bool) ([2]string, bool) {
 	})
 	for _, k := range found {
 		if k[1] != "" {
-			return k, true
+			return k, true, dup
 		}
 	}
-	return [2]string{}, false
+	return [2]string{}, false, dup
 }
 
 // eachMark calls f with the place within n, as readNodes reads it but with every list index left

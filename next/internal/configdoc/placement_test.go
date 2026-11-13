@@ -225,6 +225,14 @@ func TestRestorePlacesEachSecretInItsOwnSlot(t *testing.T) {
 				`"id": "b"`, `"id": "a"`}, 0},
 		{"json: two accounts' ids swapped", placeJSON, false,
 			[]string{`"id": "a"`, `"id": "x"`, `"id": "b"`, `"id": "a"`, `"id": "x"`, `"id": "b"`}, 0},
+		// Core's JSON reader takes the last of two keys that are the same name in any case, so
+		// an item with a placeholder may not have its id or name twice.
+		{"json: an account with its id twice", placeJSON, false,
+			[]string{`{"id": "a", `, `{"id": "a", "id": "zz", `}, 6},
+		{"json: an account with its id twice, in another case", placeJSON, false,
+			[]string{`{"id": "a", `, `{"id": "a", "ID": "zz", `}, 6},
+		{"yaml: an account with its id twice, in another case", placeYAML, true,
+			[]string{"    - id: a\n", "    - id: a\n      ID: zz\n"}, 6},
 		{"json: client keys reordered", placeJSON, false, []string{`["<c1>", "<c2>"]`, `["<c2>", "<c1>"]`}, 0},
 		{"json: registries reordered", placeJSON, false,
 			[]string{`[{"name": "one", "url": "<reg1>"}, {"name": "two", "url": "<reg2>"}]`, `[{"name": "two", "url": "<reg2>"}, {"name": "one", "url": "<reg1>"}]`}, 0},
