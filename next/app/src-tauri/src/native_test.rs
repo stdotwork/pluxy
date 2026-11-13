@@ -9,6 +9,8 @@
 //!    must be refused by Tauri's command check;
 //! 3. waits for the page's own report (it writes it into its settings through the channel);
 //! 4. in managed mode, checks this device's extension catalog (`device_native.rs`);
+//!    with `PLUXY_APP_TEST_ADMISSION`, a session checks only signed native-tier admission
+//!    (`admission_native.rs`) and quits;
 //! 5. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!
@@ -20,6 +22,9 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Webview};
 
+#[cfg(target_os = "linux")]
+#[path = "admission_native.rs"]
+mod admission;
 #[path = "device_native.rs"]
 mod device;
 #[path = "native_ingress.rs"]
@@ -143,6 +148,14 @@ fn run(app: &AppHandle) -> Result<(), String> {
     wait_for("the window's shell", || {
         eval(&main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true)
     })?;
+    // Signed native-tier admission (admission_native.rs), in a session of its own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_ADMISSION") {
+        admission::run(app, &main, dir.into())?;
+        log("quit", json!({}));
+        crate::quit(app);
+        return Ok(());
+    }
     let calls: Vec<&str> = COMMANDS
         .iter()
         .copied()
