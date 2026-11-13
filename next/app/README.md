@@ -116,7 +116,9 @@ A **core program** you name on the Connection page (or `pluxy` beside the app) i
 place. **Adopt this core program** shows its path, size and SHA-256 in the native confirmation;
 once confirmed, the app copies it into a version of its own, `custom-<its SHA-256>`, if it is
 still a regular file of that size and digest (at most 512 MiB; a FIFO or device is refused
-without being read), and runs the copy. An adopted program has no signature.
+without being read), and runs the copy. Only the program is copied, nothing beside it (such as
+`bundled/`), so an adopted core starts without the bundled packages a release brings. An adopted
+program has no signature.
 
 The app only ever stops the core process it started. A core it did not start, such as a system
 service or another core of yours on this computer, is never stopped or signalled.
