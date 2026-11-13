@@ -1274,7 +1274,8 @@ async fn device_rollback(webview: Webview, id: String) -> Result<device::View, S
         #[cfg(target_os = "linux")]
         {
             let swaps = {
-                let c = app.state::<App>().device.lock().unwrap();
+                let st = app.state::<App>();
+                let c = st.device.lock().unwrap();
                 c.get(&id)
                     .and_then(|p| p.last_good.as_ref())
                     .is_some_and(|r| c.swaps(&id, r))

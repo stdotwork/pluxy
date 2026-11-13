@@ -138,8 +138,8 @@ impl Catalog {
         Ok(s)
     }
 
-    /// A rollback of admitted native tool id to its last good release, as a swap, after
-    /// checking its files are unchanged.
+    /// A rollback of admitted native tool id to its last good release, as a swap. Check its
+    /// files with `Swap::verify`, without the catalog's lock.
     pub fn swap_rollback(&mut self, id: &str, roots: &dyn Roots) -> Result<Swap, String> {
         let p = self.swapping(id)?;
         let last = p
@@ -147,9 +147,7 @@ impl Catalog {
             .clone()
             .ok_or_else(|| format!("{id} has no earlier release to roll back to"))?;
         let source = p.source.clone();
-        let s = self.swap(id, last, source, true, roots)?;
-        s.verify()?;
-        Ok(s)
+        self.swap(id, last, source, true, roots)
     }
 
     /// Makes the swap's release active, enabled and admitted, as its native confirmation
