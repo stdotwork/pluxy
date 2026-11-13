@@ -7,7 +7,7 @@
 // `access: suite passed` when every check held.
 
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 
@@ -18,7 +18,8 @@ if (!bin || !fixtures) {
   process.exit(2);
 }
 const expect = JSON.parse(readFileSync(join(fixtures, "expect.json"), "utf8"));
-const data: string = expect.data;
+// The real path: the broker logs where each file it opened really is (/proc/self/fd).
+const data: string = realpathSync(expect.data);
 const STAGE_TIMEOUT = 300_000;
 
 let failed = 0;

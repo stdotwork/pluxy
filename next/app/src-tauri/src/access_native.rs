@@ -59,43 +59,24 @@ fn chooser_title(id: &str, resource: &str, folder: bool) -> String {
     )
 }
 
-/// Types path into the chooser titled title and accepts it.
+/// Types path into the chooser titled title and accepts it. The session has no recent files
+/// (run.ts), so a folder chooser opens in a folder, where the typed location is what it
+/// chooses. A folder is typed as `<folder>/`: text ending in a separator names that folder
+/// itself (gtkfilechooserentry.c `gtk_file_chooser_get_directory_for_text`), and with two
+/// subfolders starting with different letters (native/access.ts) the entry has no single
+/// completion to add to it.
 fn choose(title: &str, path: &Path, folder: bool) -> Result<(), String> {
     let id = wait_for(title, || window(title))?;
     x(&["windowfocus", "--sync", &id])?;
-    if folder {
-        // Once anything is recent (the file grant before it made it so), the portal's folder
-        // chooser opens in its Recent view. There a folder chooser's selection is only the rows
-        // chosen in the list, never the typed location, so "Select" stays insensitive and Return
-        // only accepts the entry's completion (GTK 3.24 gtkfilechooserwidget.c
-        // `gtk_file_chooser_widget_get_files`, gtkfilechooserdialog.c
-        // `file_chooser_widget_selection_changed`). Alt+Home opens the home folder instead: its
-        // selection is then that folder, "Select" can answer, and the typed folder is chosen.
-        x(&["key", "--clearmodifiers", "alt+Home"])?;
-        std::thread::sleep(Duration::from_millis(500));
-    }
     x(&["key", "--clearmodifiers", "ctrl+l"])?;
     std::thread::sleep(Duration::from_millis(300));
     let path = path.to_str().ok_or("fixture path is not UTF-8")?;
-    if folder {
-        // Typed as `<folder>/`, the entry names that folder itself (gtkfilechooserentry.c
-        // `gtk_file_chooser_get_directory_for_text`: text ending in a separator is its own
-        // folder; `<folder>/.` names its parent). But once the folder loads, the entry inserts
-        // its only subfolder as a selected inline completion (`finished_loading_cb`), as the tree
-        // grant once got `tree/inner`. After the load, Delete removes that selection, or does
-        // nothing at the end of the text; deleting inserts nothing, so nothing completes again.
-        x(&[
-            "type",
-            "--clearmodifiers",
-            "--delay",
-            "20",
-            &format!("{path}/"),
-        ])?;
-        std::thread::sleep(Duration::from_millis(1500));
-        x(&["key", "--clearmodifiers", "Delete"])?;
+    let typed = if folder {
+        format!("{path}/")
     } else {
-        x(&["type", "--clearmodifiers", "--delay", "20", path])?;
-    }
+        path.to_string()
+    };
+    x(&["type", "--clearmodifiers", "--delay", "20", &typed])?;
     std::thread::sleep(Duration::from_millis(300));
     x(&["key", "--clearmodifiers", "Return"])?;
     Ok(())
@@ -528,7 +509,12 @@ fn grant_stage(
     // A folder: it lists and reads inside, also through a link that stays inside; nothing
     // outside it is read, by `..`, an absolute path or a link that leaves it.
     let tree = data.join("tree");
-    grant(main, "example/files", "tree", &tree, true, Answer::Confirm)?;
+    let g = grant(main, "example/files", "tree", &tree, true, Answer::Confirm)?;
+    require(
+        g["grant"]["selected"] == tree.display().to_string()
+            && g["grant"]["target"] == tree.display().to_string(),
+        format!("the folder grant is of the typed folder: {g}"),
+    )?;
     let listing = channel(
         &files_page,
         "resources.list",
@@ -551,6 +537,7 @@ fn grant_stage(
                 (String::from("escape"), String::from("link")),
                 (String::from("inner"), String::from("folder")),
                 (String::from("inside"), String::from("link")),
+                (String::from("notes"), String::from("folder")),
                 (String::from("top.txt"), String::from("file")),
             ],
         format!("the granted folder's entries: {names:?}"),
@@ -788,7 +775,57 @@ fn grant_stage(
         "unavailable",
     )?;
 
-    // A newer release is not granted what 1.0.0 was.
+    // A reply that comes back after its page reloaded is dropped: the reloaded document is not
+    // the one that asked. Its positive control, the same read on the same page before the
+    // reload, answers.
+    let files_page = page(app, main, "device/example/files/files", &digest("files1"))?;
+    let top = json!({"resource": "tree", "path": "top.txt"});
+    reads(&files_page, top.clone(), &text("top"))?;
+    let tree_grant = grant_of(main, "example/files", "tree")?.ok_or("no tree grant")?;
+    let tree_grant = tree_grant["id"]
+        .as_str()
+        .ok_or("a grant without id")?
+        .to_string();
+    let _ = std::fs::remove_file(&held);
+    std::fs::write(&hold, "").map_err(|e| e.to_string())?;
+    let stale = send(&files_page, "resources.read", top.clone())?;
+    wait_for("the broker to hold the read", || {
+        held.exists().then_some(())
+    })?;
+    files_page
+        .eval("window.__beforeReload = true; location.reload()")
+        .map_err(|e| e.to_string())?;
+    wait_for("the page to load again", || {
+        (eval(
+            &files_page,
+            "window.__beforeReload === undefined && document.readyState === 'complete'",
+        ) == Some(json!(true)))
+        .then_some(())
+    })?;
+    files_page.eval(REPLIES).map_err(|e| e.to_string())?;
+    std::fs::remove_file(&hold).map_err(|e| e.to_string())?;
+    // The broker counts a read in flight until its answer went to the page (or was dropped).
+    wait_for("the held read to be answered", || {
+        (app.state::<crate::App>()
+            .access
+            .lock()
+            .unwrap()
+            .in_flight(&tree_grant)
+            == 0)
+            .then_some(())
+    })?;
+    // A delivered reply would arrive in the page a moment later: give it that moment.
+    std::thread::sleep(Duration::from_secs(1));
+    let after = eval(
+        &files_page,
+        &format!("window.__accessReplies?.[{}] ?? null", json!(stale)),
+    );
+    require(
+        after.as_ref().is_some_and(Value::is_null),
+        format!("the reloaded page got the earlier document's reply: {after:?}"),
+    )?;
+
+    // A newer release is not granted what 1.0.0 was; granted itself, it reads.
     install("signed", "example/files", "2.0.0")?;
     let files_page = page(app, main, "device/example/files/files", &digest("files2"))?;
     denied(
@@ -797,6 +834,8 @@ fn grant_stage(
         json!({"resource": "tree", "path": "top.txt"}),
         "not_granted",
     )?;
+    grant(main, "example/files", "tree", &tree, true, Answer::Confirm)?;
+    reads(&files_page, top.clone(), &text("top"))?;
 
     // Removing the package removes its grants; the same release from another source, with the
     // same ID, version, bytes and key, starts with no trust.
@@ -820,6 +859,23 @@ fn grant_stage(
         json!({"id": "example/files", "resource": "config"}),
         "signer",
     )?);
+    // The positive control on the same route: the mirror's signer approved for the mirror, the
+    // same grant is given and reads.
+    signer(main, "example/files", true)?;
+    grant(
+        main,
+        "example/files",
+        "config",
+        &link,
+        false,
+        Answer::Confirm,
+    )?;
+    let files_page = page(app, main, "device/example/files/files", &digest("files1"))?;
+    reads(
+        &files_page,
+        json!({"resource": "config"}),
+        &text("replaced"),
+    )?;
     let r = call(main, "access_list", json!({}))?;
     out["grants"] = r["value"]["grants"].clone();
     Ok(())
