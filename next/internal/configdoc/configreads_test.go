@@ -404,14 +404,15 @@ func TestRestoreCopyNeedsItsOriginal(t *testing.T) {
 }
 
 // A placeholder put where its secret's text, written back as it was, reads differently (a comma
-// inside a flow list or mapping) goes back quoted: the document is written out again rather than
-// refused, also when a copy of that secret stays in place.
+// inside a flow list) goes back quoted: the document is written out again rather than
+// refused, also when a copy of that secret stays in place. The secret moves from a block list
+// into a flow list of the same list, which the placement rule allows.
 func TestRestoreQuotesASecretTheFlowWouldSplit(t *testing.T) {
 	const key = "sk-aaaa,bbbb1234"
-	cur := "api-key: " + key + "\n"
+	cur := "access:\n  api-keys:\n    - " + key + "\n"
 	for _, tc := range []struct{ name, cur, edited, want string }{
-		{"a copy in place", cur + "note: " + key + "\n", "api-key: [P]\nnote: P\n", "api-key: [\"" + key + "\"]\nnote: \"" + key + "\"\n"},
-		{"each value counted", cur, "m: {api-key: P}\n", "m: {api-key: \"" + key + "\"}\n"},
+		{"a copy in place", cur + "note: " + key + "\n", "access:\n  api-keys: [P]\nnote: P\n", "access:\n  api-keys: [\"" + key + "\"]\nnote: \"" + key + "\"\n"},
+		{"each value counted", cur, "access:\n  api-keys: [P]\n", "access:\n  api-keys: [\"" + key + "\"]\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := NewRedactor()
