@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { type ErrorLogFile, type LogContent, problem } from "../api";
+import { useAccountLabels, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { strings } from "../strings";
 import {
@@ -84,6 +85,10 @@ function LogText({ content, wrap }: { content: string; wrap: boolean }) {
 
 export function LogsPage() {
   const { api, unauthorized } = useKit();
+  // Privacy mode masks what the views show; search, downloads and the files keep the real text.
+  const p = usePrivacy();
+  const labels = useAccountLabels();
+  const mask = (text: string | undefined) => p.text(text, labels);
   const files = useLoad(api.errorLogs);
   const [lines, setLines] = useState<string[]>([]);
   const [error, setError] = useState<string>();
@@ -234,7 +239,7 @@ export function LogsPage() {
         }
       />
       <Card title={t("content")}>
-        {error && <Notice tone="danger">{error}</Notice>}
+        {error && <Notice tone="danger">{mask(error)}</Notice>}
         {off && (
           <Notice tone="warn">
             {t("off")}{" "}
@@ -269,7 +274,7 @@ export function LogsPage() {
           {shown.length ? (
             shown.map((line, i) => (
               <div key={i} data-part="log-line" data-level={logLevel(line)}>
-                {line}
+                {mask(line)}
               </div>
             ))
           ) : (
@@ -297,7 +302,7 @@ export function LogsPage() {
         )}
       </Card>
       <Card title={t("errors")}>
-        {files.error && <Notice tone="danger">{files.error}</Notice>}
+        {files.error && <Notice tone="danger">{mask(files.error)}</Notice>}
         <MasterDetail
           list={
             files.loading ? (
@@ -311,7 +316,7 @@ export function LogsPage() {
                 id={(file) => file.name}
                 selected={selected}
                 columns={[
-                  { label: t("name"), value: (file) => file.name, mono: true },
+                  { label: t("name"), value: (file) => mask(file.name), mono: true },
                   { label: t("size"), value: (file) => t("bytes", { count: file.size }) },
                   { label: t("modified"), value: (file) => when(file.modified) },
                   {
@@ -343,13 +348,13 @@ export function LogsPage() {
                   setSelected(undefined);
                 }}
               >
-                <p class="mono">{selected}</p>
+                <p class="mono">{mask(selected)}</p>
                 {detailBusy && <Notice tone="muted">{t("loading")}</Notice>}
-                {detailError && <Notice tone="danger">{detailError}</Notice>}
+                {detailError && <Notice tone="danger">{mask(detailError)}</Notice>}
                 {detail && (
                   <>
                     <Button onClick={() => saveLog(detail.name, detail.content)}>{t("download")}</Button>
-                    <LogText content={detail.content} wrap={wrap} />
+                    <LogText content={mask(detail.content) ?? ""} wrap={wrap} />
                   </>
                 )}
               </Detail>
@@ -377,11 +382,11 @@ export function LogsPage() {
           <section data-part="card" aria-label={t("viewRequest", { id: requested })}>
             <h3>{t("viewRequest", { id: requested })}</h3>
             {requestBusy && <Notice tone="muted">{t("loading")}</Notice>}
-            {requestError && <Notice tone="danger">{requestError}</Notice>}
+            {requestError && <Notice tone="danger">{mask(requestError)}</Notice>}
             {request && (
               <>
                 <Button onClick={() => saveLog(request.name, request.content)}>{t("download")}</Button>
-                <LogText content={request.content} wrap={wrap} />
+                <LogText content={mask(request.content) ?? ""} wrap={wrap} />
               </>
             )}
           </section>

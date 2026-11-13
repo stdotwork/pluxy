@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { type Account, problem } from "../api";
 import { one } from "../api/path";
+import { usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { strings } from "../strings";
 import { Tabs } from "../tabs";
@@ -185,6 +186,9 @@ export function AccountsPage() {
   const fileInput = useRef<HTMLInputElement>(null);
   const [now, setNow] = useState(Date.now());
   const list = accounts.data?.accounts ?? [];
+  const p = usePrivacy();
+  // Notices name accounts by ID, with their labels masked inside when privacy mode is on.
+  const labels = list.map((a) => a.label);
   const chosen = list.find((a) => a.id === selected);
   const filtered = useMemo(() => filterAccounts(list, filters, now), [list, filters, now]);
   const total = Math.max(1, Math.ceil(filtered.length / perPage));
@@ -310,7 +314,7 @@ export function AccountsPage() {
           problem: t("problems", { count: list.filter((a) => hasProblem(a, now)).length }),
         })}
       </p>
-      {accounts.error && <Notice tone="danger">{accounts.error}</Notice>}
+      {accounts.error && <Notice tone="danger">{p.text(accounts.error, labels)}</Notice>}
       <Tabs
         label={t("providers")}
         active={filters.extension || "all"}
@@ -424,7 +428,7 @@ export function AccountsPage() {
             </Notice>
             {report.errors.map((error) => (
               <Notice key={error} tone="danger">
-                {error}
+                {p.text(error, labels)}
               </Notice>
             ))}
           </>
@@ -433,7 +437,7 @@ export function AccountsPage() {
           <div class="accounts-upload" data-part="upload-results">
             {uploads.map((u, i) => (
               <Notice key={i} tone={u.tone}>
-                {u.text}
+                {p.text(u.text, labels)}
               </Notice>
             ))}
           </div>
@@ -452,14 +456,14 @@ export function AccountsPage() {
                 selected={selected}
                 onSelect={setSelected}
                 columns={[
-                  { label: t("account"), value: (a) => a.id, mono: true },
+                  { label: t("account"), value: (a) => p.text(a.id, [a.label]), mono: true },
                   {
                     label: t("selectColumn"),
                     value: (a) => (
                       <input
                         type="checkbox"
                         data-part="select"
-                        aria-label={t("select", { id: a.id })}
+                        aria-label={t("select", { id: p.text(a.id, [a.label]) })}
                         checked={checked.has(a.id)}
                         disabled={busy}
                         onClick={(e) => e.stopPropagation()}
@@ -477,7 +481,7 @@ export function AccountsPage() {
                   },
                   { label: t("extension"), value: (a) => a.extension ?? "", mono: true },
                   { label: t("state"), value: (a) => <AccountState a={a} /> },
-                  { label: t("label"), value: (a) => a.label ?? "" },
+                  { label: t("label"), value: (a) => p.id(a.label) ?? "" },
                   { label: t("credential"), value: (a) => a.kind ?? "" },
                   {
                     label: t("from"),
@@ -486,7 +490,7 @@ export function AccountsPage() {
                   {
                     label: t("check"),
                     value: (a) => (
-                      <span title={a.check?.error?.message ?? a.check?.detail}>
+                      <span title={p.text(a.check?.error?.message ?? a.check?.detail, [a.label])}>
                         {a.check?.state === "ok"
                           ? t("ok")
                           : a.check?.state === "checking"
@@ -502,7 +506,7 @@ export function AccountsPage() {
                     value: (a) =>
                       coolingUntil(a) > now ? t("cooling", { time: coolingTime(coolingUntil(a), now) }) : "",
                   },
-                  { label: t("lastError"), value: (a) => a.last_error?.message ?? "" },
+                  { label: t("lastError"), value: (a) => p.text(a.last_error?.message, [a.label]) ?? "" },
                   { label: t("requests"), value: (a) => a.active_requests ?? 0 },
                 ]}
               />

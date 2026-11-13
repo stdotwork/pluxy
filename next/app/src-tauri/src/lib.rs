@@ -27,6 +27,7 @@ pub mod managed;
 mod native_test;
 pub mod pages;
 mod place;
+mod privacy;
 #[cfg(debug_assertions)]
 pub mod release_config;
 mod startup;
@@ -355,6 +356,29 @@ fn window_view(app: &AppHandle) -> window::View {
             .close_behavior,
         tray: usable_tray(app).is_ok(),
     }
+}
+
+fn privacy_file(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    Ok(app
+        .path()
+        .app_config_dir()
+        .map_err(|e| e.to_string())?
+        .join(privacy::FILE))
+}
+
+/// Whether privacy mode is on (`privacy.rs`).
+#[tauri::command]
+async fn privacy_get(webview: Webview) -> Result<bool, String> {
+    trusted(&webview)?;
+    Ok(privacy::load(&privacy_file(webview.app_handle())?))
+}
+
+/// Saves privacy mode; only the window's own toggle calls it.
+#[tauri::command]
+async fn privacy_set(webview: Webview, on: bool) -> Result<bool, String> {
+    trusted(&webview)?;
+    privacy::save(&privacy_file(webview.app_handle())?, on)?;
+    Ok(on)
 }
 
 #[tauri::command]
@@ -1267,6 +1291,8 @@ pub fn run() {
             window_get,
             window_set,
             window_close,
+            privacy_get,
+            privacy_set,
         ])
         .register_asynchronous_uri_scheme_protocol(pages::SCHEME, page_scheme)
         .register_asynchronous_uri_scheme_protocol(device::ASSET_SCHEME, asset_scheme)

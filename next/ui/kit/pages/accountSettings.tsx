@@ -4,6 +4,7 @@
 
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { Account } from "../api";
+import { usePrivacy } from "../privacy";
 import { guardLeave } from "../shell";
 import { strings } from "../strings";
 import { Button, Choices, Facts, Notice, Switch, useAction, useKit } from "../ui";
@@ -100,13 +101,15 @@ const modelText = (entries: Account["models"]) => pairs(entries?.map(modelRow));
 /** The account's routing fields and settings, read-only. */
 export function AccountSettings(props: { account: Account }) {
   const a = props.account;
+  const p = usePrivacy();
+  const ids = [a.label];
   const flag = (v?: boolean) => (v === undefined ? undefined : v ? t("on") : t("off"));
   return (
     <section class="stack" data-part="account-settings" aria-label={t("heading")}>
       <h3>{t("heading")}</h3>
       <Facts
         rows={[
-          [t("prefix"), a.prefix],
+          [t("prefix"), p.text(a.prefix, ids)],
           [t("priority"), a.priority ?? 0],
           [t("weight"), a.weight],
           [t("disableCooling"), flag(a.disable_cooling)],
@@ -117,7 +120,9 @@ export function AccountSettings(props: { account: Account }) {
           [t("aliases"), pairs(a.model_alias)],
           [
             t("settings"),
-            a.settings && <pre class="mono account-settings-json">{JSON.stringify(a.settings, null, 2)}</pre>,
+            a.settings && (
+              <pre class="mono account-settings-json">{p.text(JSON.stringify(a.settings, null, 2), ids)}</pre>
+            ),
           ],
         ]}
       />
@@ -176,6 +181,7 @@ export function AccountEdit(props: { account: Account; onChanged: () => void; di
 
 function EditForm(props: { account: Account; close: () => void; saved: () => void }) {
   const { api } = useKit();
+  const p = usePrivacy();
   const a = props.account;
   const [draft, setDraft] = useState<SettingsDraft>(() => draftOf(a));
   const [invalid, setInvalid] = useState<InvalidField>();
@@ -205,7 +211,10 @@ function EditForm(props: { account: Account; close: () => void; saved: () => voi
   const models = rows(draft.models, (l) => set("models", l));
   const aliases = rows(draft.aliases, (l) => set("aliases", l));
   return (
-    <ConfigDialog title={t("editTitle", { name: a.id })} close={() => !save.busy && ask(props.close)}>
+    <ConfigDialog
+      title={t("editTitle", { name: p.text(a.id, [a.label]) })}
+      close={() => !save.busy && ask(props.close)}
+    >
       <form
         class="stack account-edit"
         data-part="account-edit"
@@ -414,7 +423,7 @@ function EditForm(props: { account: Account; close: () => void; saved: () => voi
           </label>
         </fieldset>
         {(invalid || save.error) && (
-          <Notice tone="danger">{invalid ? t(`invalid_${invalid}`) : save.error}</Notice>
+          <Notice tone="danger">{invalid ? t(`invalid_${invalid}`) : p.text(save.error, [a.label])}</Notice>
         )}
         {leave ? (
           <div

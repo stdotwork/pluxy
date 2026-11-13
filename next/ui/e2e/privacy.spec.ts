@@ -83,6 +83,7 @@ const names = (page: Page) =>
   );
 
 const shown = async (page: Page) =>
+  // biome-ignore lint/performance/useDomNodeTextContent: the rendered text is what the person sees
   `${await page.locator("body").innerText()}\n${(await names(page)).join("\n")}`;
 
 async function expectMasked(page: Page) {

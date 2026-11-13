@@ -2,6 +2,7 @@
 
 import { render } from "preact";
 import { corePages } from "../kit/pages/core";
+import { prefsPrivacy } from "../kit/privacy";
 import { Shell } from "../kit/shell";
 import { ThemeState } from "../kit/theme/state";
 import defaultTheme from "../themes/default.json";
@@ -11,6 +12,7 @@ import { browserHost } from "./browserHost";
 
 const host = browserHost();
 const themes = new ThemeState(host, document, [defaultTheme, terminal, paper]);
+const privacy = prefsPrivacy(host);
 
 // ?safe turns safe mode on and keeps it on, for when custom CSS hides the Themes page's switch.
 const url = new URL(location.href);
@@ -20,4 +22,7 @@ if (url.searchParams.has("safe")) {
   history.replaceState(null, "", url);
 }
 
-render(<Shell host={host} themes={themes} pages={corePages()} extensionPages />, document.body);
+render(
+  <Shell host={host} themes={themes} privacy={privacy} pages={corePages()} extensionPages />,
+  document.body,
+);

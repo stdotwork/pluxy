@@ -48,7 +48,7 @@ export function connect(options = {}) {
   });
 }
 
-/** Sets a theme snapshot's tokens and layout on root, as the panel does on its own. */
+/** Sets a theme snapshot's tokens, layout and privacy mode on root, as the panel does on its own. */
 export function applyTheme(theme, root = document.documentElement) {
   if (!theme || typeof theme !== "object") return;
   for (const [name, value] of Object.entries(theme.tokens ?? {})) {
@@ -59,6 +59,7 @@ export function applyTheme(theme, root = document.documentElement) {
     root.style.colorScheme = theme.appearance;
   }
   for (const [option, value] of Object.entries(theme.layout ?? {})) root.dataset[option] = String(value);
+  if (typeof theme.privacy === "boolean") root.dataset.privacy = theme.privacy ? "on" : "off";
 }
 
 export class PluxyPage {

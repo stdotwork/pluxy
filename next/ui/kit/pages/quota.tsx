@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { type Account, problem, type Quota, type QuotaLimit, type QuotaReply } from "../api";
 import { Meter } from "../meter";
+import { usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { rich, strings } from "../strings";
 import { Button, Empty, Facts, List, Notice, PageHead, useKit, useLoad, when } from "../ui";
@@ -145,6 +146,7 @@ interface QuotaState {
 }
 
 function QuotaBody({ state, refresh, disabled }: { state?: QuotaState; refresh(): void; disabled: boolean }) {
+  const p = usePrivacy();
   return (
     <section class="card quota-body" data-part="card" aria-busy={state?.busy ?? false}>
       <div>
@@ -153,7 +155,7 @@ function QuotaBody({ state, refresh, disabled }: { state?: QuotaState; refresh()
         </Button>
       </div>
       {state?.busy && <Notice tone="muted">{t("loading")}</Notice>}
-      {state?.error && <Notice tone="danger">{state.error}</Notice>}
+      {state?.error && <Notice tone="danger">{p.text(state.error)}</Notice>}
       {state?.data ? (
         <>
           <QuotaSummary data={state.data} />
@@ -174,6 +176,7 @@ function QuotaBody({ state, refresh, disabled }: { state?: QuotaState; refresh()
 
 export function QuotaPage() {
   const { api, unauthorized } = useKit();
+  const p = usePrivacy();
   const accounts = useLoad(api.accounts);
   const [states, setStates] = useState<Record<string, QuotaState>>({});
   const [search, setSearch] = useState("");
@@ -244,7 +247,7 @@ export function QuotaPage() {
           </Button>
         }
       />
-      {accounts.error && <Notice tone="danger">{accounts.error}</Notice>}
+      {accounts.error && <Notice tone="danger">{p.text(accounts.error)}</Notice>}
       <div class="quota-controls">
         <label class="field" data-part="field">
           <span class="label">{t("search")}</span>
@@ -275,9 +278,9 @@ export function QuotaPage() {
               label: t("account"),
               value: (a) => (
                 <>
-                  {a.id}
+                  {p.text(a.id, [a.label])}
                   <small class="quota-identity muted">
-                    {a.label}
+                    {p.id(a.label)}
                     {a.extension && <> · {a.extension}</>}
                   </small>
                 </>

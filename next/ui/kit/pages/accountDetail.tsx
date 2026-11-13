@@ -2,6 +2,7 @@
 // AccountDetailProps and nothing else; it uses AccountState for its own state column.
 
 import type { Account } from "../api";
+import { usePrivacy } from "../privacy";
 import { strings } from "../strings";
 import {
   Badge,
@@ -57,29 +58,31 @@ export interface AccountDetailProps {
 
 export function AccountDetail(props: AccountDetailProps) {
   const { api } = useKit();
+  const p = usePrivacy();
   const a = props.account;
+  const ids = [a.label];
   const act = useAction(props.onChanged);
   const remove = useAction(() => {
     props.onClose();
     props.onChanged();
   });
   return (
-    <Detail title={a.id} onClose={props.onClose}>
+    <Detail title={p.text(a.id, ids)} onClose={props.onClose}>
       <Facts
         rows={[
           [t("state"), <AccountState a={a} />],
           [t("extension"), a.extension && <span class="mono">{a.extension}</span>],
-          [t("label"), a.label],
+          [t("label"), p.id(a.label)],
           [t("credential"), a.kind],
           [t("comesFrom"), a.source === "config" ? t("fromConfig") : t("fromLogin")],
-          [t("needsLogin"), a.reason],
+          [t("needsLogin"), p.text(a.reason, ids)],
           [t("expires"), when(a.expires_at)],
-          [t("renewalFailed"), a.renewal_error?.message],
+          [t("renewalFailed"), p.text(a.renewal_error?.message, ids)],
           [t("added"), when(a.created_at)],
           [t("changed"), when(a.updated_at)],
         ]}
       />
-      {(act.error ?? remove.error) && <Notice tone="danger">{act.error ?? remove.error}</Notice>}
+      {(act.error ?? remove.error) && <Notice tone="danger">{p.text(act.error ?? remove.error, ids)}</Notice>}
       {a.source === "config" ? (
         <p class="muted">{t("setInConfig")}</p>
       ) : (

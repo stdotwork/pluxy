@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { type Account, problem } from "../api";
 import type { CoreSettings } from "../api/settings";
 import type { Reply } from "../host";
+import { usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { strings } from "../strings";
 import { Badge, Button, Card, Empty, List, Notice, PageHead, useKit } from "../ui";
@@ -137,12 +138,13 @@ function coolingTime(account: Account): string | undefined {
       : t("seconds", { count: seconds });
 }
 function WeightEditor({ account, save }: { account: Account; save: (weight: number | null) => void }) {
+  const p = usePrivacy();
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState("");
   // Set once the editor is done with its value, so the blur that follows removing the input cannot save again.
   const closed = useRef(true);
   const refocus = useRef("");
-  const name = t("setWeightFor", { id: account.id });
+  const name = t("setWeightFor", { id: p.text(account.id, [account.label]) });
   useEffect(() => {
     if (editing || !refocus.current) return;
     focusByKey(refocus.current);
@@ -201,6 +203,7 @@ function WeightEditor({ account, save }: { account: Account; save: (weight: numb
 }
 export function RoutingPage() {
   const { api, unauthorized } = useKit();
+  const p = usePrivacy();
   const [settings, setSettings] = useState<CoreSettings>();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [busy, setBusy] = useState(true);
@@ -320,7 +323,14 @@ export function RoutingPage() {
           </Button>
         }
       />
-      {error && <Notice tone="danger">{error}</Notice>}
+      {error && (
+        <Notice tone="danger">
+          {p.text(
+            error,
+            accounts.map((a) => a.label),
+          )}
+        </Notice>
+      )}
       {!settings ? (
         <Notice tone="muted">{t("loading")}</Notice>
       ) : (
@@ -344,9 +354,9 @@ export function RoutingPage() {
                         label: t("account"),
                         value: (a) => (
                           <>
-                            {a.id}
+                            {p.text(a.id, [a.label])}
                             <small class="routing-identity muted">
-                              {a.label}
+                              {p.id(a.label)}
                               {a.extension && <> · {a.extension}</>}
                             </small>
                             {a.source === "config" && <Badge tone="muted">{t("config")}</Badge>}
@@ -384,7 +394,9 @@ export function RoutingPage() {
                               <Button
                                 key={direction}
                                 disabled={a.source === "config" || !canMove(tiers, tier.priority, direction)}
-                                label={t(direction === "up" ? "upFor" : "downFor", { id: a.id })}
+                                label={t(direction === "up" ? "upFor" : "downFor", {
+                                  id: p.text(a.id, [a.label]),
+                                })}
                                 onClick={() => {
                                   const priority = movePriority(tiers, tier.priority, direction);
                                   run(() => api.changeAccountRouting(a.id, { priority }));
