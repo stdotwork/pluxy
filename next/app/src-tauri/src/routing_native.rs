@@ -49,7 +49,7 @@ const GUIDE: &str = "pluxy/guide";
 const VIEWER: &str = "example/hub-viewer";
 
 /// Whether a native confirmation is showing now.
-fn showing() -> bool {
+pub(super) fn showing() -> bool {
     super::admission::x(&[
         "search",
         "--onlyvisible",
@@ -105,7 +105,7 @@ fn asked(
 }
 
 /// Enables native tool id through its confirmation, confirmed; returns the confirmation's text.
-fn enable(app: &AppHandle, main: &Webview, id: &str) -> Result<String, String> {
+pub(super) fn enable(app: &AppHandle, main: &Webview, id: &str) -> Result<String, String> {
     let (text, slot) = asked(
         app,
         main,
@@ -118,7 +118,12 @@ fn enable(app: &AppHandle, main: &Webview, id: &str) -> Result<String, String> {
     Ok(text)
 }
 
-fn install(main: &Webview, registry: &str, id: &str, version: &str) -> Result<(), String> {
+pub(super) fn install(
+    main: &Webview,
+    registry: &str,
+    id: &str,
+    version: &str,
+) -> Result<(), String> {
     ok(
         main,
         "device_install",
@@ -128,7 +133,7 @@ fn install(main: &Webview, registry: &str, id: &str, version: &str) -> Result<()
 }
 
 /// The window's call of op of package with input: `{ok, value}` or `{ok: false, error}`.
-fn call(main: &Webview, package: &str, op: &str, input: Value) -> Result<Value, String> {
+pub(super) fn call(main: &Webview, package: &str, op: &str, input: Value) -> Result<Value, String> {
     let slot = start(
         main,
         "program_call",
@@ -166,7 +171,7 @@ fn package_view(main: &Webview, id: &str) -> Result<Value, String> {
 
 /// A page of package id, opened in the window, with its channel up. The window opens its webview
 /// and answers its hello, as it does for the person; it shows one page at a time.
-struct Page {
+pub(super) struct Page {
     app: AppHandle,
     label: String,
     wv: Webview,
@@ -174,7 +179,7 @@ struct Page {
 }
 
 impl Page {
-    fn open(app: &AppHandle, main: &Webview, id: &str) -> Result<Page, String> {
+    pub(super) fn open(app: &AppHandle, main: &Webview, id: &str) -> Result<Page, String> {
         let route = format!("device/{id}/page");
         wait_for(&format!("{route} in the navigation"), || {
             eval(
@@ -239,13 +244,18 @@ impl Page {
         })
     }
 
-    fn call(&mut self, package: &str, op: &str, input: Value) -> Result<Value, String> {
+    pub(super) fn call(&mut self, package: &str, op: &str, input: Value) -> Result<Value, String> {
         let id = self.send(package, op, input)?;
         self.reply(&id)
     }
 
+    /// The page's webview.
+    pub(super) fn webview(&self) -> &Webview {
+        &self.wv
+    }
+
     /// Leaves the page in the window, which closes its webview.
-    fn close(self, main: &Webview) -> Result<(), String> {
+    pub(super) fn close(self, main: &Webview) -> Result<(), String> {
         main.eval("location.hash = '#/device'")
             .map_err(|e| e.to_string())?;
         wait_for(&format!("{} to close", self.label), || {
