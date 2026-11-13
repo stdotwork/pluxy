@@ -59,39 +59,21 @@ fn chooser_title(id: &str, resource: &str, folder: bool) -> String {
     )
 }
 
-/// Diagnostic (temporary): logs the whole X screen as base64 PNG, and the focused window.
-fn shot(main: &Webview, stage: &str) {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let _ = main.app_handle().run_on_main_thread(move || {
-        let png = (|| -> Result<Vec<u8>, String> {
-            use gtk::gdk::{self, prelude::*};
-            let root = gdk::Window::default_root_window();
-            let pixbuf = root
-                .pixbuf(0, 0, root.width(), root.height())
-                .ok_or("the screen could not be read")?;
-            pixbuf
-                .save_to_bufferv("png", &[])
-                .map_err(|e| e.to_string())
-        })();
-        let _ = tx.send(png);
-    });
-    use base64::Engine;
-    let png = match rx.recv_timeout(Duration::from_secs(10)) {
-        Ok(Ok(b)) => base64::engine::general_purpose::STANDARD.encode(b),
-        Ok(Err(e)) => e,
-        Err(e) => e.to_string(),
-    };
-    let focus = x(&["getwindowfocus", "getwindowname"]).unwrap_or_else(|e| e);
-    log(
-        "access_screenshot",
-        json!({"stage": stage, "focus": focus.trim(), "png": png}),
-    );
-}
-
 /// Types path into the chooser titled title and accepts it.
-fn choose(title: &str, path: &Path, shoot: Option<&Webview>) -> Result<(), String> {
+fn choose(title: &str, path: &Path, folder: bool) -> Result<(), String> {
     let id = wait_for(title, || window(title))?;
     x(&["windowfocus", "--sync", &id])?;
+    if folder {
+        // Once anything is recent (the file grant before it made it so), the portal's folder
+        // chooser opens in its Recent view. There a folder chooser's selection is only the rows
+        // chosen in the list, never the typed location, so "Select" stays insensitive and Return
+        // only accepts the entry's completion (GTK 3.24 gtkfilechooserwidget.c
+        // `gtk_file_chooser_widget_get_files`, gtkfilechooserdialog.c
+        // `file_chooser_widget_selection_changed`). Alt+Home opens the home folder instead: its
+        // selection is then that folder, "Select" can answer, and the typed folder is chosen.
+        x(&["key", "--clearmodifiers", "alt+Home"])?;
+        std::thread::sleep(Duration::from_millis(500));
+    }
     x(&["key", "--clearmodifiers", "ctrl+l"])?;
     std::thread::sleep(Duration::from_millis(300));
     x(&[
@@ -102,14 +84,7 @@ fn choose(title: &str, path: &Path, shoot: Option<&Webview>) -> Result<(), Strin
         path.to_str().ok_or("fixture path is not UTF-8")?,
     ])?;
     std::thread::sleep(Duration::from_millis(300));
-    if let Some(main) = shoot {
-        shot(main, "typed");
-    }
     x(&["key", "--clearmodifiers", "Return"])?;
-    if let Some(main) = shoot {
-        std::thread::sleep(Duration::from_secs(2));
-        shot(main, "after_return");
-    }
     Ok(())
 }
 
@@ -139,7 +114,7 @@ fn grant(
     if answer == Answer::CancelChooser {
         key(&title, "Escape")?;
     } else {
-        choose(&title, path, folder.then_some(main))?;
+        choose(&title, path, folder)?;
         key(
             CONFIRMATION,
             if answer == Answer::Confirm {
