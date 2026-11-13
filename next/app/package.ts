@@ -47,7 +47,7 @@ import { appImageHeader, type Pin, pinnedBytes, runtimeBytes } from "./native/ap
 
 const app = import.meta.dir;
 const tauriDir = join(app, "src-tauri");
-const targetDir = resolve(tauriDir, process.env.CARGO_TARGET_DIR ?? "target");
+const targetDir = resolve(tauriDir, process.env.CARGO_TARGET_DIR || "target");
 const tauri = join(app, "node_modules", ".bin", "tauri");
 const version: string = JSON.parse(readFileSync(join(tauriDir, "tauri.conf.json"), "utf8")).version;
 
@@ -112,7 +112,7 @@ function isolatedEnv(work: string, runtime: string, callerCargo: string): Record
     XDG_DATA_HOME: join(work, "data"),
     TMPDIR: join(work, "tmp"),
     CARGO_HOME: join(work, "cargo"),
-    RUSTUP_HOME: process.env.RUSTUP_HOME ?? join(homedir(), ".rustup"),
+    RUSTUP_HOME: process.env.RUSTUP_HOME || join(homedir(), ".rustup"),
     CARGO_TARGET_DIR: targetDir,
     CARGO_NET_OFFLINE: "true",
     LDAI_RUNTIME_FILE: runtime,
