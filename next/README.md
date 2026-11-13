@@ -1699,7 +1699,7 @@ its keys and its indent. `PUT /config` writes the document as sent.
 | --- | --- |
 | `GET /v0/management/config` | The config file: `format` (`json` or `yaml`), `hash` (as in status) and `content`, the file as written with each secret replaced by a placeholder such as `pluxy-redacted-4f1c...`. Secrets are found by key name, in both layouts of a `config.yaml` and in the JSON config: client keys, the management key, every `api-key` and `api_key`, everything in an account's `credential` except its `kind`, passwords, tokens and secrets (names are compared in lower case whatever joins their words, or none, so `accessToken` and `accesstoken` are `access_token`; `aws_secret_access_key` is one too), header values about authentication (`Authorization`, `X-Api-Key`, cookies) in any mapping named `headers` or ending in `headers` (`extra_headers`), and any URL with a user name, password or query. Everything below a key named like a secret is a secret, however deep, also when given through a YAML alias (as a value, or as a key's name), as `GET /accounts` shows a login account's settings, except in today's core's provider sections at the top of a `config.yaml` (the sections of the v8 `api-keys` mapping, such as `codex`, and the older lists such as `codex-api-key`), whose entries are read by these rules; any other key of the v8 `api-keys` mapping is read as a secret key; `true`, `false`, `null` and the empty string never are, as they carry no secret. Comments are shown as written. 422 when the file does not parse. Today's core returns its config, the management key's hash and provider keys included, as they are. |
 | `POST /v0/management/config/validate` | `{"content": "..."}`: checks a document as a reload would, without starting extensions or writing anything. 200 with `valid: true` and the `notices` a `config.yaml` load logs, or `valid: false` and `error`. |
-| `PUT /v0/management/config` | `{"content": "...", "base_hash": "..."}`: replaces the file with the document and applies it. 200 with the file as `GET /config` shows it; 409 when `base_hash` is set and the file has changed since; 422 with `error` when core refuses the document. |
+| `PUT /v0/management/config` | `{"content": "...", "base_hash": "..."}`: replaces the file with the document and applies it. Each placeholder goes back only where its own secret is in the file now: the same account (by its `id`) or list item, and the same keys (below). 200 with the file as `GET /config` shows it; 409 when `base_hash` is set and the file has changed since; 422 with `error` when core refuses the document, such as for a placeholder anywhere else, naming its line; a refused document writes nothing. |
 | `GET /v0/management/client-keys` | The client keys: each one's `id` and `masked` form (first and last two characters, as today's panel shows them; a key shorter than 8 characters is hidden whole). |
 | `POST /v0/management/client-keys` | Adds a new random client key (`sk-` and 26 random characters). 201 with the key's `id` and `masked` form and its `value`, which no later call shows. |
 | `DELETE /v0/management/client-keys/{id}` | Removes the client key. 204; 404 when no key has the ID; 409 for the last key, since core refuses a config without client keys. |
@@ -1711,15 +1711,27 @@ its keys and its indent. `PUT /config` writes the document as sent.
 In the document, a placeholder stands for the secret it replaced, so a document read with `GET
 /config`, edited and sent back keeps its secrets: core puts each one back from the file as it is
 now. A secret that is not a string has its type in its placeholder, so the number `1234` and the
-string `"1234"` have different placeholders and each goes back as it was written, wherever it is
-moved; one written with an explicit YAML tag (`!!int 0x1F`, `!!binary ...`) goes back with its tag. To change a secret, write the new value in its place. A placeholder is accepted only where a
-secret goes, and only while the file still holds that secret and core has not restarted (the
-placeholders are keyed hashes with a key core picks at start); otherwise the call answers 409
-(read the config again) or refuses the document. Messages in replies never show a secret either,
-however short, except a value shorter than 8 bytes that is a secret only for being in a mapping
-below a secret key (the `3` of `client_secret: {rotate_after_days: 3}`), which is left in text
-as a short secret of account settings is: replacing every occurrence of so short a value would
-garble the message.
+string `"1234"` have different placeholders and each goes back as it was written; one written
+with an explicit YAML tag (`!!int 0x1F`, `!!binary ...`) goes back with its tag. To change a
+secret, write the new value in its place. A placeholder goes back only where its own secret is
+in the file now: at the same keys (the management key, a client key, a registry's URL), and in a
+list, in the same item. An item is known by its `id` (an account), or else by its `name` (a
+registry, a named provider entry of a `config.yaml`), so items can be reordered. An item whose
+`id` or `name` the file does not have yet (a renamed account), or that has neither (an entry of
+an older list such as `codex-api-key`, a key of an entry), is known by the secrets it holds: it
+stands for an item of the file that holds them all and that no other item stands for. A plain
+value in a list, such as a client key, may move within its list. So a placeholder cannot take
+one account's key, the management key or a client key into another account, another entry, a
+header or another setting: core refuses the document, naming the line, and the value must be
+written there itself. One limit: an account keeps its key's placeholder when its `base_url`
+changes, here or through `PATCH /accounts/{id}`, so a client that may change an account may
+point its kept key at another address. A placeholder is accepted only while the file still holds
+that secret and core has not restarted (the placeholders are keyed hashes with a key core picks
+at start); otherwise the call answers 409 (read the config again). Messages in replies never
+show a secret either, however short, except a value shorter than 8 bytes that is a secret only
+for being in a mapping below a secret key (the `3` of `client_secret: {rotate_after_days: 3}`),
+which is left in text as a short secret of account settings is: replacing every occurrence of so
+short a value would garble the message.
 
 A `config.yaml` keeps each setting under the name it already has there: the v8 name, or the
 older spelling when only that is in the file. New client keys go to `access.api-keys`, or to the

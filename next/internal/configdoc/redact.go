@@ -600,9 +600,11 @@ func eachScalar(n *yaml.Node, f func(*yaml.Node)) {
 }
 
 // Restore returns an edited document with each placeholder replaced by the secret it stands
-// for in current, the config file as it is now. A placeholder may only be where a secret
-// goes; one that matches no secret in current is an ErrStale. A document without placeholders
-// comes back as it is.
+// for in current, the config file as it is now. A placeholder goes back only where its own
+// secret is in current: at the same keys, and in a list item, in the item of current it stands
+// for (slots), so a secret never moves to another account, another provider entry or another
+// setting. One that matches no secret in current is an ErrStale. A document without
+// placeholders comes back as it is.
 func (r *Redactor) Restore(edited, current []byte, isYAML bool) ([]byte, error) {
 	return r.restore(edited, current, isYAML, false)
 }
@@ -633,20 +635,26 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 		return edited, nil
 	}
 	// Each placeholder goes back as the secret's text in current, so it keeps its quotes, or
-	// in JSON its type. In settings, it goes back only where the secret is in current (paths).
-	// Two secrets of current may share a placeholder (a header's 1234 and "1234" are the same
-	// header text): a placeholder goes back as the one where it is, else as the first.
+	// in JSON its type. It goes back only where its secret is in current (paths; in a config
+	// file, slots), so no one who can edit the file but not read its secrets can put a secret
+	// where core would send it somewhere else. Two secrets of current may share a placeholder (a
+	// header's 1234 and "1234" are the same header text): a placeholder goes back as the one
+	// where it is.
 	type secret struct {
 		value, tag, text string
 		tagged           bool               // written with an explicit tag, which must go back with it
 		paths            map[string]*secret // where the placeholder's secrets are, and which is there
 	}
 	values := map[string]*secret{}
+	var curWhere map[*yaml.Node]string
+	curMarks := map[*yaml.Node]string{} // the placeholder of each secret of current
 	if cur, err := Parse(current, isYAML); err == nil {
 		where := paths(cur.root)
+		curWhere = where
 		nodes, texts, _ := found(cur.root, settings)
 		for _, n := range nodes {
 			p := r.placeholderOf(n, texts)
+			curMarks[n] = p
 			this := &secret{value: n.Value, tag: n.Tag, tagged: n.Style&yaml.TaggedStyle != 0}
 			if sp, ok := cur.span(n); ok {
 				this.text = string(cur.src[sp.start:sp.end])
@@ -666,25 +674,30 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 	for _, n := range secrets(d.root, settings) {
 		allowed[n] = true
 	}
+	// In a config file, a list item stands for the item of current it is paired with (slots).
 	where := paths(d.root)
+	if !settings {
+		marks := map[*yaml.Node]string{}
+		for _, n := range held {
+			marks[n] = n.Value
+		}
+		where = slots(d.root, curWhere, marks, curMarks)
+	}
 	repl := map[*yaml.Node]*secret{}
 	for _, n := range held {
 		s, ok := values[n.Value]
 		switch {
-		case settings && ok && s.paths[where[n]] == nil:
+		case ok && s.paths[where[n]] == nil:
 			return nil, fmt.Errorf("%w: line %d: a redacted value is not where its secret is; write the value itself there", ErrInvalid, d.line(n))
 		case settings && !allowed[n],
-			// A URL that is a secret is one wherever it is, so in a config file its placeholder
-			// may go anywhere.
-			!settings && !allowed[n] && !(ok && secretURL(s.value)):
+			// A URL that is a secret is one by its value, which its placeholder does not show,
+			// so in a config file it goes back where it is (above) whatever its key.
+			!settings && !allowed[n] && !ok:
 			return nil, fmt.Errorf("%w: line %d: a redacted value is where no secret goes; write the value itself there", ErrInvalid, d.line(n))
 		case !ok:
 			return nil, fmt.Errorf("line %d: %w", d.line(n), ErrStale)
 		}
-		if at := s.paths[where[n]]; at != nil {
-			s = at
-		}
-		repl[n] = s
+		repl[n] = s.paths[where[n]]
 	}
 	want := map[string]int{}
 	texts := map[*yaml.Node]string{}
@@ -752,6 +765,179 @@ func paths(root *yaml.Node) map[*yaml.Node]string {
 	}
 	walk(root, "")
 	return out
+}
+
+// slots is paths for a config document sent back, edited, written as the places of current, the
+// config file as it is now (curWhere, its paths), so that a placeholder goes back only where its
+// own secret is in current. A list item that is not a scalar stands for the item of current's
+// list at the same place it is paired with (pairItems), and for none ([new]) when it is paired
+// with none: an account or a provider entry keeps its secrets when it moves within its list, and
+// a secret never goes back in another. marks and curMarks are the placeholders edited holds and
+// the placeholder of each secret of current.
+func slots(edited *yaml.Node, curWhere map[*yaml.Node]string, marks, curMarks map[*yaml.Node]string) map[*yaml.Node]string {
+	lists := map[string]*yaml.Node{}
+	for n, at := range curWhere {
+		if n.Kind == yaml.SequenceNode {
+			lists[at] = n
+		}
+	}
+	out := map[*yaml.Node]string{}
+	var walk func(n *yaml.Node, at string)
+	walk = func(n *yaml.Node, at string) {
+		out[n] = at
+		switch n.Kind {
+		case yaml.MappingNode:
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				walk(n.Content[i+1], at+"."+strconv.Quote(keyName(n.Content[i])))
+			}
+		case yaml.SequenceNode:
+			paired := pairItems(n, lists[at], marks, curMarks)
+			for i, c := range n.Content {
+				switch {
+				case c.Kind == yaml.ScalarNode:
+					walk(c, at+"[]")
+				case paired[i] >= 0:
+					walk(c, at+"["+strconv.Itoa(paired[i])+"]")
+				default:
+					walk(c, at+"[new]")
+				}
+			}
+		}
+	}
+	walk(edited, "")
+	return out
+}
+
+// pairItems pairs each item of edited, a list, that is not a scalar with an item of current, the
+// list at the same place in the config file as it is now, or with none (-1); no two with the same
+// one. An item with an id, or else a name (an account's id; a provider entry's or a registry's
+// name), is paired with the item of current that has the same one, so a secret never goes back
+// in an item that has another's id or name. An item whose id or name current does not have (a
+// renamed account), or that has neither (a provider entry of a config.yaml, a key of its
+// entry), is paired by the secrets it holds: with an item that no other is paired with and holds,
+// at the same keys, a secret of each of its placeholders.
+func pairItems(edited, current *yaml.Node, marks, curMarks map[*yaml.Node]string) []int {
+	out := make([]int, len(edited.Content))
+	for i := range out {
+		out[i] = -1
+	}
+	if current == nil {
+		return out
+	}
+	owner := make([]int, len(current.Content)) // the item of edited each is paired with, or -1
+	byName := map[[2]string][]int{}
+	for j, c := range current.Content {
+		owner[j] = -1
+		if k, ok := itemName(c); ok {
+			byName[k] = append(byName[k], j)
+		}
+	}
+	var rest []int
+	for i, e := range edited.Content {
+		if e.Kind == yaml.ScalarNode {
+			continue
+		}
+		k, ok := itemName(e)
+		js, known := byName[k]
+		if !ok || !known {
+			rest = append(rest, i)
+			continue
+		}
+		for _, j := range js {
+			if owner[j] < 0 {
+				owner[j], out[i] = i, j
+				break
+			}
+		}
+	}
+	// The rest are paired by their secrets: each with an item, not paired by name, that holds all
+	// of them; one item may take another's when that one can take a third (a maximum matching),
+	// so the order of the items decides nothing.
+	type mark struct{ at, placeholder string }
+	held := map[mark][]int{} // the items of current, not paired by name, that hold each mark
+	has := make([]map[mark]bool, len(current.Content))
+	for j, c := range current.Content {
+		if owner[j] >= 0 || c.Kind == yaml.ScalarNode {
+			continue
+		}
+		has[j] = map[mark]bool{}
+		eachMark(c, curMarks, func(at, p string) {
+			m := mark{at, p}
+			if !has[j][m] {
+				has[j][m] = true
+				held[m] = append(held[m], j)
+			}
+		})
+	}
+	candidates := map[int][]int{}
+	for _, i := range rest {
+		var need []mark
+		eachMark(edited.Content[i], marks, func(at, p string) { need = append(need, mark{at, p}) })
+		if len(need) == 0 {
+			continue
+		}
+		for _, j := range held[need[0]] {
+			if !slices.ContainsFunc(need, func(m mark) bool { return !has[j][m] }) {
+				candidates[i] = append(candidates[i], j)
+			}
+		}
+	}
+	seen := make([]int, len(current.Content)) // the search that last looked at each item, plus one
+	var take func(i, search int) bool
+	take = func(i, search int) bool {
+		for _, j := range candidates[i] {
+			if seen[j] == search {
+				continue
+			}
+			seen[j] = search
+			if owner[j] < 0 || take(owner[j], search) {
+				owner[j], out[i] = i, j
+				return true
+			}
+		}
+		return false
+	}
+	for search, i := range rest {
+		take(i, search+1)
+	}
+	return out
+}
+
+// itemName returns a list item's id, or else its name, as a key and its value.
+func itemName(n *yaml.Node) ([2]string, bool) {
+	if n.Kind != yaml.MappingNode {
+		return [2]string{}, false
+	}
+	for _, key := range []string{"id", "name"} {
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			if v := resolved(n.Content[i+1]); keyName(n.Content[i]) == key && v.Kind == yaml.ScalarNode && v.Value != "" {
+				return [2]string{key, v.Value}, true
+			}
+		}
+	}
+	return [2]string{}, false
+}
+
+// eachMark calls f with the place within n, as paths writes it but with every list index left
+// out, and the placeholder, of each node of the tree under n that marks has.
+func eachMark(n *yaml.Node, marks map[*yaml.Node]string, f func(at, placeholder string)) {
+	var walk func(n *yaml.Node, at string)
+	walk = func(n *yaml.Node, at string) {
+		if p, ok := marks[n]; ok {
+			f(at, p)
+		}
+		switch n.Kind {
+		case yaml.MappingNode:
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				walk(n.Content[i+1], at+"."+strconv.Quote(keyName(n.Content[i])))
+			}
+		case yaml.SequenceNode:
+			for _, c := range n.Content {
+				walk(c, at+"[]")
+			}
+		}
+	}
+	walk(n, "")
 }
 
 // restored reports whether a document holds no placeholder and holds each wanted secret value
