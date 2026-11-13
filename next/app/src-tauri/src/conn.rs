@@ -505,10 +505,15 @@ impl Connection {
                     && self.settings.url == next.url
                     && self.settings.ca_file == next.ca_file;
                 let client = Client::new(&base, certs);
-                // A metadata-only change preserves an existing key only for this same target.
+                // A metadata-only change preserves an existing key only for this same target. A
+                // kept key is replaced by the one in use, which differs after a rotated key could
+                // not be saved; signed out, the kept key stays as it is.
                 let session = if same { self.key.clone() } else { None };
                 next.key = if same {
-                    self.settings.key.clone()
+                    self.settings
+                        .key
+                        .as_ref()
+                        .map(|kept| self.key.clone().unwrap_or_else(|| kept.clone()))
                 } else {
                     None
                 };
