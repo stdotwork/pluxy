@@ -41,6 +41,10 @@
 // candidate is incompatible, crashed into backoff and quarantine, and rolled back; its processes
 // are gone after the app quits. The other sessions run a build without that
 // feature; its device check shows the same profile admits nothing there.
+// The cross-package routing check (routing.ts, routing_native.rs) runs in one more session with
+// that build: signed tools calling each other's declared exports through the host, a curated web
+// package's page calling native imports after their native consent, and the refusals of
+// undeclared, forged, cyclic, stale, revoked and Unverified routes, each with a positive control.
 // The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
@@ -75,6 +79,7 @@ import { buildDeviceFixtures } from "./device";
 import { runInstances } from "./instances";
 import { descendants, webProcesses } from "./processes";
 import { buildProgramFixtures } from "./program";
+import { buildRoutingFixtures } from "./routing";
 import { missingPrerequisites } from "./services";
 
 const app = join(import.meta.dir, "..");
@@ -258,7 +263,8 @@ interface Rotation {
  * entry. With suite, the session runs window.ts, which runs the app through the window checks'
  * stages. earlyExit: the app's setup waits for its core's exit callback before the app state
  * exists (PLUXY_APP_TEST_EARLY_EXIT), and only the recovery of that core is checked. admission:
- * the session checks only signed native-tier admission; program: only the program host. */
+ * the session checks only signed native-tier admission; program: only the program host and swap
+ * checks; routing: only the cross-package routing check. */
 async function runApp(
   mode: Mode,
   artifact: Artifact,
@@ -273,6 +279,7 @@ async function runApp(
   admission = false,
   program = false,
   earlyExit = false,
+  routing = false,
 ): Promise<string[]> {
   const { label, bin } = artifact;
   const root = rotation.root ?? mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
@@ -306,7 +313,8 @@ async function runApp(
       );
     const quit = join(root, "quit");
     // This device's extension catalog is the same in every mode: check it once, in managed mode.
-    const device = mode === "managed" && !admission && !program ? join(root, "device") : undefined;
+    const device =
+      mode === "managed" && !admission && !program && !routing ? join(root, "device") : undefined;
     // A test trust profile in HOME naming curated registries: the admission session's build
     // honours it; the device check's normal build must not.
     const curated = device || admission ? join(root, "curated") : undefined;
@@ -321,6 +329,18 @@ async function runApp(
     if (programDir) {
       mkdirSync(programDir);
       const f = buildProgramFixtures(programDir, dirs.home, programFixture);
+      nonce = f.nonce;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
+    // The routing check's signed tools and web packages, their registries and trust profile.
+    const routingDir = routing ? join(root, "routing") : undefined;
+    if (routingDir) {
+      mkdirSync(routingDir);
+      const f = buildRoutingFixtures(routingDir, dirs.home, programFixture);
       nonce = f.nonce;
       roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
       writeFileSync(
@@ -348,7 +368,7 @@ async function runApp(
       // The app starts again on the first run's HOME: its marker and profile stay, and so does
       // the nonce the marker holds.
       nonce = JSON.parse(readFileSync(join(dirs.home, MARKER_FILE), "utf8")).nonce;
-    } else if (!programDir) {
+    } else if (!programDir && !routingDir) {
       try {
         nonce = /^nonce=([0-9a-f]{64})$/m.exec(run(probe, ["trust-marker", dirs.home], app))?.[1] ?? "";
         if (!nonce) throw new Error("it printed no nonce");
@@ -393,6 +413,7 @@ async function runApp(
       ...(admission ? { PLUXY_APP_TEST_ADMISSION: curated as string } : {}),
       // In the app's environment, never in the tool's (program_native.rs checks its names).
       ...(programDir ? { PLUXY_APP_TEST_PROGRAM: programDir, PLUXY_TEST_PROGRAM_CANARY: randomUUID() } : {}),
+      ...(routingDir ? { PLUXY_APP_TEST_ROUTING: routingDir } : {}),
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: artifact.identifier } : {}),
       ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
       ...(key ? { PLUXY_APP_TEST_KEY_FILE: keyFile } : {}),
@@ -600,6 +621,16 @@ async function runApp(
       console.log(`${mode} program ${JSON.stringify(p ?? {})}`);
       console.log(`${mode} swap ${JSON.stringify(w ?? {})}`);
       console.log(`${mode}: program ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
+    if (routing) {
+      const r = steps.get("routing") as { passed?: boolean } | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(r?.passed === true, `the routing check did not complete: ${failure}`);
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} routing ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode}: routing ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
 
@@ -1007,8 +1038,8 @@ async function main(): Promise<number> {
       const p = await runApp("managed", dev("managed"), updaterKey, managed);
       p.push(...(await runApp("managed", dev("managed"), updaterKey, managed, undefined, true)));
       p.push(...(await runApp("managed", dev("managed"), updaterKey, managed, undefined, true, true)));
-      // The signed native-tier admission check, then the program host check, on the build with
-      // artifact-test-trust.
+      // The signed native-tier admission check, then the program host check and the routing
+      // check, on the build with artifact-test-trust.
       p.push(
         ...(await runApp(
           "managed",
@@ -1036,6 +1067,25 @@ async function main(): Promise<number> {
           undefined,
           undefined,
           {},
+          false,
+          true,
+        )),
+      );
+      // The cross-package routing check, on the same build.
+      p.push(
+        ...(await runApp(
+          "managed",
+          trusted,
+          updaterKey,
+          managed,
+          undefined,
+          false,
+          false,
+          undefined,
+          undefined,
+          {},
+          false,
+          false,
           false,
           true,
         )),

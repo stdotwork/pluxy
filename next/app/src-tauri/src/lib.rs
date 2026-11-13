@@ -34,6 +34,8 @@ pub mod program;
 pub mod recovery;
 #[cfg(debug_assertions)]
 pub mod release_config;
+#[cfg(target_os = "linux")]
+pub mod route;
 mod startup;
 pub mod trust;
 pub mod window;
@@ -78,6 +80,9 @@ struct App {
     /// The admitted native tools that run, on demand (`program.rs`).
     #[cfg(target_os = "linux")]
     programs: program::Host,
+    /// Page calls of native operations in flight (`route.rs`).
+    #[cfg(target_os = "linux")]
+    routes: route::Routes,
     status: Mutex<Option<MenuItem<Wry>>>,
     /// Start, Stop and Restart, in that order.
     core_actions: Mutex<Vec<MenuItem<Wry>>>,
@@ -344,6 +349,11 @@ fn close_pages(app: &AppHandle) {
 /// destroys the WebKit widget (wry 0.57.1, `InnerWebView::drop`), before `close` returns. From
 /// another thread `close` only posts the message.
 fn close_webviews(app: &AppHandle, labels: Vec<String>) -> Vec<String> {
+    // Their calls of native operations in flight are cancelled, their answers not delivered.
+    #[cfg(target_os = "linux")]
+    for l in &labels {
+        app.state::<App>().routes.page_closed(l);
+    }
     let todo: Vec<String> = {
         let st = app.state::<App>();
         let mut closing = st.closing.lock().unwrap();
@@ -1595,6 +1605,59 @@ fn native_enable(_app: &AppHandle, id: &str) -> Result<device::View, String> {
     ))
 }
 
+/// Allows web package id's native imports, once the person confirmed them in a native
+/// confirmation listing each operation and its effect, or revokes them, cancelling its pages'
+/// calls in flight.
+#[tauri::command]
+async fn device_imports(
+    webview: Webview,
+    id: String,
+    allowed: bool,
+) -> Result<device::View, String> {
+    trusted(&webview)?;
+    let app = webview.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "linux")]
+        {
+            let st = app.state::<App>();
+            let roots = trust::TrustStore::current();
+            if allowed {
+                let (consent, action) = {
+                    let c = st.device.lock().unwrap();
+                    let consent = c.consent_candidate(&id, &roots)?;
+                    let action = c.consent_confirmation(&id, &consent, &roots)?;
+                    (consent, action)
+                };
+                let action = {
+                    let mut c = st.confirmations.lock().unwrap();
+                    let prepared = c.prepare_main(action)?;
+                    c.queue(prepared)?
+                };
+                confirmation::request(&app, action.clone())?;
+                route::confirmed(&app, &action, &program::Cancel::default())
+                    .map_err(|e| format!("{e}; {id}'s native imports stay as they were"))?;
+                st.device
+                    .lock()
+                    .unwrap()
+                    .allow_imports(&id, &consent, &roots)?;
+            } else {
+                st.device.lock().unwrap().revoke_imports(&id)?;
+                st.routes.revoked(&id);
+            }
+            let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-device", ());
+            let view = st.device.lock().unwrap().view(&roots);
+            Ok(view)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (app, allowed);
+            Err(format!("{id}: native imports are supported on Linux only"))
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 fn device_remove(webview: Webview, id: String) -> Result<device::View, String> {
     device_change(&webview, &id, |c| c.remove(&id))
@@ -1641,7 +1704,8 @@ fn program_resolver(app: AppHandle) -> program::Resolve {
 }
 
 /// Calls operation op of the native tool package with input, starting the tool if it is not
-/// running. With a ticket, `program_cancel` cancels the call.
+/// running, after a native confirmation for a write or launch (`route.rs`). With a ticket,
+/// `program_cancel` cancels the call.
 #[tauri::command]
 async fn program_call(
     webview: Webview,
@@ -1666,9 +1730,7 @@ async fn program_call(
             std::thread::Builder::new()
                 .name("pluxy-prog-call".into())
                 .spawn(move || {
-                    app.state::<App>()
-                        .programs
-                        .run_call(call, &package, &op, input)
+                    route::call_main(&app, call, &package, &op, input, None)
                         .map_err(|e| e.to_string())
                 })
                 .map_err(|e| e.to_string())?
@@ -1847,6 +1909,32 @@ fn page_scheme(
         served.status,
         request.uri().query(),
     );
+    // A page's call of a native operation is the router's, never the window's.
+    let msg = msg.and_then(|m| {
+        if m.kind != "call" || m.data["method"] != "native.call" {
+            return Some(m);
+        }
+        let id = m.data["id"].as_str().unwrap_or_default().to_string();
+        let app = app.clone();
+        let spawned = std::thread::Builder::new()
+            .name("pluxy-page-call".into())
+            .spawn(move || {
+                #[cfg(target_os = "linux")]
+                route::call_page(&app, &m.label, &m.generation, &id, &m.data["params"]);
+                #[cfg(not(target_os = "linux"))]
+                let _ = deliver_page(
+                    &app,
+                    &m.label,
+                    &m.generation,
+                    serde_json::json!({"type": "message", "data": {"v": 0, "id": id,
+                        "error": {"code": "unavailable", "message": "native tools run on Linux only for now"}}}),
+                );
+            });
+        if let Err(e) = spawned {
+            eprintln!("pluxy-app: a page's native call: {e}");
+        }
+        None
+    });
     if let Some(m) = msg {
         #[cfg(all(target_os = "linux", feature = "native-test"))]
         if m.kind == "call" && m.data.get("id").and_then(Value::as_str) == Some("spoof-confirm") {
@@ -1910,6 +1998,7 @@ pub fn run() {
             device_remove,
             device_rollback,
             device_page_open,
+            device_imports,
             program_call,
             program_cancel,
             program_status,
@@ -2019,6 +2108,8 @@ pub fn run() {
                     program_resolver(app.handle().clone()),
                     Default::default(),
                 ),
+                #[cfg(target_os = "linux")]
+                routes: route::Routes::default(),
                 status: Mutex::new(None),
                 core_actions: Mutex::new(Vec::new()),
                 shown: Mutex::new(Shown::default()),
@@ -2031,6 +2122,12 @@ pub fn run() {
                 rotation_open: AtomicBool::new(false),
             });
             let handle = app.handle().clone();
+            // Tools' own calls of other packages' operations go through the router.
+            #[cfg(target_os = "linux")]
+            handle
+                .state::<App>()
+                .programs
+                .set_route(route::route(handle.clone()));
             #[cfg(target_os = "linux")]
             if let Some(message) = handle
                 .state::<App>()

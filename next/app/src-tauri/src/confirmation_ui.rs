@@ -90,7 +90,9 @@ pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> 
             .pack_start(&text_view(&review), true, true, 8);
         let remember =
             gtk::CheckButton::with_mnemonic("_Remember this exact executable, argv and cwd");
-        if launch {
+        // Only a launch from the window, the tray or native UI may offer it: a page or import
+        // chain never uses a remembered approval, so it would save one nothing can use.
+        if launch && !page {
             dialog.content_area().pack_start(&remember, false, false, 8);
         }
         let app = handle.clone();
@@ -105,6 +107,30 @@ pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> 
             if let Some(d) = expires.upgrade() {
                 d.response(gtk::ResponseType::Cancel);
             }
+        });
+        // Withdrawn (its caller's call was cancelled) or otherwise no longer pending: it closes,
+        // as cancelled.
+        let watched = dialog.downgrade();
+        let watching = completed.clone();
+        let (watch_app, watch_id) = (handle.clone(), id.clone());
+        gtk::glib::timeout_add_local(Duration::from_millis(250), move || {
+            if watching.get() {
+                return gtk::glib::ControlFlow::Break;
+            }
+            let gone = !watch_app
+                .state::<crate::App>()
+                .confirmations
+                .lock()
+                .unwrap()
+                .pending
+                .contains_key(&watch_id);
+            if !gone {
+                return gtk::glib::ControlFlow::Continue;
+            }
+            if let Some(d) = watched.upgrade() {
+                d.response(gtk::ResponseType::Cancel);
+            }
+            gtk::glib::ControlFlow::Break
         });
         dialog.connect_response(move |d, response| {
             if completed.replace(true) {
