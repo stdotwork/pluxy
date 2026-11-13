@@ -5,6 +5,7 @@ import { strings } from "../strings";
 import { Badge, Button, ConfirmButton, Facts, List, Notice, useKit, useLoad, when } from "../ui";
 import { credentialTools } from "./accountTools.helpers";
 import { ConfigDialog } from "./configDialog";
+import { configAddress } from "./configSource.helpers";
 
 const t = strings("accountTools", {
   health: "Health",
@@ -237,7 +238,7 @@ export function AccountTools(props: { account: Account; onChanged(): void }) {
           </Button>
         )}
         {a.source === "config" && (
-          <a data-part="account-config-link" href="#/config">
+          <a data-part="account-config-link" href={configAddress("source", a.id)}>
             {t("edit")}
           </a>
         )}

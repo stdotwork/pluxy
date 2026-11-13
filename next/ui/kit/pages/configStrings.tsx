@@ -65,4 +65,6 @@ export const configText = strings("config", {
     "Core did not return configuration text. Correct the file outside the panel, then reload.",
   sourceHint: "Secrets appear as placeholders. Keep a placeholder to preserve its secret.",
   noNewline: "No newline at end of file",
+  accountNotFound:
+    "The file has no entry with the ID {id}. An account made from a provider key section (such as claude-api-key) gets its ID from the entry's name or place, so look there.",
 });
