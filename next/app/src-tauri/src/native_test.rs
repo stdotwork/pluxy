@@ -180,6 +180,112 @@ fn probe(w: &Webview, calls: &[&str]) -> Result<Value, String> {
     })
 }
 
+/// The page area the window drew for its page webview.
+const AREA: &str = "(() => { const r = document.querySelector('[data-part=extension-frame]').getBoundingClientRect(); \
+     return {x: r.left, y: r.top, width: r.width, height: r.height}; })()";
+
+/// f's result, run on the main thread (GTK widgets live there).
+fn on_main<T: Send + 'static>(
+    app: &AppHandle,
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Option<T> {
+    let (tx, rx) = mpsc::channel();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(f());
+    })
+    .ok()?;
+    rx.recv_timeout(Duration::from_secs(5)).ok()
+}
+
+/// Whether two places agree, to the rounding of logical pixels to whole ones.
+#[cfg(target_os = "linux")]
+fn same_place(a: &Value, b: &Value) -> bool {
+    ["x", "y", "width", "height"].iter().all(
+        |k| matches!((a[k].as_f64(), b[k].as_f64()), (Some(a), Some(b)) if (a - b).abs() <= 2.0),
+    )
+}
+
+/// A page webview whose document is taller than its page area still covers exactly that area, at
+/// the top of the window and with the window partly scrolled: the place GTK allocates it, not
+/// only the size the app asks for. The document is made taller from outside, then restored.
+#[cfg(target_os = "linux")]
+fn tall_page(app: &AppHandle, main: &Webview, wv: &Webview, label: &str) -> Result<Value, String> {
+    let area0 = eval(main, AREA).ok_or("no page area")?;
+    let height = area0["height"].as_f64().ok_or("no page area height")?;
+    let tall = (height * 3.0).round();
+    wv.eval(format!(
+        "for (const e of [document.documentElement, document.body]) {{ \
+         e.style.setProperty('height', '{tall}px', 'important'); \
+         e.style.setProperty('overflow', 'visible', 'important'); }}"
+    ))
+    .map_err(|e| e.to_string())?;
+    // The control: GTK sees the document taller than the area, so a webview given its natural
+    // height would not fit it.
+    let l = label.to_string();
+    let natural = wait_for(
+        "the page webview's natural height to pass its area's",
+        || {
+            let l = l.clone();
+            on_main(app, move || crate::place::natural_height(&l))
+                .flatten()
+                .filter(|n| *n > height + 100.0)
+        },
+    )?;
+
+    // Where the page webview is once the window has placed it again, against its area.
+    let settled = |what: &str| -> Result<(Value, Value), String> {
+        let mut last = (Value::Null, Value::Null);
+        wait_for(what, || {
+            let area = eval(main, AREA)?;
+            let l = label.to_string();
+            let placed = json!(on_main(app, move || crate::place::allocation(&l)).flatten());
+            last = (area.clone(), placed.clone());
+            same_place(&area, &placed).then_some(())
+        })
+        .map_err(|e| format!("{e}: placed {} for the area {}", last.1, last.0))?;
+        Ok(last)
+    };
+    main.eval("window.dispatchEvent(new Event('resize'))")
+        .map_err(|e| e.to_string())?;
+    let (area, placed) = settled("the tall page webview over its area")?;
+
+    // Partly scrolled: the area moves up by half its distance from the top, still in view.
+    let scroll = (area0["y"].as_f64().ok_or("no page area top")? / 2.0).floor();
+    main.eval(format!(
+        "{{ const s = document.createElement('div'); s.id = 'pluxy-test-spacer'; \
+         s.style.height = (2 * innerHeight) + 'px'; \
+         document.querySelector('[data-part=extension-frame]').after(s); \
+         document.scrollingElement.scrollTop = {scroll}; }}"
+    ))
+    .map_err(|e| e.to_string())?;
+    let want_y = area0["y"].as_f64().unwrap_or(0.0) - scroll;
+    wait_for("the window to scroll", || {
+        eval(main, AREA)?["y"]
+            .as_f64()
+            .filter(|y| (y - want_y).abs() <= 1.0)
+    })?;
+    let (area_scrolled, placed_scrolled) = settled("the tall page webview over its scrolled area")?;
+
+    main.eval(
+        "{ document.getElementById('pluxy-test-spacer')?.remove(); \
+         document.scrollingElement.scrollTop = 0; }",
+    )
+    .map_err(|e| e.to_string())?;
+    wv.eval(
+        "for (const e of [document.documentElement, document.body]) { \
+         e.style.removeProperty('height'); e.style.removeProperty('overflow'); }",
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(json!({
+        "natural": natural,
+        "area": area,
+        "placed": placed,
+        "scroll": scroll,
+        "area_scrolled": area_scrolled,
+        "placed_scrolled": placed_scrolled,
+    }))
+}
+
 fn run(app: &AppHandle) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if let Ok(stage) = std::env::var("PLUXY_APP_TEST_WINDOW") {
@@ -257,20 +363,12 @@ fn run(app: &AppHandle) -> Result<(), String> {
         r["label"] = json!(label);
         r["url"] = eval(&wv, "location.href").unwrap_or(Value::Null);
         // Where the page webview is, against the page area the window drew for it.
-        r["area"] = eval(
-            &main,
-            "(() => { const r = document.querySelector('[data-part=extension-frame]').getBoundingClientRect(); \
-             return {x: r.left, y: r.top, width: r.width, height: r.height}; })()",
-        )
-        .unwrap_or(Value::Null);
-        let (tx, rx) = mpsc::channel();
+        r["area"] = eval(&main, AREA).unwrap_or(Value::Null);
         let l = label.clone();
-        app.run_on_main_thread(move || {
-            let _ = tx.send(crate::place::allocation(&l));
-        })
-        .map_err(|e| e.to_string())?;
-        r["placed"] = json!(rx.recv_timeout(Duration::from_secs(5)).ok().flatten());
+        r["placed"] = json!(on_main(app, move || crate::place::allocation(&l)).flatten());
         log("page", r);
+        #[cfg(target_os = "linux")]
+        log("page_allocation", tall_page(app, &main, &wv, &label)?);
         #[cfg(target_os = "linux")]
         crate::confirmation::native::run(app, &main, &wv)?;
 

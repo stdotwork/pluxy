@@ -697,6 +697,11 @@ async function runApp(
       area && placed && (["x", "y", "width", "height"] as const).every((k) => near(area[k], placed[k])),
       `the page webview is at ${JSON.stringify(placed)}, the page area at ${JSON.stringify(area)}`,
     );
+    // A page webview whose document is taller than its area is still placed exactly over it,
+    // unscrolled and partly scrolled (native_test.rs tall_page fails the run when it is not).
+    const allocation = steps.get("page_allocation");
+    check(allocation?.placed && allocation?.placed_scrolled, "the tall page allocation check did not run");
+    console.log(`${mode} page_allocation ${JSON.stringify(allocation)}`);
     for (const cmd of commands) check(page?.calls[cmd], `the page webview's probe did not try ${cmd}`);
     for (const [cmd, c] of Object.entries(page?.calls ?? {})) {
       check(!c.ok && REFUSED.test(c.detail), `${cmd} from the page webview: ${JSON.stringify(c)}`);

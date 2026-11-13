@@ -102,6 +102,18 @@ mod gtk_overlay {
         })
     }
 
+    /// The height the page webview asks for itself, without its margins: for a webview, its
+    /// document's height.
+    #[cfg(feature = "native-test")]
+    pub fn natural_height(label: &str) -> Option<f64> {
+        PLACED.with(|p| {
+            let p = p.borrow();
+            let w = p.get(label)?;
+            let (_, natural) = w.preferred_height();
+            Some((natural - w.margin_top() - w.margin_bottom()) as f64)
+        })
+    }
+
     pub fn forget_all() {
         PLACED.with(|p| p.borrow_mut().clear());
     }
@@ -144,6 +156,18 @@ pub fn forget(label: &str) {
 pub fn allocation(label: &str) -> Option<Bounds> {
     #[cfg(target_os = "linux")]
     return gtk_overlay::allocation(label);
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = label;
+        None
+    }
+}
+
+/// The page webview's own height request, its document's height (Linux only).
+#[cfg(feature = "native-test")]
+pub fn natural_height(label: &str) -> Option<f64> {
+    #[cfg(target_os = "linux")]
+    return gtk_overlay::natural_height(label);
     #[cfg(not(target_os = "linux"))]
     {
         let _ = label;
