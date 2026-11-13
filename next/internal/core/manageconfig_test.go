@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stdotwork/pluxy/next/internal/configdoc"
 	"github.com/stdotwork/pluxy/next/internal/server"
 )
 
@@ -252,5 +253,18 @@ func TestScrubConfigError(t *testing.T) {
 	}
 	if got := ScrubConfigError(path, err); strings.Contains(got.Error(), "fake-provider-secret") || !errors.Is(got, err) {
 		t.Errorf("ScrubConfigError = %v", got)
+	}
+}
+
+// A copy of a settings secret's placeholder whose secret the sent settings no longer hold as it
+// was is refused with the copy's line, which PATCH /accounts/{id} shows (server.ErrSecretCopy).
+func TestAccountRedactorRefusesACopyWithItsLine(t *testing.T) {
+	const key = "sk-real-secret-value-1234"
+	r := accountRedactor{configdoc.NewRedactor()}
+	cur := "{\n  \"api_key\": \"" + key + "\",\n  \"note\": \"" + key + "\"\n}\n"
+	sent := "{\n  \"api_key\": \"brand-new-key-999999\",\n  \"note\": \"" + r.Placeholder(key) + "\"\n}\n"
+	_, err := r.RestoreSettings([]byte(sent), []byte(cur))
+	if !errors.Is(err, server.ErrSecretCopy) || !strings.HasPrefix(err.Error(), "settings: line 3: a redacted value is a copy of a secret") || strings.Contains(err.Error(), key) {
+		t.Errorf("RestoreSettings = %v, want server.ErrSecretCopy naming line 3", err)
 	}
 }

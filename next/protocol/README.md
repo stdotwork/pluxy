@@ -517,9 +517,14 @@ JSON, URL and base64 forms and as quoted in core's own messages, from everything
 back. Keep values that are not secret,
 especially short ones, out of the credential. Core removes the secrets in the account's
 `settings` the same way: every value below a key named like a secret (such as `api_key`,
-`password` or `*_token`), header values about authentication in a `headers` object, and any URL
+`password`, `*_token`, `accessToken` or `aws_secret_access_key`: names are compared in lower case
+whatever joins their words, or none, and may end in a number or a word such as `value` or
+`pem`), header values about authentication or named like a secret in an object whose name holds
+`header` (`extra_headers`, `headers_override`), and any URL
 with a user name, password or query (a `base_url` with a token in it), as its management API
-hides them. Below a key named like a secret, `true`, `false`, `null` and the empty string are
+hides them; of such a URL also its user name, its password, the two together (in Basic form
+too) and the value of each query parameter named like a secret (`key`, `token`, `sig`, ...), as
+written and decoded, on their own. Below a key named like a secret, `true`, `false`, `null` and the empty string are
 not secrets: they carry none. Unlike a credential's strings, a settings secret shorter than 8
 bytes is left in text, since removing every occurrence of so short a string would mangle
 unrelated text; the management API still shows it as a placeholder. When the settings change,
@@ -569,7 +574,7 @@ the extension's other headers stay. Core never sends `Host`, `Content-Length`,
 or a value with a line break or another control character: its config load refuses them.
 
 The value of a header whose name is about authentication (its name holds `auth`, `key`,
-`token`, `secret`, `cookie`, `session`, `password` or `signature`, letter case aside) is a
+`token`, `secret`, `cookie`, `session`, `password`, `passphrase` or `signature`, letter case aside) is a
 secret: an extension never logs or shows it, and core removes it from everything a call sends
 back, as it does a credential's strings; a value shorter than 8 bytes is removed only next to
 its name, as text shows a header (`Name: value`, `Name:value`, `Name=value`, JSON's

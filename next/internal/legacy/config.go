@@ -181,6 +181,16 @@ func SectionLists() []string {
 	return out
 }
 
+// SectionNames returns the keys of the v8 api-keys mapping of a config.yaml that are provider key
+// sections (codex, openai-compatibility and the rest).
+func SectionNames() []string {
+	var out []string
+	for _, f := range families {
+		out = append(out, f.v8)
+	}
+	return out
+}
+
 // Statuses of a setting, as next/README.md names them.
 const (
 	supported = iota
