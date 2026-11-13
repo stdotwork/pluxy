@@ -402,12 +402,14 @@ and finds the change not applied and the page saying why; checks for updates and
 notes and finds no script, image, frame, handler or extra link, the Markdown rendered and the
 raw HTML left out; probes every app and plugin command from the notes webview (each refused)
 with the window's `release_get` as control; navigates the notes webview to an address the notes
-do not link to (nothing opens) and follows the rendered link and "View full release notes" (the
-stand-in browser gets exactly those); asks the notes webview to download its own style sheet
+do not link to (nothing opens) and follows the rendered link, a link whose address has characters the
+renderer escapes (`a[1]?q=x|y`) and "View full release notes" (the stand-in browser gets exactly
+those); asks the notes webview to download its own style sheet
 (refused, nothing saved) and right-clicks it (no menu); collapses the notes (their webview closes) and expands
 them again (a new one, over the notes area); scrolls the page with the navigation bar on top and
 finds the notes webview over only the part of its area below that bar, hidden once the area is
-out of sight, and back over it unscrolled; stops the feed and finds the offline error with the last good copy and its time; and
+out of sight, and back over it unscrolled; stops the feed and finds the offline error with the last good copy and its time, and the notes webview moved down
+with its area when that notice appeared above it; and
 leaves the page, closing the notes webviews. The runner checks the feed server saw exactly one
 feed read and nothing else, so the hostile image and frame were never loaded.
 
