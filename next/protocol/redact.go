@@ -720,79 +720,171 @@ func (r *Redactor) Body() *BodyRedactor {
 // BodyRedactor removes the credential from a body that arrives in pieces, where a form of it may
 // be cut between two pieces or more. Write takes each piece in turn and returns what may be sent
 // on now; Flush returns the rest once the body ends (a body that breaks off can drop it instead).
-// Joined, what they return is what String returns for the whole body, wherever it was cut, for
-// every form of the credential the body holds as it is: String replaces the longest form at the
-// leftmost position first, and Write returns the text up to the first position where more text
-// could change what is replaced, holding back the rest, which is shorter than the longest form.
-// That is all it holds, so a body of any length passes through in bounded memory and a stream is
-// not delayed except where a piece ends with what could be the start of a form.
 //
-// It is never worse than redacting each piece on its own: where holding back would cut what
-// String finds in the text whole, such as a credential spelled with escapes outside its listed
-// forms that ends like the start of one, Write holds nothing back and returns all of it.
+// It follows the listed forms (encodings) as String's replacer does: at each position the longest
+// form that starts there is replaced, and the search goes on after it. Write returns the text up
+// to the first position where more text could change that, and holds back the rest: fewer bytes
+// than the longest form. When a form could be part of a JSON number, it also holds back a colon,
+// bracket or comma at the end, with any spaces after it and the number that follows, if any (a run
+// of the bytes of numbers that starts with a digit or a minus), when they take at most
+// maxNumberHold bytes, and where they start inside a form, that form. So a body of any length
+// passes through in bounded memory, and a stream is delayed only where a piece ends with what
+// could start a form, or such a number. Each text it returns is redacted with String, so a
+// credential spelled with escapes is found within it, and a number in JSON that holds one
+// becomes 0.
 //
-// shortcut: String also decodes escapes (\u0073, %73) that could spell the credential, and reads
-// a body that is JSON as JSON; Write does both within the text it has, so a credential spelled
-// with escapes outside its listed forms (encodings) that a piece cuts in two, or a number holding
-// it, is removed as String would remove it only when it lies within one returned text, as when
-// each piece is redacted on its own. Holding back for those would need far more than the longest
-// form; do so if an upstream is seen to escape credentials in a streamed body.
+// It is never worse than redacting each piece on its own: where holding back would change what
+// String finds in the text whole (for example a credential spelled with escapes that ends like the
+// start of a form, or text String gives up on and replaces whole), Write returns all of the text it
+// has, redacted whole, but for the end of what it would have held that this left as it was, which
+// it goes on holding back. It keeps the rest of that end too, marked as sent: a form that starts
+// there and that later pieces complete is replaced in them, so the rest of a credential in one of
+// its forms cut there is not sent; what was sent of it before the cut stays sent.
+//
+// shortcut: a credential spelled with escapes outside its listed forms (\u0073 for s, %73)
+// that a piece cuts in two is not found, as when each piece is redacted on its own; holding back
+// for those would need far more than the longest form. A number that, with what stands before it,
+// takes more than maxNumberHold bytes and is cut between pieces may be redacted as text
+// ([redacted]) or as two numbers (0 and the rest of its digits) where String would write 0, either
+// of which leaves JSON invalid. String reads text that is JSON as JSON, and Write calls it on each
+// text it returns, so where a cut makes a text JSON that the whole body is not (a JSON string on
+// its own), or the other way round, a number holding a credential may become 0 where String on the
+// whole body writes [redacted], or the other way round; the credential is removed either way.
+// Upgrade the first two if an upstream is seen to write credentials that way in a streamed body.
 type BodyRedactor struct {
 	r       *Redactor
 	byFirst [256][]string // the forms by their first byte, longest first
-	held    string        // the end of the body so far, which more text could still change
+	// held is the end of the body so far, which more text could still change; its first sent
+	// bytes were already returned, redacted whole, by a Write that could not hold them back.
+	held string
+	sent int
 }
+
+// maxNumberHold bounds how much of a JSON number, and of what stands before it, Write holds back
+// besides a form's start, so that String reads the number whole.
+const maxNumberHold = 64
 
 // Write returns the redacted text of the body so far that more text cannot change.
 func (b *BodyRedactor) Write(piece string) string {
 	if b.r == nil || b.r.r == nil {
 		return piece
 	}
-	s := b.held + piece
-	cut := b.decided(s)
-	out := b.r.String(s[:cut])
-	if cut < len(s) {
-		if whole := b.r.String(s); whole != out+b.r.String(s[cut:]) {
-			// The cut would split something String finds in s whole: send all of s.
-			b.held = ""
-			return whole
-		}
-	}
-	b.held = strings.Clone(s[cut:]) // not keeping all of a large piece alive
-	return out
+	return b.emit(b.held+piece, false)
 }
 
 // Flush returns the redacted text the BodyRedactor still holds, for the end of the body.
 func (b *BodyRedactor) Flush() string {
-	if b == nil {
+	if b == nil || b.r == nil || b.r.r == nil {
 		return ""
 	}
-	s := b.held
-	b.held = ""
-	return b.r.String(s)
+	return b.emit(b.held, true)
 }
 
-// decided returns how much of s more text after it cannot change once redacted. It follows the
-// forms as String's replacer does: at each position the longest form that starts there is
-// replaced, and the search goes on after it. A position at which a form longer than the rest of
-// s starts with that rest is undecided, since more text could complete it; so is everything
-// after. Forms are longest first, so the first that matches is the longest.
-func (b *BodyRedactor) decided(s string) int {
+// emit returns what can be sent of s, the held text and what came after it, and keeps the rest;
+// with final nothing more comes. s[:b.sent] was already sent.
+func (b *BodyRedactor) emit(s string, final bool) string {
+	skip, cut := b.parse(s, b.sent, final)
+	if !final {
+		cut = b.numberStart(s, cut)
+	}
+	if cut <= b.sent {
+		// Nothing new is decided: hold it all from cut, also what was sent of it, so that a form
+		// that starts there is still found once more text comes. A cut is never inside a form,
+		// so past sent it is also past skip.
+		b.held, b.sent = strings.Clone(s[cut:]), b.sent-cut
+		return ""
+	}
+	var lead string
+	if skip > b.sent {
+		// A form that began in what was sent ends here: its rest is not sent.
+		lead = Redacted
+	}
+	out := b.r.String(s[skip:cut])
+	b.held, b.sent = strings.Clone(s[cut:]), 0 // not keeping all of a large piece alive
+	if cut < len(s) {
+		if whole := b.r.String(s[skip:]); whole != out+b.r.String(s[cut:]) {
+			// The cut would hide what String finds in the text whole: send it whole, and keep the
+			// end, so that a form starting there is still removed from what follows. Of that end,
+			// what the text whole changed counts as sent; the rest, which the text whole ends with
+			// as it was, is held back as before rather than sent. That the text whole merely ends
+			// like it (a 0 standing for a number that ends in 0) is not enough: redacting the text
+			// up to there must give the rest of the text whole.
+			j := 0
+			for j < len(b.held) && !(utf8.RuneStart(b.held[j]) && strings.HasSuffix(whole, b.held[j:]) &&
+				whole[:len(whole)-(len(b.held)-j)] == b.r.String(s[skip:cut+j])) {
+				j++
+			}
+			b.sent = j
+			return lead + whole[:len(whole)-(len(b.held)-j)]
+		}
+	}
+	return lead + out
+}
+
+// parse follows the forms through s and returns cut, how much of s more text after it cannot
+// change once redacted (all of s when final), and skip: sent, or the end of a form that starts
+// before sent and ends after it. A position at which a form longer than the rest of s starts with
+// that rest is undecided, since more text could complete it; so is everything after. Forms are
+// longest first, so the first that matches is the longest.
+func (b *BodyRedactor) parse(s string, sent int, final bool) (skip, cut int) {
+	skip = sent
 	for i := 0; i < len(s); {
 		rest, n := s[i:], 0
 		for _, f := range b.byFirst[s[i]] {
 			if len(f) > len(rest) {
-				if strings.HasPrefix(f, rest) {
-					return i
+				if !final && strings.HasPrefix(f, rest) {
+					return skip, i
 				}
 			} else if strings.HasPrefix(rest, f) {
 				n = len(f)
 				break
 			}
 		}
+		if i < sent && i+n > sent {
+			skip = i + n
+		}
 		i += max(n, 1)
 	}
-	return len(s)
+	return skip, len(s)
+}
+
+// numberStart returns where to cut s instead of at cut, a position parse stopped at, so that a
+// JSON number is not cut from its digits or from the colon, bracket or comma before it, which
+// String needs to read it as a number (jsonNumbers). When the Redactor has a form that could be
+// part of a number and s[:cut] ends with such a character, any spaces, and either nothing more or
+// a run of the bytes of numbers that starts with a minus or a digit, it returns the position of
+// that character (or of the form it falls in) if that is within maxNumberHold of cut; cut
+// otherwise. Other runs of those bytes, such as the "e" ending "there", are never a number.
+func (b *BodyRedactor) numberStart(s string, cut int) int {
+	if !b.r.numeric {
+		return cut
+	}
+	c := cut
+	for c > 0 && strings.IndexByte(numberChars, s[c-1]) >= 0 {
+		c--
+	}
+	if c < cut && s[c] != '-' && (s[c] < '0' || s[c] > '9') {
+		return cut
+	}
+	t := strings.TrimRight(s[:c], " \t\r\n")
+	if t == "" || strings.IndexByte(":[,", t[len(t)-1]) < 0 || cut-(len(t)-1) > maxNumberHold {
+		return cut
+	}
+	c = len(t) - 1
+	// c must be a position parse stops at, not inside a form.
+	last := 0
+	for i := 0; i <= c && i < len(s); {
+		last = i
+		n := 0
+		for _, f := range b.byFirst[s[i]] {
+			if len(f) <= len(s)-i && strings.HasPrefix(s[i:], f) {
+				n = len(f)
+				break
+			}
+		}
+		i += max(n, 1)
+	}
+	return last
 }
 
 func (r *Redactor) usage(u *llm.Usage) *llm.Usage {

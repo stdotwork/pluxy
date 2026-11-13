@@ -13,9 +13,11 @@
     "core:event:allow-unlisten",
     "allow-connection-get",
     "allow-connection-set",
+    "allow-core-start",
     "allow-core-restart",
     "allow-core-call",
     "allow-key-entry",
+    "allow-management-key-rotate",
     "allow-sign-out",
     "allow-page-open",
     "allow-page-place",
@@ -37,6 +39,8 @@
     "allow-program-status",
     "allow-window-get",
     "allow-window-set",
-    "allow-window-close"
+    "allow-window-close",
+    "allow-privacy-get",
+    "allow-privacy-set"
   ]
 }

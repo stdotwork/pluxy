@@ -1,10 +1,12 @@
 import { useRef, useState } from "preact/hooks";
 import { type Account, type AccountTestResult, problem } from "../api";
 import { LoginFlow } from "../loginFlow";
+import { accountIdentities, usePrivacy } from "../privacy";
 import { strings } from "../strings";
 import { Badge, Button, ConfirmButton, Facts, List, Notice, useKit, useLoad, when } from "../ui";
 import { credentialTools } from "./accountTools.helpers";
 import { ConfigDialog } from "./configDialog";
+import { configAddress } from "./configSource.helpers";
 
 const t = strings("accountTools", {
   health: "Health",
@@ -70,7 +72,9 @@ const t = strings("accountTools", {
 
 export function AccountTools(props: { account: Account; onChanged(): void }) {
   const { api, unauthorized } = useKit();
+  const p = usePrivacy();
   const a = props.account;
+  const ids = accountIdentities(a);
   const tools = credentialTools(a);
   const [modelsOpen, setModelsOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
@@ -110,10 +114,10 @@ export function AccountTools(props: { account: Account; onChanged(): void }) {
                   : (check?.state ?? t("not_checked"))}
               </Badge>,
             ],
-            [t("detail"), check?.detail],
-            [t("error"), check?.error && errorText(check.error)],
+            [t("detail"), p.text(check?.detail, ids)],
+            [t("error"), check?.error && p.text(errorText(check.error), ids)],
             [t("checkedAt"), when(check?.at)],
-            [t("lastError"), a.last_error && errorText(a.last_error)],
+            [t("lastError"), a.last_error && p.text(errorText(a.last_error), ids)],
             [t("lastErrorAt"), when(a.last_error_at)],
             [t("active"), a.active_requests ?? 0],
           ]}
@@ -147,7 +151,7 @@ export function AccountTools(props: { account: Account; onChanged(): void }) {
                             : c.kind,
                         ],
                         [t("until"), when(c.until)],
-                        [t("error"), c.error && errorText(c.error)],
+                        [t("error"), c.error && p.text(errorText(c.error), ids)],
                       ]}
                     />
                   </li>
@@ -166,7 +170,9 @@ export function AccountTools(props: { account: Account; onChanged(): void }) {
       </section>
       {confirm && (
         <ConfigDialog title={t("clearTitle")} close={() => !busy && setConfirm(false)}>
-          <p data-part="account-cooldown-confirm">{t("clearConfirm", { name: a.label || a.id })}</p>
+          <p data-part="account-cooldown-confirm">
+            {t("clearConfirm", { name: a.label ? p.id(a.label) : p.text(a.id, ids) })}
+          </p>
           <div class="actions">
             <ConfirmButton
               disabled={busy}
@@ -192,8 +198,8 @@ export function AccountTools(props: { account: Account; onChanged(): void }) {
           </div>
         </ConfigDialog>
       )}
-      {error && <Notice tone="danger">{error}</Notice>}
-      {notice && <Notice tone="ok">{notice}</Notice>}
+      {error && <Notice tone="danger">{p.text(error, ids)}</Notice>}
+      {notice && <Notice tone="ok">{p.text(notice, ids)}</Notice>}
       <div class="actions" data-part="account-tool-actions">
         <Button onClick={() => setModelsOpen((open) => !open)}>{t("models")}</Button>
         <Button
@@ -237,7 +243,7 @@ export function AccountTools(props: { account: Account; onChanged(): void }) {
           </Button>
         )}
         {a.source === "config" && (
-          <a data-part="account-config-link" href="#/config">
+          <a data-part="account-config-link" href={configAddress("source", a.id)}>
             {t("edit")}
           </a>
         )}
@@ -255,13 +261,13 @@ export function AccountTools(props: { account: Account; onChanged(): void }) {
               [t("model"), result.model],
               [t("served"), result.served_model],
               [t("latency"), t("milliseconds", { count: result.latency_ms })],
-              [t("error"), result.error && errorText(result.error)],
+              [t("error"), result.error && p.text(errorText(result.error), ids)],
             ]}
           />
           {result.reply && (
             <div data-part="account-test-reply">
               <h4>{t("reply")}</h4>
-              <pre class="mono">{result.reply}</pre>
+              <pre class="mono">{p.text(result.reply, ids)}</pre>
             </div>
           )}
         </section>

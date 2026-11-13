@@ -53,7 +53,7 @@ func TestRedactSettings(t *testing.T) {
 }
 
 // In settings, a placeholder goes back only where its secret is: in its own place, or within its
-// own list in any order. A config document's placeholder may still move between secret keys.
+// own list in any order; in a config document too (TestRestorePlacesEachSecretInItsOwnSlot).
 func TestRestoreSettingsKeepsSecretsInPlace(t *testing.T) {
 	r := NewRedactor()
 	cur := []byte(`{"api_key":"fake-a","password":"fake-b","api_keys":["fake-c","fake-d"]}`)
@@ -72,8 +72,8 @@ func TestRestoreSettingsKeepsSecretsInPlace(t *testing.T) {
 	if _, err := r.RestoreSettings([]byte(`{"api_key":"pluxy-redacted-000000000000000000000000"}`), cur); !errors.Is(err, ErrStale) {
 		t.Errorf("unknown placeholder at a secret key: err = %v, want ErrStale", err)
 	}
-	if out, err := r.Restore(swapped, cur, false); err != nil || string(out) != `{"api_key":"fake-b","password":"fake-a"}` {
-		t.Errorf("config restore of moved placeholders = %s, %v; want them accepted", out, err)
+	if out, err := r.Restore(swapped, cur, false); !errors.Is(err, ErrInvalid) || errors.Is(err, ErrStale) {
+		t.Errorf("config restore of swapped placeholders = %s, %v; want ErrInvalid only", out, err)
 	}
 }
 

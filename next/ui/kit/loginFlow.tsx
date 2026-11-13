@@ -2,6 +2,7 @@ import type { TargetedInputEvent } from "preact";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { type Login, type LoginInput, type LoginMethod, problem } from "./api";
 import type { Reply } from "./host";
+import { usePrivacy } from "./privacy";
 import { strings } from "./strings";
 import { Button, Notice, useKit } from "./ui";
 
@@ -207,6 +208,7 @@ export function validAccountId(id: string): boolean {
  * the login running in core; only Cancel sends DELETE. */
 export function LoginFlow(props: LoginFlowProps) {
   const { api, unauthorized } = useKit();
+  const p = usePrivacy();
   const [accountId, setAccountId] = useState(suggestedAccountId);
   const [values, setValues] = useState<Record<string, string>>({});
   const [reading, setReading] = useState<Record<string, boolean>>({});
@@ -519,7 +521,7 @@ export function LoginFlow(props: LoginFlowProps) {
           {(prompt.kind === "browser" || prompt.kind === "device") && (
             <p>{t(prompt.kind === "browser" ? "authorize" : "device")}</p>
           )}
-          {prompt.message && <p>{prompt.message}</p>}
+          {prompt.message && <p>{p.text(prompt.message)}</p>}
           {prompt.kind === "device" && prompt.user_code && (
             <div class="stack">
               <span>{t("deviceCode")}</span>
@@ -592,8 +594,8 @@ export function LoginFlow(props: LoginFlowProps) {
           </div>
         </>
       )}
-      {error && <Notice tone="danger">{error}</Notice>}
-      {pollError && <Notice tone="danger">{pollError}</Notice>}
+      {error && <Notice tone="danger">{p.text(error)}</Notice>}
+      {pollError && <Notice tone="danger">{p.text(pollError)}</Notice>}
       {login?.state === "done" && (
         <>
           <Notice tone="ok">{t("success")}</Notice>
@@ -612,7 +614,9 @@ export function LoginFlow(props: LoginFlowProps) {
       {terminalFailure && (
         <>
           <Notice tone="danger">
-            {t("failed", { reason: pollStopped ?? startError ?? login?.error?.message ?? t("noReason") })}
+            {t("failed", {
+              reason: p.text(pollStopped ?? startError ?? login?.error?.message) ?? t("noReason"),
+            })}
           </Notice>
           <div>
             <Button onClick={reset}>{t("startOver")}</Button>

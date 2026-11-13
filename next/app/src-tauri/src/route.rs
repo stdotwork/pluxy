@@ -78,6 +78,7 @@ fn fail(code: &str, message: impl Into<String>) -> CallError {
     CallError {
         code: code.into(),
         message: message.into(),
+        unknown: false,
     }
 }
 
@@ -93,10 +94,10 @@ fn roots() -> crate::trust::TrustStore {
 /// handler's), a launch may use a remembered approval.
 pub fn call_main(
     app: &AppHandle,
+    call: program::Call,
     package: &str,
     op: &str,
     input: Value,
-    ticket: Option<&str>,
     gesture: Option<Gesture>,
 ) -> Result<Value, CallError> {
     let grant = app
@@ -113,11 +114,11 @@ pub fn call_main(
     };
     dispatch(
         app,
+        call,
         grant,
         vec![Hop::Main],
         origin,
         input,
-        ticket,
         Cancel::default(),
     )
 }
@@ -187,7 +188,9 @@ fn outbound(app: &AppHandle, o: Outbound) -> Result<Value, CallError> {
         packages,
         gesture: Arc::clone(&parent.gesture),
     };
-    dispatch(app, grant, chain, origin, o.input, None, o.cancel)
+    // Registered like any call, so `cancel_all` reaches it too.
+    let call = app.state::<App>().programs.begin_call(None)?;
+    dispatch(app, call, grant, chain, origin, o.input, o.cancel)
 }
 
 /// A page's `native.call` with params `{package, op, input}`, call id of page label's document
@@ -266,15 +269,17 @@ fn page_call(app: &AppHandle, label: &str, params: &Value) -> Result<Value, Call
         sha256: sha256.clone(),
         page: binding.page.clone(),
     }];
-    let r = dispatch(
-        app,
-        g,
-        chain,
-        origin,
-        params["input"].clone(),
-        None,
-        Cancel::default().with(&flag),
-    );
+    let r = st.programs.begin_call(None).and_then(|call| {
+        dispatch(
+            app,
+            call,
+            g,
+            chain,
+            origin,
+            params["input"].clone(),
+            Cancel::default().with(&flag),
+        )
+    });
     st.routes
         .inflight
         .lock()
@@ -301,11 +306,11 @@ fn release_of(caller: &str, folder: &str) -> Option<String> {
 /// context with chain and origin, pinned to the granted release.
 fn dispatch(
     app: &AppHandle,
+    call: program::Call,
     grant: Grant,
     chain: Vec<Hop>,
     origin: Origin,
     input: Value,
-    ticket: Option<&str>,
     cancel: Cancel,
 ) -> Result<Value, CallError> {
     if serde_json::to_vec(&input).map_or(usize::MAX, |b| b.len()) > MAX_INPUT {
@@ -322,11 +327,11 @@ fn dispatch(
         expect: Some((grant.target.sha256().into(), grant.target.installed_at())),
         extra: Box::new(origin),
     };
-    app.state::<App>().programs.call_with(
+    app.state::<App>().programs.run_call_with(
+        call,
         grant.target.id(),
         &grant.op.id,
         input,
-        ticket,
         Arc::new(context),
         cancel,
     )

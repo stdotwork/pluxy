@@ -5,9 +5,11 @@ pub const COMMANDS: &[&str] = &[
     "startup_set",
     "connection_get",
     "connection_set",
+    "core_start",
     "core_restart",
     "core_call",
     "key_entry",
+    "management_key_rotate",
     "sign_out",
     "page_open",
     "page_place",
@@ -30,4 +32,6 @@ pub const COMMANDS: &[&str] = &[
     "window_get",
     "window_set",
     "window_close",
+    "privacy_get",
+    "privacy_set",
 ];

@@ -241,14 +241,14 @@ fn clicked(
     let (a, package, op) = (app.clone(), package.to_string(), op.to_string());
     crate::confirmation::native::click(app, "pluxy routing Start", move |gesture| {
         std::thread::spawn(move || {
-            let _ = tx.send(crate::route::call_main(
-                &a,
-                &package,
-                &op,
-                input,
-                None,
-                Some(gesture),
-            ));
+            let r = a
+                .state::<crate::App>()
+                .programs
+                .begin_call(None)
+                .and_then(|call| {
+                    crate::route::call_main(&a, call, &package, &op, input, Some(gesture))
+                });
+            let _ = tx.send(r);
         });
     })?;
     Ok(rx)

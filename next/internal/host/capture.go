@@ -35,7 +35,7 @@ func capture(ctx context.Context, info protocol.Info) CaptureFunc {
 
 // redactDiagnostic removes r's credentials from every string of d. In a body it also removes the
 // bytes beside a cut that could be a secret cut in two (Redactor.TrimCut), redacts a start and an
-// end with nothing between them as one text (Redactor.Body), and it sets BodySize
+// end with nothing between them as one text and joins them (Redactor.Body), and it sets BodySize
 // to the length of what is left of the pieces plus the bytes left out between them, so a body
 // that was cut is told from one that only got shorter because a credential was replaced.
 func redactDiagnostic(r *protocol.Redactor, d protocol.Diagnostic) protocol.Diagnostic {
@@ -65,10 +65,14 @@ func redactBody(r *protocol.Redactor, b protocol.CapturedBody) protocol.Captured
 		head = r.String(head)
 	} else {
 		// Nothing lies between the start and the end, so they are one text, as the request
-		// log writes them: a secret cut between them is redacted whole.
+		// log writes them: a secret in one of the forms core removes that is cut between them is
+		// removed, but for any part of its start that redacting the start whole had already
+		// sent (protocol.BodyRedactor). They are sent on joined: bytes held back from the
+		// start and sent with the end could make the end longer than the log keeps of it, which
+		// would log a gap that is not there.
 		br := r.Body()
-		head = br.Write(head)
-		end = br.Write(end) + br.Flush()
+		head = br.Write(head) + br.Write(end) + br.Flush()
+		end = ""
 	}
 	return protocol.CapturedBody{Body: head, BodyEnd: end, BodySize: int64(len(head)+len(end)) + left}
 }
