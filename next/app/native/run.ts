@@ -8,6 +8,9 @@
 //   refused by Tauri's command check, and the app never reaches a command from that webview;
 // - from inside the page's sandboxed frame nothing reaches the app (test/probe reports through
 //   its channel);
+// - in managed mode, this device's extension catalog installs, swaps, rolls back, disables and
+//   removes page-only packages from a local registry and from local files through the native
+//   file chooser, refusing reserved IDs and a failed candidate (device.ts, device_native.rs);
 // - closing the window leaves no webview and no web process, with the app still in the tray;
 // - quitting stops the app's own core, and leaves a local or remote core running.
 //
@@ -21,6 +24,13 @@
 // a test-feature binary.
 // In managed mode it then runs the window checks (window.ts, native_window.rs) in two more
 // sessions, one with a tray watcher and one without.
+// Then, in a session of its own (instances.ts, instances-session.ts), the single-instance
+// scenario: a second launch on the same profile exits and raises the first's window, a launch on
+// another profile runs as its own app, and a killed owner's stale lock is recovered.
+// The signed native-tier admission check (admission.ts, admission_native.rs) runs in one more
+// session, with the app built with artifact-test-trust and a test trust profile in the run's HOME.
+// The other sessions run a build without that feature; its device check shows the same profile
+// admits nothing there.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
 // own (dbus-run-session, xvfb-run), and random ports. Inside that session, before the app,
@@ -32,11 +42,24 @@
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline";
+import { buildAdmissionFixtures, PROFILE_FILE } from "./admission";
 import { appImageHeader, buildSmokeAppImage, packAppImage } from "./appimage";
+import { buildDeviceFixtures } from "./device";
+import { runInstances } from "./instances";
 import { descendants, webProcesses } from "./processes";
 import { missingPrerequisites } from "./services";
 
@@ -74,6 +97,9 @@ interface Artifact {
   /** The updater gate passes (the test package) or refuses (anything else), with the same
    * test trust profile in place either way. */
   gate: "passes" | "refuses";
+  /** What a refusal must say. A build with artifact-test-trust refuses a normal identifier for
+   * that identifier; one without it never had updater trust at all. */
+  refusal?: RegExp;
 }
 /** The session's setup failed (session.ts said what is missing or broken, and never said it was
  * ready): the app never ran, and the other modes would fail the same way. */
@@ -203,6 +229,7 @@ async function runApp(
   noTray = false,
   key?: string,
   suite?: Suite,
+  admission = false,
 ): Promise<string[]> {
   const { label, bin } = artifact;
   const root = mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
@@ -226,20 +253,6 @@ async function runApp(
     writeFileSync(join(dirs.config, artifact.identifier, "connection.json"), JSON.stringify(connection), {
       mode: 0o600,
     });
-    // The test trust profile, the same in every run: the marker the app's own code writes
-    // (session_probe trust-marker), its nonce for the app, and the updater key.
-    let nonce = "";
-    try {
-      nonce = /^nonce=([0-9a-f]{64})$/m.exec(run(probe, ["trust-marker", dirs.home], app))?.[1] ?? "";
-      if (!nonce) throw new Error("it printed no nonce");
-    } catch (e) {
-      check(false, `the test trust marker was not written: ${(e as Error).message}`);
-    }
-    writeFileSync(
-      join(dirs.home, ".pluxy-test-trust-roots.json"),
-      JSON.stringify({ roots: [], updater: { kind: "test", public_key: updaterKey } }),
-      { mode: 0o600 },
-    );
     // The main checks close the window to the tray; the window suite starts with Ask every time.
     if (!suite)
       writeFileSync(
@@ -248,6 +261,45 @@ async function runApp(
         { mode: 0o600 },
       );
     const quit = join(root, "quit");
+    // This device's extension catalog is the same in every mode: check it once, in managed mode.
+    const device = mode === "managed" && !admission ? join(root, "device") : undefined;
+    // A test trust profile in HOME naming curated registries: the admission session's build
+    // honours it; the device check's normal build must not.
+    const curated = device || admission ? join(root, "curated") : undefined;
+    // The test trust profile in HOME: its marker and nonce, and the updater key, the same in
+    // every run. With curated registries the fixtures write the marker and the publisher roots;
+    // otherwise the app's own code writes the marker (session_probe trust-marker), with no roots.
+    let nonce = "";
+    let roots: object[] = [];
+    if (curated) {
+      mkdirSync(curated);
+      if (device) mkdirSync(device);
+      const a = buildAdmissionFixtures(curated, dirs.home);
+      nonce = a.nonce;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      const registries = admission
+        ? a.registries
+        : [
+            ...(buildDeviceFixtures(device as string) as { registries: object[] }).registries,
+            ...a.registries.filter((r) => r.name === "curated"),
+          ];
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries }),
+      );
+    } else {
+      try {
+        nonce = /^nonce=([0-9a-f]{64})$/m.exec(run(probe, ["trust-marker", dirs.home], app))?.[1] ?? "";
+        if (!nonce) throw new Error("it printed no nonce");
+      } catch (e) {
+        check(false, `the test trust marker was not written: ${(e as Error).message}`);
+      }
+    }
+    writeFileSync(
+      join(dirs.home, PROFILE_FILE),
+      JSON.stringify({ roots, updater: { kind: "test", public_key: updaterKey } }),
+      { mode: 0o600 },
+    );
     const keyFile = join(root, "key-input");
     const wrongKey = randomUUID();
     if (key) writeFileSync(keyFile, JSON.stringify({ key, wrong: wrongKey }), { mode: 0o600 });
@@ -271,6 +323,8 @@ async function runApp(
       APPIMAGE_EXTRACT_AND_RUN: "1",
       PLUXY_APP_TEST_PAGE: PAGE,
       PLUXY_APP_TEST_QUIT: quit,
+      ...(device ? { PLUXY_APP_TEST_DEVICE: device, PLUXY_APP_TEST_CURATED: curated as string } : {}),
+      ...(admission ? { PLUXY_APP_TEST_ADMISSION: curated as string } : {}),
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: artifact.identifier } : {}),
       ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
       ...(key ? { PLUXY_APP_TEST_KEY_FILE: keyFile } : {}),
@@ -302,6 +356,7 @@ async function runApp(
     const steps = new Map<string, Step>();
     const order: string[] = []; // the app's steps in the order it reported them
     const reached: string[] = [];
+    const assets: { label: string; path: string; status: number }[] = [];
     let before = 0;
     let after = -1;
     const pid = proc.pid ?? 0;
@@ -341,6 +396,10 @@ async function runApp(
       const value = JSON.parse(json);
       if (step === "reached") {
         reached.push(value.webview);
+        return;
+      }
+      if (step === "asset") {
+        assets.push(value);
         return;
       }
       steps.set(step, value);
@@ -387,6 +446,43 @@ async function runApp(
     }
     check(!steps.has("failed"), `the app's test steps failed: ${JSON.stringify(steps.get("failed"))}`);
 
+    // The updater gate, reported before any other step: it read the compiled marker, identifier
+    // and product name, and with the same profile passes only the test package.
+    const checkGate = () => {
+      const gate = steps.get("updater_gate") as
+        | { passed?: boolean; marker?: boolean; identifier?: string; product?: string; error?: string }
+        | undefined;
+      console.log(`${label} updater_gate ${JSON.stringify(gate)}`);
+      check(order[0] === "updater_gate", `the app's first report is ${order[0]}, not its updater gate`);
+      check(
+        gate?.marker === true,
+        `the updater gate did not find the compiled test marker: ${JSON.stringify(gate)}`,
+      );
+      if (artifact.gate === "passes") {
+        check(
+          gate?.passed === true && gate.identifier === TEST_ID && gate.product === TEST_PRODUCT,
+          `the test package's updater gate did not pass as ${TEST_ID}/${TEST_PRODUCT}: ${JSON.stringify(gate)}`,
+        );
+      } else {
+        check(
+          gate?.passed === false &&
+            gate.identifier === identifier &&
+            (artifact.refusal ?? /identifier/).test(gate.error ?? ""),
+          `the ${identifier} app's updater gate was not refused as ${artifact.refusal ?? "for its identifier"}: ${JSON.stringify(gate)}`,
+        );
+      }
+    };
+
+    if (admission) {
+      checkGate();
+      const a = steps.get("admission");
+      check(a?.passed === true, "the native admission check did not complete");
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} admission ${JSON.stringify(a ?? {})}`);
+      console.log(`${mode}: admission ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
     if (startup) {
       check(
         log.some((l) => l.startsWith("startup preferences passed:")),
@@ -397,28 +493,7 @@ async function runApp(
       return problems;
     }
 
-    // The updater gate, reported before any other step: it read the compiled marker, identifier
-    // and product name, and with the same profile passes only the test package.
-    const gate = steps.get("updater_gate") as
-      | { passed?: boolean; marker?: boolean; identifier?: string; product?: string; error?: string }
-      | undefined;
-    console.log(`${label} updater_gate ${JSON.stringify(gate)}`);
-    check(order[0] === "updater_gate", `the app's first report is ${order[0]}, not its updater gate`);
-    check(
-      gate?.marker === true,
-      `the updater gate did not find the compiled test marker: ${JSON.stringify(gate)}`,
-    );
-    if (artifact.gate === "passes") {
-      check(
-        gate?.passed === true && gate.identifier === TEST_ID && gate.product === TEST_PRODUCT,
-        `the test package's updater gate did not pass as ${TEST_ID}/${TEST_PRODUCT}: ${JSON.stringify(gate)}`,
-      );
-    } else {
-      check(
-        gate?.passed === false && gate.identifier === identifier && /identifier/.test(gate.error ?? ""),
-        `the ${identifier} app's updater gate was not refused for its identifier: ${JSON.stringify(gate)}`,
-      );
-    }
+    checkGate();
 
     if (key) {
       const entry = steps.get("keyentry");
@@ -512,6 +587,42 @@ async function runApp(
 
     check(steps.get("confirmations")?.passed === true, "native confirmation checks did not complete");
 
+    // This device's catalog: the driver's own checks passed, and the asset scheme served the
+    // swapped-in release to its page webview and refused that webview the replaced one's files.
+    if (device) {
+      const d = steps.get("device") as
+        | { passed?: boolean; v2_label?: string; digests?: Record<string, string>; normal_build?: string }
+        | undefined;
+      // Without its line, the app's failed step says where the check stopped and why.
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(d?.passed === true, `the device catalog check did not complete: ${failure}`);
+      // This normal build refused the curated registry's signed native tool despite the HOME's
+      // valid test trust profile, for want of roots.
+      check(
+        d?.normal_build?.includes("not configured"),
+        `the normal build did not refuse the curated native tool: ${JSON.stringify(d?.normal_build)}`,
+      );
+      const dg = d?.digests ?? {};
+      const served = (label: string | undefined, digest: string | undefined, status: number) =>
+        assets.some((a) => a.label === label && a.path.includes(`/${digest}/`) && a.status === status);
+      check(
+        dg.notes2 && served(d?.v2_label, dg.notes2, 200),
+        `the asset scheme did not serve 2.0.0 to ${d?.v2_label}`,
+      );
+      check(
+        dg.notes1 && served(d?.v2_label, dg.notes1, 404),
+        `the asset scheme did not refuse 1.0.0 to ${d?.v2_label}`,
+      );
+      for (const k of ["spoof", "pluxy_local", "notes3"])
+        check(
+          dg[k] && !assets.some((a) => a.path.includes(`/${dg[k]}/`) && a.status === 200),
+          `the asset scheme served refused package ${k}`,
+        );
+      console.log(
+        `${mode} device ${JSON.stringify(d ?? { failed: failure })} (${assets.length} asset requests)`,
+      );
+    }
+
     // Closing the window frees its webviews; the app stays in the tray.
     const closed = steps.get("closed") as
       | { webviews: string[]; tray: boolean; core_pid?: number }
@@ -531,9 +642,31 @@ async function runApp(
         `${reached.length} commands reached, all from main: ${reached.every((w) => w === "main")})`,
     );
   } finally {
-    await removeRun(root);
+    // A folder left behind is a problem of its own; it must not hide this run's report.
+    await removeRun(root).catch((e) => problems.push(`the run folder ${root} was not removed: ${e}`));
   }
   return problems;
+}
+
+/** Lets this user remove the device's package store the app left in its run folder, after the
+ * app has quit: the store keeps its installed folders read-only, so they cannot be emptied as
+ * they are. Only folders under the app's `device-packages` change. They are path-based changes,
+ * safe here because the app made that tree, holds no links or mounts in it (archives with links
+ * are refused), and no longer runs. */
+function makeRemovable(root: string) {
+  const walk = (dir: string) => {
+    let entries: string[];
+    try {
+      const st = lstatSync(dir);
+      if (!st.isDirectory()) return;
+      if ((st.mode & 0o700) !== 0o700) chmodSync(dir, 0o700);
+      entries = readdirSync(dir);
+    } catch {
+      return; // gone: rmSync reports what it cannot remove
+    }
+    for (const e of entries) walk(join(dir, e));
+  };
+  walk(join(root, "data", identifier, "device-packages"));
 }
 
 /** Removes a run's folder. A desktop service the run's bus started (such as the document portal,
@@ -541,6 +674,7 @@ async function runApp(
 async function removeRun(root: string) {
   for (let i = 0; ; i++) {
     try {
+      makeRemovable(root);
       rmSync(root, { recursive: true, force: true });
       return;
     } catch (e) {
@@ -564,8 +698,7 @@ if (missing.length > 0) {
 }
 
 const targetDir = resolvePath(tauri, process.env.CARGO_TARGET_DIR ?? "target");
-/** The dev app, and the probe the session uses to check the desktop services. */
-const bin = join(targetDir, "debug", "pluxy-app");
+/** The probe the session uses to check the desktop services. */
 const probe = join(targetDir, "debug", "examples", "session_probe");
 let appImage = ""; // the smoke AppImage the sessions run
 const problems: string[] = [];
@@ -626,27 +759,38 @@ async function main(): Promise<number> {
   }
 
   // The dev app, and the probe the session uses to check the desktop services
-  // (examples/session_probe.rs). Its features are the test package's, so the two differ only in
-  // the identifier and product name the test package's config gives it.
+  // (examples/session_probe.rs).
   run(
     "cargo",
-    [
-      "build",
-      "--locked",
-      "--features",
-      "native-test,artifact-test-trust",
-      "--bin",
-      "pluxy-app",
-      "--example",
-      "session_probe",
-    ],
+    ["build", "--locked", "--features", "native-test", "--bin", "pluxy-app", "--example", "session_probe"],
     tauri,
   );
+  // The build without artifact-test-trust, kept aside before the build with it replaces it. The
+  // device check needs the one (a normal build refuses the curated native tool), the admission
+  // session and the updater gate's identifier check the other (its features are the test
+  // package's, so the two differ only in the identifier and product name).
+  const binDir = tempDir("pluxy-app-native-bin-");
+  const bin = join(binDir, "pluxy-app");
+  copyFileSync(join(targetDir, "debug", "pluxy-app"), bin);
+  run(
+    "cargo",
+    ["build", "--locked", "--features", "native-test,artifact-test-trust", "--bin", "pluxy-app"],
+    tauri,
+  );
+  const trustBin = join(targetDir, "debug", "pluxy-app");
   const appImageDir = tempDir("pluxy-app-native-appimage-");
   // The same test trust profile in every run; without a test package, a key no build carries.
   const updaterKey = testPackage?.updater_pubkey ?? "no-test-package";
   let setupFailure: string | undefined;
-  const dev = (mode: Mode): Artifact => ({ label: mode, bin, identifier, gate: "refuses" });
+  // Without artifact-test-trust the app has no updater trust at all, which is what its gate says.
+  const dev = (mode: Mode): Artifact => ({
+    label: mode,
+    bin,
+    identifier,
+    gate: "refuses",
+    refusal: /updater trust not configured/,
+  });
+  const trusted: Artifact = { label: "managed", bin: trustBin, identifier, gate: "refuses" };
 
   try {
     appImage = await buildSmokeAppImage(appImageDir);
@@ -659,6 +803,20 @@ async function main(): Promise<number> {
       const p = await runApp("managed", dev("managed"), updaterKey, managed);
       p.push(...(await runApp("managed", dev("managed"), updaterKey, managed, undefined, true)));
       p.push(...(await runApp("managed", dev("managed"), updaterKey, managed, undefined, true, true)));
+      p.push(
+        ...(await runApp(
+          "managed",
+          trusted,
+          updaterKey,
+          managed,
+          undefined,
+          false,
+          false,
+          undefined,
+          undefined,
+          true,
+        )),
+      );
       for (const suite of ["window", "window-no-tray"] as const)
         p.push(
           ...(await runApp(
@@ -674,6 +832,21 @@ async function main(): Promise<number> {
           )),
         );
       problems.push(...p.map((x) => `managed: ${x}`));
+
+      // Two launches of the app on one profile: one app, one core, the first one's window raised.
+      const inst = await runInstances({
+        bin,
+        probe,
+        appImage,
+        core,
+        identifier,
+        timeoutMs: TIMEOUT,
+        sessions,
+        stopSession,
+        removeRun,
+      });
+      if (inst.setup !== undefined) throw new SetupError(inst.setup);
+      problems.push(...inst.problems.map((x) => `instances: ${x}`));
     } finally {
       rmSync(prepared, { recursive: true, force: true });
     }
@@ -776,6 +949,8 @@ async function main(): Promise<number> {
     console.error(`\n${problems.length} problems:\n- ${problems.join("\n- ")}`);
     return 1;
   }
-  console.log("native test passed in all three modes, as the packaged app, and at the release gate");
+  console.log(
+    "native test passed in all three modes, the single-instance scenario, as the packaged app, and at the release gate",
+  );
   return 0;
 }

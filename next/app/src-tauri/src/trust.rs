@@ -77,6 +77,31 @@ impl TrustStore {
         let _ = home;
         Ok(Self { config })
     }
+    /// This process's trust: the compiled production roots or, in a test-trust build, the test
+    /// profile in the process HOME. A profile that cannot be used leaves native-tier trust
+    /// unconfigured, never another set of roots.
+    pub fn current() -> Self {
+        let home = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_default();
+        Self::load(&home).unwrap_or_else(|e| {
+            eprintln!("pluxy-app: native-tier trust is not configured: {e}");
+            Self {
+                config: TrustConfig {
+                    roots: vec![],
+                    updater: None,
+                },
+            }
+        })
+    }
+    /// Whether a root names source as its curated source.
+    pub fn curated_source(&self, source: &str) -> bool {
+        self.config.roots.iter().any(|r| r.source == source)
+    }
+    /// Whether a root names publisher.
+    pub fn root_publisher(&self, publisher: &str) -> bool {
+        self.config.roots.iter().any(|r| r.publisher == publisher)
+    }
     pub fn require_native(&self) -> Result<(), String> {
         if self.config.roots.is_empty() {
             Err("native-tier trust not configured".into())
