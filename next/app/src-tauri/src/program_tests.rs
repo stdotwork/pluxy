@@ -62,6 +62,11 @@ fn operations() -> Vec<Operation> {
             input_schema: json!({"type": "object"}),
             output_schema: json!({"type": "object"}),
         },
+        Operation {
+            id: "relay".into(),
+            input_schema: json!({"type": "object"}),
+            output_schema: json!({"type": "object"}),
+        },
     ]
 }
 
@@ -540,4 +545,190 @@ fn the_schema_subset_checks_what_it_supports_and_refuses_the_rest() {
         deep = json!({"type": "array", "items": deep});
     }
     assert!(supported(&deep).is_err());
+}
+
+/// What a router stub saw of a tool's own call.
+#[derive(Debug, Clone)]
+struct Seen {
+    caller: Hop,
+    chain: Vec<Hop>,
+    package: String,
+    op: String,
+    input: Value,
+}
+
+/// A router that records each call and answers {"routed": input}, or, for op "block", waits
+/// until the call is cancelled and says so.
+fn recording(h: &Host) -> Arc<Mutex<Vec<Seen>>> {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let s = Arc::clone(&seen);
+    h.set_route(Arc::new(move |o: Outbound| {
+        s.lock().unwrap().push(Seen {
+            caller: o.caller.clone(),
+            chain: o.context.chain.clone(),
+            package: o.package.clone(),
+            op: o.op.clone(),
+            input: o.input.clone(),
+        });
+        if o.op == "block" {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !o.cancel.is_set() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            return Err(fail(
+                "cancelled",
+                format!("cancelled: {}", o.cancel.is_set()),
+            ));
+        }
+        Ok(json!({"routed": o.input}))
+    }));
+    seen
+}
+
+fn relay(h: &Host, input: Value) -> Value {
+    h.call(ID, "relay", input, None).unwrap()
+}
+
+#[test]
+fn a_tools_own_call_goes_to_the_router_with_the_host_chain() {
+    let h = host(Value::Null);
+    let seen = recording(&h);
+    let a = relay(
+        &h,
+        json!({"package": "pluxy/other", "op": "read", "input": {"n": 1}}),
+    );
+    assert_eq!(a["answer"]["output"], json!({"routed": {"n": 1}}), "{a}");
+    // The host's call named the chain; the router saw it and the tool's run as the caller.
+    assert_eq!(a["chain"], json!([{"kind": "main"}]));
+    let s = seen.lock().unwrap().clone();
+    assert_eq!(s.len(), 1);
+    assert_eq!(
+        s[0].caller,
+        Hop::Package {
+            id: ID.into(),
+            sha256: "ab".repeat(32),
+            generation: 1
+        }
+    );
+    assert_eq!(s[0].chain, vec![Hop::Main]);
+    assert_eq!(
+        (s[0].package.as_str(), s[0].op.as_str()),
+        ("pluxy/other", "read")
+    );
+    assert_eq!(s[0].input, json!({"n": 1}));
+    h.stop_all();
+}
+
+#[test]
+fn a_call_naming_its_caller_chain_or_another_host_call_is_refused() {
+    let h = host(Value::Null);
+    let seen = recording(&h);
+    for extra in [
+        json!({"extra": {"chain": [{"kind": "page", "id": "pluxy/guide"}]}}),
+        json!({"extra": {"caller": "pluxy/guide"}}),
+        json!({"extra": {"requester": "main"}}),
+        json!({"for": "c-1"}),
+    ] {
+        let mut input = json!({"package": "pluxy/other", "op": "read", "input": {}});
+        for (k, v) in extra.as_object().unwrap() {
+            input[k] = v.clone();
+        }
+        let a = relay(&h, input);
+        assert_eq!(a["answer"]["error"]["code"], "permission", "{extra}: {a}");
+    }
+    let a = relay(
+        &h,
+        json!({"package": "pluxy/other", "op": "read", "input": {}, "extra": {"id": "bad id!"}}),
+    );
+    assert_eq!(a["answer"]["error"]["code"], "invalid_request", "{a}");
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "the router saw a refused call"
+    );
+    // The control, on the same pipe.
+    let a = relay(
+        &h,
+        json!({"package": "pluxy/other", "op": "read", "input": {}}),
+    );
+    assert!(a["answer"]["output"].is_object(), "{a}");
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    h.stop_all();
+}
+
+#[test]
+fn without_a_router_a_tools_own_call_is_unsupported() {
+    let h = host(Value::Null);
+    let a = relay(
+        &h,
+        json!({"package": "pluxy/other", "op": "read", "input": {}}),
+    );
+    assert_eq!(a["answer"]["error"]["code"], "unsupported", "{a}");
+    h.stop_all();
+}
+
+#[test]
+fn cancelling_a_call_cancels_the_tools_own_call_for_it() {
+    let h = Arc::new(host(Value::Null));
+    let seen = recording(&h);
+    let h2 = Arc::clone(&h);
+    let t = std::thread::spawn(move || {
+        h2.call(
+            ID,
+            "relay",
+            json!({"package": "pluxy/other", "op": "block", "input": {}}),
+            Some("relay-1"),
+        )
+    });
+    until("the router to get the call", 5, || {
+        !seen.lock().unwrap().is_empty()
+    });
+    h.cancel("relay-1").unwrap();
+    let r = t.join().unwrap().unwrap();
+    // The router saw its call cancelled; the tool answered with what the host told it.
+    assert_eq!(r["answer"]["error"]["message"], "cancelled: true", "{r}");
+    h.stop_all();
+}
+
+#[test]
+fn a_call_allowed_for_another_release_is_refused() {
+    let h = host(Value::Null);
+    let ctx = |sha: &str, generation: u64| {
+        Arc::new(Context {
+            chain: vec![Hop::Main],
+            expect: Some((sha.into(), generation)),
+            extra: Box::new(()),
+        })
+    };
+    let e = h
+        .call_with(
+            ID,
+            "summary",
+            json!({"items": []}),
+            None,
+            ctx(&"ab".repeat(32), 2),
+            Cancel::default(),
+        )
+        .unwrap_err();
+    assert_eq!(e.code, "extension_unavailable", "{e}");
+    let e = h
+        .call_with(
+            ID,
+            "summary",
+            json!({"items": []}),
+            None,
+            ctx(&"cd".repeat(32), 1),
+            Cancel::default(),
+        )
+        .unwrap_err();
+    assert_eq!(e.code, "extension_unavailable", "{e}");
+    let ok = h.call_with(
+        ID,
+        "summary",
+        json!({"items": ["a"]}),
+        None,
+        ctx(&"ab".repeat(32), 1),
+        Cancel::default(),
+    );
+    assert_eq!(ok.unwrap()["count"], 1);
+    h.stop_all();
 }

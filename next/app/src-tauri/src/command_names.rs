@@ -23,6 +23,7 @@ pub const COMMANDS: &[&str] = &[
     "device_remove",
     "device_rollback",
     "device_page_open",
+    "device_imports",
     "program_call",
     "program_cancel",
     "program_status",

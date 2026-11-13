@@ -312,6 +312,13 @@ impl Pages {
                     "config.set" => c.params.as_object().is_some_and(|p| {
                         p.len() == 1 && p.get("values").is_some_and(Value::is_object)
                     }),
+                    // A native operation, which the router answers (`route.rs`).
+                    "native.call" => c.params.as_object().is_some_and(|p| {
+                        p.len() == 3
+                            && p.get("package").is_some_and(Value::is_string)
+                            && p.get("op").is_some_and(Value::is_string)
+                            && p.get("input").is_some_and(Value::is_object)
+                    }),
                     _ => return Err(fail(400, "unknown_method")),
                 };
                 let data: Value =

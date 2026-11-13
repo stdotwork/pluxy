@@ -24,8 +24,10 @@
 //!   until consent is given again; native routes reach the new release;
 //! - revoke: revoking the consent while a page's call runs delivers no result to it, and the
 //!   next call is refused;
-//! - launch: a launch-class call from the window asks each time; the same launch through a web
-//!   package's import asks each time, even after "remember" was ticked.
+//! - launch: a launch-class call started by a native click asks, and with "remember" ticked, the
+//!   next identical one from a native click runs without asking; the same launch through relay
+//!   (another chain) asks again, as does one from the window without a native click; through a web
+//!   package's import it asks each time, even after "remember" was ticked there.
 //!
 //! One line on stderr: `native-test: routing <JSON>`.
 
@@ -33,6 +35,7 @@ use super::admission::{dialog, dialog_text, ok, press, require, settle, start};
 use super::{eval, log, wait_for};
 use serde_json::{json, Value};
 use std::path::PathBuf;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Webview};
 
@@ -224,6 +227,38 @@ impl Page {
     fn close(self, main: &Webview) -> Result<(), String> {
         ok(main, "page_close", json!({"label": self.label})).map(|_| ())
     }
+}
+
+/// Starts the window's call of op of package with input from a native button's click, which
+/// makes a native gesture; the answer comes on the receiver.
+fn clicked(
+    app: &AppHandle,
+    package: &str,
+    op: &str,
+    input: Value,
+) -> Result<mpsc::Receiver<Result<Value, crate::program::CallError>>, String> {
+    let (tx, rx) = mpsc::channel();
+    let (a, package, op) = (app.clone(), package.to_string(), op.to_string());
+    crate::confirmation::native::click(app, "pluxy routing Start", move |gesture| {
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::route::call_main(
+                &a,
+                &package,
+                &op,
+                input,
+                None,
+                Some(gesture),
+            ));
+        });
+    })?;
+    Ok(rx)
+}
+
+fn answer(
+    rx: &mpsc::Receiver<Result<Value, crate::program::CallError>>,
+) -> Result<Result<Value, crate::program::CallError>, String> {
+    rx.recv_timeout(Duration::from_secs(90))
+        .map_err(|_| "no answer to the clicked call".to_string())
 }
 
 fn forbidden(r: &Value, what: &str) -> Result<(), String> {
@@ -565,6 +600,42 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         (|| {
             let launch = expect["launch"].clone();
             let argv = launch["argv"].clone();
+            // Started by a native click: asks the first time; remembered, the next runs unasked.
+            let rx = clicked(app, TARGET, "launch", launch.clone())?;
+            let text = dialog_text(app)?;
+            require(
+                text.contains(launch["executable"].as_str().unwrap_or("?"))
+                    && text.contains("main window"),
+                format!("the clicked launch's confirmation: {text}"),
+            )?;
+            press("alt+r")?;
+            press("alt+o")?;
+            let r = answer(&rx)?.map_err(|e| format!("the confirmed clicked launch: {e}"))?;
+            require(r["launched"] == argv, format!("the clicked launch: {r}"))?;
+            let rx = clicked(app, TARGET, "launch", launch.clone())?;
+            let r = answer(&rx)?.map_err(|e| format!("the remembered launch: {e}"))?;
+            require(
+                r["launched"] == argv && !showing(),
+                format!("the remembered launch ran without asking: {r}"),
+            )?;
+            // The same launch through relay is another chain: it asks again.
+            let rx = clicked(
+                app,
+                RELAY,
+                "relay",
+                json!({"package": TARGET, "op": "launch", "input": launch}),
+            )?;
+            let text = dialog_text(app)?;
+            require(
+                text.contains(RELAY),
+                format!("the relayed launch's confirmation: {text}"),
+            )?;
+            press("alt+c")?;
+            let r = answer(&rx)?.map_err(|e| format!("relay's own call: {e}"))?;
+            require(
+                r["answer"]["error"]["code"] == "cancelled",
+                format!("the relayed launch, cancelled: {r}"),
+            )?;
             // The window's call without a native gesture asks.
             let slot = start(
                 main,

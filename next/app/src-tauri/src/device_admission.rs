@@ -58,6 +58,9 @@ pub struct OperationDecl {
     pub description: String,
     pub input_schema: Value,
     pub output_schema: Value,
+    /// `read`, `write` or `launch` (`imports::Effect`); absent in a manifest: `write`.
+    #[serde(default = "imports::write_effect")]
+    pub effect: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,7 +124,7 @@ impl Package {
         let d = v.descriptor();
         if d.id != id
             || d.version != r.version
-            || d.tier != Tier::Native
+            || d.tier != tier(&r.tier)
             || d.size != r.size
             || d.sha256 != r.sha256
         {
@@ -162,6 +165,8 @@ pub struct Admitted {
     pub(super) state: StateDecl,
     pub(super) app_version: i64,
     pub(super) host_contract: i64,
+    pub(super) imports: Vec<ImportDecl>,
+    pub(super) exports: Option<ExportDecl>,
 }
 
 impl Admitted {
@@ -226,12 +231,19 @@ impl Admitted {
     pub fn host_contract(&self) -> i64 {
         self.host_contract
     }
-    /// The native confirmation enabling it shows: the main window as the requester; the tool,
-    /// as the executor, with its ID, source, digest, signer and key, contracts, operations and
-    /// program; and that it has full access to your user account.
+    /// The other packages' operations it may call through the host.
+    pub fn imports(&self) -> &[ImportDecl] {
+        &self.imports
+    }
+    /// The operations other packages may import, and their contract.
+    pub fn exports(&self) -> Option<&ExportDecl> {
+        self.exports.as_ref()
+    }
+    /// It, as native confirmations name a package: ID, source, digest, signer and key,
+    /// contracts and generation.
     #[cfg(target_os = "linux")]
-    pub fn confirmation(&self) -> crate::confirmation::Action {
-        let package = crate::confirmation::Package {
+    pub fn package(&self) -> crate::confirmation::Package {
+        crate::confirmation::Package {
             id: self.id.clone(),
             source: format!("registry {} ({})", self.source.name, self.signed.source),
             digest: self.sha256.clone(),
@@ -240,40 +252,59 @@ impl Admitted {
                 self.signed.publisher, self.signed.key_id, self.signed.public_key
             ),
             contract: format!(
-                "app host {}; app {}; state {}, reads {:?}",
+                "app host {}; app {}; state {}, reads {:?}{}",
                 self.host_contract,
                 self.app_version,
                 self.state.version,
-                self.state.readable_versions
+                self.state.readable_versions,
+                self.exports
+                    .as_ref()
+                    .map(|e| format!("; exports contract {}", e.contract))
+                    .unwrap_or_default()
             ),
             generation: self.installed_at,
-        };
+        }
+    }
+    /// The native confirmation enabling it shows: the main window as the requester; the tool,
+    /// as the executor, with its ID, source, digest, signer and key, contracts, operations and
+    /// program; and that it has full access to your user account.
+    #[cfg(target_os = "linux")]
+    pub fn confirmation(&self) -> crate::confirmation::Action {
+        let package = self.package();
         let operations: Vec<String> = self
             .operations
             .iter()
-            .map(|o| format!("{} ({})", o.id, o.description))
+            .map(|o| format!("{} ({}, {})", o.id, o.description, o.effect))
             .collect();
         crate::confirmation::Action {
             what: format!(
-                "Enable native tool {} {}. It has full access to your user account. Operations: {}",
+                "Enable native tool {} {}. It has full access to your user account. Operations: {}.{}",
                 self.id,
                 self.version,
-                operations.join(", ")
+                operations.join(", "),
+                imports::listing(&self.imports)
             ),
             // The person asked in the app's main window; the tool is what would run.
-            chain: vec![crate::confirmation::Package {
-                id: "main window".into(),
-                source: format!("pluxy app {}", env!("CARGO_PKG_VERSION")),
-                digest: String::new(),
-                signer: String::new(),
-                contract: format!("app host {HOST_CONTRACT}"),
-                generation: 0,
-            }],
+            chain: vec![main_window()],
             executor: package,
             native_tool: true,
             files: vec![self.program.clone()],
             launch: None,
         }
+    }
+}
+
+/// The main window, as native confirmations name the requester of what the person asked for
+/// there.
+#[cfg(target_os = "linux")]
+pub fn main_window() -> crate::confirmation::Package {
+    crate::confirmation::Package {
+        id: "main window".into(),
+        source: format!("pluxy app {}", env!("CARGO_PKG_VERSION")),
+        digest: String::new(),
+        signer: String::new(),
+        contract: format!("app host {HOST_CONTRACT}"),
+        generation: 0,
     }
 }
 
@@ -324,7 +355,7 @@ fn names(d: &artifact::Descriptor, id: &str, version: &str) -> Result<(), String
 }
 
 /// Checks the signature l over its descriptor with source's root key, and that the descriptor
-/// names id's release version as a native tool, from the index alone (before anything is
+/// names id's release version, from the index alone (before anything is
 /// fetched).
 pub(super) fn check_listed(
     roots: &dyn Roots,
@@ -338,14 +369,16 @@ pub(super) fn check_listed(
         .map_err(|_| format!("{id} {version}: its signature is not 128 lower-case hex digits"))?;
     let v = artifact::verify_descriptor(&key, l.descriptor.as_bytes(), &sig, platform)
         .map_err(|e| format!("{id} {version}: {e}"))?;
-    names(v.descriptor(), id, version)?;
-    // As staging refuses it once the archive is unpacked.
-    if v.descriptor().tier != Tier::Native {
-        return Err(format!(
-            "{id} {version}: curated web packages are not admitted by this app yet"
-        ));
+    names(v.descriptor(), id, version)
+}
+
+/// The descriptor tier a release of tier names.
+fn tier(tier: &str) -> Tier {
+    if tier == "native" {
+        Tier::Native
+    } else {
+        Tier::Web
     }
-    Ok(())
 }
 
 /// Verifies a curated registry's signature l over its descriptor with source's root key for
@@ -433,8 +466,13 @@ pub(super) fn native_release(
             description: o.description.clone(),
             input_schema: o.input_schema.clone(),
             output_schema: o.output_schema.clone(),
+            effect: o.effect.clone().unwrap_or_else(imports::write_effect),
         })
         .collect();
+    r.exports = app.exports.as_ref().map(|e| ExportDecl {
+        contract: e.contract.unwrap_or_default(),
+        operations: e.operations.clone(),
+    });
     r.state = app.state.as_ref().map(|s| StateDecl {
         version: s.version,
         readable_versions: s.readable_versions.clone(),
@@ -507,6 +545,8 @@ impl Catalog {
             state,
             app_version: r.app_version,
             host_contract: HOST_CONTRACT,
+            imports: r.imports.clone(),
+            exports: r.exports.clone(),
         };
         Ok((a, r.tree.clone()))
     }
@@ -530,13 +570,18 @@ impl Catalog {
         if self.packages.get(id).is_some_and(|p| p.enabled) {
             return Err(format!("{id} is enabled already"));
         }
-        self.native_record(id, roots)
+        let (a, tree) = self.native_record(id, roots)?;
+        // Its required imports are enabled tools exporting them, and they lead back to it nowhere.
+        self.dependencies(id, &a.imports, roots)?;
+        Ok((a, tree))
     }
 
     /// Enables the native tool a, after its native confirmation, when it is still the release,
     /// source and signer the person confirmed and still checks out.
     pub fn admit(&mut self, a: &Admitted, roots: &dyn Roots) -> Result<(), String> {
         let now = self.check_native(&a.id, roots);
+        // Its imports again: a target disabled while it was being confirmed refuses it.
+        self.dependencies(&a.id, &a.imports, roots)?;
         self.admit_as(a, now)
     }
 
@@ -544,6 +589,7 @@ impl Catalog {
     /// the catalog's lock: the record must still be the one checked.
     pub fn admit_checked(&mut self, a: &Admitted, roots: &dyn Roots) -> Result<(), String> {
         let now = self.native_record(&a.id, roots).map(|(now, _)| now);
+        self.dependencies(&a.id, &a.imports, roots)?;
         self.admit_as(a, now)
     }
 
