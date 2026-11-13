@@ -530,6 +530,13 @@ pub(crate) fn run(
             .exists()
             .then_some(())
     })?;
+    // The error notice appears above the notes area: no scroll, no resize of the window or of
+    // the area, yet the area moves down, and the notes webview has to follow it.
+    let shown = "(() => { const r = document.querySelector('[data-part=release-notes][data-product=app]').getBoundingClientRect(); \
+        const v = document.documentElement; const x = Math.max(r.left, 0), y = Math.max(r.top, 0); \
+        const w = Math.min(r.right, v.clientWidth) - x, h = Math.min(r.bottom, v.clientHeight) - y; \
+        return w >= 1 && h >= 1 ? {x, y, width: w, height: h} : null; })()";
+    let area_before = area(main, "app");
     click(main, "[data-part=release-check]")?;
     wait_attr(
         main,
@@ -538,10 +545,21 @@ pub(crate) fn run(
         "offline",
         "true",
     )?;
+    let mut last = json!(null);
+    let under_notice = wait_for("the notes webview over its area under the notice", || {
+        let want = eval(main, shown)?;
+        let got = placed(app, &again).ok()?;
+        last = json!({"want": want, "placed": got});
+        near(&want, &got).then(|| last.clone())
+    })
+    .map_err(|e| format!("{e}: {last}"))?;
+    let area_after = area(main, "app");
     evidence["offline"] = json!({
         "kept": attr(main, app_card, "latest") == "0.3.0-preview.1",
         "same_time": attr(main, "[data-part=release-checked]", "at") == checked,
         "message": eval(main, "document.querySelector('[data-part=release-problem]')?.textContent ?? null"),
+        "area_moved": (area_after["y"].as_f64().unwrap_or(0.0) - area_before["y"].as_f64().unwrap_or(0.0)).abs() > 2.0,
+        "area_before": area_before, "area_after": area_after, "webview": under_notice,
     });
 
     // Leaving the page closes its notes webviews.

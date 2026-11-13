@@ -557,6 +557,8 @@ function checkRelease(
     off.kept === true && off.same_time === true && /Could not reach the release feed/.test(off.message ?? ""),
     `offline: ${JSON.stringify(off)}`,
   );
+  // The notice moved the notes area (so the check below is not vacuous), and the webview followed.
+  check(off.area_moved === true, `the offline notice did not move the notes area: ${JSON.stringify(off)}`);
   check(release.closed === true, "notes webviews stayed open after leaving the page");
   // What the feed server and the stand-in browser saw, apart from the app's own report.
   const seen = Object.fromEntries(feed.requests);
