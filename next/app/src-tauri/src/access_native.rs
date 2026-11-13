@@ -51,41 +51,6 @@ fn key(title: &str, keys: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The names of the visible top-level windows, to say what was showing when a wait failed.
-fn showing_windows() -> String {
-    x(&["search", "--onlyvisible", "--name", "."])
-        .map(|ids| {
-            ids.lines()
-                .map(|id| x(&["getwindowname", id]).unwrap_or_else(|e| e))
-                .collect::<Vec<_>>()
-                .join(" | ")
-        })
-        .unwrap_or_else(|e| e)
-}
-
-/// Answers the native confirmation the command in slot opens with keys. If the command answers
-/// first, or nothing shows, says so, with the windows showing.
-fn answer_confirmation(main: &Webview, slot: &str, keys: &str) -> Result<(), String> {
-    let seen = wait_for(CONFIRMATION, || {
-        if window(CONFIRMATION).is_some() {
-            return Some(Ok(()));
-        }
-        eval(
-            main,
-            &format!("window.__pluxyDevice?.[{}] ?? null", json!(slot)),
-        )
-        .filter(|v| !v.is_null())
-        .map(|r| {
-            Err(format!(
-                "the command answered before any confirmation showed: {r}"
-            ))
-        })
-    })
-    .map_err(|e| format!("{e}; windows showing: {}", showing_windows()))?;
-    seen?;
-    key(CONFIRMATION, keys)
-}
-
 /// The native file chooser's title for a grant.
 fn chooser_title(id: &str, resource: &str, folder: bool) -> String {
     format!(
@@ -139,9 +104,8 @@ fn grant(
         key(&title, "Escape")?;
     } else {
         choose(&title, path)?;
-        answer_confirmation(
-            main,
-            &slot,
+        key(
+            CONFIRMATION,
             if answer == Answer::Confirm {
                 "alt+o"
             } else {
@@ -165,7 +129,7 @@ fn grant(
 /// Approves (or cancels approving) the signer of package id's active release.
 fn signer(main: &Webview, id: &str, confirm: bool) -> Result<(), String> {
     let slot = start(main, "access_signer", json!({"id": id}))?;
-    answer_confirmation(main, &slot, if confirm { "alt+o" } else { "alt+c" })?;
+    key(CONFIRMATION, if confirm { "alt+o" } else { "alt+c" })?;
     let r = settle(main, &slot)?;
     let want = if confirm { "approved" } else { "cancelled" };
     require(
