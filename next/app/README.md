@@ -102,17 +102,17 @@ the app started (read from `/proc` on Linux, before the app sends anything there
 version it was signed as, and the app has saved the new selection. If not, the app puts the
 config back as it was, removes a version it installed for this switch, and runs the version that
 worked before (when the switch was to the selected version itself, and reinstalled it, copied a
-damaged adopted program in again, or ran it with **Roll back to** and it failed, the one before
-it, which is then selected once it runs); the page says why the new one did not start. If the config cannot be put back, no
-core runs: the candidate stays recorded with the copy, and the app tries again at its next start.
-Once it is put back, a mark beside the config says so, and a later start does not put it back
-again over your edits, unless the app could save neither the failure nor that mark: then the
-next start puts the same config back once more. If the app stops while a version starts, it does the same at its next start, also when that
-was a reinstall or rollback of the selected version; a copy
-it cannot read is an error, and the config is left as it is. From the moment the app begins to
-stop its core, or sees it exit, it sends nothing more to that address. The app keeps the
-running version and the one before it, and removes older ones after a switch. Rolling back
-reaches only an installed version.
+damaged adopted program in again, or ran it with **Roll back to** and it failed, the one before it,
+which is then selected once it runs); the page says why the new one did not start. If the config
+cannot be put back, no core runs: the candidate stays recorded with the copy, and the app tries
+again at its next start. Once it is put back, a mark beside the config says so, and a later start
+does not put it back again over your edits, unless the app could save neither the failure nor that
+mark: then the next start puts the same config back once more. If the app stops while a version
+starts, it does the same at its next start, also when that was a reinstall or rollback of the
+selected version; a copy it cannot read is an error, and the config is left as it is. From the
+moment the app begins to stop its core, or sees it exit, it sends nothing more to that address. The
+app keeps the running version and the one before it, and removes older ones after a switch. Rolling
+back reaches only an installed version.
 
 A **core program** you name on the Connection page (or `pluxy` beside the app) is never run in
 place. **Adopt this core program** shows its path, size and SHA-256 in the native confirmation;
@@ -355,15 +355,16 @@ In managed mode, two more sessions run the window checks (`native/window.ts`, wh
 the app through the stages in `src-tauri/src/native_window.rs`), one with a tray watcher and
 one without. Their core is the signed test release 2.0.0, installed before each session
 (`session_probe install-core`, as a confirmed install would), because the sign-in below needs the
-bundled test packages beside the core's program and an adopted program is copied alone. They close the window as its window manager would (a GTK delete event) and answer
-the prompt in the window: Cancel keeps it, Minimize to Tray and the remembered choices close it
-with no webview or web process left, and the app's own tray item (through the watcher and its
-menu, `session_probe tray`) opens it again at the size and place it had; Exit App, from the
-prompt or the setting, quits and stops the app's own core; the next launch opens where the
-window was. A pending test sign-in's polls are counted while the window shows, while it is
-unmapped (as a window manager minimizes it; GDK then reports it minimized) and once it is mapped
-again. Without a tray watcher, closing quits without asking, with Minimize to Tray or Ask saved.
-The `native-test` feature is for that test alone; release builds never have it.
+bundled test packages beside the core's program and an adopted program is copied alone. They close
+the window as its window manager would (a GTK delete event) and answer the prompt in the window:
+Cancel keeps it, Minimize to Tray and the remembered choices close it with no webview or web
+process left, and the app's own tray item (through the watcher and its menu, `session_probe tray`)
+opens it again at the size and place it had; Exit App, from the prompt or the setting, quits and
+stops the app's own core; the next launch opens where the window was. A pending test sign-in's
+polls are counted while the window shows, while it is unmapped (as a window manager minimizes it;
+GDK then reports it minimized) and once it is mapped again. Without a tray watcher, closing quits
+without asking, with Minimize to Tray or Ask saved. The `native-test` feature is for that test
+alone; release builds never have it.
 
 In local and remote modes, the test also drives the real GTK dialog with `xdotool`: good keys
 authenticate, bad keys and Cancel preserve the connection and saved settings, and the native
