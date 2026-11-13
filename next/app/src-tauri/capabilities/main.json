@@ -31,6 +31,10 @@
     "allow-device-remove",
     "allow-device-rollback",
     "allow-device-page-open",
+    "allow-access-list",
+    "allow-access-signer",
+    "allow-access-grant",
+    "allow-access-revoke",
     "allow-window-get",
     "allow-window-set",
     "allow-window-close"

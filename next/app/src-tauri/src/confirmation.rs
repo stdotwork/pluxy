@@ -492,6 +492,13 @@ impl Confirmations {
     pub fn prepare_import(&mut self, action: Action) -> Result<Prepared, String> {
         self.prepare(action, Origin::Import)
     }
+    /// For native handlers of a window command, such as granting a file through Access: the
+    /// action is built by native code from native state, never from the window's arguments,
+    /// and its review still needs the person's native answer. Main origin never reuses a
+    /// remembered launch here: Access actions have no launch.
+    pub fn prepare_main(&mut self, action: Action) -> Result<Prepared, String> {
+        self.prepare(action, Origin::Main)
+    }
     // Trusted preparations are created only by native main/tray/UI handlers in this module.
     fn prepare(&mut self, action: Action, origin: Origin) -> Result<Prepared, String> {
         if action.chain.is_empty() {

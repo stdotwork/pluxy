@@ -24,10 +24,56 @@ export interface DeviceRelease {
   host_versions: number[];
   ui_version?: number;
   pages: DevicePage[];
-  /** Resources the package asks for; none is granted yet. */
+  /** Resources the package asks for, by ID. */
   resources: string[];
+  /** The same, as Access grants them. */
+  declared: DeviceResource[];
+  /** Who signed it, from the registry it came from; null when unsigned. */
+  signer: DeviceSigner | null;
   /** Whether it declares settings; they are not served on this device yet. */
   settings: boolean;
+}
+
+export interface DeviceResource {
+  id: string;
+  kind: "file" | "subtree";
+  operations: string[];
+}
+
+export interface DeviceSigner {
+  publisher: string;
+  key_id: string;
+  /** The Ed25519 public key, in hexadecimal. */
+  public_key: string;
+  /** The registry's index this signer is approved for, or would be. */
+  source: string;
+  approved: boolean;
+}
+
+/** A file or folder the person granted to a package (src-tauri/src/access.rs). */
+export interface AccessGrant {
+  id: string;
+  package: string;
+  resource: string;
+  kind: "file" | "subtree";
+  operations: string[];
+  /** What the person chose. */
+  selected: string;
+  /** What it resolved to when they confirmed it. */
+  target: string;
+  /** The release it was granted to. */
+  sha256: string;
+  /** A document portal file: the grant ends when the app quits. */
+  session_only: boolean;
+  /** The link or file changed since: refused until granted again. */
+  changed: boolean;
+  granted_at: number;
+}
+
+export interface AccessList {
+  signers: { publisher: string; source: string; key_id: string; public_key: string }[];
+  grants: AccessGrant[];
+  warning?: string | null;
 }
 
 export interface DevicePackage {
@@ -91,4 +137,16 @@ export const device = {
   setEnabled: (id: string, enabled: boolean) => reply<DeviceCatalog>("device_enable", { id, enabled }),
   remove: (id: string) => reply<DeviceCatalog>("device_remove", { id }),
   rollback: (id: string) => reply<DeviceCatalog>("device_rollback", { id }),
+};
+
+/** Access: grants start here, in the window; native code asks for the file and the
+ * confirmation, and the window never names a path. */
+export const access = {
+  list: () => reply<AccessList>("access_list"),
+  /** Opens a native confirmation of the package's signer. */
+  approveSigner: (id: string) => reply<{ outcome: "approved" | "cancelled" }>("access_signer", { id }),
+  /** Opens the native file chooser, then a native confirmation. */
+  grant: (id: string, resource: string) =>
+    reply<{ outcome: "granted" | "cancelled"; grant?: AccessGrant }>("access_grant", { id, resource }),
+  revoke: (grant: string) => reply<{ finished: number }>("access_revoke", { grant }),
 };
