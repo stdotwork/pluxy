@@ -140,6 +140,11 @@ pub struct Package {
     pub admission: Option<Admission>,
 }
 
+/// The catalog format with a native tool in it. A build before native tools reads only version
+/// 0, and would read a native release as a page package; it refuses (and moves aside) this one.
+/// A catalog with no native release stays version 0.
+const NATIVE_CATALOG: u32 = 1;
+
 #[derive(Default, Serialize, Deserialize)]
 struct Saved {
     version: u32,
@@ -443,7 +448,7 @@ impl Catalog {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
             Err(e) => Err(e.to_string()),
             Ok(b) => match serde_json::from_slice::<Saved>(&b) {
-                Ok(s) if s.version == 0 => Ok(s.packages),
+                Ok(s) if s.version == 0 || s.version == NATIVE_CATALOG => Ok(s.packages),
                 Ok(s) => Err(format!("version {} is not supported", s.version)),
                 Err(e) => Err(e.to_string()),
             },
@@ -569,8 +574,13 @@ impl Catalog {
             return Err(why.clone());
         }
         private_dir(&self.dirs.root)?;
+        let native = self.packages.values().any(|p| {
+            std::iter::once(&p.active)
+                .chain(p.last_good.as_ref())
+                .any(|r| r.tier == "native")
+        });
         let saved = Saved {
-            version: 0,
+            version: if native { NATIVE_CATALOG } else { 0 },
             packages: self.packages.clone(),
         };
         let bytes = serde_json::to_vec_pretty(&saved).map_err(|e| e.to_string())?;

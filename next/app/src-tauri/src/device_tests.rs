@@ -1136,6 +1136,18 @@ fn only_a_curated_signed_native_tool_installs() {
     assert_eq!(v.packages[0].trust, "unverified");
     let e = c.admitted("pluxy/tool", &roots).unwrap_err();
     assert!(e.contains("disabled"), "{e}");
+    // A catalog with a native tool is version 1, which a build before native tools refuses
+    // (and moves aside) instead of reading it as page packages; without one it stays 0.
+    let version = |d: &Dirs| {
+        serde_json::from_slice::<Value>(&fs::read(d.catalog()).unwrap()).unwrap()["version"].clone()
+    };
+    assert_eq!(version(&d), 1);
+    assert!(Catalog::open(d.clone(), false).get("pluxy/tool").is_some());
+    install(&mut c, &package("example/page", "1"), local("p")).unwrap();
+    c.remove("pluxy/tool").unwrap();
+    assert_eq!(version(&d), 0);
+    c.commit(stage_from_registry(&d, &roots, "curated", "pluxy/tool", Some("1.0.0")).unwrap())
+        .unwrap();
     let e = c.set_enabled("pluxy/tool", true).unwrap_err();
     assert!(e.contains("native confirmation"), "{e}");
     done(root);

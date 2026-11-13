@@ -200,7 +200,9 @@ manifest must be a valid manifest version 1 with an app contribution for host co
 one with an existing file for each page, or a curated native one (below). The app unpacks it into a staging folder and moves it into an
 immutable store, `device-packages/store/<archive SHA-256>/` in the app's data folder, with
 read-only files. The catalog (`device-packages/catalog.json`) records each package's source and
-each release's version, digest, sizes, formats, pages and the SHA-256 of each page file.
+each release's version, digest, sizes, formats, pages and the SHA-256 of each page file. A catalog
+holding a native tool is saved as version 1, so an app from before native tools, which reads only
+version 0, moves it aside with a warning instead of reading the tool as a page package.
 
 A registry is curated when its index address equals the `source` of a native-tier trust root
 exactly. This build compiles no roots (production roots are a release decision), so nothing is
