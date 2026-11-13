@@ -857,8 +857,6 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 		if out, ok := d.replace(texts); ok {
 			if err := restored(out, isYAML, settings, want, copies); err == nil {
 				return out, nil
-			} else if errors.Is(err, errCopy) {
-				return nil, err
 			}
 		}
 	}
@@ -889,8 +887,9 @@ type copyAt struct {
 	line        int
 }
 
-// errCopy marks a copy of a secret that the restored document would show.
-var errCopy = errors.New("a redacted value is a copy of a secret the document no longer holds as it was; write the value itself there")
+// ErrCopy marks a copy of a secret that the restored document would show. Restore's error
+// wraps it with ErrInvalid and the copy's line.
+var ErrCopy = errors.New("a redacted value is a copy of a secret the document no longer holds as it was; write the value itself there")
 
 // paths returns where each node under root is: the keys and list indexes leading to it. A list
 // item that is a scalar has [] for its index, so it may move within its own list, and only there.
@@ -940,7 +939,7 @@ func restored(b []byte, isYAML, strict bool, want map[string]int, copies []copyA
 	}
 	for _, c := range copies {
 		if !at[[2]string{c.path, c.value}] {
-			return fmt.Errorf("%w: line %d: %w", ErrInvalid, c.line, errCopy)
+			return fmt.Errorf("%w: line %d: %w", ErrInvalid, c.line, ErrCopy)
 		}
 	}
 	for v, n := range want {
