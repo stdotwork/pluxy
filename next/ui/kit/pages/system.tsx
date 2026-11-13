@@ -1,5 +1,6 @@
 import type { ComponentChildren } from "preact";
 import type { ServedModel } from "../api";
+import { useAccountLabels, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { rich, strings } from "../strings";
 import { Button, Card, Empty, List, Notice, PageHead, useKit, useLoad, when } from "../ui";
@@ -113,6 +114,8 @@ function clientAddresses(origin: string): ClientAddress[] {
 
 export function SystemPage() {
   const { api, host } = useKit();
+  const privacy = usePrivacy();
+  const mask = privacy.masker(useAccountLabels());
   const status = useLoad(api.status);
   const models = useLoad(api.servedModels);
   const s = status.data;
@@ -149,7 +152,7 @@ export function SystemPage() {
             </Button>
           }
         >
-          {models.error && <Notice tone="danger">{models.error}</Notice>}
+          {models.error && <Notice tone="danger">{mask(models.error)}</Notice>}
           {models.loading && !list && <Empty>{t("loadingModels")}</Empty>}
           {list && list.length === 0 && <Empty>{t("modelsEmpty")}</Empty>}
           {list && list.length > 0 && (
@@ -168,7 +171,7 @@ export function SystemPage() {
                 columns={[
                   { label: t("model"), value: (r) => r.id, mono: true },
                   { label: t("aliases"), value: (r) => r.aliases.join(", "), mono: true },
-                  { label: t("accounts"), value: (r) => r.accounts.join(", "), mono: true },
+                  { label: t("accounts"), value: (r) => r.accounts.map(mask).join(", "), mono: true },
                 ]}
               />
             </section>

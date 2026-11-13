@@ -161,6 +161,11 @@ test("privacy mode masks identities, survives a reload, reaches extension pages 
   await expect(detail).toContainText(`ask ${EMAIL_MASKED} about ${AMP_MASKED}`);
   await expectMasked(page);
 
+  // The System page's models list the accounts that serve them.
+  await goTo(page, "System");
+  await expect(page.getByText(IMPORTED_ID_MASKED).first()).toBeVisible();
+  await expectMasked(page);
+
   // Keys are not privacy fields: the client key list shows core's own masked form, unchanged.
   const keys = (await core.mgmt<{ keys: ClientKey[] }>("GET", "/client-keys")).body.keys;
   await goTo(page, "Config Panel");
@@ -195,6 +200,8 @@ test("privacy mode masks identities, survives a reload, reaches extension pages 
   await expect(list.locator('[data-part="item"]').filter({ hasText: EMAIL_ID })).toContainText(EMAIL);
   await page.reload();
   await expect(toggle(page)).toHaveAttribute("aria-pressed", "false");
+  await goTo(page, "System");
+  await expect(page.getByText(IMPORTED_ID).first()).toBeVisible();
 
   // No key reached the page in either state.
   expect(await page.content()).not.toContain(keyCanary);
