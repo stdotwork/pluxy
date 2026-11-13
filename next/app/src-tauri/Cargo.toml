@@ -3,7 +3,7 @@ name = "pluxy-app"
 version = "0.1.0"
 description = "The pluxy desktop app: a window, a tray icon and, if wanted, a core of its own"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.89"
 publish = false
 
 [lib]
