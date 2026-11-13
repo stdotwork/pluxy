@@ -618,3 +618,62 @@ fn real_trust_store_lookup_controls() {
     f.profile();
     positive(&TrustStore::load(&f.dir).unwrap());
 }
+
+// The updater gate (trust::updater_gate) with a real isolated profile: a test build passes only
+// as the test package (test identifier, product name and the profile's key compiled in); a
+// normal build refuses whatever its config says.
+#[test]
+fn updater_gate_passes_only_the_test_package() {
+    if isolated("updater_gate_passes_only_the_test_package") {
+        return;
+    }
+    let f = Fixture::new();
+    let config = |identifier: &str, product: &str, pubkey: &str| -> tauri::Config {
+        serde_json::from_value(json!({
+            "identifier": identifier,
+            "productName": product,
+            "plugins": {"updater": {"pubkey": pubkey}},
+        }))
+        .unwrap()
+    };
+    let test_id = "dev.pluxy.desktop.test";
+    let test_product = "pluxy Test";
+    // Without a profile, nothing passes.
+    let error = trust::updater_gate(&config(test_id, test_product, "k"), &f.dir).unwrap_err();
+    assert!(error.contains("updater trust not configured"), "{error}");
+    f.profile();
+    let profile: serde_json::Value =
+        serde_json::from_slice(&fs::read(f.dir.join(trust::PROFILE_FILE)).unwrap()).unwrap();
+    let key = profile["updater"]["public_key"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let package = config(test_id, test_product, &key);
+    if !cfg!(feature = "artifact-test-trust") {
+        for c in [&package, &config("dev.pluxy.desktop", "pluxy", &key)] {
+            let error = trust::updater_gate(c, &f.dir).unwrap_err();
+            assert!(error.contains("updater trust not configured"), "{error}");
+        }
+        return;
+    }
+    assert_eq!(trust::updater_gate(&package, &f.dir).unwrap(), key);
+    for (c, reason) in [
+        (
+            config("dev.pluxy.desktop", test_product, &key),
+            "identifier",
+        ),
+        (config(test_id, "pluxy", &key), "product name"),
+        (
+            config(test_id, test_product, "another key"),
+            "not the one compiled",
+        ),
+    ] {
+        let error = trust::updater_gate(&c, &f.dir).unwrap_err();
+        assert!(error.contains(reason), "expected {reason}, got {error}");
+        // The positive control, on the same profile.
+        assert_eq!(trust::updater_gate(&package, &f.dir).unwrap(), key);
+    }
+    fs::remove_file(f.dir.join(trust::MARKER_FILE)).unwrap();
+    let error = trust::updater_gate(&package, &f.dir).unwrap_err();
+    assert!(error.contains("updater trust not configured"), "{error}");
+}

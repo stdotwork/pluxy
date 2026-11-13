@@ -9,6 +9,8 @@
     "lint": "biome check .",
     "test": "bun test tests",
     "test:native": "bun native/run.ts",
+    "package:test": "bun package.ts test",
+    "package:release": "bun package.ts release",
     "verify": "bun run check && bun run lint && bun run test && bun run build"
   },
   "dependencies": {
@@ -16,6 +18,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.6",
+    "@tauri-apps/cli": "2.12.4",
     "@types/bun": "1.4.3",
     "typescript": "7.0.2"
   }

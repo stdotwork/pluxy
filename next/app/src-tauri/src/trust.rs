@@ -119,6 +119,54 @@ impl TrustStore {
     }
 }
 
+#[cfg(feature = "artifact-test-trust")]
+const TEST_IDENTIFIER: &str = "dev.pluxy.desktop.test";
+#[cfg(feature = "artifact-test-trust")]
+const TEST_PRODUCT: &str = "pluxy Test";
+
+/// The updater gate: the only way an updater gets its key, called before any updater plugin call.
+/// home is the process HOME, as for `TrustStore::load`. A build without the
+/// `artifact-test-trust` feature (which also compiles the test marker) gets production updater
+/// trust only, which is not configured, so it refuses. A test build passes only as the test
+/// package: the compiled identifier and product name are the test ones, the runner's isolated
+/// trust profile loads, and its updater key equals the compiled `plugins.updater.pubkey`.
+pub fn updater_gate(config: &tauri::Config, home: &Path) -> Result<String, String> {
+    #[cfg(feature = "artifact-test-trust")]
+    {
+        if config.identifier != TEST_IDENTIFIER {
+            return Err(format!(
+                "test updater trust needs the test identifier {TEST_IDENTIFIER}, not {}",
+                config.identifier
+            ));
+        }
+        if config.product_name.as_deref() != Some(TEST_PRODUCT) {
+            return Err(format!(
+                "test updater trust needs the test product name {TEST_PRODUCT}, not {:?}",
+                config.product_name
+            ));
+        }
+    }
+    let store = TrustStore::load(home)?;
+    let key = store.updater_key()?;
+    #[cfg(feature = "artifact-test-trust")]
+    {
+        let compiled = config
+            .plugins
+            .0
+            .get("updater")
+            .and_then(|u| u.get("pubkey"))
+            .and_then(serde_json::Value::as_str);
+        if compiled != Some(key) {
+            return Err(
+                "the test profile's updater key is not the one compiled into this app".into(),
+            );
+        }
+    }
+    #[cfg(not(feature = "artifact-test-trust"))]
+    let _ = config;
+    Ok(key.to_string())
+}
+
 impl crate::artifact::PublisherKeys for TrustStore {
     fn publisher_key(
         &self,
