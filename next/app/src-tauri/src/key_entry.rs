@@ -82,7 +82,8 @@ pub(crate) fn request(app: &AppHandle, summary: String) -> Result<Option<Input>,
 }
 
 /// Shows a rotated management key once, with notice saying how the app keeps it, a Copy button
-/// (to the clipboard) and Close. Returns once the window is asked for; it does not wait.
+/// (to the clipboard) and Close. Returns once the window is asked for; it does not wait. The
+/// window stays open when the main window closes to the tray.
 #[cfg(target_os = "linux")]
 pub(crate) fn reveal(app: &AppHandle, key: String, notice: String) {
     use gtk::prelude::*;
@@ -92,10 +93,12 @@ pub(crate) fn reveal(app: &AppHandle, key: String, notice: String) {
         let parent = handle
             .get_window(crate::WINDOW)
             .and_then(|w| w.gtk_window().ok());
+        // Not destroyed with its parent: closing the main window to the tray must leave the
+        // only display of the new key open.
         let dialog = gtk::Dialog::with_buttons(
             Some("pluxy new management key"),
             parent.as_ref(),
-            gtk::DialogFlags::DESTROY_WITH_PARENT,
+            gtk::DialogFlags::empty(),
             &[
                 ("Co_py", gtk::ResponseType::Apply),
                 ("_Close", gtk::ResponseType::Close),
