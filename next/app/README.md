@@ -204,7 +204,8 @@ started before a feed change (even back to the same address), is ignored.
 The window gets only versions, channels, dates and whether a release has notes or a notes
 address; never notes text or a notes address. Each release's notes open in a webview of their
 own (`notes-<n>`, at most two), placed over the part of the notes area that shows: below a
-navigation bar pinned at the top, and hidden when none of it shows, so it never covers the rest
+navigation bar pinned at the top, and hidden when none of it shows, and placed again whenever the page moves the area (scrolling,
+resizing, a notice appearing above it), so it never covers the rest
 of the window. It has a web context of its own, cleared at each start. No capability names it. It loads one document from the
 `pluxy-notes:` scheme, which serves each notes webview only its own document and style sheet:
 the notes' Markdown (CommonMark, with tables and strikethrough) as HTML, rendered natively
