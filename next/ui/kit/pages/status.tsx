@@ -5,6 +5,7 @@
 import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { Account, ExtensionStatus, UsageGroup } from "../api";
+import { usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { strings } from "../strings";
 import { bucketRows, successPercent, TrafficChart } from "../trafficChart";
@@ -184,6 +185,7 @@ const dash = "—";
 
 export function StatusPage() {
   const { api } = useKit();
+  const p = usePrivacy();
   const status = useLoad(api.status);
   const usage = useLoad(() => api.usage(usageQuery()));
   const accounts = useLoad(api.accounts);
@@ -392,7 +394,7 @@ export function StatusPage() {
                 <Notice tone="danger">
                   {t("refused", {
                     revision: failed.revision,
-                    why: failed.error ?? t("noReason"),
+                    why: p.text(failed.error) ?? t("noReason"),
                     active: s.active.revision,
                   })}
                 </Notice>
@@ -415,7 +417,7 @@ export function StatusPage() {
                     },
                     { label: t("requests"), value: (e) => e.active_requests },
                     { label: t("restarts"), value: (e) => e.restarts },
-                    { label: t("lastError"), value: (e) => e.last_error ?? "" },
+                    { label: t("lastError"), value: (e) => p.text(e.last_error) ?? "" },
                   ]}
                 />
               )}
