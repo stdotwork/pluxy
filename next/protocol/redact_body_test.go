@@ -274,21 +274,53 @@ func TestBodyRedactorNumericSecret(t *testing.T) {
 	}
 }
 
-// Wherever a body that holds a numeric secret is cut, what the client gets joined is what String
-// returns for the whole body.
+// Wherever a body that holds a numeric secret is cut, into two pieces or three, what the client
+// gets joined is what String returns for the whole body. After text that makes String give up,
+// no form of the secret reaches the client, nor the rest of one cut there.
 func TestBodyRedactorNumericMatchesStringAtEveryCut(t *testing.T) {
 	r := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: "12345678"})
-	frags := []string{"12345678", "9", "1234", `{"a":`, `{"a": `, ", ", `"b":`, "[", "]", "}", "-", ".5", "e3", "x", " ", `"n 12345678"`}
+	frags := []string{"12345678", "9", "1234", `{"a":`, `{"a": `, ", ", `"b":`, "[", "]", "}", "-", ".5", "e3", "x", " ", `"n 12345678"`,
+		"hello there", "v1.2.3", "x-"}
 	rng := rand.New(rand.NewPCG(5, 6))
-	for range 300 {
+	for n := range 300 {
 		var b strings.Builder
 		for range 1 + rng.IntN(6) {
 			b.WriteString(frags[rng.IntN(len(frags))])
 		}
 		whole := b.String()
+		want := r.String(whole)
 		for i := 0; i <= len(whole); i++ {
-			if got, want := redactPieces(t, r, []string{whole[:i], whole[i:]}), r.String(whole); got != want {
+			if got := redactPieces(t, r, []string{whole[:i], whole[i:]}); got != want {
 				t.Fatalf("body %q cut at %d: got %q, want %q", whole, i, got, want)
+			}
+			// Three pieces, cut at every pair of offsets, for some bodies. A middle piece with a quote
+			// can be a JSON string on its own (`":, -12345678"`), which String reads as JSON, so a
+			// number in it may become 0 where the whole body gives [redacted]: there the secret must
+			// still not reach the client.
+			for j := i; n%10 == 0 && j <= len(whole); j++ {
+				pieces := []string{whole[:i], whole[i:j], whole[j:]}
+				got := redactPieces(t, r, pieces)
+				if !strings.Contains(pieces[1], `"`) && got != want {
+					t.Fatalf("body %q cut at %d and %d: got %q, want %q", whole, i, j, got, want)
+				}
+				if f := formsIn(r, got); len(f) > 0 {
+					t.Fatalf("body %q cut at %d and %d: got %q, which holds %q", whole, i, j, got, f)
+				}
+			}
+		}
+		if n%3 != 0 {
+			continue
+		}
+		whole = collapsing + whole
+		for i := len(collapsing) - 1; i <= len(whole); i++ {
+			for _, pieces := range [][]string{{whole[:i], whole[i:]}, {whole[:i], whole[i : i+(len(whole)-i)/2], whole[i+(len(whole)-i)/2:]}} {
+				got := redactPieces(t, r, pieces)
+				if f := formsIn(r, got); len(f) > 0 {
+					t.Fatalf("body %q cut as %q: got %q, which holds %q", whole, pieces, got, f)
+				}
+				if tail := cutTail(r, whole, pieces, got); tail != "" {
+					t.Fatalf("body %q cut as %q: got %q, which holds %q, the rest of a secret cut there", whole, pieces, got, tail)
+				}
 			}
 		}
 	}
