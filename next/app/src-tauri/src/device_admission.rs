@@ -82,6 +82,20 @@ pub struct Admission {
 }
 
 impl Admission {
+    /// The admission of a, confirmed now.
+    pub(super) fn of(a: &Admitted) -> Admission {
+        Admission {
+            sha256: a.sha256.clone(),
+            installed_at: a.installed_at,
+            source: a.signed.source.clone(),
+            publisher: a.signed.publisher.clone(),
+            key_id: a.signed.key_id.clone(),
+            public_key: a.public_key().into(),
+            host_contract: a.host_contract,
+            confirmed_at: super::now(),
+        }
+    }
+
     fn names(&self, r: &Release) -> bool {
         self.sha256 == r.sha256
             && self.installed_at == r.installed_at
@@ -95,7 +109,16 @@ impl Package {
     /// The active release's curated signature, when it verifies against roots now (the root
     /// still has its key), from the source it was signed for, and names that release.
     pub(super) fn curated_signature(&self, id: &str, roots: &dyn Roots) -> Result<&Signed, String> {
-        let r = &self.active;
+        self.curated_signature_of(id, &self.active, roots)
+    }
+
+    /// `curated_signature`, for release r of this package (one being swapped in).
+    pub(super) fn curated_signature_of<'a>(
+        &self,
+        id: &str,
+        r: &'a Release,
+        roots: &dyn Roots,
+    ) -> Result<&'a Signed, String> {
         let s = r
             .signed
             .as_ref()
@@ -464,11 +487,22 @@ impl Catalog {
             .packages
             .get(id)
             .ok_or_else(|| format!("{id} is not installed on this device"))?;
-        let r = &p.active;
+        self.release_record(id, p, &p.active, roots)
+    }
+
+    /// `native_record`, for release r of package p (the active release, or one being swapped
+    /// in).
+    pub(super) fn release_record(
+        &self,
+        id: &str,
+        p: &Package,
+        r: &Release,
+        roots: &dyn Roots,
+    ) -> Result<(Admitted, Tree), String> {
         if r.tier != "native" {
             return Err(format!("{id} is not a native tool"));
         }
-        let s = p.curated_signature(id, roots)?;
+        let s = p.curated_signature_of(id, r, roots)?;
         if !r.host_versions.contains(&HOST_CONTRACT) {
             return Err(format!(
                 "{id} {} needs app host contract {:?}; this app speaks host contract {HOST_CONTRACT}",
@@ -540,16 +574,7 @@ impl Catalog {
             .ok_or_else(|| format!("{} is not installed on this device", a.id))?;
         let was = (p.enabled, p.admission.take());
         p.enabled = true;
-        p.admission = Some(Admission {
-            sha256: a.sha256.clone(),
-            installed_at: a.installed_at,
-            source: a.signed.source.clone(),
-            publisher: a.signed.publisher.clone(),
-            key_id: a.signed.key_id.clone(),
-            public_key: a.public_key().into(),
-            host_contract: a.host_contract,
-            confirmed_at: super::now(),
-        });
+        p.admission = Some(Admission::of(a));
         if let Err(e) = self.save() {
             if let Some(p) = self.packages.get_mut(&a.id) {
                 (p.enabled, p.admission) = was;

@@ -1256,6 +1256,16 @@ fn device_changed(
     id: &str,
     f: impl FnOnce(&mut device::Catalog) -> Result<(), String>,
 ) -> Result<device::View, String> {
+    device_changed_as(app, id, f, true)
+}
+
+/// `device_changed`; with stop_tool false, it leaves the package's native tool to f (a swap).
+fn device_changed_as(
+    app: &AppHandle,
+    id: &str,
+    f: impl FnOnce(&mut device::Catalog) -> Result<(), String>,
+    stop_tool: bool,
+) -> Result<device::View, String> {
     let st = app.state::<App>();
     let (labels, view, mut left) = {
         let mut catalog = st.device.lock().unwrap();
@@ -1272,7 +1282,11 @@ fn device_changed(
     // A native tool runs only as the release it was admitted as: any change stops it, and its
     // next call starts it from its record then, if it still has one.
     #[cfg(target_os = "linux")]
-    st.programs.stop(id);
+    if stop_tool {
+        st.programs.stop(id);
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = stop_tool;
     let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-device", ());
     if left.is_empty() {
         Ok(view)
@@ -1281,10 +1295,125 @@ fn device_changed(
     }
 }
 
-/// Commits a staged candidate and closes the package's open pages.
+/// Commits a staged candidate and closes the package's open pages. An update of a native tool
+/// the person enabled is a swap (`native_swap`).
 fn device_commit(app: &AppHandle, c: device::Candidate) -> Result<device::View, String> {
     let id = c.id.clone();
+    #[cfg(target_os = "linux")]
+    if app
+        .state::<App>()
+        .device
+        .lock()
+        .unwrap()
+        .swaps(&id, &c.release)
+    {
+        return native_swap(app, &id, |catalog, roots| catalog.swap_update(c, roots));
+    }
     device_changed(app, &id, |catalog| catalog.commit(c))
+}
+
+/// Replaces enabled native tool id's active release by the one stage gives (an update, or the
+/// last good release) while the tool serves on. The person confirms the new release in a native
+/// confirmation; the program host starts and describes it, with no call; only then is it
+/// committed and does it serve, while the old release's tool drains (`program::Host::switch`).
+/// A cancel or a failure leaves the active release enabled and serving, as it was.
+#[cfg(target_os = "linux")]
+fn native_swap(
+    app: &AppHandle,
+    id: &str,
+    stage: impl FnOnce(&mut device::Catalog, &trust::TrustStore) -> Result<device::Swap, String>,
+) -> Result<device::View, String> {
+    let st = app.state::<App>();
+    let roots = trust::TrustStore::current();
+    // The tool's stop count as it is staged: a change to the package since (disable, remove)
+    // stopped it, and the swap's release does not start.
+    let (swap, stops) = {
+        let mut catalog = st.device.lock().unwrap();
+        let swap = stage(&mut catalog, &roots)?;
+        (swap, st.programs.stops(id))
+    };
+    let (from, to) = (
+        swap.from_version().to_string(),
+        swap.admitted().version().to_string(),
+    );
+    let stays = |e: String| format!("{e}; {id} {from} stays");
+    let prepared = (|| {
+        // Its files are hashed without holding the catalog, before and after the confirmation.
+        swap.verify()?;
+        let mut action = swap.admitted().confirmation();
+        action.what = format!(
+            "Update native tool {id} from {from} to {to}; {from} serves until {to} is ready. {}",
+            action.what
+        );
+        if !ask_native(app, action, id)? {
+            return Err("the update was cancelled".to_string());
+        }
+        swap.verify()?;
+        // The package may have been disabled, removed or changed while the confirmation was open.
+        st.device.lock().unwrap().swap_current(&swap, &roots)?;
+        // On a thread of its own that ends with the start: the tool is held by the host's
+        // supervisor thread, never by the thread that started it.
+        std::thread::scope(|s| {
+            std::thread::Builder::new()
+                .name("pluxy-prog-swap".into())
+                .spawn_scoped(s, || st.programs.prepare(swap.admitted(), stops))
+                .map_err(|e| e.to_string())?
+                .join()
+                .map_err(|_| "the swap's thread failed".to_string())?
+                .map_err(|e| e.message)
+        })
+    })();
+    let prepared = match prepared {
+        Ok(p) => p,
+        Err(e) => {
+            st.device.lock().unwrap().end_swap(swap);
+            return Err(stays(e));
+        }
+    };
+    device_changed_as(
+        app,
+        id,
+        |catalog| {
+            catalog.commit_swap(swap, &roots).map_err(stays)?;
+            // Stopped since it was described: nothing of the old release may serve on.
+            if st.programs.switch(prepared).is_err() {
+                st.programs.stop(id);
+            }
+            Ok(())
+        },
+        false,
+    )
+}
+
+/// Asks the person to confirm what in a native confirmation, which the window cannot answer
+/// for them, and waits for the outcome: true once they confirmed (its single-use token spent),
+/// false if they cancelled.
+#[cfg(target_os = "linux")]
+fn ask_native(app: &AppHandle, what: confirmation::Action, id: &str) -> Result<bool, String> {
+    let st = app.state::<App>();
+    let action = {
+        let mut c = st.confirmations.lock().unwrap();
+        let prepared = c.prepare_main(what)?;
+        c.queue(prepared)?
+    };
+    confirmation::request(app, action.clone())?;
+    // The dialog's own handler leaves the outcome for native code; it expires after a minute.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(75);
+    let outcome = loop {
+        if let Some(r) = st.confirmations.lock().unwrap().take_result(&action) {
+            break r;
+        }
+        if std::time::Instant::now() > deadline {
+            return Err(format!("the native confirmation for {id} expired"));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    let Some(token) = outcome? else {
+        return Ok(false);
+    };
+    // Spends the single-use token and checks the program file is the one shown.
+    st.confirmations.lock().unwrap().consume(&action, &token)?;
+    Ok(true)
 }
 
 /// Installs or updates package id from a registry: version, or its newest release.
@@ -1442,32 +1571,11 @@ fn native_enable(app: &AppHandle, id: &str) -> Result<device::View, String> {
     // Its files are hashed without holding the catalog (`checked_unlocked`).
     let candidate =
         device::native_candidate_unlocked(&st.device, id, &trust::TrustStore::current())?;
-    let action = {
-        let mut c = st.confirmations.lock().unwrap();
-        let prepared = c.prepare_main(candidate.confirmation())?;
-        c.queue(prepared)?
-    };
-    confirmation::request(app, action.clone())?;
-    // The dialog's own handler leaves the outcome for native code; it expires after a minute.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(75);
-    let outcome = loop {
-        if let Some(r) = st.confirmations.lock().unwrap().take_result(&action) {
-            break r;
-        }
-        if std::time::Instant::now() > deadline {
-            return Err(format!(
-                "the native confirmation for {id} expired; it stays disabled"
-            ));
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    };
-    let token = match outcome {
-        Ok(Some(token)) => token,
-        Ok(None) => return Err(format!("native enable cancelled; {id} stays disabled")),
+    match ask_native(app, candidate.confirmation(), id) {
+        Ok(true) => {}
+        Ok(false) => return Err(format!("native enable cancelled; {id} stays disabled")),
         Err(e) => return Err(format!("{e}; {id} stays disabled")),
-    };
-    // Spends the single-use token and checks the program file is the one shown.
-    st.confirmations.lock().unwrap().consume(&action, &token)?;
+    }
     // Its files once more, then the record under the catalog's lock: still the one shown.
     let now = device::native_candidate_unlocked(&st.device, id, &trust::TrustStore::current())?;
     if now != candidate {
@@ -1492,10 +1600,30 @@ fn device_remove(webview: Webview, id: String) -> Result<device::View, String> {
     device_change(&webview, &id, |c| c.remove(&id))
 }
 
-/// Makes package id's last good release active again.
+/// Makes package id's last good release active again. For a native tool the person enabled,
+/// that is a swap (`native_swap`).
 #[tauri::command]
-fn device_rollback(webview: Webview, id: String) -> Result<device::View, String> {
-    device_change(&webview, &id, |c| c.rollback(&id))
+async fn device_rollback(webview: Webview, id: String) -> Result<device::View, String> {
+    trusted(&webview)?;
+    let app = webview.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "linux")]
+        {
+            let swaps = {
+                let st = app.state::<App>();
+                let c = st.device.lock().unwrap();
+                c.get(&id)
+                    .and_then(|p| p.last_good.as_ref())
+                    .is_some_and(|r| c.swaps(&id, r))
+            };
+            if swaps {
+                return native_swap(&app, &id, |c, roots| c.swap_rollback(&id, roots));
+            }
+        }
+        device_changed(&app, &id, |c| c.rollback(&id))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// What the program host starts tool id from: its admitted record, checked now
