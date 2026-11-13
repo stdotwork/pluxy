@@ -239,3 +239,19 @@ test("privacy mode masks identities, survives a reload, reaches extension pages 
   expect(await page.content()).not.toContain(keyCanary);
   expect(await page.content()).not.toContain(core.key);
 });
+
+test("the panel's other tabs follow privacy mode", async ({ page, context }) => {
+  await openPanel(page, core);
+  await signIn(page, core);
+  const other = await context.newPage();
+  await openPanel(other, core);
+  await signIn(other, core);
+  await expect(toggle(other)).toHaveAttribute("aria-pressed", "false");
+  await toggle(page).click();
+  await expect(toggle(other)).toHaveAttribute("aria-pressed", "true");
+  await goTo(other, "Accounts");
+  await expect(other.getByRole("button", { name: EMAIL_MASKED, exact: true })).toBeVisible();
+  await toggle(page).click();
+  await expect(toggle(other)).toHaveAttribute("aria-pressed", "false");
+  await expect(other.getByRole("button", { name: EMAIL_ID, exact: true })).toBeVisible();
+});

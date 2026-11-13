@@ -152,6 +152,13 @@ export class PrivacyState {
     for (const fn of this.listeners) fn();
   }
 
+  /** Takes a choice another window made and saved already: shows it without saving it again. */
+  adopt(on: boolean) {
+    if (on === this.value) return;
+    this.value = on;
+    for (const fn of this.listeners) fn();
+  }
+
   subscribe(fn: () => void) {
     this.listeners.add(fn);
     return () => {
