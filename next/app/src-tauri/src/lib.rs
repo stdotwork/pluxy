@@ -14,6 +14,7 @@ include!(concat!(env!("OUT_DIR"), "/build_receipt.rs"));
 #[no_mangle]
 pub static PLUXY_TEST_BUILD: [u8; 31] = *b"PLUXY_TEST_BUILD_DO_NOT_RELEASE";
 
+pub mod access;
 pub mod artifact;
 pub mod client;
 mod command_names;
@@ -38,6 +39,8 @@ pub mod release;
 pub mod release_config;
 #[cfg(all(target_os = "linux", feature = "native-test"))]
 mod release_native;
+#[cfg(target_os = "linux")]
+pub mod route;
 mod startup;
 pub mod trust;
 mod updates;
@@ -84,9 +87,19 @@ struct App {
     /// This device's extension catalog. Installs check and stage a release without it.
     device: Mutex<device::Catalog>,
     device_dirs: device::Dirs,
+    /// Access: approved signers and the files and folders granted to device packages. Lock it
+    /// after `device`, never before.
+    #[cfg(unix)]
+    access: Mutex<access::Store>,
+    /// Notified when a read through Access finishes, for a revocation waiting on it.
+    #[cfg(unix)]
+    access_done: std::sync::Condvar,
     /// The admitted native tools that run, on demand (`program.rs`).
     #[cfg(target_os = "linux")]
     programs: program::Host,
+    /// Page calls of native operations in flight (`route.rs`).
+    #[cfg(target_os = "linux")]
+    routes: route::Routes,
     status: Mutex<Option<MenuItem<Wry>>>,
     /// Start, Stop and Restart, in that order.
     core_actions: Mutex<Vec<MenuItem<Wry>>>,
@@ -356,6 +369,11 @@ fn close_pages(app: &AppHandle) {
 /// destroys the WebKit widget (wry 0.57.1, `InnerWebView::drop`), before `close` returns. From
 /// another thread `close` only posts the message.
 fn close_webviews(app: &AppHandle, labels: Vec<String>) -> Vec<String> {
+    // Their calls of native operations in flight are cancelled, their answers not delivered.
+    #[cfg(target_os = "linux")]
+    for l in &labels {
+        app.state::<App>().routes.page_closed(l);
+    }
     let todo: Vec<String> = {
         let st = app.state::<App>();
         let mut closing = st.closing.lock().unwrap();
@@ -1242,11 +1260,23 @@ fn confirmation_settings(webview: Webview) -> Result<(), String> {
 #[tauri::command]
 fn device_list(webview: Webview, state: tauri::State<App>) -> Result<device::View, String> {
     trusted(&webview)?;
-    Ok(state
-        .device
-        .lock()
-        .unwrap()
-        .view(&trust::TrustStore::current()))
+    Ok(device_view(&state, &state.device.lock().unwrap()))
+}
+
+/// The catalog as the window shows it: trust from the current roots, and each signer's
+/// approval from Access.
+fn device_view(st: &App, catalog: &device::Catalog) -> device::View {
+    let roots = trust::TrustStore::current();
+    #[cfg(unix)]
+    {
+        let access = st.access.lock().unwrap();
+        catalog.view_with(&roots, &|s| access.approved(s))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = st;
+        catalog.view(&roots)
+    }
 }
 
 /// What the registries in `device-registries.json` offer this computer.
@@ -1291,7 +1321,7 @@ fn device_changed_as(
             pages.unbind(l);
         }
         let left: Vec<String> = catalog.take_cleanup().into_iter().collect();
-        (labels, catalog.view(&trust::TrustStore::current()), left)
+        (labels, device_view(&st, &catalog), left)
     };
     left.extend(close_webviews(app, labels));
     // A native tool runs only as the release it was admitted as: any change stops it, and its
@@ -1610,9 +1640,436 @@ fn native_enable(_app: &AppHandle, id: &str) -> Result<device::View, String> {
     ))
 }
 
+/// Allows web package id's native imports, once the person confirmed them in a native
+/// confirmation listing each operation and its effect, or revokes them, cancelling its pages'
+/// calls in flight.
+#[tauri::command]
+async fn device_imports(
+    webview: Webview,
+    id: String,
+    allowed: bool,
+) -> Result<device::View, String> {
+    trusted(&webview)?;
+    let app = webview.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "linux")]
+        {
+            let st = app.state::<App>();
+            let roots = trust::TrustStore::current();
+            if allowed {
+                let (consent, action) = {
+                    let c = st.device.lock().unwrap();
+                    let consent = c.consent_candidate(&id, &roots)?;
+                    let action = c.consent_confirmation(&id, &consent, &roots)?;
+                    (consent, action)
+                };
+                let action = {
+                    let mut c = st.confirmations.lock().unwrap();
+                    let prepared = c.prepare_main(action)?;
+                    c.queue(prepared)?
+                };
+                confirmation::request(&app, action.clone())?;
+                route::confirmed(&app, &action, &program::Cancel::default())
+                    .map_err(|e| format!("{e}; {id}'s native imports stay as they were"))?;
+                st.device
+                    .lock()
+                    .unwrap()
+                    .allow_imports(&id, &consent, &roots)?;
+            } else {
+                st.device.lock().unwrap().revoke_imports(&id)?;
+                st.routes.revoked(&id);
+            }
+            let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-device", ());
+            let view = st.device.lock().unwrap().view(&roots);
+            Ok(view)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (app, allowed);
+            Err(format!("{id}: native imports are supported on Linux only"))
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 fn device_remove(webview: Webview, id: String) -> Result<device::View, String> {
-    device_change(&webview, &id, |c| c.remove(&id))
+    let view = device_change(&webview, &id, |c| c.remove(&id));
+    // A removed package keeps no grants: installing it again starts with none.
+    #[cfg(unix)]
+    if webview
+        .state::<App>()
+        .device
+        .lock()
+        .unwrap()
+        .get(&id)
+        .is_none()
+    {
+        let st = webview.state::<App>();
+        let removed = st.access.lock().unwrap().remove_package(&id);
+        st.access_done.notify_all();
+        removed.map_err(|e| format!("{id} was removed, but its grants could not be: {e}"))?;
+    }
+    view
+}
+
+// Access (`access.rs`): the window's commands, the native file chooser and confirmation for
+// grants and signers, and the broker that answers device pages' `resources.*` calls. Grants
+// start only here, from the window; pages can only read what was granted.
+
+/// Asks the person to confirm action in a native confirmation. None: they cancelled.
+#[cfg(target_os = "linux")]
+fn access_confirm(
+    app: &AppHandle,
+    action: confirmation::Action,
+) -> Result<Option<confirmation::Authorized>, String> {
+    let st = app.state::<App>();
+    let id = {
+        let mut c = st.confirmations.lock().unwrap();
+        let p = c.prepare_main(action)?;
+        c.queue(p)?
+    };
+    confirmation::request(app, id.clone())?;
+    // The dialog expires after a minute; this waits a little longer for its answer.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(75);
+    loop {
+        let result = st.confirmations.lock().unwrap().take_result(&id);
+        match result {
+            Some(Ok(Some(token))) => {
+                return st
+                    .confirmations
+                    .lock()
+                    .unwrap()
+                    .consume(&id, &token)
+                    .map(Some)
+            }
+            Some(Ok(None)) => return Ok(None),
+            Some(Err(e)) => return Err(e),
+            None if std::time::Instant::now() > deadline => {
+                return Err("the native confirmation did not answer".into())
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(100)),
+        }
+    }
+}
+
+/// Asks the person for a file (or a folder) in the native file chooser, titled title. None:
+/// they cancelled. With GTK_USE_PORTAL=1, or inside a sandbox, it is the desktop portal's.
+#[cfg(target_os = "linux")]
+fn access_choose(
+    app: &AppHandle,
+    title: String,
+    folder: bool,
+) -> Result<Option<std::path::PathBuf>, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        use gtk::prelude::*;
+        let d = gtk::FileChooserNative::new(
+            Some(&title),
+            None::<&gtk::Window>,
+            if folder {
+                gtk::FileChooserAction::SelectFolder
+            } else {
+                gtk::FileChooserAction::Open
+            },
+            Some("_Choose"),
+            Some("_Cancel"),
+        );
+        d.set_modal(true);
+        d.set_local_only(true);
+        // Kept until it answers: nothing else holds a native chooser.
+        let keep = std::rc::Rc::new(std::cell::RefCell::new(Some(d.clone())));
+        d.connect_response(move |d, r| {
+            let Some(_kept) = keep.borrow_mut().take() else {
+                return;
+            };
+            let chosen = (r == gtk::ResponseType::Accept)
+                .then(|| d.filename())
+                .flatten();
+            let _ = tx.send(chosen);
+        });
+        d.show();
+    })
+    .map_err(|e| e.to_string())?;
+    rx.recv().map_err(|_| "the file chooser closed".to_string())
+}
+
+fn access_facts(app: &AppHandle, id: &str) -> Result<access::Facts, String> {
+    app.state::<App>()
+        .device
+        .lock()
+        .unwrap()
+        .facts(id, &trust::TrustStore::current())
+        .ok_or_else(|| format!("{id} is not installed on this device"))
+}
+
+#[cfg(unix)]
+fn grant_view(g: &access::Grant) -> Value {
+    serde_json::json!({
+        "id": g.id,
+        "package": g.package,
+        "resource": g.resource,
+        "kind": g.kind,
+        "operations": g.operations,
+        "selected": g.selected,
+        "target": g.target,
+        "sha256": g.sha256,
+        "session_only": g.session_only,
+        "changed": g.changed,
+        "granted_at": g.granted_at,
+    })
+}
+
+/// Approved signers and every grant.
+#[tauri::command]
+fn access_list(webview: Webview) -> Result<Value, String> {
+    trusted(&webview)?;
+    #[cfg(unix)]
+    {
+        let a = webview.state::<App>();
+        let a = a.access.lock().unwrap();
+        Ok(serde_json::json!({
+            "signers": a.signers(),
+            "grants": a.grants().map(grant_view).collect::<Vec<_>>(),
+            "warning": a.warning,
+        }))
+    }
+    #[cfg(not(unix))]
+    {
+        Err("Access is supported on Linux only".into())
+    }
+}
+
+/// Approves the signer of package id's active release, for its source, in a native
+/// confirmation that shows the signer's full public key.
+#[tauri::command]
+async fn access_signer(webview: Webview, id: String) -> Result<Value, String> {
+    trusted(&webview)?;
+    let app = webview.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "linux")]
+        {
+            let f = access_facts(&app, &id)?;
+            let s = f
+                .signed
+                .clone()
+                .ok_or_else(|| format!("{id} is not signed: there is no signer to approve"))?;
+            if f.source.as_deref() != Some(s.source.as_str()) {
+                return Err(format!("{id}: its signature names another source"));
+            }
+            if app.state::<App>().access.lock().unwrap().approved(&s) {
+                return Ok(serde_json::json!({"outcome": "approved"}));
+            }
+            let action = access::confirmation(
+                &f,
+                format!(
+                    "Approve signer {} key {} for packages from {}.\nPublic key (Ed25519): {}\nPackages this key signs from this source may then ask you for files and folders; each grant still asks you. A signature says who signed a package, not that it is safe.",
+                    s.publisher, s.key_id, s.source, s.public_key
+                ),
+                vec![],
+            );
+            if access_confirm(&app, action)?.is_none() {
+                return Ok(serde_json::json!({"outcome": "cancelled"}));
+            }
+            if access_facts(&app, &id)?.signed.as_ref() != Some(&s) {
+                return Err(format!("{id} changed during review; approve its signer again"));
+            }
+            app.state::<App>().access.lock().unwrap().approve(&s)?;
+            let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-device", ());
+            Ok(serde_json::json!({"outcome": "approved"}))
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (app, id);
+            Err("Access is supported on Linux only".into())
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Grants package id's resource: the person chooses a file or folder in the native chooser
+/// and confirms what it resolved to in a native confirmation.
+#[tauri::command]
+async fn access_grant(webview: Webview, id: String, resource: String) -> Result<Value, String> {
+    trusted(&webview)?;
+    let app = webview.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "linux")]
+        {
+            let f = access_facts(&app, &id)?;
+            let d = app.state::<App>().access.lock().unwrap().may_grant(&f, &resource)?;
+            let folder = d.kind == "subtree";
+            let title = format!(
+                "Choose a {} for {id}: {resource}",
+                if folder { "folder" } else { "file" }
+            );
+            let Some(path) = access_choose(&app, title, folder)? else {
+                return Ok(serde_json::json!({"outcome": "cancelled"}));
+            };
+            let r = access::resolve(&path, &d.kind)?;
+            let ops: Vec<&str> = d
+                .operations
+                .iter()
+                .map(String::as_str)
+                .filter(|o| access::supported(&d.kind, o))
+                .collect();
+            let what = format!(
+                "Grant {id} {} its resource {resource} ({}).\nChosen: {}\nRead from: {}{}\nIts pages can read {} and send what they read anywhere they can reach. You can revoke this on the Device extensions page.",
+                ops.join(" and "),
+                d.kind,
+                r.selected.display(),
+                r.target.display(),
+                if r.portal {
+                    "\nThe document portal offers this file: the grant lasts until the app quits."
+                } else {
+                    ""
+                },
+                if folder { "everything in this folder" } else { "this file" },
+            );
+            let action = access::confirmation(&f, what, vec![path.clone()]);
+            if access_confirm(&app, action)?.is_none() {
+                return Ok(serde_json::json!({"outcome": "cancelled"}));
+            }
+            // What was reviewed is what is granted: the package and the chosen path as they
+            // are now. The catalog stays locked until the grant is saved, so the package
+            // cannot be removed (and its grants with it) in between.
+            let st = app.state::<App>();
+            let catalog = st.device.lock().unwrap();
+            let now = catalog
+                .facts(&id, &trust::TrustStore::current())
+                .ok_or_else(|| format!("{id} is not installed on this device"))?;
+            if now.sha256 != f.sha256 || now.signed != f.signed || now.source != f.source {
+                return Err(format!("{id} changed during review; grant it again"));
+            }
+            if access::resolve(&path, &d.kind)? != r {
+                return Err("the chosen file changed during review; grant it again".into());
+            }
+            let g = st.access.lock().unwrap().add(&now, &d, &r)?;
+            drop(catalog);
+            let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-device", ());
+            Ok(serde_json::json!({"outcome": "granted", "grant": grant_view(&g)}))
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (app, id, resource);
+            Err("Access is supported on Linux only".into())
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Revokes a grant. Answers once the reads in flight under it have finished (they answer
+/// `revoked`), saying how many there were.
+#[tauri::command]
+async fn access_revoke(webview: Webview, grant: String) -> Result<Value, String> {
+    trusted(&webview)?;
+    let app = webview.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(unix)]
+        {
+            let st = app.state::<App>();
+            let mut a = st.access.lock().unwrap();
+            let finished = a.revoke(&grant)?;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while a.in_flight(&grant) > 0 {
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                if left.is_zero() {
+                    return Err(format!(
+                        "revoked; {} reads under it have not finished yet",
+                        a.in_flight(&grant)
+                    ));
+                }
+                a = st.access_done.wait_timeout(a, left).unwrap().0;
+            }
+            drop(a);
+            let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-device", ());
+            Ok(serde_json::json!({"finished": finished}))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (app, grant);
+            Err("Access is supported on Linux only".into())
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// For the native test: holds a read before its final check while the hold file exists.
+#[cfg(all(unix, feature = "native-test"))]
+fn access_hold() {
+    let Ok(hold) = std::env::var("PLUXY_APP_TEST_ACCESS_HOLD") else {
+        return;
+    };
+    let hold = std::path::PathBuf::from(hold);
+    if !hold.exists() {
+        return;
+    }
+    let _ = std::fs::write(hold.with_extension("held"), "");
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while hold.exists() && std::time::Instant::now() < until {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// Answers a device page's `resources.*` call, admitted by the native ingress, off the
+/// scheme's thread. The package and release come from the page webview's native binding,
+/// never from the call. The reply goes back through the page's own delivery, so its bytes
+/// never reach the window.
+#[cfg(unix)]
+fn access_call(app: AppHandle, label: String, generation: String, data: Value) {
+    std::thread::spawn(move || {
+        let id = data["id"].as_str().unwrap_or_default().to_string();
+        let method = data["method"].as_str().unwrap_or_default().to_string();
+        let st = app.state::<App>();
+        let binding = st.pages.lock().unwrap().get(&label).cloned();
+        // A begun call is in flight until its answer was handed to the page.
+        let mut begun = None;
+        let result = (|| -> Result<Value, access::Denial> {
+            let (package, digest) = binding
+                .and_then(|b| b.device_release())
+                .ok_or(access::Denial::NotGranted)?;
+            let facts = st
+                .device
+                .lock()
+                .unwrap()
+                .facts(&package, &trust::TrustStore::current())
+                .ok_or(access::Denial::NotGranted)?;
+            if method == "resources.status" {
+                return Ok(st.access.lock().unwrap().status(&facts, &digest));
+            }
+            let b = begun.insert(st.access.lock().unwrap().begin(
+                &facts,
+                &digest,
+                &method,
+                &data["params"],
+            )?);
+            let (r, opened) = access::run(b);
+            #[cfg(feature = "native-test")]
+            access_hold();
+            st.access.lock().unwrap().finish(b, r, opened)
+        })();
+        let data = match result {
+            Ok(v) => serde_json::json!({"v": 0, "id": id, "result": v}),
+            Err(d) => {
+                serde_json::json!({"v": 0, "id": id, "error": {"code": d.code(), "message": d.message()}})
+            }
+        };
+        let _ = deliver_page(
+            &app,
+            &label,
+            &generation,
+            serde_json::json!({"type": "message", "data": data}),
+        );
+        // A revocation answers only once what was read is with the page (or dropped).
+        if let Some(b) = begun {
+            st.access.lock().unwrap().delivered(&b);
+            st.access_done.notify_all();
+        }
+    });
 }
 
 /// Makes package id's last good release active again. For a native tool the person enabled,
@@ -1656,7 +2113,8 @@ fn program_resolver(app: AppHandle) -> program::Resolve {
 }
 
 /// Calls operation op of the native tool package with input, starting the tool if it is not
-/// running. With a ticket, `program_cancel` cancels the call.
+/// running, after a native confirmation for a write or launch (`route.rs`). With a ticket,
+/// `program_cancel` cancels the call.
 #[tauri::command]
 async fn program_call(
     webview: Webview,
@@ -1681,9 +2139,7 @@ async fn program_call(
             std::thread::Builder::new()
                 .name("pluxy-prog-call".into())
                 .spawn(move || {
-                    app.state::<App>()
-                        .programs
-                        .run_call(call, &package, &op, input)
+                    route::call_main(&app, call, &package, &op, input, None)
                         .map_err(|e| e.to_string())
                 })
                 .map_err(|e| e.to_string())?
@@ -1862,17 +2318,64 @@ fn page_scheme(
         served.status,
         request.uri().query(),
     );
+    // A page's call of a native operation is the router's, never the window's.
+    let msg = msg.and_then(|m| {
+        if m.kind != "call" || m.data["method"] != "native.call" {
+            return Some(m);
+        }
+        let id = m.data["id"].as_str().unwrap_or_default().to_string();
+        let app = app.clone();
+        let spawned = std::thread::Builder::new()
+            .name("pluxy-page-call".into())
+            .spawn(move || {
+                #[cfg(target_os = "linux")]
+                route::call_page(&app, &m.label, &m.generation, &id, &m.data["params"]);
+                #[cfg(not(target_os = "linux"))]
+                let _ = deliver_page(
+                    &app,
+                    &m.label,
+                    &m.generation,
+                    serde_json::json!({"type": "message", "data": {"v": 0, "id": id,
+                        "error": {"code": "unavailable", "message": "native tools run on Linux only for now"}}}),
+                );
+            });
+        if let Err(e) = spawned {
+            eprintln!("pluxy-app: a page's native call: {e}");
+        }
+        None
+    });
     if let Some(m) = msg {
         #[cfg(all(target_os = "linux", feature = "native-test"))]
         if m.kind == "call" && m.data.get("id").and_then(Value::as_str) == Some("spoof-confirm") {
             confirmation::native::PAGE_CLAIMS.fetch_add(1, Ordering::SeqCst);
         }
-        let result = app.emit_to(EventTarget::webview(MAIN), "pluxy-page", m);
-        #[cfg(feature = "native-test")]
-        if result.is_ok() {
-            native_test::ingress_forwarded();
+        // Access calls go to the broker, never to the window.
+        let access = m.kind == "call"
+            && m.data["method"]
+                .as_str()
+                .is_some_and(|x| x.starts_with("resources."));
+        if access {
+            #[cfg(unix)]
+            access_call(app.clone(), m.label, m.generation, m.data);
+            // No broker off Unix: the call is answered, never left waiting.
+            #[cfg(not(unix))]
+            {
+                let d = serde_json::json!({"v": 0, "id": m.data["id"], "error": {"code": "unavailable", "message": "Access is supported on Linux only"}});
+                let _ = deliver_page(
+                    &app,
+                    &m.label,
+                    &m.generation,
+                    serde_json::json!({"type": "message", "data": d}),
+                );
+            }
+        } else {
+            let result = app.emit_to(EventTarget::webview(MAIN), "pluxy-page", m);
+            #[cfg(feature = "native-test")]
+            if result.is_ok() {
+                native_test::ingress_forwarded();
+            }
+            let _ = result;
         }
-        let _ = result;
     }
     let resp = Response::builder()
         .status(served.status)
@@ -1933,6 +2436,11 @@ pub fn run() {
             device_remove,
             device_rollback,
             device_page_open,
+            access_list,
+            access_signer,
+            access_grant,
+            access_revoke,
+            device_imports,
             program_call,
             program_cancel,
             program_status,
@@ -1998,6 +2506,12 @@ pub fn run() {
             if let Some(w) = &catalog.warning {
                 eprintln!("pluxy-app: {w}");
             }
+            #[cfg(unix)]
+            let access_store = access::Store::open(&config);
+            #[cfg(unix)]
+            if let Some(w) = &access_store.warning {
+                eprintln!("pluxy-app: {w}");
+            }
             let core = app.path().app_data_dir()?.join("core");
             // When the app's core exits, the tray and the window show it. Off this thread: the
             // exit may come while a connection change holds the connection.
@@ -2048,11 +2562,17 @@ pub fn run() {
                 closing: Mutex::new(Vec::new()),
                 device: Mutex::new(catalog),
                 device_dirs,
+                #[cfg(unix)]
+                access: Mutex::new(access_store),
+                #[cfg(unix)]
+                access_done: std::sync::Condvar::new(),
                 #[cfg(target_os = "linux")]
                 programs: program::Host::new(
                     program_resolver(app.handle().clone()),
                     Default::default(),
                 ),
+                #[cfg(target_os = "linux")]
+                routes: route::Routes::default(),
                 status: Mutex::new(None),
                 core_actions: Mutex::new(Vec::new()),
                 shown: Mutex::new(Shown::default()),
@@ -2065,6 +2585,12 @@ pub fn run() {
                 rotation_open: AtomicBool::new(false),
             });
             let handle = app.handle().clone();
+            // Tools' own calls of other packages' operations go through the router.
+            #[cfg(target_os = "linux")]
+            handle
+                .state::<App>()
+                .programs
+                .set_route(route::route(handle.clone()));
             #[cfg(target_os = "linux")]
             if let Some(message) = handle
                 .state::<App>()

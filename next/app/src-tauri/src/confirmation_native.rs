@@ -137,6 +137,39 @@ fn trusted_start(app: &tauri::AppHandle, a: &Action) -> Result<(bool, String), S
         .map_err(|e| e.to_string())?
 }
 
+/// Shows a native window titled title with one button and presses it with X input: its click
+/// handler calls f with a gesture made there, as a trusted native launcher's would. For other
+/// native checks that start a trusted call (`routing_native.rs`).
+pub(crate) fn click(
+    app: &tauri::AppHandle,
+    title: &str,
+    f: impl FnOnce(Gesture) + Send + 'static,
+) -> Result<(), String> {
+    let name = title.to_string();
+    let f = std::sync::Mutex::new(Some(f));
+    app.run_on_main_thread(move || {
+        let w = gtk::Window::new(gtk::WindowType::Toplevel);
+        w.set_title(&name);
+        let button = gtk::Button::with_mnemonic("_Start");
+        w.add(&button);
+        let weak = w.downgrade();
+        button.connect_clicked(move |_| {
+            if let Some(f) = f.lock().unwrap().take() {
+                f(Gesture {
+                    created: Instant::now(),
+                });
+            }
+            if let Some(w) = weak.upgrade() {
+                w.close();
+            }
+        });
+        w.show_all();
+    })
+    .map_err(|e| e.to_string())?;
+    wait_for(title, || window(title))?;
+    key(title, "alt+s")
+}
+
 pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Result<(), String> {
     let dir = std::env::temp_dir().join(format!(
         "pluxy-native-confirm-{}",

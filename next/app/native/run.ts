@@ -29,7 +29,8 @@
 // build and a clean AppImage, and refuse the test package (renamed or not) and an AppImage holding
 // a test-feature binary.
 // In managed mode it then runs the window checks (window.ts, native_window.rs) in two more
-// sessions, one with a tray watcher and one without.
+// sessions, one with a tray watcher and one without, and the Access checks (access-suite.ts,
+// access_native.rs) in another, with the desktop portal's file chooser (GTK_USE_PORTAL=1).
 // Then, in a session of its own (instances.ts, instances-session.ts), the single-instance
 // scenario: a second launch on the same profile exits and raises the first's window, a launch on
 // another profile runs as its own app, and a killed owner's stale lock is recovered.
@@ -41,6 +42,10 @@
 // candidate is incompatible, crashed into backoff and quarantine, and rolled back; its processes
 // are gone after the app quits. The other sessions run a build without that
 // feature; its device check shows the same profile admits nothing there.
+// The cross-package routing check (routing.ts, routing_native.rs) runs in one more session with
+// that build: signed tools calling each other's declared exports through the host, a curated web
+// package's page calling native imports after their native consent, and the refusals of
+// undeclared, forged, cyclic, stale, revoked and Unverified routes, each with a positive control.
 // The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
@@ -69,6 +74,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline";
+import { buildAccessFixtures } from "./access";
 import { buildAdmissionFixtures, MARKER_FILE, PROFILE_FILE } from "./admission";
 import { appImageHeader, buildSmokeAppImage, packAppImage } from "./appimage";
 import { buildDeviceFixtures } from "./device";
@@ -76,6 +82,7 @@ import { type Feed, standInBrowser, startFeed } from "./feed";
 import { runInstances } from "./instances";
 import { descendants, webProcesses } from "./processes";
 import { buildProgramFixtures } from "./program";
+import { buildRoutingFixtures } from "./routing";
 import { missingPrerequisites } from "./services";
 
 const app = join(import.meta.dir, "..");
@@ -243,9 +250,9 @@ function managementKey(config: string): string {
   return JSON.parse(readFileSync(config, "utf8")).management_key;
 }
 
-/** The window checks (window.ts), with or without a tray watcher in the session, and the privacy
- * mode checks (privacy.ts). */
-type Suite = "window" | "window-no-tray" | "privacy";
+/** The window checks (window.ts), with or without a tray watcher in the session, the privacy
+ * mode checks (privacy.ts), and the Access checks (access-suite.ts). */
+type Suite = "window" | "window-no-tray" | "privacy" | "access";
 
 /** For a local or remote core, rotation.coreConfig is its config file. rotation.root keeps the
  * run's folders for the caller to remove; with rotation.restart the app starts again on them,
@@ -261,7 +268,8 @@ interface Rotation {
  * entry. With suite, the session runs window.ts, which runs the app through the window checks'
  * stages. earlyExit: the app's setup waits for its core's exit callback before the app state
  * exists (PLUXY_APP_TEST_EARLY_EXIT), and only the recovery of that core is checked. admission:
- * the session checks only signed native-tier admission; program: only the program host. */
+ * the session checks only signed native-tier admission; program: only the program host and swap
+ * checks; routing: only the cross-package routing check. */
 async function runApp(
   mode: Mode,
   artifact: Artifact,
@@ -276,6 +284,7 @@ async function runApp(
   admission = false,
   program = false,
   earlyExit = false,
+  routing = false,
 ): Promise<string[]> {
   const { label, bin } = artifact;
   const root = rotation.root ?? mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
@@ -321,7 +330,27 @@ async function runApp(
       }
     }, 100);
     // This device's extension catalog is the same in every mode: check it once, in managed mode.
-    const device = mode === "managed" && !admission && !program ? join(root, "device") : undefined;
+    const device =
+      mode === "managed" && !admission && !program && !routing && suite !== "access"
+        ? join(root, "device")
+        : undefined;
+    const access = suite === "access" ? join(root, "access") : undefined;
+    if (access) {
+      mkdirSync(access);
+      writeFileSync(
+        join(dirs.config, identifier, "device-registries.json"),
+        JSON.stringify(buildAccessFixtures(access)),
+      );
+      // No recent files for the session's GTK programs, the portal's file chooser among them:
+      // with recent files, a folder chooser opens in its Recent view, where a typed folder
+      // cannot be chosen (GTK 3.24 gtkfilechooserwidget.c gtk_file_chooser_widget_get_files);
+      // without, it opens in a folder (startup mode falls back to the current folder).
+      mkdirSync(join(dirs.config, "gtk-3.0"), { recursive: true });
+      writeFileSync(
+        join(dirs.config, "gtk-3.0", "settings.ini"),
+        "[Settings]\ngtk-recent-files-enabled=false\n",
+      );
+    }
     // A test trust profile in HOME naming curated registries: the admission session's build
     // honours it; the device check's normal build must not.
     const curated = device || admission ? join(root, "curated") : undefined;
@@ -336,6 +365,18 @@ async function runApp(
     if (programDir) {
       mkdirSync(programDir);
       const f = buildProgramFixtures(programDir, dirs.home, programFixture);
+      nonce = f.nonce;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
+    // The routing check's signed tools and web packages, their registries and trust profile.
+    const routingDir = routing ? join(root, "routing") : undefined;
+    if (routingDir) {
+      mkdirSync(routingDir);
+      const f = buildRoutingFixtures(routingDir, dirs.home, programFixture);
       nonce = f.nonce;
       roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
       writeFileSync(
@@ -363,7 +404,7 @@ async function runApp(
       // The app starts again on the first run's HOME: its marker and profile stay, and so does
       // the nonce the marker holds.
       nonce = JSON.parse(readFileSync(join(dirs.home, MARKER_FILE), "utf8")).nonce;
-    } else if (!programDir) {
+    } else if (!programDir && !routingDir) {
       try {
         nonce = /^nonce=([0-9a-f]{64})$/m.exec(run(probe, ["trust-marker", dirs.home], app))?.[1] ?? "";
         if (!nonce) throw new Error("it printed no nonce");
@@ -397,7 +438,8 @@ async function runApp(
       WEBKIT_DISABLE_DMABUF_RENDERER: "1",
       LIBGL_ALWAYS_SOFTWARE: "1",
       NO_AT_BRIDGE: "1",
-      GTK_USE_PORTAL: "0",
+      // GTK's own file chooser, except for the Access checks, which use the desktop portal's.
+      GTK_USE_PORTAL: access ? "1" : "0",
       // The FUSE-free way to run an AppImage, which the session's smoke AppImage uses.
       APPIMAGE_EXTRACT_AND_RUN: "1",
       PLUXY_APP_TEST_PAGE: PAGE,
@@ -410,9 +452,11 @@ async function runApp(
       PLUXY_APP_TEST_STATE: join(root, "state.json"),
       PLUXY_APP_TEST_TRAY_HOLD: join(root, "tray-hold"),
       ...(device ? { PLUXY_APP_TEST_DEVICE: device, PLUXY_APP_TEST_CURATED: curated as string } : {}),
+      ...(access ? { PLUXY_APP_TEST_ACCESS: access, PLUXY_APP_TEST_ACCESS_HOLD: join(access, "hold") } : {}),
       ...(admission ? { PLUXY_APP_TEST_ADMISSION: curated as string } : {}),
       // In the app's environment, never in the tool's (program_native.rs checks its names).
       ...(programDir ? { PLUXY_APP_TEST_PROGRAM: programDir, PLUXY_TEST_PROGRAM_CANARY: randomUUID() } : {}),
+      ...(routingDir ? { PLUXY_APP_TEST_ROUTING: routingDir } : {}),
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: artifact.identifier } : {}),
       ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
       ...(key ? { PLUXY_APP_TEST_KEY_FILE: keyFile } : {}),
@@ -435,7 +479,12 @@ async function runApp(
       probe,
       appImage,
       randomUUID(),
-      suite ? join(import.meta.dir, suite === "privacy" ? "privacy.ts" : "window.ts") : bin,
+      suite
+        ? join(
+            import.meta.dir,
+            suite === "access" ? "access-suite.ts" : suite === "privacy" ? "privacy.ts" : "window.ts",
+          )
+        : bin,
     ];
     const xvfb = ["xvfb-run", "-a", "-s", "-screen 0 1280x800x24 -nolisten tcp", ...session];
     const proc = spawn("dbus-run-session", ["--", ...xvfb], {
@@ -466,8 +515,8 @@ async function runApp(
         problems.push("management key appeared on stdout/stderr");
         return;
       }
-      // window.ts's and privacy.ts's checks, each shown.
-      const driver = /^(window|privacy): /.exec(line)?.[1];
+      // window.ts's, privacy.ts's and access-suite.ts's checks, each shown.
+      const driver = /^(window|privacy|access): /.exec(line)?.[1];
       if (driver) {
         console.log(`  ${mode} | ${line}`);
         if (line.startsWith(`${driver}: suite passed`)) suitePassed = true;
@@ -623,6 +672,16 @@ async function runApp(
       return problems;
     }
 
+    if (routing) {
+      const r = steps.get("routing") as { passed?: boolean } | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(r?.passed === true, `the routing check did not complete: ${failure}`);
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} routing ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode}: routing ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
     // The updater gate, reported before any other step: it read the compiled marker, identifier
     // and product name, and with the same profile passes only the test package.
     const checkGate = () => {
@@ -717,6 +776,16 @@ async function runApp(
       area && placed && (["x", "y", "width", "height"] as const).every((k) => near(area[k], placed[k])),
       `the page webview is at ${JSON.stringify(placed)}, the page area at ${JSON.stringify(area)}`,
     );
+    // The page webview keeps exactly its area after the window shrinks, at the top and partly
+    // scrolled (native_test.rs shrunk_page; its report says what it saw).
+    const allocation = steps.get("page_allocation") as
+      | { ok?: boolean; top?: { ok?: boolean }; scrolled?: { ok?: boolean } }
+      | undefined;
+    check(
+      allocation?.ok === true && allocation.top?.ok === true && allocation.scrolled?.ok === true,
+      `the page webview after the window shrank: ${JSON.stringify(allocation)}`,
+    );
+    console.log(`${mode} page_allocation ${JSON.stringify(allocation)}`);
     for (const cmd of commands) check(page?.calls[cmd], `the page webview's probe did not try ${cmd}`);
     for (const [cmd, c] of Object.entries(page?.calls ?? {})) {
       check(!c.ok && REFUSED.test(c.detail), `${cmd} from the page webview: ${JSON.stringify(c)}`);
@@ -1133,8 +1202,8 @@ async function main(): Promise<number> {
       const p = await runApp("managed", dev("managed"), updaterKey, managed);
       p.push(...(await runApp("managed", dev("managed"), updaterKey, managed, undefined, true)));
       p.push(...(await runApp("managed", dev("managed"), updaterKey, managed, undefined, true, true)));
-      // The signed native-tier admission check, then the program host check, on the build with
-      // artifact-test-trust.
+      // The signed native-tier admission check, then the program host check and the routing
+      // check, on the build with artifact-test-trust.
       p.push(
         ...(await runApp(
           "managed",
@@ -1166,7 +1235,26 @@ async function main(): Promise<number> {
           true,
         )),
       );
-      for (const suite of ["window", "window-no-tray", "privacy"] as const)
+      // The cross-package routing check, on the same build.
+      p.push(
+        ...(await runApp(
+          "managed",
+          trusted,
+          updaterKey,
+          managed,
+          undefined,
+          false,
+          false,
+          undefined,
+          undefined,
+          {},
+          false,
+          false,
+          false,
+          true,
+        )),
+      );
+      for (const suite of ["window", "window-no-tray", "privacy", "access"] as const)
         p.push(
           ...(await runApp(
             "managed",

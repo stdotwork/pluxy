@@ -26,6 +26,7 @@ fn main() {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let result = match args.as_slice() {
         ["documents", file] => linux::documents(file),
+        ["documents-delete", doc] => linux::documents_delete(doc),
         ["watcher"] => linux::watcher(),
         ["tray-pid", pid] => linux::tray_pid(pid),
         ["portal"] => linux::portal(),
@@ -36,7 +37,7 @@ fn main() {
         ["trust-marker", home] => pluxy_app::trust::write_test_marker(std::path::Path::new(home))
             .map(|nonce| vec![format!("nonce={nonce}")]),
         _ => Err(
-            "usage: session_probe documents <file> | watcher | portal | owner <name> | tray <pid> <action> | trust-marker <home>"
+            "usage: session_probe documents <file> | documents-delete <doc> | watcher | portal | owner <name> | tray <pid> <action> | trust-marker <home>"
                 .into(),
         ),
     };
@@ -229,6 +230,21 @@ mod linux {
             format!("doc={doc}"),
             format!("name={name}"),
         ])
+    }
+
+    /// Removes a document from the document portal: its path under the mount goes away.
+    pub fn documents_delete(doc: &str) -> Lines {
+        let conn = session()?;
+        call(
+            &conn,
+            DOCUMENTS,
+            "/org/freedesktop/portal/documents",
+            DOCUMENTS,
+            "Delete",
+            Some(&(doc,).to_variant()),
+            "()",
+        )?;
+        Ok(vec![format!("deleted={doc}")])
     }
 
     /// The portal frontend answers, the gtk backend runs, and the frontend offers what that
