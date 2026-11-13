@@ -237,10 +237,13 @@ its SHA-256 against the record and runs that opened file, in its package folder,
 environment, only its three private pipes, a process group of its own and a parent-death signal,
 from a supervisor thread that stays until the tool has been reaped. Calls follow [app program
 contract v0](app-host/README.md#app-program-contract-v0), one at a time. When the last call
-ends, the tool stops after 30 seconds idle; any change to its package (disable, update, roll back,
-remove) and quitting the app stop it at once. Stopping closes its stdin, kills its whole process
-group after five seconds and reaps it: no process or thread of it is left. Pages, including the
-tool's own, have no program command and no route to its pipes.
+ends, the tool stops after 30 seconds idle; closing the window cancels its calls, so their tools
+stop when idle. Any change to its package (disable, update, roll back, remove) and quitting the
+app stop it at once, and once the app is quitting no call starts a tool. Stopping closes its
+stdin, kills its whole process group after five seconds and reaps it: no process or thread of it
+is left. If the app itself dies, the tool gets SIGTERM and nothing kills its group, so a tool must
+end the processes it started when its input ends and on SIGTERM. Pages, including the tool's own,
+have no program command and no route to its pipes.
 
 Installing a newer release keeps the one it replaces as the last good release. A candidate that
 fails any check leaves the active release, its files and its open pages as they were. **Roll
@@ -447,8 +450,8 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
 ## Limits
 
 - Device extensions: no production trust roots (so no curated source outside tests), resources
-  or settings yet, and native tools run on Linux only, with no crash backoff, swap or routing
-  from pages yet; installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
+  or settings yet, and native tools run on Linux only (5.11 or later: the program host needs
+  `close_range` with `CLOSE_RANGE_CLOEXEC`), with no crash backoff, swap or routing from pages yet; installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
   native run.
 - Tested on Linux only. On Windows the page document's address is
   `http://pluxy-page.localhost/`; neither Windows nor macOS has been run.

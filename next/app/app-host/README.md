@@ -180,7 +180,8 @@ Never automatically retry a mutation whose outcome is unknown.
 
 Installation, enablement and authorization are distinct from process state. Start on demand with
 a ten-second startup limit. Last lease release schedules idle stop, default 30 seconds. On stdin
-EOF/stop, checkpoint and exit. After five seconds, kill/reap only the owned tool group. A dedicated
+EOF/stop, checkpoint, end every process the tool started and exit; do the same on SIGTERM, which
+the tool gets if the app dies without stopping it, when nothing kills its group. After five seconds, kill/reap only the owned tool group. A dedicated
 supervisor thread remains until exit/reap, including on Linux where the parent-death signal follows
 the creating thread. Explicitly launched agents have separate lifetimes outside tool cleanup.
 
@@ -204,14 +205,16 @@ anything a caller passes. On top of the rules above:
   an interpreter would open the path again.
 - The tool's environment holds exactly the three variables above. Only stdin, stdout and stderr
   are open in it; every other descriptor closes as it executes. It leads a process group of its
-  own and gets SIGTERM if the app dies without stopping it. Its supervisor thread starts it and
-  stays until it has been reaped.
+  own and gets SIGTERM if the app dies without stopping it. Process listings show it by its
+  program's path. Its supervisor thread starts it and stays until it has been reaped. It needs
+  Linux 5.11 or later (`close_range` with `CLOSE_RANGE_CLOEXEC`).
 - Hello must come first and name the record's ID and digest and contract 0. The describe reply's
   `operations` are objects with an `id`; their IDs must be exactly the manifest's, and
   `state.version` the manifest's. A tool that does not match stays **incompatible** until its
   package changes. `describe` is the host's call: a manifest may not declare it.
 - A frame from a tool may be at most 1 MiB; a larger one, an unknown frame type or a reply
-  before hello breaks the pipe and the tool is stopped. A reply to a call that is no longer
+  before hello breaks the pipe and the tool is stopped; a start it breaks fails saying which.
+  A reply to a call that is no longer
   waiting is dropped. Progress frames are read and not delivered yet.
 - Inputs are at most 64 KiB of JSON. Inputs and outputs are checked against the operation's
   schemas, which may use only `type`, `properties`, `required`, `additionalProperties`, `items`,
@@ -219,14 +222,21 @@ anything a caller passes. On top of the rules above:
   the annotations `title`, `description`, `default`, `examples` and `$comment`; a schema using
   any other keyword makes the tool incompatible rather than half checked. An output its schema
   refuses fails the call with `extension_protocol`.
-- Calls to one tool run one at a time, at most eight at once counting those waiting their turn.
-  A cancelled call has five seconds for its terminal reply; after that the tool is stopped.
+- A call is checked against its operation and input schema before the tool is leased or
+  started. Calls to one tool run one at a time, at most eight at once counting those waiting
+  their turn, and at most eight more wait for it to start or stop. Calls that waited on a start
+  that failed get that start's error rather than starting it again. A cancelled call has five
+  seconds for its terminal reply; after that the tool is stopped.
 - Each call holds a lease. Idle stop, a change to the package and app quit close the tool's
   stdin, kill its whole process group after five seconds (once its leader exits, the rest of
-  the group at once) and reap it. A child that leaves the group is not followed.
+  the group at once), and the tool itself if it left that group, and reap it. A child that
+  leaves the group is not followed. Closing the window cancels every call, so the tools stop
+  when idle; once the app is quitting, no call starts a tool.
 - Stderr lines are logged prefixed with the tool's ID, at most 8 KiB each (a longer one is left
-  out with a note), with control characters escaped and the values the host knows the tool must
-  not show removed. The last 20 say why it stopped.
+  out with a note) and 50 a second (the rest are left out and counted), with control and format
+  characters (such as U+202E) escaped and the values the host knows the tool must not show
+  removed. The last 20 say why it stopped. Error messages and hello or describe values a tool
+  sends reach the window and the status escaped the same way.
 
 Still to come: crash backoff and quarantine (a crashed tool starts again at its next call), swaps
 and draining old generations, calls routed from pages, jobs, secrets, and Windows and macOS.
