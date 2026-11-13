@@ -404,7 +404,9 @@ impl Connection {
 
     /// Starts the selected version. A switch the app did not finish (it stopped while a
     /// candidate was starting) is undone first: the config is put back and the candidate is
-    /// recorded as failed. With no version installed, the app runs no core.
+    /// recorded as failed; when that switch repaired the selected version itself, the one before
+    /// it is selected and runs, as after a failed switch. With no version installed, the app runs
+    /// no core.
     fn start_core(&mut self) -> Result<(), String> {
         let store = self.store()?;
         let mut st = store.state()?;
@@ -412,11 +414,22 @@ impl Connection {
             if let Some(kept) = ConfigSnapshot::kept(&store, &self.config_path())? {
                 kept.restore()?;
             }
+            let reason = format!("the app stopped while core {c} was starting");
             st.failed = Some(cores::Failed {
                 version: c.clone(),
-                reason: format!("the app stopped while core {c} was starting"),
+                reason: reason.clone(),
             });
+            let repaired = st.selected.as_deref() == Some(c.as_str());
+            let nothing_before = repaired && st.previous.is_none();
+            if repaired && !nothing_before {
+                st.selected = st.previous.take();
+                st.previous = Some(c);
+            }
             store.save_state(&st)?;
+            if nothing_before {
+                // As after a failed switch: nothing else worked before it, so no core runs.
+                return Err(reason);
+            }
         }
         let Some(id) = st.selected else {
             return Ok(());

@@ -306,6 +306,62 @@ fn a_crash_while_a_candidate_starts_is_undone_at_the_next_start() {
     assert!(store.state().unwrap().candidate.is_none());
 }
 
+/// What the app leaves when it dies while version, the selected one, starts again after a
+/// repair: the kept config copy, version the candidate, a broken config.
+fn crash_while_repairing(f: &Fixture, version: &str) -> Store {
+    let store = Store::open(&f.root.join("cores")).unwrap();
+    ConfigSnapshot::take(&store, &f.root.join("core/config.json")).unwrap();
+    let mut st = store.state().unwrap();
+    assert_eq!(st.selected.as_deref(), Some(version));
+    st.candidate = Some(version.into());
+    store.save_state(&st).unwrap();
+    std::fs::write(f.root.join("core/config.json"), b"broken").unwrap();
+    store
+}
+
+/// N4 at the next start: a repair of the selected version that the app did not finish falls back
+/// to the version before it, which then stays selected; with none before it, no core runs.
+#[test]
+fn a_crash_while_the_selected_version_is_repaired_runs_the_one_before() {
+    let mut f = fixture("crash-repair");
+    f.install("1.0.0").unwrap();
+    f.install("2.0.0").unwrap();
+    let config = f.config();
+    f.conn.stop_core();
+    let store = crash_while_repairing(&f, "2.0.0");
+    let c = Connection::open(dirs(&f.root), None);
+    assert_eq!(f.config(), config, "the config was not put back");
+    assert_eq!(
+        c.caller().call("GET", "/status", None).body.unwrap()["version"],
+        "1.0.0"
+    );
+    let st = store.state().unwrap();
+    assert_eq!(st.selected.as_deref(), Some("1.0.0"));
+    assert_eq!(st.previous.as_deref(), Some("2.0.0"));
+    assert_eq!(st.failed.unwrap().version, "2.0.0");
+    assert!(st.candidate.is_none());
+    drop(c);
+    let c = Connection::open(dirs(&f.root), None);
+    assert_eq!(
+        c.caller().call("GET", "/status", None).body.unwrap()["version"],
+        "1.0.0",
+        "the version before did not stay selected"
+    );
+    drop(c);
+
+    let mut f = fixture("crash-repair-only");
+    f.install("1.0.0").unwrap();
+    f.conn.stop_core();
+    crash_while_repairing(&f, "1.0.0");
+    let mut c = Connection::open(dirs(&f.root), None);
+    assert!(c.core_pid().is_none(), "the unfinished repair ran again");
+    let err = c.view().error.unwrap_or_default();
+    assert!(
+        err.contains("the app stopped while core 1.0.0 was starting"),
+        "{err}"
+    );
+}
+
 #[test]
 fn refusals_change_nothing_and_the_same_routes_work() {
     let mut f = fixture("refuse");
