@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"runtime"
 	"runtime/debug"
@@ -305,6 +306,49 @@ func TestRedactAndRestoreTimeGrowsWithSize(t *testing.T) {
 				t.Logf("%s: %s: %v, %v: %.1f times", l.name, name, best[0], best[1], ratio)
 			}
 		}
+	}
+}
+
+// A secret's value written again as a whole value where no secret goes (a note holding the key)
+// is hidden there too, and goes back there; a copy shorter than MinTextSecret, or a number, is
+// no secret and stays shown, as for F1's 3. A copy's placeholder goes back only where the file
+// holds that copy now.
+func TestRedactCopiesOfSecrets(t *testing.T) {
+	const key = "sk-real-secret-value-1234"
+	for _, tc := range []struct {
+		name, src string
+		isYAML    bool
+		shown     []string
+		moved     string // the redacted document with the copy's placeholder moved
+	}{
+		{"yaml", "api-key: " + key + "\nnote: " + key + "\nnotes: [first, \"" + key + "\"]\nsecret: abcd\nlabel: abcd\nretry: 12345678\nprivate-key: \"12345678\"\n",
+			true, []string{"label: abcd", "retry: 12345678"}, "other: P\n"},
+		{"json", `{"api_key": "` + key + `", "note": "` + key + `", "notes": ["first", "` + key + `"], "secret": "abcd", "label": "abcd"}` + "\n",
+			false, []string{`"label": "abcd"`}, `{"other": "P"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			redactRoundTrip(t, tc.src, tc.isYAML, []string{key}, tc.shown)
+			r := NewRedactor()
+			moved := strings.ReplaceAll(tc.moved, "P", r.Placeholder(key))
+			if _, err := r.Restore([]byte(moved), []byte(tc.src), tc.isYAML); !errors.Is(err, ErrInvalid) {
+				t.Errorf("Restore of a copy's placeholder moved to another key: %v, want ErrInvalid", err)
+			}
+		})
+	}
+	// In settings the same.
+	r := NewRedactor()
+	src := `{"api_key": "` + key + `", "note": "` + key + `"}`
+	red, err := r.RedactSettings([]byte(src))
+	if err != nil || strings.Contains(string(red), key) {
+		t.Fatalf("RedactSettings: %v\n%s", err, red)
+	}
+	if back, err := r.RestoreSettings(red, []byte(src)); err != nil || string(back) != src {
+		t.Errorf("RestoreSettings: %v\n%s", err, back)
+	}
+	// A placeholder that stands for no secret, where no secret goes, is refused.
+	stale := `{"api_key": "` + key + `", "note": "` + r.Placeholder("no-such-secret-1234") + `"}`
+	if _, err := r.RestoreSettings([]byte(stale), []byte(src)); !errors.Is(err, ErrInvalid) {
+		t.Errorf("RestoreSettings of an unknown placeholder on a plain key: %v, want ErrInvalid", err)
 	}
 }
 

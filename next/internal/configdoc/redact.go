@@ -487,6 +487,24 @@ func found(n *yaml.Node, strict bool) (out []*yaml.Node, texts map[*yaml.Node]st
 	} else {
 		walk(n, ctx{role: roleTop})
 	}
+	// A string secret of MinTextSecret bytes or more written again as a whole value anywhere
+	// else (note: <the key>) is a secret there too. A shorter or not string copy is not: it
+	// carries too little of the secret, and the same 3 or "abc" is often written for other
+	// reasons. A placeholder is no secret to copy: in an edited document, one moved elsewhere
+	// is no copy (Restore puts a copy back only where the file holds it).
+	copied := map[string]bool{}
+	for _, v := range out {
+		if v.Tag == "!!str" && len(v.Value) >= MinTextSecret && !placeholder.MatchString(v.Value) {
+			copied[v.Value] = true
+		}
+	}
+	if len(copied) > 0 {
+		eachValue(n, func(v *yaml.Node) {
+			if v.Tag == "!!str" && copied[v.Value] {
+				add(v, false)
+			}
+		})
+	}
 	for _, v := range out {
 		if !direct[v] {
 			if nested == nil {
@@ -681,6 +699,23 @@ func redacted(b []byte, isYAML, strict bool, values map[string]bool, shown map[s
 	return true
 }
 
+// eachValue calls f with each scalar node of the tree under n that is a value, not a mapping's
+// key, once each (an alias's anchor is where it is written).
+func eachValue(n *yaml.Node, f func(*yaml.Node)) {
+	switch n.Kind {
+	case yaml.ScalarNode:
+		f(n)
+	case yaml.MappingNode:
+		for i := 1; i < len(n.Content); i += 2 {
+			eachValue(n.Content[i], f)
+		}
+	default:
+		for _, c := range n.Content {
+			eachValue(c, f)
+		}
+	}
+}
+
 // eachScalar calls f with each scalar node of the tree under n, once each (an alias's anchor is
 // where it is written).
 func eachScalar(n *yaml.Node, f func(*yaml.Node)) {
@@ -766,10 +801,11 @@ func (r *Redactor) restore(edited, current []byte, isYAML, settings bool) ([]byt
 		switch {
 		case settings && ok && s.paths[where[n]] == nil:
 			return nil, fmt.Errorf("%w: line %d: a redacted value is not where its secret is; write the value itself there", ErrInvalid, d.line(n))
-		case settings && !allowed[n],
+		// A copy of a secret (see found) goes back only where the file holds that copy now.
+		case settings && !allowed[n] && !(ok && s.paths[where[n]] != nil),
 			// A URL that is a secret is one wherever it is, so in a config file its placeholder
 			// may go anywhere.
-			!settings && !allowed[n] && !(ok && secretURL(s.value)):
+			!settings && !allowed[n] && !(ok && (secretURL(s.value) || s.paths[where[n]] != nil)):
 			return nil, fmt.Errorf("%w: line %d: a redacted value is where no secret goes; write the value itself there", ErrInvalid, d.line(n))
 		case !ok:
 			return nil, fmt.Errorf("line %d: %w", d.line(n), ErrStale)
