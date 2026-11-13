@@ -377,6 +377,9 @@ async fn privacy_get(webview: Webview) -> Result<bool, String> {
 #[tauri::command]
 async fn privacy_set(webview: Webview, on: bool) -> Result<bool, String> {
     trusted(&webview)?;
+    // One write at a time, as window_set writes under its store's lock.
+    static SAVING: Mutex<()> = Mutex::new(());
+    let _saving = SAVING.lock().unwrap();
     privacy::save(&privacy_file(webview.app_handle())?, on)?;
     Ok(on)
 }

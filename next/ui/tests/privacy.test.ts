@@ -7,6 +7,7 @@ import {
   maskEmail,
   maskIdentifier,
   maskSensitiveText,
+  PrivacyState,
   privacyMasks,
   textMasker,
 } from "../kit/privacy";
@@ -169,4 +170,29 @@ test("until the account identities load, privacy mode hides text that may name a
   expect(privacyMasks(false).masker(undefined)("claude-alice.smith-example.com")).toBe(
     "claude-alice.smith-example.com",
   );
+});
+
+test("privacy mode saves one change at a time, in order", async () => {
+  // Two saves at once could finish in either order and leave the older choice kept.
+  const calls: string[] = [];
+  let finishFirst = () => {};
+  const state = new PrivacyState(false, (on) => {
+    calls.push(`start ${on}`);
+    return new Promise<void>((resolve) => {
+      const finish = () => {
+        calls.push(`end ${on}`);
+        resolve();
+      };
+      if (on) finishFirst = finish;
+      else finish();
+    });
+  });
+  state.set(true);
+  state.set(false);
+  expect(state.on).toBe(false);
+  await Bun.sleep(10);
+  expect(calls).toEqual(["start true"]);
+  finishFirst();
+  await Bun.sleep(10);
+  expect(calls).toEqual(["start true", "end true", "start false", "end false"]);
 });

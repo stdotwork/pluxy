@@ -127,6 +127,7 @@ export function accountIdentities(a: { label?: string; settings?: Record<string,
 /** Whether privacy mode is on, kept where the host build keeps it. */
 export class PrivacyState {
   private listeners = new Set<() => void>();
+  private saving: Promise<void> = Promise.resolve();
 
   /** save keeps a change; it may fail, and the choice then lasts until the window closes. */
   constructor(
@@ -141,11 +142,13 @@ export class PrivacyState {
   set(on: boolean) {
     if (on === this.value) return;
     this.value = on;
-    try {
-      Promise.resolve(this.save(on)).catch(() => console.error("privacy mode: the choice was not saved"));
-    } catch {
-      console.error("privacy mode: the choice was not saved");
-    }
+    // One save at a time, in order: two at once could finish in either order and keep the older.
+    this.saving = this.saving
+      .then(() => this.save(on))
+      .then(
+        () => {},
+        () => console.error("privacy mode: the choice was not saved"),
+      );
     for (const fn of this.listeners) fn();
   }
 
