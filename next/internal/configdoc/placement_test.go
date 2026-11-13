@@ -132,6 +132,18 @@ api-keys:
     api-key-entries:
       - api-key: "<k2>"
 `
+	// Two named provider entries with the same name.
+	placeSameName = `api-keys:
+  codex:
+    - name: one
+      base-url: "https://one.example/v1"
+      keys:
+        - api-key: "<k1>"
+    - name: one
+      base-url: "https://two.example/v1"
+      keys:
+        - api-key: "<k2>"
+`
 	// Account a's key is anchored and aliased into its own header, and account c merges a in:
 	// core reads a's key in each of those four places.
 	placeAliased = `management:
@@ -192,8 +204,6 @@ func TestRestorePlacesEachSecretInItsOwnSlot(t *testing.T) {
 			[]string{`["<c1>", "<c2>"]`, `["<c1>", "<c2>", "<mgmt>"]`}, 2},
 		{"json: a registry URL in a name", placeJSON, false,
 			[]string{`"name": "one"`, `"name": "<reg1>"`}, 4},
-		{"json: two registries' URLs swapped", placeJSON, false,
-			[]string{`"<reg1>"`, `"<x>"`, `"<reg2>"`, `"<reg1>"`, `"<x>"`, `"<reg2>"`}, 4},
 		{"json: an account's proxy URL in another account", placeJSON, false,
 			[]string{`{"id": "b", `, `{"id": "b", "proxy_url": "<proxyA>", `}, 7},
 		{"json: an account's proxy URL at the top", placeJSON, false,
@@ -208,6 +218,13 @@ func TestRestorePlacesEachSecretInItsOwnSlot(t *testing.T) {
 		{"json: an account renamed and the other removed", placeJSON, false,
 			[]string{"    {\"id\": \"a\", \"proxy_url\": \"<proxyA>\", \"credential\": {\"kind\": \"api_key\", \"api_key\": \"<a>\"}},\n", "",
 				`"id": "b"`, `"id": "b2"`}, 0},
+		// An account whose secrets are not those of the account with its id is paired by its
+		// secrets: it is that account, renamed.
+		{"json: an account removed and the other renamed to its id", placeJSON, false,
+			[]string{"    {\"id\": \"a\", \"proxy_url\": \"<proxyA>\", \"credential\": {\"kind\": \"api_key\", \"api_key\": \"<a>\"}},\n", "",
+				`"id": "b"`, `"id": "a"`}, 0},
+		{"json: two accounts' ids swapped", placeJSON, false,
+			[]string{`"id": "a"`, `"id": "x"`, `"id": "b"`, `"id": "a"`, `"id": "x"`, `"id": "b"`}, 0},
 		{"json: client keys reordered", placeJSON, false, []string{`["<c1>", "<c2>"]`, `["<c2>", "<c1>"]`}, 0},
 		{"json: registries reordered", placeJSON, false,
 			[]string{`[{"name": "one", "url": "<reg1>"}, {"name": "two", "url": "<reg2>"}]`, `[{"name": "two", "url": "<reg2>"}, {"name": "one", "url": "<reg1>"}]`}, 0},
@@ -222,12 +239,6 @@ func TestRestorePlacesEachSecretInItsOwnSlot(t *testing.T) {
 			[]string{`api_key: "<b>"`, `api_key: "<a>"`}, 12},
 		{"yaml: the management key in an account's api_key", placeYAML, true,
 			[]string{`api_key: "<b>"`, `api_key: "<mgmt>"`}, 12},
-		// Each account holds only its key, so only its id tells them apart.
-		{"yaml: two accounts' keys swapped", placeYAML, true,
-			[]string{`api_key: "<a>"`, `api_key: "<x>"`, `api_key: "<b>"`, `api_key: "<a>"`, `api_key: "<x>"`, `api_key: "<b>"`}, 8},
-		{"yaml: an account removed, its key in the other", placeYAML, true,
-			[]string{"    - id: a\n      credential:\n        kind: api_key\n        api_key: \"<a>\"\n", "",
-				`api_key: "<b>"`, `api_key: "<a>"`}, 8},
 		{"yaml: accounts reordered", placeYAML, true,
 			[]string{"    - id: a\n      credential:\n        kind: api_key\n        api_key: \"<a>\"\n", "",
 				"api_key: \"<b>\"\n", "api_key: \"<b>\"\n    - id: a\n      credential:\n        kind: api_key\n        api_key: \"<a>\"\n"}, 0},
@@ -263,9 +274,26 @@ func TestRestorePlacesEachSecretInItsOwnSlot(t *testing.T) {
 		{"config.yaml v8: an entry's keys reordered", placeV8, true,
 			[]string{`api-key: "<k1>"`, `api-key: "<x>"`, `api-key: "<k2>"`, `api-key: "<k1>"`, `api-key: "<x>"`, `api-key: "<k2>"`}, 0},
 		{"config.yaml v8: a named entry renamed", placeV8, true, []string{"name: two", "name: three"}, 0},
+		{"config.yaml v8: two entries with the same name reordered", placeSameName, true,
+			[]string{
+				"    - name: one\n      base-url: \"https://one.example/v1\"\n      keys:\n        - api-key: \"<k1>\"\n", "",
+				"        - api-key: \"<k2>\"\n", "        - api-key: \"<k2>\"\n    - name: one\n      base-url: \"https://one.example/v1\"\n      keys:\n        - api-key: \"<k1>\"\n",
+			}, 0},
 
+		// An item whose secrets are not those of the item with its id or name is paired by its
+		// secrets, so these are taken: each is the same document as two items' ids or names
+		// swapped, or an item removed and the other renamed to its id, and each secret stays in
+		// the item that held it. The openai-compatibility entries' keys then go with each
+		// other's base-url: the known limit of a key kept at a new address.
+		{"json: two registries' URLs swapped", placeJSON, false,
+			[]string{`"<reg1>"`, `"<x>"`, `"<reg2>"`, `"<reg1>"`, `"<x>"`, `"<reg2>"`}, 0},
+		{"yaml: two accounts' keys swapped", placeYAML, true,
+			[]string{`api_key: "<a>"`, `api_key: "<x>"`, `api_key: "<b>"`, `api_key: "<a>"`, `api_key: "<x>"`, `api_key: "<b>"`}, 0},
+		{"yaml: an account removed, its key in the other", placeYAML, true,
+			[]string{"    - id: a\n      credential:\n        kind: api_key\n        api_key: \"<a>\"\n", "",
+				`api_key: "<b>"`, `api_key: "<a>"`}, 0},
 		{"config.yaml: keys swapped between named openai-compatibility entries", placeCompat, true,
-			[]string{`api-key: "<k1>"`, `api-key: "<x>"`, `api-key: "<k2>"`, `api-key: "<k1>"`, `api-key: "<x>"`, `api-key: "<k2>"`}, 5},
+			[]string{`api-key: "<k1>"`, `api-key: "<x>"`, `api-key: "<k2>"`, `api-key: "<k1>"`, `api-key: "<x>"`, `api-key: "<k2>"`}, 0},
 
 		// In YAML, a secret is where core reads it, with aliases and merge keys resolved as core's
 		// loader resolves them: a refusal names the alias or the merge key.

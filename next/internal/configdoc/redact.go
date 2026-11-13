@@ -1139,15 +1139,17 @@ func slots(edited *yaml.Node, marks map[*yaml.Node]string, cur curReading) map[*
 	return out
 }
 
-// pairItems pairs each item of edited, a list, that is not a scalar with an item of current, the
-// list at the same place in the config file as it is now (cur), or with none (-1); no two with
-// the same one. Each item is read as core reads it, an alias as its anchor and a mapping with
-// the mappings merged into it. An item with an id, or else a name (an account's id; a provider
-// entry's or a registry's name), is paired with the item of current that has the same one, so a
-// secret never goes back in an item that has another's id or name. An item whose id or name
-// current does not have (a renamed account), or that has neither (a provider entry of a
-// config.yaml, a key of its entry), is paired by the secrets it holds: with an item that no
-// other is paired with and holds, at the same keys, a secret of each of its placeholders.
+// pairItems pairs each item of edited, a list, that holds a placeholder and is not a scalar with
+// an item of current, the list at the same place in the config file as it is now (cur), or with
+// none (-1); no two with the same one. Each item is read as core reads it, an alias as its anchor
+// and a mapping with the mappings merged into it. An item is paired only with one that holds, at
+// the same keys, a secret of each of its placeholders, so a secret never goes back in another
+// account or entry. Among those, an item with an id, or else a name (an account's id; a provider
+// entry's or a registry's name), is paired with the one that has the same id or name when it can
+// be; else by its secrets alone, as an item that has neither (a provider entry of a config.yaml,
+// a key of its entry) is: an account renamed, or given the id of another, is the account whose
+// secrets it holds. One item may take another's when that one can take a third (a maximum
+// matching), so the order of the items decides nothing.
 func pairItems(edited, current *yaml.Node, marks map[*yaml.Node]string, cur curReading) []int {
 	out := make([]int, len(edited.Content))
 	for i := range out {
@@ -1162,41 +1164,18 @@ func pairItems(edited, current *yaml.Node, marks map[*yaml.Node]string, cur curR
 		}
 		return n
 	}
+	type mark struct{ at, placeholder string }
 	owner := make([]int, len(current.Content)) // the item of edited each is paired with, or -1
 	byName := map[[2]string][]int{}
-	for j, c := range current.Content {
-		owner[j] = -1
-		if k, ok := itemName(item(c, cur.follow), cur.follow); ok {
-			byName[k] = append(byName[k], j)
-		}
-	}
-	var rest []int
-	for i, e := range edited.Content {
-		if resolved(e).Kind == yaml.ScalarNode {
-			continue
-		}
-		k, ok := itemName(resolved(e), true)
-		js, known := byName[k]
-		if !ok || !known {
-			rest = append(rest, i)
-			continue
-		}
-		for _, j := range js {
-			if owner[j] < 0 {
-				owner[j], out[i] = i, j
-				break
-			}
-		}
-	}
-	// The rest are paired by their secrets: each with an item, not paired by name, that holds all
-	// of them; one item may take another's when that one can take a third (a maximum matching),
-	// so the order of the items decides nothing.
-	type mark struct{ at, placeholder string }
-	held := map[mark][]int{} // the items of current, not paired by name, that hold each mark
+	held := map[mark][]int{} // the items of current that hold each mark
 	has := make([]map[mark]bool, len(current.Content))
 	for j, c := range current.Content {
-		if owner[j] >= 0 || item(c, cur.follow).Kind == yaml.ScalarNode {
+		owner[j] = -1
+		if item(c, cur.follow).Kind == yaml.ScalarNode {
 			continue
+		}
+		if k, ok := itemName(item(c, cur.follow), cur.follow); ok {
+			byName[k] = append(byName[k], j)
 		}
 		has[j] = map[mark]bool{}
 		eachMark(c, cur.follow, cur.marks, func(at, p string) {
@@ -1209,24 +1188,31 @@ func pairItems(edited, current *yaml.Node, marks map[*yaml.Node]string, cur curR
 	}
 	// Items that hold the same placeholders at the same keys have the same candidates, so they
 	// are paired as a group, its candidates found once, from the current items that hold its
-	// rarest mark: many entries that share a key cost no more than reading them. Each group takes
-	// free candidates first, the groups that need most before the others; an item left over then
-	// looks for an augmenting path (Kuhn's algorithm), skipping a group that found none in this
-	// search, and a group that found none once never finds one later.
+	// rarest mark: many entries that share a key cost no more than reading them. Items take the
+	// candidate with their id or name first, then each group free candidates, the groups that
+	// need most before the others; an item left over then looks for an augmenting path (Kuhn's
+	// algorithm), skipping a group that found none in this search, and a group that found none
+	// once never finds one later.
 	type group struct {
 		need   []mark
-		cands  []int // the items of current, not paired by name, that hold each of need
+		cands  []int // the items of current that hold each of need
 		items  []int // the items of edited that hold need
 		failed int   // the search in which the group found no item, plus one
 		dead   bool  // a search found no item for it: none ever will
 	}
+	fits := func(need []mark, j int) bool {
+		return has[j] != nil && !slices.ContainsFunc(need, func(m mark) bool { return !has[j][m] })
+	}
 	groups := map[string]*group{}
 	var order []*group
 	groupOf := map[int]*group{}
-	for _, i := range rest {
+	for i, e := range edited.Content {
+		if resolved(e).Kind == yaml.ScalarNode {
+			continue
+		}
 		var need []mark
 		in := map[mark]bool{}
-		eachMark(edited.Content[i], true, marks, func(at, p string) {
+		eachMark(e, true, marks, func(at, p string) {
 			if m := (mark{at, p}); !in[m] {
 				in[m] = true
 				need = append(need, m)
@@ -1250,7 +1236,7 @@ func pairItems(edited, current *yaml.Node, marks map[*yaml.Node]string, cur curR
 				}
 			}
 			for _, j := range held[rarest] {
-				if !slices.ContainsFunc(need, func(m mark) bool { return !has[j][m] }) {
+				if fits(need, j) {
 					g.cands = append(g.cands, j)
 				}
 			}
@@ -1259,11 +1245,22 @@ func pairItems(edited, current *yaml.Node, marks map[*yaml.Node]string, cur curR
 		}
 		g.items = append(g.items, i)
 		groupOf[i] = g
+		if k, ok := itemName(resolved(e), true); ok {
+			for _, j := range byName[k] {
+				if owner[j] < 0 && fits(need, j) {
+					owner[j], out[i] = i, j
+					break
+				}
+			}
+		}
 	}
 	slices.SortStableFunc(order, func(a, b *group) int { return len(b.need) - len(a.need) })
 	for _, g := range order {
 		next := 0
 		for _, i := range g.items {
+			if out[i] >= 0 {
+				continue
+			}
 			for next < len(g.cands) && owner[g.cands[next]] >= 0 {
 				next++
 			}
@@ -1299,6 +1296,15 @@ func pairItems(edited, current *yaml.Node, marks map[*yaml.Node]string, cur curR
 			if out[i] < 0 && !g.dead {
 				search++
 				g.dead = !take(i, search)
+			}
+		}
+	}
+	// An item left with none is refused either way; one with an id or name is paired with the
+	// item that has it, so the refusal names the placeholder that is not that item's.
+	for i, e := range edited.Content {
+		if k, ok := itemName(resolved(e), true); ok && out[i] < 0 && groupOf[i] != nil {
+			if j := slices.IndexFunc(byName[k], func(j int) bool { return owner[j] < 0 }); j >= 0 {
+				owner[byName[k][j]], out[i] = i, byName[k][j]
 			}
 		}
 	}
