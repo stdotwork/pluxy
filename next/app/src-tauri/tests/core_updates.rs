@@ -362,6 +362,91 @@ fn a_crash_while_the_selected_version_is_repaired_runs_the_one_before() {
     );
 }
 
+/// Points the connection at a new source, name, holding releases (version, folder to pack),
+/// and returns its key.
+fn use_source(f: &mut Fixture, name: &str, releases: &[(&str, PathBuf)]) -> Keys {
+    let src = f.root.join(name);
+    std::fs::create_dir_all(&src).unwrap();
+    let index = src.join("index.json");
+    let keys = Keys::new(&index);
+    let r: Vec<_> = releases
+        .iter()
+        .map(|(v, dir)| release(&src, &keys, v, &pack(dir), true))
+        .collect();
+    write_index(&index, &r);
+    f.conn
+        .change(Change {
+            mode: Some(Mode::Managed),
+            core_source: Some(index.display().to_string()),
+            ..Change::default()
+        })
+        .unwrap();
+    keys
+}
+
+/// A fallback selects a version only once it has run, and never one that is not installed: at
+/// the next start, and after a failed switch.
+#[test]
+fn a_fallback_selects_only_an_installed_version_that_ran() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut f = fixture("fallback-ran");
+    f.install("1.0.0").unwrap();
+    f.install("2.0.0").unwrap();
+    f.conn.stop_core();
+    // 1.0.0 changed since it was installed, so it cannot start.
+    let program = f.root.join("cores/versions/1.0.0/pluxy");
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut bytes = std::fs::read(&program).unwrap();
+    bytes.push(0);
+    std::fs::write(&program, bytes).unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let store = crash_while_repairing(&f, "2.0.0");
+    let mut c = Connection::open(dirs(&f.root), None);
+    assert!(c.core_pid().is_none());
+    let st = store.state().unwrap();
+    assert_eq!(
+        st.selected.as_deref(),
+        Some("2.0.0"),
+        "the selection moved to a version that did not run"
+    );
+    assert_eq!(st.previous.as_deref(), Some("1.0.0"));
+    assert_eq!(st.failed.unwrap().version, "2.0.0");
+    assert!(st.candidate.is_none());
+    let err = c.view().error.unwrap_or_default();
+    assert!(err.contains("core 1.0.0 did not start either"), "{err}");
+    drop(c);
+
+    // The version before it is no longer installed: it is not selected at the next start.
+    let mut f = fixture("fallback-removed");
+    f.install("1.0.0").unwrap();
+    f.install("2.0.0").unwrap();
+    f.conn.stop_core();
+    let store = crash_while_repairing(&f, "2.0.0");
+    store.remove("1.0.0");
+    let c = Connection::open(dirs(&f.root), None);
+    assert!(c.core_pid().is_none());
+    assert_eq!(store.state().unwrap().selected.as_deref(), Some("2.0.0"));
+    drop(c);
+
+    // After a failed switch: 2.0.0, selected, has lost its folder, so installing it again is a
+    // fresh install, removed when it fails; it is not kept as the version before 1.0.0.
+    let mut f = fixture("fallback-fresh");
+    f.install("1.0.0").unwrap();
+    f.install("2.0.0").unwrap();
+    let keys = use_source(&mut f, "bad-source", &[("2.0.0", built().join("3.0.0"))]);
+    f.conn.stop_core();
+    std::fs::remove_dir_all(f.root.join("cores/versions/2.0.0")).unwrap();
+    let staged = f.conn.prepare_install(&keys, "2.0.0").unwrap();
+    let err = f.conn.apply(CoreChange::Install(staged)).unwrap_err();
+    assert!(err.contains("core 1.0.0 runs again"), "{err}");
+    let st = Store::open(&f.root.join("cores")).unwrap().state().unwrap();
+    assert_eq!(st.selected.as_deref(), Some("1.0.0"));
+    assert_eq!(
+        st.previous, None,
+        "a removed version is kept as the one before"
+    );
+}
+
 #[test]
 fn refusals_change_nothing_and_the_same_routes_work() {
     let mut f = fixture("refuse");

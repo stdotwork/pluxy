@@ -403,33 +403,43 @@ impl Connection {
     }
 
     /// Starts the selected version. A switch the app did not finish (it stopped while a
-    /// candidate was starting) is undone first: the config is put back and the candidate is
-    /// recorded as failed; when that switch repaired the selected version itself, the one before
-    /// it is selected and runs, as after a failed switch. With no version installed, the app runs
-    /// no core.
+    /// candidate was starting) is undone first: the config is put back, the candidate is
+    /// recorded as failed, and the version that worked before runs, as after a failed switch
+    /// (when that switch repaired the selected version itself, the one before it, selected once
+    /// it runs). With no version installed, the app runs no core.
     fn start_core(&mut self) -> Result<(), String> {
         let store = self.store()?;
-        let mut st = store.state()?;
-        if let Some(c) = st.candidate.take() {
+        let st = store.state()?;
+        if let Some(c) = st.candidate.clone() {
             if let Some(kept) = ConfigSnapshot::kept(&store, &self.config_path())? {
                 kept.restore()?;
             }
             let reason = format!("the app stopped while core {c} was starting");
-            st.failed = Some(cores::Failed {
+            let failed = Some(cores::Failed {
                 version: c.clone(),
                 reason: reason.clone(),
             });
-            let repaired = st.selected.as_deref() == Some(c.as_str());
-            let nothing_before = repaired && st.previous.is_none();
-            if repaired && !nothing_before {
-                st.selected = st.previous.take();
-                st.previous = Some(c);
-            }
-            store.save_state(&st)?;
-            if nothing_before {
-                // As after a failed switch: nothing else worked before it, so no core runs.
-                return Err(reason);
-            }
+            let Some(last) = last_good(&store, &st, &c, true) else {
+                store.save_state(&ended(&store, &st, failed, None))?;
+                // Nothing else worked before it: no core runs.
+                return match st.selected {
+                    Some(_) => Err(reason),
+                    None => Ok(()),
+                };
+            };
+            let ran = self
+                .run_version(&store, &last)
+                .map_err(|e| format!("{reason}; core {last} did not start either: {e}"));
+            let saved = store.save_state(&ended(
+                &store,
+                &st,
+                failed,
+                ran.is_ok().then_some(last.as_str()),
+            ));
+            ran?;
+            return saved.map_err(|e| {
+                format!("{reason}; core {last} runs, but the app could not record that: {e}")
+            });
         }
         let Some(id) = st.selected else {
             return Ok(());
@@ -586,14 +596,7 @@ impl Connection {
         self.error = None;
         // tried: the candidate ran, or its files were replaced.
         let back = |c: &mut Self, why: String, tried: bool| -> Result<(), String> {
-            // The version that worked before; when this switch repaired that very version and
-            // it was tried, the one before it, which then stays selected.
-            let last = st
-                .selected
-                .clone()
-                .filter(|s| !(tried && s == id))
-                .or_else(|| st.previous.clone());
-            let Some(last) = last else {
+            let Some(last) = last_good(store, &st, id, tried) else {
                 c.error = Some(why.clone());
                 return Err(why);
             };
@@ -601,10 +604,8 @@ impl Connection {
                 Ok(()) => {
                     let mut msg = format!("{why}; core {last} runs again");
                     if st.selected.as_deref() != Some(last.as_str()) {
-                        let saved = store.state().and_then(|mut now| {
-                            now.previous = now.selected.take();
-                            now.selected = Some(last.clone());
-                            store.save_state(&now)
+                        let saved = store.state().and_then(|now| {
+                            store.save_state(&ended(store, &now, None, Some(&last)))
                         });
                         if let Err(e) = saved {
                             msg.push_str(&format!(
@@ -997,6 +998,43 @@ impl Connection {
             error: self.error.clone(),
         }
     }
+}
+
+/// The version to run when a switch to id did not finish: the version that worked before, which
+/// is the selected one unless that is id and id was tried (it ran, or its files were replaced),
+/// then the one before it; only one that is installed.
+fn last_good(store: &Store, st: &cores::State, id: &str, tried: bool) -> Option<String> {
+    [
+        st.selected.as_deref().filter(|s| !(tried && *s == id)),
+        st.previous.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|v| store.installed(v))
+    .map(String::from)
+}
+
+/// st once a switch ended without its candidate: no candidate, failed recorded when given, and
+/// ran (a version that runs now) selected, with the one selected before it, while installed, as
+/// the one before.
+fn ended(
+    store: &Store,
+    st: &cores::State,
+    failed: Option<cores::Failed>,
+    ran: Option<&str>,
+) -> cores::State {
+    let mut s = st.clone();
+    s.candidate = None;
+    if failed.is_some() {
+        s.failed = failed;
+    }
+    if let Some(ran) = ran {
+        if s.selected.as_deref() != Some(ran) {
+            s.previous = s.selected.take().filter(|v| store.installed(v));
+            s.selected = Some(ran.to_string());
+        }
+    }
+    s
 }
 
 /// Whether a core the app just started is the one it asked for: it says it listens on this
