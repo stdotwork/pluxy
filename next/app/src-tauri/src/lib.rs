@@ -28,6 +28,7 @@ pub mod managed;
 mod native_test;
 pub mod pages;
 mod place;
+mod privacy;
 pub mod recovery;
 #[cfg(debug_assertions)]
 pub mod release_config;
@@ -540,6 +541,32 @@ fn window_view(app: &AppHandle) -> window::View {
     }
 }
 
+fn privacy_file(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    Ok(app
+        .path()
+        .app_config_dir()
+        .map_err(|e| e.to_string())?
+        .join(privacy::FILE))
+}
+
+/// Whether privacy mode is on (`privacy.rs`).
+#[tauri::command]
+async fn privacy_get(webview: Webview) -> Result<bool, String> {
+    trusted(&webview)?;
+    Ok(privacy::load(&privacy_file(webview.app_handle())?))
+}
+
+/// Saves privacy mode; only the window's own toggle calls it.
+#[tauri::command]
+async fn privacy_set(webview: Webview, on: bool) -> Result<bool, String> {
+    trusted(&webview)?;
+    // One write at a time, as window_set writes under its store's lock.
+    static SAVING: Mutex<()> = Mutex::new(());
+    let _saving = SAVING.lock().unwrap();
+    privacy::save(&privacy_file(webview.app_handle())?, on)?;
+    Ok(on)
+}
+
 #[tauri::command]
 async fn window_get(webview: Webview) -> Result<window::View, String> {
     trusted(&webview)?;
@@ -1011,8 +1038,14 @@ fn deliver_page(app: &AppHandle, label: &str, generation: &str, msg: Value) -> R
     let callback_label = label.to_string();
     let callback_generation = generation.to_string();
     let callback_msg = serde_json::json!({"type":msg["type"],"data":{"id":msg["data"]["id"],"event":msg["data"]["event"],"error":{"code":msg["data"]["error"]["code"]}}});
+    #[cfg(feature = "native-test")]
+    let sent = msg.clone();
     let result = target
         .eval_with_callback(js, move |result| {
+            #[cfg(feature = "native-test")]
+            if result == "true" {
+                native_test::privacy::delivered(&sent);
+            }
             finish_page_delivery(
                 &callback_app,
                 &callback_label,
@@ -1545,6 +1578,8 @@ pub fn run() {
             window_get,
             window_set,
             window_close,
+            privacy_get,
+            privacy_set,
         ])
         .register_asynchronous_uri_scheme_protocol(pages::SCHEME, page_scheme)
         .register_asynchronous_uri_scheme_protocol(device::ASSET_SCHEME, asset_scheme)

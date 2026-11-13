@@ -34,6 +34,13 @@ function write(s: Storage | undefined, name: string, value: string | null) {
   }
 }
 
+/** Calls fn with a pref's new value when another tab of this panel changes it. */
+export function watchPref(name: string, fn: (value: string | null) => void) {
+  window.addEventListener("storage", (event) => {
+    if (event.storageArea === store("localStorage") && event.key === PREFS + name) fn(event.newValue);
+  });
+}
+
 export function browserHost(): Host {
   const local = store("localStorage");
   const session = store("sessionStorage");

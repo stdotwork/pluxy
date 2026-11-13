@@ -3,9 +3,11 @@
 
 import { useLayoutEffect, useRef, useState } from "preact/hooks";
 import type { Api, UIExtension, UIPage } from "../api";
+import type { PrivacyState } from "../privacy";
 import { strings } from "../strings";
 import { THEME_VERSION } from "../theme/contract";
 import type { Resolved } from "../theme/engine";
+import type { ThemeState } from "../theme/state";
 import { Button, Notice, PageHead, useKit } from "../ui";
 import { type Channel, isHello, type Outcome, pickVersion, serve } from "./channel";
 import { pageProblem } from "./site";
@@ -16,13 +18,27 @@ const t = strings("extensionPage", {
   loadAgain: "Load the page again",
 });
 
-/** The theme as a page gets it: tokens and layout, never custom CSS. */
-export function themeSnapshot(r: Resolved) {
+/**
+ * The theme as a page gets it: tokens and layout, never custom CSS, and whether privacy mode is
+ * on, so the page can hide the account identities it shows itself.
+ */
+export function themeSnapshot(r: Resolved, privacy: boolean) {
   return {
     theme_version: THEME_VERSION,
     appearance: r.appearance,
     layout: { ...r.layout },
     tokens: { ...r.tokens },
+    privacy,
+  };
+}
+
+/** Calls fn when what themeSnapshot holds changes: the theme, its choices or privacy mode. */
+export function subscribePresentation(themes: ThemeState, privacy: PrivacyState, fn: () => void): () => void {
+  const offTheme = themes.subscribe(fn);
+  const offPrivacy = privacy.subscribe(fn);
+  return () => {
+    offTheme();
+    offPrivacy();
   };
 }
 
@@ -54,7 +70,7 @@ export interface ExtensionPageProps {
 }
 
 export function ExtensionPage(props: ExtensionPageProps) {
-  const { api, themes, unauthorized } = useKit();
+  const { api, themes, privacy, unauthorized } = useKit();
   const { ext, page } = props;
   const frame = useRef<HTMLIFrameElement>(null);
   const [mount, setMount] = useState(0); // a new frame, and a new channel, each time it changes
@@ -90,7 +106,7 @@ export function ExtensionPage(props: ExtensionPageProps) {
         ports.port1,
         { extension: ext.id, permissions: permissions ? permissions.split(" ") : [] },
         {
-          theme: () => themeSnapshot(themes.resolved),
+          theme: () => themeSnapshot(themes.resolved, privacy.on),
           configGet: () => settingsOutcome(api.settings(ext.id), unauthorized),
           configSet: (values) => settingsOutcome(api.changeSettings(ext.id, values), unauthorized),
         },
@@ -103,7 +119,7 @@ export function ExtensionPage(props: ExtensionPageProps) {
           type: "welcome",
           extension: ext.id,
           page: page.id,
-          theme: themeSnapshot(themes.resolved),
+          theme: themeSnapshot(themes.resolved, privacy.on),
         },
         "*",
         [ports.port2],
@@ -120,14 +136,16 @@ export function ExtensionPage(props: ExtensionPageProps) {
     window.addEventListener("message", onMessage);
     const el = frame.current;
     el?.addEventListener("load", onLoad);
-    const unsubscribe = themes.subscribe(() => channel?.event("theme", themeSnapshot(themes.resolved)));
+    const unsubscribe = subscribePresentation(themes, privacy, () =>
+      channel?.event("theme", themeSnapshot(themes.resolved, privacy.on)),
+    );
     return () => {
       window.removeEventListener("message", onMessage);
       el?.removeEventListener("load", onLoad);
       unsubscribe();
       close();
     };
-  }, [mount, problem, ext.id, permissions, page.id, page.url, api, themes, unauthorized]);
+  }, [mount, problem, ext.id, permissions, page.id, page.url, api, themes, privacy, unauthorized]);
 
   return (
     <>

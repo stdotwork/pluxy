@@ -1,6 +1,7 @@
 import { useState } from "preact/hooks";
 import type { Package } from "../api";
 import { SettingsForm } from "../extensions/settings";
+import { useAccountLabels, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { strings } from "../strings";
 import {
@@ -55,6 +56,7 @@ function PackageDetail(props: { p: Package; onClose: () => void; onChanged: () =
   const { api } = useKit();
   const { p } = props;
   const status = useLoad(api.status);
+  const mask = usePrivacy().masker(useAccountLabels(status.data));
   const act = useAction(props.onChanged);
   const remove = useAction(() => {
     props.onClose();
@@ -70,7 +72,7 @@ function PackageDetail(props: { p: Package; onClose: () => void; onChanged: () =
           [t("registry"), p.registry],
           [t("installed"), when(p.installed_at)],
           [t("digest"), <span class="mono">{p.sha256.slice(0, 16)}</span>],
-          [t("whyNotRunning"), p.error],
+          [t("whyNotRunning"), mask(p.error)],
         ]}
       />
       {running.map((g) => (
@@ -84,13 +86,13 @@ function PackageDetail(props: { p: Package; onClose: () => void; onChanged: () =
             [t("process"), g.pid],
             [t("requestsNow"), g.active_requests],
             [t("restarts"), g.restarts],
-            [t("lastError"), g.last_error],
+            [t("lastError"), mask(g.last_error)],
           ]}
         />
       ))}
       <p class="muted">{t("isolation")}</p>
       {p.state !== "disabled" && <SettingsForm id={p.id} />}
-      {(act.error ?? remove.error) && <Notice tone="danger">{act.error ?? remove.error}</Notice>}
+      {(act.error ?? remove.error) && <Notice tone="danger">{mask(act.error ?? remove.error)}</Notice>}
       <div class="actions">
         <Button
           variant={p.enabled ? "quiet" : "primary"}

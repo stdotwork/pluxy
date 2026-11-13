@@ -24,6 +24,7 @@
 // session, with the app built with artifact-test-trust and a test trust profile in the run's HOME.
 // The other sessions run a build without that feature; its device check shows the same profile
 // admits nothing there.
+// The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
 // own (dbus-run-session, xvfb-run), and random ports. Inside that session, before the app,
@@ -171,8 +172,9 @@ async function managementStatus(base: string, key: string, ca?: string): Promise
   return r.status;
 }
 
-/** The window checks (window.ts), with or without a tray watcher in the session. */
-type Suite = "window" | "window-no-tray";
+/** The window checks (window.ts), with or without a tray watcher in the session, and the privacy
+ * mode checks (privacy.ts). */
+type Suite = "window" | "window-no-tray" | "privacy";
 
 /** Runs the app once with connection as its saved connection, and checks what it reports. With
  * suite, the session runs window.ts, which runs the app through the window checks' stages.
@@ -285,7 +287,7 @@ async function runApp(
       probe,
       appImage,
       randomUUID(),
-      suite ? join(import.meta.dir, "window.ts") : bin,
+      suite ? join(import.meta.dir, suite === "privacy" ? "privacy.ts" : "window.ts") : bin,
     ];
     const xvfb = ["xvfb-run", "-a", "-s", "-screen 0 1280x800x24 -nolisten tcp", ...session];
     const proc = spawn("dbus-run-session", ["--", ...xvfb], {
@@ -313,10 +315,11 @@ async function runApp(
         problems.push("management key appeared on stdout/stderr");
         return;
       }
-      // window.ts's checks, each shown.
-      if (line.startsWith("window: ")) {
+      // window.ts's and privacy.ts's checks, each shown.
+      const driver = /^(window|privacy): /.exec(line)?.[1];
+      if (driver) {
         console.log(`  ${mode} | ${line}`);
-        if (line.startsWith("window: suite passed")) suitePassed = true;
+        if (line.startsWith(`${driver}: suite passed`)) suitePassed = true;
         return;
       }
       // The session's service checks are always shown: they say what this run stood on.
@@ -697,7 +700,7 @@ try {
         true,
       )),
     );
-    for (const suite of ["window", "window-no-tray"] as const)
+    for (const suite of ["window", "window-no-tray", "privacy"] as const)
       p.push(
         ...(await runApp(
           "managed",

@@ -6,6 +6,7 @@ import { useCallback, useEffect, useId, useMemo, useState } from "preact/hooks";
 import { api } from "./api";
 import { ExtensionPage, type ExtensionPageProps } from "./extensions/page";
 import type { Host } from "./host";
+import { PrivacyContext, type PrivacyState, privacyMasks } from "./privacy";
 import { strings } from "./strings";
 import type { ThemeState } from "./theme/state";
 import { Button, type Kit, KitContext, Notice } from "./ui";
@@ -19,6 +20,10 @@ const t = strings("shell", {
   navigation: "Main",
   signOut: "Sign out",
   signOutShort: "Out",
+  privacy: "Privacy mode",
+  privacyShort: "Priv",
+  privacyEnable: "Turn on privacy mode to hide account emails and identifiers",
+  privacyDisable: "Turn off privacy mode to show full account details",
   "group.operate": "Operate",
   "group.gateway": "Gateway",
   "group.observe": "Observe",
@@ -157,9 +162,21 @@ function SignIn(props: { host: Host; onDone: () => void; reason?: string }) {
   );
 }
 
+/** Privacy mode's state, drawing again when it changes. */
+function usePrivacyOn(privacy: PrivacyState): boolean {
+  const [on, setOn] = useState(privacy.on);
+  useEffect(() => {
+    setOn(privacy.on);
+    return privacy.subscribe(() => setOn(privacy.on));
+  }, [privacy]);
+  return on;
+}
+
 export function Shell(props: {
   host: Host;
   themes: ThemeState;
+  /** Privacy mode, kept where the host build keeps it. */
+  privacy: PrivacyState;
   pages: PageDef[];
   brand?: string;
   /** Adds the pages of the extensions that run, after the build's own. */
@@ -170,7 +187,12 @@ export function Shell(props: {
    */
   extensionPage?: ExtensionPageView;
 }) {
-  const { host, themes } = props;
+  const { host, themes, privacy } = props;
+  const privacyOn = usePrivacyOn(privacy);
+  const masks = useMemo(() => privacyMasks(privacyOn), [privacyOn]);
+  useEffect(() => {
+    document.documentElement.dataset.privacy = privacyOn ? "on" : "off";
+  }, [privacyOn]);
   const [signedIn, setSignedIn] = useState(host.signedIn());
   const [reason, setReason] = useState<string>();
   const [uiVersion, setUiVersion] = useState(0);
@@ -182,8 +204,8 @@ export function Shell(props: {
   }, [host]);
   const extensionsChanged = useCallback(() => setUiVersion((n) => n + 1), []);
   const kit = useMemo(
-    () => ({ host, api: api(host), themes, unauthorized, extensionsChanged }),
-    [host, themes, unauthorized, extensionsChanged],
+    () => ({ host, api: api(host), themes, privacy, unauthorized, extensionsChanged }),
+    [host, themes, privacy, unauthorized, extensionsChanged],
   );
   const extPages = useExtensionPages(
     signedIn && props.extensionPages === true,
@@ -237,69 +259,85 @@ export function Shell(props: {
 
   return (
     <KitContext.Provider value={kit}>
-      <div class="shell" data-part="shell">
-        <nav class="nav" data-part="nav" aria-label={t("navigation")}>
-          <a class="brand" href={`#/${pages[0]?.id ?? ""}`}>
-            {props.brand ?? "pluxy"}
-          </a>
-          {PAGE_GROUPS.map((group) => {
-            const listed = pages.filter((p) => p.group === group);
-            if (listed.length === 0) return null;
-            const label = `${navId}-${group}`;
-            return (
-              // biome-ignore lint/a11y/useSemanticElements: a fieldset groups form controls; this groups links
-              <div
-                key={group}
-                class="nav-group"
-                data-part="nav-group"
-                data-group={group}
-                role="group"
-                aria-labelledby={label}
-              >
-                <span class="nav-group-label" id={label}>
-                  {t(`group.${group}`)}
-                </span>
-                <ul>
-                  {listed.map((p) => (
-                    <li key={p.id}>
-                      <a
-                        href={`#/${p.id}`}
-                        class="nav-item"
-                        data-part="nav-item"
-                        aria-current={p.id === page ? "page" : undefined}
-                        title={p.tip ?? p.title}
-                      >
-                        <span class="full">{p.title}</span>
-                        <span class="short" aria-hidden="true">
-                          {p.short}
-                        </span>
-                      </a>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            );
-          })}
-          {host.features.has("signOut") && (
+      <PrivacyContext.Provider value={masks}>
+        <div class="shell" data-part="shell">
+          <nav class="nav" data-part="nav" aria-label={t("navigation")}>
+            <a class="brand" href={`#/${pages[0]?.id ?? ""}`}>
+              {props.brand ?? "pluxy"}
+            </a>
+            {PAGE_GROUPS.map((group) => {
+              const listed = pages.filter((p) => p.group === group);
+              if (listed.length === 0) return null;
+              const label = `${navId}-${group}`;
+              return (
+                // biome-ignore lint/a11y/useSemanticElements: a fieldset groups form controls; this groups links
+                <div
+                  key={group}
+                  class="nav-group"
+                  data-part="nav-group"
+                  data-group={group}
+                  role="group"
+                  aria-labelledby={label}
+                >
+                  <span class="nav-group-label" id={label}>
+                    {t(`group.${group}`)}
+                  </span>
+                  <ul>
+                    {listed.map((p) => (
+                      <li key={p.id}>
+                        <a
+                          href={`#/${p.id}`}
+                          class="nav-item"
+                          data-part="nav-item"
+                          aria-current={p.id === page ? "page" : undefined}
+                          title={p.tip ?? p.title}
+                        >
+                          <span class="full">{p.title}</span>
+                          <span class="short" aria-hidden="true">
+                            {p.short}
+                          </span>
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })}
             <button
               type="button"
-              class="nav-item signout"
-              onClick={() => {
-                host.signOut();
-                setSignedIn(false);
-              }}
+              class="nav-item privacy"
+              data-part="privacy-toggle"
+              aria-pressed={privacyOn}
+              aria-label={t("privacy")}
+              title={t(privacyOn ? "privacyDisable" : "privacyEnable")}
+              onClick={() => privacy.set(!privacyOn)}
             >
-              <span class="full">{t("signOut")}</span>
+              <span class="full">{t("privacy")}</span>
               <span class="short" aria-hidden="true">
-                {t("signOutShort")}
+                {t("privacyShort")}
               </span>
             </button>
-          )}
-        </nav>
-        <main class="main" data-part="main">
-          <div class="content">{active?.render()}</div>
-        </main>
-      </div>
+            {host.features.has("signOut") && (
+              <button
+                type="button"
+                class="nav-item signout"
+                onClick={() => {
+                  host.signOut();
+                  setSignedIn(false);
+                }}
+              >
+                <span class="full">{t("signOut")}</span>
+                <span class="short" aria-hidden="true">
+                  {t("signOutShort")}
+                </span>
+              </button>
+            )}
+          </nav>
+          <main class="main" data-part="main">
+            <div class="content">{active?.render()}</div>
+          </main>
+        </div>
+      </PrivacyContext.Provider>
     </KitContext.Provider>
   );
 }
