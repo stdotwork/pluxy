@@ -115,8 +115,8 @@ func TestRedactAliasKeys(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := mustParse(t, tc.src, true)
-			if !slices.ContainsFunc(d.Secrets(), func(s string) bool { return strings.Contains(s, tc.secret) }) {
-				t.Errorf("Secrets() = %q, want one holding %q", d.Secrets(), tc.secret)
+			if !slices.ContainsFunc(d.TextSecrets(), func(s string) bool { return strings.Contains(s, tc.secret) }) {
+				t.Errorf("TextSecrets() = %q, want one holding %q", d.TextSecrets(), tc.secret)
 			}
 			redactRoundTrip(t, tc.src, true, []string{tc.secret}, nil)
 		})

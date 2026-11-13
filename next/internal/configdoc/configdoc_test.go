@@ -83,9 +83,9 @@ func (d *Doc) secretNodes() ([]*yaml.Node, map[*yaml.Node]string) {
 func redactChecked(t *testing.T, src string, isYAML bool, wantSecrets []string) (red, restored string) {
 	t.Helper()
 	r := NewRedactor()
-	secrets := mustParse(t, src, isYAML).Secrets()
+	secrets := mustParse(t, src, isYAML).TextSecrets()
 	if !slices.Equal(sorted(secrets), sorted(wantSecrets)) {
-		t.Fatalf("Secrets() = %q, want %q", sorted(secrets), sorted(wantSecrets))
+		t.Fatalf("TextSecrets() = %q, want %q", sorted(secrets), sorted(wantSecrets))
 	}
 	out, err := r.Redact([]byte(src), isYAML)
 	if err != nil {
@@ -102,7 +102,7 @@ func redactChecked(t *testing.T, src string, isYAML bool, wantSecrets []string) 
 			t.Errorf("no placeholder for %q in the redacted document:\n%s", n.Value, out)
 		}
 	}
-	for _, s := range mustParse(t, string(out), isYAML).Secrets() {
+	for _, s := range mustParse(t, string(out), isYAML).TextSecrets() {
 		if !placeholderRE.MatchString(s) {
 			t.Errorf("redacted document still holds %q where a secret goes", s)
 		}

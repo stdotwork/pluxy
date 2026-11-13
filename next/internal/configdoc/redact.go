@@ -516,17 +516,8 @@ func found(n *yaml.Node, strict bool) (out []*yaml.Node, texts map[*yaml.Node]st
 	return out, texts, nested
 }
 
-// Secrets returns the secret values the document holds.
-func (d *Doc) Secrets() []string {
-	var out []string
-	for _, n := range secrets(d.root, false) {
-		out = append(out, n.Value)
-	}
-	return out
-}
-
 // TextSecrets returns the secret values to take out of text where they occur, such as core's
-// messages (Redactor.Scrub): every secret of the document, except a number shorter than
+// messages (Redactor.Scrub): every secret of the document (the values Redact hides), except a number shorter than
 // MinTextSecret that is a secret only for being in a mapping below a secret key (the 3 of
 // client_secret: {rotate_after_days: 3}), which is left in text: taking every 3 out of a message
 // would garble it. A string is taken out however short. The redacted document still shows a
@@ -609,8 +600,8 @@ func SettingsSecrets(b []byte) []string {
 
 // Redact returns a config file's contents with a placeholder in place of each secret. The
 // rest stays as written, comments included. Where a secret's text cannot be found exactly (a
-// block scalar, an anchor before it), the document is written out again with the placeholders,
-// as Doc.Bytes writes it.
+// block scalar, an anchor before it, a tag with the value on the next line), the document is
+// written out again with the placeholders, as Doc.Bytes writes it.
 func (r *Redactor) Redact(b []byte, isYAML bool) ([]byte, error) {
 	return r.redact(b, isYAML, false)
 }
@@ -939,8 +930,8 @@ func (d *Doc) replace(repl map[*yaml.Node]string) ([]byte, bool) {
 	out.Grow(len(d.src))
 	last := 0
 	for _, e := range edits {
-		if e.start < last { // two nodes at one place: an alias's anchor, replaced once
-			continue
+		if e.start < last { // distinct scalars never overlap; should two, write the document out again
+			return nil, false
 		}
 		out.Write(d.src[last:e.start])
 		out.WriteString(e.text)
