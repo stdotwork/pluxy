@@ -1945,6 +1945,10 @@ pub fn run() {
                 eprintln!("pluxy-app: no way to raise this window from a later launch: {e}");
             }
             app.manage(instance);
+            // Next, before any other step: the updater gate's report (it starts nothing; it reads
+            // the compiled marker, identifier and product name). A later launch ended above.
+            #[cfg(feature = "native-test")]
+            native_test::updater_gate(app.handle());
             let config = app.path().app_config_dir()?;
             let startup_store = startup::Store::new(
                 config.clone(),

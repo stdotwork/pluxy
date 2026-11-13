@@ -20,6 +20,8 @@
 //!
 //! With `PLUXY_APP_TEST_WINDOW` or `PLUXY_APP_TEST_PRIVACY` it runs that stage of the window or
 //! privacy mode checks instead (`native_window.rs`, `native_privacy.rs`).
+//! Before these, as the app starts, it reports its updater gate (`updater_gate`).
+//!
 //! With `PLUXY_APP_TEST_EARLY_EXIT` set it does none of that: the app's setup waits for its
 //! core's exit callback before the app state exists, then the run waits for the app to start
 //! that core again and quits.
@@ -99,6 +101,25 @@ const ACTING: &[&str] = &[
 mod key_entry_test;
 #[path = "rotation_test.rs"]
 mod rotation_test;
+
+/// Reports the updater gate (`trust::updater_gate`) with what it read: the compiled test marker,
+/// identifier and product name. The app calls this first among the test's steps, right after the
+/// single-instance check (a later launch ends there and reports nothing).
+pub fn updater_gate(app: &AppHandle) {
+    let config = app.config();
+    let home = std::env::var_os("HOME").unwrap_or_default();
+    let result = crate::trust::updater_gate(config, std::path::Path::new(&home));
+    log(
+        "updater_gate",
+        json!({
+            "passed": result.is_ok(),
+            "marker": cfg!(any(feature = "native-test", feature = "artifact-test-trust")),
+            "identifier": config.identifier,
+            "product": config.product_name,
+            "error": result.err(),
+        }),
+    );
+}
 
 pub(crate) fn log(step: &str, v: Value) {
     eprintln!("native-test: {step} {v}");

@@ -20,6 +20,14 @@
 //   (the window's or an extension page's) and no output line holds any key the run rotated; in
 //   local mode the app then starts again on the same folders and signs in with the kept key.
 //
+// The packaged app too: the test package (package.ts test, an AppImage with the test identifier,
+// product name and compiled test marker) runs through the same checks in local mode, as the
+// AppImage itself, not the binary it was built from. Before anything else, each run's app reports
+// its updater gate (the check P8c2's updater must pass before any updater plugin call): with the
+// same test trust profile in every run, the test package passes it and the normal-identifier dev
+// binary is refused. Then the release command (package.ts release) must pass a clean release
+// build and a clean AppImage, and refuse the test package (renamed or not) and an AppImage holding
+// a test-feature binary.
 // In managed mode it then runs the window checks (window.ts, native_window.rs) in two more
 // sessions, one with a tray watcher and one without.
 // Then, in a session of its own (instances.ts, instances-session.ts), the single-instance
@@ -59,10 +67,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve as resolvePath } from "node:path";
+import { basename, join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline";
-import { buildAdmissionFixtures } from "./admission";
-import { buildSmokeAppImage } from "./appimage";
+import { buildAdmissionFixtures, MARKER_FILE, PROFILE_FILE } from "./admission";
+import { appImageHeader, buildSmokeAppImage, packAppImage } from "./appimage";
 import { buildDeviceFixtures } from "./device";
 import { runInstances } from "./instances";
 import { descendants, webProcesses } from "./processes";
@@ -73,6 +81,9 @@ const app = join(import.meta.dir, "..");
 const next = join(app, "..");
 const tauri = join(app, "src-tauri");
 const identifier: string = JSON.parse(readFileSync(join(tauri, "tauri.conf.json"), "utf8")).identifier;
+/** What the test package must be built as; written here, not read from what package.ts made. */
+const TEST_ID = "dev.pluxy.desktop.test";
+const TEST_PRODUCT = "pluxy Test";
 const commands = [
   ...readFileSync(join(tauri, "src", "command_names.rs"), "utf8").matchAll(/^\s+"(\w+)",$/gm),
 ].map((m) => m[1] as string);
@@ -82,6 +93,28 @@ const REFUSED = /not allowed( on window|\. Permissions associated| by ACL)/;
 const TIMEOUT = 240_000;
 
 type Mode = "managed" | "local" | "remote";
+/** What package.ts test wrote into its folder's test-package.json. */
+interface TestPackage {
+  /** The AppImage, under its -test file name. */
+  appimage: string;
+  /** The temporary updater public key compiled into it (no private key is kept). */
+  updater_pubkey: string;
+}
+/** Which app a run starts, and what its updater gate must say. */
+interface Artifact {
+  /** How the run's lines are labelled. */
+  label: string;
+  /** The program the session starts: the dev binary, or the AppImage itself. */
+  bin: string;
+  /** The identifier the app's config folder is named after. */
+  identifier: string;
+  /** The updater gate passes (the test package) or refuses (anything else), with the same
+   * test trust profile in place either way. */
+  gate: "passes" | "refuses";
+  /** What a refusal must say. A build with artifact-test-trust refuses a normal identifier for
+   * that identifier; one without it never had updater trust at all. */
+  refusal?: RegExp;
+}
 /** The session's setup failed (session.ts said what is missing or broken, and never said it was
  * ready): the app never ran, and the other modes would fail the same way. */
 class SetupError extends Error {}
@@ -109,6 +142,12 @@ function run(cmd: string, args: string[], cwd: string) {
   const r = spawnSync(cmd, args, { cwd, stdio: ["ignore", "pipe", "inherit"], encoding: "utf8" });
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(" ")} exited with ${r.status}`);
   return r.stdout;
+}
+
+/** Runs a command whose output is only shown (a build, which can print a lot). */
+function runShown(cmd: string, args: string[], cwd: string) {
+  const r = spawnSync(cmd, args, { cwd, stdio: ["ignore", "inherit", "inherit"] });
+  if (r.status !== 0) throw new Error(`${cmd} ${args.join(" ")} exited with ${r.status}`);
 }
 
 /** A core from panelcore, running until its stdin closes. */
@@ -140,7 +179,10 @@ const sessions = new Set<number>();
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     // Bounded: TERM, a grace period, then KILL for each session, before the runner exits.
-    void Promise.all([...sessions].map(stopSession)).finally(() => process.exit(130));
+    void Promise.all([...sessions].map(stopSession)).finally(() => {
+      removeTemporary();
+      process.exit(130);
+    });
   });
 }
 
@@ -211,14 +253,16 @@ interface Rotation {
   restart?: boolean;
 }
 
-/** Runs the app once with connection as its saved connection, and checks what it reports. With
- * suite, the session runs window.ts, which runs the app through the window checks' stages.
- * earlyExit: the app's setup waits for its core's exit callback before the app state exists
- * (PLUXY_APP_TEST_EARLY_EXIT), and only the recovery of that core is checked. admission: the
- * session checks only signed native-tier admission. */
+/** Runs the app once with connection as its saved connection, and checks what it reports.
+ * updaterKey goes into the run's test trust profile; with key, the run also drives native key
+ * entry. With suite, the session runs window.ts, which runs the app through the window checks'
+ * stages. earlyExit: the app's setup waits for its core's exit callback before the app state
+ * exists (PLUXY_APP_TEST_EARLY_EXIT), and only the recovery of that core is checked. admission:
+ * the session checks only signed native-tier admission; program: only the program host. */
 async function runApp(
   mode: Mode,
-  bin: string,
+  artifact: Artifact,
+  updaterKey: string,
   connection: object,
   base?: string,
   startup = false,
@@ -230,6 +274,7 @@ async function runApp(
   program = false,
   earlyExit = false,
 ): Promise<string[]> {
+  const { label, bin } = artifact;
   const root = rotation.root ?? mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
   const problems: string[] = [];
   const check = (ok: unknown, what: string) => {
@@ -243,17 +288,19 @@ async function runApp(
       cache: join(root, "cache"),
       state: join(root, "state"),
       runtime: join(root, "runtime"),
+      // Where an AppImage's runtime extracts it (APPIMAGE_EXTRACT_AND_RUN), inside the run.
+      tmp: join(root, "tmp"),
     };
     for (const d of Object.values(dirs)) mkdirSync(d, { recursive: true, mode: 0o700 });
-    mkdirSync(join(dirs.config, identifier), { recursive: true });
+    mkdirSync(join(dirs.config, artifact.identifier), { recursive: true });
     if (!rotation.restart)
-      writeFileSync(join(dirs.config, identifier, "connection.json"), JSON.stringify(connection), {
+      writeFileSync(join(dirs.config, artifact.identifier, "connection.json"), JSON.stringify(connection), {
         mode: 0o600,
       });
     // The main checks close the window to the tray; the window suite starts with Ask every time.
     if (!suite)
       writeFileSync(
-        join(dirs.config, identifier, "window.json"),
+        join(dirs.config, artifact.identifier, "window.json"),
         JSON.stringify({ close_behavior: "minimize-to-tray" }),
         { mode: 0o600 },
       );
@@ -263,15 +310,21 @@ async function runApp(
     // A test trust profile in HOME naming curated registries: the admission session's build
     // honours it; the device check's normal build must not.
     const curated = device || admission ? join(root, "curated") : undefined;
-    let nonce: string | undefined;
+    // The test trust profile in HOME: its marker and nonce, and the updater key, the same in
+    // every run. With curated registries or the program host's fixtures, they write the marker
+    // and the publisher roots; otherwise the app's own code writes the marker (session_probe
+    // trust-marker), with no roots.
+    let nonce = "";
+    let roots: object[] = [];
     // The program host check's signed summary tool, its curated registry and trust profile.
     const programDir = program ? join(root, "program") : undefined;
     if (programDir) {
       mkdirSync(programDir);
       const f = buildProgramFixtures(programDir, dirs.home, programFixture);
       nonce = f.nonce;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
       writeFileSync(
-        join(dirs.config, identifier, "device-registries.json"),
+        join(dirs.config, artifact.identifier, "device-registries.json"),
         JSON.stringify({ version: 0, registries: f.registries }),
       );
     }
@@ -280,6 +333,7 @@ async function runApp(
       if (device) mkdirSync(device);
       const a = buildAdmissionFixtures(curated, dirs.home);
       nonce = a.nonce;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
       const registries = admission
         ? a.registries
         : [
@@ -287,10 +341,27 @@ async function runApp(
             ...a.registries.filter((r) => r.name === "curated"),
           ];
       writeFileSync(
-        join(dirs.config, identifier, "device-registries.json"),
+        join(dirs.config, artifact.identifier, "device-registries.json"),
         JSON.stringify({ version: 0, registries }),
       );
+    } else if (rotation.restart) {
+      // The app starts again on the first run's HOME: its marker and profile stay, and so does
+      // the nonce the marker holds.
+      nonce = JSON.parse(readFileSync(join(dirs.home, MARKER_FILE), "utf8")).nonce;
+    } else if (!programDir) {
+      try {
+        nonce = /^nonce=([0-9a-f]{64})$/m.exec(run(probe, ["trust-marker", dirs.home], app))?.[1] ?? "";
+        if (!nonce) throw new Error("it printed no nonce");
+      } catch (e) {
+        check(false, `the test trust marker was not written: ${(e as Error).message}`);
+      }
     }
+    if (!rotation.restart)
+      writeFileSync(
+        join(dirs.home, PROFILE_FILE),
+        JSON.stringify({ roots, updater: { kind: "test", public_key: updaterKey } }),
+        { mode: 0o600 },
+      );
     const keyFile = join(root, "key-input");
     // Every key the rotation check sees, for the log audit below; it is native-test output.
     const rotatedFile = join(root, "rotated-keys");
@@ -306,6 +377,8 @@ async function runApp(
       XDG_CACHE_HOME: dirs.cache,
       XDG_STATE_HOME: dirs.state,
       XDG_RUNTIME_DIR: dirs.runtime,
+      TMPDIR: dirs.tmp,
+      PLUXY_TEST_TRUST_NONCE: nonce,
       WEBKIT_DISABLE_DMABUF_RENDERER: "1",
       LIBGL_ALWAYS_SOFTWARE: "1",
       NO_AT_BRIDGE: "1",
@@ -320,8 +393,7 @@ async function runApp(
       ...(admission ? { PLUXY_APP_TEST_ADMISSION: curated as string } : {}),
       // In the app's environment, never in the tool's (program_native.rs checks its names).
       ...(programDir ? { PLUXY_APP_TEST_PROGRAM: programDir, PLUXY_TEST_PROGRAM_CANARY: randomUUID() } : {}),
-      ...(nonce ? { PLUXY_TEST_TRUST_NONCE: nonce } : {}),
-      ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: identifier } : {}),
+      ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: artifact.identifier } : {}),
       ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
       ...(key ? { PLUXY_APP_TEST_KEY_FILE: keyFile } : {}),
       PLUXY_APP_TEST_ROTATED_FILE: rotatedFile,
@@ -331,7 +403,7 @@ async function runApp(
         ? {
             PLUXY_APP_TEST_WINDOW_BIN: bin,
             PLUXY_APP_TEST_PROBE: probe,
-            PLUXY_APP_TEST_IDENTIFIER: identifier,
+            PLUXY_APP_TEST_IDENTIFIER: artifact.identifier,
           }
         : {}),
       ...(earlyExit ? { PLUXY_APP_TEST_EARLY_EXIT: "1" } : {}),
@@ -354,6 +426,7 @@ async function runApp(
       detached: true,
     });
     const steps = new Map<string, Step>();
+    const order: string[] = []; // the app's steps in the order it reported them
     const reached: string[] = [];
     const assets: { label: string; path: string; status: number }[] = [];
     let before = 0;
@@ -386,7 +459,7 @@ async function runApp(
         return;
       }
       if (line.startsWith("native-prereq: ")) {
-        console.log(`  ${mode} | ${line}`);
+        console.log(`  ${label} | ${line}`);
         if (line === "native-prereq: ready") ready = true;
         if (line.startsWith("native-prereq: FAILED "))
           setup.push(line.slice("native-prereq: FAILED ".length));
@@ -395,7 +468,7 @@ async function runApp(
       if (line.startsWith("native-test: recovery-attempt ")) attempts++;
       const m = /^native-test: (\w+) (.*)$/.exec(line);
       if (!m) {
-        if (process.env.PLUXY_APP_TEST_VERBOSE) console.error(`  ${mode} | ${line}`);
+        if (process.env.PLUXY_APP_TEST_VERBOSE) console.error(`  ${label} | ${line}`);
         log.push(line);
         if (log.length > 60) log.shift();
         return;
@@ -411,7 +484,9 @@ async function runApp(
         return;
       }
       steps.set(step, value);
-      if (step === "confirmations") console.log(`  ${mode} | native confirmations: ${JSON.stringify(value)}`);
+      order.push(step);
+      if (step === "confirmations")
+        console.log(`  ${label} | native confirmations: ${JSON.stringify(value)}`);
       if (step === "frame") before = webProcesses(pid);
       if (step === "closed") {
         // Give the web processes a moment to exit, then let the app quit.
@@ -528,7 +603,35 @@ async function runApp(
       return problems;
     }
 
+    // The updater gate, reported before any other step: it read the compiled marker, identifier
+    // and product name, and with the same profile passes only the test package.
+    const checkGate = () => {
+      const gate = steps.get("updater_gate") as
+        | { passed?: boolean; marker?: boolean; identifier?: string; product?: string; error?: string }
+        | undefined;
+      console.log(`${label} updater_gate ${JSON.stringify(gate)}`);
+      check(order[0] === "updater_gate", `the app's first report is ${order[0]}, not its updater gate`);
+      check(
+        gate?.marker === true,
+        `the updater gate did not find the compiled test marker: ${JSON.stringify(gate)}`,
+      );
+      if (artifact.gate === "passes") {
+        check(
+          gate?.passed === true && gate.identifier === TEST_ID && gate.product === TEST_PRODUCT,
+          `the test package's updater gate did not pass as ${TEST_ID}/${TEST_PRODUCT}: ${JSON.stringify(gate)}`,
+        );
+      } else {
+        check(
+          gate?.passed === false &&
+            gate.identifier === identifier &&
+            (artifact.refusal ?? /identifier/).test(gate.error ?? ""),
+          `the ${identifier} app's updater gate was not refused as ${artifact.refusal ?? "for its identifier"}: ${JSON.stringify(gate)}`,
+        );
+      }
+    };
+
     if (admission) {
+      checkGate();
       const a = steps.get("admission");
       check(a?.passed === true, "the native admission check did not complete");
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
@@ -547,6 +650,7 @@ async function runApp(
       return problems;
     }
 
+    checkGate();
     check(
       steps.get("recovery")?.ok === true,
       `tray/recovery check: ${JSON.stringify(steps.get("recovery"))}`,
@@ -564,7 +668,7 @@ async function runApp(
         "events_clean",
       ])
         check(entry?.[field] === true, `native key entry did not prove ${field}`);
-      console.log(`  ${mode} | native key entry: ${JSON.stringify(entry ?? {})}`);
+      console.log(`  ${label} | native key entry: ${JSON.stringify(entry ?? {})}`);
     }
 
     // The window: connected in this mode, every command reached, core's status through the app.
@@ -635,12 +739,12 @@ async function runApp(
         value && Object.entries(expected).every(([key, want]) => value[key] === want),
         `${step} evidence missing or wrong: ${JSON.stringify(value)}`,
       );
-      console.log(`${mode} ${step} ${JSON.stringify(value)}`);
+      console.log(`${label} ${step} ${JSON.stringify(value)}`);
     }
 
     const ingress = steps.get("ingress");
     check(ingress?.control === true, "the native ingress check did not finish");
-    if (ingress) console.log(`${mode} native ingress ${JSON.stringify(ingress)}`);
+    if (ingress) console.log(`${label} native ingress ${JSON.stringify(ingress)}`);
 
     check(steps.get("confirmations")?.passed === true, "native confirmation checks did not complete");
 
@@ -722,9 +826,9 @@ async function runApp(
       await Bun.sleep(1000);
       check(last && !alive(last), `the app's core ${last} still runs after it quit`);
     }
-    if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+    if (problems.length > 0) console.log(`${label}: the app's last lines:\n  ${log.join("\n  ")}`);
     console.log(
-      `${mode}: ${problems.length === 0 ? "ok" : "FAILED"} (web processes ${before} open, ${after} after close; ` +
+      `${label}: ${problems.length === 0 ? "ok" : "FAILED"} (web processes ${before} open, ${after} after close; ` +
         `${reached.length} commands reached, all from main: ${reached.every((w) => w === "main")})`,
     );
   } finally {
@@ -784,182 +888,344 @@ if (missing.length > 0) {
   process.exit(1);
 }
 
-run("bun", ["run", "build"], app);
-// The app, and the probe the session uses to check the desktop services (examples/session_probe.rs).
-run(
-  "cargo",
-  [
-    "build",
-    "--locked",
-    "--features",
-    "native-test",
-    "--bin",
-    "pluxy-app",
-    "--example",
-    "session_probe",
-    "--example",
-    "program_fixture",
-  ],
-  tauri,
-);
 const targetDir = resolvePath(tauri, process.env.CARGO_TARGET_DIR ?? "target");
+/** The probe the session uses to check the desktop services. */
 const probe = join(targetDir, "debug", "examples", "session_probe");
-// The disposable summary tool the program host check packs into a signed package.
+/** The disposable summary tool the program host check packs into a signed package. */
 const programFixture = join(targetDir, "debug", "examples", "program_fixture");
-// The build without artifact-test-trust, kept aside before the build with it replaces it.
-const binDir = mkdtempSync(join(tmpdir(), "pluxy-app-native-bin-"));
-const bin = join(binDir, "pluxy-app");
+let appImage = ""; // the smoke AppImage the sessions run
+const problems: string[] = [];
+
+/** This run's own temporary folders (each app run removes its own), removed when it ends,
+ * however it ends. */
+const temporary: string[] = [];
+function tempDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  temporary.push(dir);
+  return dir;
+}
+/** Removes each folder, keeping those it could not remove for a later try; says whether all went. */
+function removeTemporary(): boolean {
+  const failed: string[] = [];
+  for (const dir of temporary.splice(0)) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch (e) {
+      failed.push(dir);
+      console.error(`could not remove ${dir}: ${(e as Error).message}`);
+    }
+  }
+  temporary.push(...failed);
+  return failed.length === 0;
+}
+
+let exitCode = 1;
 try {
+  exitCode = await main();
+} finally {
+  if (!removeTemporary()) exitCode = 1;
+}
+process.exit(exitCode);
+
+async function main(): Promise<number> {
+  run("bun", ["run", "build"], app);
+
+  // The test package first: its Tauri build renames the binary it makes in target/debug, and the
+  // dev build below puts the dev binary back.
+  const packageDir = tempDir("pluxy-app-native-package-");
+  let testPackage: TestPackage | undefined;
+  try {
+    runShown("bun", ["run", "package:test", packageDir], app);
+    const made: TestPackage = JSON.parse(readFileSync(join(packageDir, "test-package.json"), "utf8"));
+    const name = basename(made.appimage);
+    const header = appImageHeader(made.appimage);
+    console.log(
+      `package: ${name}: first bytes ${header.hex}; ELF ${header.elf}, AppImage type ${header.type ?? "none"}`,
+    );
+    if (!/-test_[^/]*\.AppImage$/.test(name))
+      problems.push(`the test package's file name ${name} has no -test`);
+    if (!header.elf || header.type !== 2) problems.push(`the test package ${name} is not a type-2 AppImage`);
+    if (!made.updater_pubkey) problems.push("the test package names no updater public key");
+    testPackage = made;
+  } catch (e) {
+    problems.push(`the test package was not built: ${(e as Error).message}`);
+  }
+
+  // The dev app, the probe the session uses to check the desktop services
+  // (examples/session_probe.rs) and the program host check's summary tool.
+  run(
+    "cargo",
+    [
+      "build",
+      "--locked",
+      "--features",
+      "native-test",
+      "--bin",
+      "pluxy-app",
+      "--example",
+      "session_probe",
+      "--example",
+      "program_fixture",
+    ],
+    tauri,
+  );
+  // The build without artifact-test-trust, kept aside before the build with it replaces it. The
+  // device check needs the one (a normal build refuses the curated native tool), the admission
+  // session and the updater gate's identifier check the other (its features are the test
+  // package's, so the two differ only in the identifier and product name).
+  const binDir = tempDir("pluxy-app-native-bin-");
+  const bin = join(binDir, "pluxy-app");
   copyFileSync(join(targetDir, "debug", "pluxy-app"), bin);
   run(
     "cargo",
     ["build", "--locked", "--features", "native-test,artifact-test-trust", "--bin", "pluxy-app"],
     tauri,
   );
-} catch (e) {
-  rmSync(binDir, { recursive: true, force: true });
-  throw e;
-}
-const trustBin = join(targetDir, "debug", "pluxy-app");
-const appImageDir = mkdtempSync(join(tmpdir(), "pluxy-app-native-appimage-"));
-const problems: string[] = [];
-let appImage = ""; // the smoke AppImage the sessions run
-let setupFailure: string | undefined;
+  const trustBin = join(targetDir, "debug", "pluxy-app");
+  const appImageDir = tempDir("pluxy-app-native-appimage-");
+  // The same test trust profile in every run; without a test package, a key no build carries.
+  const updaterKey = testPackage?.updater_pubkey ?? "no-test-package";
+  let setupFailure: string | undefined;
+  // Without artifact-test-trust the app has no updater trust at all, which is what its gate says.
+  const dev = (mode: Mode): Artifact => ({
+    label: mode,
+    bin,
+    identifier,
+    gate: "refuses",
+    refusal: /updater trust not configured/,
+  });
+  const trusted: Artifact = { label: "managed", bin: trustBin, identifier, gate: "refuses" };
 
-try {
-  appImage = await buildSmokeAppImage(appImageDir);
-  const prepared = mkdtempSync(join(tmpdir(), "pluxy-app-native-core-"));
   try {
-    const { core } = JSON.parse(run("go", ["run", "./e2e/panelcore", "-probe", "-prepare", prepared], next));
-    const p = await runApp("managed", bin, { mode: "managed", core_path: core });
-    p.push(...(await runApp("managed", bin, { mode: "managed", core_path: core }, undefined, true)));
-    p.push(...(await runApp("managed", bin, { mode: "managed", core_path: core }, undefined, true, true)));
-    p.push(
-      ...(await runApp(
-        "managed",
-        trustBin,
-        { mode: "managed", core_path: core },
-        undefined,
-        false,
-        false,
-        undefined,
-        undefined,
-        {},
-        true,
-      )),
-    );
-    p.push(
-      ...(await runApp(
-        "managed",
-        trustBin,
-        { mode: "managed", core_path: core },
-        undefined,
-        false,
-        false,
-        undefined,
-        undefined,
-        {},
-        false,
-        true,
-      )),
-    );
-    for (const suite of ["window", "window-no-tray", "privacy"] as const)
+    appImage = await buildSmokeAppImage(appImageDir);
+    const prepared = mkdtempSync(join(tmpdir(), "pluxy-app-native-core-"));
+    try {
+      const { core } = JSON.parse(
+        run("go", ["run", "./e2e/panelcore", "-probe", "-prepare", prepared], next),
+      );
+      const managed = { mode: "managed", core_path: core };
+      const p = await runApp("managed", dev("managed"), updaterKey, managed);
+      p.push(...(await runApp("managed", dev("managed"), updaterKey, managed, undefined, true)));
+      p.push(...(await runApp("managed", dev("managed"), updaterKey, managed, undefined, true, true)));
+      // The signed native-tier admission check, then the program host check, on the build with
+      // artifact-test-trust.
       p.push(
         ...(await runApp(
           "managed",
-          bin,
-          { mode: "managed", core_path: core },
+          trusted,
+          updaterKey,
+          managed,
           undefined,
           false,
-          suite === "window-no-tray",
+          false,
           undefined,
-          suite,
+          undefined,
+          {},
+          true,
         )),
       );
-    problems.push(...p.map((x) => `managed: ${x}`));
-    // The first start runs a stand-in that says where it listens and exits at once; the next
-    // start, recovery's, runs the real core.
-    const early = join(prepared, "early-exit.sh");
-    writeFileSync(
-      early,
-      `#!/bin/sh\nif [ ! -e "$0.ran" ]; then\n  : > "$0.ran"\n  echo 'pluxy: listening on http://127.0.0.1:1' >&2\n  exit 7\nfi\nexec '${core}' "$@"\n`,
-      { mode: 0o755 },
-    );
-    const e = await runApp(
-      "managed",
-      bin,
-      { mode: "managed", core_path: early },
-      undefined,
-      false,
-      false,
-      undefined,
-      undefined,
-      {},
-      false,
-      false,
-      true,
-    );
-    problems.push(...e.map((x) => `managed, early exit: ${x}`));
+      p.push(
+        ...(await runApp(
+          "managed",
+          trusted,
+          updaterKey,
+          managed,
+          undefined,
+          false,
+          false,
+          undefined,
+          undefined,
+          {},
+          false,
+          true,
+        )),
+      );
+      for (const suite of ["window", "window-no-tray", "privacy"] as const)
+        p.push(
+          ...(await runApp(
+            "managed",
+            dev("managed"),
+            updaterKey,
+            managed,
+            undefined,
+            false,
+            suite === "window-no-tray",
+            undefined,
+            suite,
+          )),
+        );
+      problems.push(...p.map((x) => `managed: ${x}`));
+      // The first start runs a stand-in that says where it listens and exits at once; the next
+      // start, recovery's, runs the real core.
+      const early = join(prepared, "early-exit.sh");
+      writeFileSync(
+        early,
+        `#!/bin/sh\nif [ ! -e "$0.ran" ]; then\n  : > "$0.ran"\n  echo 'pluxy: listening on http://127.0.0.1:1' >&2\n  exit 7\nfi\nexec '${core}' "$@"\n`,
+        { mode: 0o755 },
+      );
+      const e = await runApp(
+        "managed",
+        dev("managed"),
+        updaterKey,
+        { mode: "managed", core_path: early },
+        undefined,
+        false,
+        false,
+        undefined,
+        undefined,
+        {},
+        false,
+        false,
+        true,
+      );
+      problems.push(...e.map((x) => `managed, early exit: ${x}`));
 
-    // Two launches of the app on one profile: one app, one core, the first one's window raised.
-    const inst = await runInstances({
-      bin,
-      probe,
-      appImage,
-      core,
-      identifier,
-      timeoutMs: TIMEOUT,
-      sessions,
-      stopSession,
-      removeRun,
-    });
-    if (inst.setup !== undefined) throw new SetupError(inst.setup);
-    problems.push(...inst.problems.map((x) => `instances: ${x}`));
-  } finally {
-    rmSync(prepared, { recursive: true, force: true });
+      // Two launches of the app on one profile: one app, one core, the first one's window raised.
+      const inst = await runInstances({
+        bin,
+        probe,
+        appImage,
+        core,
+        identifier,
+        timeoutMs: TIMEOUT,
+        sessions,
+        stopSession,
+        removeRun,
+      });
+      if (inst.setup !== undefined) throw new SetupError(inst.setup);
+      problems.push(...inst.problems.map((x) => `instances: ${x}`));
+    } finally {
+      rmSync(prepared, { recursive: true, force: true });
+    }
+
+    for (const mode of ["local", "remote"] as const) {
+      const c = await startCore(mode === "remote");
+      const kept = mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
+      try {
+        const conn = { mode, url: c.base, key: c.key, ...(c.ca ? { ca_file: c.ca } : {}) };
+        const rotation = { coreConfig: c.config, root: kept };
+        const p = await runApp(
+          mode,
+          dev(mode),
+          updaterKey,
+          conn,
+          c.base,
+          false,
+          false,
+          c.key,
+          undefined,
+          rotation,
+        );
+        // Rotated and kept: the app starts again on the same folders, signed in on the new key.
+        if (mode === "local")
+          p.push(
+            ...(await runApp(mode, dev(mode), updaterKey, conn, c.base, false, false, undefined, undefined, {
+              ...rotation,
+              restart: true,
+            })),
+          );
+        const current = { ...conn, key: managementKey(c.config) };
+        p.push(...(await runApp(mode, dev(mode), updaterKey, current, c.base, true)));
+        // The app only connected: its quitting leaves this core running.
+        if ((await managementStatus(c.base, current.key, c.ca)) !== 200)
+          p.push("the core stopped when the app quit");
+        problems.push(...p.map((x) => `${mode}: ${x}`));
+      } finally {
+        await removeRun(kept);
+        c.proc.stdin?.end();
+        await new Promise((r) => c.proc.once("exit", r));
+      }
+    }
+
+    // The packaged app: the AppImage itself, against a test core of the runner's.
+    if (testPackage) {
+      const packaged: Artifact = {
+        label: "packaged",
+        bin: testPackage.appimage,
+        identifier: TEST_ID,
+        gate: "passes",
+      };
+      const c = await startCore(false);
+      try {
+        const conn = { mode: "local", url: c.base, key: c.key };
+        // The same checks as the dev app's local run, including the key rotation, which needs
+        // the core's config file; the key it rotated to is the one that must still work.
+        const p = await runApp("local", packaged, updaterKey, conn, c.base, false, false, c.key, undefined, {
+          coreConfig: c.config,
+        });
+        if ((await managementStatus(c.base, managementKey(c.config))) !== 200)
+          p.push("the core stopped when the app quit");
+        problems.push(...p.map((x) => `packaged: ${x}`));
+      } finally {
+        c.proc.stdin?.end();
+        await new Promise((r) => c.proc.once("exit", r));
+      }
+    } else {
+      problems.push("packaged: there is no test package to run");
+    }
+  } catch (e) {
+    if (!(e instanceof SetupError)) throw e;
+    setupFailure = e.message;
   }
 
-  for (const mode of ["local", "remote"] as const) {
-    const c = await startCore(mode === "remote");
-    const kept = mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
+  if (setupFailure !== undefined) {
+    console.error(`\nnative test setup failed:\n${setupFailure}`);
+    return 1;
+  }
+
+  // The release gate (package.ts release): it builds the release app and checks it with every
+  // AppImage given, unpacking each, never running it. Each refusal has a passing case on the same
+  // route: an AppImage packed the same way around a clean binary.
+  const releaseDir = tempDir("pluxy-app-native-release-");
+  {
+    const releaseGate = (what: string, images: string[], want: "valid" | RegExp) => {
+      const r = spawnSync("bun", ["run", "package:release", ...images], {
+        cwd: app,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "inherit"],
+      });
+      const verdict = /^release-package: .*$/m.exec(r.stdout ?? "")?.[0] ?? "no verdict";
+      console.log(`release gate, ${what}: exit ${r.status}: ${verdict}`);
+      const ok =
+        want === "valid"
+          ? r.status === 0 && verdict.startsWith("release-package: valid")
+          : r.status === 1 && verdict.startsWith("release-package: refused") && want.test(verdict);
+      if (!ok) problems.push(`release gate, ${what}: exit ${r.status}: ${verdict}`);
+    };
+    releaseGate("a clean release build", [], "valid");
+    const releaseBin = join(targetDir, "release", "pluxy-app");
     try {
-      const conn = { mode, url: c.base, key: c.key, ...(c.ca ? { ca_file: c.ca } : {}) };
-      const rotation = { coreConfig: c.config, root: kept };
-      const p = await runApp(mode, bin, conn, c.base, false, false, c.key, undefined, rotation);
-      // Rotated and kept: the app starts again on the same folders, signed in on the new key.
-      if (mode === "local")
-        p.push(
-          ...(await runApp(mode, bin, conn, c.base, false, false, undefined, undefined, {
-            ...rotation,
-            restart: true,
-          })),
-        );
-      const current = { ...conn, key: managementKey(c.config) };
-      p.push(...(await runApp(mode, bin, current, c.base, true)));
-      // The app only connected: its quitting leaves this core running.
-      if ((await managementStatus(c.base, current.key, c.ca)) !== 200)
-        p.push("the core stopped when the app quit");
-      problems.push(...p.map((x) => `${mode}: ${x}`));
-    } finally {
-      await removeRun(kept);
-      c.proc.stdin?.end();
-      await new Promise((r) => c.proc.once("exit", r));
+      const clean = await packAppImage(join(releaseDir, "clean"), "pluxy.AppImage", {
+        "usr/bin/pluxy-app": releaseBin,
+      });
+      releaseGate("a clean AppImage", [clean], "valid");
+    } catch (e) {
+      problems.push(`release gate: no clean AppImage: ${(e as Error).message}`);
+    }
+    const marked = await packAppImage(join(releaseDir, "marked"), "pluxy.AppImage", {
+      "usr/bin/pluxy-app": bin,
+    });
+    releaseGate(
+      "an AppImage holding the test-feature dev binary",
+      [marked],
+      /pluxy\.AppImage!usr\/bin\/pluxy-app: test build marker\/identity in artifact/,
+    );
+    if (testPackage) {
+      const renamed = join(releaseDir, "candidate.AppImage");
+      copyFileSync(testPackage.appimage, renamed);
+      releaseGate("the test package, renamed", [renamed], /candidate\.AppImage!/);
+      releaseGate("the test package", [testPackage.appimage], /test\/private release input or artifact path/);
+    } else {
+      problems.push("release gate: there is no test package to refuse");
     }
   }
-} catch (e) {
-  if (!(e instanceof SetupError)) throw e;
-  setupFailure = e.message;
-} finally {
-  rmSync(appImageDir, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-}
 
-if (setupFailure !== undefined) {
-  console.error(`\nnative test setup failed:\n${setupFailure}`);
-  process.exit(1);
+  if (problems.length > 0) {
+    console.error(`\n${problems.length} problems:\n- ${problems.join("\n- ")}`);
+    return 1;
+  }
+  console.log(
+    "native test passed in all three modes, the single-instance scenario, as the packaged app, and at the release gate",
+  );
+  return 0;
 }
-if (problems.length > 0) {
-  console.error(`\n${problems.length} problems:\n- ${problems.join("\n- ")}`);
-  process.exit(1);
-}
-console.log("native test passed in all three modes and the single-instance scenario");
