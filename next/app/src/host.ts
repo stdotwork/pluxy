@@ -67,8 +67,14 @@ function write(name: string, value: string | null) {
 /**
  * The host for one connection; the app makes a new one when the connection changes. changed
  * gets the connection after signing out (also when core refused the key), with any error.
+ * refreshed gets it after a rotation, which can change how the key is kept and the error the
+ * Connection page shows, but not the connection itself.
  */
-export function appHost(conn: Connection, changed: (c: Connection) => void): Host {
+export function appHost(
+  conn: Connection,
+  changed: (c: Connection) => void,
+  refreshed: (c: Connection) => void = () => {},
+): Host {
   let signed = conn.signed_in;
   const features = new Set<Feature>(["rotateManagementKey"]);
   if (conn.mode === "local" || conn.mode === "remote") features.add("signOut");
@@ -76,7 +82,11 @@ export function appHost(conn: Connection, changed: (c: Connection) => void): Hos
     async call<T>(method: Method, path: string, body?: unknown): Promise<Reply<T>> {
       try {
         // Native, behind a native confirmation: the reply says how the new key is kept, never the key.
-        if (method === "POST" && path === ROTATE) return await invoke<Reply<T>>("management_key_rotate");
+        if (method === "POST" && path === ROTATE) {
+          const reply = await invoke<Reply<T>>("management_key_rotate");
+          connectionGet().then(refreshed, () => {});
+          return reply;
+        }
         return await invoke<Reply<T>>("core_call", { method, path, body: body ?? null });
       } catch (e) {
         return { status: 0, error: { code: "unavailable", message: String(e) } };

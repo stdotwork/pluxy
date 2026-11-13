@@ -22,12 +22,16 @@ function brand(c: Connection): string {
 
 function App(props: { initial: Connection }) {
   const [conn, setConn] = useState(props.initial);
+  // What the Connection page shows: conn, or newer after a rotation, which refreshes it alone so
+  // the shell and its pages (the Config page's notices) stay as they are.
+  const [shown, setShown] = useState(props.initial);
   const [generation, setGeneration] = useState(0);
   const changed = (c: Connection) => {
     setConn(c);
+    setShown(c);
     setGeneration((n) => n + 1);
   };
-  const host = useMemo(() => appHost(conn, changed), [conn]);
+  const host = useMemo(() => appHost(conn, changed, setShown), [conn]);
   // The app's own core exited: show it.
   useEffect(() => {
     const off = listen("pluxy-connection", () => connectionGet().then(changed, () => {}));
@@ -47,10 +51,10 @@ function App(props: { initial: Connection }) {
         title: "Connection",
         short: "Conn",
         group: "control",
-        render: () => <ConnectionPage connection={conn} onChange={changed} />,
+        render: () => <ConnectionPage connection={shown} onChange={changed} />,
       },
     ],
-    [conn],
+    [shown],
   );
 
   // Not connected or not signed in (or the app's own core did not start): only the Connection
@@ -60,7 +64,7 @@ function App(props: { initial: Connection }) {
       <div class="shell" data-part="shell">
         <main class="main" data-part="main">
           <div class="content">
-            <ConnectionPage connection={conn} onChange={changed} />
+            <ConnectionPage connection={shown} onChange={changed} />
           </div>
         </main>
       </div>
