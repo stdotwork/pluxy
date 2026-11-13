@@ -1336,7 +1336,7 @@ itself under that name, as an HTTP client leaves out `Authorization` there.
 out is removed), and with `null` or `{}` removes them all.
 
 The value of a header whose name is about authentication (it holds `auth`, `key`, `token`,
-`secret`, `cookie`, `session`, `password` or `signature`, letter case aside) is a secret, by the
+`secret`, `cookie`, `session`, `password`, `passphrase` or `signature`, letter case aside) is a secret, by the
 rule config redaction uses: `GET /config` and `GET /accounts` show the same placeholder in its
 place (that of the header core sends, also for a value of a provider section of a `config.yaml`
 written as a number or with spaces around it), except for a value written as `true` or `false`,
@@ -1889,7 +1889,7 @@ credential redaction finds (JSON escapes, percent-encoding and the rest). Replie
 sections come from the extension with the account's own credential, the secrets in its settings,
 its proxy's password and its secret header values already removed; in the upstream sections the
 values of headers and query parameters whose names hold `auth`, `key`, `token`, `secret`,
-`cookie`, `session`, `password` or `signature` are masked too, the URL's user name and password
+`cookie`, `session`, `password`, `passphrase` or `signature` are masked too, the URL's user name and password
 are left out, and the characters a secret could be made of on each side of a body's left-out
 middle are left out with it. Today's core writes the reply's headers unmasked and logs requests
 that fail the client key check.

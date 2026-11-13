@@ -573,7 +573,7 @@ the extension's other headers stay. Core never sends `Host`, `Content-Length`,
 or a value with a line break or another control character: its config load refuses them.
 
 The value of a header whose name is about authentication (its name holds `auth`, `key`,
-`token`, `secret`, `cookie`, `session`, `password` or `signature`, letter case aside) is a
+`token`, `secret`, `cookie`, `session`, `password`, `passphrase` or `signature`, letter case aside) is a
 secret: an extension never logs or shows it, and core removes it from everything a call sends
 back, as it does a credential's strings; a value shorter than 8 bytes is removed only next to
 its name, as text shows a header (`Name: value`, `Name:value`, `Name=value`, JSON's
