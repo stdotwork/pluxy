@@ -227,9 +227,32 @@ anything a caller passes. On top of the rules above:
 - Stderr lines are logged prefixed with the tool's ID, at most 8 KiB each (a longer one is left
   out with a note), with control characters escaped and the values the host knows the tool must
   not show removed. The last 20 say why it stopped.
+- A tool that exits on its own, breaks its pipe or leaves a cancel unanswered has **crashed**.
+  Nothing restarts it on its own: a call after the backoff (one second, doubling with each crash
+  in a row, up to a minute) starts it, and a call during the backoff is refused. Five crashes in a
+  row make it **quarantined**: calls are refused until its package changes (disabled and enabled
+  again, updated, rolled back). A run of ten minutes starts a new count. A crash of a release
+  that is draining is not counted.
+- A call the tool received and did not answer (it crashed, was stopped, left a cancel unanswered
+  or reached the drain limit) has an **unknown outcome**: its error says so, and it is never sent
+  again. The host keeps it until the package's next start, which carries the list in describe,
+  as `{"type":"call","id":"c-9","op":"describe","contract_version":0,"unknown":[{"id":"c-7","op":"apply","generation":1700000000}]}`
+  (`generation` is the release's install time). A tool that writes must reconcile those calls
+  with its own records before it answers describe; whichever release starts next gets them,
+  then the host forgets them. A call refused before it was sent, an `error` frame and a
+  cancel the tool answered all have known outcomes.
+- **Swaps.** Updating or rolling back an enabled native tool stages the release and asks for
+  its own native confirmation. Once confirmed, the host starts the release's tool and runs hello
+  and describe with no call; it fails as any start does. Then the catalog commits it as active,
+  enabled and admitted, only if the release it replaces is still the active, admitted one, and
+  new calls and leases go to the new tool. The old one **drains**: calls holding its leases,
+  including those waiting their turn, finish on it; then its stdin closes as for any stop. After
+  ten minutes (the drain limit) it is stopped and its unanswered calls have unknown outcomes.
+  Calls of one package run one at a time across its releases, so the new release's first call
+  waits for the old release's. The package's pages close at the switch. A cancelled confirmation
+  or a candidate that fails installs nothing; the old release stays active and serving.
 
-Still to come: crash backoff and quarantine (a crashed tool starts again at its next call), swaps
-and draining old generations, calls routed from pages, jobs, secrets, and Windows and macOS.
+Still to come: calls routed from pages, jobs, secrets, and Windows and macOS.
 
 ## Shared manifest fixtures
 

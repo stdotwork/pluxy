@@ -33,6 +33,11 @@ fn fast() -> Limits {
         startup: Duration::from_secs(3),
         stop: Duration::from_millis(800),
         cancel: Duration::from_millis(800),
+        backoff: Duration::from_millis(300),
+        backoff_max: Duration::from_millis(1200),
+        quarantine_after: 5,
+        stable: Duration::from_secs(600),
+        drain: Duration::from_secs(10),
     }
 }
 
@@ -62,11 +67,27 @@ fn operations() -> Vec<Operation> {
             input_schema: json!({"type": "object"}),
             output_schema: json!({"type": "object"}),
         },
+        Operation {
+            id: "slow".into(),
+            input_schema: json!({"type": "object", "required": ["ms"],
+                "properties": {"ms": {"type": "integer", "minimum": 0}}}),
+            output_schema: json!({"type": "object"}),
+        },
+        Operation {
+            id: "crash".into(),
+            input_schema: json!({"type": "object"}),
+            output_schema: json!({"type": "object"}),
+        },
     ]
 }
 
 /// A package folder for the fixture, misbehaving as mode says (null: not at all).
 fn package(mode: Value) -> Spec {
+    release(mode, "1.0.0", 1)
+}
+
+/// `package`, for release version with generation.
+fn release(mode: Value, version: &str, generation: u64) -> Spec {
     let mut rnd = [0u8; 8];
     getrandom::fill(&mut rnd).unwrap();
     let name: String = rnd.iter().map(|b| format!("{b:02x}")).collect();
@@ -78,9 +99,8 @@ fn package(mode: Value) -> Spec {
         .collect();
     std::fs::write(
         dir.join("pluxy-extension.json"),
-        serde_json::to_vec(
-            &json!({"app": {"operations": ops, "state": {"version": 0, "readable_versions": [0]}}}),
-        )
+        serde_json::to_vec(&json!({"version": version,
+                "app": {"operations": ops, "state": {"version": 0, "readable_versions": [0]}}}))
         .unwrap(),
     )
     .unwrap();
@@ -92,7 +112,7 @@ fn package(mode: Value) -> Spec {
     Spec {
         id: ID.into(),
         sha256: "ab".repeat(32),
-        generation: 1,
+        generation,
         program,
         program_sha256: this_program_sha256().into(),
         dir,
@@ -327,7 +347,7 @@ fn calls_wait_their_turn_and_are_bounded() {
     until("the calls to queue", 5, || {
         let t = h.0.slots().get(ID).and_then(|s| s.run.clone());
         t.is_some_and(|r| {
-            let turn = r.turn.lock().unwrap();
+            let turn = r.gate.turn.lock().unwrap();
             usize::from(turn.0) + turn.1 == MAX_PENDING
         })
     });
@@ -380,9 +400,12 @@ fn a_crash_fails_the_call_and_the_next_call_starts_it_again() {
     let (pid, child) = pids(&summary(&h, &[]).unwrap());
     let e = h.call(ID, "wait", json!({}), None).unwrap_err();
     assert_eq!(e.code, "extension_crashed", "{e}");
+    assert!(e.unknown, "{e}");
     until("the crash", 5, || h.status(ID).state == "crashed");
     until("its child to go", 5, || !alive(child));
     assert!(h.status(ID).last.unwrap().contains("exited"));
+    // After the backoff, a call starts it again.
+    std::thread::sleep(fast().backoff);
     assert_ne!(summary(&h, &[]).unwrap()["pid"], pid);
     h.stop_all();
 }
@@ -540,4 +563,262 @@ fn the_schema_subset_checks_what_it_supports_and_refuses_the_rest() {
         deep = json!({"type": "array", "items": deep});
     }
     assert!(supported(&deep).is_err());
+}
+
+/// Starts a call of op on its own thread.
+fn call_in_thread(
+    h: &Arc<Host>,
+    op: &'static str,
+    input: Value,
+) -> std::thread::JoinHandle<Result<Value, CallError>> {
+    let h = Arc::clone(h);
+    std::thread::spawn(move || h.call(ID, op, input, None))
+}
+
+fn retry_in(h: &Host) -> Duration {
+    Duration::from_millis(h.status(ID).retry_in_ms.expect("a backoff"))
+}
+
+#[test]
+fn crashes_back_off_then_quarantine_until_the_package_changes() {
+    let h = host(json!({"crash_on": "crash"}));
+    let mut waits = Vec::new();
+    for n in 1..=5u32 {
+        let pid = pids(&summary(&h, &[]).unwrap()).0;
+        let e = h.call(ID, "crash", json!({}), None).unwrap_err();
+        assert!(e.unknown && e.code == "extension_crashed", "{e}");
+        until("the crash", 5, || h.status(ID).pid.is_none());
+        let s = h.status(ID);
+        assert_eq!(s.crashes, n, "{s:?}");
+        if n == 5 {
+            assert_eq!(s.state, "quarantined", "{s:?}");
+            break;
+        }
+        assert_eq!(s.state, "crashed", "{s:?}");
+        // A call during the backoff is refused and starts nothing.
+        let wait = retry_in(&h);
+        waits.push(wait);
+        let e = summary(&h, &[]).unwrap_err();
+        assert!(e.message.contains("restart"), "{e}");
+        assert_eq!(h.status(ID).pid, None);
+        assert!(!alive(pid));
+        std::thread::sleep(wait + Duration::from_millis(50));
+    }
+    // 300 ms doubling, up to 1200 ms.
+    let expect = [300u64, 600, 1200, 1200];
+    for (w, e) in waits.iter().zip(expect) {
+        assert!(
+            *w <= Duration::from_millis(e + 1)
+                && *w + Duration::from_millis(100) >= Duration::from_millis(e),
+            "{waits:?}"
+        );
+    }
+    // Quarantined: no start, however long one waits.
+    std::thread::sleep(fast().backoff_max);
+    let e = summary(&h, &[]).unwrap_err();
+    assert!(e.message.contains("quarantined after 5 crashes"), "{e}");
+    assert_eq!(h.status(ID).pid, None);
+    // Its package changed: a new count.
+    h.stop(ID);
+    assert_eq!((h.status(ID).state, h.status(ID).crashes), ("idle", 0));
+    assert_eq!(summary(&h, &[]).unwrap()["calls"], 1);
+    h.stop_all();
+}
+
+#[test]
+fn a_run_past_the_stable_time_starts_a_new_count() {
+    let mut limits = fast();
+    limits.stable = Duration::from_millis(600);
+    let h = host_for(package(json!({"crash_on": "crash"})), limits);
+    summary(&h, &[]).unwrap();
+    h.call(ID, "crash", json!({}), None).unwrap_err();
+    until("the crash", 5, || h.status(ID).crashes == 1);
+    std::thread::sleep(retry_in(&h));
+    summary(&h, &[]).unwrap();
+    std::thread::sleep(limits.stable);
+    h.call(ID, "crash", json!({}), None).unwrap_err();
+    until("the crash", 5, || h.status(ID).pid.is_none());
+    assert_eq!(h.status(ID).crashes, 1);
+    h.stop_all();
+}
+
+#[test]
+fn an_unknown_outcome_is_reported_at_the_next_start_and_never_sent_again() {
+    let h = Arc::new(host(json!({"crash_on": "crash"})));
+    // Known outcomes are not unknown: a refusal before sending, the tool's error, a cancel it
+    // answered, a result.
+    let refused = h
+        .call(ID, "summary", json!({"items": 1}), None)
+        .unwrap_err();
+    let errored = h.call(ID, "summary", json!({}), None).unwrap_err();
+    assert!(!refused.unknown && !errored.unknown, "{refused} {errored}");
+    let w = {
+        let h = Arc::clone(&h);
+        std::thread::spawn(move || h.call(ID, "wait", json!({}), Some("u-1")))
+    };
+    until("the wait call", 5, || h.status(ID).state == "active");
+    h.cancel("u-1").unwrap();
+    let cancelled = w.join().unwrap().unwrap_err();
+    assert!(!cancelled.unknown, "{cancelled}");
+    let first = summary(&h, &[]).unwrap();
+    assert!(
+        first["reported"].as_array().is_some_and(|a| a.is_empty()),
+        "{first}"
+    );
+    assert!(h.status(ID).unknown.is_empty());
+
+    let e = h.call(ID, "crash", json!({}), None).unwrap_err();
+    assert!(e.unknown && e.message.contains("outcome is unknown"), "{e}");
+    until("the crash", 5, || h.status(ID).pid.is_none());
+    let unknown = h.status(ID).unknown;
+    assert_eq!(unknown.len(), 1, "{unknown:?}");
+    assert_eq!(
+        (unknown[0].op.as_str(), unknown[0].generation),
+        ("crash", 1)
+    );
+    std::thread::sleep(retry_in(&h));
+    // The next start's describe reports it; the crash call itself is not sent again.
+    let again = summary(&h, &[]).unwrap();
+    assert_eq!(again["calls"], 1);
+    assert_eq!(
+        again["reported"],
+        json!([{"id": unknown[0].call, "op": "crash", "generation": 1}])
+    );
+    assert!(h.status(ID).unknown.is_empty());
+    // Reported once: the start after it reports nothing.
+    h.stop(ID);
+    until("the stop", 5, || h.status(ID).pid.is_none());
+    let third = summary(&h, &[]).unwrap();
+    assert_eq!(third["reported"], json!([]));
+    h.stop_all();
+}
+
+#[test]
+fn a_swap_drains_the_old_release_and_serializes_calls_across_releases() {
+    let v1 = package(Value::Null);
+    let v2 = release(Value::Null, "1.1.0", 2);
+    let h = Arc::new(host_for(v1, fast()));
+    let first = summary(&h, &[]).unwrap();
+    let (old, old_child) = pids(&first);
+    // Held through the swap (hashing this test program can take longer than the idle delay).
+    let held = h.lease(ID).unwrap();
+
+    // Prepared: started and described, but no call reaches it and the old one serves.
+    let p = h.prepare(v2).unwrap();
+    let new = u64::from(p.run.pid().unwrap());
+    assert!(alive(new));
+    let slow = call_in_thread(&h, "slow", json!({"ms": 1500}));
+    until("the slow call", 5, || {
+        h.0.slots()[ID].gate.turn.lock().unwrap().0
+    });
+    let s = h.status(ID);
+    assert_eq!((s.pid, s.generation), (Some(old as u32), Some(1)));
+    h.switch(p).unwrap();
+    drop(held);
+    let s = h.status(ID);
+    assert_eq!((s.pid, s.generation), (Some(new as u32), Some(2)));
+    assert_eq!(
+        s.draining,
+        vec![Draining {
+            generation: 1,
+            pid: Some(old as u32),
+            leases: 1
+        }]
+    );
+    // The next call goes to the new release, after the old release's call.
+    let next = summary(&h, &[]).unwrap();
+    let slow = slow.join().unwrap().unwrap();
+    assert_eq!(
+        (slow["version"].clone(), slow["pid"].clone()),
+        (json!("1.0.0"), json!(old))
+    );
+    assert_eq!(
+        (next["version"].clone(), next["pid"].clone()),
+        (json!("1.1.0"), json!(new))
+    );
+    assert_eq!(next["calls"], 1);
+    assert!(next["at"].as_u64().unwrap() >= slow["at"].as_u64().unwrap());
+    // Its last call over, the old release stops and is reaped.
+    until("the old release to go", 5, || {
+        !alive(old) && !alive(old_child) && h.status(ID).draining.is_empty()
+    });
+    assert!(alive(new));
+    assert_eq!(h.status(ID).state, "ready");
+    h.stop_all();
+    assert!(!alive(new));
+}
+
+#[test]
+fn a_failed_or_abandoned_candidate_leaves_the_old_release_serving() {
+    let h = host(Value::Null);
+    let (old, _) = pids(&summary(&h, &[]).unwrap());
+    // Held (hashing this test program can take longer than the idle delay).
+    let held = h.lease(ID).unwrap();
+    // Incompatible: refused, reaped, and the old release serves on.
+    let mut bad = release(json!({"extra_operation": "more"}), "1.2.0", 3);
+    bad.sha256 = "ab".repeat(32);
+    let e = h.prepare(bad).err().expect("refused");
+    assert!(e.message.contains("incompatible"), "{e}");
+    let s = h.status(ID);
+    assert_eq!(
+        (s.state, s.pid, s.generation),
+        ("active", Some(old as u32), Some(1))
+    );
+    // Silent until its startup limit: refused the same way.
+    let t = Instant::now();
+    let e = h
+        .prepare(release(json!({"silent": true}), "1.2.0", 3))
+        .err()
+        .expect("refused");
+    assert!(
+        e.message.contains("did not say hello") && t.elapsed() >= fast().startup,
+        "{e}"
+    );
+    // Abandoned (dropped without a switch): stopped.
+    let p = h.prepare(release(Value::Null, "1.1.0", 2)).unwrap();
+    let cand = u64::from(p.run.pid().unwrap());
+    drop(p);
+    until("the abandoned candidate to go", 5, || !alive(cand));
+    // Stopped by a package change before its switch: the switch is refused.
+    let p = h.prepare(release(Value::Null, "1.1.0", 2)).unwrap();
+    let cand = u64::from(p.run.pid().unwrap());
+    h.stop(ID);
+    let e = h.switch(p).unwrap_err();
+    assert!(e.message.contains("stopped before it could serve"), "{e}");
+    drop(held);
+    until("the stopped candidate to go", 5, || {
+        !alive(cand) && !alive(old)
+    });
+    // None of them got a call: the old release's next start answers its first.
+    let again = summary(&h, &[]).unwrap();
+    assert_eq!(
+        (again["version"].clone(), again["calls"].clone()),
+        (json!("1.0.0"), json!(1))
+    );
+    h.stop_all();
+}
+
+#[test]
+fn a_draining_release_is_stopped_at_the_drain_limit() {
+    let mut limits = fast();
+    limits.drain = Duration::from_millis(500);
+    let h = Arc::new(host_for(package(Value::Null), limits));
+    let (old, _) = pids(&summary(&h, &[]).unwrap());
+    let waiting = call_in_thread(&h, "wait", json!({}));
+    until("the wait call", 5, || h.status(ID).state == "active");
+    let p = h.prepare(release(Value::Null, "1.1.0", 2)).unwrap();
+    let t = Instant::now();
+    h.switch(p).unwrap();
+    let e = waiting.join().unwrap().unwrap_err();
+    assert!(e.unknown, "{e}");
+    assert!(t.elapsed() >= limits.drain, "{:?}", t.elapsed());
+    until("the old release to go", 5, || {
+        !alive(old) && h.status(ID).draining.is_empty()
+    });
+    let u = h.status(ID).unknown;
+    assert_eq!((u.len(), u[0].op.as_str(), u[0].generation), (1, "wait", 1));
+    // The release serving now is not crashed by it.
+    assert_eq!(h.status(ID).state, "ready");
+    assert_eq!(summary(&h, &[]).unwrap()["version"], "1.1.0");
+    h.stop_all();
 }

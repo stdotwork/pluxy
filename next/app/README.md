@@ -131,7 +131,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `device_enable`, `device_remove`, `device_rollback` | Enables or disables (a native tool only through its native confirmation), removes, or rolls back a package on this device |
 | `device_page_open` | Opens a webview for a page of a package on this device, at the address its catalog keeps |
 | `program_call`, `program_cancel` | Calls an operation of an admitted native tool, starting it if it is not running; cancels a call by the ticket it was given (Linux) |
-| `program_status` | Whether a native tool runs, its leases, and how it last stopped (Linux) |
+| `program_status` | Whether a native tool runs, its leases, how it last stopped, its crashes in a row and backoff, calls of unknown outcome, and replaced releases still draining (Linux) |
 | `window_get`, `window_set` | Reads or saves the Close behavior, and whether there is a usable tray |
 | `window_close` | Answers the close prompt: Exit App or Minimize to Tray, and whether to remember it |
 
@@ -228,7 +228,8 @@ file is recorded. It is labelled **Curated** and installs disabled. Enabling it 
 confirmation that says it has **full access to your user account** and shows its ID, source,
 digest, signer, contracts, operations and program; only Confirm there enables it, and the catalog
 records that admission against the release, source, signer and key. Disabling, updating, rolling
-back or removing it ends the admission, so a new release asks again.
+back or removing it ends the admission, so a new release asks again. A native release replaces
+another only if it reads the state version the other writes.
 
 The program host (`src-tauri/src/program.rs`, Linux) runs an admitted tool only on demand: at its
 first call from the window, from what `Catalog::admitted` returns then, after checking the
@@ -241,6 +242,17 @@ ends, the tool stops after 30 seconds idle; any change to its package (disable, 
 remove) and quitting the app stop it at once. Stopping closes its stdin, kills its whole process
 group after five seconds and reaps it: no process or thread of it is left. Pages, including the
 tool's own, have no program command and no route to its pipes.
+
+Updating or rolling back a native tool that is enabled swaps it while it serves on. The new
+release is staged and shown in its own native confirmation; once confirmed, the program host
+starts and describes it, with no call. Only then is it committed, enabled and admitted, and do new
+calls go to it, while the old release's tool finishes the calls it has (for at most ten minutes)
+and stops. Calls to one tool run one at a time across its releases. A cancelled confirmation, or a
+release that fails to start or describe itself, installs nothing and leaves the old release
+enabled and running. A tool that crashes is started again only by a call after a backoff (one
+second, doubling to a minute); five crashes in a row quarantine it until it is disabled and
+enabled again, or updated. A call the tool took and never answered has an unknown outcome: it is
+never sent again, and the tool's next start is told of it.
 
 Installing a newer release keeps the one it replaces as the last good release. A candidate that
 fails any check leaves the active release, its files and its open pages as they were. **Roll
@@ -390,7 +402,17 @@ while it runs on under its supervisor thread; its pipes are held by the app and 
 call is cancelled and the next call is answered by the same process. From the tool's own page
 webview every program command is refused and none reaches the tool. Left alone it stops after 30
 seconds with its child and the host's threads; the next call starts it again; disabling it stops
-it at once. Enabled and running when the app quits, its process and child are gone afterwards.
+it at once. Enabled and running, it then goes on to the swap check (`src-tauri/src/swap_native.rs`,
+with releases 1.0.0, 1.1.0 and an incompatible 1.2.0). A slow call runs on 1.0.0 while 1.1.0 is
+installed and confirmed: 1.1.0 runs before the swap returns and 1.0.0 drains, the slow call is
+answered by 1.0.0 and the next call by 1.1.0, after it; then 1.0.0 is reaped, and the install's
+thread has ended while 1.1.0 runs on. A cancelled confirmation for 1.2.0 changes nothing; a
+confirmed 1.2.0 is refused as incompatible and deleted, and 1.1.0 serves on in the same process.
+Five crash calls in a row each fail with an unknown outcome; a call during each backoff is
+refused and starts nothing; the next call after it is the restarted tool's first, and its describe
+was told of the crash call; the fifth crash quarantines it until it is disabled and enabled
+again. A call is cancelled, the tool stops after 30 seconds idle, and a rollback to 1.0.0 asks
+again and runs it. Running when the app quits, its process and child are gone afterwards.
 
 In managed mode, two more sessions run the window checks (`native/window.ts`, which launches
 the app through the stages in `src-tauri/src/native_window.rs`), one with a tray watcher and
@@ -447,8 +469,7 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
 ## Limits
 
 - Device extensions: no production trust roots (so no curated source outside tests), resources
-  or settings yet, and native tools run on Linux only, with no crash backoff, swap or routing
-  from pages yet; installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
+  or settings yet, and native tools run on Linux only, with no routing from pages yet; installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
   native run.
 - Tested on Linux only. On Windows the page document's address is
   `http://pluxy-page.localhost/`; neither Windows nor macOS has been run.
