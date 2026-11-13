@@ -3,7 +3,7 @@ name = "pluxy-app"
 version = "0.1.0"
 description = "The pluxy desktop app: a window, a tray icon and, if wanted, a core of its own"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.89"
 publish = false
 
 [lib]
@@ -43,6 +43,9 @@ url = "2"
 ureq = { version = "3.5", default-features = false, features = ["rustls"] }
 getrandom = "0.3"
 sha2 = "=0.10.9"
+# Release archives of packages installed on this device (src/device.rs): gzip-compressed tar.
+flate2 = "=1.1.11"
+tar = { version = "=0.4.46", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

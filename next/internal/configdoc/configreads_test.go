@@ -403,6 +403,27 @@ func TestRestoreCopyNeedsItsOriginal(t *testing.T) {
 	}
 }
 
+// A placeholder put where its secret's text, written back as it was, reads differently (a comma
+// inside a flow list or mapping) goes back quoted: the document is written out again rather than
+// refused, also when a copy of that secret stays in place.
+func TestRestoreQuotesASecretTheFlowWouldSplit(t *testing.T) {
+	const key = "sk-aaaa,bbbb1234"
+	cur := "api-key: " + key + "\n"
+	for _, tc := range []struct{ name, cur, edited, want string }{
+		{"a copy in place", cur + "note: " + key + "\n", "api-key: [P]\nnote: P\n", "api-key: [\"" + key + "\"]\nnote: \"" + key + "\"\n"},
+		{"each value counted", cur, "m: {api-key: P}\n", "m: {api-key: \"" + key + "\"}\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := NewRedactor()
+			edited := strings.ReplaceAll(tc.edited, "P", r.Placeholder(key))
+			back, err := r.Restore([]byte(edited), []byte(tc.cur), true)
+			if err != nil || string(back) != tc.want {
+				t.Errorf("Restore(%q) = %v\n%s\nwant\n%s", edited, err, back, tc.want)
+			}
+		})
+	}
+}
+
 // After core restarts, a placeholder of the old key stands for no secret: it is stale, whether
 // a copy comes before its original or after it.
 func TestRestoreAfterRestartIsStale(t *testing.T) {
