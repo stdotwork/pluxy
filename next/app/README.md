@@ -46,8 +46,8 @@ calls core's `POST /v0/management/management-key/rotate` itself. It keeps the ne
 one was kept (in `connection.json`, for this session only, or, for the app's own core, in that
 core's config file, which core writes) and shows it once in a native window with Copy and
 Close, for other programs that used the old key and for signing in again. That window stays open
-when the main window closes to the tray. The window gets only how it went: the key never reaches
-a webview. `core_call` refuses every path under
+when the main window closes to the tray, and a later rotation's window replaces it. The window
+gets only how it went: the key never reaches a webview. `core_call` refuses every path under
 `/management-key`, however it is spelled. If the new key cannot be saved, the app keeps using
 it until it quits and says to copy it and enter it again with "Keep the key on this device".
 A call that left with the old key during a rotation is sent once more with the new one. The app

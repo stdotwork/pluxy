@@ -83,13 +83,23 @@ pub(crate) fn request(app: &AppHandle, summary: String) -> Result<Option<Input>,
 
 /// Shows a rotated management key once, with notice saying how the app keeps it, a Copy button
 /// (to the clipboard) and Close. Returns once the window is asked for; it does not wait. The
-/// window stays open when the main window closes to the tray.
+/// window stays open when the main window closes to the tray, and replaces the window of an
+/// earlier rotation, whose key no longer works.
 #[cfg(target_os = "linux")]
 pub(crate) fn reveal(app: &AppHandle, key: String, notice: String) {
     use gtk::prelude::*;
     use tauri::Manager;
+    thread_local! {
+        static SHOWN: std::cell::RefCell<Option<gtk::Dialog>> = const { std::cell::RefCell::new(None) };
+    }
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
+        if let Some(earlier) = SHOWN.with(|s| s.borrow_mut().take()) {
+            // SAFETY: on the GTK thread; nothing uses the earlier window afterwards.
+            unsafe {
+                earlier.destroy();
+            }
+        }
         let parent = handle
             .get_window(crate::WINDOW)
             .and_then(|w| w.gtk_window().ok());
@@ -123,6 +133,12 @@ pub(crate) fn reveal(app: &AppHandle, key: String, notice: String) {
                 gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD).set_text(&key);
                 return;
             }
+            SHOWN.with(|s| {
+                let mut s = s.borrow_mut();
+                if s.as_ref() == Some(d) {
+                    *s = None;
+                }
+            });
             d.hide();
             unsafe {
                 d.destroy();
@@ -130,6 +146,7 @@ pub(crate) fn reveal(app: &AppHandle, key: String, notice: String) {
         });
         dialog.show_all();
         dialog.present();
+        SHOWN.with(|s| *s.borrow_mut() = Some(dialog));
     });
 }
 
