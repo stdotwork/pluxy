@@ -245,6 +245,7 @@ four keys, `id` a string of 1 to 64 characters, `params` an object or `null`. Th
 | `theme.get` | `null` | none | The theme snapshot (below). |
 | `config.get` | `null` | `config.read` | `{"values": {...}, "set": [...]}`, as the management API's `GET` gives them. |
 | `config.set` | `{"values": {...}}` | `config.write` | The same, after the change. Fields as for the management API's `PATCH`. |
+| `native.call` | `{"package": "...", "op": "...", "input": {...}}` | the package's declared `imports` and the person's native consent | Desktop app only, for a page of a package on that device: the operation's output. The app answers it natively and never forwards it to its window; see [Calls between packages](../../app/app-host/README.md#calls-between-packages). The panel answers `unknown_method`. |
 
 Error codes: `bad_request` (the message breaks the shape above, or a method's `params` are
 wrong), `too_large`, `unknown_method`, `forbidden` (the extension did not declare the

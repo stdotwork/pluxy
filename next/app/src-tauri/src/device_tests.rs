@@ -1253,7 +1253,7 @@ fn native_fixture(root: &Path) -> (Dirs, TestRoots) {
     bad["key_id"] = "a/b".into();
     let mut long = signed_artifact("longkey", &long_key, Some((&key, "pluxy/longkey", "1.0.0")));
     long["key_id"] = "k".repeat(65).into();
-    // Signed by the root's key, but as a web package: curated web packages are refused.
+    // Signed by the root's key as a web package: a curated web package.
     let web = signed_artifact_as(
         "webdesc",
         &web_desc,
@@ -1345,8 +1345,24 @@ fn only_a_curated_signed_native_tool_installs() {
         let e = refused("curated", id, &roots);
         assert!(e.contains("key_id is not valid"), "{id}: {e}");
     }
-    let e = refused("curated", "pluxy/webdesc", &roots);
-    assert!(e.contains("curated web packages are not admitted"), "{e}");
+    // A curated web package installs, enabled, as curated. Its signature is its root's, which
+    // Access never uses: a reserved publisher's package gets no signer approval or grants.
+    {
+        let mut c = Catalog::open(d.clone(), false, &roots);
+        c.commit(
+            stage_from_registry(&d, &roots, "curated", "pluxy/webdesc", Some("1.0.0")).unwrap(),
+        )
+        .unwrap();
+        let p = c.get("pluxy/webdesc").unwrap();
+        assert!(p.enabled && p.active.signed.is_some(), "{p:?}");
+        let v = c.view(&roots);
+        assert_eq!(v.packages[0].trust, "curated");
+        assert!(!v.packages[0].active.signer.as_ref().unwrap().access);
+        assert!(c.facts("pluxy/webdesc", &roots).unwrap().signed.is_none());
+        // Without its root, it is held as any reserved publisher's package.
+        assert!(c.set_enabled("pluxy/webdesc", true, &NoRoots).is_err());
+        c.remove("pluxy/webdesc").unwrap();
+    }
     // A curated registry lists only its root's keys: any other signature in it is refused,
     // whatever the publisher.
     let e = refused("curated", "example/signedpage", &roots);
@@ -1376,7 +1392,6 @@ fn only_a_curated_signed_native_tool_installs() {
             "pluxy/partial",
             "pluxy/renamed",
             "pluxy/unsigned",
-            "pluxy/webdesc",
             "pluxy/wrongkey"
         ])
     );
@@ -1696,6 +1711,601 @@ fn a_package_whose_publisher_a_root_now_reserves_is_disabled() {
     // Removing it still works.
     c.remove("acme/page").unwrap();
     done(root);
+}
+
+/// A native package whose app contribution also has extra's fields (imports, exports,
+/// operations).
+fn native_with(id: &str, version: &str, extra: Value) -> Vec<u8> {
+    let mut m = serde_json::json!({
+        "manifest_version": 1, "id": id, "version": version,
+        "app": {"version": 0, "tier": "native", "host_versions": [0],
+            "programs": {platform(): "bin/tool"},
+            "operations": [
+                {"id": "read", "description": "Read", "effect": "read",
+                    "input_schema": {"type": "object"}, "output_schema": {"type": "object"}},
+                {"id": "write", "description": "Write",
+                    "input_schema": {"type": "object"}, "output_schema": {"type": "object"}},
+                {"id": "hidden", "description": "Not exported", "effect": "read",
+                    "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}],
+            "state": {"version": 0, "readable_versions": [0]}}
+    });
+    if let Value::Object(o) = extra {
+        for (k, v) in o {
+            m["app"][k] = v;
+        }
+    }
+    let m = serde_json::to_vec(&m).unwrap();
+    let mut b = tar::Builder::new(Vec::new());
+    for (name, data, mode) in [
+        ("pluxy-extension.json", m.as_slice(), 0o644),
+        (
+            "bin/tool",
+            format!("#!/bin/sh\n# {id} {version}\n").as_bytes(),
+            0o755,
+        ),
+    ] {
+        let mut h = tar::Header::new_gnu();
+        h.set_path(name).unwrap();
+        h.set_size(data.len() as u64);
+        h.set_mode(mode);
+        h.set_entry_type(tar::EntryType::Regular);
+        h.set_cksum();
+        b.append(&h, data).unwrap();
+    }
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    gz.write_all(&b.into_inner().unwrap()).unwrap();
+    gz.finish().unwrap()
+}
+
+fn import(package: &str, contract: &[i64], ops: &[&str], required: bool) -> Value {
+    serde_json::json!({"package": package, "contract": contract, "operations": ops, "required": required})
+}
+
+#[test]
+fn imports_exports_and_effects_are_validated() {
+    let check = |tier: &str, extra: Value| {
+        let mut m = serde_json::json!({"manifest_version": 1, "id": "pluxy/a", "version": "1",
+            "app": {"version": 0, "tier": tier, "host_versions": [0]}});
+        if tier == "native" {
+            m["app"]["programs"] = serde_json::json!({platform(): "bin/tool"});
+            m["app"]["operations"] = serde_json::json!([{"id": "op", "description": "d",
+                "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}]);
+            m["app"]["state"] = serde_json::json!({"version": 0, "readable_versions": [0]});
+        }
+        if let Value::Object(o) = extra {
+            for (k, v) in o {
+                m["app"][k] = v;
+            }
+        }
+        let m: Manifest = serde_json::from_value(m).unwrap();
+        validate(&m).and_then(|app| imports::import_decls(&m.id, app.as_ref().unwrap()))
+    };
+    let good = import("pluxy/b", &[1], &["op"], true);
+    assert!(check("web", serde_json::json!({"imports": [good]})).is_ok());
+    assert!(check(
+        "native",
+        serde_json::json!({"imports": [good],
+        "exports": {"contract": 1, "operations": ["op"]}})
+    )
+    .is_ok());
+    let op = |effect: &str, schema: Value| {
+        serde_json::json!({"operations": [{"id": "op", "description": "d", "effect": effect,
+            "input_schema": schema, "output_schema": {"type": "object"}}]})
+    };
+    let launch_schema =
+        serde_json::json!({"type": "object", "required": ["executable", "argv", "cwd"]});
+    assert!(check("native", op("launch", launch_schema)).is_ok());
+    for (tier, bad, says) in [
+        (
+            "web",
+            serde_json::json!({"exports": {"contract": 1, "operations": ["op"]}}),
+            "exports",
+        ),
+        (
+            "native",
+            serde_json::json!({"exports": {"contract": 1, "operations": ["nope"]}}),
+            "app.exports",
+        ),
+        (
+            "native",
+            serde_json::json!({"exports": {"operations": ["op"]}}),
+            "app.exports",
+        ),
+        (
+            "native",
+            serde_json::json!({"exports": {"contract": -1, "operations": ["op"]}}),
+            "app.exports",
+        ),
+        (
+            "native",
+            serde_json::json!({"exports": {"contract": 1, "operations": ["op", "op"]}}),
+            "app.exports",
+        ),
+        (
+            "web",
+            serde_json::json!({"imports": [good, good]}),
+            "app.imports",
+        ),
+        (
+            "web",
+            serde_json::json!({"imports": [import("pluxy/b", &[], &["op"], true)]}),
+            "app.imports",
+        ),
+        (
+            "web",
+            serde_json::json!({"imports": [import("pluxy/b", &[-1], &["op"], true)]}),
+            "app.imports",
+        ),
+        (
+            "web",
+            serde_json::json!({"imports": [import("pluxy/b", &[1], &[], true)]}),
+            "app.imports",
+        ),
+        (
+            "web",
+            serde_json::json!({"imports": [import("pluxy/b", &[1], &["Op"], true)]}),
+            "app.imports",
+        ),
+        (
+            "web",
+            serde_json::json!({"imports": [import("B", &[1], &["op"], true)]}),
+            "app.imports",
+        ),
+        (
+            "web",
+            serde_json::json!({"imports": [import("pluxy/a", &[1], &["op"], true)]}),
+            "imports itself",
+        ),
+        (
+            "native",
+            op("delete", serde_json::json!({"type": "object"})),
+            "effect",
+        ),
+        (
+            "native",
+            op(
+                "launch",
+                serde_json::json!({"type": "object", "required": ["argv", "cwd"]}),
+            ),
+            "launch",
+        ),
+    ] {
+        let e = check(tier, bad.clone()).unwrap_err();
+        assert!(e.contains(says), "{bad}: {e}");
+    }
+    let many: Vec<Value> = (0..17)
+        .map(|i| import(&format!("pluxy/t{i}"), &[1], &["op"], true))
+        .collect();
+    assert!(check("web", serde_json::json!({"imports": many}))
+        .unwrap_err()
+        .contains("more than 16"));
+    // An operation with no effect is valid, and asks before each call (`routing_catalog`'s
+    // write).
+    assert!(check("native", Value::Null).is_ok());
+}
+
+/// A curated registry with tools that import and export, and web packages that import them;
+/// staged and committed into a catalog.
+fn routing_catalog(root: &Path) -> (Catalog, TestRoots) {
+    let d = dirs(root);
+    let reg = root.join("reg");
+    fs::create_dir_all(&reg).unwrap();
+    let mut rnd = [0u8; 32];
+    getrandom::fill(&mut rnd).unwrap();
+    let key = ed25519_dalek::SigningKey::from_bytes(&rnd);
+    let exports = serde_json::json!({"exports": {"contract": 1, "operations": ["read", "write"]}});
+    let tools: Vec<(&str, &str, Value)> = vec![
+        ("pluxy/target", "1.0.0", exports.clone()),
+        ("pluxy/target", "2.0.0", exports),
+        (
+            "pluxy/relay",
+            "1.0.0",
+            serde_json::json!({"imports": [import("pluxy/target", &[1], &["read"], true)]}),
+        ),
+        (
+            "pluxy/needs2",
+            "1.0.0",
+            serde_json::json!({"imports": [import("pluxy/target", &[2], &["read"], true)]}),
+        ),
+        (
+            "pluxy/hidden",
+            "1.0.0",
+            serde_json::json!({"imports": [import("pluxy/target", &[1], &["hidden"], true)]}),
+        ),
+        (
+            "pluxy/opt",
+            "1.0.0",
+            serde_json::json!({"imports": [import("pluxy/missing", &[1], &["read"], false)]}),
+        ),
+        (
+            "pluxy/ca",
+            "1.0.0",
+            serde_json::json!({"exports": {"contract": 1, "operations": ["read"]},
+            "imports": [import("pluxy/cb", &[1], &["read"], false)]}),
+        ),
+        (
+            "pluxy/cb",
+            "1.0.0",
+            serde_json::json!({"exports": {"contract": 1, "operations": ["read"]},
+            "imports": [import("pluxy/cc", &[1], &["read"], false)]}),
+        ),
+        (
+            "pluxy/cc",
+            "1.0.0",
+            serde_json::json!({"exports": {"contract": 1, "operations": ["read"]},
+            "imports": [import("pluxy/ca", &[1], &["read"], false)]}),
+        ),
+        // Swaps: sa's 2.0.0 imports sb, which imports sa; sd's 1.0.0 and se's 2.0.0 require the
+        // target, their other releases import nothing.
+        (
+            "pluxy/sa",
+            "1.0.0",
+            serde_json::json!({"exports": {"contract": 1, "operations": ["read"]}}),
+        ),
+        (
+            "pluxy/sa",
+            "2.0.0",
+            serde_json::json!({"exports": {"contract": 1, "operations": ["read"]},
+            "imports": [import("pluxy/sb", &[1], &["read"], false)]}),
+        ),
+        (
+            "pluxy/sb",
+            "1.0.0",
+            serde_json::json!({"exports": {"contract": 1, "operations": ["read"]},
+            "imports": [import("pluxy/sa", &[1], &["read"], false)]}),
+        ),
+        (
+            "pluxy/sd",
+            "1.0.0",
+            serde_json::json!({"imports": [import("pluxy/target", &[1], &["read"], true)]}),
+        ),
+        ("pluxy/sd", "2.0.0", serde_json::json!({})),
+        ("pluxy/se", "1.0.0", serde_json::json!({})),
+        (
+            "pluxy/se",
+            "2.0.0",
+            serde_json::json!({"imports": [import("pluxy/target", &[1], &["read"], true)]}),
+        ),
+    ];
+    let mut packages = serde_json::Map::new();
+    let mut add = |id: &str, version: &str, bytes: Vec<u8>, tier: &str| {
+        let file = format!("{}-{version}.tar.gz", id.replace('/', "-"));
+        fs::write(reg.join(&file), &bytes).unwrap();
+        let a = signed_artifact_as(&file, &bytes, Some((&key, id, version)), tier);
+        let e = packages
+            .entry(id.to_string())
+            .or_insert_with(|| serde_json::json!({"releases": []}));
+        e["releases"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"version": version, "artifacts": {platform(): a}}));
+    };
+    for (id, version, extra) in &tools {
+        add(
+            id,
+            version,
+            native_with(id, version, extra.clone()),
+            "native",
+        );
+    }
+    let web = |id: &str, imports: Value| {
+        let m = manifest(id, "1.0.0", serde_json::json!({"imports": imports}));
+        archive(&[
+            ("pluxy-extension.json", &m),
+            ("pages/index.html", b"<p>guide"),
+        ])
+    };
+    add(
+        "pluxy/guide",
+        "1.0.0",
+        web(
+            "pluxy/guide",
+            serde_json::json!([import("pluxy/target", &[1], &["read", "write"], true)]),
+        ),
+        "web",
+    );
+    let index = serde_json::json!({"registry_version": 0, "packages": packages});
+    fs::write(
+        reg.join("curated.json"),
+        serde_json::to_vec(&index).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        &d.registries,
+        serde_json::to_vec(&serde_json::json!({"version": 0, "registries": [
+            {"name": "curated", "url": reg.join("curated.json")}]}))
+        .unwrap(),
+    )
+    .unwrap();
+    let roots = TestRoots {
+        publisher: "pluxy".into(),
+        source: reg.join("curated.json").display().to_string(),
+        key_id: "k1".into(),
+        key: key.verifying_key(),
+    };
+    let mut c = Catalog::open(d.clone(), false, &roots);
+    for id in [
+        "pluxy/target",
+        "pluxy/relay",
+        "pluxy/needs2",
+        "pluxy/hidden",
+        "pluxy/opt",
+        "pluxy/ca",
+        "pluxy/cb",
+        "pluxy/cc",
+        "pluxy/sa",
+        "pluxy/sb",
+        "pluxy/sd",
+        "pluxy/se",
+        "pluxy/guide",
+    ] {
+        c.commit(stage_from_registry(&d, &roots, "curated", id, Some("1.0.0")).unwrap())
+            .unwrap();
+    }
+    // An Unverified web package with the same imports, from a local file.
+    let viewer = manifest(
+        "example/viewer",
+        "1.0.0",
+        serde_json::json!({"imports": [import("pluxy/target", &[1], &["read"], true)]}),
+    );
+    install(
+        &mut c,
+        &archive(&[
+            ("pluxy-extension.json", &viewer),
+            ("pages/index.html", b"<p>v"),
+        ]),
+        local("viewer.tar.gz"),
+    )
+    .unwrap();
+    (c, roots)
+}
+
+#[test]
+fn a_swap_checks_dependencies_and_cycles_when_staged_and_when_committed() {
+    let root = temp();
+    let (mut c, roots) = routing_catalog(&root);
+    let d = dirs(&root);
+    let stage =
+        |id: &str, v: &str| stage_from_registry(&d, &roots, "curated", id, Some(v)).unwrap();
+    // An update that would close a cycle (sa 2.0.0 imports sb, which imports sa) is refused when
+    // staged, and nothing is held for it.
+    enable(&mut c, "pluxy/sa", &roots).unwrap();
+    enable(&mut c, "pluxy/sb", &roots).unwrap();
+    let e = c
+        .swap_update(stage("pluxy/sa", "2.0.0"), &roots)
+        .unwrap_err();
+    assert!(e.contains("cycle") && e.contains("pluxy/sb"), "{e}");
+    assert_eq!(c.get("pluxy/sa").unwrap().active.version, "1.0.0");
+    // With sb disabled the same update commits: the control on the same route.
+    c.set_enabled("pluxy/sb", false, &roots).unwrap();
+    let s = c.swap_update(stage("pluxy/sa", "2.0.0"), &roots).unwrap();
+    c.commit_swap(s, &roots).unwrap();
+    assert_eq!(c.get("pluxy/sa").unwrap().active.version, "2.0.0");
+
+    // A rollback to a release whose required import is not enabled is refused when staged.
+    enable(&mut c, "pluxy/target", &roots).unwrap();
+    enable(&mut c, "pluxy/sd", &roots).unwrap();
+    let s = c.swap_update(stage("pluxy/sd", "2.0.0"), &roots).unwrap();
+    c.commit_swap(s, &roots).unwrap();
+    c.set_enabled("pluxy/target", false, &roots).unwrap();
+    let e = c.swap_rollback("pluxy/sd", &roots).unwrap_err();
+    assert!(e.contains("requires pluxy/target"), "{e}");
+    enable(&mut c, "pluxy/target", &roots).unwrap();
+    let s = c.swap_rollback("pluxy/sd", &roots).unwrap();
+    c.commit_swap(s, &roots).unwrap();
+    assert_eq!(c.get("pluxy/sd").unwrap().active.version, "1.0.0");
+
+    // Staged while its required import was enabled, refused at commit once that is disabled.
+    enable(&mut c, "pluxy/se", &roots).unwrap();
+    let s = c.swap_update(stage("pluxy/se", "2.0.0"), &roots).unwrap();
+    c.swap_current(&s, &roots).unwrap();
+    c.set_enabled("pluxy/target", false, &roots).unwrap();
+    assert!(c.swap_current(&s, &roots).is_err());
+    let e = c.commit_swap(s, &roots).unwrap_err();
+    assert!(e.contains("requires pluxy/target"), "{e}");
+    assert_eq!(c.get("pluxy/se").unwrap().active.version, "1.0.0");
+    // The refused update held nothing: another may be staged.
+    enable(&mut c, "pluxy/target", &roots).unwrap();
+    let s = c.swap_update(stage("pluxy/se", "2.0.0"), &roots).unwrap();
+    c.commit_swap(s, &roots).unwrap();
+    assert_eq!(c.get("pluxy/se").unwrap().active.version, "2.0.0");
+    done(root);
+}
+
+fn enable(c: &mut Catalog, id: &str, roots: &TestRoots) -> Result<(), String> {
+    let a = candidate(c, id, roots)?;
+    c.admit_checked(&a, roots)
+}
+
+#[test]
+fn dependencies_cycles_consent_and_grants() {
+    let root = temp();
+    let (mut c, roots) = routing_catalog(&root);
+    // A required import must be an enabled tool exporting it under an accepted contract.
+    let e = enable(&mut c, "pluxy/relay", &roots).unwrap_err();
+    assert!(
+        e.contains("requires pluxy/target") && e.contains("disabled"),
+        "{e}"
+    );
+    enable(&mut c, "pluxy/target", &roots).unwrap();
+    let e = enable(&mut c, "pluxy/needs2", &roots).unwrap_err();
+    assert!(e.contains("exports contract 1"), "{e}");
+    let e = enable(&mut c, "pluxy/hidden", &roots).unwrap_err();
+    assert!(e.contains("does not export hidden"), "{e}");
+    // An optional import may be missing.
+    enable(&mut c, "pluxy/opt", &roots).unwrap();
+    let a = candidate(&c, "pluxy/relay", &roots).unwrap();
+    #[cfg(target_os = "linux")]
+    {
+        let what = a.confirmation().what;
+        assert!(
+            what.contains("Imports: pluxy/target (export contract [1], required): read"),
+            "{what}"
+        );
+    }
+    c.admit_checked(&a, &roots).unwrap();
+    // Cycles through enabled packages, however long, refuse the package closing them.
+    enable(&mut c, "pluxy/ca", &roots).unwrap();
+    enable(&mut c, "pluxy/cb", &roots).unwrap();
+    let e = enable(&mut c, "pluxy/cc", &roots).unwrap_err();
+    assert!(e.contains("cycle") && e.contains("pluxy/ca"), "{e}");
+    // Grants: the window may call any declared operation; relay only what it imports and
+    // target exports, while relay is the release it runs.
+    assert_eq!(
+        c.main_grant("pluxy/target", "hidden", &roots)
+            .unwrap()
+            .op
+            .id,
+        "hidden"
+    );
+    assert_eq!(
+        c.main_grant("pluxy/target", "write", &roots)
+            .unwrap()
+            .op
+            .effect,
+        "write"
+    );
+    assert!(c.main_grant("pluxy/target", "nope", &roots).is_err());
+    let relay = c.admitted("pluxy/relay", &roots).unwrap();
+    let me = ("pluxy/relay", relay.sha256(), relay.installed_at());
+    let (g, caller) = c.native_grant(me, "pluxy/target", "read", &roots).unwrap();
+    assert_eq!(
+        (g.target.id(), g.op.effect.as_str(), caller.id()),
+        ("pluxy/target", "read", "pluxy/relay")
+    );
+    for (target, op) in [
+        ("pluxy/target", "write"),
+        ("pluxy/target", "hidden"),
+        ("pluxy/ca", "read"),
+    ] {
+        let e = c.native_grant(me, target, op, &roots).unwrap_err();
+        assert_eq!(e.code, "permission", "{target} {op}: {e:?}");
+    }
+    let stale = ("pluxy/relay", relay.sha256(), relay.installed_at() + 1);
+    let e = c
+        .native_grant(stale, "pluxy/target", "read", &roots)
+        .unwrap_err();
+    assert!(e.message.contains("changed since this run"), "{e:?}");
+    // A web package: curated, consent bound to both releases, revocable.
+    let guide = c.get("pluxy/guide").unwrap().active.sha256.clone();
+    let e = c
+        .page_grant(("pluxy/guide", &guide), "pluxy/target", "read", &roots)
+        .unwrap_err();
+    assert!(e.message.contains("not allowed"), "{e:?}");
+    let viewer = c.get("example/viewer").unwrap().active.sha256.clone();
+    let e = c.consent_candidate("example/viewer", &roots).unwrap_err();
+    assert!(e.contains("Unverified"), "{e}");
+    let e = c
+        .page_grant(("example/viewer", &viewer), "pluxy/target", "read", &roots)
+        .unwrap_err();
+    assert!(e.message.contains("Unverified"), "{e:?}");
+    let consent = c.consent_candidate("pluxy/guide", &roots).unwrap();
+    assert_eq!(consent.targets.len(), 1);
+    #[cfg(target_os = "linux")]
+    {
+        let what = c
+            .consent_confirmation("pluxy/guide", &consent, &roots)
+            .unwrap()
+            .what;
+        assert!(
+            what.contains("pluxy/target 1.0.0 read: Read (read)")
+                && what.contains("write: Write (write)"),
+            "{what}"
+        );
+    }
+    assert!(!c.imports_allowed("pluxy/guide", &roots));
+    c.allow_imports("pluxy/guide", &consent, &roots).unwrap();
+    assert!(c.imports_allowed("pluxy/guide", &roots));
+    let g = c
+        .page_grant(("pluxy/guide", &guide), "pluxy/target", "write", &roots)
+        .unwrap();
+    assert_eq!(g.op.effect, "write");
+    for (sha, target, op) in [
+        (guide.as_str(), "pluxy/target", "hidden"),
+        ("0".repeat(64).as_str(), "pluxy/target", "read"),
+    ] {
+        assert!(
+            c.page_grant(("pluxy/guide", sha), target, op, &roots)
+                .is_err(),
+            "{target} {op}"
+        );
+    }
+    // The catalog keeps the consent across reopening.
+    let reopened = Catalog::open(c.dirs.clone(), false, &roots);
+    assert!(reopened.imports_allowed("pluxy/guide", &roots));
+    // A target updated (and enabled again) is not what was allowed: its consent went with its
+    // admission, and calls are refused until allowed again.
+    c.commit(
+        stage_from_registry(
+            &c.dirs.clone(),
+            &roots,
+            "curated",
+            "pluxy/target",
+            Some("2.0.0"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    enable(&mut c, "pluxy/target", &roots).unwrap();
+    let e = c
+        .page_grant(("pluxy/guide", &guide), "pluxy/target", "read", &roots)
+        .unwrap_err();
+    assert!(e.message.contains("not allowed"), "{e:?}");
+    // Native routes take the new release, without consent.
+    assert!(c.native_grant(me, "pluxy/target", "read", &roots).is_ok());
+    let consent = c.consent_candidate("pluxy/guide", &roots).unwrap();
+    c.allow_imports("pluxy/guide", &consent, &roots).unwrap();
+    assert!(c
+        .page_grant(("pluxy/guide", &guide), "pluxy/target", "read", &roots)
+        .is_ok());
+    // A stale consent (the target changed between candidate and confirmation) is refused.
+    let mut old = consent.clone();
+    old.targets[0].installed_at += 1;
+    assert!(c
+        .allow_imports("pluxy/guide", &old, &roots)
+        .unwrap_err()
+        .contains("changed"));
+    // A consent names the caller's release: kept on another one (every change clears it; this
+    // is the check behind that), it covers nothing.
+    c.packages
+        .get_mut("pluxy/guide")
+        .unwrap()
+        .active
+        .installed_at += 1;
+    assert!(!c.imports_allowed("pluxy/guide", &roots));
+    assert!(c
+        .page_grant(("pluxy/guide", &guide), "pluxy/target", "read", &roots)
+        .is_err());
+    c.packages
+        .get_mut("pluxy/guide")
+        .unwrap()
+        .active
+        .installed_at -= 1;
+    assert!(c
+        .page_grant(("pluxy/guide", &guide), "pluxy/target", "read", &roots)
+        .is_ok());
+    c.revoke_imports("pluxy/guide").unwrap();
+    assert!(c
+        .page_grant(("pluxy/guide", &guide), "pluxy/target", "read", &roots)
+        .is_err());
+    // A target disabled and enabled again is a new native decision: the consents naming it go.
+    c.allow_imports("pluxy/guide", &consent, &roots).unwrap();
+    assert!(c
+        .page_grant(("pluxy/guide", &guide), "pluxy/target", "read", &roots)
+        .is_ok());
+    c.set_enabled("pluxy/target", false, &roots).unwrap();
+    enable(&mut c, "pluxy/target", &roots).unwrap();
+    assert!(!c.imports_allowed("pluxy/guide", &roots));
+    assert!(c
+        .page_grant(("pluxy/guide", &guide), "pluxy/target", "read", &roots)
+        .is_err());
+    // Disabling clears consent too.
+    let consent = c.consent_candidate("pluxy/guide", &roots).unwrap();
+    c.allow_imports("pluxy/guide", &consent, &roots).unwrap();
+    c.set_enabled("pluxy/guide", false, &roots).unwrap();
+    c.set_enabled("pluxy/guide", true, &roots).unwrap();
+    assert!(!c.imports_allowed("pluxy/guide", &roots));
+    let _ = fs::remove_dir_all(&root);
 }
 
 #[test]

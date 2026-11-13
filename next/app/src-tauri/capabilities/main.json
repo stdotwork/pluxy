@@ -37,6 +37,7 @@
     "allow-access-signer",
     "allow-access-grant",
     "allow-access-revoke",
+    "allow-device-imports",
     "allow-program-call",
     "allow-program-cancel",
     "allow-program-status",

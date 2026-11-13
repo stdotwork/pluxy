@@ -29,6 +29,7 @@ pub const COMMANDS: &[&str] = &[
     "access_signer",
     "access_grant",
     "access_revoke",
+    "device_imports",
     "program_call",
     "program_cancel",
     "program_status",

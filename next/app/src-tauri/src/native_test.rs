@@ -51,6 +51,9 @@ mod ingress;
 #[path = "program_native.rs"]
 mod program;
 #[cfg(target_os = "linux")]
+#[path = "routing_native.rs"]
+mod routing;
+#[cfg(target_os = "linux")]
 #[path = "swap_native.rs"]
 mod swap;
 pub use ingress::{
@@ -211,6 +214,15 @@ fn run(app: &AppHandle) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_ADMISSION") {
         admission::run(app, &main, dir.into())?;
+        log("quit", json!({}));
+        crate::quit(app);
+        return Ok(());
+    }
+    // Cross-package routing and import authorization (routing_native.rs), in a session of its
+    // own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_ROUTING") {
+        routing::run(app, &main, dir.into())?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());

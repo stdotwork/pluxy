@@ -10,8 +10,15 @@
 //!   and group, the child it started, the calls it has had, its environment's names, its open
 //!   file descriptors and its working folder;
 //! - `wait` only once it is cancelled;
+//! - `store` and `launch` with what they were given, doing nothing else: the routing check's
+//!   write- and launch-class operations;
+//! - `relay` by calling another package's operation through the host, as the input says, and
+//!   answering with the host's answer to that;
 //! - `slow` after `ms` milliseconds, with its version, process and when it answered;
-//! - `crash` never: it exits at once with status 3.
+//! - `crash` never: it exits at once with status 3;
+//! - `flood` never: it sends 2000 call frames the host refuses, and reads nothing more.
+//!
+//! Each answer of summary, store, launch and relay also carries the `chain` the host's call named.
 //!
 //! `summary` also says its release's version, when it answered (milliseconds since the Unix
 //! epoch) and the calls of unknown outcome the host reported in describe (`reported`).
@@ -152,6 +159,41 @@ fn sleep_forever() -> ! {
     }
 }
 
+/// Calls `input.package`'s `input.op` with `input.input` through the host, for call f, with
+/// `input.extra`'s fields added to the frame (and `input.for` instead of f's ID when given), and
+/// waits for the host's answer: `{"output": ...}` or `{"error": ...}`. A cancel of f while it
+/// waits is passed on as a cancel of this call.
+fn relay(input: &mut impl Read, output: &mut impl Write, f: &Value, n: u64) -> Value {
+    let own = format!("o-{n}");
+    let mut call = json!({
+        "type": "call",
+        "id": own,
+        "for": f["input"].get("for").cloned().unwrap_or_else(|| f["id"].clone()),
+        "package": f["input"]["package"],
+        "op": f["input"]["op"],
+        "input": f["input"]["input"],
+    });
+    if let (Some(extra), Some(frame)) = (f["input"]["extra"].as_object(), call.as_object_mut()) {
+        for (k, v) in extra {
+            frame.insert(k.clone(), v.clone());
+        }
+    }
+    // The ID sent, which extra may have replaced: the host answers that one.
+    let rid = call["id"].clone();
+    write_frame(output, &call);
+    while let Some(m) = read_frame(input) {
+        match m["type"].as_str() {
+            Some("result") if m["id"] == rid => return json!({"output": m["output"]}),
+            Some("error") if m["id"] == rid => return json!({"error": m["error"]}),
+            Some("cancel") if m["id"] == f["id"] => {
+                write_frame(output, &json!({"type": "cancel", "id": rid}));
+            }
+            _ => {}
+        }
+    }
+    json!({"error": {"code": "extension_unavailable", "message": "the host closed the pipe"}})
+}
+
 /// Its child's process ID, for the SIGTERM handler.
 #[cfg(unix)]
 static CHILD_PID: AtomicI32 = AtomicI32::new(0);
@@ -266,6 +308,7 @@ pub fn main() -> ! {
     );
     let mut calls = 0u64;
     let mut waiting: Option<Value> = None;
+    let mut relayed = 0u64;
     let mut reported = Value::Null;
     let version = manifest["version"].clone();
     let at = || {
@@ -276,6 +319,7 @@ pub fn main() -> ! {
     };
     while let Some(f) = read_frame(&mut input) {
         let id = f["id"].clone();
+        let chain = f["chain"].clone();
         match (f["type"].as_str(), f["op"].as_str()) {
             (Some("call"), Some("describe")) => {
                 reported = f["unknown"].clone();
@@ -335,6 +379,7 @@ pub fn main() -> ! {
                                 "env": names,
                                 "fds": fds(),
                                 "cwd": std::env::current_dir().ok(),
+                                "chain": chain,
                                 "version": version,
                                 "at": at(),
                                 "reported": reported,
@@ -361,6 +406,25 @@ pub fn main() -> ! {
                         );
                         waiting = Some(id);
                     }
+                    "store" => write_frame(
+                        &mut output,
+                        &json!({"type": "result", "id": id, "output":
+                            {"stored": f["input"]["value"], "calls": calls, "chain": chain}}),
+                    ),
+                    "launch" => write_frame(
+                        &mut output,
+                        &json!({"type": "result", "id": id, "output":
+                            {"launched": f["input"]["argv"], "calls": calls, "chain": chain}}),
+                    ),
+                    "relay" => {
+                        relayed += 1;
+                        let answer = relay(&mut input, &mut output, &f, relayed);
+                        write_frame(
+                            &mut output,
+                            &json!({"type": "result", "id": id, "output":
+                                {"answer": answer, "calls": calls, "chain": chain}}),
+                        );
+                    }
                     "slow" => {
                         let ms = f["input"]["ms"].as_u64().unwrap_or(0);
                         std::thread::sleep(Duration::from_millis(ms));
@@ -371,6 +435,17 @@ pub fn main() -> ! {
                         );
                     }
                     "crash" => std::process::exit(3),
+                    "flood" => {
+                        for i in 0..2000 {
+                            write_frame(
+                                &mut output,
+                                &json!({"type": "call", "id": format!("f-{i}"), "for": id,
+                                    "package": "pluxy/other", "op": "read", "input": {},
+                                    "chain": []}),
+                            );
+                        }
+                        sleep_forever();
+                    }
                     _ => write_frame(
                         &mut output,
                         &error(&id, "unsupported", &format!("no operation {op}")),

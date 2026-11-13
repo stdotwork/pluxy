@@ -14,6 +14,21 @@ export interface DevicePage {
   url: string;
 }
 
+/** Another package's operations a package may call through the host. */
+export interface DeviceImport {
+  package: string;
+  /** The target's export contracts it works with. */
+  contract: number[];
+  operations: string[];
+  /** Required: enabled only with the target enabled. Optional: a call fails while it is missing. */
+  required: boolean;
+}
+
+export interface DeviceExports {
+  contract: number;
+  operations: string[];
+}
+
 export interface DeviceRelease {
   version: string;
   sha256: string;
@@ -37,6 +52,9 @@ export interface DeviceRelease {
   tier: "web" | "native";
   /** A native tool's declared operations, as [id, description]. */
   operations: [string, string][];
+  imports: DeviceImport[];
+  /** A native tool's operations other packages may import. */
+  exports: DeviceExports | null;
 }
 
 export interface DeviceResource {
@@ -92,6 +110,8 @@ export interface DevicePackage {
   tier: "web" | "native";
   /** A native tool: whether the person enabled it in a native confirmation for this release. */
   authorized: boolean;
+  /** A web package: whether the person allowed its native imports for this release. */
+  imports_allowed: boolean;
   source: { kind: "local" | "registry"; name: string; index?: string };
   active: DeviceRelease;
   last_good?: DeviceRelease;
@@ -150,6 +170,9 @@ export const device = {
   setEnabled: (id: string, enabled: boolean) => reply<DeviceCatalog>("device_enable", { id, enabled }),
   remove: (id: string) => reply<DeviceCatalog>("device_remove", { id }),
   rollback: (id: string) => reply<DeviceCatalog>("device_rollback", { id }),
+  /** Allowing a web package's native imports opens the native confirmation and answers once it
+   * is closed; revoking needs none. */
+  setImports: (id: string, allowed: boolean) => reply<DeviceCatalog>("device_imports", { id, allowed }),
 };
 
 /** Access: grants start here, in the window; native code asks for the file and the

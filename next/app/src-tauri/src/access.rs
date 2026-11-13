@@ -99,14 +99,7 @@ pub fn confirmation(
     };
     crate::confirmation::Action {
         what,
-        chain: vec![crate::confirmation::Package {
-            id: "main window".into(),
-            source: format!("pluxy app {}", env!("CARGO_PKG_VERSION")),
-            digest: String::new(),
-            signer: String::new(),
-            contract: format!("app host {}", crate::device::HOST_CONTRACT),
-            generation: 0,
-        }],
+        chain: vec![crate::device::main_window()],
         executor: package,
         native_tool: false,
         files,

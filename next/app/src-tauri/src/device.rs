@@ -17,10 +17,13 @@
 //! person can roll back. With `--safe-mode`, no device page is listed, opened or served and no
 //! native tool is admitted; the catalog can still be managed.
 
+#[cfg(target_os = "linux")]
+pub use admission::main_window;
 pub use admission::{
     admitted_unlocked, native_candidate_unlocked, Admission, Admitted, OperationDecl, Roots,
     Signed, StateDecl,
 };
+pub use imports::{Consent, ConsentTarget, ExportDecl, Grant, ImportDecl, Refused, LAUNCH_FIELDS};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -133,6 +136,12 @@ pub struct Release {
     /// before it is admitted.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tree: BTreeMap<String, String>,
+    /// The other packages' operations it may call through the host.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub imports: Vec<ImportDecl>,
+    /// Native: the operations other packages may import, and their contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exports: Option<ExportDecl>,
 }
 
 fn web() -> String {
@@ -149,6 +158,10 @@ pub struct Package {
     /// A native tool's confirmed admission, bound to its active release and signer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admission: Option<Admission>,
+    /// A curated web package's confirmed native imports, bound to its active release and to
+    /// each target's release.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent: Option<Consent>,
 }
 
 /// The catalog format with a native tool in it. A build before native tools reads only version
@@ -229,6 +242,10 @@ pub struct ReleaseView {
     pub tier: String,
     /// Native: the declared operations, by ID and description.
     pub operations: Vec<(String, String)>,
+    /// The other packages' operations it may call through the host.
+    pub imports: Vec<ImportDecl>,
+    /// Native: the operations other packages may import.
+    pub exports: Option<ExportDecl>,
     /// Who signed it, and whether the person approved that signer for its source (Access).
     /// Whether the signature is curated is the package's `trust`, from the current roots.
     pub signer: Option<SignerView>,
@@ -255,6 +272,8 @@ pub struct PackageView {
     pub tier: String,
     /// A native tool: whether the person confirmed it for its active release.
     pub authorized: bool,
+    /// A web package: whether the person allowed its native imports for its active release.
+    pub imports_allowed: bool,
     pub source: Source,
     pub active: ReleaseView,
     pub last_good: Option<ReleaseView>,
@@ -387,6 +406,8 @@ fn release_view(
             approved: approved(s),
             access: for_access(id, r, roots).is_some(),
         }),
+        imports: r.imports.clone(),
+        exports: r.exports.clone(),
     }
 }
 
@@ -619,6 +640,7 @@ impl Catalog {
                     },
                     tier: p.active.tier.clone(),
                     authorized: p.authorized(),
+                    imports_allowed: self.imports_allowed(id, roots),
                     source: p.source.clone(),
                     active: release_view(id, &p.active, roots, approved),
                     last_good: p
@@ -761,6 +783,7 @@ impl Catalog {
                 last_good: Some(p.active),
                 active: c.release.clone(),
                 admission: None,
+                consent: None,
             },
             None => Package {
                 enabled: !native,
@@ -768,9 +791,13 @@ impl Catalog {
                 active: c.release.clone(),
                 last_good: None,
                 admission: None,
+                consent: None,
             },
         };
         self.packages.insert(id.clone(), package);
+        if previous.is_some() {
+            self.drop_consents_naming(id);
+        }
         if let Err(e) = self.save() {
             match previous {
                 Some(p) => self.packages.insert(id.clone(), p),
@@ -824,11 +851,12 @@ impl Catalog {
         if let Some(why) = held(id, p, roots).filter(|_| enabled) {
             return Err(why);
         }
-        let was = (p.enabled, p.admission.take());
+        let was = (p.enabled, p.admission.take(), p.consent.take());
         p.enabled = enabled;
+        self.drop_consents_naming(id);
         if let Err(e) = self.save() {
             if let Some(p) = self.packages.get_mut(id) {
-                (p.enabled, p.admission) = was;
+                (p.enabled, p.admission, p.consent) = was;
             }
             return Err(e);
         }
@@ -840,6 +868,7 @@ impl Catalog {
             .packages
             .remove(id)
             .ok_or_else(|| format!("{id} is not installed on this device"))?;
+        self.drop_consents_naming(id);
         if let Err(e) = self.save() {
             self.packages.insert(id.into(), p);
             return Err(e);
@@ -867,15 +896,16 @@ impl Catalog {
         let active = std::mem::replace(&mut p.active, last);
         p.last_good = Some(active);
         // A native tool's admission named the release that is no longer active.
-        let was = (p.enabled, p.admission.take());
+        let was = (p.enabled, p.admission.take(), p.consent.take());
         if p.active.tier == "native" || p.last_good.as_ref().is_some_and(|r| r.tier == "native") {
             p.enabled = false;
         }
+        self.drop_consents_naming(id);
         if let Err(e) = self.save() {
             let p = self.packages.get_mut(id).unwrap();
             let last = std::mem::replace(&mut p.active, p.last_good.take().unwrap());
             p.last_good = Some(last);
-            (p.enabled, p.admission) = was;
+            (p.enabled, p.admission, p.consent) = was;
             return Err(e);
         }
         Ok(())
@@ -1093,6 +1123,8 @@ struct App {
     programs: Option<BTreeMap<String, String>>,
     operations: Option<Vec<Operation>>,
     state: Option<State>,
+    imports: Option<Vec<imports::ImportSpec>>,
+    exports: Option<imports::ExportSpec>,
 }
 
 #[derive(Deserialize, Default)]
@@ -1110,6 +1142,7 @@ struct Operation {
     description: String,
     input_schema: Value,
     output_schema: Value,
+    effect: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -1259,9 +1292,14 @@ impl App {
         if let Some(c) = &self.config {
             c.validate().map_err(|e| format!("app: {e}"))?;
         }
+        imports::validate_imports(self.imports.as_deref())?;
         if self.tier == "web" {
-            if self.programs.is_some() || self.operations.is_some() || self.state.is_some() {
-                return Err("web app cannot declare programs, operations or state".into());
+            if self.programs.is_some()
+                || self.operations.is_some()
+                || self.state.is_some()
+                || self.exports.is_some()
+            {
+                return Err("web app cannot declare programs, operations, exports or state".into());
             }
             let mut seen = BTreeSet::new();
             for r in self.resources.iter().flatten() {
@@ -1310,7 +1348,9 @@ impl App {
             if !op.input_schema.is_object() || !op.output_schema.is_object() {
                 return Err("app.operations schemas must be JSON objects".into());
             }
+            imports::validate_effect(op)?;
         }
+        imports::validate_exports(self.exports.as_ref(), ops)?;
         match &self.state {
             Some(s) if s.version >= 0 && !s.readable_versions.is_empty() => {
                 if s.readable_versions.iter().any(|v| *v < 0) {
@@ -1598,6 +1638,8 @@ fn stage_signed(
             operations: vec![],
             state: None,
             tree: BTreeMap::new(),
+            imports: vec![],
+            exports: None,
         },
         staged: staged.clone(),
     };
@@ -1630,20 +1672,11 @@ fn stage_signed(
             m.id, m.version
         )
     })?;
-    match (app.tier.as_str(), &signing) {
-        ("native", None) => {
-            return Err(format!(
-                "{} {} is a native tool; native tools are admitted only from a curated source with a first-party signature",
-                m.id, m.version
-            ))
-        }
-        ("web", Some(_)) => {
-            return Err(format!(
-                "{} {}: curated web packages are not admitted by this app yet",
-                m.id, m.version
-            ))
-        }
-        _ => {}
+    if app.tier == "native" && signing.is_none() {
+        return Err(format!(
+            "{} {} is a native tool; native tools are admitted only from a curated source with a first-party signature",
+            m.id, m.version
+        ));
     }
     if !app.host_versions.contains(&HOST_CONTRACT) {
         return Err(format!(
@@ -1673,8 +1706,14 @@ fn stage_signed(
         })
         .collect();
     r.settings = app.config.is_some();
-    if let Some(s) = signing {
-        admission::native_release(r, &app, &staged, s.signed)?;
+    r.imports = imports::import_decls(&m.id, &app)?;
+    match signing {
+        Some(s) if app.tier == "native" => {
+            admission::native_release(r, &app, &staged, s.signed)?;
+        }
+        // A curated web package: its signature makes it curated, which native imports need.
+        Some(s) => r.signed = Some(s.signed),
+        None => {}
     }
     if let Some(ui) = &app.ui {
         if !store_path(&ui.dir) {
@@ -2206,6 +2245,8 @@ pub fn stage_from_registry(
 
 #[path = "device_admission.rs"]
 mod admission;
+#[path = "device_imports.rs"]
+mod imports;
 #[path = "device_swap.rs"]
 mod swap;
 use admission::Signing;

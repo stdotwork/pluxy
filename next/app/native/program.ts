@@ -34,6 +34,7 @@ const OPERATIONS = [
   {
     id: "summary",
     description: "Count the items and name the longest",
+    effect: "read",
     input_schema: {
       type: "object",
       properties: {
@@ -51,12 +52,14 @@ const OPERATIONS = [
   {
     id: "wait",
     description: "Wait until cancelled",
+    effect: "read",
     input_schema: { type: "object", additionalProperties: false },
     output_schema: object,
   },
   {
     id: "slow",
     description: "Answer after a while",
+    effect: "read",
     input_schema: {
       type: "object",
       properties: { ms: { type: "integer", minimum: 0, maximum: 60000 } },
@@ -68,6 +71,7 @@ const OPERATIONS = [
   {
     id: "crash",
     description: "Exit at once without answering",
+    effect: "read",
     input_schema: { type: "object", additionalProperties: false },
     output_schema: object,
   },
