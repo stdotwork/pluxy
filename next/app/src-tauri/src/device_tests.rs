@@ -1191,6 +1191,21 @@ fn admission_is_confirmed_per_release_and_checked_each_time() {
         a
     );
 
+    // A confirmation for another host contract, or for another key, is not this one.
+    let saved = c.packages["pluxy/tool"].admission.clone().unwrap();
+    for change in [
+        (|a: &mut Admission| a.host_contract += 1) as fn(&mut Admission),
+        |a: &mut Admission| a.public_key = hex(signing_key().verifying_key().as_bytes()),
+    ] {
+        let mut x = saved.clone();
+        change(&mut x);
+        c.packages.get_mut("pluxy/tool").unwrap().admission = Some(x);
+        let e = c.admitted("pluxy/tool", &roots).unwrap_err();
+        assert!(e.contains("signing key or host contract changed"), "{e}");
+    }
+    c.packages.get_mut("pluxy/tool").unwrap().admission = Some(saved);
+    assert_eq!(c.admitted("pluxy/tool", &roots).unwrap(), a);
+
     // Disabling ends it.
     c.set_enabled("pluxy/tool", false).unwrap();
     assert!(c.get("pluxy/tool").unwrap().admission.is_none());
