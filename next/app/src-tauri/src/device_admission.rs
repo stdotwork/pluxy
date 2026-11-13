@@ -324,7 +324,8 @@ fn names(d: &artifact::Descriptor, id: &str, version: &str) -> Result<(), String
 }
 
 /// Checks the signature l over its descriptor with source's root key, and that the descriptor
-/// names id's release version, from the index alone (before anything is fetched).
+/// names id's release version as a native tool, from the index alone (before anything is
+/// fetched).
 pub(super) fn check_listed(
     roots: &dyn Roots,
     source: &str,
@@ -337,7 +338,14 @@ pub(super) fn check_listed(
         .map_err(|_| format!("{id} {version}: its signature is not 128 lower-case hex digits"))?;
     let v = artifact::verify_descriptor(&key, l.descriptor.as_bytes(), &sig, platform)
         .map_err(|e| format!("{id} {version}: {e}"))?;
-    names(v.descriptor(), id, version)
+    names(v.descriptor(), id, version)?;
+    // As staging refuses it once the archive is unpacked.
+    if v.descriptor().tier != Tier::Native {
+        return Err(format!(
+            "{id} {version}: curated web packages are not admitted by this app yet"
+        ));
+    }
+    Ok(())
 }
 
 /// Verifies a curated registry's signature l over its descriptor with source's root key for

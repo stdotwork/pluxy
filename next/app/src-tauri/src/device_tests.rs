@@ -966,7 +966,15 @@ fn signing_key() -> ed25519_dalek::SigningKey {
     ed25519_dalek::SigningKey::from_bytes(&seed)
 }
 
-/// A native tool's archive: its manifest and an executable program for this computer.
+/// About 200 KiB of data: more than one 64 KiB chunk of a file being hashed.
+fn blob() -> Vec<u8> {
+    (0..200 * 1024u32)
+        .map(|i| (i.wrapping_mul(2_654_435_761) >> 24) as u8)
+        .collect()
+}
+
+/// A native tool's archive: its manifest, an executable program for this computer and a data
+/// file of about 200 KiB.
 fn native_package(id: &str, version: &str) -> Vec<u8> {
     let m = serde_json::to_vec(&serde_json::json!({
         "manifest_version": 1, "id": id, "version": version,
@@ -977,9 +985,11 @@ fn native_package(id: &str, version: &str) -> Vec<u8> {
             "state": {"version": 0, "readable_versions": [0]}}
     }))
     .unwrap();
+    let blob = blob();
     let mut b = tar::Builder::new(Vec::new());
     for (name, data, mode) in [
         ("pluxy-extension.json", m.as_slice(), 0o644),
+        ("data/blob", blob.as_slice(), 0o644),
         (
             "bin/tool",
             format!("#!/bin/sh\n# {version}\n").as_bytes(),
@@ -999,17 +1009,28 @@ fn native_package(id: &str, version: &str) -> Vec<u8> {
     gz.finish().unwrap()
 }
 
-/// An index artifact for bytes at file; signed by key over a descriptor naming (id, version).
+/// An index artifact for bytes at file; signed by key over a descriptor naming (id, version)
+/// and the native tier.
 fn signed_artifact(
     file: &str,
     bytes: &[u8],
     signed: Option<(&ed25519_dalek::SigningKey, &str, &str)>,
 ) -> Value {
+    signed_artifact_as(file, bytes, signed, "native")
+}
+
+/// `signed_artifact`, with the descriptor naming tier.
+fn signed_artifact_as(
+    file: &str,
+    bytes: &[u8],
+    signed: Option<(&ed25519_dalek::SigningKey, &str, &str)>,
+    tier: &str,
+) -> Value {
     use ed25519_dalek::Signer;
     let mut a = serde_json::json!({"url": file, "sha256": digest(bytes), "size": bytes.len()});
     if let Some((key, id, version)) = signed {
         let descriptor = serde_json::to_string(&serde_json::json!({
-            "id": id, "version": version, "tier": "native", "platform": platform(),
+            "id": id, "version": version, "tier": tier, "platform": platform(),
             "size": bytes.len(), "sha256": digest(bytes)}))
         .unwrap();
         a["key_id"] = "k1".into();
@@ -1037,7 +1058,13 @@ fn native_fixture(root: &Path) -> (Dirs, TestRoots) {
     let partial = native_package("pluxy/partial", "1.0.0");
     let wrong_key = native_package("pluxy/wrongkey", "1.0.0");
     let signed_page = package("example/signedpage", "1.0.0");
+    let bad_key = native_package("pluxy/badkey", "1.0.0");
+    let long_key = native_package("pluxy/longkey", "1.0.0");
+    let web_desc = package("pluxy/webdesc", "1.0.0");
     for (f, b) in [
+        ("badkey", &bad_key),
+        ("longkey", &long_key),
+        ("webdesc", &web_desc),
         ("partial", &partial),
         ("wrongkey", &wrong_key),
         ("signedpage", &signed_page),
@@ -1081,7 +1108,22 @@ fn native_fixture(root: &Path) -> (Dirs, TestRoots) {
     );
     let mut page_part = page_signed.clone();
     page_part.as_object_mut().unwrap().remove("descriptor");
+    // Key IDs that are not 1 to 64 of letters, digits, '.', '_' and '-'.
+    let mut bad = signed_artifact("badkey", &bad_key, Some((&key, "pluxy/badkey", "1.0.0")));
+    bad["key_id"] = "a/b".into();
+    let mut long = signed_artifact("longkey", &long_key, Some((&key, "pluxy/longkey", "1.0.0")));
+    long["key_id"] = "k".repeat(65).into();
+    // Signed by the root's key, but as a web package: curated web packages are refused.
+    let web = signed_artifact_as(
+        "webdesc",
+        &web_desc,
+        Some((&key, "pluxy/webdesc", "1.0.0")),
+        "web",
+    );
     let curated = serde_json::json!({"registry_version": 0, "packages": {
+        "pluxy/badkey": one(bad),
+        "pluxy/longkey": one(long),
+        "pluxy/webdesc": one(web),
         "pluxy/partial": one(part),
         "pluxy/wrongkey": one(wrong),
         "example/signedpage": one(page_signed.clone()),
@@ -1146,6 +1188,12 @@ fn only_a_curated_signed_native_tool_installs() {
     assert!(e.contains("part of a signature"), "{e}");
     let e = refused("curated", "pluxy/wrongkey", &roots);
     assert!(e.contains("not the key its root names"), "{e}");
+    for id in ["pluxy/badkey", "pluxy/longkey"] {
+        let e = refused("curated", id, &roots);
+        assert!(e.contains("key_id is not valid"), "{id}: {e}");
+    }
+    let e = refused("curated", "pluxy/webdesc", &roots);
+    assert!(e.contains("curated web packages are not admitted"), "{e}");
     // What the registries list says the same, before anything is fetched; whether a package is
     // a native tool only its archive tells.
     let listed = offers(&d, &roots).unwrap();
@@ -1164,10 +1212,13 @@ fn only_a_curated_signed_native_tool_installs() {
     assert_eq!(
         refusals("curated"),
         set(&[
+            "pluxy/badkey",
             "pluxy/forged",
+            "pluxy/longkey",
             "pluxy/partial",
             "pluxy/renamed",
             "pluxy/unsigned",
+            "pluxy/webdesc",
             "pluxy/wrongkey"
         ])
     );
@@ -1265,6 +1316,11 @@ fn admission_is_confirmed_per_release_and_checked_each_time() {
     assert_eq!(a.public_key(), hex(roots.key.as_bytes()));
     assert_eq!(a.signed.public_key, hex(roots.key.as_bytes()));
     assert_eq!(a.operations[0].id, "inspect");
+    // Every file's digest past its first 64 KiB, against the fixture's own bytes.
+    assert_eq!(
+        c.get("pluxy/tool").unwrap().active.tree["data/blob"],
+        digest(&blob())
+    );
     // The program's digest at install, from the fixture's own bytes.
     assert_eq!(a.program_sha256(), digest(b"#!/bin/sh\n# 1.0.0\n"));
     // The person asks in the main window; the tool is what runs.
