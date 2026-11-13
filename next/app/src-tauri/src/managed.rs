@@ -655,6 +655,39 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    /// The exit is seen as it happens, from the pidfd, not by the 100 ms reaping poll: with the
+    /// child's lock held, nothing can reap it, so only the pidfd can set gone.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_core_exit_is_seen_before_it_is_reaped() {
+        let dir = temp("pidfd");
+        let program = script(
+            &dir,
+            "echo 'pluxy: listening on http://127.0.0.1:1' >&2\nexec sleep 30",
+        );
+        let core = ManagedCore::start(File::open(&program).unwrap(), &program, &dir, None).unwrap();
+        let gone = core.gone();
+        // Checked after the lock is let go, so a failure does not poison it for stop().
+        let (killed, seen, reaped) = {
+            let _held = core.child.lock().unwrap();
+            let killed = unsafe { libc::kill(core.pid() as libc::pid_t, libc::SIGKILL) } == 0;
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !gone.load(Ordering::SeqCst) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let reaped = core.status.lock().unwrap().is_some();
+            (killed, gone.load(Ordering::SeqCst), reaped)
+        };
+        assert!(killed, "the core could not be killed");
+        assert!(seen, "the core's exit was not seen while it was unreaped");
+        assert!(!reaped, "the core was reaped while its lock was held");
+        assert!(
+            core.wait(Duration::from_secs(2)),
+            "the core was never reaped"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn a_core_that_exits_at_start_says_why() {
         let dir = temp("exit");
