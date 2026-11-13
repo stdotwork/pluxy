@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
 	"strconv"
@@ -42,6 +43,32 @@ type fakeProxy struct {
 	requests []string
 	creds    []string // the user name and password each request came with, "" for none
 	out      map[string]bool
+	bodyEnd  func() // see holdBodyEnd
+}
+
+// holdBodyEnd makes the HTTP proxy call f before it reads a forwarded request body again after
+// the body ended, which net/http does to check nothing follows: a test holds that read back with
+// f, as a busy machine may.
+func (p *fakeProxy) holdBodyEnd(f func()) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.bodyEnd = f
+}
+
+// lateEnd is a forwarded request body that calls end before each read after the body ended.
+type lateEnd struct {
+	io.ReadCloser
+	end   func()
+	ended bool
+}
+
+func (b *lateEnd) Read(buf []byte) (int, error) {
+	if b.ended {
+		b.end()
+	}
+	n, err := b.ReadCloser.Read(buf)
+	b.ended = b.ended || err == io.EOF
+	return n, err
 }
 
 // URL returns the proxy's URL with scheme, and with its user name and password when it asks
@@ -107,6 +134,12 @@ func newHTTPProxy(t *testing.T, auth bool) *fakeProxy {
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.Out.URL = r.In.URL
 			r.Out.Host = r.In.Host
+			p.mu.Lock()
+			end := p.bodyEnd
+			p.mu.Unlock()
+			if end != nil && r.Out.Body != nil {
+				r.Out.Body = &lateEnd{ReadCloser: r.Out.Body, end: end}
+			}
 		},
 		Transport: &http.Transport{
 			DialContext:       func(ctx context.Context, _, addr string) (net.Conn, error) { return p.dial(ctx, addr) },
@@ -135,6 +168,14 @@ func newHTTPProxy(t *testing.T, auth bool) *fakeProxy {
 				http.Error(w, "fake proxy: not a proxy request", http.StatusBadRequest)
 				return
 			}
+			// The forwarder still reads the request body (to check it ended) after the upstream has
+			// all of it and may have answered. By default the server reads and closes that body when
+			// the reply's headers go out, and the forwarder's late read then fails, which closes the
+			// upstream connection mid-reply. Full duplex leaves the body to the forwarder.
+			if err := http.NewResponseController(w).EnableFullDuplex(); err != nil {
+				http.Error(w, "fake proxy: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
 			forward.ServeHTTP(w, r)
 			return
 		}
@@ -159,6 +200,59 @@ func newHTTPProxy(t *testing.T, auth bool) *fakeProxy {
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { srv.Close() })
 	return p
+}
+
+// The HTTP proxy keeps a streamed reply going when it reads the request body past its end only
+// after the reply has started, as it may on a busy machine.
+func TestHTTPProxyStreamsWhenBodyEndReadLate(t *testing.T) {
+	firstSeen := make(chan struct{}) // the client has the reply's first event
+	lateRead := make(chan struct{})  // the proxy goes on to read past the body's end
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: first\n\n")
+		w.(http.Flusher).Flush()
+		select {
+		case <-lateRead:
+		case <-time.After(10 * time.Second):
+		}
+		// Time for that read, and for whatever it makes the proxy do, before the rest goes.
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(200 * time.Millisecond):
+		}
+		_, _ = io.WriteString(w, "data: second\n\ndata: [DONE]\n\n")
+	}))
+	t.Cleanup(up.Close)
+	p := newHTTPProxy(t, false)
+	var once sync.Once
+	p.holdBodyEnd(func() {
+		select {
+		case <-firstSeen:
+		case <-time.After(10 * time.Second):
+		}
+		once.Do(func() { close(lateRead) })
+	})
+	proxyURL, _ := url.Parse(p.URL("http"))
+	tr := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+	t.Cleanup(tr.CloseIdleConnections)
+	resp, err := (&http.Client{Transport: tr}).Post(up.URL+"/v1/chat/completions", "application/json",
+		strings.NewReader(`{"model":"m","stream":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	br := bufio.NewReader(resp.Body)
+	first, err := br.ReadString('\n')
+	if err != nil || first != "data: first\n" {
+		t.Fatalf("first line %q, %v", first, err)
+	}
+	close(firstSeen)
+	rest, err := io.ReadAll(br)
+	if err != nil || !strings.Contains(string(rest), "data: second\n\ndata: [DONE]\n\n") {
+		t.Fatalf("after the first event: %q, %v", rest, err)
+	}
 }
 
 // pipe copies between client (whose reader may hold bytes read ahead) and target until either

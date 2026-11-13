@@ -13,6 +13,7 @@ export const configText = strings("config", {
   searchSettings: "Search settings (label or YAML key)",
   noResults: "No results",
   logToFile: "Log to File",
+  proxyUrl: "Proxy URL",
   strategy: "Routing Strategy",
   roundRobin: "Round Robin",
   weighted: "Weighted Round Robin",
