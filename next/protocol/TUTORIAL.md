@@ -222,11 +222,11 @@ including what to send when the upstream connection is lost, are in
 
 Core's payload rules (see [Payload rules](README.md#payload-rules)) reach a turn on its frame, and
 `sdk.Upstream` cannot apply them to a message that is not an HTTP request. So a session handler
-passes each final message it writes upstream to `sdk.ApplyPayload(ctx, body)` once, just before
-writing it, with the turn's `ctx` and after everything else it does to the message
-(`extensions/codex/websocket.go` does this). Do not also pass a message that goes out as an HTTP
-request through `sdk.Upstream` to `sdk.ApplyPayload`: `sdk.Upstream` has applied the rules to it
-already, and they would apply twice.
+passes the message it writes upstream for each turn (not a control message such as the client's
+interrupt) to `sdk.ApplyPayload(ctx, body)` once, just before writing it, with the turn's `ctx`
+and after everything else it does to the message (`extensions/codex/websocket.go` does this). Do
+not also pass a message that goes out as an HTTP request through `sdk.Upstream` to
+`sdk.ApplyPayload`: `sdk.Upstream` has applied the rules to it already, and they would apply twice.
 
 ## 8. List models (optional, protocol 0.3)
 
