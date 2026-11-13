@@ -16,6 +16,7 @@
     "allow-core-restart",
     "allow-core-call",
     "allow-key-entry",
+    "allow-management-key-rotate",
     "allow-sign-out",
     "allow-page-open",
     "allow-page-place",
@@ -31,8 +32,13 @@
     "allow-device-remove",
     "allow-device-rollback",
     "allow-device-page-open",
+    "allow-program-call",
+    "allow-program-cancel",
+    "allow-program-status",
     "allow-window-get",
     "allow-window-set",
-    "allow-window-close"
+    "allow-window-close",
+    "allow-privacy-get",
+    "allow-privacy-set"
   ]
 }

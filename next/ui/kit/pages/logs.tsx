@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { type ErrorLogFile, type LogContent, problem } from "../api";
+import { useAccountLabels, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { strings } from "../strings";
 import {
@@ -84,8 +85,12 @@ function LogText({ content, wrap }: { content: string; wrap: boolean }) {
 
 export function LogsPage() {
   const { api, unauthorized } = useKit();
+  // Privacy mode masks what the views show; search, downloads and the files keep the real text.
+  const p = usePrivacy();
   const files = useLoad(api.errorLogs);
   const [lines, setLines] = useState<string[]>([]);
+  const labels = useAccountLabels(lines);
+  const mask = useMemo(() => p.masker(labels), [p, labels]);
   const [error, setError] = useState<string>();
   const [off, setOff] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -130,6 +135,8 @@ export function LogsPage() {
       latest.current = r.body["latest-timestamp"];
       const incoming = r.body.lines;
       setLines((old) => {
+        // Nothing new: the same lines, so nothing is masked again.
+        if (append && incoming.length === 0) return old;
         const next = append ? [...old, ...incoming] : incoming;
         if (next.length > 10000) setTrimmed(true);
         else if (!append) setTrimmed(false);
@@ -214,9 +221,13 @@ export function LogsPage() {
     }
   };
   const query = search.toLocaleLowerCase();
-  const shown = lines.filter(
-    (line) => (!level || logLevel(line) === level) && line.toLocaleLowerCase().includes(query),
+  // Masked once per change of the lines or the labels, not on each render (a read every 2 seconds
+  // while reading continuously, each keystroke in the search).
+  const masked = useMemo(() => lines.map(mask), [lines, mask]);
+  const shownAt = lines.flatMap((line, i) =>
+    (!level || logLevel(line) === level) && line.toLocaleLowerCase().includes(query) ? [i] : [],
   );
+  const shown = shownAt.map((i) => lines[i] as string);
   return (
     <>
       <PageHead
@@ -234,7 +245,7 @@ export function LogsPage() {
         }
       />
       <Card title={t("content")}>
-        {error && <Notice tone="danger">{error}</Notice>}
+        {error && <Notice tone="danger">{mask(error)}</Notice>}
         {off && (
           <Notice tone="warn">
             {t("off")}{" "}
@@ -267,9 +278,9 @@ export function LogsPage() {
           data-wrap={wrap ? "" : undefined}
         >
           {shown.length ? (
-            shown.map((line, i) => (
-              <div key={i} data-part="log-line" data-level={logLevel(line)}>
-                {line}
+            shownAt.map((i) => (
+              <div key={i} data-part="log-line" data-level={logLevel(lines[i] as string)}>
+                {masked[i]}
               </div>
             ))
           ) : (
@@ -297,7 +308,7 @@ export function LogsPage() {
         )}
       </Card>
       <Card title={t("errors")}>
-        {files.error && <Notice tone="danger">{files.error}</Notice>}
+        {files.error && <Notice tone="danger">{mask(files.error)}</Notice>}
         <MasterDetail
           list={
             files.loading ? (
@@ -311,7 +322,7 @@ export function LogsPage() {
                 id={(file) => file.name}
                 selected={selected}
                 columns={[
-                  { label: t("name"), value: (file) => file.name, mono: true },
+                  { label: t("name"), value: (file) => mask(file.name), mono: true },
                   { label: t("size"), value: (file) => t("bytes", { count: file.size }) },
                   { label: t("modified"), value: (file) => when(file.modified) },
                   {
@@ -343,13 +354,13 @@ export function LogsPage() {
                   setSelected(undefined);
                 }}
               >
-                <p class="mono">{selected}</p>
+                <p class="mono">{mask(selected)}</p>
                 {detailBusy && <Notice tone="muted">{t("loading")}</Notice>}
-                {detailError && <Notice tone="danger">{detailError}</Notice>}
+                {detailError && <Notice tone="danger">{mask(detailError)}</Notice>}
                 {detail && (
                   <>
                     <Button onClick={() => saveLog(detail.name, detail.content)}>{t("download")}</Button>
-                    <LogText content={detail.content} wrap={wrap} />
+                    <LogText content={mask(detail.content) ?? ""} wrap={wrap} />
                   </>
                 )}
               </Detail>
@@ -377,11 +388,11 @@ export function LogsPage() {
           <section data-part="card" aria-label={t("viewRequest", { id: requested })}>
             <h3>{t("viewRequest", { id: requested })}</h3>
             {requestBusy && <Notice tone="muted">{t("loading")}</Notice>}
-            {requestError && <Notice tone="danger">{requestError}</Notice>}
+            {requestError && <Notice tone="danger">{mask(requestError)}</Notice>}
             {request && (
               <>
                 <Button onClick={() => saveLog(request.name, request.content)}>{t("download")}</Button>
-                <LogText content={request.content} wrap={wrap} />
+                <LogText content={mask(request.content) ?? ""} wrap={wrap} />
               </>
             )}
           </section>

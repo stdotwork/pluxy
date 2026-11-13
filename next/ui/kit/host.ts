@@ -18,7 +18,10 @@ export interface Host {
    * Calls core's management API, version 0. path is under /v0/management, such as "/accounts".
    * The host adds the management key; no request carrying it goes anywhere but core's
    * management API. Hosts offering rotateManagementKey adopt a successful rotation's value
-   * before returning its reply, so the kit can reveal it once and later calls keep working.
+   * before returning its reply, so the kit can reveal it once and later calls keep working. A
+   * host that keeps the key outside its pages (the desktop app) leaves value out of a successful
+   * reply's body, may add an error beside it for a problem after the rotation, and answers 204
+   * with no body when the person cancels.
    */
   call<T>(method: Method, path: string, body?: unknown): Promise<Reply<T>>;
   /** Whether the host holds a management key to call with. */

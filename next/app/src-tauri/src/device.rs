@@ -15,7 +15,10 @@
 //! no device page is listed, opened or served and no native tool is admitted; the catalog can
 //! still be managed.
 
-pub use admission::{Admission, Admitted, OperationDecl, Roots, Signed, StateDecl};
+pub use admission::{
+    admitted_unlocked, native_candidate_unlocked, Admission, Admitted, OperationDecl, Roots,
+    Signed, StateDecl,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};

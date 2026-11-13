@@ -1,4 +1,5 @@
-//! Native secret entry. Only this module reads GTK's hidden entry; no key is returned to IPC.
+//! Native secret entry, and the native window showing a rotated key once. Only this module reads
+//! GTK's hidden entry or shows a key; no key is returned to IPC.
 use tauri::AppHandle;
 
 pub(crate) struct Input {
@@ -78,6 +79,75 @@ pub(crate) fn request(app: &AppHandle, summary: String) -> Result<Option<Input>,
     .map_err(|_| "could not open native key entry")?;
     rx.recv()
         .map_err(|_| "native key entry closed unexpectedly")
+}
+
+/// Shows a rotated management key once, with notice saying how the app keeps it, a Copy button
+/// (to the clipboard) and Close. Returns once the window is asked for; it does not wait. The
+/// window stays open when the main window closes to the tray, and replaces the window of an
+/// earlier rotation, whose key no longer works.
+#[cfg(target_os = "linux")]
+pub(crate) fn reveal(app: &AppHandle, key: String, notice: String) {
+    use gtk::prelude::*;
+    use tauri::Manager;
+    thread_local! {
+        static SHOWN: std::cell::RefCell<Option<gtk::Dialog>> = const { std::cell::RefCell::new(None) };
+    }
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(earlier) = SHOWN.with(|s| s.borrow_mut().take()) {
+            // SAFETY: on the GTK thread; nothing uses the earlier window afterwards.
+            unsafe {
+                earlier.destroy();
+            }
+        }
+        let parent = handle
+            .get_window(crate::WINDOW)
+            .and_then(|w| w.gtk_window().ok());
+        // Not destroyed with its parent: closing the main window to the tray must leave the
+        // only display of the new key open.
+        let dialog = gtk::Dialog::with_buttons(
+            Some("pluxy new management key"),
+            parent.as_ref(),
+            gtk::DialogFlags::empty(),
+            &[
+                ("Co_py", gtk::ResponseType::Apply),
+                ("_Close", gtk::ResponseType::Close),
+            ],
+        );
+        dialog.set_default_response(gtk::ResponseType::Close);
+        let content = dialog.content_area();
+        content.set_border_width(16);
+        content.set_spacing(12);
+        let label = gtk::Label::new(Some(&notice));
+        label.set_xalign(0.0);
+        label.set_line_wrap(true);
+        label.set_max_width_chars(60);
+        content.add(&label);
+        let value = gtk::Label::new(Some(&key));
+        value.set_xalign(0.0);
+        value.set_selectable(true);
+        value.style_context().add_class("monospace");
+        content.add(&value);
+        dialog.connect_response(move |d, response| {
+            if response == gtk::ResponseType::Apply {
+                gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD).set_text(&key);
+                return;
+            }
+            SHOWN.with(|s| {
+                let mut s = s.borrow_mut();
+                if s.as_ref() == Some(d) {
+                    *s = None;
+                }
+            });
+            d.hide();
+            unsafe {
+                d.destroy();
+            }
+        });
+        dialog.show_all();
+        dialog.present();
+        SHOWN.with(|s| *s.borrow_mut() = Some(dialog));
+    });
 }
 
 #[cfg(not(target_os = "linux"))]

@@ -26,6 +26,8 @@ const t = strings("configKeys", {
   rotationUnavailable: "Management key rotation is unavailable in this host.",
   rotationUnknown:
     "The management key may have changed. Find the current key in core's config file and sign in with it before rotating again.",
+  rotatedApart:
+    "Management key rotated. The app now uses the new key and showed it once in a window of its own, not on this page.",
   copyFailed: "Could not copy. Select the key and copy it manually.",
 });
 
@@ -49,6 +51,8 @@ export function useConfigKeys(tab: string, onChanged: () => void) {
   const [management, setManagement] = useState<NewKey>();
   const [adding, setAdding] = useState(false);
   const [rotating, setRotating] = useState(false);
+  /** A rotation the host kept the key of, without passing it to the page. */
+  const [rotatedApart, setRotatedApart] = useState(false);
   const [clientError, setClientError] = useState<string>();
   const [rotationError, setRotationError] = useState<string>();
   const nextId = useRef(0);
@@ -80,20 +84,26 @@ export function useConfigKeys(tab: string, onChanged: () => void) {
     const origin = currentTab.current;
     setRotating(true);
     setRotationError(undefined);
+    setRotatedApart(false);
     const reply = await api.rotateManagementKey();
     setRotating(false);
     if (reply.status === 401) return unauthorized();
-    setRotationError(reply.status === 0 ? t("rotationUnknown") : problem(reply));
-    if (reply.body) {
-      setManagement({ id: ++nextId.current, value: reply.body.value, tab: origin, seen: false });
-      onChanged();
-    }
+    setRotationError(
+      reply.status === 0
+        ? (reply.error?.message ?? t("rotationUnknown"))
+        : (problem(reply) ?? reply.error?.message),
+    );
+    const value = reply.body?.value;
+    if (value) setManagement({ id: ++nextId.current, value, tab: origin, seen: false });
+    else if (reply.body) setRotatedApart(true);
+    if (reply.body) onChanged();
   };
   return {
     clients,
     management,
     adding,
     rotating,
+    rotatedApart,
     clientError,
     rotationError,
     add,
@@ -255,6 +265,7 @@ export function ConfigConnectivity(props: {
           }
         >
           <p class="muted">{canRotate ? t("rotationHint") : t("rotationUnavailable")}</p>
+          {state.rotatedApart && <Notice tone="ok">{t("rotatedApart")}</Notice>}
           {state.rotationError && <Notice tone="danger">{state.rotationError}</Notice>}
           {value && (
             <KeyNotice

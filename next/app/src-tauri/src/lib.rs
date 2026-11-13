@@ -28,6 +28,9 @@ pub mod managed;
 mod native_test;
 pub mod pages;
 mod place;
+mod privacy;
+#[cfg(target_os = "linux")]
+pub mod program;
 #[cfg(debug_assertions)]
 pub mod release_config;
 mod startup;
@@ -71,6 +74,9 @@ struct App {
     /// This device's extension catalog. Installs check and stage a release without it.
     device: Mutex<device::Catalog>,
     device_dirs: device::Dirs,
+    /// The admitted native tools that run, on demand (`program.rs`).
+    #[cfg(target_os = "linux")]
+    programs: program::Host,
     status: Mutex<Option<MenuItem<Wry>>>,
     /// What closing the window does, and its size and place (`window.rs`).
     window: Mutex<window::Store>,
@@ -78,6 +84,7 @@ struct App {
     quitting: AtomicBool,
     key_entry_open: AtomicBool,
     key_entry_after: Mutex<Option<std::time::Instant>>,
+    rotation_open: AtomicBool,
 }
 
 /// Every command checks its caller too: the capability already allows only the window.
@@ -234,6 +241,8 @@ fn quit(app: &AppHandle) {
     remember_window(app);
     #[cfg(target_os = "linux")]
     st.confirmations.lock().unwrap().invalidate();
+    #[cfg(target_os = "linux")]
+    st.programs.stop_all();
     st.conn.lock().unwrap().stop_core();
     app.exit(0);
 }
@@ -367,6 +376,32 @@ fn window_view(app: &AppHandle) -> window::View {
             .close_behavior,
         tray: usable_tray(app).is_ok(),
     }
+}
+
+fn privacy_file(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    Ok(app
+        .path()
+        .app_config_dir()
+        .map_err(|e| e.to_string())?
+        .join(privacy::FILE))
+}
+
+/// Whether privacy mode is on (`privacy.rs`).
+#[tauri::command]
+async fn privacy_get(webview: Webview) -> Result<bool, String> {
+    trusted(&webview)?;
+    Ok(privacy::load(&privacy_file(webview.app_handle())?))
+}
+
+/// Saves privacy mode; only the window's own toggle calls it.
+#[tauri::command]
+async fn privacy_set(webview: Webview, on: bool) -> Result<bool, String> {
+    trusted(&webview)?;
+    // One write at a time, as window_set writes under its store's lock.
+    static SAVING: Mutex<()> = Mutex::new(());
+    let _saving = SAVING.lock().unwrap();
+    privacy::save(&privacy_file(webview.app_handle())?, on)?;
+    Ok(on)
 }
 
 #[tauri::command]
@@ -603,10 +638,109 @@ async fn core_call(
     native_test::ingress_operation(&method, &path);
     #[cfg(feature = "native-test")]
     native_test::window_call(&method, &path);
+    if client::native_only(&path) {
+        return Ok(client::Reply::failed(
+            403,
+            "native_only",
+            "the management key is rotated only by the app itself: use Rotate on the Config page",
+        ));
+    }
     let caller = state.conn.lock().unwrap().caller();
-    tauri::async_runtime::spawn_blocking(move || caller.call(&method, &path, body.as_ref()))
-        .await
-        .map_err(|e| e.to_string())
+    let app = webview.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        caller.call_or_retry(&method, &path, body.as_ref(), || {
+            app.state::<App>().conn.lock().unwrap().caller()
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Rotates the management key natively: the person confirms in the native confirmation, the app
+/// calls core's rotation route itself, keeps the new key as the old one was kept and shows it
+/// once in a native window. The window gets only how it went and how the key is kept: 200 with
+/// `kept`, plus an error when it could not be saved; 204 when the person cancelled.
+#[tauri::command]
+async fn management_key_rotate(webview: Webview) -> Result<client::Reply, String> {
+    trusted(&webview)?;
+    let app = webview.app_handle().clone();
+    let st = app.state::<App>();
+    if st.key_entry_open.load(Ordering::SeqCst) {
+        return Err("finish native key entry first".into());
+    }
+    if st.rotation_open.swap(true, Ordering::SeqCst) {
+        return Err("a rotation is already in progress".into());
+    }
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        struct Pending(AppHandle);
+        impl Drop for Pending {
+            fn drop(&mut self) {
+                self.0
+                    .state::<App>()
+                    .rotation_open
+                    .store(false, Ordering::SeqCst);
+            }
+        }
+        let _pending = Pending(handle.clone());
+        rotate(&handle)
+    })
+    .await
+    .map_err(|_| "native rotation failed".into())
+}
+
+#[cfg(target_os = "linux")]
+fn rotate(app: &AppHandle) -> client::Reply {
+    let st = app.state::<App>();
+    let prepared = st.conn.lock().unwrap().prepare_rotation();
+    let target = match prepared {
+        Ok(target) => target,
+        Err(reply) => return reply,
+    };
+    match confirmation::confirm_app(app, target.summary.clone(), target.revision()) {
+        Ok(true) => {}
+        Ok(false) => {
+            return client::Reply {
+                status: 204,
+                body: None,
+                error: None,
+            }
+        }
+        Err(e) => return client::Reply::failed(409, "not_confirmed", e),
+    }
+    let mut c = st.conn.lock().unwrap();
+    let result = c.finish_rotation(target);
+    let view = c.view();
+    drop(c);
+    show_status(app, &view);
+    match result {
+        Err(reply) => reply,
+        Ok(rotation) => {
+            let error = match &rotation.kept {
+                conn::Kept::NotSaved(why) => Some(client::ApiError {
+                    code: "not_saved".into(),
+                    message: why.clone(),
+                }),
+                _ => None,
+            };
+            let body = serde_json::json!({"kept": rotation.kept.name()});
+            key_entry::reveal(app, rotation.key, rotation.kept.notice());
+            client::Reply {
+                status: 200,
+                body: Some(body),
+                error,
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn rotate(_: &AppHandle) -> client::Reply {
+    client::Reply::failed(
+        501,
+        "unsupported",
+        "native key rotation is currently supported on Linux only",
+    )
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -827,8 +961,14 @@ fn deliver_page(app: &AppHandle, label: &str, generation: &str, msg: Value) -> R
     let callback_label = label.to_string();
     let callback_generation = generation.to_string();
     let callback_msg = serde_json::json!({"type":msg["type"],"data":{"id":msg["data"]["id"],"event":msg["data"]["event"],"error":{"code":msg["data"]["error"]["code"]}}});
+    #[cfg(feature = "native-test")]
+    let sent = msg.clone();
     let result = target
         .eval_with_callback(js, move |result| {
+            #[cfg(feature = "native-test")]
+            if result == "true" {
+                native_test::privacy::delivered(&sent);
+            }
             finish_page_delivery(
                 &callback_app,
                 &callback_label,
@@ -945,6 +1085,10 @@ fn device_changed(
         (labels, catalog.view(&trust::TrustStore::current()), left)
     };
     left.extend(close_webviews(app, labels));
+    // A native tool runs only as the release it was admitted as: any change stops it, and its
+    // next call starts it from its record then, if it still has one.
+    #[cfg(target_os = "linux")]
+    st.programs.stop(id);
     let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-device", ());
     if left.is_empty() {
         Ok(view)
@@ -1111,11 +1255,9 @@ async fn device_enable(
 #[cfg(target_os = "linux")]
 fn native_enable(app: &AppHandle, id: &str) -> Result<device::View, String> {
     let st = app.state::<App>();
-    let candidate = st
-        .device
-        .lock()
-        .unwrap()
-        .native_candidate(id, &trust::TrustStore::current())?;
+    // Its files are hashed without holding the catalog (`checked_unlocked`).
+    let candidate =
+        device::native_candidate_unlocked(&st.device, id, &trust::TrustStore::current())?;
     let action = {
         let mut c = st.confirmations.lock().unwrap();
         let prepared = c.prepare_main(candidate.confirmation())?;
@@ -1142,8 +1284,15 @@ fn native_enable(app: &AppHandle, id: &str) -> Result<device::View, String> {
     };
     // Spends the single-use token and checks the program file is the one shown.
     st.confirmations.lock().unwrap().consume(&action, &token)?;
+    // Its files once more, then the record under the catalog's lock: still the one shown.
+    let now = device::native_candidate_unlocked(&st.device, id, &trust::TrustStore::current())?;
+    if now != candidate {
+        return Err(format!(
+            "{id} changed while it was being confirmed; enable it again"
+        ));
+    }
     device_changed(app, id, |c| {
-        c.admit(&candidate, &trust::TrustStore::current())
+        c.admit_checked(&candidate, &trust::TrustStore::current())
     })
 }
 
@@ -1163,6 +1312,96 @@ fn device_remove(webview: Webview, id: String) -> Result<device::View, String> {
 #[tauri::command]
 fn device_rollback(webview: Webview, id: String) -> Result<device::View, String> {
     device_change(&webview, &id, |c| c.rollback(&id))
+}
+
+/// What the program host starts tool id from: its admitted record, checked now
+/// (`Catalog::admitted`).
+#[cfg(target_os = "linux")]
+fn program_resolver(app: AppHandle) -> program::Resolve {
+    Box::new(move |id| {
+        // Its files are hashed without holding the catalog (`checked_unlocked`).
+        device::admitted_unlocked(
+            &app.state::<App>().device,
+            id,
+            &trust::TrustStore::current(),
+        )
+    })
+}
+
+/// Calls operation op of the native tool package with input, starting the tool if it is not
+/// running. With a ticket, `program_cancel` cancels the call.
+#[tauri::command]
+async fn program_call(
+    webview: Webview,
+    package: String,
+    op: String,
+    input: Value,
+    ticket: Option<String>,
+) -> Result<Value, String> {
+    trusted(&webview)?;
+    #[cfg(target_os = "linux")]
+    {
+        let app = webview.app_handle().clone();
+        // Registered now, before it can wait, so a cancel or the window's closing reaches it.
+        let call = app
+            .state::<App>()
+            .programs
+            .begin_call(ticket.as_deref())
+            .map_err(|e| e.to_string())?;
+        tauri::async_runtime::spawn_blocking(move || {
+            // On a thread of its own that ends with the call: a tool this call starts is held by
+            // the host's supervisor thread, never by the thread that started it.
+            std::thread::Builder::new()
+                .name("pluxy-prog-call".into())
+                .spawn(move || {
+                    app.state::<App>()
+                        .programs
+                        .run_call(call, &package, &op, input)
+                        .map_err(|e| e.to_string())
+                })
+                .map_err(|e| e.to_string())?
+                .join()
+                .map_err(|_| "the call's thread failed".to_string())?
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (package, op, input, ticket);
+        Err("native tools run on Linux only for now".into())
+    }
+}
+
+/// Cancels the native tool call with ticket.
+#[tauri::command]
+fn program_cancel(webview: Webview, ticket: String) -> Result<(), String> {
+    trusted(&webview)?;
+    #[cfg(target_os = "linux")]
+    {
+        webview.state::<App>().programs.cancel(&ticket)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = ticket;
+        Err("native tools run on Linux only for now".into())
+    }
+}
+
+/// Whether the native tool package runs, and how it last stopped.
+#[tauri::command]
+fn program_status(webview: Webview, package: String) -> Result<Value, String> {
+    trusted(&webview)?;
+    #[cfg(target_os = "linux")]
+    {
+        serde_json::to_value(webview.state::<App>().programs.status(&package))
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = package;
+        Err("native tools run on Linux only for now".into())
+    }
 }
 
 /// The `pluxy-app:` scheme: a device page's files, served only to the page webview bound to
@@ -1342,6 +1581,7 @@ pub fn run() {
             core_restart,
             core_call,
             key_entry,
+            management_key_rotate,
             sign_out,
             page_open,
             page_place,
@@ -1357,9 +1597,14 @@ pub fn run() {
             device_remove,
             device_rollback,
             device_page_open,
+            program_call,
+            program_cancel,
+            program_status,
             window_get,
             window_set,
             window_close,
+            privacy_get,
+            privacy_set,
         ])
         .register_asynchronous_uri_scheme_protocol(pages::SCHEME, page_scheme)
         .register_asynchronous_uri_scheme_protocol(device::ASSET_SCHEME, asset_scheme)
@@ -1444,12 +1689,18 @@ pub fn run() {
                 closing: Mutex::new(Vec::new()),
                 device: Mutex::new(catalog),
                 device_dirs,
+                #[cfg(target_os = "linux")]
+                programs: program::Host::new(
+                    program_resolver(app.handle().clone()),
+                    Default::default(),
+                ),
                 status: Mutex::new(None),
                 window: Mutex::new(window_prefs),
                 has_tray: AtomicBool::new(false),
                 quitting: AtomicBool::new(false),
                 key_entry_open: AtomicBool::new(false),
                 key_entry_after: Mutex::new(None),
+                rotation_open: AtomicBool::new(false),
             });
             let handle = app.handle().clone();
             #[cfg(target_os = "linux")]
@@ -1519,6 +1770,9 @@ pub fn run() {
                         .lock()
                         .unwrap()
                         .invalidate();
+                    // Its native tool calls end, so their tools stop when idle.
+                    #[cfg(target_os = "linux")]
+                    app.state::<App>().programs.cancel_all();
                     // Its webviews went with it.
                     app.state::<App>().pages.lock().unwrap().clear();
                     place::forget_all();
@@ -1541,6 +1795,8 @@ pub fn run() {
         }
         RunEvent::Exit => {
             if let Some(st) = app.try_state::<App>() {
+                #[cfg(target_os = "linux")]
+                st.programs.stop_all();
                 st.conn.lock().unwrap().stop_core();
             }
             if let Some(i) = app.try_state::<instance::Instance>() {
