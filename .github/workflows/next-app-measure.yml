@@ -5,7 +5,10 @@
 #   before=<full sha>   the commit to measure as "before"
 #   after=<full sha>    the commit to measure as "after"
 #   shards=<1..25>      jobs per variant (default 8); GitHub runs about 20 jobs at once, the rest queue
-#   iters=<1..20>       full native test runs per job (default 10)
+#   iters=<1..20>       full native test runs per job (default 10); in paired mode, pairs per job
+#   paired=<0|1>        0 (default): separate jobs per variant. 1: each job builds BOTH commits and
+#                       alternates before, after, before, after, ... on the same runner (iters pairs,
+#                       so 2 x iters runs per job), to tell a bad runner from a bad commit.
 # Both commits must be on a pushed branch. To run a measurement: edit measure.txt, commit, push.
 name: Next app measure
 
@@ -31,6 +34,7 @@ jobs:
       after: ${{ steps.read.outputs.after }}
       shards: ${{ steps.read.outputs.shards }}
       iters: ${{ steps.read.outputs.iters }}
+      paired: ${{ steps.read.outputs.paired }}
     steps:
       - uses: actions/checkout@v4
       - name: Read measure.txt
@@ -41,23 +45,28 @@ jobs:
           after=$(get after)
           shards=$(get shards)
           iters=$(get iters)
+          paired=$(get paired)
           shards=${shards:-8}
           iters=${iters:-10}
+          paired=${paired:-0}
           fail() { echo "::error::measure.txt: $1"; exit 1; }
           [[ $before =~ ^[0-9a-f]{40}$ ]] || fail "before= must be a full 40-character sha"
           [[ $after =~ ^[0-9a-f]{40}$ ]] || fail "after= must be a full 40-character sha"
           [[ $shards =~ ^[0-9]+$ ]] && (( shards >= 1 && shards <= 25 )) || fail "shards= must be 1 to 25"
           [[ $iters =~ ^[0-9]+$ ]] && (( iters >= 1 && iters <= 20 )) || fail "iters= must be 1 to 20"
+          [[ $paired == 0 || $paired == 1 ]] || fail "paired= must be 0 or 1"
           {
             echo "before=$before"
             echo "after=$after"
             echo "iters=$iters"
+            echo "paired=$paired"
             echo "shards=$(jq -cn --argjson n "$shards" '[range(1; $n + 1)]')"
           } >> "$GITHUB_OUTPUT"
-          echo "before=$before after=$after shards=$shards iters=$iters"
+          echo "before=$before after=$after shards=$shards iters=$iters paired=$paired"
 
   measure:
     needs: config
+    if: needs.config.outputs.paired != '1'
     # Pinned like the real Native job (next-app.yml): the package names and the file paths the
     # native test starts services from are Ubuntu 24.04's.
     runs-on: ubuntu-24.04
@@ -246,8 +255,216 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
 
+  # Paired mode: one job per shard builds BOTH commits and alternates before, after, before, after,
+  # ... on the same runner. Same set-up, build and loop as the `measure` job, which stays as it was.
+  measure-paired:
+    needs: config
+    if: needs.config.outputs.paired == '1'
+    runs-on: ubuntu-24.04
+    # Two builds, then about 2.5 minutes per full run; no new pair starts after 38 minutes.
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.config.outputs.shards) }}
+    env:
+      VARIANT: paired
+      SHARD: ${{ matrix.shard }}
+      ITERS: ${{ needs.config.outputs.iters }}
+      BEFORE_SHA: ${{ needs.config.outputs.before }}
+      AFTER_SHA: ${{ needs.config.outputs.after }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Each commit gets its own working tree (and so its own builds) under wt/.
+      - name: Check out both commits
+        run: |
+          for pair in "before:$BEFORE_SHA" "after:$AFTER_SHA"; do
+            name=${pair%%:*}
+            sha=${pair#*:}
+            if ! git cat-file -e "$sha^{commit}" 2>/dev/null; then
+              echo "::error::$sha is not on any pushed branch of this repository"
+              exit 1
+            fi
+            git worktree add --detach "$GITHUB_WORKSPACE/wt/$name" "$sha"
+            echo "$name: $(git -C "$GITHUB_WORKSPACE/wt/$name" log -1 --format='%H %s')"
+          done
+          echo "tool and dependency files that differ between the two commits:"
+          git diff --name-only "$BEFORE_SHA" "$AFTER_SHA" -- next/go.mod next/app/src-tauri/Cargo.lock next/app/src-tauri/Cargo.toml next/app/package.json next/app/bun.lock next/ui/package.json next/ui/bun.lock | sed 's/^/  /'
+          echo "(end of list)"
+      - name: Check the runner is Ubuntu 24.04
+        run: |
+          . /etc/os-release
+          if [ "$VERSION_ID" != "24.04" ]; then
+            echo "::error::the packages and paths here are Ubuntu 24.04's; this runner is $PRETTY_NAME"
+            exit 1
+          fi
+          echo "$PRETTY_NAME"
+      # What this runner VM is, kept with the job's results so a bad runner can be told from a good one.
+      - name: Machine facts
+        run: |
+          mkdir -p "$RUNNER_TEMP/measure-out"
+          cpu=$(lscpu | sed -n 's/^Model name:[[:space:]]*//p' | head -n 1)
+          hv=$(lscpu | sed -n 's/^Hypervisor vendor:[[:space:]]*//p' | head -n 1)
+          mhz=$(sed -n 's/^cpu MHz[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo | head -n 1)
+          mem=$(free -m | awk '/^Mem:/ {print $2}')
+          load=$(cut -d' ' -f1-3 /proc/loadavg)
+          echo "MACHINE $VARIANT shard=$SHARD host=$(hostname) cpu=\"$cpu\" mhz=$mhz hypervisor=\"$hv\" nproc=$(nproc) mem_mb=$mem image=${ImageVersion:-unknown} kernel=$(uname -r) load=\"$load\"" \
+            | tee "$RUNNER_TEMP/measure-out/machine.txt"
+      # Copied from next-app.yml's Native job.
+      - name: Install WebKitGTK, the tray library, Xvfb, D-Bus, the portals, a tray watcher, squashfs-tools and xdotool
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth dbus-daemon \
+            xdg-desktop-portal xdg-desktop-portal-gtk ayatana-indicator-application squashfs-tools xdotool
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: wt/before/next/go.mod
+          cache: true
+          cache-dependency-path: wt/before/next/go.mod
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.3'
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.97.0
+        with:
+          components: rustfmt, clippy
+      - name: Cache Rust dependencies and build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            wt/before/next/app/src-tauri -> target
+            wt/after/next/app/src-tauri -> target
+      # For each commit: the UI kit and app installs, then what native/run.ts builds before it runs
+      # anything (the window, the app, the session probe, panelcore), done once here so the first run
+      # is not slower than the rest. Each run below still runs run.ts's own build step, which finds
+      # everything built.
+      - name: Install and build both commits
+        run: |
+          for name in before after; do
+            echo "::group::build $name"
+            (cd "wt/$name/next/ui" && bun install --frozen-lockfile)
+            (cd "wt/$name/next/app" && bun install --frozen-lockfile && bun run build)
+            (cd "wt/$name/next/app/src-tauri" && cargo build --locked --features native-test --bin pluxy-app --example session_probe)
+            (cd "wt/$name/next" && go build -o /dev/null ./e2e/panelcore)
+            echo "::endgroup::"
+          done
+      - name: Native test loop
+        timeout-minutes: 55
+        env:
+          # No new pair starts after this many seconds; runs in progress are allowed to finish.
+          LOOP_BUDGET_SECONDS: '2280'
+        run: |
+          set +e
+          logs="$RUNNER_TEMP/measure-logs"
+          failed_logs="$RUNNER_TEMP/measure-failed-logs"
+          out="$RUNNER_TEMP/measure-out"
+          mkdir -p "$logs" "$failed_logs" "$out"
+          : > "$out/lines.txt"
+
+          # The failed checks of one run, shortened and joined with " | " (a check's name can
+          # hold a comma): window.ts's `window: FAILED <check>` lines, run.ts's list of problems,
+          # and a setup failure.
+          failed_checks() {
+            local log=$1 code=$2 list
+            list=$(
+              {
+                grep -aoE 'window: FAILED .*' "$log" | sed -E 's/^window: FAILED //'
+                sed -n -E '/^[0-9]+ problems:$/,$p' "$log" | grep -aE '^- ' | sed -E 's/^- //' \
+                  | grep -avE 'the window checks failed'
+                grep -a -A1 '^native test setup failed' "$log" | tr '\n' ' ' | sed -E 's/^(.+)$/SETUP: \1/'
+                echo
+              } | sed -E '/^[[:space:]]*$/d' | cut -c1-110 | sed -E 's/[[:space:]]+$//' \
+                | awk '!seen[$0]++ { printf "%s%s", (n++ ? " | " : ""), $0 } END { print "" }'
+            )
+            if [ -z "$list" ]; then
+              list="no FAILED line found; exit=$code; last line: $(tail -n 1 "$log" | cut -c1-100)"
+            fi
+            printf '%s' "$list"
+          }
+
+          declare -A runs pass fail skipped
+          for v in before after; do runs[$v]=0; pass[$v]=0; fail[$v]=0; skipped[$v]=0; done
+
+          # One full native test run of variant $1, as iteration $2, from that commit's own tree.
+          run_one() {
+            local v=$1 i=$2 id log t0 code secs result checks line
+            id="$v shard=$SHARD iter=$i"
+            log="$logs/$v-shard$SHARD-iter$i.log"
+            t0=$SECONDS
+            (cd "$GITHUB_WORKSPACE/wt/$v/next/app" && timeout --kill-after=30s 15m bun run test:native) > "$log" 2>&1
+            code=$?
+            secs=$((SECONDS - t0))
+            runs[$v]=$((runs[$v] + 1))
+            if [ "$code" -eq 0 ] && grep -aq '^native test passed in all three modes$' "$log"; then
+              result=pass
+              checks=-
+              pass[$v]=$((pass[$v] + 1))
+            else
+              result=fail
+              fail[$v]=$((fail[$v] + 1))
+              if [ "$code" -eq 124 ] || [ "$code" -eq 137 ]; then
+                checks="the run timed out after 15m (exit $code) | $(failed_checks "$log" "$code")"
+                # A hung run can leave its session behind: clear it before the next run.
+                pkill -KILL -x 'pluxy-app|Xvfb|dbus-daemon' 2>/dev/null
+              elif [ "$code" -eq 0 ]; then
+                checks="exit 0 but no success line | $(failed_checks "$log" "$code")"
+              else
+                checks=$(failed_checks "$log" "$code")
+              fi
+              cp "$log" "$failed_logs/"
+              echo "::group::failed run $id (exit $code), last 80 lines"
+              tail -n 80 "$log"
+              echo "::endgroup::"
+            fi
+            line="MEASURE $id result=$result failed_checks=$checks"
+            echo "$line"; echo "$line" >> "$out/lines.txt"
+            echo "ITER-TIME $id secs=$secs"
+          }
+
+          start=$SECONDS
+          for p in $(seq 1 "$ITERS"); do
+            if (( SECONDS - start > LOOP_BUDGET_SECONDS )); then
+              for v in before after; do
+                line="MEASURE $v shard=$SHARD iter=$p result=skipped failed_checks=out of time budget"
+                echo "$line"; echo "$line" >> "$out/lines.txt"
+                skipped[$v]=$((skipped[$v] + 1))
+              done
+              continue
+            fi
+            # Always before first, then after, on this runner.
+            for v in before after; do run_one "$v" "$p"; done
+          done
+          for v in before after; do
+            echo "$v $SHARD ${runs[$v]} ${pass[$v]} ${fail[$v]} ${skipped[$v]}" >> "$out/counts.txt"
+            echo "job paired shard=$SHARD $v: runs=${runs[$v]} pass=${pass[$v]} fail=${fail[$v]} skipped=${skipped[$v]}"
+          done
+          echo "loop took $((SECONDS - start))s"
+          # The job ends red only now, after every run.
+          [ $((fail[before] + fail[after])) -eq 0 ]
+      - name: Upload the counts, MEASURE lines and machine facts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: result-paired-${{ matrix.shard }}
+          path: ${{ runner.temp }}/measure-out
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Upload the logs of failed runs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failed-logs-paired-${{ matrix.shard }}
+          path: ${{ runner.temp }}/measure-failed-logs
+          if-no-files-found: ignore
+          retention-days: 3
+
   summary:
-    needs: [config, measure]
+    needs: [config, measure, measure-paired]
     if: always() && needs.config.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -263,35 +480,52 @@ jobs:
           AFTER: ${{ needs.config.outputs.after }}
           SHARDS: ${{ needs.config.outputs.shards }}
           ITERS: ${{ needs.config.outputs.iters }}
+          PAIRED: ${{ needs.config.outputs.paired }}
         run: |
           expected=$(jq -n --argjson s "$SHARDS" '$s | length')
+          # Each counts.txt line is: variant shard runs pass fail skipped. A separate-jobs job writes
+          # one line, a paired job two.
           {
             echo "### Native test measurement"
             echo
-            echo "before \`$BEFORE\`, after \`$AFTER\`; $expected jobs per variant, $ITERS runs per job."
+            if [ "$PAIRED" = 1 ]; then
+              echo "Paired: $expected jobs, each building both commits and alternating before, after on one runner; $ITERS pairs per job."
+            else
+              echo "$expected jobs per variant, $ITERS runs per job."
+            fi
+            echo "before \`$BEFORE\`, after \`$AFTER\`."
             echo
             echo "| variant | runs | failures | skipped | jobs reported |"
             echo "| --- | --- | --- | --- | --- |"
             for v in before after; do
-              files=$(ls results/result-$v-*/counts.txt 2>/dev/null || true)
-              if [ -n "$files" ]; then
-                # shellcheck disable=SC2086
-                read -r runs failures skipped jobs < <(cat $files | awk '{r+=$3; f+=$5; s+=$6; j++} END {print r+0, f+0, s+0, j+0}')
-              else
-                runs=0 failures=0 skipped=0 jobs=0
-              fi
-              echo "| $v | $runs | $failures | $skipped | $jobs of $expected |"
-              echo "$v: $runs runs, $failures failures (skipped $skipped, jobs reported $jobs of $expected)" >&2
+              cat results/*/counts.txt 2>/dev/null | awk -v v="$v" '$1 == v { r += $3; f += $5; s += $6; j++ } END { print v, r + 0, f + 0, s + 0, j + 0 }' \
+                | { read -r _ runs failures skipped jobs
+                    echo "| $v | $runs | $failures | $skipped | $jobs of $expected |"
+                    echo "$v: $runs runs, $failures failures (skipped $skipped, jobs reported $jobs of $expected)" >&2; }
             done
             echo
+            if [ "$PAIRED" = 1 ]; then
+              echo "#### Per shard (before and after on the same runner)"
+              echo
+              echo '```'
+              for d in results/result-paired-*/; do
+                [ -f "$d/counts.txt" ] || continue
+                awk '$1 == "before" { s = $2; br = $3; bf = $5 }
+                     $1 == "after" { s = $2; ar = $3; af = $5 }
+                     END { printf "PAIR shard=%s before_fail=%d/%d after_fail=%d/%d\n", s, bf, br, af, ar }' "$d/counts.txt"
+              done | sort -V
+              echo '```'
+              echo
+            fi
             echo "#### Per job: counts and the runner's machine facts"
             echo
             echo '```'
-            for d in results/result-*/; do
+            for d in results/*/; do
               [ -f "$d/counts.txt" ] || continue
-              read -r cv cs cr cp cf csk < "$d/counts.txt"
               facts=$(sed -E 's/^MACHINE [a-z]+ shard=[0-9]+ //' "$d/machine.txt" 2>/dev/null || echo "no machine facts")
-              echo "$cv shard=$cs runs=$cr fail=$cf | $facts"
+              shard=$(awk 'NR == 1 { print $2 }' "$d/counts.txt")
+              res=$(awk '{ printf "%s=%d/%d ", $1, $5, $3 }' "$d/counts.txt")
+              echo "shard=$shard ${res}(failed/ran) | $facts"
             done | sort -V
             echo '```'
             echo
@@ -299,7 +533,7 @@ jobs:
               echo "#### Failed checks, $v (count, check)"
               echo
               echo '```'
-              grep -h "^MEASURE $v .* result=fail " results/result-$v-*/lines.txt 2>/dev/null \
+              grep -h "^MEASURE $v .* result=fail " results/*/lines.txt 2>/dev/null \
                 | sed -E 's/^.* failed_checks=//' | awk -F' [|] ' '{ for (i = 1; i <= NF; i++) print $i }' \
                 | sort | uniq -c | sort -rn
               echo '```'
@@ -307,7 +541,7 @@ jobs:
               echo "#### Failing runs, $v"
               echo
               echo '```'
-              grep -h "^MEASURE $v .* result=fail " results/result-$v-*/lines.txt 2>/dev/null | sort
+              grep -h "^MEASURE $v .* result=fail " results/*/lines.txt 2>/dev/null | sort -V
               echo '```'
               echo
             done
