@@ -92,6 +92,36 @@ test("the Dashboard sums up the requests core recorded and the accounts it holds
   }
 });
 
+test("the Dashboard shows core's global proxy URL as core shows it, or a dash for none", async ({ page }) => {
+  const line = () =>
+    page
+      .getByRole("region", { name: "Configuration at a glance" })
+      .locator(".facts > div")
+      .filter({ hasText: "Upstream proxy" })
+      .locator("dd");
+  await openPanel(page, core);
+  await signIn(page, core);
+  await goTo(page, "Dashboard");
+  await expect(line()).toHaveText("—");
+  if (process.env.DASHBOARD_SHOTS)
+    await page.screenshot({ path: `${process.env.DASHBOARD_SHOTS}/proxy-none.png`, fullPage: true });
+
+  const set = await core.mgmt<{ "proxy-url": string }>("PATCH", "/settings", {
+    "proxy-url": "http://carol:dashpass99@127.0.0.1:3128",
+  });
+  expect(set.status).toBe(200);
+  expect(set.body["proxy-url"]).toBe("http://redacted@127.0.0.1:3128");
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(line()).toHaveText("http://redacted@127.0.0.1:3128");
+  await expect(line()).not.toContainText("dashpass99");
+  if (process.env.DASHBOARD_SHOTS)
+    await page.screenshot({ path: `${process.env.DASHBOARD_SHOTS}/proxy-set.png`, fullPage: true });
+
+  expect((await core.mgmt("PATCH", "/settings", { "proxy-url": "" })).status).toBe(200);
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(line()).toHaveText("—");
+});
+
 test("the Dashboard refreshes every minute, and only while the document is visible", async ({ page }) => {
   const reads: string[] = [];
   page.on("request", (r) => {

@@ -75,6 +75,7 @@ const t = strings("dashboard", {
   fileLogging: "File logging",
   requestLog: "Request log",
   modelPrefix: "Model prefix",
+  upstreamProxy: "Upstream proxy",
   yes: "Yes",
   no: "No",
   editConfig: "Edit configuration",
@@ -369,6 +370,7 @@ export function StatusPage() {
                   [t("fileLogging"), yesNo(settingsData.observability.logs["logging-to-file"])],
                   [t("requestLog"), yesNo(settingsData.observability.logs["request-log"])],
                   [t("modelPrefix"), yesNo(settingsData.routing["force-model-prefix"])],
+                  [t("upstreamProxy"), <span class="mono">{settingsData["proxy-url"].trim() || dash}</span>],
                 ]}
               />
             )}

@@ -8,7 +8,8 @@
 //!    top of that page's webview, calls every app command and some Tauri plugin commands: each
 //!    must be refused by Tauri's command check;
 //! 3. waits for the page's own report (it writes it into its settings through the channel);
-//! 4. closes the window, reports which webviews are left, and quits (stopping the app's own core)
+//! 4. in managed mode, checks this device's extension catalog (`device_native.rs`);
+//! 5. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!
 //! Each step prints one line on stderr: `native-test: <step> <JSON>`.
@@ -19,6 +20,8 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Webview};
 
+#[path = "device_native.rs"]
+mod device;
 #[path = "native_ingress.rs"]
 mod ingress;
 pub use ingress::{
@@ -63,6 +66,7 @@ const ACTING: &[&str] = &[
     "core_restart",
     "key_entry",
     "confirmation_settings",
+    "device_install_file",
 ];
 
 #[path = "key_entry_test.rs"]
@@ -260,6 +264,11 @@ fn run(app: &AppHandle) -> Result<(), String> {
     key_entry_test::check(app, &main)?;
     ingress::run(app, &main)?;
 
+    // This device's extension catalog (device_native.rs), with fixtures from native/device.ts.
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_DEVICE") {
+        device::run(app, &main, dir.into())?;
+    }
+
     // For screenshots: keep the window open until this file exists.
     if let Ok(f) = std::env::var("PLUXY_APP_TEST_HOLD") {
         wait_for("the hold file", || {
@@ -287,6 +296,64 @@ fn run(app: &AppHandle) -> Result<(), String> {
         })?;
     }
     log("quit", json!({}));
+    crate::quit(app);
+    Ok(())
+}
+
+/// The window as the instance scenario sees it.
+fn window_state(app: &AppHandle) -> Value {
+    match app.get_window(WINDOW) {
+        Some(w) => json!({
+            "exists": true,
+            "visible": w.is_visible().unwrap_or(false),
+            "minimized": w.is_minimized().unwrap_or(false),
+            "focused": w.is_focused().unwrap_or(false),
+        }),
+        None => json!({"exists": false}),
+    }
+}
+
+/// The single-instance scenario (`native/instances-session.ts`, which sets
+/// `PLUXY_APP_TEST_INSTANCES`): reports once the window is up (`up`), then answers each line on
+/// stdin, one command per line, with the window's state (`state`): `state`, `hide`, `close`, or
+/// `quit`, which quits (stopping the app's own core) and answers nothing. If stdin closes, the
+/// app quits.
+fn instances(app: &AppHandle) -> Result<(), String> {
+    wait_for("the window", || app.get_webview(MAIN))?;
+    log(
+        "up",
+        json!({
+            "window": window_state(app),
+            "tray": app.state::<App>().has_tray.load(std::sync::atomic::Ordering::SeqCst),
+            "core_pid": app.state::<App>().conn.lock().unwrap().core_pid(),
+        }),
+    );
+    for line in std::io::stdin().lines() {
+        let line = line.map_err(|e| e.to_string())?;
+        match line.trim() {
+            "state" => {}
+            "hide" => app
+                .get_window(WINDOW)
+                .ok_or("no window")?
+                .hide()
+                .map_err(|e| e.to_string())?,
+            "close" => {
+                app.get_window(WINDOW)
+                    .ok_or("no window")?
+                    .close()
+                    .map_err(|e| e.to_string())?;
+                wait_for("the window to close", || {
+                    app.get_window(WINDOW).is_none().then_some(())
+                })?;
+            }
+            "quit" => {
+                crate::quit(app);
+                return Ok(());
+            }
+            other => return Err(format!("unknown command {other:?}")),
+        }
+        log("state", window_state(app));
+    }
     crate::quit(app);
     Ok(())
 }
@@ -332,7 +399,12 @@ fn startup(app: &AppHandle, stage: &str) -> Result<(), String> {
 
 pub fn start(app: AppHandle) {
     std::thread::spawn(move || {
-        if let Err(e) = run(&app) {
+        let result = if std::env::var_os("PLUXY_APP_TEST_INSTANCES").is_some() {
+            instances(&app)
+        } else {
+            run(&app)
+        };
+        if let Err(e) = result {
             // What the window showed, to tell why.
             let shown = app.get_webview(MAIN).and_then(|m| {
                 eval(
