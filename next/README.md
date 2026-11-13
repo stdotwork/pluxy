@@ -1,6 +1,9 @@
 # next: the new pluxy core
 
-A new core for pluxy, built from scratch beside today's `core/`. Core receives client requests and
+A new core for pluxy, built from scratch beside today's core, the Go proxy in `core/`. (In this
+README and in the corpus, "today's core" and "the old core" mean that core, and `core/...` paths
+are files in it. Once `core/` is removed from the repository, they mean `core/` at the last commit
+that still has it; the commit will be named here when that happens.) Core receives client requests and
 hands them to **provider extensions**: separate programs, one per kind of upstream, that core
 starts and talks to over a local socket. Today it serves OpenAI Chat Completions, OpenAI
 Responses, Anthropic Messages and Gemini GenerateContent (streamed and not, over HTTP) through the
@@ -43,7 +46,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `ui/` | The UI kit the panel and the desktop app share, the panel's browser build, and the [theme contract](ui/themes/README.md) ([README](ui/README.md)). |
 | `app/` | The desktop app: the kit's second build in a Tauri window, with a tray icon and three ways to reach core ([README](app/README.md)). |
 | `e2e/` | Black-box tests that drive the built core over HTTP. |
-| `corpus/` | Differential test corpus: cases replayed against this core and today's `core/`, with listed exceptions ([README](corpus/README.md)). |
+| `corpus/` | Differential test corpus: cases replayed against this core and today's core, with listed exceptions ([README](corpus/README.md)). |
 
 Go extensions build each upstream client's transport with `sdk.Upstream(base)`, where `base` is
 their configured `*http.Transport`. This includes login, token refresh and WebSocket handshake
@@ -1051,7 +1054,7 @@ The sign-in is Google's OAuth for installed apps with the Antigravity app's own 
 scopes, as today's core signs in, plus PKCE. Google's token endpoint also takes that client's
 secret. The extension has it built in: it is the installed-app client secret of the OAuth client the
 Antigravity desktop app uses, which ships inside every copy of the app, and today's core carries the
-same value (`ClientSecret` in `core/internal/auth/antigravity/constants.go`). It is not a user's
+same value (`ClientSecret` in the old core's `core/internal/auth/antigravity/constants.go`). It is not a user's
 credential and gives no access to an account without a sign-in. A login asks for no input, the
 credential does not keep the secret, and every renewal sends it, so an account renews whether it
 was logged in or imported. After signing in, the
@@ -1488,17 +1491,22 @@ uses saved credentials for plan metadata without renewing them. With no enabled,
 account (including a configuration with only other extensions), the reply is 200
 `{"models":[]}`.
 
-To refresh the catalog by hand, from the repository root copy the reviewed catalog and rebuild
-the extension:
+To refresh the catalog by hand, fetch `codex_client_models.json` from the
+[router-for-me/models](https://github.com/router-for-me/models) repository, the source the old
+core refreshes its copy from, and rebuild the extension. From `next/`:
 
 ```bash
-cp core/internal/registry/models/codex_client_models.json next/extensions/codex/client_models.json
-cd next
+tmp=$(mktemp -d) && git -C "$tmp" init -q
+git -C "$tmp" fetch --depth 1 https://github.com/router-for-me/models main
+git -C "$tmp" show FETCH_HEAD:codex_client_models.json > extensions/codex/client_models.json
+rm -rf "$tmp"
 go build -o extensions/codex/codex ./extensions/codex
 ```
 
-Review the source and its changes before copying it, run the Codex catalog corpus and e2e tests,
-and reload core after replacing the extension program. The routing list in
+Review the file and its changes before keeping it, run the tests in `extensions/codex`
+(`TestClientModelTemplates` in `client_models_test.go` expects 12 templates, so a changed count
+needs the test updated too), run the Codex catalog corpus and e2e tests, and reload core after
+replacing the extension program. The routing list in
 `extensions/codex/models.json` remains separate from this client metadata.
 
 ### Account model names
@@ -2042,7 +2050,8 @@ time.
 Core also reads a `config.yaml` written for today's core (`core/`), so an existing config moves
 over without renaming keys. A config file whose name ends in `.yaml` or `.yml` is read with
 today's key names; any other file is read as the JSON config above. Both layouts today's core
-reads work: the v8 layout of `core/config.example.yaml` (`server.port`, `access.api-keys`,
+reads work: the v8 layout of `internal/legacy/testdata/config.example.yaml` (a byte-identical
+copy of the old core's example config; `server.port`, `access.api-keys`,
 `api-keys.codex`, ...) and the older spellings (`port`, `api-keys` as a list,
 `codex-api-key`, ...). When a file has both spellings of one setting, the v8 one wins, as in
 today's core.

@@ -16,6 +16,10 @@ import (
 // has the token limits and generation methods core fills in: the input limit is the context
 // length, the output limit the longest reply, and the methods generateContent and countTokens.
 //
+// The old core's refresh script does not read devin_models.json. https://github.com/router-for-me/models
+// has a devin_models.json that differs from the old core's copy (it lists swe-2-flash, which this
+// list lacks), so a refresh by hand from it also means updating modelLevels in models.go.
+//
 //go:embed models.json
 var catalogJSON []byte
 

@@ -11,7 +11,8 @@ import (
 
 // modelsJSON is the list a Kimi Code login or API key serves, in protocol.ModelList form: the
 // models of today's core's catalog (core/internal/registry/models/models.json, "kimi"), with their
-// metadata.
+// metadata. To refresh it by hand, take the kimi section of models.json in
+// https://github.com/router-for-me/models, the file the old core copied.
 //
 //go:embed models.json
 var modelsJSON []byte

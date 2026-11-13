@@ -16,9 +16,10 @@ import (
 
 // Environment switches:
 //
-//	PLUXY_CORPUS_OLD_CORE=1      also run today's core (built from ../../core) and compare live
-//	PLUXY_CORPUS_OLD_CORE_BIN=…  use this old-core binary instead of building one
-//	PLUXY_CORPUS_RECORD=1        run the old core and write its observations into the case files
+//	PLUXY_CORPUS_OLD_CORE=1      also run today's core (built from ../../core, which must exist) and compare live
+//	PLUXY_CORPUS_OLD_CORE_BIN=…  run this old-core binary live (alone, it also turns live on) instead of building one
+//	PLUXY_CORPUS_RECORD=1        run the old core live and write its observations into the case files
+//	                             (built from ../../core unless PLUXY_CORPUS_OLD_CORE_BIN names a binary)
 //	PLUXY_CORPUS_REPORT=path     also write the report to path
 //	PLUXY_CORPUS_CASE=regexp     run only cases whose format/provider/name matches
 //	PLUXY_CORPUS_DUMP_NEW=dir    write each new-core observation to dir/<format>.<provider>.<name>.json
@@ -138,7 +139,10 @@ func TestCorpus(t *testing.T) {
 	}
 	reference := "the old core's recorded observations (set PLUXY_CORPUS_OLD_CORE=1 to run it live)"
 	if liveOld {
-		reference = "the old core, run live from core/"
+		reference = "the old core, run live (built from core/)"
+		if bin := os.Getenv("PLUXY_CORPUS_OLD_CORE_BIN"); bin != "" {
+			reference = "the old core, run live (the binary at PLUXY_CORPUS_OLD_CORE_BIN: " + bin + ")"
+		}
 	}
 	report := Report(ordered, reference, global.Exceptions, staleGlobal)
 	fmt.Println(report)

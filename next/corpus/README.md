@@ -8,6 +8,12 @@ the two cores did: the reply the client got and the requests that reached the up
 The new core must match the old one except where a case lists an **exception**. Each exception
 gives a reason, so every difference is on the record.
 
+Which old core: in this repository, "today's core", "the old core" and `core/...` paths in this
+document, in code comments and in the cases' `source` fields mean the old core in `core/`. Once
+`core/` is removed, they mean `core/` at the last commit that still has it; the commit will be
+named here when that happens. The recorded replies need no old core to run, and
+[re-recording](#re-recording-against-the-old-core) works from a worktree of that commit.
+
 ## Running it
 
 From `next/`:
@@ -22,9 +28,9 @@ printed at the end (with `-v`).
 
 | Variable | Effect |
 | --- | --- |
-| `PLUXY_CORPUS_OLD_CORE=1` | Also build `core/` (with cgo) and run it live. Fails if the live old core no longer matches a recording. |
-| `PLUXY_CORPUS_OLD_CORE_BIN=path` | Run this old-core binary live instead of building one. |
-| `PLUXY_CORPUS_RECORD=1` | Run the old core live and write its observations into the case files (`recorded_old_core`). |
+| `PLUXY_CORPUS_OLD_CORE=1` | Also build `core/` (with cgo) and run it live. Fails if the live old core no longer matches a recording. Works only while `core/` is in the repository. |
+| `PLUXY_CORPUS_OLD_CORE_BIN=path` | Run this old-core binary live instead of building one. Set alone, it also turns on the live run. |
+| `PLUXY_CORPUS_RECORD=1` | Run the old core live and write its observations into the case files (`recorded_old_core`). Builds `core/` unless `PLUXY_CORPUS_OLD_CORE_BIN` names a binary. |
 | `PLUXY_CORPUS_REPORT=path` | Also write the report to a file. |
 | `PLUXY_CORPUS_CASE=regexp` | Run only cases whose `format/provider/name` matches. |
 | `PLUXY_CORPUS_DUMP_NEW=dir` | Write each new-core observation to a file in `dir`, to read the values an exception's `want` needs. |
@@ -32,6 +38,31 @@ printed at the end (with `-v`).
 
 CI runs the fast form in `next-ci.yml` and the live form in `next-corpus.yml` (on changes to
 `next/` or `core/`).
+
+### Re-recording against the old core
+
+The variables combine like this: the old core runs live when any of `PLUXY_CORPUS_OLD_CORE=1`,
+`PLUXY_CORPUS_RECORD=1` or `PLUXY_CORPUS_OLD_CORE_BIN` is set. If `PLUXY_CORPUS_OLD_CORE_BIN` is
+set, that binary runs and nothing is built, whatever the other two say. If it is not set, the
+runner builds the old core from the repository's `core/` folder, so `PLUXY_CORPUS_OLD_CORE=1` and
+`PLUXY_CORPUS_RECORD=1` without a binary work only while `core/` is in the repository. With
+`PLUXY_CORPUS_RECORD=1` the live observations are written into the case files; without it they are
+compared with the recordings and the report.
+
+This route keeps working after `core/` is removed: build the old core from a worktree of the last
+commit that has it, then point the corpus at the binary. From the repository root, with `<commit>`
+the commit this document names (or any commit that has `core/`):
+
+```bash
+git worktree add /tmp/old-core-tree <commit>
+(cd /tmp/old-core-tree/core && CGO_ENABLED=1 go build -o /tmp/old-core ./cmd/server)
+cd next
+PLUXY_CORPUS_OLD_CORE_BIN=/tmp/old-core PLUXY_CORPUS_RECORD=1 go test -count=1 -run TestCorpus ./corpus
+# or, to compare live without writing: PLUXY_CORPUS_OLD_CORE_BIN=/tmp/old-core go test -count=1 -v -run TestCorpus ./corpus
+git worktree remove --force /tmp/old-core-tree && rm /tmp/old-core
+```
+
+A single case: add `PLUXY_CORPUS_CASE=<name>`. The report says which old core ran.
 
 ## How a core is run
 

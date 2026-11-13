@@ -60,8 +60,8 @@ settings form from its schema. The contract for both, and the module pages use, 
 
 ## The panel's pages
 
-The pages core offers, in navigation order, and the page of the old panel
-([`extensions/panel`](../../extensions/panel)) that each one replaces. A page's ID is its address
+The pages core offers, in navigation order, and the page of the old web panel (the React/Vite
+panel that `extensions/panel` held) that each one replaces. A page's ID is its address
 (`#/<id>`) and its theme hook `data-page`. Why the pages have these names, and the other
 decisions behind them, is in [docs/panel.md](../../docs/panel.md).
 
