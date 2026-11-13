@@ -562,7 +562,9 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             require(r["ok"] == true, format!("the confirmed update: {r}"))?;
             let t = package_view(main, TARGET)?;
             require(
-                t["active"]["version"] == "2.0.0" && t["enabled"] == true && t["authorized"] == true,
+                t["active"]["version"] == "2.0.0"
+                    && t["enabled"] == true
+                    && t["authorized"] == true,
                 format!("the target after its update: {t}"),
             )?;
             let r = page.call(TARGET, "summary", json!({"items": items}))?;
