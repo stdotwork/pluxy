@@ -77,16 +77,25 @@ fn choose(title: &str, path: &Path, folder: bool) -> Result<(), String> {
     x(&["key", "--clearmodifiers", "ctrl+l"])?;
     std::thread::sleep(Duration::from_millis(300));
     let path = path.to_str().ok_or("fixture path is not UTF-8")?;
-    // A typed folder's name completes inline to `name/`, and then to its only subfolder, before
-    // the chooser reads its location (the tree grant once got `tree/inner`). Typed as `name/.`,
-    // nothing completes (the fixtures' folders hold no hidden entries), and GLib canonicalizes
-    // the chosen `name/.` to the folder itself (`g_canonicalize_filename`).
-    let typed = if folder {
-        format!("{path}/.")
+    if folder {
+        // Typed as `<folder>/`, the entry names that folder itself (gtkfilechooserentry.c
+        // `gtk_file_chooser_get_directory_for_text`: text ending in a separator is its own
+        // folder; `<folder>/.` names its parent). But once the folder loads, the entry inserts
+        // its only subfolder as a selected inline completion (`finished_loading_cb`), as the tree
+        // grant once got `tree/inner`. After the load, Delete removes that selection, or does
+        // nothing at the end of the text; deleting inserts nothing, so nothing completes again.
+        x(&[
+            "type",
+            "--clearmodifiers",
+            "--delay",
+            "20",
+            &format!("{path}/"),
+        ])?;
+        std::thread::sleep(Duration::from_millis(1500));
+        x(&["key", "--clearmodifiers", "Delete"])?;
     } else {
-        path.to_string()
-    };
-    x(&["type", "--clearmodifiers", "--delay", "20", &typed])?;
+        x(&["type", "--clearmodifiers", "--delay", "20", path])?;
+    }
     std::thread::sleep(Duration::from_millis(300));
     x(&["key", "--clearmodifiers", "Return"])?;
     Ok(())
