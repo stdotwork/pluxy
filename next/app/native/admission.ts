@@ -88,8 +88,9 @@ function publicHex(key: KeyObject): string {
   return hex(Buffer.from(jwk.x as string, "base64url"));
 }
 
-/** An index artifact for archive, signed with key when given. */
-function artifact(root: string, file: string, f: Fixture, key?: KeyObject) {
+/** An index artifact for archive, signed with key when given, naming the root's public key
+ * (rootKey): a forger copies the key the index should name. */
+function artifact(root: string, file: string, f: Fixture, rootKey: KeyObject, key?: KeyObject) {
   const bytes = readFileSync(join(root, file));
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   const entry: Record<string, unknown> = { url: file, sha256, size: bytes.length };
@@ -104,6 +105,7 @@ function artifact(root: string, file: string, f: Fixture, key?: KeyObject) {
       sha256,
     });
     entry.key_id = KEY_ID;
+    entry.public_key = publicHex(rootKey);
     entry.descriptor = descriptor;
     entry.signature = hex(sign(null, Buffer.from(descriptor, "utf8"), key));
   }
@@ -132,7 +134,7 @@ export function buildAdmissionFixtures(root: string, home: string): Admission {
   for (const f of Object.values(fixtures)) pack(root, f);
   const a = (k: string, key?: KeyObject) => {
     const f = fixtures[k] as Fixture;
-    return artifact(root, f.file, f, key);
+    return artifact(root, f.file, f, publicKey, key);
   };
   const tool = a("tool", privateKey);
   const forged = a("forged", other);

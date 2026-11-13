@@ -215,8 +215,11 @@ refused until the package is removed. Packages get no resources or settings here
 settings calls answer `unavailable`.
 
 A native tool installs only from a curated registry whose index entry carries a descriptor signed
-by the root's key for that publisher and source; the signature, then the archive's size and
-SHA-256, are checked before it is unpacked, and the manifest's ID, version and tier after. Its
+by the root's key for that publisher and source, and names that key as its `public_key`; the
+signature, then the archive's size and SHA-256, are checked before it is unpacked, and the
+manifest's ID, version and tier after. A signature the index lists for any other package is
+ignored, and the Device extensions page marks an entry the index already shows install would
+refuse. Its
 program for this computer must be an executable file in the package, and the SHA-256 of every
 file is recorded. It is labelled **Curated** and installs disabled. Enabling it opens a native
 confirmation that says it has **full access to your user account** and shows its ID, source,

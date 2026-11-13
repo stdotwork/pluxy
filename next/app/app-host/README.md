@@ -90,11 +90,15 @@ signature over those exact bytes against the trusted publisher key, then verify 
 and SHA-256 **before extraction**. Check the extracted manifest ID, version and tier against the
 descriptor, and platform against the selected artifact. Store the exact descriptor bytes and
 signature; never verify a receiver's reserialized JSON. Whitespace and key order are signed too.
-The index pins size, digest, key identity and signature: a signed artifact adds `key_id` (the
-key's ID in its root), `descriptor` (the exact descriptor bytes as a JSON string) and `signature`
-beside `url`, `sha256` and `size`. The desktop app reads them only from a curated registry, one
-whose index address equals a trust root's `source` exactly; from any other registry they are
-ignored and the package is Unverified. Detached signature files contain exactly
+The index pins size, digest, key identity and signature: a signed artifact adds `key_id` (1 to
+64 letters, digits, `.`, `_` or `-`), `public_key`, `descriptor` (the exact descriptor bytes as a
+JSON string) and `signature` beside `url`, `sha256` and `size`, all four or none; part of a
+signature is refused. The desktop app verifies one only for a reserved publisher's package from a
+curated registry, one whose index address equals a trust root's `source` exactly: the key is the
+root's for that publisher and `key_id`, and `public_key` must be that key, or the package is
+refused. Any other listed signature, from a registry no root names or for a publisher no root
+names, is ignored for now and the package is Unverified; such a package is never a native tool
+and never has a reserved ID. Detached signature files contain exactly
 64 raw Ed25519 bytes; JSON/index transport encodes them as 128 lower-case hexadecimal digits.
 Public keys are 32 bytes, encoded as 64 lower-case hexadecimal digits. Verification uses pinned
 `ed25519-dalek` 2.2.0 with `VerifyingKey::verify_strict` and default features disabled. This is

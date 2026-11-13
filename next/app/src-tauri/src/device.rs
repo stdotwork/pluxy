@@ -1640,10 +1640,13 @@ struct Artifact {
     url: String,
     sha256: String,
     size: u64,
-    /// A curated registry's signature (app host README, signed descriptor bytes): the key's ID
-    /// in the root, the exact descriptor text and the detached signature in lower-case hex.
+    /// A publisher signature (app host README, signed descriptor bytes): the key's ID, its
+    /// Ed25519 public key and the detached signature in lower-case hex, and the exact
+    /// descriptor text signed. All four or none.
     #[serde(default)]
     key_id: Option<String>,
+    #[serde(default)]
+    public_key: Option<String>,
     #[serde(default)]
     descriptor: Option<String>,
     #[serde(default)]
@@ -1833,17 +1836,33 @@ pub fn offers(dirs: &Dirs, roots: &dyn Roots) -> Result<Vec<RegistryView>, Strin
                     .packages
                     .into_iter()
                     .filter(|(id, _)| valid_id(id))
-                    .map(|(id, p)| Offer {
-                        refused: (!roots.curated(&r.url))
-                            .then(|| reserved(&id, roots))
-                            .flatten(),
-                        versions: p
+                    .map(|(id, p)| {
+                        let releases: Vec<&IndexRelease> = p
                             .releases
                             .iter()
                             .filter(|x| x.artifacts.contains_key(&platform))
-                            .map(|x| x.version.clone())
-                            .collect(),
-                        id,
+                            .collect();
+                        // What install would say of the release offered, from the index alone.
+                        let refused = releases.first().and_then(|x| {
+                            let a = &x.artifacts[&platform];
+                            to_verify(roots, &r, &id, &x.version, a)
+                                .and_then(|l| match l {
+                                    Some(l) => admission::check_listed(
+                                        roots,
+                                        &r.url,
+                                        &l,
+                                        &platform,
+                                        (&id, &x.version),
+                                    ),
+                                    None => Ok(()),
+                                })
+                                .err()
+                        });
+                        Offer {
+                            refused,
+                            versions: releases.iter().map(|x| x.version.clone()).collect(),
+                            id,
+                        }
                     })
                     .filter(|o| !o.versions.is_empty())
                     .collect(),
@@ -1859,6 +1878,67 @@ pub fn offers(dirs: &Dirs, roots: &dyn Roots) -> Result<Vec<RegistryView>, Strin
             },
         })
         .collect())
+}
+
+/// The signature registry entry a lists for id's release version: all four fields, or none.
+/// Part of one is refused, as is a key ID that is not 1 to 64 letters, digits, `.`, `_` or `-`.
+fn listed<'a>(
+    id: &str,
+    version: &str,
+    a: &'a Artifact,
+) -> Result<Option<admission::Listed<'a>>, String> {
+    let (key_id, public_key, descriptor, signature) =
+        match (&a.key_id, &a.public_key, &a.descriptor, &a.signature) {
+            (None, None, None, None) => return Ok(None),
+            (Some(k), Some(p), Some(d), Some(s)) => (k, p, d, s),
+            _ => {
+                return Err(format!(
+                    "{id} {version}: the registry lists part of a signature (key_id, public_key, descriptor and signature go together)"
+                ))
+            }
+        };
+    if key_id.is_empty()
+        || key_id.len() > 64
+        || !key_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+    {
+        return Err(format!(
+            "{id} {version}: the signature's key_id is not valid"
+        ));
+    }
+    Ok(Some(admission::Listed {
+        key_id,
+        public_key,
+        descriptor,
+        signature,
+    }))
+}
+
+/// What install makes of registry r's entry a for id's release version, before anything is
+/// fetched: the signature to verify against r's root, None for a package installed unsigned
+/// (Unverified), or why it is refused. Only a reserved publisher's package, from a curated
+/// registry, is verified; any other signature is ignored, since no root vouches for it.
+fn to_verify<'a>(
+    roots: &dyn Roots,
+    r: &Registry,
+    id: &str,
+    version: &str,
+    a: &'a Artifact,
+) -> Result<Option<admission::Listed<'a>>, String> {
+    let l = listed(id, version, a)?;
+    let Some(why) = reserved(id, roots) else {
+        return Ok(None);
+    };
+    if !roots.curated(&r.url) {
+        return Err(why);
+    }
+    l.map(Some).ok_or_else(|| {
+        format!(
+            "{id}: a reserved publisher's package needs a curated first-party signature, and registry {} lists none for {id} {version}",
+            r.name
+        )
+    })
 }
 
 /// Fetches and stages package id's release version (the newest with an archive for this
@@ -1900,31 +1980,16 @@ pub fn stage_from_registry(
             )
         })?;
     let a = &release.artifacts[&platform];
+    let listed = to_verify(roots, &r, id, &release.version, a)?;
     let mut bytes = fetch_artifact(&base, a)?;
-    let signing = match (&a.key_id, &a.descriptor, &a.signature) {
-        (Some(key_id), Some(descriptor), Some(signature)) if curated => {
-            let (s, archive) = admission::verify(
-                roots,
-                &r.url,
-                key_id,
-                descriptor,
-                signature,
-                &platform,
-                (id, &release.version),
-                bytes,
-            )?;
+    let signing = match listed {
+        Some(l) => {
+            let (s, archive) =
+                admission::verify(roots, &r.url, &l, &platform, (id, &release.version), bytes)?;
             bytes = archive;
             Some(s)
         }
-        _ if curated && reserved(id, roots).is_some() => {
-            return Err(format!(
-                "{id}: a reserved publisher's package needs a curated first-party signature, and registry {name} lists none for {id} {}",
-                release.version
-            ))
-        }
-        // From a source that is not curated a signature proves nothing here: the package is
-        // Unverified, and a native tool is refused.
-        _ => None,
+        None => None,
     };
     stage_signed(
         dirs,

@@ -35,12 +35,15 @@ impl Roots for crate::trust::TrustStore {
     }
 }
 
-/// The curated signature a release was installed with.
+/// The curated signature a release was installed with: the same shape as the signatures
+/// Access keeps for approved signers (P8e3).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Signed {
     pub publisher: String,
     /// The key's ID in its root.
     pub key_id: String,
+    /// The Ed25519 public key the index named, which is the root's, in lower-case hex.
+    pub public_key: String,
     /// The curated registry's index the root names: the trust domain.
     pub source: String,
     /// The exact signed descriptor bytes, UTF-8 JSON as the index gave them.
@@ -89,13 +92,9 @@ impl Admission {
 }
 
 impl Package {
-    /// The active release's curated signature and its root's key, when it verifies against
-    /// roots now, from the source it was signed for, and names that release.
-    pub(super) fn curated_signature(
-        &self,
-        id: &str,
-        roots: &dyn Roots,
-    ) -> Result<(&Signed, ed25519_dalek::VerifyingKey), String> {
+    /// The active release's curated signature, when it verifies against roots now (the root
+    /// still has its key), from the source it was signed for, and names that release.
+    pub(super) fn curated_signature(&self, id: &str, roots: &dyn Roots) -> Result<&Signed, String> {
         let r = &self.active;
         let s = r
             .signed
@@ -110,6 +109,12 @@ impl Package {
         let key = roots
             .publisher_key(&s.source, &s.key_id, &s.publisher)
             .map_err(|e| format!("{id}: {e}"))?;
+        if hex(key.as_bytes()) != s.public_key {
+            return Err(format!(
+                "{id}: its root's key for {} is not the key it was signed with",
+                s.key_id
+            ));
+        }
         let sig = artifact::decode_hex::<64>(&s.signature)?;
         let v = artifact::verify_descriptor(&key, s.descriptor.as_bytes(), &sig, &platform())
             .map_err(|e| format!("{id}: {e}"))?;
@@ -124,7 +129,7 @@ impl Package {
                 "{id}: its signed descriptor does not name the installed release"
             ));
         }
-        Ok((s, key))
+        Ok(s)
     }
 
     /// A native tool the person confirmed for its active release, while it stays enabled.
@@ -150,7 +155,6 @@ pub struct Admitted {
     pub(super) installed_at: u64,
     pub(super) source: Source,
     pub(super) signed: Signed,
-    pub(super) public_key: String,
     pub(super) dir: PathBuf,
     pub(super) program: PathBuf,
     pub(super) program_sha256: String,
@@ -189,9 +193,9 @@ impl Admitted {
     pub fn signed(&self) -> &Signed {
         &self.signed
     }
-    /// The root's public key, in lower-case hex.
+    /// The root's public key, in lower-case hex (also `signed().public_key`).
     pub fn public_key(&self) -> &str {
-        &self.public_key
+        &self.signed.public_key
     }
     /// The release's immutable store folder.
     pub fn dir(&self) -> &Path {
@@ -233,7 +237,7 @@ impl Admitted {
             digest: self.sha256.clone(),
             signer: format!(
                 "{} key {} ({})",
-                self.signed.publisher, self.signed.key_id, self.public_key
+                self.signed.publisher, self.signed.key_id, self.signed.public_key
             ),
             contract: format!(
                 "app host {}; app {}; state {}, reads {:?}",
@@ -279,67 +283,101 @@ pub struct Signing {
     pub signed: Signed,
 }
 
-/// Verifies a curated registry's signature over descriptor with source's root key for its
-/// publisher, then bytes against the signed size and digest, before anything is unpacked.
-/// Returns the checked bytes.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn verify(
+/// A signature a registry entry lists: all four fields (`Artifact`).
+pub(super) struct Listed<'a> {
+    pub key_id: &'a str,
+    pub public_key: &'a str,
+    pub descriptor: &'a str,
+    pub signature: &'a str,
+}
+
+/// The key source's root names for id's publisher and l's key ID, when the index names that
+/// same key.
+fn root_key(
     roots: &dyn Roots,
     source: &str,
-    key_id: &str,
-    descriptor: &str,
-    signature: &str,
-    platform: &str,
-    (id, version): (&str, &str),
-    bytes: Vec<u8>,
-) -> Result<(Signing, Vec<u8>), String> {
-    let sig = artifact::decode_hex::<64>(signature)
-        .map_err(|_| format!("{id} {version}: its signature is not 128 lower-case hex digits"))?;
-    let checked = artifact::verify_trusted_archive(
-        &Keys(roots),
-        source,
-        key_id,
-        descriptor.as_bytes(),
-        &sig,
-        platform,
-        std::io::Cursor::new(bytes),
-    )
-    .map_err(|e| format!("{id} {version}: {e}"))?;
-    let d = checked.descriptor();
+    l: &Listed,
+    id: &str,
+) -> Result<ed25519_dalek::VerifyingKey, String> {
+    let publisher = id.split('/').next().unwrap_or_default();
+    let key = roots
+        .publisher_key(source, l.key_id, publisher)
+        .map_err(|e| format!("{id}: {e}"))?;
+    if hex(key.as_bytes()) != l.public_key {
+        return Err(format!(
+            "{id}: the index's public_key is not the key its root names for {}",
+            l.key_id
+        ));
+    }
+    Ok(key)
+}
+
+/// Whether descriptor d names id's release version.
+fn names(d: &artifact::Descriptor, id: &str, version: &str) -> Result<(), String> {
     if d.id != id || d.version != version {
         return Err(format!(
             "{id} {version}: its signed descriptor names {} {}",
             d.id, d.version
         ));
     }
-    let publisher = d.id.split('/').next().unwrap_or_default().to_string();
+    Ok(())
+}
+
+/// Checks the signature l over its descriptor with source's root key, and that the descriptor
+/// names id's release version, from the index alone (before anything is fetched).
+pub(super) fn check_listed(
+    roots: &dyn Roots,
+    source: &str,
+    l: &Listed,
+    platform: &str,
+    (id, version): (&str, &str),
+) -> Result<(), String> {
+    let key = root_key(roots, source, l, id)?;
+    let sig = artifact::decode_hex::<64>(l.signature)
+        .map_err(|_| format!("{id} {version}: its signature is not 128 lower-case hex digits"))?;
+    let v = artifact::verify_descriptor(&key, l.descriptor.as_bytes(), &sig, platform)
+        .map_err(|e| format!("{id} {version}: {e}"))?;
+    names(v.descriptor(), id, version)
+}
+
+/// Verifies a curated registry's signature l over its descriptor with source's root key for
+/// id's publisher, then bytes against the signed size and digest, before anything is unpacked.
+/// Returns the checked bytes.
+pub(super) fn verify(
+    roots: &dyn Roots,
+    source: &str,
+    l: &Listed,
+    platform: &str,
+    (id, version): (&str, &str),
+    bytes: Vec<u8>,
+) -> Result<(Signing, Vec<u8>), String> {
+    let key = root_key(roots, source, l, id)?;
+    let sig = artifact::decode_hex::<64>(l.signature)
+        .map_err(|_| format!("{id} {version}: its signature is not 128 lower-case hex digits"))?;
+    let checked = artifact::verify_archive(
+        &key,
+        l.descriptor.as_bytes(),
+        &sig,
+        platform,
+        std::io::Cursor::new(bytes),
+    )
+    .map_err(|e| format!("{id} {version}: {e}"))?;
+    names(checked.descriptor(), id, version)?;
     let (verified, archive) = checked.into_parts();
     Ok((
         Signing {
             verified,
             signed: Signed {
-                publisher,
-                key_id: key_id.into(),
+                publisher: id.split('/').next().unwrap_or_default().into(),
+                key_id: l.key_id.into(),
+                public_key: l.public_key.into(),
                 source: source.into(),
-                descriptor: descriptor.into(),
-                signature: signature.into(),
+                descriptor: l.descriptor.into(),
+                signature: l.signature.into(),
             },
         },
         archive.into_inner(),
     ))
-}
-
-/// `PublisherKeys` for a `dyn Roots`.
-struct Keys<'a>(&'a dyn Roots);
-impl PublisherKeys for Keys<'_> {
-    fn publisher_key(
-        &self,
-        source: &str,
-        key_id: &str,
-        publisher: &str,
-    ) -> Result<ed25519_dalek::VerifyingKey, String> {
-        self.0.publisher_key(source, key_id, publisher)
-    }
 }
 
 /// Fills in a signed native release staged in staged: its program for this computer, which
@@ -421,7 +459,7 @@ impl Catalog {
         if r.tier != "native" {
             return Err(format!("{id} is not a native tool"));
         }
-        let (s, key) = p.curated_signature(id, roots)?;
+        let s = p.curated_signature(id, roots)?;
         if !r.host_versions.contains(&HOST_CONTRACT) {
             return Err(format!(
                 "{id} {} needs app host contract {:?}; this app speaks host contract {HOST_CONTRACT}",
@@ -447,7 +485,6 @@ impl Catalog {
             installed_at: r.installed_at,
             source: p.source.clone(),
             signed: s.clone(),
-            public_key: hex(key.as_bytes()),
             program: dir.join(program),
             program_sha256,
             dir,
@@ -494,7 +531,7 @@ impl Catalog {
             source: a.signed.source.clone(),
             publisher: a.signed.publisher.clone(),
             key_id: a.signed.key_id.clone(),
-            public_key: a.public_key.clone(),
+            public_key: a.public_key().into(),
             host_contract: a.host_contract,
             confirmed_at: super::now(),
         });
@@ -531,7 +568,7 @@ impl Catalog {
                 )
             })?;
         let a = self.check_native(id, roots)?;
-        if admission.public_key != a.public_key || admission.host_contract != a.host_contract {
+        if admission.public_key != a.public_key() || admission.host_contract != a.host_contract {
             return Err(format!(
                 "{id}'s signing key or host contract changed since it was confirmed; enable it again"
             ));

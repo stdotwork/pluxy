@@ -1013,6 +1013,7 @@ fn signed_artifact(
             "size": bytes.len(), "sha256": digest(bytes)}))
         .unwrap();
         a["key_id"] = "k1".into();
+        a["public_key"] = hex(key.verifying_key().as_bytes()).into();
         a["signature"] = hex(&key.sign(descriptor.as_bytes()).to_bytes()).into();
         a["descriptor"] = descriptor.into();
     }
@@ -1033,7 +1034,13 @@ fn native_fixture(root: &Path) -> (Dirs, TestRoots) {
     let forged = native_package("pluxy/forged", "1.0.0");
     let renamed = native_package("pluxy/renamed", "1.0.0");
     let lookalike = native_package("example/native", "1.0.0");
+    let partial = native_package("pluxy/partial", "1.0.0");
+    let wrong_key = native_package("pluxy/wrongkey", "1.0.0");
+    let signed_page = package("example/signedpage", "1.0.0");
     for (f, b) in [
+        ("partial", &partial),
+        ("wrongkey", &wrong_key),
+        ("signedpage", &signed_page),
         ("v1", &v1),
         ("v2", &v2),
         ("unsigned", &unsigned),
@@ -1049,15 +1056,44 @@ fn native_fixture(root: &Path) -> (Dirs, TestRoots) {
         {"version": "1.1.0", "artifacts": {p.clone(): signed_artifact("v2", &v2, Some((&key, "pluxy/tool", "1.1.0")))}},
         {"version": "1.0.0", "artifacts": {p.clone(): signed_artifact("v1", &v1, Some((&key, "pluxy/tool", "1.0.0")))}}
     ]});
+    // Signed by another key, listing the root's key: the signature does not hold.
+    let mut forged_entry = signed_artifact(
+        "forged",
+        &forged,
+        Some((&other_key, "pluxy/forged", "1.0.0")),
+    );
+    forged_entry["public_key"] = hex(key.verifying_key().as_bytes()).into();
+    // Part of a signature: no public_key.
+    let mut part = signed_artifact("partial", &partial, Some((&key, "pluxy/partial", "1.0.0")));
+    part.as_object_mut().unwrap().remove("public_key");
+    // Signed with the root's key, but the index names another key.
+    let mut wrong = signed_artifact(
+        "wrongkey",
+        &wrong_key,
+        Some((&key, "pluxy/wrongkey", "1.0.0")),
+    );
+    wrong["public_key"] = hex(other_key.verifying_key().as_bytes()).into();
+    // Signed by a key no root names, for a publisher no root names: no provenance here.
+    let page_signed = signed_artifact(
+        "signedpage",
+        &signed_page,
+        Some((&other_key, "example/signedpage", "1.0.0")),
+    );
+    let mut page_part = page_signed.clone();
+    page_part.as_object_mut().unwrap().remove("descriptor");
     let curated = serde_json::json!({"registry_version": 0, "packages": {
+        "pluxy/partial": one(part),
+        "pluxy/wrongkey": one(wrong),
+        "example/signedpage": one(page_signed.clone()),
         "pluxy/tool": tool,
         "pluxy/unsigned": one(signed_artifact("unsigned", &unsigned, None)),
-        "pluxy/forged": one(signed_artifact("forged", &forged, Some((&other_key, "pluxy/forged", "1.0.0")))),
+        "pluxy/forged": one(forged_entry),
         // Signed, but its descriptor names another release.
         "pluxy/renamed": one(signed_artifact("renamed", &renamed, Some((&key, "pluxy/renamed", "2.0.0")))),
         "example/native": one(signed_artifact("lookalike", &lookalike, None)),
     }});
     let other = serde_json::json!({"registry_version": 0, "packages": {"pluxy/tool": tool,
+        "example/signedpage": one(page_signed), "example/partial": one(page_part),
         "example/native": one(signed_artifact("lookalike", &lookalike, None))}});
     fs::write(
         reg.join("curated.json"),
@@ -1104,6 +1140,48 @@ fn only_a_curated_signed_native_tool_installs() {
     assert!(e.contains("invalid descriptor signature"), "{e}");
     let e = refused("curated", "pluxy/renamed", &roots);
     assert!(e.contains("names pluxy/renamed 2.0.0"), "{e}");
+    let e = refused("curated", "pluxy/partial", &roots);
+    assert!(e.contains("part of a signature"), "{e}");
+    let e = refused("other", "example/partial", &roots);
+    assert!(e.contains("part of a signature"), "{e}");
+    let e = refused("curated", "pluxy/wrongkey", &roots);
+    assert!(e.contains("not the key its root names"), "{e}");
+    // What the registries list says the same, before anything is fetched; whether a package is
+    // a native tool only its archive tells.
+    let listed = offers(&d, &roots).unwrap();
+    let refusals = |name: &str| -> BTreeSet<String> {
+        listed
+            .iter()
+            .find(|r| r.name == name)
+            .unwrap()
+            .packages
+            .iter()
+            .filter(|o| o.refused.is_some())
+            .map(|o| o.id.clone())
+            .collect()
+    };
+    let set = |ids: &[&str]| ids.iter().map(|s| s.to_string()).collect::<BTreeSet<_>>();
+    assert_eq!(
+        refusals("curated"),
+        set(&[
+            "pluxy/forged",
+            "pluxy/partial",
+            "pluxy/renamed",
+            "pluxy/unsigned",
+            "pluxy/wrongkey"
+        ])
+    );
+    assert_eq!(refusals("other"), set(&["example/partial", "pluxy/tool"]));
+    // A signature a root does not vouch for is ignored, from either registry: Unverified.
+    for registry in ["curated", "other"] {
+        let mut c = Catalog::open(d.clone(), false, &roots);
+        c.commit(stage_from_registry(&d, &roots, registry, "example/signedpage", None).unwrap())
+            .unwrap();
+        let p = c.get("example/signedpage").unwrap();
+        assert!(p.active.signed.is_none(), "{registry}: {p:?}");
+        assert_eq!(c.view(&roots).packages[0].trust, "unverified");
+        c.remove("example/signedpage").unwrap();
+    }
     // A build with no roots: nothing is curated.
     let e = refused("curated", "pluxy/tool", &NoRoots);
     assert!(e.contains("not configured"), "{e}");
@@ -1184,7 +1262,8 @@ fn admission_is_confirmed_per_release_and_checked_each_time() {
         ),
         ("pluxy", "k1", roots.source.as_str())
     );
-    assert_eq!(a.public_key, hex(roots.key.as_bytes()));
+    assert_eq!(a.public_key(), hex(roots.key.as_bytes()));
+    assert_eq!(a.signed.public_key, hex(roots.key.as_bytes()));
     assert_eq!(a.operations[0].id, "inspect");
     // The program's digest at install, from the fixture's own bytes.
     assert_eq!(a.program_sha256(), digest(b"#!/bin/sh\n# 1.0.0\n"));
