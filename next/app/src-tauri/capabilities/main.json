@@ -36,6 +36,8 @@
     "allow-program-status",
     "allow-window-get",
     "allow-window-set",
-    "allow-window-close"
+    "allow-window-close",
+    "allow-privacy-get",
+    "allow-privacy-set"
   ]
 }
