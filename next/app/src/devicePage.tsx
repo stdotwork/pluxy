@@ -84,7 +84,7 @@ const t = strings("device", {
   availableList: "Available extensions",
   install: "Install",
   update: "Update to {version}",
-  reserved: "Refused: reserved publisher",
+  refused: "Refused",
 });
 
 function sourceText(p: DevicePackage): string {
@@ -227,7 +227,7 @@ function Available(props: { installed: DevicePackage[]; onInstalled: () => void 
               value: (o) =>
                 o.refused ? (
                   <span class="muted" title={o.refused}>
-                    {t("reserved")}
+                    {t("refused")}
                   </span>
                 ) : (
                   <Button

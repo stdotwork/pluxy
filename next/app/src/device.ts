@@ -59,7 +59,8 @@ export interface DeviceOffer {
   id: string;
   /** Versions with an archive for this computer, newest first. */
   versions: string[];
-  /** Why the app refuses it whatever the archive holds (a reserved publisher). */
+  /** Why installing the version offered is refused, as far as the index shows (a reserved
+   * publisher, or a signature that is missing, partial or does not hold). */
   refused?: string;
 }
 

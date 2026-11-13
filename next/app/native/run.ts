@@ -536,11 +536,17 @@ async function runApp(
     // swapped-in release to its page webview and refused that webview the replaced one's files.
     if (device) {
       const d = steps.get("device") as
-        | { passed?: boolean; v2_label?: string; digests?: Record<string, string> }
+        | { passed?: boolean; v2_label?: string; digests?: Record<string, string>; normal_build?: string }
         | undefined;
       // Without its line, the app's failed step says where the check stopped and why.
       const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
       check(d?.passed === true, `the device catalog check did not complete: ${failure}`);
+      // This normal build refused the curated registry's signed native tool despite the HOME's
+      // valid test trust profile, for want of roots.
+      check(
+        d?.normal_build?.includes("not configured"),
+        `the normal build did not refuse the curated native tool: ${JSON.stringify(d?.normal_build)}`,
+      );
       const dg = d?.digests ?? {};
       const served = (label: string | undefined, digest: string | undefined, status: number) =>
         assets.some((a) => a.label === label && a.path.includes(`/${digest}/`) && a.status === status);

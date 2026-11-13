@@ -898,7 +898,11 @@ fn confirmation_settings(webview: Webview) -> Result<(), String> {
 #[tauri::command]
 fn device_list(webview: Webview, state: tauri::State<App>) -> Result<device::View, String> {
     trusted(&webview)?;
-    Ok(state.device.lock().unwrap().view())
+    Ok(state
+        .device
+        .lock()
+        .unwrap()
+        .view(&trust::TrustStore::current()))
 }
 
 /// What the registries in `device-registries.json` offer this computer.
@@ -933,7 +937,7 @@ fn device_changed(
             pages.unbind(l);
         }
         let left: Vec<String> = catalog.take_cleanup().into_iter().collect();
-        (labels, catalog.view(), left)
+        (labels, catalog.view(&trust::TrustStore::current()), left)
     };
     left.extend(close_webviews(app, labels));
     // A native tool runs only as the release it was admitted as: any change stops it, and its
@@ -1092,7 +1096,9 @@ async fn device_enable(
         if native {
             return native_enable(&app, &id);
         }
-        device_changed(&app, &id, |c| c.set_enabled(&id, enabled))
+        device_changed(&app, &id, |c| {
+            c.set_enabled(&id, enabled, &trust::TrustStore::current())
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1461,7 +1467,11 @@ pub fn run() {
             };
             // `--safe-mode`: no page of a package on this device is listed, opened or served.
             let safe_mode = std::env::args().skip(1).any(|a| a == "--safe-mode");
-            let catalog = device::Catalog::open(device_dirs.clone(), safe_mode);
+            let catalog = device::Catalog::open(
+                device_dirs.clone(),
+                safe_mode,
+                &trust::TrustStore::current(),
+            );
             if let Some(w) = &catalog.warning {
                 eprintln!("pluxy-app: {w}");
             }

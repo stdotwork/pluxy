@@ -108,14 +108,14 @@ pub struct Spec {
 impl From<&crate::device::Admitted> for Spec {
     fn from(a: &crate::device::Admitted) -> Self {
         Spec {
-            id: a.id.clone(),
-            sha256: a.sha256.clone(),
-            generation: a.installed_at,
-            program: a.program.clone(),
-            program_sha256: a.program_sha256.clone(),
-            dir: a.dir.clone(),
+            id: a.id().into(),
+            sha256: a.sha256().into(),
+            generation: a.installed_at(),
+            program: a.program().into(),
+            program_sha256: a.program_sha256().into(),
+            dir: a.dir().into(),
             operations: a
-                .operations
+                .operations()
                 .iter()
                 .map(|o| Operation {
                     id: o.id.clone(),
@@ -123,7 +123,7 @@ impl From<&crate::device::Admitted> for Spec {
                     output_schema: o.output_schema.clone(),
                 })
                 .collect(),
-            state_version: a.state.version,
+            state_version: a.state().version,
             secrets: Vec::new(),
         }
     }

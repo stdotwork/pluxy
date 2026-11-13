@@ -3,7 +3,7 @@
 // for this run, three local registry indexes (two the run's trust profile names as curated
 // sources, one it does not), and the run's test trust profile in its HOME. The private key never
 // leaves this process: only the public key is written, into the trust profile. expect.json holds
-// each archive's SHA-256, computed here from the archive bytes.
+// each archive's SHA-256, computed here from the archive bytes, and the native program's.
 
 import { spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync, type KeyObject, randomBytes, sign } from "node:crypto";
@@ -14,6 +14,8 @@ import { join } from "node:path";
 export const MARKER_FILE = ".pluxy-test-trust-profile.json";
 export const PROFILE_FILE = ".pluxy-test-trust-roots.json";
 export const KEY_ID = "fixture";
+/** The native fixtures' program (bin/tool). */
+const PROGRAM = "#!/bin/sh\nexit 0\n";
 
 /** Go's platform name for this machine, as registry artifacts are keyed. */
 export function platform(): string {
@@ -64,7 +66,7 @@ function pack(root: string, f: Fixture): string {
   );
   if (f.tier === "native") {
     // Never run by this slice: admission starts no process.
-    writeFileSync(join(dir, "bin", "tool"), "#!/bin/sh\nexit 0\n");
+    writeFileSync(join(dir, "bin", "tool"), PROGRAM);
     chmodSync(join(dir, "bin", "tool"), 0o755);
   } else {
     mkdirSync(join(dir, "pages"));
@@ -86,8 +88,9 @@ export function publicHex(key: KeyObject): string {
   return hex(Buffer.from(jwk.x as string, "base64url"));
 }
 
-/** An index artifact for archive, signed with key when given. */
-export function artifact(root: string, file: string, f: Fixture, key?: KeyObject) {
+/** An index artifact for archive, signed with key when given, naming the root's public key
+ * (rootKey): a forger copies the key the index should name. */
+export function artifact(root: string, file: string, f: Fixture, rootKey: KeyObject, key?: KeyObject) {
   const bytes = readFileSync(join(root, file));
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   const entry: Record<string, unknown> = { url: file, sha256, size: bytes.length };
@@ -102,6 +105,7 @@ export function artifact(root: string, file: string, f: Fixture, key?: KeyObject
       sha256,
     });
     entry.key_id = KEY_ID;
+    entry.public_key = publicHex(rootKey);
     entry.descriptor = descriptor;
     entry.signature = hex(sign(null, Buffer.from(descriptor, "utf8"), key));
   }
@@ -150,7 +154,7 @@ export function buildAdmissionFixtures(root: string, home: string): Admission {
   for (const f of Object.values(fixtures)) pack(root, f);
   const a = (k: string, key?: KeyObject) => {
     const f = fixtures[k] as Fixture;
-    return artifact(root, f.file, f, key);
+    return artifact(root, f.file, f, publicKey, key);
   };
   const tool = a("tool", privateKey);
   const forged = a("forged", other);
@@ -191,6 +195,7 @@ export function buildAdmissionFixtures(root: string, home: string): Admission {
       page: page.sha256,
       public_key: publicHex(publicKey),
       key_id: KEY_ID,
+      program: createHash("sha256").update(PROGRAM).digest("hex"),
     }),
   );
 

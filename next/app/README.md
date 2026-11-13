@@ -202,20 +202,26 @@ manifest must be a valid manifest version 1 with an app contribution for host co
 one with an existing file for each page, or a curated native one (below). The app unpacks it into a staging folder and moves it into an
 immutable store, `device-packages/store/<archive SHA-256>/` in the app's data folder, with
 read-only files. The catalog (`device-packages/catalog.json`) records each package's source and
-each release's version, digest, sizes, formats, pages and the SHA-256 of each page file.
+each release's version, digest, sizes, formats, pages and the SHA-256 of each page file. A catalog
+holding a native tool is saved as version 1, so an app from before native tools, which reads only
+version 0, moves it aside with a warning instead of reading the tool as a page package.
 
 A registry is curated when its index address equals the `source` of a native-tier trust root
 exactly. This build compiles no roots (production roots are a release decision), so nothing is
 curated outside a test build with a test trust profile. A package from any other source is
 labelled **Unverified**, and one whose ID claims a reserved publisher (`pluxy`, or any publisher a
 root names) is refused, before a registry's archive is fetched and again after a local archive is
-unpacked. A package keeps the source it was installed from: a release from another source is
+unpacked. A package installed before a root reserved its publisher is disabled when the
+catalog opens, with a warning, and cannot be enabled again until it is removed. A package keeps the source it was installed from: a release from another source is
 refused until the package is removed. Packages get no resources or settings here: their pages'
 settings calls answer `unavailable`.
 
 A native tool installs only from a curated registry whose index entry carries a descriptor signed
-by the root's key for that publisher and source; the signature, then the archive's size and
-SHA-256, are checked before it is unpacked, and the manifest's ID, version and tier after. Its
+by the root's key for that publisher and source, and names that key as its `public_key`; the
+signature, then the archive's size and SHA-256, are checked before it is unpacked, and the
+manifest's ID, version and tier after. A signature the index lists for any other package is
+ignored, and the Device extensions page marks an entry the index already shows install would
+refuse. Its
 program for this computer must be an executable file in the package, and the SHA-256 of every
 file is recorded. It is labelled **Curated** and installs disabled. Enabling it opens a native
 confirmation that says it has **full access to your user account** and shows its ID, source,

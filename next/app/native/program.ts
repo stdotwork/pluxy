@@ -82,7 +82,7 @@ export function buildProgramFixtures(root: string, home: string, program: string
   if (r.status !== 0) throw new Error(`tar exited with ${r.status}`);
   rmSync(dir, { recursive: true, force: true });
 
-  const signed = artifact(root, f.file, f, privateKey);
+  const signed = artifact(root, f.file, f, publicKey, privateKey);
   const curated = join(root, "curated.json");
   writeFileSync(
     curated,
