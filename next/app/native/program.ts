@@ -45,6 +45,7 @@ export function buildProgramFixtures(root: string, home: string, program: string
           {
             id: "summary",
             description: "Count the items and name the longest",
+            effect: "read",
             input_schema: {
               type: "object",
               properties: {
@@ -62,6 +63,7 @@ export function buildProgramFixtures(root: string, home: string, program: string
           {
             id: "wait",
             description: "Wait until cancelled",
+            effect: "read",
             input_schema: { type: "object", additionalProperties: false },
             output_schema: object,
           },

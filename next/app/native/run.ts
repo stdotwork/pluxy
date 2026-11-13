@@ -53,6 +53,7 @@ import { buildSmokeAppImage } from "./appimage";
 import { buildDeviceFixtures } from "./device";
 import { descendants, webProcesses } from "./processes";
 import { buildProgramFixtures } from "./program";
+import { buildRoutingFixtures } from "./routing";
 import { missingPrerequisites } from "./services";
 
 const app = join(import.meta.dir, "..");
@@ -195,6 +196,7 @@ async function runApp(
   suite?: Suite,
   admission = false,
   program = false,
+  routing = false,
 ): Promise<string[]> {
   const root = mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
   const problems: string[] = [];
@@ -224,7 +226,8 @@ async function runApp(
       );
     const quit = join(root, "quit");
     // This device's extension catalog is the same in every mode: check it once, in managed mode.
-    const device = mode === "managed" && !admission && !program ? join(root, "device") : undefined;
+    const device =
+      mode === "managed" && !admission && !program && !routing ? join(root, "device") : undefined;
     // A test trust profile in HOME naming curated registries: the admission session's build
     // honours it; the device check's normal build must not.
     const curated = device || admission ? join(root, "curated") : undefined;
@@ -234,6 +237,17 @@ async function runApp(
     if (programDir) {
       mkdirSync(programDir);
       const f = buildProgramFixtures(programDir, dirs.home, programFixture);
+      nonce = f.nonce;
+      writeFileSync(
+        join(dirs.config, identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
+    // The routing check's signed tools and web packages, their registries and trust profile.
+    const routingDir = routing ? join(root, "routing") : undefined;
+    if (routingDir) {
+      mkdirSync(routingDir);
+      const f = buildRoutingFixtures(routingDir, dirs.home, programFixture);
       nonce = f.nonce;
       writeFileSync(
         join(dirs.config, identifier, "device-registries.json"),
@@ -281,6 +295,7 @@ async function runApp(
       ...(admission ? { PLUXY_APP_TEST_ADMISSION: curated as string } : {}),
       // In the app's environment, never in the tool's (program_native.rs checks its names).
       ...(programDir ? { PLUXY_APP_TEST_PROGRAM: programDir, PLUXY_TEST_PROGRAM_CANARY: randomUUID() } : {}),
+      ...(routingDir ? { PLUXY_APP_TEST_ROUTING: routingDir } : {}),
       ...(nonce ? { PLUXY_TEST_TRUST_NONCE: nonce } : {}),
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: identifier } : {}),
       ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
@@ -418,6 +433,16 @@ async function runApp(
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode} program ${JSON.stringify(p ?? {})}`);
       console.log(`${mode}: program ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
+    if (routing) {
+      const r = steps.get("routing") as { passed?: boolean } | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(r?.passed === true, `the routing check did not complete: ${failure}`);
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} routing ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode}: routing ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
 
@@ -715,6 +740,21 @@ try {
         false,
         undefined,
         undefined,
+        false,
+        true,
+      )),
+    );
+    p.push(
+      ...(await runApp(
+        "managed",
+        trustBin,
+        { mode: "managed", core_path: core },
+        undefined,
+        false,
+        false,
+        undefined,
+        undefined,
+        false,
         false,
         true,
       )),

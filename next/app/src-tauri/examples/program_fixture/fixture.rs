@@ -9,7 +9,13 @@
 //! - `summary` with what it was given (`count`, `longest`) and what it sees of itself: its process
 //!   and group, the child it started, the calls it has had, its environment's names, its open
 //!   file descriptors and its working folder;
-//! - `wait` only once it is cancelled.
+//! - `wait` only once it is cancelled;
+//! - `store` and `launch` with what they were given, doing nothing else: the routing check's
+//!   write- and launch-class operations;
+//! - `relay` by calling another package's operation through the host, as the input says, and
+//!   answering with the host's answer to that.
+//!
+//! Each answer but describe's also carries the `chain` the host's call named.
 //!
 //! At start it starts one child, itself again, which sleeps in its process group until killed, so
 //! the checks can see the host stop the whole group. It exits at the end of its input. A
@@ -116,6 +122,39 @@ fn sleep_forever() -> ! {
     }
 }
 
+/// Calls `input.package`'s `input.op` with `input.input` through the host, for call f, with
+/// `input.extra`'s fields added to the frame (and `input.for` instead of f's ID when given), and
+/// waits for the host's answer: `{"output": ...}` or `{"error": ...}`. A cancel of f while it
+/// waits is passed on as a cancel of this call.
+fn relay(input: &mut impl Read, output: &mut impl Write, f: &Value, n: u64) -> Value {
+    let rid = format!("o-{n}");
+    let mut call = json!({
+        "type": "call",
+        "id": rid,
+        "for": f["input"].get("for").cloned().unwrap_or_else(|| f["id"].clone()),
+        "package": f["input"]["package"],
+        "op": f["input"]["op"],
+        "input": f["input"]["input"],
+    });
+    if let (Some(extra), Some(frame)) = (f["input"]["extra"].as_object(), call.as_object_mut()) {
+        for (k, v) in extra {
+            frame.insert(k.clone(), v.clone());
+        }
+    }
+    write_frame(output, &call);
+    while let Some(m) = read_frame(input) {
+        match m["type"].as_str() {
+            Some("result") if m["id"] == rid.as_str() => return json!({"output": m["output"]}),
+            Some("error") if m["id"] == rid.as_str() => return json!({"error": m["error"]}),
+            Some("cancel") if m["id"] == f["id"] => {
+                write_frame(output, &json!({"type": "cancel", "id": rid}));
+            }
+            _ => {}
+        }
+    }
+    json!({"error": {"code": "extension_unavailable", "message": "the host closed the pipe"}})
+}
+
 /// Runs the fixture: as its child when started with `CHILD`, else as the tool.
 pub fn main() -> ! {
     if std::env::var_os(CHILD).is_some() {
@@ -168,8 +207,10 @@ pub fn main() -> ! {
     );
     let mut calls = 0u64;
     let mut waiting: Option<Value> = None;
+    let mut relayed = 0u64;
     while let Some(f) = read_frame(&mut input) {
         let id = f["id"].clone();
+        let chain = f["chain"].clone();
         match (f["type"].as_str(), f["op"].as_str()) {
             (Some("call"), Some("describe")) => {
                 let mut ops = manifest["app"]["operations"].clone();
@@ -218,6 +259,7 @@ pub fn main() -> ! {
                                 "env": names,
                                 "fds": fds(),
                                 "cwd": std::env::current_dir().ok(),
+                                "chain": chain,
                             })
                         });
                         write_frame(
@@ -231,6 +273,25 @@ pub fn main() -> ! {
                             &json!({"type": "progress", "id": id, "value": {"waiting": true}}),
                         );
                         waiting = Some(id);
+                    }
+                    "store" => write_frame(
+                        &mut output,
+                        &json!({"type": "result", "id": id, "output":
+                            {"stored": f["input"]["value"], "calls": calls, "chain": chain}}),
+                    ),
+                    "launch" => write_frame(
+                        &mut output,
+                        &json!({"type": "result", "id": id, "output":
+                            {"launched": f["input"]["argv"], "calls": calls, "chain": chain}}),
+                    ),
+                    "relay" => {
+                        relayed += 1;
+                        let answer = relay(&mut input, &mut output, &f, relayed);
+                        write_frame(
+                            &mut output,
+                            &json!({"type": "result", "id": id, "output":
+                                {"answer": answer, "calls": calls, "chain": chain}}),
+                        );
                     }
                     _ => write_frame(
                         &mut output,
