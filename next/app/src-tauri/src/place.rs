@@ -43,11 +43,17 @@ mod gtk_overlay {
         )
     }
 
-    fn put(w: &gtk::Widget, p: Place) {
+    /// Puts w at p, or hides it when there is no p.
+    fn put(w: &gtk::Widget, p: Option<Place>) {
+        let Some(p) = p else {
+            w.hide();
+            return;
+        };
         // Its minimum too: GTK warns when it gives a widget less than that.
         w.set_size_request(p.2, p.3);
         // The overlay lays it out again, at its new place (child_position).
         w.queue_resize();
+        w.show();
     }
 
     /// The overlay's `get-child-position` handler: a page webview's place is the one the app put
@@ -78,7 +84,7 @@ mod gtk_overlay {
     }
 
     /// Moves the page webview just added to window's box over the window's webview.
-    pub fn adopt(window: &tauri::Window, label: &str, b: Bounds) -> Result<(), String> {
+    pub fn adopt(window: &tauri::Window, label: &str, b: Option<Bounds>) -> Result<(), String> {
         let vbox = window.default_vbox().map_err(|e| e.to_string())?;
         let children = vbox.children();
         let overlay = match children
@@ -119,23 +125,31 @@ mod gtk_overlay {
         // All of the place child_position gives it, with no margins or alignment inside.
         page.set_halign(gtk::Align::Fill);
         page.set_valign(gtk::Align::Fill);
-        let place = place_of(b);
+        // A page placed hidden keeps a place of one pixel until it is placed.
+        let place = place_of(b.unwrap_or(Bounds {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        }));
         PLACED.with(|p| {
             p.borrow_mut()
                 .insert(label.to_string(), (page.clone(), place))
         });
-        put(&page, place);
         overlay.add_overlay(&page);
-        page.show();
+        put(&page, b.map(|_| place));
         Ok(())
     }
 
-    pub fn place(label: &str, b: Bounds) -> Result<(), String> {
+    pub fn place(label: &str, b: Option<Bounds>) -> Result<(), String> {
         let placed = PLACED.with(|p| {
             let mut p = p.borrow_mut();
             let (w, place) = p.get_mut(label)?;
-            *place = place_of(b);
-            Some((w.clone(), *place))
+            // Hidden, it keeps its last place.
+            if let Some(b) = b {
+                *place = place_of(b);
+            }
+            Some((w.clone(), b.map(|_| *place)))
         });
         match placed {
             Some((w, place)) => {
@@ -154,7 +168,7 @@ mod gtk_overlay {
     pub fn allocation(label: &str) -> Option<Bounds> {
         PLACED.with(|p| {
             let p = p.borrow();
-            let (w, _) = p.get(label)?;
+            let (w, _) = p.get(label).filter(|(w, _)| w.is_visible())?;
             let a = w.allocation();
             // Relative to the window, as the page area is.
             let (x, y) = w.translate_coordinates(&w.toplevel()?, 0, 0)?;
@@ -186,28 +200,37 @@ mod gtk_overlay {
     }
 }
 
-/// Puts the page webview labelled label, just added to window, at b.
-pub fn adopt(window: &Window, label: &str, b: Bounds) -> Result<(), String> {
+/// Puts the page webview labelled label, just added to window, at b; none hides it.
+pub fn adopt(window: &Window, label: &str, b: Option<Bounds>) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     return gtk_overlay::adopt(window, label, b);
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (window, label, b);
-        Ok(())
+        use tauri::Manager as _;
+        match (b, window.get_webview(label)) {
+            (None, Some(w)) => w.hide().map_err(|e| e.to_string()),
+            _ => Ok(()),
+        }
     }
 }
 
-/// Moves the page webview to b.
-pub fn place(webview: &Webview, b: Bounds) -> Result<(), String> {
+/// Moves the page webview to b; none hides it until it is placed again.
+pub fn place(webview: &Webview, b: Option<Bounds>) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     return gtk_overlay::place(webview.label(), b);
     #[cfg(not(target_os = "linux"))]
-    webview
-        .set_bounds(tauri::Rect {
-            position: tauri::LogicalPosition::new(b.x.max(0.0), b.y.max(0.0)).into(),
-            size: tauri::LogicalSize::new(b.width.max(1.0), b.height.max(1.0)).into(),
-        })
-        .map_err(|e| e.to_string())
+    {
+        let Some(b) = b else {
+            return webview.hide().map_err(|e| e.to_string());
+        };
+        webview
+            .set_bounds(tauri::Rect {
+                position: tauri::LogicalPosition::new(b.x.max(0.0), b.y.max(0.0)).into(),
+                size: tauri::LogicalSize::new(b.width.max(1.0), b.height.max(1.0)).into(),
+            })
+            .and_then(|_| webview.show())
+            .map_err(|e| e.to_string())
+    }
 }
 
 /// Drops what the app holds of a page webview that closed.
@@ -218,7 +241,8 @@ pub fn forget(label: &str) {
     let _ = label;
 }
 
-/// Where the page webview labelled label actually is, in the window's overlay (Linux only).
+/// Where the page webview labelled label actually is, in the window's overlay, if it shows
+/// (Linux only).
 #[cfg(feature = "native-test")]
 pub fn allocation(label: &str) -> Option<Bounds> {
     #[cfg(target_os = "linux")]

@@ -83,6 +83,7 @@ import { buildAccessFixtures } from "./access";
 import { buildAdmissionFixtures, MARKER_FILE, PROFILE_FILE } from "./admission";
 import { appImageHeader, buildSmokeAppImage, packAppImage } from "./appimage";
 import { buildDeviceFixtures } from "./device";
+import { type Feed, standInBrowser, startFeed } from "./feed";
 import { runInstances } from "./instances";
 import { descendants, webProcesses } from "./processes";
 import { buildProgramFixtures } from "./program";
@@ -93,7 +94,9 @@ import { buildVaultFixtures } from "./vault";
 const app = join(import.meta.dir, "..");
 const next = join(app, "..");
 const tauri = join(app, "src-tauri");
-const identifier: string = JSON.parse(readFileSync(join(tauri, "tauri.conf.json"), "utf8")).identifier;
+const tauriConf = JSON.parse(readFileSync(join(tauri, "tauri.conf.json"), "utf8"));
+const identifier: string = tauriConf.identifier;
+const appVersion: string = tauriConf.version;
 /** What the test package must be built as; written here, not read from what package.ts made. */
 const TEST_ID = "dev.pluxy.desktop.test";
 const TEST_PRODUCT = "pluxy Test";
@@ -293,6 +296,8 @@ async function runApp(
   const { label, bin } = artifact;
   const root = rotation.root ?? mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
   const problems: string[] = [];
+  let feed: Feed | undefined;
+  let offlineWatch: ReturnType<typeof setInterval> | undefined;
   const check = (ok: unknown, what: string) => {
     if (!ok) problems.push(what);
   };
@@ -321,6 +326,16 @@ async function runApp(
         { mode: 0o600 },
       );
     const quit = join(root, "quit");
+    // The fake release feed, and the stand-in browser that notes links open in.
+    feed = startFeed(join(root, "feed"));
+    const browserLog = standInBrowser(root, dirs);
+    const offline = join(root, "feed-offline");
+    offlineWatch = setInterval(() => {
+      if (feed && existsSync(offline) && !existsSync(`${offline}-done`)) {
+        feed.stop();
+        writeFileSync(`${offline}-done`, "");
+      }
+    }, 100);
     // This device's extension catalog is the same in every mode: check it once, in managed mode.
     const device =
       mode === "managed" && !admission && !program && !routing && !vault && suite !== "access"
@@ -450,6 +465,11 @@ async function runApp(
       APPIMAGE_EXTRACT_AND_RUN: "1",
       PLUXY_APP_TEST_PAGE: PAGE,
       PLUXY_APP_TEST_QUIT: quit,
+      PLUXY_APP_TEST_FEED: feed.url,
+      PLUXY_APP_TEST_FEED_OTHER: feed.other,
+      PLUXY_APP_TEST_FEED_CA: feed.ca,
+      PLUXY_APP_TEST_FEED_OFFLINE: offline,
+      PLUXY_APP_TEST_BROWSER_LOG: browserLog,
       PLUXY_APP_TEST_STATE: join(root, "state.json"),
       PLUXY_APP_TEST_TRAY_HOLD: join(root, "tray-hold"),
       ...(device ? { PLUXY_APP_TEST_DEVICE: device, PLUXY_APP_TEST_CURATED: curated as string } : {}),
@@ -853,6 +873,8 @@ async function runApp(
 
     check(steps.get("confirmations")?.passed === true, "native confirmation checks did not complete");
 
+    checkRelease(steps.get("release"), feed, browserLog, check);
+    console.log(`${mode} release ${JSON.stringify(steps.get("release"))}`);
     const rotationStep = steps.get("rotation");
     const managed = mode === "managed";
     const wanted = {
@@ -937,11 +959,115 @@ async function runApp(
         `${reached.length} commands reached, all from main: ${reached.every((w) => w === "main")})`,
     );
   } finally {
+    clearInterval(offlineWatch);
+    feed?.stop();
     // A folder left behind is a problem of its own; it must not hide this run's report.
     if (!rotation.root)
       await removeRun(root).catch((e) => problems.push(`the run folder ${root} was not removed: ${e}`));
   }
   return problems;
+}
+
+/** The release feed check's evidence (release_native.rs), against the feed fixture and what the
+ * feed server and the stand-in browser saw, which the app cannot change. */
+function checkRelease(
+  // biome-ignore lint/suspicious/noExplicitAny: the app's JSON evidence, checked field by field below
+  release: Record<string, any> | undefined,
+  feed: Feed,
+  browserLog: string,
+  check: (ok: unknown, what: string) => void,
+) {
+  check(release, "the release feed check did not finish");
+  if (!release) return;
+  const good = `${feed.base}/notes/0.3.0-preview.1`;
+  const full = `${feed.base}/releases/0.3.0-preview.1`;
+  // The fixture's `/escaped/a[1]?q=x|y`, as the notes document writes it (and WebKit navigates to it).
+  const escaped = `${feed.base}/escaped/a%5B1%5D?q=x%7Cy`;
+  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  check(release.no_default === true, "release settings existed before any feed was confirmed");
+  check(release.confirmed === true, "the confirmed feed was not kept in release.json");
+  check(
+    same(release.stable, { app: "0.2.0", core: "1.4.0", installed_app: appVersion }),
+    `the stable channel showed ${JSON.stringify(release.stable)}`,
+  );
+  check(release.cancel_kept === true, "cancelling a feed change did not keep the old feed and its copy");
+  const vo = release.voided ?? {};
+  check(
+    vo.channel_disabled === true &&
+      vo.channel_set === true &&
+      /settings changed while the feed change waited/.test(vo.error ?? "") &&
+      vo.kept === true,
+    `a feed change voided while it waited: ${JSON.stringify(vo)}`,
+  );
+  check(
+    same(release.preview, { app: "0.3.0-preview.1", core: "1.5.0-rc.1" }),
+    `Preview (latest) showed ${JSON.stringify(release.preview)}`,
+  );
+  const n = release.notes ?? {};
+  check(n.href === "pluxy-notes://localhost/", `the notes webview shows ${n.href}`);
+  check(n.internals === true, "the notes webview has no IPC, so its probe proves nothing");
+  for (const k of ["scripts", "images", "embedded", "handlers"] as const)
+    check(n[k] === 0, `the notes document has ${n[k]} ${k}`);
+  check(n.ran === null, `a script in the notes ran: ${n.ran}`);
+  check(n.heading === "What changed", `the notes' Markdown was not rendered: ${n.heading}`);
+  check(n.html_left_out === true, "raw HTML in the notes was not left out, or the text was lost");
+  check(
+    same(n.links, [good, escaped]),
+    `the notes link to ${JSON.stringify(n.links)}, not ${good} and ${escaped}`,
+  );
+  check(
+    release.control?.ok === true && release.control.source === feed.url,
+    `the window's release_get control failed: ${JSON.stringify(release.control)}`,
+  );
+  const probe = release.notes_probe as Probe | undefined;
+  check(probe?.internals, "the notes webview's probe found no IPC");
+  for (const cmd of commands) check(probe?.calls[cmd], `the notes webview's probe did not try ${cmd}`);
+  for (const [cmd, c] of Object.entries(probe?.calls ?? {}))
+    check(!c.ok && REFUSED.test(c.detail), `${cmd} from the notes webview: ${JSON.stringify(c)}`);
+  const nav = release.navigation ?? {};
+  check(same(nav.unlinked_opened, []), `an unlinked address opened: ${JSON.stringify(nav.unlinked_opened)}`);
+  check(same(nav.opened, [good]), `the notes link opened ${JSON.stringify(nav.opened)}`);
+  check(same(nav.full, [good, full]), `View full release notes opened ${JSON.stringify(nav.full)}`);
+  check(
+    same(nav.escaped, [good, full, escaped]),
+    `the link with escaped characters opened ${JSON.stringify(nav.escaped)}`,
+  );
+  check(nav.stayed === "pluxy-notes://localhost/", `the notes webview navigated to ${nav.stayed}`);
+  const dl = release.downloads ?? {};
+  check(
+    dl.refused >= 1 && dl.saved === false && dl.right_clicks >= 1 && dl.menu_shown === false,
+    `downloads and context menu in the notes webview: ${JSON.stringify(dl)}`,
+  );
+  const ex = release.expand ?? {};
+  check(
+    ex.first_follows === true && ex.collapse_closed === true && ex.expand_follows === true,
+    `Expand/Collapse: ${JSON.stringify(ex)}`,
+  );
+  const sc = release.scrolled ?? {};
+  const g = (step: string) => sc[step]?.geometry ?? {};
+  check(
+    sc.unscrolled?.placed &&
+      sc.back?.placed &&
+      sc.partly?.placed &&
+      g("partly").top < g("partly").nav &&
+      Math.abs(sc.partly.placed.y - g("partly").nav) <= 2 &&
+      sc.hidden?.want === null &&
+      sc.hidden?.placed === null,
+    `the notes webview on a scrolled page: ${JSON.stringify(sc)}`,
+  );
+  const off = release.offline ?? {};
+  check(
+    off.kept === true && off.same_time === true && /Could not reach the release feed/.test(off.message ?? ""),
+    `offline: ${JSON.stringify(off)}`,
+  );
+  // The notice moved the notes area (so the check below is not vacuous), and the webview followed.
+  check(off.area_moved === true, `the offline notice did not move the notes area: ${JSON.stringify(off)}`);
+  check(release.closed === true, "notes webviews stayed open after leaving the page");
+  // What the feed server and the stand-in browser saw, apart from the app's own report.
+  const seen = Object.fromEntries(feed.requests);
+  check(same(seen, { "/feed.json": 1 }), `the feed server saw ${JSON.stringify(seen)}, not one feed read`);
+  const opened = existsSync(browserLog) ? readFileSync(browserLog, "utf8").trim().split("\n") : [];
+  check(same(opened, [good, full, escaped]), `the stand-in browser opened ${JSON.stringify(opened)}`);
 }
 
 /** Lets this user remove the device's package store the app left in its run folder, after the

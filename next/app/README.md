@@ -8,7 +8,7 @@ from packages installed on this device, open in webviews of their own.
 | Folder | What it holds |
 | --- | --- |
 | `src/` | The window: the kit's shell and pages, the app's host (`host.ts`), the Connection page, and how extension pages are drawn (`nativePage.tsx`) |
-| `page/` | The small document an extension page's webview loads, which holds the page's sandboxed frame |
+| `page/` | The small document an extension page's webview loads, which holds the page's sandboxed frame, and the release notes' style sheet |
 | `src-tauri/` | The native side: commands, the connection to core, the app's own core, extension page webviews, the tray |
 | `native/` | The native test (`run.ts`) |
 | `package.ts` | The test-package and release-package commands ([Packages](#packages)) |
@@ -190,6 +190,11 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `page_send` | Passes the window's channel messages to a page's webview |
 | `confirmation_request` | Opens native review for an opaque action ID already prepared by native code; returns no approval or token |
 | `confirmation_settings` | Opens native settings to inspect and revoke exact remembered launches (Linux) |
+| `release_get`, `release_check` | The release feed's view (versions, dates, status); `release_check` reads the feed first ("Check for Updates") |
+| `release_channel_set` | Picks the Stable or the Preview (latest) channel |
+| `release_source_set` | Asks to change or remove the feed's address; opens a native confirmation (Linux) and applies nothing itself |
+| `release_notes_open`, `release_notes_place`, `release_notes_close` | Opens a release's notes in a webview of their own over part of the window, moves it, closes it |
+| `release_notes_full` | Opens the release's notes address from the feed in the browser ("View full release notes") |
 | `device_list` | This device's extension catalog |
 | `device_registries` | What the registries in `device-registries.json` offer this computer |
 | `device_install` | Installs or updates a package from one of those registries |
@@ -250,6 +255,97 @@ native error; if even that cannot reach the renderer, the channel closes. The wr
 bounded FIFO of eight calls one at a time; hello and closed messages always enter that FIFO. Refusals return an HTTP status and, for bodies within the transport limit with a readable id,
 the matching channel error. Oversized transport bodies are rejected without scanning for an id.
 Permissions and extension settings still use the shared kit's channel. No page receives a key.
+
+## Version Management and release notes
+
+The Version Management page (Control group) shows, for the app ("Desktop Application") and for
+core, the current version, the latest version on the chosen channel and when it was published,
+then the app release's notes. Stable shows the
+highest stable version; Preview (latest) shows the highest version on either channel, so it is a
+stable release when that is the newest. Versions compare by semantic version precedence. The
+current core version is what the connected core reports in `GET /v0/management/status`.
+
+The app has no built-in feed address and reads nothing until the person sets one. Setting,
+changing or removing the address opens the native confirmation (below), with the old and the
+new address; only its confirmed, one-use token applies the change, and cancelling, closing the
+window or letting it expire keeps the old address. While a change waits, the page does not let
+the channel be changed (the `release_channel_set` command itself still accepts a channel); a
+confirmed change the settings outran (they changed while it waited, as a direct channel change
+does) or that cannot be saved is not applied, and the page shows why. The address must be `https://`, with a host
+and no user name or password. The choice is kept in `release.json` next to `connection.json`,
+readable only by your user. A file the app cannot use (unreadable, larger than 64 KiB, or with an
+address that fails the checks above) is shown as an error saying to fix or delete it, and is never
+overwritten; until then no feed is used. The channel is a plain setting there too. The kept feed
+is read only up to 2 MiB.
+
+"Check for Updates" reads the feed: https only, the public certificate roots, no redirects, at
+most 1 MiB, 30 seconds. The last good feed is kept in `release-feed.json` in the app's cache
+folder with the time it was read, and shown again after a restart. When a check fails (offline,
+an error answer, a feed the app refuses) the page says why and keeps showing the last good feed
+with that time. A feed with any bad release is refused whole. Changing the address drops the copy.
+Only the latest check of the current feed is taken: an earlier check that finishes later, or one
+started before a feed change (even back to the same address), is ignored.
+
+The window gets only versions, channels, dates and whether a release has notes or a notes
+address; never notes text or a notes address. Each release's notes open in a webview of their
+own (`notes-<n>`, at most two), placed over the part of the notes area that shows: below a
+navigation bar pinned at the top, and hidden when none of it shows, and placed again whenever the page moves the area (scrolling,
+resizing, a notice appearing above it), so it never covers the rest
+of the window. It has a web context of its own, cleared at each start. No capability names it. It loads one document from the
+`pluxy-notes:` scheme, which serves each notes webview only its own document and style sheet:
+the notes' Markdown (CommonMark, with tables and strikethrough) as HTML, rendered natively
+(`src-tauri/src/notes.rs`). Raw HTML in the notes is left out, comments included, as the old
+app's notes were; an image shows as its alternative text, and only absolute `https://` links
+stay links (a link to an IPv6 address does not: the renderer's escaping of its brackets would
+break it). The document has no script,
+and its policy (`script-src 'none'`, `img-src 'none'`, `connect-src 'none'`, no frames or
+forms) allows none and loads nothing but its style sheet, with the window's theme colours and
+fonts, which native code checks as the kit checks theme values. The notes are expanded at first;
+Collapse hides them and closes their webview, Expand opens a new one. The notes webview never
+navigates: following a link opens it in the browser,
+only when the notes link to that exact address (as the rendered link writes it), and at most one
+address a second, notes links and "View full release notes" together; the code that starts the
+browser refuses anything but `https://` itself. The notes webview refuses every download, on every platform,
+and, on Linux only (the code that turns the menu off does nothing elsewhere), shows no context
+menu. Since the document runs no script, only a person
+activating a link navigates it.
+
+### Release feed format
+
+A feed is one JSON document, format 1. A later slice's fields in a release (for example its
+signed artifacts) are ignored by readers that do not know them; any other change of meaning
+takes a new format number, which this app refuses.
+
+```json
+{
+  "format": 1,
+  "releases": [
+    {
+      "product": "app",
+      "version": "0.3.0-preview.1",
+      "channel": "preview",
+      "published": "2026-11-05T09:00:00Z",
+      "notes": "## What changed\n\nMarkdown text.",
+      "notes_url": "https://example.invalid/releases/0.3.0-preview.1"
+    }
+  ]
+}
+```
+
+| Field | Rule |
+| --- | --- |
+| `format` | `1` |
+| `releases` | At most 256 |
+| `product` | `app` or `core` |
+| `version` | A semantic version (2.0.0) without a leading `v`, at most 64 characters; one release per product and version precedence |
+| `channel` | `stable` or `preview`; a stable release has no pre-release part |
+| `published` | RFC 3339 in UTC, ending in `Z`, on a day its month has; second 60 (a leap second) is refused |
+| `notes` | Optional Markdown, at most 64 KiB |
+| `notes_url` | Optional `https://` address with a host and no user name or password, at most 2048 bytes as given and once normalised (percent-encoded) |
+
+The whole feed is at most 1 MiB. The feed is not signed: https is its only protection, and
+nothing in it is trusted as markup. Signed update artifacts have their own signatures. Production
+feed addresses, keys and formats are decided at release; until then there is no built-in feed.
 
 ## Extensions on this device
 
@@ -683,6 +779,30 @@ a child and runs a fixture script through `fexecve`, checking `FD_CLOEXEC` behav
 when both it and the system temporary folder are mounted noexec. Native GUI fixture actions do
 not execute a program.
 
+The same run checks the release feed (`src-tauri/src/release_native.rs`) on the Version
+Management page,
+against a fake https feed the runner serves on a random loopback port (`native/feed.ts`, with
+`native/release-feed.json`) and a certificate authority made with `openssl` for that run. Only
+native-test builds read that authority (`PLUXY_APP_TEST_FEED_CA`); other builds check a feed
+against the public roots only. A stand-in browser, the run's default `https` handler through
+its own XDG folders, logs each address it is asked to open. The check confirms a feed address in
+the real dialog, then cancels a second change and finds the old address, its file and its copy
+kept; asks for a third, finds Channel disabled, changes the channel by a direct call and confirms,
+and finds the change not applied and the page saying why; checks for updates and reads the stable and the Preview (latest) versions; opens hostile
+notes and finds no script, image, frame, handler or extra link, the Markdown rendered and the
+raw HTML left out; probes every app and plugin command from the notes webview (each refused)
+with the window's `release_get` as control; navigates the notes webview to an address the notes
+do not link to (nothing opens) and follows the rendered link, a link whose address has characters the
+renderer escapes (`a[1]?q=x|y`) and "View full release notes" (the stand-in browser gets exactly
+those); asks the notes webview to download its own style sheet
+(refused, nothing saved) and right-clicks it (no menu); collapses the notes (their webview closes) and expands
+them again (a new one, over the notes area); scrolls the page with the navigation bar on top and
+finds the notes webview over only the part of its area below that bar, hidden once the area is
+out of sight, and back over it unscrolled; stops the feed and finds the offline error with the last good copy and its time, and the notes webview moved down
+with its area when that notice appeared above it; and
+leaves the page, closing the notes webviews. The runner checks the feed server saw exactly one
+feed read and nothing else, so the hostile image and frame were never loaded.
+
 Before the app, each run's session starts desktop services (`native/session.ts`, with the
 packages and paths in `native/services.ts`) and checks them for real; a missing or broken one
 fails the run at setup, naming its package, and never skips:
@@ -701,7 +821,7 @@ fails the run at setup, naming its package, and never skips:
 
 When the app has exited, the session stops what it started. On Ubuntu 24.04 the packages are
 `xdg-desktop-portal` (frontend, document portal, permission store), `xdg-desktop-portal-gtk`,
-`ayatana-indicator-application`, `squashfs-tools` and `xdotool`; the document portal also needs FUSE
+`ayatana-indicator-application`, `squashfs-tools`, `xdotool` and `openssl`; the document portal also needs FUSE
 (`/dev/fuse`, `fusermount3`). CI installs them on a pinned `ubuntu-24.04` runner.
 
 ## Packages
@@ -766,6 +886,11 @@ There is no updater yet; the signed-update slice calls this gate.
 - Tested on Linux only. On Windows the page document's address is
   `http://pluxy-page.localhost/`; neither Windows nor macOS has been run.
 - No installer or bundled core yet: the only package is the test AppImage, which is not for release.
+  Version Management shows releases; it does not install them.
+- Changing the release feed needs the native confirmation, so it works on Linux only, and so
+  does opening an address in the browser.
+- Release notes tables show their columns left-aligned whatever alignment the Markdown asks for:
+  the renderer writes alignment as inline style, which the notes' policy refuses.
 - Recovery history lasts for the current app process; quitting the app ends its recovery window.
   A supervisor thread starts the core and stays until it exits, since on Linux the parent-death
   signal follows the thread that started it.
