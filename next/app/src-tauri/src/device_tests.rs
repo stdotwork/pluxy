@@ -1740,6 +1740,37 @@ fn routing_catalog(root: &Path) -> (Catalog, TestRoots) {
             serde_json::json!({"exports": {"contract": 1, "operations": ["read"]},
             "imports": [import("pluxy/ca", &[1], &["read"], false)]}),
         ),
+        // Swaps: sa's 2.0.0 imports sb, which imports sa; sd's 1.0.0 and se's 2.0.0 require the
+        // target, their other releases import nothing.
+        (
+            "pluxy/sa",
+            "1.0.0",
+            serde_json::json!({"exports": {"contract": 1, "operations": ["read"]}}),
+        ),
+        (
+            "pluxy/sa",
+            "2.0.0",
+            serde_json::json!({"exports": {"contract": 1, "operations": ["read"]},
+            "imports": [import("pluxy/sb", &[1], &["read"], false)]}),
+        ),
+        (
+            "pluxy/sb",
+            "1.0.0",
+            serde_json::json!({"exports": {"contract": 1, "operations": ["read"]},
+            "imports": [import("pluxy/sa", &[1], &["read"], false)]}),
+        ),
+        (
+            "pluxy/sd",
+            "1.0.0",
+            serde_json::json!({"imports": [import("pluxy/target", &[1], &["read"], true)]}),
+        ),
+        ("pluxy/sd", "2.0.0", serde_json::json!({})),
+        ("pluxy/se", "1.0.0", serde_json::json!({})),
+        (
+            "pluxy/se",
+            "2.0.0",
+            serde_json::json!({"imports": [import("pluxy/target", &[1], &["read"], true)]}),
+        ),
     ];
     let mut packages = serde_json::Map::new();
     let mut add = |id: &str, version: &str, bytes: Vec<u8>, tier: &str| {
@@ -1807,6 +1838,10 @@ fn routing_catalog(root: &Path) -> (Catalog, TestRoots) {
         "pluxy/ca",
         "pluxy/cb",
         "pluxy/cc",
+        "pluxy/sa",
+        "pluxy/sb",
+        "pluxy/sd",
+        "pluxy/se",
         "pluxy/guide",
     ] {
         c.commit(stage_from_registry(&d, &roots, "curated", id, Some("1.0.0")).unwrap())
@@ -1828,6 +1863,58 @@ fn routing_catalog(root: &Path) -> (Catalog, TestRoots) {
     )
     .unwrap();
     (c, roots)
+}
+
+#[test]
+fn a_swap_checks_dependencies_and_cycles_when_staged_and_when_committed() {
+    let root = temp();
+    let (mut c, roots) = routing_catalog(&root);
+    let d = dirs(&root);
+    let stage =
+        |id: &str, v: &str| stage_from_registry(&d, &roots, "curated", id, Some(v)).unwrap();
+    // An update that would close a cycle (sa 2.0.0 imports sb, which imports sa) is refused when
+    // staged, and nothing is held for it.
+    enable(&mut c, "pluxy/sa", &roots).unwrap();
+    enable(&mut c, "pluxy/sb", &roots).unwrap();
+    let e = c
+        .swap_update(stage("pluxy/sa", "2.0.0"), &roots)
+        .unwrap_err();
+    assert!(e.contains("cycle") && e.contains("pluxy/sb"), "{e}");
+    assert_eq!(c.get("pluxy/sa").unwrap().active.version, "1.0.0");
+    // With sb disabled the same update commits: the control on the same route.
+    c.set_enabled("pluxy/sb", false, &roots).unwrap();
+    let s = c.swap_update(stage("pluxy/sa", "2.0.0"), &roots).unwrap();
+    c.commit_swap(s, &roots).unwrap();
+    assert_eq!(c.get("pluxy/sa").unwrap().active.version, "2.0.0");
+
+    // A rollback to a release whose required import is not enabled is refused when staged.
+    enable(&mut c, "pluxy/target", &roots).unwrap();
+    enable(&mut c, "pluxy/sd", &roots).unwrap();
+    let s = c.swap_update(stage("pluxy/sd", "2.0.0"), &roots).unwrap();
+    c.commit_swap(s, &roots).unwrap();
+    c.set_enabled("pluxy/target", false, &roots).unwrap();
+    let e = c.swap_rollback("pluxy/sd", &roots).unwrap_err();
+    assert!(e.contains("requires pluxy/target"), "{e}");
+    enable(&mut c, "pluxy/target", &roots).unwrap();
+    let s = c.swap_rollback("pluxy/sd", &roots).unwrap();
+    c.commit_swap(s, &roots).unwrap();
+    assert_eq!(c.get("pluxy/sd").unwrap().active.version, "1.0.0");
+
+    // Staged while its required import was enabled, refused at commit once that is disabled.
+    enable(&mut c, "pluxy/se", &roots).unwrap();
+    let s = c.swap_update(stage("pluxy/se", "2.0.0"), &roots).unwrap();
+    c.swap_current(&s, &roots).unwrap();
+    c.set_enabled("pluxy/target", false, &roots).unwrap();
+    assert!(c.swap_current(&s, &roots).is_err());
+    let e = c.commit_swap(s, &roots).unwrap_err();
+    assert!(e.contains("requires pluxy/target"), "{e}");
+    assert_eq!(c.get("pluxy/se").unwrap().active.version, "1.0.0");
+    // The refused update held nothing: another may be staged.
+    enable(&mut c, "pluxy/target", &roots).unwrap();
+    let s = c.swap_update(stage("pluxy/se", "2.0.0"), &roots).unwrap();
+    c.commit_swap(s, &roots).unwrap();
+    assert_eq!(c.get("pluxy/se").unwrap().active.version, "2.0.0");
+    done(root);
 }
 
 fn enable(c: &mut Catalog, id: &str, roots: &TestRoots) -> Result<(), String> {
@@ -1951,7 +2038,8 @@ fn dependencies_cycles_consent_and_grants() {
     // The catalog keeps the consent across reopening.
     let reopened = Catalog::open(c.dirs.clone(), false, &roots);
     assert!(reopened.imports_allowed("pluxy/guide", &roots));
-    // A target updated (and enabled again) is not what was allowed: refused until allowed again.
+    // A target updated (and enabled again) is not what was allowed: its consent went with its
+    // admission, and calls are refused until allowed again.
     c.commit(
         stage_from_registry(
             &c.dirs.clone(),
@@ -1967,7 +2055,7 @@ fn dependencies_cycles_consent_and_grants() {
     let e = c
         .page_grant(("pluxy/guide", &guide), "pluxy/target", "read", &roots)
         .unwrap_err();
-    assert!(e.message.contains("allow them again"), "{e:?}");
+    assert!(e.message.contains("not allowed"), "{e:?}");
     // Native routes take the new release, without consent.
     assert!(c.native_grant(me, "pluxy/target", "read", &roots).is_ok());
     let consent = c.consent_candidate("pluxy/guide", &roots).unwrap();
@@ -2005,7 +2093,19 @@ fn dependencies_cycles_consent_and_grants() {
     assert!(c
         .page_grant(("pluxy/guide", &guide), "pluxy/target", "read", &roots)
         .is_err());
+    // A target disabled and enabled again is a new native decision: the consents naming it go.
+    c.allow_imports("pluxy/guide", &consent, &roots).unwrap();
+    assert!(c
+        .page_grant(("pluxy/guide", &guide), "pluxy/target", "read", &roots)
+        .is_ok());
+    c.set_enabled("pluxy/target", false, &roots).unwrap();
+    enable(&mut c, "pluxy/target", &roots).unwrap();
+    assert!(!c.imports_allowed("pluxy/guide", &roots));
+    assert!(c
+        .page_grant(("pluxy/guide", &guide), "pluxy/target", "read", &roots)
+        .is_err());
     // Disabling clears consent too.
+    let consent = c.consent_candidate("pluxy/guide", &roots).unwrap();
     c.allow_imports("pluxy/guide", &consent, &roots).unwrap();
     c.set_enabled("pluxy/guide", false, &roots).unwrap();
     c.set_enabled("pluxy/guide", true, &roots).unwrap();

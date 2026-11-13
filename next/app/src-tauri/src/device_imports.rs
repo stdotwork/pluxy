@@ -467,6 +467,21 @@ impl Catalog {
     }
 
     /// Whether web package id has import consent for its active release.
+    /// Drops every consent that names target: its admission was cleared or replaced (disabled,
+    /// updated, rolled back, removed or swapped), and enabling it again is a new native decision.
+    /// Called before saving; a save that fails leaves them dropped, so the person allows them
+    /// again (it fails closed).
+    pub(super) fn drop_consents_naming(&mut self, target: &str) {
+        for p in self.packages.values_mut() {
+            if p.consent
+                .as_ref()
+                .is_some_and(|c| c.targets.iter().any(|t| t.id == target))
+            {
+                p.consent = None;
+            }
+        }
+    }
+
     pub fn imports_allowed(&self, id: &str, roots: &dyn Roots) -> bool {
         self.packages.get(id).is_some_and(|p| {
             p.consent

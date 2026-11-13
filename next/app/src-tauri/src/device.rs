@@ -729,6 +729,9 @@ impl Catalog {
             },
         };
         self.packages.insert(id.clone(), package);
+        if previous.is_some() {
+            self.drop_consents_naming(id);
+        }
         if let Err(e) = self.save() {
             match previous {
                 Some(p) => self.packages.insert(id.clone(), p),
@@ -784,6 +787,7 @@ impl Catalog {
         }
         let was = (p.enabled, p.admission.take(), p.consent.take());
         p.enabled = enabled;
+        self.drop_consents_naming(id);
         if let Err(e) = self.save() {
             if let Some(p) = self.packages.get_mut(id) {
                 (p.enabled, p.admission, p.consent) = was;
@@ -798,6 +802,7 @@ impl Catalog {
             .packages
             .remove(id)
             .ok_or_else(|| format!("{id} is not installed on this device"))?;
+        self.drop_consents_naming(id);
         if let Err(e) = self.save() {
             self.packages.insert(id.into(), p);
             return Err(e);
@@ -829,6 +834,7 @@ impl Catalog {
         if p.active.tier == "native" || p.last_good.as_ref().is_some_and(|r| r.tier == "native") {
             p.enabled = false;
         }
+        self.drop_consents_naming(id);
         if let Err(e) = self.save() {
             let p = self.packages.get_mut(id).unwrap();
             let last = std::mem::replace(&mut p.active, p.last_good.take().unwrap());
