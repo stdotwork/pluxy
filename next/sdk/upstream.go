@@ -26,12 +26,13 @@ import (
 // (Info.Headers) sends each of them on every request, in place of any value the extension set
 // for the same name. A call with payload rules (Info.Payload, protocol minor version 14) has them
 // applied to each request whose body is JSON, after everything else changed it (see
-// WithPayloadRoot). A call core asks to capture (protocol minor version 13) records each request
-// and what came back, without its secrets, and the SDK reports them to core before the call's
-// terminal event; a response body is recorded as it is read, its start and end only. Use the
-// handler's context on requests so the transport can access UpstreamInfo and core's
-// cancellation: a request without it uses no proxy, no headers and no payload rules and is not
-// recorded.
+// WithPayloadRoot); a session turn's upstream message is not such a request, so the extension
+// passes it to ApplyPayload (protocol minor version 15). A call core asks to capture (protocol
+// minor version 13) records each request and what came back, without its secrets, and the SDK
+// reports them to core before the call's terminal event; a response body is recorded as it is
+// read, its start and end only. Use the handler's context on requests so the transport can
+// access UpstreamInfo and core's cancellation: a request without it uses no proxy, no headers
+// and no payload rules and is not recorded.
 // base must be non-nil and must not be changed after use.
 func Upstream(base *http.Transport) http.RoundTripper {
 	upstreamUsed.Store(true)
@@ -92,7 +93,7 @@ func (t upstreamTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		req = withHeaders(req, info.Headers)
 	}
 	if info.Payload != nil {
-		if req, err = withPayload(req, info.Payload); err != nil {
+		if req, err = withPayload(req); err != nil {
 			return nil, err
 		}
 	}
@@ -149,7 +150,7 @@ func redirectedAway(req *http.Request) bool {
 // change it. A body that is not JSON (by its Content-Type), or is encoded (Content-Encoding), is
 // sent as it is. The rules apply to the body req carries, once: net/http sends the same new
 // bytes again when it retries the request on another connection.
-func withPayload(req *http.Request, rules *payload.Rules) (*http.Request, error) {
+func withPayload(req *http.Request) (*http.Request, error) {
 	if req.Body == nil || req.Body == http.NoBody || !jsonBody(req.Header) {
 		return req, nil
 	}
@@ -158,12 +159,27 @@ func withPayload(req *http.Request, rules *payload.Rules) (*http.Request, error)
 	if err != nil {
 		return nil, fmt.Errorf("reading the request body for payload rules: %w", err)
 	}
-	out, _ := payload.Apply(rules, body, payload.Input{Root: payloadRoot(req.Context()), Selected: true})
+	out := ApplyPayload(req.Context(), body)
 	r := req.Clone(req.Context())
 	r.Body = io.NopCloser(bytes.NewReader(out))
 	r.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(out)), nil }
 	r.ContentLength = int64(len(out))
 	return r, nil
+}
+
+// ApplyPayload returns body with the payload rules of the call ctx belongs to (Info.Payload)
+// applied, for an extension that sends a request upstream by a way that is not an HTTP request
+// through Upstream: the message that carries a session turn on an upstream WebSocket. Call it
+// once, on the final message, after everything else the extension does to it. Without rules, or
+// when body is not a JSON object or array, it returns body as it is. Rule paths are relative to
+// the body, or to the member WithPayloadRoot names. ctx must be the context of the turn or call.
+func ApplyPayload(ctx context.Context, body []byte) []byte {
+	info, _ := UpstreamInfo(ctx)
+	if info.Payload == nil {
+		return body
+	}
+	out, _ := payload.Apply(info.Payload, body, payload.Input{Root: payloadRoot(ctx), Selected: true})
+	return out
 }
 
 // jsonBody reports whether h says the body is JSON (application/json or a +json type) and not
@@ -275,8 +291,9 @@ type Info struct {
 	// Headers are the account's extra headers, which Upstream sets on each request; read-only.
 	// Values of headers about authentication are secret: never log or show them.
 	Headers map[string]string
-	// Payload is the payload rules core matched to the call (protocol minor version 14), which
-	// Upstream applies to each JSON request body; nil for none. Read-only.
+	// Payload is the payload rules core matched to the call or session turn (protocol minor
+	// version 14, 15 for a turn), which Upstream applies to each JSON request body and
+	// ApplyPayload to a message; nil for none. Read-only.
 	Payload *payload.Rules
 
 	capture *captureLog // the call's capture, when core asked for one
