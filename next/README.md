@@ -1733,9 +1733,11 @@ item of a list, or whose secret was changed or removed is refused. In a `config.
 is wherever core reads it: an alias (`*name`) reads its anchor at the alias's place, and a merge
 key (`<<`) reads the merged mapping's keys in the mapping it is in, as core's loader reads them.
 Each place core would read a placeholder at must be one where the file, read the same way, has
-that secret now: a file that already aliases a secret goes back as it is, but an alias or merge
-key that reads a placeholder anywhere else is refused, naming the alias's or the merge key's
-line. So a placeholder cannot take one account's key, the management key or a client key into
+that secret now: a file that already aliases a secret is taken (it is written out again, as core
+reads it, so its quotes and spacing may change), but an alias or merge key that reads a
+placeholder anywhere else is refused, naming the alias's or the merge key's line, and so is a
+mapping key that is a placeholder or an alias of one, which would make a secret a key's name,
+such as a header's. So a placeholder cannot take one account's key, the management key or a client key into
 another account, another entry, a header or another setting: core refuses the document, naming
 the line, and the value must be written there itself. `POST /config/validate` runs the same
 check and answers `valid: false` with the reason. One limit: an account or a provider entry that
