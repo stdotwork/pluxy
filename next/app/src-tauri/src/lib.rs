@@ -19,6 +19,7 @@ mod command_names;
 #[cfg(target_os = "linux")]
 pub mod confirmation;
 pub mod conn;
+pub mod instance;
 mod key_entry;
 pub mod managed;
 #[cfg(feature = "native-test")]
@@ -163,6 +164,17 @@ fn close_pages(app: &AppHandle) {
             let _ = w.close();
         }
     }
+}
+
+/// Shows the window (a new one if it was closed), for a later launch of the app on this profile,
+/// and says whether it did. On the window's own thread, where the tray's "Open pluxy" runs too.
+fn raise_window(app: &AppHandle) -> bool {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let a = app.clone();
+    let queued = app.run_on_main_thread(move || {
+        let _ = tx.send(open_window(&a).is_ok());
+    });
+    queued.is_ok() && rx.recv_timeout(std::time::Duration::from_secs(15)) == Ok(true)
 }
 
 /// Stops the app's own core, if it runs one, and exits. A local or remote core keeps running.
@@ -862,6 +874,29 @@ pub fn run() {
         ])
         .register_asynchronous_uri_scheme_protocol(pages::SCHEME, page_scheme)
         .setup(|app| {
+            // First, before the core, the tray or any webview: one app per profile. A later launch
+            // has the first show its window, and ends here, having started nothing.
+            let instance =
+                match instance::start(&app.path().app_data_dir()?.join("instance"), instance::WAIT)
+                {
+                    Ok(instance::Start::First(i)) => i,
+                    Ok(instance::Start::Raised) => {
+                        eprintln!("pluxy-app: already running; its window is shown");
+                        std::process::exit(0);
+                    }
+                    Err(e) => {
+                        eprintln!("pluxy-app: {e}");
+                        std::process::exit(1);
+                    }
+                };
+            let raise = app.handle().clone();
+            if let Err(e) = instance.listen(&instance::socket_dirs(), move || raise_window(&raise))
+            {
+                // The lock still keeps a second app out; a later launch is told at once that this
+                // window cannot be raised.
+                eprintln!("pluxy-app: no way to raise this window from a later launch: {e}");
+            }
+            app.manage(instance);
             let config = app.path().app_config_dir()?;
             let startup_store = startup::Store::new(
                 config.clone(),
@@ -1000,6 +1035,9 @@ pub fn run() {
         RunEvent::Exit => {
             if let Some(st) = app.try_state::<App>() {
                 st.conn.lock().unwrap().stop_core();
+            }
+            if let Some(i) = app.try_state::<instance::Instance>() {
+                i.release();
             }
         }
         _ => {}

@@ -11,12 +11,22 @@ export interface Field {
   hint?: string;
   min?: number;
   step?: "any";
+  placeholder?: string;
+  /** A text field that may be empty (empty is a value core takes). */
+  optional?: boolean;
 }
 export const fields = (): Record<SettingsTab, Field[]> => {
   const log: Field = { key: "observability.logs.logging-to-file", label: t("logToFile"), kind: "switch" };
   return {
     common: [log],
     network: [
+      {
+        key: "proxy-url",
+        label: t("proxyUrl"),
+        kind: "text",
+        optional: true,
+        placeholder: "socks5://user:pass@127.0.0.1:1080/",
+      },
       { key: "routing.strategy", label: t("strategy"), kind: "strategy" },
       { key: "routing.retry.request-retry", label: t("retry"), kind: "number", min: 0 },
       { key: "routing.retry.max-retry-credentials", label: t("maxCredentials"), kind: "number", min: 0 },
@@ -155,7 +165,8 @@ export function SettingControl({
             <input
               id={field.key}
               type="text"
-              required
+              required={!field.optional}
+              placeholder={field.placeholder}
               disabled={field.key === "routing.session-affinity-ttl" && !settings.routing["session-affinity"]}
               value={String(value)}
               onInput={(e) => {

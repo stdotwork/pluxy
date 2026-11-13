@@ -1386,10 +1386,13 @@ translated to the upstream's format: a field the extension fills in itself count
 as the Claude extension's `max_tokens` of 32000 for a client that sets none. To replace such a
 value, use `override`, as today's example config does for `max_tokens`.
 
-Rules do not reach Devin, whose upstream body is protobuf, nor turns on an upstream WebSocket
-session (a Codex Responses WebSocket); a client WebSocket turn that goes upstream as an HTTP
-request gets them. An extension older than protocol 0.14 cannot apply rules, so a request that
-rules apply to is not sent to it: it goes to other accounts, and the error says why.
+A turn on an upstream WebSocket (a Codex Responses WebSocket) gets them too: they apply once to
+the `response.create` message the extension sends for the turn, selected for that turn as for any
+request. A message that is no turn, such as the client's interrupt, goes upstream as it is. A
+client WebSocket turn that goes upstream as an HTTP request gets them as an HTTP request does.
+Rules do not reach Devin, whose upstream body is protobuf. An extension older than protocol 0.14
+cannot apply rules (0.15 for a turn on an upstream WebSocket), so a request that rules apply to is
+not sent to it: it goes to other accounts, and the error says why.
 
 ### Account checks
 

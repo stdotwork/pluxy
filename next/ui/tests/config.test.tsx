@@ -26,6 +26,7 @@ const settings: CoreSettings = {
     usage: { "usage-statistics-enabled": true },
   },
   token_count_estimate: true,
+  "proxy-url": "socks5://redacted@127.0.0.1:1080",
 };
 
 test("settingsChange refuses a cleared retry count instead of sending ignored null", () => {
@@ -42,6 +43,39 @@ test("an unrelated edit leaves fractional durations out of PATCH", () => {
   expect(settingsChange(settings, changeSetting(settings, "routing.force-model-prefix", true))).toEqual({
     routing: { "force-model-prefix": true },
   });
+});
+
+test("the proxy URL is sent only when edited, and cleared by an empty string", () => {
+  // Another setting's edit never sends the proxy as shown, so its hidden password is not touched.
+  expect(settingsChange(settings, changeSetting(settings, "routing.force-model-prefix", true))).toEqual({
+    routing: { "force-model-prefix": true },
+  });
+  expect(settingsChange(settings, changeSetting(settings, "proxy-url", ""))).toEqual({ "proxy-url": "" });
+  expect(settingsChange(settings, changeSetting(settings, "proxy-url", "http://proxy.example:3128"))).toEqual(
+    { "proxy-url": "http://proxy.example:3128" },
+  );
+  const empty = changeSetting(settings, "proxy-url", "");
+  expect(settingsChange(empty, empty)).toEqual({});
+});
+
+test("the Network tab's proxy URL field may be empty and has the old placeholder", () => {
+  const html = render(
+    <ConfigSettings
+      tab="network"
+      search=""
+      value={changeSetting(settings, "proxy-url", "")}
+      onChange={() => {}}
+      dirty={false}
+      busy={false}
+      save={() => {}}
+      discard={() => {}}
+    />,
+  );
+  const input = html.match(/<input[^>]*id="proxy-url"[^>]*>/)?.[0];
+  expect(input).toBeDefined();
+  expect(input).toContain('placeholder="socks5://user:pass@127.0.0.1:1080/"');
+  expect(input).not.toContain("required");
+  expect(html).toContain("Proxy URL");
 });
 
 test("duration controls accept fractional readbacks; existing retry count is required", () => {

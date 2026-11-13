@@ -26,7 +26,8 @@
 //
 // A login's accounts serve the models fake-model, rate-limited and server-error; config accounts
 // keep serving whatever their config names, or any model. Every account answers check, and quota
-// with a fixed plan, and a signed-in account renews its credential.
+// with a fixed plan (its settings can move the five-hour reset and add a manual-resets limit), and
+// a signed-in account renews its credential.
 //
 // A file named crash-on-start in the package folder makes it exit before its handshake. Each
 // start appends the process ID to the file starts in the package folder.
@@ -54,6 +55,10 @@ import (
 
 type settings struct {
 	Gate string `json:"gate"`
+	// FiveHourResetsAt, when set, is the Unix time the five-hour window resets at, in place of the fixed one.
+	FiveHourResetsAt int64 `json:"five_hour_resets_at"`
+	// ManualResets, when set, adds a manual-resets limit (reset_credits) with this count.
+	ManualResets *int64 `json:"manual_resets"`
 }
 
 // The models that fail on purpose.
@@ -303,10 +308,22 @@ func check(context.Context, sdk.CheckCall) (*protocol.CheckResult, error) {
 	return &protocol.CheckResult{Detail: "the test provider answered"}, nil
 }
 
-func quota(context.Context, sdk.QuotaCall) (*protocol.Quota, error) {
+func quota(_ context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
+	var s settings
+	_ = json.Unmarshal(call.Account.Settings, &s)
+	fiveHourReset := int64(fiveHourResetsAt)
+	if s.FiveHourResetsAt != 0 {
+		fiveHourReset = s.FiveHourResetsAt
+	}
 	pct := func(v float64) *float64 { return &v }
-	return &protocol.Quota{Plan: quotaPlan, PlanEndsAt: 1924992000, Limits: []protocol.QuotaLimit{
-		{ID: "five_hour", Label: "5-hour limit", UsedPercent: pct(fiveHourPercent), ResetsAt: fiveHourResetsAt, WindowSeconds: fiveHourWindowSec},
+	limits := []protocol.QuotaLimit{
+		{ID: "five_hour", Label: "5-hour limit", UsedPercent: pct(fiveHourPercent), ResetsAt: fiveHourReset, WindowSeconds: fiveHourWindowSec},
 		{ID: "weekly", Label: "Weekly limit", UsedPercent: pct(weeklyPercent), ResetsAt: weeklyResetsAt, WindowSeconds: weeklyWindowSec},
-	}}, nil
+	}
+	if s.ManualResets != nil {
+		// The manual resets the Codex extension reports: a count, with no reset time.
+		n := float64(*s.ManualResets)
+		limits = append(limits, protocol.QuotaLimit{ID: "reset_credits", Label: "Manual resets", Remaining: &n, Unit: "resets"})
+	}
+	return &protocol.Quota{Plan: quotaPlan, PlanEndsAt: 1924992000, Limits: limits}, nil
 }
