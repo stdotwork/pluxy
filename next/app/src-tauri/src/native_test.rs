@@ -20,6 +20,8 @@
 //! 5. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!
+//! With `PLUXY_APP_TEST_UPDATE` it runs only the signed application update check
+//! (`update_native.rs`).
 //! With `PLUXY_APP_TEST_WINDOW` or `PLUXY_APP_TEST_PRIVACY` it runs that stage of the window or
 //! privacy mode checks instead (`native_window.rs`, `native_privacy.rs`).
 //! Before these, as the app starts, it reports its updater gate (`updater_gate`).
@@ -376,6 +378,11 @@ fn run(app: &AppHandle) -> Result<(), String> {
     wait_for("the window's shell", || {
         eval(&main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true)
     })?;
+    // The signed application update (update_native.rs), in a session of its own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_UPDATE") {
+        return crate::update_native::run(app, &main, dir.into());
+    }
     // Signed native-tier admission (admission_native.rs), in a session of its own.
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_ADMISSION") {

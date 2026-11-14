@@ -43,6 +43,8 @@ mod release_native;
 pub mod route;
 mod startup;
 pub mod trust;
+#[cfg(all(target_os = "linux", feature = "native-test"))]
+mod update_native;
 mod updates;
 pub mod window;
 

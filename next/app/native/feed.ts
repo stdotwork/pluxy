@@ -9,7 +9,7 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /** Makes a certificate authority and a server certificate for 127.0.0.1 in dir. */
-function certificates(dir: string): { ca: string; cert: string; key: string } {
+export function certificates(dir: string): { ca: string; cert: string; key: string } {
   const ssl = (args: string[]) => {
     const r = spawnSync("openssl", args, { cwd: dir, stdio: ["ignore", "ignore", "pipe"], encoding: "utf8" });
     if (r.status !== 0) throw new Error(`openssl ${args[0]}: ${r.stderr}`);
