@@ -103,12 +103,16 @@ func listen(addr string, fd int) (net.Listener, error) {
 	if fd < 0 {
 		return net.Listen("tcp", addr)
 	}
+	if fd <= 2 {
+		return nil, fmt.Errorf("-listen-fd %d: a standard stream is not a listening socket", fd)
+	}
 	f := os.NewFile(uintptr(fd), "listen-fd")
 	if f == nil {
 		return nil, fmt.Errorf("-listen-fd %d: not an open file", fd)
 	}
-	// FileListener keeps a duplicate that closes on exec, so programs core starts never hold the
-	// socket; the inherited descriptor is closed here.
+	// FileListener keeps a duplicate that closes on exec and the inherited descriptor is closed
+	// here, so programs core starts after this never hold the socket (run takes it before any
+	// extension starts).
 	defer f.Close()
 	ln, err := net.FileListener(f)
 	if err != nil {
@@ -144,8 +148,21 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string, 
 	logs := logfile.New(core.LogsDir(configPath))
 	log.SetOutput(io.MultiWriter(os.Stderr, logs))
 	log.Print(buildinfo.Line())
+	// The inherited socket is taken before any extension starts: until then its descriptor does
+	// not close on exec, and every extension would hold the core's port.
+	var ln net.Listener
+	if listenFD >= 0 {
+		l, err := listen("", listenFD)
+		if err != nil {
+			return err
+		}
+		ln = l
+	}
 	c, err := core.Start(core.Options{ConfigPath: configPath, SafeMode: safeMode, Bundled: bundled, Logs: logs})
 	if err != nil {
+		if ln != nil {
+			ln.Close()
+		}
 		if !safeMode {
 			err = fmt.Errorf("%w (start with -safe-mode to run without extensions)", err)
 		}
@@ -160,9 +177,10 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string, 
 		log.Printf("extension %s %s started", e.ID, e.Version)
 	}
 
-	ln, err := listen(cfg.Listen, listenFD)
-	if err != nil {
-		return err
+	if ln == nil {
+		if ln, err = listen(cfg.Listen, -1); err != nil {
+			return err
+		}
 	}
 	// Extension pages have a listener of their own, so they are served on another site than
 	// the panel (next/ui/extension-pages/README.md).

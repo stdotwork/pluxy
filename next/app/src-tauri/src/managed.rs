@@ -130,6 +130,7 @@ pub fn listen_addr(path: &Path) -> Result<SocketAddr, String> {
 
 /// Binds addr for the app's core, waiting up to two seconds while it is in use: the previous
 /// core's socket stays open until the last call that could reach it has ended.
+#[cfg(unix)]
 fn bind(addr: SocketAddr) -> Result<TcpListener, String> {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {

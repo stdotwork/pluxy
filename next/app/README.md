@@ -133,7 +133,11 @@ The app keeps its own copy of the core's listening socket for as long as anythin
 still send there, so no other program can listen on that address in between: not while a crashed
 core's exit is being noticed, and not while the core drains after a stop, the app's or a SIGTERM
 from elsewhere (the core closes its listener as it starts draining). A call made in that time
-reaches the core or waits in the app's socket, and fails once the core has exited. The
+reaches the core or waits in the app's socket, and fails once the core has exited. This holds
+for other programs calling the core too: a new connection in that time is no longer refused at
+once, but waits (up to the core's drain, 10 seconds or more) and is then closed, possibly after
+its request was sent. The core takes the socket before it starts any extension, so no program it
+starts holds it. The
 app keeps the running version and the one before it, and removes older ones after a switch. Rolling
 back reaches only an installed version.
 
