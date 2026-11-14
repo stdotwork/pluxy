@@ -1,0 +1,132 @@
+:root {
+  color-scheme: light dark;
+  --gap: calc(var(--px-space-unit, 4px) * 3);
+}
+body {
+  margin: 0;
+  padding: var(--gap);
+  background: var(--px-color-bg, Canvas);
+  color: var(--px-color-text, CanvasText);
+  font-family: var(--px-font-body, system-ui, sans-serif);
+  font-size: var(--px-font-size, 14px);
+  line-height: var(--px-font-line-height, 1.5);
+}
+h1 {
+  font-size: var(--px-font-size-title, 1.3em);
+  margin: 0 0 4px;
+}
+h2 {
+  font-size: 1em;
+  margin: var(--gap) 0 4px;
+}
+p {
+  margin: 0 0 var(--gap);
+}
+button {
+  font: inherit;
+  color: inherit;
+  background: var(--px-color-surface-raised, ButtonFace);
+  border: 1px solid var(--px-color-border, ButtonBorder);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--px-color-focus, Highlight);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+input,
+select {
+  font: inherit;
+  color: inherit;
+  background: var(--px-color-surface, Field);
+  border: 1px solid var(--px-color-border, ButtonBorder);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+.muted {
+  color: var(--px-color-text-muted, GrayText);
+}
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10em, 1fr));
+  gap: 8px;
+  margin: var(--gap) 0;
+}
+.stat,
+.panel {
+  background: var(--px-color-surface, transparent);
+  border: 1px solid var(--px-color-border, GrayText);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+.stat b {
+  display: block;
+  font-size: 1.2em;
+  overflow-wrap: anywhere;
+}
+.warn {
+  color: var(--px-color-warn, inherit);
+}
+.error {
+  color: var(--px-color-danger, inherit);
+}
+ul.sessions {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+ul.sessions button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin: 0 0 6px;
+  padding: 8px 12px;
+}
+.badge {
+  font-size: var(--px-font-size-small, 0.85em);
+  border: 1px solid var(--px-color-border, GrayText);
+  border-radius: 999px;
+  padding: 0 8px;
+}
+.archived .badge {
+  color: var(--px-color-text-muted, GrayText);
+}
+dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 12px;
+  margin: 0;
+}
+dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.message {
+  border-left: 3px solid var(--px-color-border, GrayText);
+  padding: 4px 10px;
+  margin: 0 0 8px;
+}
+.message.user {
+  border-color: var(--px-color-accent, Highlight);
+}
+.message pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--px-font-mono, ui-monospace, monospace);
+  margin: 4px 0 0;
+}
+[data-privacy="on"] .private {
+  filter: blur(5px);
+}

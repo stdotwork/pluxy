@@ -1,0 +1,486 @@
+//! The reader against Codex homes built here, after the old app's tests
+//! (`extensions/app/src-tauri/src/codex_sessions.rs` and `codex_sessions/context.rs`).
+
+use super::*;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// A new empty folder, removed when dropped.
+struct Root(PathBuf);
+
+impl Root {
+    fn new(name: &str) -> Root {
+        static N: AtomicU64 = AtomicU64::new(0);
+        let p = std::env::temp_dir().join(format!(
+            "codex-sessions-{name}-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::SeqCst)
+        ));
+        let _ = fs::remove_dir_all(&p);
+        fs::create_dir_all(&p).unwrap();
+        Root(p)
+    }
+}
+
+impl Drop for Root {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+impl std::ops::Deref for Root {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+fn sql(path: &Path, batch: &str) {
+    let c = Connection::open(path).unwrap();
+    c.execute_batch(batch).unwrap();
+}
+
+fn never() -> bool {
+    false
+}
+
+fn write(path: &Path, text: &str) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, text).unwrap();
+}
+
+#[test]
+fn list_merges_threads_and_automation_rows_in_update_order() {
+    let root = Root::new("list");
+    let rollout = root.join("sessions/rollout.jsonl");
+    write(&rollout, "{}\n");
+    sql(
+        &root.join("state_5.sqlite"),
+        &format!(
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, title TEXT, cwd TEXT, model_provider TEXT, archived INTEGER, has_user_event INTEGER, updated_at_ms INTEGER);
+             INSERT INTO threads VALUES ('thread-1', '{}', 'First', 'C:/old', 'openai', 0, 0, 200);",
+            rollout.display()
+        ),
+    );
+    fs::create_dir_all(root.join("sqlite")).unwrap();
+    sql(
+        &root.join("sqlite/codex-dev.db"),
+        "CREATE TABLE automation_runs (thread_id TEXT PRIMARY KEY, status TEXT, thread_title TEXT, source_cwd TEXT, updated_at INTEGER);
+         INSERT INTO automation_runs VALUES ('thread-1', 'running', 'First new', 'C:/newer', 4);
+         INSERT INTO automation_runs VALUES ('thread-2', 'archived', 'Second', 'C:/new', 3);",
+    );
+    let page = list(&root, 0, 50);
+    assert_eq!(page.sessions.len(), 2);
+    assert_eq!(page.total, 2);
+    assert_eq!(page.sessions[0].id, "thread-1");
+    assert_eq!(page.sessions[0].title, "First new");
+    assert_eq!(page.sessions[0].provider, "openai");
+    assert_eq!(page.sessions[0].updated_ms, Some(4000));
+    assert_eq!(page.sessions[1].id, "thread-2");
+    assert!(page.sessions[1].archived);
+    let second = list(&root, 1, 1);
+    assert_eq!(second.sessions.len(), 1);
+    assert_eq!(second.total, 2);
+    assert_eq!(second.sessions[0].id, "thread-2");
+    assert!(!second.has_more);
+    let v = second.to_json();
+    assert_eq!(
+        (v["active"].clone(), v["archived"].clone()),
+        (json!(0), json!(1))
+    );
+}
+
+#[test]
+fn list_includes_unindexed_sessions_without_rollout_metadata() {
+    let root = Root::new("list-all-providers");
+    let api = "019f1234-abcd-7000-8000-000000000001";
+    let oauth = "019f1234-abcd-7000-8000-000000000002";
+    write(
+        &root.join(format!("sessions/rollout-2026-08-04T12-00-00-{api}.jsonl")),
+        "not parsed by the session list\n",
+    );
+    write(
+        &root.join(format!(
+            "archived_sessions/rollout-2026-08-03T12-00-00-{oauth}.jsonl"
+        )),
+        "not parsed by the session list\n",
+    );
+    write(
+        &root.join("session_index.jsonl"),
+        &format!(
+            "{}\n{}\n",
+            json!({"id": api, "thread_name": "API session", "updated_at": "2026-08-04T12:00:00Z"}),
+            json!({"id": oauth, "thread_name": "OAuth session", "updated_at": "2026-08-03T12:00:00Z"})
+        ),
+    );
+    let page = list(&root, 0, 50);
+    assert_eq!(page.sessions.len(), 2);
+    assert_eq!(page.sessions[0].id, api);
+    assert_eq!(page.sessions[0].title, "API session");
+    assert!(!page.sessions[0].archived);
+    assert_eq!(page.sessions[1].id, oauth);
+    assert_eq!(page.sessions[1].title, "OAuth session");
+    assert!(page.sessions[1].archived);
+    assert!(page
+        .sessions
+        .iter()
+        .all(|s| s.cwd.is_empty() && s.provider.is_empty()));
+}
+
+#[test]
+fn listing_uses_filenames_and_index_without_parsing_rollouts() {
+    let root = Root::new("list-no-rollout-reads");
+    let mut index = String::new();
+    for n in 0..6 {
+        let id = format!("019f1234-abcd-7000-8000-{n:012}");
+        let dir = if n % 2 == 0 {
+            "sessions"
+        } else {
+            "archived_sessions"
+        };
+        let path = root
+            .join(dir)
+            .join(format!("rollout-2026-10-10T10-00-00-{id}.jsonl"));
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            path,
+            b"not JSON; listing must not read or parse this file\xff",
+        )
+        .unwrap();
+        index.push_str(&format!(
+            "{}\n",
+            json!({"id": id, "thread_name": format!("Session {n}"), "updated_at": (1000 + n).to_string()})
+        ));
+    }
+    write(&root.join("session_index.jsonl"), &index);
+    let page = list(&root, 2, 2);
+    assert_eq!(page.total, 6);
+    assert_eq!(page.sessions.len(), 2);
+    assert!(page.has_more);
+    assert!(page.warnings.is_empty(), "{:?}", page.warnings);
+    assert_eq!(page.sessions[0].title, "Session 3");
+    assert!(page.sessions[0].archived);
+    assert_eq!(page.sessions[1].title, "Session 2");
+    assert!(!page.sessions[1].archived);
+}
+
+#[test]
+fn list_accepts_optional_thread_columns_and_warns_about_a_broken_database() {
+    let root = Root::new("list-optional");
+    fs::create_dir_all(root.join("sqlite")).unwrap();
+    sql(
+        &root.join("sqlite/optional.sqlite3"),
+        "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT);
+         CREATE TABLE inbox_items (id TEXT PRIMARY KEY);
+         INSERT INTO threads VALUES ('optional-thread', 'Optional');",
+    );
+    fs::write(root.join("sqlite/broken.db"), b"not a sqlite database").unwrap();
+    let page = list(&root, 0, 0);
+    assert_eq!(page.limit, 1);
+    assert_eq!(page.sessions.len(), 1);
+    assert_eq!(page.sessions[0].id, "optional-thread");
+    assert_eq!(page.sessions[0].cwd, "");
+    assert_eq!(page.sessions[0].updated_ms, None);
+    // One warning for the broken database, naming it.
+    assert_eq!(page.warnings.len(), 1, "{:?}", page.warnings);
+    assert!(page.warnings[0].contains("broken.db"));
+    assert_eq!(list(&root, 0, usize::MAX).limit, MAX_PAGE_SIZE);
+}
+
+#[test]
+fn local_prefixed_threads_and_their_rollouts_are_one_session() {
+    let root = Root::new("list-local");
+    let id = "019f1234-abcd-7000-8000-0000000000aa";
+    sql(
+        &root.join("state_5.sqlite"),
+        &format!(
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, name TEXT, updated_at INTEGER);
+             INSERT INTO threads VALUES ('local:{id}', 'Local', 1754000000);"
+        ),
+    );
+    write(&root.join(format!("sessions/rollout-x-{id}.jsonl")), "");
+    let page = list(&root, 0, 50);
+    assert_eq!(page.total, 1);
+    assert_eq!(page.sessions.len(), 1);
+    assert_eq!(page.sessions[0].id, format!("local:{id}"));
+    assert_eq!(page.sessions[0].updated_ms, Some(1_754_000_000_000));
+}
+
+#[test]
+fn links_in_the_session_folders_are_skipped() {
+    let root = Root::new("list-links");
+    let outside = Root::new("list-links-outside");
+    let id = "019f1234-abcd-7000-8000-0000000000bb";
+    let target = outside.join(format!("rollout-{id}.jsonl"));
+    write(&target, "");
+    fs::create_dir_all(root.join("sessions")).unwrap();
+    std::os::unix::fs::symlink(&target, root.join(format!("sessions/rollout-{id}.jsonl"))).unwrap();
+    assert!(list(&root, 0, 50).sessions.is_empty());
+    assert!(find_rollout(&root, id).is_none());
+}
+
+#[test]
+fn timestamps_parse_as_the_old_app_did() {
+    assert_eq!(
+        parse_timestamp_ms("2025-08-05T09:00:00Z"),
+        Some(1_754_384_400_000)
+    );
+    assert_eq!(
+        parse_timestamp_ms("2025-08-05T11:00:00.250+02:00"),
+        Some(1_754_384_400_250)
+    );
+    assert_eq!(parse_timestamp_ms("1970-01-01T00:00:00Z"), Some(0));
+    assert_eq!(parse_timestamp_ms("1003"), Some(1_003_000));
+    assert_eq!(parse_timestamp_ms("1754384400000"), Some(1_754_384_400_000));
+    assert_eq!(parse_timestamp_ms(""), None);
+    assert_eq!(parse_timestamp_ms("2025-08-05"), None);
+    assert_eq!(parse_timestamp_ms("2025-13-05T09:00:00Z"), None);
+}
+
+#[test]
+fn rollout_ids_come_from_the_end_of_the_file_name() {
+    let p = |n: &str| rollout_id(Path::new(n));
+    assert_eq!(
+        p("rollout-2026-10-05T12-00-00-019f1234-abcd-7000-8000-000000000020_019f1234-abcd-7000-8000-000000000021.jsonl").as_deref(),
+        Some("019f1234-abcd-7000-8000-000000000021")
+    );
+    assert_eq!(p("rollout-short.jsonl"), None);
+    assert_eq!(p("other-019f1234-abcd-7000-8000-000000000021.jsonl"), None);
+    assert_eq!(
+        p("rollout-019f1234-abcd-7000-8000-00000000002g.jsonl"),
+        None
+    );
+}
+
+#[test]
+fn session_ids_with_paths_or_too_long_are_refused() {
+    for bad in [
+        "../etc/passwd",
+        "..\\windows\\system32",
+        "test/session",
+        "test:session",
+        "",
+        "   ",
+        "a.b",
+    ] {
+        assert!(validate_id(bad).is_err(), "{bad}");
+    }
+    assert_eq!(
+        validate_id("01a0ba19-e1ac-7d00-9136-563b25bbdb86").unwrap(),
+        "01a0ba19-e1ac-7d00-9136-563b25bbdb86"
+    );
+    assert_eq!(validate_id("local:abc").unwrap(), "abc");
+    assert!(validate_id(&"a".repeat(129)).is_err());
+    assert!(validate_id(&"a".repeat(128)).is_ok());
+}
+
+#[test]
+fn lookup_does_not_open_unrelated_rollouts() {
+    let root = Root::new("detail-no-unrelated");
+    let id = "019f1234-abcd-7000-8000-000000000030";
+    let other = "019f1234-abcd-7000-8000-000000000031";
+    write(
+        &root.join(format!("sessions/rollout-{other}.jsonl")),
+        &format!(
+            "{}\n",
+            json!({"type": "session_meta", "payload": {"id": id}})
+        ),
+    );
+    assert!(find_rollout(&root, id).is_none());
+    assert!(matches!(
+        detail(&root, id, 0, 50, &never),
+        Err(DetailError::NotFound(_))
+    ));
+}
+
+#[test]
+fn a_database_rollout_outside_the_codex_home_is_not_read() {
+    let root = Root::new("detail-outside");
+    let outside = Root::new("detail-outside-file");
+    let id = "019f1234-abcd-7000-8000-000000000010";
+    let file = outside.join("outside.jsonl");
+    write(
+        &file,
+        &format!(
+            "{}\n",
+            json!({"type": "response_item", "payload": {"type": "message", "role": "user", "content": "outside"}})
+        ),
+    );
+    sql(
+        &root.join("state_5.sqlite"),
+        &format!(
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, title TEXT);
+             INSERT INTO threads VALUES ('{id}', '{}', 'Outside');",
+            file.display()
+        ),
+    );
+    let d = detail(&root, id, 0, 50, &never).unwrap();
+    assert_eq!(d["rollout"], Value::Null);
+    assert_eq!(d["title"], "Outside");
+    assert_eq!(d["messages"], json!([]));
+}
+
+#[test]
+fn the_child_id_in_a_forked_rollouts_name_is_the_one_found() {
+    let root = Root::new("detail-parent-child");
+    let parent = "019f1234-abcd-7000-8000-000000000020";
+    let child = "019f1234-abcd-7000-8000-000000000021";
+    let rollout = root.join(format!(
+        "sessions/2026/10/05/rollout-2026-10-05T12-00-00-{parent}_{child}.jsonl"
+    ));
+    write(
+        &rollout,
+        &format!(
+            "{}\n",
+            json!({"type": "session_meta", "payload": {"id": child}})
+        ),
+    );
+    assert_eq!(
+        find_rollout(&root, child),
+        Some(fs::canonicalize(&rollout).unwrap())
+    );
+    assert!(find_rollout(&root, parent).is_none());
+}
+
+#[test]
+fn detail_reads_a_legacy_schema_without_optional_columns() {
+    let root = Root::new("detail-legacy");
+    let id = "019f1234-abcd-7000-8000-000000000002";
+    let rollout = root.join(format!("sessions/rollout-{id}.jsonl"));
+    write(
+        &rollout,
+        &format!(
+            "{}\n",
+            json!({"type": "session_meta", "payload": {"id": id, "title": "Legacy"}})
+        ),
+    );
+    sql(
+        &root.join("state_5.sqlite"),
+        &format!(
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, title TEXT, cwd TEXT, model_provider TEXT);
+             INSERT INTO threads VALUES ('{id}', '{}', 'Legacy', 'C:\\Repo', 'openai');",
+            rollout.display()
+        ),
+    );
+    let d = detail(&root, id, 0, 50, &never).unwrap();
+    assert_eq!(d["model"], Value::Null);
+    assert_eq!(d["updated_ms"], Value::Null);
+    assert_eq!(d["title"], "Legacy");
+    assert_eq!(d["cwd"], "C:\\Repo");
+}
+
+#[test]
+fn detail_takes_the_latest_model_and_pages_capped_messages() {
+    let root = Root::new("detail-model");
+    let id = "019f1234-abcd-7000-8000-000000000095";
+    let lines = [
+        json!({"type": "session_meta", "payload": {"id": id, "cwd": "/w", "model_provider": "openai"}}),
+        json!({"type": "turn_context", "payload": {"model": "first-model"}}),
+        json!({"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "First turn"}]}}),
+        json!({"type": "turn_context", "payload": {"model": "latest-model"}}),
+        json!({"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "é".repeat(5000)}]}}),
+        json!({"type": "response_item", "payload": {"type": "reasoning", "encrypted_content": "x"}}),
+        json!({"type": "response_item", "payload": {"type": "custom_tool_call", "name": "apply", "input": "patch", "call_id": "c1"}}),
+        json!({"type": "response_item", "payload": {"type": "function_call_output", "call_id": "c1", "output": {"ok": true}}}),
+    ];
+    let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    write(&root.join(format!("sessions/rollout-{id}.jsonl")), &text);
+    let d = detail(&root, id, 0, 50, &never).unwrap();
+    assert_eq!(d["model"], "latest-model");
+    assert_eq!(
+        (d["cwd"].clone(), d["provider"].clone()),
+        (json!("/w"), json!("openai"))
+    );
+    assert_eq!(d["total"], 5);
+    assert_eq!(d["next_offset"], Value::Null);
+    assert_eq!(
+        d["stats"],
+        json!({"lines": 8, "messages": 3, "user": 1, "assistant": 1, "tool": 2, "reasoning": 1, "size": text.len()})
+    );
+    let m = d["messages"].as_array().unwrap();
+    // 5,000 two-byte characters, cut at 8 KiB on a character boundary.
+    assert_eq!(m[1]["truncated"], true);
+    assert_eq!(m[1]["content"].as_str().unwrap().len(), MAX_MESSAGE);
+    assert_eq!(m[2]["content"], "[Encrypted reasoning block]");
+    assert_eq!(m[3]["content"], "apply(patch)");
+    assert_eq!(m[3]["call_id"], "c1");
+    assert_eq!(m[4]["content"], "{\"ok\":true}");
+    let page = detail(&root, id, 1, 2, &never).unwrap();
+    assert_eq!(page["messages"].as_array().unwrap().len(), 2);
+    assert_eq!(page["messages"][0]["line"], 4);
+    assert_eq!(page["next_offset"], 3);
+    assert_eq!(
+        detail(&root, id, 0, 50, &|| true),
+        Err(DetailError::Cancelled)
+    );
+}
+
+#[test]
+fn a_detail_page_stays_within_its_budget() {
+    let root = Root::new("detail-budget");
+    let id = "019f1234-abcd-7000-8000-000000000096";
+    let line = json!({"type": "response_item", "payload": {"type": "message", "role": "user", "content": "\u{1}".repeat(MAX_MESSAGE)}});
+    let text: String = (0..100).map(|_| format!("{line}\n")).collect();
+    write(&root.join(format!("sessions/rollout-{id}.jsonl")), &text);
+    let d = detail(&root, id, 0, 100, &never).unwrap();
+    let n = d["messages"].as_array().unwrap().len();
+    assert!(n > 0 && n < 100, "{n}");
+    assert!(d["messages"].to_string().len() <= MAX_DETAIL);
+    assert_eq!(d["next_offset"], n);
+    assert_eq!(d["total"], 100);
+}
+
+#[test]
+fn reading_a_wal_database_leaves_nothing_beside_it() {
+    let root = Root::new("wal");
+    fs::create_dir_all(root.join("sqlite")).unwrap();
+    let db = root.join("sqlite/threads.db");
+    {
+        let c = Connection::open(&db).unwrap();
+        c.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, updated_at_ms INTEGER);
+             INSERT INTO threads VALUES ('w', 'WAL thread', 5);",
+        )
+        .unwrap();
+    }
+    assert!(is_wal(&db));
+    assert!(!sidecar(&db, "-wal").exists() && !sidecar(&db, "-shm").exists());
+    let before = fs::read(&db).unwrap();
+    let page = list(&root, 0, 50);
+    assert_eq!(page.sessions[0].title, "WAL thread");
+    assert!(page.warnings.is_empty(), "{:?}", page.warnings);
+    assert!(detail(&root, "w", 0, 50, &never).is_ok());
+    assert!(!sidecar(&db, "-wal").exists(), "a -wal file appeared");
+    assert!(!sidecar(&db, "-shm").exists(), "a -shm file appeared");
+    assert_eq!(fs::read(&db).unwrap(), before);
+}
+
+#[test]
+fn a_path_with_uri_characters_opens() {
+    let root = Root::new("uri ?#%");
+    sql(
+        &root.join("state_5.sqlite"),
+        "CREATE TABLE threads (id TEXT PRIMARY KEY, name TEXT); INSERT INTO threads VALUES ('u', 'Odd path');",
+    );
+    let page = list(&root, 0, 50);
+    assert!(page.warnings.is_empty(), "{:?}", page.warnings);
+    assert_eq!(page.sessions[0].title, "Odd path");
+}
+
+#[test]
+fn the_page_never_writes_html() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("pages");
+    for name in ["app.js", "index.html"] {
+        let text = fs::read_to_string(dir.join(name)).unwrap();
+        for sink in [
+            "innerHTML",
+            "outerHTML",
+            "insertAdjacentHTML",
+            "document.write",
+            "DOMParser",
+            "createContextualFragment",
+        ] {
+            assert!(!text.contains(sink), "{name} uses {sink}");
+        }
+    }
+}
