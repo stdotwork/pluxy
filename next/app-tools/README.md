@@ -11,6 +11,7 @@ reference: this folder implements it, it does not change it.
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
 cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex)
 cargo build --locked -p pluxy-transactions --example fixture-writer   # the native test's fixture
+cargo build --release --locked -p claude-code   # likewise execution
 ```
 
 ## `lib/program`
@@ -205,6 +206,49 @@ for it there): its `response_item` records become messages (user and assistant t
 the database's, else the last `turn_context`'s.
 
 The page renders every session's text as text, never as HTML.
+
+## `claude-code`
+
+`pluxy/claude-code` sets up Claude Code to use pluxy's core and says how to start it, for the
+desktop app's Claude Code page (`../app/README.md`, "Claude Code"). It writes one settings file
+through `lib/transactions` (set `claude-code`): link-preserving, journalled, the original and
+applied images in the host's vault. It exports nothing.
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `preview` | `read` | `targets`: one selection (`file`, or `root` and `path`), by default `~/.claude/settings.json` in the app's `HOME`; `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `settings`: `state` (`not-configured`, `configured`, `needs-update`), `base_url`, `key_set`, each role's model and 1M switch, `startup_model`, `subagent_model`, `max_context_tokens`, `auto_compact_pct`, `disable_auto_compact`; never the key |
+| `apply` | `write`; secret `key` (value) | One pin, `base_url`, `key`, `opus`, `sonnet`, `haiku`, `fable` (empty: follows Sonnet) with `<role>_1m`, `startup_model`, `subagent_model` (empty: removed), `max_context_tokens` (100000 to 1000000), `auto_compact_pct` (1 to 100), `disable_auto_compact` | The library's outcome |
+| `clear` | `write` | One pin | The library's outcome: the values Apply wrote go, edits made since stay |
+| `restore` | `write` | One pin | The library's outcome: the original bytes back (Restore Backup) |
+| `status` | `read` | — | The library's status |
+| `recipe` | `read` | — | `{"client": "Claude Code", "kind": "terminal", "program": "claude", "args": []}`, for the launcher |
+
+What `apply` writes, keeping everything else in the file (keys in its order, numbers with their
+digits), with Claude Code's own names
+([settings](https://code.claude.com/docs/en/settings), [environment variables](https://code.claude.com/docs/en/env-vars),
+[model configuration](https://code.claude.com/docs/en/model-config), read 2026-11-14):
+
+- in `env`: `ANTHROPIC_BASE_URL` (the core) and `ANTHROPIC_AUTH_TOKEN` (the client key, sent as a
+  bearer token); `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU,FABLE}_MODEL`, each with `[1m]` when its 1M
+  switch is on (a model typed with `[1m]` counts as the switch); the `/model` picker's
+  `ANTHROPIC_DEFAULT_*_MODEL_NAME` and `_DESCRIPTION` ("Opus · <model>", "Auto-compact window: 1M",
+  "1M enabled · …"), and `ANTHROPIC_CUSTOM_MODEL_OPTION` with its name and description for the
+  Sonnet model, as the old app wrote them; `CLAUDE_CODE_SUBAGENT_MODEL`;
+  `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` (the picker lists the core's models);
+  `CLAUDE_CODE_AUTO_MODE_SERVER=0` (auto mode uses Claude Code's own classifier requests instead
+  of asking the server to review its actions, as the old app set it); `CLAUDE_CODE_MAX_CONTEXT_TOKENS` and `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (the
+  window, which beats every other window setting), `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` and
+  `DISABLE_AUTO_COMPACT` (`1` or `0`). `ANTHROPIC_API_KEY` is removed (it would win over the bearer
+  token) and so is `ANTHROPIC_MODEL` (it would win over `model`);
+- at the top level: `model` (the startup model, so `/model` can still change it; removed when
+  empty), `autoCompactWindow` and `autoCompactEnabled`.
+
+Clear's three-way merge brings back what Apply removed or replaced, unless the person changed it
+since. `CLAUDE_CODE_EFFORT_LEVEL` and per-model `modelSettings` are left alone. Every operation but
+`restore` refuses, before writing, a file Claude Code would not take as its own settings: not strict
+JSON (a comment, a trailing comma), not an object, an `env` that is not an object of strings, or a
+`$schema` other than `https://json.schemastore.org/claude-code-settings.json`. A missing or empty
+file is an empty one. Restore Backup puts the original back whatever the file holds now.
 
 ## `execution`
 
