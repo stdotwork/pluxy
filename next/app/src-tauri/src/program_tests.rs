@@ -1907,6 +1907,53 @@ fn a_start_with_open_journals_that_cannot_take_its_turn_fails_instead_of_describ
 }
 
 #[test]
+fn a_call_unanswered_when_its_tool_exits_is_known_to_the_slot_before_its_thread_wakes() {
+    let h = Arc::new(host(Value::Null));
+    let slow = call_in_thread(&h, "slow", json!({"ms": 8000}));
+    let run = || h.0.slots().get(ID).and_then(|s| s.run.clone());
+    until("the call is sent", 5, || {
+        run().is_some_and(|r| !r.pending.lock().unwrap().is_empty())
+    });
+    std::thread::sleep(Duration::from_millis(200));
+    // Hold up the call's thread where it ends: it wakes only once the tool has been reaped, as
+    // it can when it is slow to get a processor.
+    let run = run().unwrap();
+    let stall = run.serving.lock().unwrap();
+    h.stop(ID);
+    until("the stop", 5, || h.status(ID).state == "stopped");
+    // The next start's describe looks now: the call is already of unknown outcome.
+    let known = h.status(ID).unknown;
+    assert_eq!(known.len(), 1, "the slot does not know the unanswered call");
+    assert_eq!(known[0].op, "slow");
+    drop(stall);
+    let e = slow.join().unwrap().unwrap_err();
+    assert!(e.unknown, "{e}");
+    // Recorded once, not again by its thread.
+    assert_eq!(h.status(ID).unknown.len(), 1);
+    // The next start reports it, and the tool serves.
+    summary(&h, &[]).unwrap();
+    assert!(h.status(ID).unknown.is_empty());
+    h.stop_all();
+}
+
+#[test]
+fn stopping_a_crashed_tool_that_is_not_running_reads_as_idle() {
+    let h = host(json!({"crash_on": "crash"}));
+    summary(&h, &[]).unwrap();
+    h.call(ID, "crash", json!({}), None).unwrap_err();
+    until("the crash", 5, || h.status(ID).state == "crashed");
+    assert_eq!(h.status(ID).crashes, 1);
+    h.stop(ID);
+    let s = h.status(ID);
+    assert_eq!(s.state, "idle");
+    assert_eq!(s.crashes, 0);
+    assert_eq!(s.retry_in_ms, None);
+    // Its next call starts it at once, with no backoff.
+    summary(&h, &[]).unwrap();
+    h.stop_all();
+}
+
+#[test]
 fn a_tool_gets_its_home_and_its_own_data_folder_and_a_planted_link_refuses_the_start() {
     use std::os::unix::fs::PermissionsExt;
     let base = Folder(package(Value::Null).dir);

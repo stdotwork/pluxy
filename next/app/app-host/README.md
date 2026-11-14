@@ -299,10 +299,12 @@ anything a caller passes. On top of the rules above:
   again, updated, rolled back). A clean stop (when idle, or a stop the host asked for, such as a
   disable) or a run of ten minutes starts a new count: with the 30-second idle stop, crashes in a
   row are those with no clean stop between them. A crash of a release that is draining is not
-  counted.
+  counted. A stop the host asks for while the tool is not running (crashed, quarantined or
+  incompatible) clears that state too: it reads as idle until its next call.
 - A call the tool received and did not answer (it crashed, was stopped, left a cancel unanswered
   or reached the drain limit) has an **unknown outcome**: its error says so, and it is never sent
-  again. The host keeps it until the package's next start, which carries the list in describe,
+  again. The host keeps it, recorded by the time the tool is reaped, until the package's next
+  start, which carries the list in describe,
   as `{"type":"call","id":"c-9","op":"describe","contract_version":0,"unknown":[{"id":"c-7","op":"apply","generation":1700000000}]}`
   (`generation` is the release's install time). A tool that writes must reconcile those calls
   with its own records before it answers describe. The describe that carries them waits for the

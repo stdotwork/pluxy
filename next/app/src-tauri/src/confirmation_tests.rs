@@ -611,6 +611,44 @@ fn an_app_action_is_reviewed_by_its_description_alone() {
 }
 
 #[test]
+fn an_app_confirmation_that_never_finishes_is_withdrawn() {
+    let (dir, mut c, _) = fixture();
+    let p = c
+        .prepare_app("Rotate the management key.".into(), 7)
+        .unwrap();
+    let id = c.queue(p).unwrap();
+    assert!(c.pending.contains_key(&id));
+    let c = std::sync::Mutex::new(c);
+    // No result by the deadline: it fails, and does not keep one of the pending places.
+    let deadline = Instant::now();
+    std::thread::sleep(Duration::from_millis(5));
+    let e = super::ui::wait_app(&c, &id, deadline).unwrap_err();
+    assert!(e.contains("did not finish"), "{e}");
+    assert!(
+        !c.lock().unwrap().pending.contains_key(&id),
+        "the timed-out confirmation is still pending"
+    );
+    // The control: a confirmed one is waited for and spent.
+    let mut g = c.lock().unwrap();
+    let p = g
+        .prepare_app("Rotate the management key.".into(), 7)
+        .unwrap();
+    let id = g.queue(p).unwrap();
+    let t = g.finish(&id, true, false).unwrap().unwrap();
+    g.results.insert(id.clone(), Ok(Some(t.clone())));
+    drop(g);
+    assert_eq!(
+        super::ui::wait_app(&c, &id, Instant::now() + Duration::from_secs(5)),
+        Ok(true)
+    );
+    assert!(
+        c.lock().unwrap().consume(&id, &t).is_err(),
+        "token spent twice"
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn the_remember_text_names_the_secrets_a_launch_uses() {
     let (dir, mut c, mut a) = fixture();
     let p = c.prepare(a.clone(), Origin::NativeUi).unwrap();

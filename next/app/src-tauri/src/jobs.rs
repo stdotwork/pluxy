@@ -306,16 +306,17 @@ impl Jobs {
     }
 
     /// A new job, as `add`, kept only if grant allows it: the job counts, and a revocation
-    /// reaches it, from before grant decides.
+    /// reaches it, from before grant decides. Grant is given the job's cancel flag, set by that
+    /// revocation, for whatever it waits on (a confirmation) to stop waiting.
     pub fn start<G>(
         &self,
         consumer: &str,
         producer: &str,
         kind: &str,
-        grant: impl FnOnce() -> Result<G, CallError>,
+        grant: impl FnOnce(&Arc<AtomicBool>) -> Result<G, CallError>,
     ) -> Result<(Arc<Job>, G), CallError> {
         let job = self.add(consumer, producer, kind)?;
-        let r = grant().and_then(|g| match job.state.lock().unwrap().why.clone() {
+        let r = grant(&job.cancel).and_then(|g| match job.state.lock().unwrap().why.clone() {
             // Revoked (or cancelled) while it was granted or confirmed.
             Some(why) => Err(fail(
                 "cancelled",
@@ -509,12 +510,12 @@ mod tests {
     fn a_revocation_while_a_job_starts_refuses_it() {
         let jobs = Jobs::default();
         // The control: granted, it starts and counts.
-        let (job, ()) = jobs.start("c", "p", "c/items", || Ok(())).unwrap();
+        let (job, ()) = jobs.start("c", "p", "c/items", |_| Ok(())).unwrap();
         assert!(!job.cancel.load(Ordering::SeqCst));
         jobs.remove(&job);
         // Revoked while it was being granted (or confirmed): refused, and it no longer counts.
         let e = jobs
-            .start("c", "p", "c/items", || {
+            .start("c", "p", "c/items", |_| {
                 jobs.revoke("p");
                 Ok(())
             })
@@ -523,7 +524,7 @@ mod tests {
         assert_eq!(e.code, "cancelled", "{e:?}");
         // A grant that refuses: refused with its error, and it no longer counts.
         let e = jobs
-            .start("c", "p", "c/items", || -> Result<(), CallError> {
+            .start("c", "p", "c/items", |_| -> Result<(), CallError> {
                 Err(fail("permission", "no"))
             })
             .err()
@@ -532,6 +533,25 @@ mod tests {
         for _ in 0..MAX_PER_CONSUMER {
             jobs.add("c", "p", "c/items").unwrap();
         }
+    }
+
+    #[test]
+    fn a_grant_waiting_on_a_confirmation_is_told_of_a_revocation_by_the_jobs_cancel_flag() {
+        let jobs = Jobs::default();
+        let e = jobs
+            .start("c", "p", "c/items", |cancel| {
+                assert!(!cancel.load(Ordering::SeqCst));
+                // A change to the producer while the confirmation is open.
+                jobs.revoke("p");
+                assert!(
+                    cancel.load(Ordering::SeqCst),
+                    "the flag the grant waits on was not set by the revocation"
+                );
+                Ok(())
+            })
+            .err()
+            .unwrap();
+        assert_eq!(e.code, "cancelled", "{e:?}");
     }
 
     #[test]
