@@ -1337,6 +1337,10 @@ fn device_changed_as(
         (labels, device_view(&st, &catalog), left)
     };
     left.extend(close_webviews(app, labels));
+    // Its registrations end with any change, a swap too: its jobs, as consumer or producer, are
+    // cancelled and nothing more of them is delivered.
+    #[cfg(target_os = "linux")]
+    st.routes.jobs.revoke(id);
     // A native tool runs only as the release it was admitted as: any change stops it, and its
     // next call starts it from its record then, if it still has one.
     #[cfg(target_os = "linux")]
