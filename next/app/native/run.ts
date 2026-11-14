@@ -1320,7 +1320,7 @@ async function runApp(
     }
 
     if (claudeCode) {
-      const r = steps.get("claude-code") as { passed?: boolean } | undefined;
+      const r = steps.get("claude_code") as { passed?: boolean } | undefined;
       const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
       check(r?.passed === true, `the Claude Code check did not complete: ${failure}`);
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
