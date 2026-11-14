@@ -1841,9 +1841,21 @@ fn handshake(
     };
     // The describe's own time, besides any wait for the turn.
     let describe = left();
-    let turn = (unknown && (!pending(inner).is_empty() || !journals()?.is_empty()))
+    let open = journals()?.len();
+    let turn = (unknown && (!pending(inner).is_empty() || open > 0))
         .then(|| take_turn(run, inner.limits.startup))
         .flatten();
+    // Unknown calls wait for a later start's turn, but an open journal is never described
+    // away: a start that cannot reconcile one fails, and is retried.
+    if turn.is_none() && open > 0 {
+        return Err(fail(
+            "extension_unavailable",
+            format!(
+                "{id} could not take its turn to reconcile {open} journal{} within the startup limit",
+                if open == 1 { "" } else { "s" }
+            ),
+        ));
+    }
     let (unknown, journals) = if turn.is_some() {
         (pending(inner), journals()?)
     } else {
