@@ -845,6 +845,37 @@ version** puts it back over whatever the file holds now (a file absent in the ba
 no automatic backup is made) and **Delete this version** deletes only that backup, each in the
 tool's native confirmation.
 
+## Hermes Agent
+
+The Hermes Agent page sets up and starts Hermes Agent with this core (`src/hermes.tsx`). It needs
+the curated native tool `pluxy/hermes-setup` ([app tools](../app-tools/README.md#hermes-setup))
+and, for **Start CLI**, the execution program, both installed and enabled on the Device extensions
+page. Like the Claude Code page it is the window's own page, because **Apply** gives the tool the
+client key.
+
+**Read settings** previews Hermes Agent's `config.yaml`: in its default home (`~/.hermes`, or the
+profile `~/.hermes/active_profile` names), in a selected Hermes home folder (the folder
+`HERMES_HOME` names, or a profile's `~/.hermes/profiles/<name>`; the folder may be a link, as
+chezmoi can make) or as a selected file (a link, as stow makes, is followed and kept). It shows
+whether pluxy's integration is applied, the file it writes to, the provider's address, whether a
+key is in the file, the selected provider and the default model, never the key, and warns when the
+old desktop app's `cpa-gui` provider is still there. **Default model** is the model Hermes Agent
+starts with through this core (the core's served models are suggested; **Refresh models** reloads
+them). The **Authentication Key** is one of the vault's secrets, or a new one through native key
+entry (**Add key…**).
+
+**Connect in One Click** (or **Update Configuration** / **Repair Connection** once applied),
+**Clear integration** and **Restore Backup** each preview the file again and call the tool, whose
+native confirmation names the file it resolves to, the key's label for Apply, and that an edit made
+in the same instant by another program may be lost; comments and everything else in the file stay,
+including the person's own settings under the pluxy provider. **Backup and restore** is the shared
+backup browser. **Start CLI** asks the tool for its recipe (`hermes` in a terminal, no arguments,
+which starts a chat; `~/.local/bin/hermes`, where Hermes's installer puts it, when it exists) and
+starts it through the launcher in the chosen working directory (recently used ones offered),
+terminal and optional program path. Each launch's confirmation shows it in full; the key is not
+part of a launch: Hermes Agent reads it from its config file. Hermes Agent's desktop app is not
+offered: its Linux packages are not released.
+
 ## Build and check
 
 Bun `1.4.3`, a stable Rust toolchain (CI uses 1.97.0), and on Linux the WebKitGTK 4.1 and

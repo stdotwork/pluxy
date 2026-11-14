@@ -29,7 +29,8 @@
 //!    fixture parser (`usage_native.rs`); with `PLUXY_APP_TEST_LAUNCHER`, only the execution
 //!    program and the launcher (`launcher_native.rs`); with `PLUXY_APP_TEST_CLAUDE_CODE`, only
 //!    the Claude Code setup and launcher (`claude_code_native.rs`), with its backup browser
-//!    (`backups_native.rs`);
+//!    (`backups_native.rs`); with `PLUXY_APP_TEST_HERMES`, only the Hermes Agent setup and launcher
+//!    (`hermes_native.rs`);
 //! 5. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!
@@ -71,6 +72,9 @@ mod client_key;
 mod core_updates;
 #[path = "device_native.rs"]
 mod device;
+#[cfg(target_os = "linux")]
+#[path = "hermes_native.rs"]
+mod hermes;
 #[path = "native_ingress.rs"]
 mod ingress;
 #[cfg(target_os = "linux")]
@@ -497,6 +501,14 @@ fn run(app: &AppHandle) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_CLAUDE_CODE") {
         claude_code::run(app, &main, dir.into())?;
+        log("quit", json!({}));
+        crate::quit(app);
+        return Ok(());
+    }
+    // The Hermes Agent setup and launcher (hermes_native.rs), in a session of its own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_HERMES") {
+        hermes::run(app, &main, dir.into())?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());

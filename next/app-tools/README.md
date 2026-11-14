@@ -11,7 +11,7 @@ reference: this folder implements it, it does not change it.
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
 cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-omp)
 cargo build --locked -p pluxy-transactions --example fixture-writer   # the native test's fixture
-cargo build --release --locked -p claude-code   # likewise execution
+cargo build --release --locked -p claude-code   # likewise execution and hermes-setup
 ```
 
 ## `lib/program`
@@ -304,6 +304,67 @@ since. `CLAUDE_CODE_EFFORT_LEVEL` and per-model `modelSettings` are left alone. 
 JSON (a comment, a trailing comma), not an object, an `env` that is not an object of strings, or a
 `$schema` other than `https://json.schemastore.org/claude-code-settings.json`. A missing or empty
 file is an empty one. Restore Backup puts the original back whatever the file holds now.
+
+## `hermes-setup`
+
+`pluxy/hermes-setup` sets up Hermes Agent to use pluxy's core and says how to start it, for the
+desktop app's Hermes Agent page (`../app/README.md`, "Hermes Agent"). It writes Hermes Agent's
+`config.yaml` through `lib/transactions` (set `hermes`, one target): link-preserving, journalled,
+the original and applied images in the host's vault, and its manual backups (the backup browser).
+It exports nothing.
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `preview` | `read` | `targets`: one selection (`file`, or `root` and `path`); or `folder`: a Hermes home folder (what `HERMES_HOME` names; it may be a link), whose `config.yaml` is used; by default `config.yaml` in the home Hermes uses (below); `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `config`: `state` (`not-configured`, `configured`, `needs-update`), `base_url` (the provider's `api`), `key_set`, `provider` (`model.provider`), `model` (`model.default`, when the provider is pluxy's), `legacy` (the old desktop app's `cpa-gui` provider is there); never the key |
+| `apply` | `write`; secret `key` (value) | One pin, `base_url`, `key`, `model` (one model ID) | The library's outcome |
+| `clear` | `write` | One pin | The library's outcome: the values Apply wrote go, edits made since stay |
+| `restore` | `write` | One pin | The library's outcome: the original bytes back (Restore Backup) |
+| `status` | `read` | — | The library's status |
+| `recipe` | `read` | — | `{"client": "Hermes Agent", "kind": "terminal", "program": <~/.local/bin/hermes when an executable file is there, else "hermes">, "args": []}`, for the launcher |
+| `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations (`lib/transactions`), one file per version, diffed by setting name (the file's YAML read as its value) | The library's answers: IDs, paths, presence, sizes and setting names, never a value |
+
+Hermes Agent keeps its settings in `config.yaml` in its home folder: `HERMES_HOME`, else
+`~/.hermes`; with no `--profile` flag, a profile named in `~/.hermes/active_profile` (other than
+`default`) makes the home `~/.hermes/profiles/<name>`. The tool's environment has no
+`HERMES_HOME`, so by default it uses `~/.hermes/config.yaml`, or the active profile's
+`config.yaml` (a name that is not a profile ID, or a profile folder that is not there, refuses: the
+person selects the folder); a person who sets `HERMES_HOME` selects that folder. Hermes's own checks
+that a profile folder is a live profile are not repeated. Read at source (NousResearch/hermes-agent
+at tag v0.23.1, 3b4215785882, 2026-11-09): `hermes_constants.py`, `hermes_yaml.py`,
+`hermes_cli/config.py`, `config_providers.py`, `config_version_stamp.py`, `runtime_provider_custom.py`,
+`providers.py`, `model_setup_flows_custom.py`, `main.py` (profiles), `setup-hermes.sh` and
+`website/docs/user-guide/configuring-models.md`.
+
+What `apply` writes, as `hermes model` does for a provider of the `providers:` map:
+
+- `providers.pluxy`: `api` (the core's address with `/v1`), `api_key` (the client key),
+  `transport` `chat_completions` and `default_model` (the model). Keys there that Hermes would read
+  before these are removed: `api_mode`, `key_env`, `api_key_env`, `key_cmd`, and `enabled` when it
+  is not `true`. Its other members, such as the person's per-model `models` metadata or
+  `extra_headers`, and every other provider stay. Hermes lists the core's models from its
+  `/v1/models` itself, so no `models` map is written.
+- `model`: `provider` `custom:pluxy` (Hermes's name for that entry), `default` (the model) and
+  `api_mode` `chat_completions`; an earlier endpoint's `base_url`, `api_key`, `key_env` and
+  `api_key_env` there are removed (`key_env` would win over the entry's key). A `model:` written as
+  plain text, the default model, becomes a mapping, as Hermes itself does. Everything else stays.
+
+The file is edited in place through a lossless YAML tree (yaml-edit; the same code as
+`omp-setup`): comments, key order, quoting and indentation stay, and only keys whose values change
+are touched. It is read as YAML 1.2 (saphyr) and every edited file is read again and must hold
+exactly the intended value, else nothing is written. Hermes reads it with YAML 1.1 rules (ruamel),
+which take some plain words and numbers differently, so the key and the model pluxy writes are
+refused when a YAML 1.1 reader could take them for anything but text (`yes`, `no`, `on`, `off`,
+`y`, `n`, `true`, `false`, `null` or `~` in any case, or text starting with a digit, sign or dot
+made only of characters numbers, dates and times use), when they hold `${` (Hermes expands it from
+the environment) or spaces. Clear's three-way merge brings back what Apply replaced unless the
+person changed it since, and edits only what differs; a file Apply created that holds nothing else
+is removed. An old desktop app's `custom_providers` entry named `cpa-gui` (or a `providers.cpa-gui`)
+is left alone. `preview` and `apply` refuse, before writing, a file Hermes would not take, or would
+not take pluxy's values in: not UTF-8, not YAML (a repeated key too), more than one document, a
+top level that is not a mapping, a tag, `providers` or `providers.pluxy` not a mapping, `model` not
+a mapping or text, `model.provider` or `model.default` not text. A missing or empty file is an
+empty one. `_config_version` is not checked: Hermes reads every version's `providers:` and treats a
+file without one as current. Restore Backup puts the original back whatever the file holds now.
 
 ## `execution`
 
