@@ -26,6 +26,13 @@
 //!   counts once), a repeated sync reads nothing, and after a session grows and another is rewound
 //!   (truncated) each is read and counted once; no prompt canary of the Codex home reaches a
 //!   report, the hub's store or (by run.ts) the app's output;
+//! - the Claude Code parser (pluxy/usage-claude, a real package): installed and enabled after the
+//!   Codex step, it reads a Claude Code home written by hand in the run's HOME with its default
+//!   root, in the same syncs as the Codex parser; the reports equal the expected totals for Claude
+//!   Code alone, for Claude Code and Codex together, and in a second time zone (one response's
+//!   content-block lines count once, a branch session's copy of the original's history counts
+//!   once, also after the branch grows); no prompt, reply, folder or raw message ID reaches a
+//!   report, the hub's store or (by run.ts) the app's output;
 //! - the Oh My Pi parser (pluxy/usage-omp, a real package), the same way on a home written by hand in
 //!   the run's HOME with both of its default roots (one session in both counts once, from the newer
 //!   copy); then disabled, a session written meanwhile is never scanned: the report is unchanged,
@@ -685,6 +692,86 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     )?;
     page.close(main)?;
 
+    // ---- the Claude Code parser: a real package, its default root in the run's HOME, the Codex
+    // parser still enabled, so one sync runs both and the reports compare them.
+    let claude = expect["claude"]["id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let canaries: Vec<String> = expect["claude"]["canaries"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|c| c.as_str().map(String::from))
+        .collect();
+    let mut page = Page::open(app, main, &hub)?;
+    step(
+        "claude",
+        (|| {
+            install(
+                main,
+                "curated",
+                &claude,
+                expect["versions"][&claude].as_str().unwrap_or_default(),
+            )?;
+            require(
+                program(&claude).is_file(),
+                format!("{} is not installed", program(&claude).display()),
+            )?;
+            enable(app, main, &claude)?;
+            let mut seen = String::new();
+            let mut check = |page: &mut Page, sync: &str, cases: &str| -> Result<(), String> {
+                let s = synced(page, &hub, true)?;
+                require(
+                    counts(&s, &claude) == expect["claude"]["syncs"][sync],
+                    format!("the {sync} sync of the Claude Code source: {s}"),
+                )?;
+                // The Codex source, unchanged since its step, is listed and reads nothing.
+                require(
+                    counts(&s, &codex) == expect["claude"]["syncs"]["codex"],
+                    format!("the {sync} sync of the Codex source beside Claude Code: {s}"),
+                )?;
+                for case in expect["claude"]["reports"][cases]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                {
+                    let got = unasked(page, &hub, "report", case["input"].clone())?;
+                    seen.push_str(&got.to_string());
+                    let what = format!("claude {sync} ({})", case["name"]);
+                    matches(&got, &case["output"], &what)?;
+                }
+                Ok(())
+            };
+            check(&mut page, "first", "first")?;
+            check(&mut page, "repeat", "first")?;
+            // The branch session grows; its copy of the original's history is read again and
+            // still counted once.
+            write_lines(&expect["claude"]["writes"]["append"])?;
+            check(&mut page, "after", "after")?;
+            // No prompt, reply, folder, summary or raw message or request ID in any report or in
+            // the hub's store.
+            no_canary(&canaries, &seen, "a report")?;
+            let data = app
+                .path()
+                .app_data_dir()
+                .map_err(|e| e.to_string())?
+                .join("tools")
+                .join(&hub);
+            // The same search finds what the store does hold (a positive control).
+            let stored = folder_text(&data)?;
+            require(
+                stored.contains("claude-sonnet-4-5") && seen.contains("claude-sonnet-4-5"),
+                "the store and the reports should hold the Claude models: the canary search reads nothing",
+            )?;
+            no_canary(&canaries, &stored, "the hub's store")?;
+            wait_for("the Claude Code parser to stop when idle", || {
+                processes(&program(&claude)).is_empty().then_some(())
+            })?;
+            Ok(())
+        })(),
+    )?;
+    page.close(main)?;
     // ---- the Oh My Pi parser: a real package, its default roots in the run's HOME.
     step(
         "omp",

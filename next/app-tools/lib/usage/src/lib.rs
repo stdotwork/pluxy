@@ -1,6 +1,7 @@
-//! Schema 1 of kind `pluxy/agent-usage/usage`, the usage hub's versioned ingest API
-//! (`../../agent-usage/README.md`, "Schema 1"), and what a usage parser shares: finding its
-//! source files, reading one safely and streaming its rows as a job's batches.
+//! Schemas 1 and 2 of kind `pluxy/agent-usage/usage`, the usage hub's versioned ingest API
+//! (`../../agent-usage/README.md`, "Schema 1" and "Schema 2"), and what a usage parser shares:
+//! finding its source files, reading one safely, reading the fields records share (`fields`) and
+//! streaming its rows as a job's batches.
 //!
 //! A parser implements [`Parser`] and answers its produces operation with [`produce`]:
 //!
@@ -45,9 +46,15 @@ use std::io::{BufRead, Read};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
-/// The kind the hub consumes, and the schema this crate speaks.
+pub mod fields;
+
+/// The kind the hub consumes, and the schema this crate speaks. A parser that sends keyed rows
+/// (`Sink::event`) declares `SCHEMA_KEYED` instead.
 pub const KIND: &str = "pluxy/agent-usage/usage";
 pub const SCHEMA: u64 = 1;
+pub const SCHEMA_KEYED: u64 = 2;
+/// The longest key a keyed row may carry, in bytes.
+pub const MAX_KEY: usize = 128;
 /// Files a `files` job lists at most per source; the newest are kept.
 pub const MAX_FILES: usize = 20_000;
 /// Folders below a root a source file may be at most.
@@ -157,12 +164,14 @@ impl Tokens {
     }
 }
 
-/// One row of a `read` batch: an hour (unix seconds of its start, UTC), a model and its tokens.
+/// One row of a `read` batch: an hour (unix seconds of its start, UTC), a model and its tokens;
+/// at schema 2 it may carry a key, making it one event counted once per source across files.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Row {
     pub hour: i64,
     pub model: String,
     pub tokens: Tokens,
+    pub key: Option<String>,
 }
 
 /// The latest hour a row may name (the start of the year 3000, UTC).
@@ -174,11 +183,14 @@ impl Row {
         o.insert("hour".into(), json!(self.hour));
         o.insert("model".into(), json!(self.model));
         self.tokens.put(&mut o);
+        if let Some(key) = &self.key {
+            o.insert("key".into(), json!(key));
+        }
         Value::Object(o)
     }
 
     /// From a batch's row: an hour from 0 to `MAX_HOUR`, a whole hour; a model of at most
-    /// `MAX_MODEL` characters; every token field.
+    /// `MAX_MODEL` characters; every token field; and, if there, a key of 1 to `MAX_KEY` bytes.
     pub fn from_json(v: &Value) -> Result<Row, String> {
         let hour = v["hour"]
             .as_i64()
@@ -189,10 +201,20 @@ impl Row {
             .filter(|m| m.chars().count() <= MAX_MODEL)
             .ok_or("model is not a short string")?
             .to_string();
+        let key = match v.get("key") {
+            None => None,
+            Some(k) => Some(
+                k.as_str()
+                    .filter(|k| !k.is_empty() && k.len() <= MAX_KEY)
+                    .ok_or("key is not a short string")?
+                    .to_string(),
+            ),
+        };
         Ok(Row {
             hour,
             model,
             tokens: Tokens::from_json(v)?,
+            key,
         })
     }
 }
@@ -395,6 +417,10 @@ pub trait Parser: Send + Sync {
     fn file_id(&self, path: &Path) -> Option<String> {
         path.to_str().map(String::from)
     }
+    /// The stable ID of a file found under root: by default `file_id`.
+    fn file_id_under(&self, _root: &Path, path: &Path) -> Option<String> {
+        self.file_id(path)
+    }
     /// The file a file ID names, when it is one of its source files under roots.
     fn locate(&self, roots: &[PathBuf], id: &str) -> Option<PathBuf> {
         locate(roots, id, &|p| self.wanted(p))
@@ -419,7 +445,7 @@ pub trait Parser: Send + Sync {
 
 /// Where a parser puts one file's rows: summed per hour and model into parts, each sent as a
 /// batch `{file, size, mtime_ns, part, last, rows}` once it nears the batch limit, the last one
-/// when the file is done.
+/// when the file is done. Keyed rows (`event`, schema 2) are sent one per event, never summed.
 pub struct Sink<'a> {
     call: &'a Call,
     file: &'a str,
@@ -427,6 +453,7 @@ pub struct Sink<'a> {
     mtime_ns: i64,
     part: u64,
     rows: BTreeMap<(i64, String), Tokens>,
+    events: Vec<Row>,
     bytes: usize,
 }
 
@@ -443,6 +470,7 @@ impl<'a> Sink<'a> {
             mtime_ns,
             part: 0,
             rows: BTreeMap::new(),
+            events: Vec::new(),
             bytes: 0,
         }
     }
@@ -466,9 +494,40 @@ impl<'a> Sink<'a> {
         Ok(())
     }
 
+    /// Adds one event of model at time (unix seconds), counted once per source by key (1 to
+    /// `MAX_KEY` bytes) across every file that has it: a keyed row of schema 2. A parser sends
+    /// each key of a file once; a model name is cut to `MAX_MODEL` characters.
+    pub fn event(
+        &mut self,
+        time: i64,
+        model: &str,
+        key: &str,
+        tokens: &Tokens,
+    ) -> Result<(), Error> {
+        let hour = time.div_euclid(3600) * 3600;
+        if !(0..=MAX_HOUR).contains(&hour) {
+            return Ok(());
+        }
+        if key.is_empty() || key.len() > MAX_KEY {
+            return Err(Error::internal("an event's key is empty or too long"));
+        }
+        let model: String = model.chars().take(MAX_MODEL).collect();
+        self.bytes += ROW_SIZE + json!(model).to_string().len() + json!(key).to_string().len();
+        self.events.push(Row {
+            hour,
+            model,
+            tokens: *tokens,
+            key: Some(key.to_string()),
+        });
+        if self.bytes >= PART_BUDGET {
+            self.send(false)?;
+        }
+        Ok(())
+    }
+
     /// Sends the rows so far as a part of their own, if there are any.
     pub fn end_part(&mut self) -> Result<(), Error> {
-        if self.rows.is_empty() {
+        if self.rows.is_empty() && self.events.is_empty() {
             return Ok(());
         }
         self.send(false)
@@ -488,14 +547,14 @@ impl<'a> Sink<'a> {
         self.call.check()?;
         let rows: Vec<Value> = std::mem::take(&mut self.rows)
             .into_iter()
-            .map(|((hour, model), tokens)| {
-                Row {
-                    hour,
-                    model,
-                    tokens,
-                }
-                .to_json()
+            .map(|((hour, model), tokens)| Row {
+                hour,
+                model,
+                tokens,
+                key: None,
             })
+            .chain(std::mem::take(&mut self.events))
+            .map(|row| row.to_json())
             .collect();
         self.bytes = 0;
         let batch = json!({"file": self.file, "size": self.size, "mtime_ns": self.mtime_ns,
@@ -585,7 +644,9 @@ pub fn produce(call: &Call, parser: &dyn Parser) -> Result<Value, Error> {
             let items: Vec<Value> = found
                 .iter()
                 .filter_map(|f| {
-                    let id = parser.file_id(&f.path)?;
+                    // The root a scan found it under: the first that holds it.
+                    let root = roots.iter().find(|r| f.path.starts_with(r))?;
+                    let id = parser.file_id_under(root, &f.path)?;
                     Some(json!({"file": id, "size": f.size, "mtime_ns": f.mtime_ns}))
                 })
                 .collect();

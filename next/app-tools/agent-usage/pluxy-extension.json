@@ -104,7 +104,7 @@
         "output_schema": { "type": "object" }
       }
     ],
-    "consumes": [{ "kind": "pluxy/agent-usage/usage", "schema": [1], "deliver": "ingest" }],
+    "consumes": [{ "kind": "pluxy/agent-usage/usage", "schema": [1, 2], "deliver": "ingest" }],
     "state": { "version": 0, "readable_versions": [0] },
     "ui": {
       "version": 0,
