@@ -19,7 +19,8 @@
 //!    with `PLUXY_APP_TEST_ADMISSION`, a session checks only signed native-tier admission
 //!    (`admission_native.rs`) and quits; with `PLUXY_APP_TEST_PROGRAM`, only the program host
 //!    (`program_native.rs`, then `swap_native.rs`); with `PLUXY_APP_TEST_VAULT`, only the vault,
-//!    secret delivery and references and journal recovery (`vault_native.rs`); with
+//!    secret delivery and references and journal recovery (`vault_native.rs`), then native
+//!    client-key capture (`client_key_native.rs`); with
 //!    `PLUXY_APP_TEST_SPAWN`, only the host's spawn service, managed runtimes and launch
 //!    environment (`spawn_native.rs`); with
 //!    `PLUXY_APP_TEST_SESSIONS`, only the read-only Codex session reader (`sessions_native.rs`);
@@ -64,6 +65,8 @@ mod backups;
 #[cfg(target_os = "linux")]
 #[path = "claude_code_native.rs"]
 mod claude_code;
+#[path = "client_key_native.rs"]
+mod client_key;
 #[cfg(target_os = "linux")]
 #[path = "codex_native.rs"]
 mod codex;
@@ -470,7 +473,9 @@ fn run(app: &AppHandle) -> Result<(), String> {
     // session of its own.
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_VAULT") {
-        vault::run(app, &main, dir.into())?;
+        vault::run(app, &main, dir.clone().into())?;
+        // Native one-time client-key capture (client_key_native.rs), with the same tools.
+        client_key::run(app, &main, dir.into())?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());
