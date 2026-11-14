@@ -611,12 +611,15 @@ fn replace(appimage: &Path, bytes: &[u8]) -> Result<(), String> {
             f.set_permissions(fs::Permissions::from_mode(mode | 0o700))?;
             f.sync_all()
         })
-        .and_then(|_| fs::rename(&tmp, appimage))
-        .and_then(|_| fs::File::open(parent)?.sync_all());
+        .and_then(|_| fs::rename(&tmp, appimage));
     if let Err(e) = written {
         let _ = fs::remove_file(&tmp);
         return Err(format!("{}: {e}", appimage.display()));
     }
+    // Best effort once renamed: the new AppImage is in place, so a failed folder sync must not
+    // report the install as failed (the caller would drop its pending record and the new version
+    // would run untracked).
+    let _ = fs::File::open(parent).and_then(|d| d.sync_all());
     Ok(())
 }
 
