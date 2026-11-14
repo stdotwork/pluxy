@@ -30,14 +30,16 @@ them. App-only packages omit provider fields; no dummy provider is needed.
 | `exports` | Native only, optional: `{"contract": <nonnegative integer>, "operations": [<declared IDs>]}`, the operations other packages may import and the version of that export contract. |
 | `imports` | Optional, both tiers: at most 16 entries `{"package": <ID>, "contract": [<accepted export contracts>], "operations": [<IDs>], "required": <bool, default true>, "secrets": [<IDs>]}`, one per package, never the package itself. `secrets` (native tools only) lists the imported operations it may pass secret references to. See [Calls between packages](#calls-between-packages). |
 | `state` | Native only: `version` written by this release and nonempty `readable_versions` list. Check state compatibility before swap or rollback. |
+| `produces` | Native only, optional: at most 8 entries `{"kind": "<package ID>/<stream>", "schema": <nonnegative integer>, "operation": <declared ID>}`, each kind once: the kinds of data it produces as [jobs](#jobs), at which schema version, by which operation, which has no secret fields. |
+| `consumes` | Native only, optional: at most 8 entries `{"kind": "<its own ID>/<stream>", "schema": [<accepted schema versions>], "deliver": <declared ID>}`, each kind once: the kinds it consumes, in its own namespace, and the operation the host delivers their batches to, which no package may export, no `produces` entry may name and which has no secret fields. |
 
 Resource and operation IDs use 1 to 32 lower-case letters, digits and hyphens, starting with a
 letter or digit, and are unique within their respective lists. State and host contract versions
 are nonnegative integers. Paths must stay inside the
 package. Web packages cannot declare programs, native operations or state; native packages cannot
 request folder grants through `resources`. Resources describe exact files or bounded subtrees
-selected later by the user, never automatic home-directory access. Jobs belong to a later host
-contract; these fields do not introduce them.
+selected later by the user, never automatic home-directory access. [Jobs](#jobs) and
+[secrets](#secrets-references-and-the-vault) have their own sections.
 
 Package release, manifest, provider protocol, UI, config and app contribution versions are
 separate. App program negotiation is separate too. A mixed package can be compatible with core
@@ -263,7 +265,8 @@ anything a caller passes. On top of the rules above:
 - A frame from a tool may be at most 1 MiB; a larger one, an unknown frame type or a reply
   before hello breaks the pipe and the tool is stopped; a start it breaks fails saying which.
   A reply to a call that is no longer
-  waiting is dropped. Progress frames are read and not delivered yet.
+  waiting is dropped. Progress frames of a job's call are its batches ([Jobs](#jobs)); other
+  progress frames are read and not delivered.
 - Inputs are at most 64 KiB of JSON. Inputs and outputs are checked against the operation's
   schemas, which may use only `type`, `properties`, `required`, `additionalProperties`, `items`,
   `enum`, `const`, `minimum`, `maximum`, `minLength`, `maxLength`, `minItems`, `maxItems` and
@@ -323,7 +326,7 @@ anything a caller passes. On top of the rules above:
   release go in no set order. The package's pages close at the switch. A cancelled confirmation
   or a candidate that fails installs nothing; the old release stays active and serving.
 
-Still to come: jobs; deleting a tool's data folder from the Device page; and Windows and macOS.
+Still to come: deleting a tool's data folder from the Device page; and Windows and macOS.
 
 ## Calls between packages
 
@@ -434,6 +437,97 @@ A call goes ahead only if all of these hold, checked again for each call:
 A routed call is then a call like any other: it is registered so a cancel and the window's
 closing reach it, and it goes through the same limits, per-package turn, backoff, quarantine and
 unknown-outcome rules as a call from the window.
+
+## Jobs
+
+A job is bounded asynchronous work one native tool, the **consumer**, asks of another, the
+**producer**, through the host: the producer streams batches of a declared kind, and the host
+delivers each one to the consumer with its source, which only the host names. The usage hub and
+its parsers are built on this; the facility itself knows nothing of usage.
+
+### Registrations
+
+A kind is `<package ID>/<stream>`: the namespace of the package that consumes it, which defines
+its schema. A producer **registers** by declaring `produces` in its manifest: the kind, the schema
+version it produces and the operation that runs a job of it. There is no registration message: a
+registration is read from the catalog at each request, from an enabled, admitted native tool's
+active release, as the package ID, version, archive SHA-256, generation (install time), schema,
+source (the registry index of its curated signature) and signer the catalog admitted it with.
+Disabling, updating, rolling back, swapping or removing it ends its registration. A consumer
+declares `consumes` for kinds in its own namespace only. Neither adds an import: a consumer does
+not depend on its producers, and the manifest graph stays acyclic.
+
+### Asking the host
+
+A consumer asks the host's job service with a `jobs` frame, for a host call it is serving, as it
+would call an import; the host answers on its stdin with a `result` or `error` frame of that ID:
+
+```json
+{"type":"jobs","id":"q-1","for":"c-2","op":"registrations","input":{"kind":"example/hub/items"}}
+{"type":"jobs","id":"q-2","for":"c-2","op":"start","input":{"kind":"example/hub/items","package":"example/parser","sha256":"<digest>","generation":1700000000,"input":{...}}}
+{"type":"jobs","id":"q-3","for":"c-2","op":"cancel","input":{"job":"j-7"}}
+```
+
+- `registrations` gives `{"registrations": [{"package", "version", "sha256", "generation",
+  "schema", "source", "signer": {"publisher", "key_id"}}]}`: every registration of a kind the
+  caller consumes, at a schema it accepts, other than its own. A kind it does not consume is
+  refused with `permission`.
+- `start` names one registration exactly. It is decided as a call of the producer's operation
+  with the consumer as caller: the consumer must be the release it runs and consume the kind, the
+  producer must still be that release, admitted and producing the kind at an accepted schema; the
+  chain, input and confirmation rules of [How a call is decided](#how-a-call-is-decided) apply,
+  and the job is pinned to the producer's release. A consumer that reaches the producer through
+  its imports is refused (a job could wait on its own consumer). It is answered at once with
+  `{"job": "j-<n>"}`, an ID the host issues. A consumer has at most four jobs at once, the host
+  sixteen; one more is refused with `unavailable`. A job counts, and a change to either package
+  reaches it, from before it is granted: a change while it is granted or confirmed refuses it
+  with `cancelled`.
+- `cancel` cancels one of the caller's own jobs; any other ID is refused with `permission`.
+
+A job's operation and a deliver operation have no secret fields (a manifest that gives them any is
+invalid): a job is started by a tool and delivered by the host, and neither fills one. A secret's
+value or a reference anywhere in a start's `input` is refused as in any call's input
+([Secrets and references](#secrets-and-references)), and the host refuses to deliver a batch
+holding one, which fails the job; an end holding one is delivered as `failed` without it.
+
+### Running a job
+
+The host calls the producer's operation with the job in the call frame,
+`"job": {"id": "j-7", "kind": "example/hub/items", "window": 4}`. The producer sends each batch as
+`{"type":"progress","id":"c-9","value":{...}}`, with nothing but `type`, `id` and `value`, and the
+host acknowledges each batch once the consumer took it with `{"type":"ack","id":"c-9","seq":1}`
+(batches are numbered from 1). At most `window` batches may wait unacknowledged. A batch past the
+window, one whose value is larger than 48 KiB, or one naming anything else (a `source`, say) ends
+the job as failed and cancels the producer's call; the batches it had not delivered are dropped.
+The producer's `result` ends the job as done; its `error` or cancellation ends it as failed or
+cancelled.
+
+The host delivers to the consumer's `deliver` operation, as host calls of it with the job's chain
+followed by the producer, pinned to the consumer's release, one at a time and in order:
+
+```json
+{"job":"j-7","kind":"example/hub/items","seq":1,"event":"batch","value":{...},"source":{"package":"example/parser","version":"1.2.0","sha256":"<digest>","generation":1700000000,"schema":1,"source":"<index>","signer":{"publisher":"example","key_id":"k1"}}}
+```
+
+and then one end: `{"job", "kind", "event": "done", "output", "batches", "source"}` (the
+producer's output, after every batch) or `"event": "failed"` or `"cancelled"` with an `error`.
+A deliver operation's input schema must accept these. Each batch is granted again first: if
+either package changed, the job is cancelled and nothing more of it is delivered. The end is
+`done` only while both packages are still those releases and the producer's output is at most
+48 KiB; otherwise it is `cancelled` or `failed`, saying why. It is delivered only while the
+consumer is still that release, once and best-effort: if the consumer does not take it (it
+crashed, is stopping or busy, or its schema refuses it), it is not sent again, the job is over,
+and a `cancel` of its ID is refused as no job under way. A batch the consumer does not take fails
+the job.
+
+A delivery waits at most ten seconds (the startup limit) for the consumer's turn, since calls to
+one package run one at a time. A consumer must therefore answer the call that started a job
+before its deliveries can arrive, and never wait for its own job inside a call; a consumer kept
+busy longer (by another call, or a native confirmation one of its calls waits for) fails the job,
+saying it stayed busy. The window, pages and other tools are refused the deliver operation: only the host
+calls it, so a batch's source is always the host's. The consumer is leased while its job runs;
+the producer, as for any call, while its call runs. A change to either package cancels its jobs,
+and closing the window cancels every call, jobs' included.
 
 ## Secrets, references and the vault
 
