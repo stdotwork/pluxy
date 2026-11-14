@@ -118,7 +118,7 @@ func TestNames(t *testing.T) {
 func TestRenamed(t *testing.T) {
 	body := json.RawMessage(`{ "messages":[{"role":"user","content":"model"}],"model" : "pub-a", "x":{"model":"keep"},"model":"pub-a"}`)
 	req := llm.Request{Model: "pub-a", Native: &llm.Native{Format: llm.FormatOpenAIChat, Body: body}}
-	got := renamed(req, "up-a")
+	got := Renamed(req, "up-a")
 	want := `{ "messages":[{"role":"user","content":"model"}],"model" : "up-a", "x":{"model":"keep"},"model":"up-a"}`
 	if got.Model != "up-a" || string(got.Native.Body) != want {
 		t.Errorf("renamed: model %q, body %s", got.Model, got.Native.Body)
@@ -127,7 +127,7 @@ func TestRenamed(t *testing.T) {
 		t.Error("renamed changed the caller's request")
 	}
 	gemini := llm.Request{Model: "pub", Native: &llm.Native{Format: llm.FormatGeminiGenerate, Body: json.RawMessage(`{"contents":[]}`)}}
-	if got := renamed(gemini, "up"); got.Model != "up" || string(got.Native.Body) != `{"contents":[]}` {
+	if got := Renamed(gemini, "up"); got.Model != "up" || string(got.Native.Body) != `{"contents":[]}` {
 		t.Errorf("renamed a body without a model: %+v", got)
 	}
 }
