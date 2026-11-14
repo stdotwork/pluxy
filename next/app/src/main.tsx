@@ -19,11 +19,16 @@ import { claudeCodePage } from "./claudeCode";
 import { ConnectionPage } from "./connection";
 import { type DeviceCatalog, device, newest } from "./device";
 import { DevicePage, devicePage } from "./devicePage";
+import { type AgentPage, easyModePage } from "./easyMode";
 import { appHost, type Connection, connectionGet, privacyGet, privacySet } from "./host";
 import { launcherPage } from "./launcherPage";
 import { NativeExtensionPage } from "./nativePage";
 import { UpdatesPage } from "./updates";
 import { ClosePrompt } from "./window";
+
+/** The agent clients' setup pages: each names the optional tool it drives, and Beginner Mode
+ * offers the ones whose tool is installed or offered by a registry. */
+const agentPages = (): AgentPage[] => [claudeCodePage()];
 
 function brand(c: Connection): string {
   return c.mode === "remote" && c.target ? `pluxy · ${new URL(c.target).host}` : "pluxy";
@@ -102,9 +107,11 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
     };
   }, []);
   const themes = useMemo(() => new ThemeState(host, document, [defaultTheme, terminal, paper]), [host]);
-  const pages: PageDef[] = useMemo(
-    () => [
+  const pages: PageDef[] = useMemo(() => {
+    const agents = agentPages();
+    return [
       ...corePages(),
+      easyModePage(agents, catalog, loadDevice),
       {
         id: "connection",
         title: "Connection",
@@ -122,11 +129,10 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
       },
       devicePage(loadDevice),
       launcherPage(),
-      claudeCodePage(),
+      ...agents,
       ...devicePages(catalog),
-    ],
-    [shown, catalog, loadDevice],
-  );
+    ];
+  }, [shown, catalog, loadDevice]);
 
   // Not connected or not signed in (or the app's own core did not start): the Connection page,
   // where the person can fix the address or give the key, and this device's extensions, which
