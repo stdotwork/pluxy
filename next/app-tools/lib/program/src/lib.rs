@@ -225,6 +225,8 @@ impl Description {
 pub trait Handler: Send + Sync + 'static {
     /// Answers one call of a declared operation: its output, or the error it ends with. A long
     /// call looks at [`Call::cancelled`] now and then and ends with [`Error::cancelled`] once set.
+    /// What it returns is the call's outcome, even after a cancel: a call that finished its work
+    /// (a write that took effect) answers with its result, never `cancelled`.
     fn call(&self, call: &Call) -> Result<Value, Error>;
 
     /// Before describe is answered at a start: reconciles the calls of unknown outcome the host
@@ -453,11 +455,10 @@ fn answer(handler: &dyn Handler, description: &Description, call: Call, frame: &
             .call(&call)
             .map(|output| json!({"type": "result", "id": call.id, "output": output}))
     };
-    let reply = match reply {
-        Ok(_) if call.cancelled() && call.op != "describe" => Err(Error::cancelled()),
-        r => r,
-    }
-    .unwrap_or_else(|e| json!({"type": "error", "id": call.id, "error": e.to_json()}));
+    // The handler's own outcome stands, even after a cancel: one that honours the cancel returns
+    // `cancelled` itself, and one that finished did its work (a write may have taken effect).
+    let reply =
+        reply.unwrap_or_else(|e| json!({"type": "error", "id": call.id, "error": e.to_json()}));
     if let Err(e) = call.shared.send(&reply) {
         if e.kind() == io::ErrorKind::InvalidInput {
             let e = Error::internal("the answer is larger than a frame may be (1 MiB)");

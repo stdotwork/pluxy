@@ -185,7 +185,7 @@ fn calls_answer_with_results_errors_and_progress() {
 }
 
 #[test]
-fn a_cancel_ends_the_call_cancelled_even_if_it_finishes() {
+fn a_cancel_ends_a_call_that_honours_it_and_a_finished_call_keeps_its_result() {
     let mut h = Host::start();
     h.next();
     h.send(json!({"type": "call", "id": "c-2", "op": "wait", "input": {}}));
@@ -194,9 +194,14 @@ fn a_cancel_ends_the_call_cancelled_even_if_it_finishes() {
         h.next(),
         json!({"type": "error", "id": "c-2", "error": {"code": "cancelled", "message": "the call was cancelled"}})
     );
+    // A handler that finishes anyway did its work (a write may have taken effect): its result
+    // is the call's outcome, not `cancelled`.
     h.send(json!({"type": "call", "id": "c-3", "op": "ignore-cancel", "input": {}}));
     h.send(json!({"type": "cancel", "id": "c-3"}));
-    assert_eq!(h.next()["error"]["code"], "cancelled");
+    assert_eq!(
+        h.next(),
+        json!({"type": "result", "id": "c-3", "output": {"finished": true}})
+    );
     // The pipe stays: the next call is answered.
     h.send(json!({"type": "call", "id": "c-4", "op": "echo", "input": {}}));
     assert_eq!(h.next()["type"], "result");
