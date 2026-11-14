@@ -1,7 +1,7 @@
 // The single-instance scenario, run inside a native session (session.ts starts it in place of the
 // app; instances.ts starts the session):
 //
-//   bun native/instances-session.ts <app> <core program> <app identifier>
+//   bun native/instances-session.ts <app> <core program> <app identifier> <session_probe>
 //
 // It launches the real app (built with the native-test feature, PLUXY_APP_TEST_INSTANCES=1 so the
 // app answers commands on stdin: native_test.rs) several times and checks, from outside it:
@@ -18,15 +18,20 @@
 //   takes over: it starts normally, and a launch after that raises it;
 // - when the owner quits, its socket and address are gone.
 //
+// The app runs a copy of the core program adopted into each profile (session_probe adopt-core),
+// as the window's Adopt would: the copy runs from an open file, so a core is told by the program
+// it runs, not by its name.
+//
 // Output: `instances: ...` lines, and `instances-problem: ...` for each failed check.
 
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -35,15 +40,17 @@ import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { makeProfile } from "./profile";
 
-const [bin, core, identifier] = process.argv.slice(2);
-if (!bin || !core || !identifier) {
-  console.error("usage: bun native/instances-session.ts <app> <core program> <app identifier>");
+const [bin, core, identifier, probe] = process.argv.slice(2);
+if (!bin || !core || !identifier || !probe) {
+  console.error(
+    "usage: bun native/instances-session.ts <app> <core program> <app identifier> <session_probe>",
+  );
   process.exit(2);
 }
 
 const SECOND_EXIT_MS = 10_000;
 const UP_MS = 60_000;
-const coreComm = basename(core).slice(0, 15);
+const coreName = basename(core);
 const appComm = "pluxy-app";
 
 const problems: string[] = [];
@@ -145,24 +152,44 @@ class Launch {
   }
 }
 
-/** Every process on the machine: pid to its parent and name. */
-function processes(): Map<number, { ppid: number; comm: string }> {
-  const out = new Map<number, { ppid: number; comm: string }>();
+/** Every process on the machine: pid to its parent, name and program (when readable). */
+function processes(): Map<number, { ppid: number; comm: string; exe: string }> {
+  const out = new Map<number, { ppid: number; comm: string; exe: string }>();
   for (const d of readdirSync("/proc")) {
     if (!/^\d+$/.test(d)) continue;
     try {
       const stat = readFileSync(`/proc/${d}/stat`, "utf8");
       const close = stat.lastIndexOf(")");
       if (stat.slice(close + 2, close + 3) === "Z") continue;
+      let exe = "";
+      try {
+        exe = readlinkSync(`/proc/${d}/exe`);
+      } catch {
+        // another user's, or gone
+      }
       out.set(Number(d), {
         comm: stat.slice(stat.indexOf("(") + 1, close),
         ppid: Number(stat.slice(close + 2).split(" ")[1]),
+        exe,
       });
     } catch {
       // gone already
     }
   }
   return out;
+}
+
+/** Adopts the core program into the app's cores in the data folder data, as the window's Adopt
+ * would: the app runs only a core in its own store. */
+function adopt(data: string) {
+  const r = spawnSync(
+    probe as string,
+    ["adopt-core", join(data, identifier as string, "cores"), core as string],
+    {
+      stdio: ["ignore", "ignore", "inherit"],
+    },
+  );
+  if (r.status !== 0) throw new Error(`session_probe adopt-core exited with ${r.status}`);
 }
 
 /** The running core programs and apps below this script. */
@@ -174,11 +201,10 @@ function counts(): { cores: number[]; apps: number[]; coresOf: (app: number) => 
     }
     return false;
   };
-  const named = (comm: string) => [...all].filter(([p, v]) => v.comm === comm && below(p));
-  const cores = named(coreComm);
+  const cores = [...all].filter(([p, v]) => basename(v.exe) === coreName && below(p));
   return {
     cores: cores.map(([p]) => p),
-    apps: named(appComm).map(([p]) => p),
+    apps: [...all].filter(([p, v]) => v.comm === appComm && below(p)).map(([p]) => p),
     coresOf: (app) => cores.filter(([, v]) => v.ppid === app).map(([p]) => p),
   };
 }
@@ -249,6 +275,7 @@ const env = (extra: Record<string, string | undefined> = {}) => ({ ...process.en
 async function main() {
   // Profile A is this session's own (the runner wrote its connection.json: managed mode).
   const home = env();
+  adopt(process.env.XDG_DATA_HOME as string);
   const dataDir = join(process.env.XDG_DATA_HOME as string, identifier as string);
   const address = join(dataDir, "instance", "address");
   const lock = join(dataDir, "instance", "lock");
@@ -336,6 +363,7 @@ async function main() {
     JSON.stringify({ mode: "managed", core_path: core }),
     { mode: 0o600 },
   );
+  adopt(b.dirs.data);
   const other = env({ ...b.env, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR });
   const control = await owner("other profile", other);
   now = counts();

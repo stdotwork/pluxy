@@ -1,19 +1,24 @@
 // The app's Connection page: how the app reaches core. Three modes:
-// - managed: the app runs a core of its own, with a config it keeps in its data folder, and
-//   stops it when the app quits;
+// - managed: the app runs a core of its own, one of the versions it installed from the core
+//   source or adopted, with a config it keeps in its data folder, and stops it when the app quits;
 // - local: a core already running on this computer, such as a system service; the app only
 //   connects, and leaves it running;
 // - remote: a core on another computer, over https; shown with its address while connected.
 
-import { useId, useState } from "preact/hooks";
-import { Button, Card, Choices, Facts, Notice, PageHead } from "../../ui/kit/ui";
+import { useEffect, useId, useRef, useState } from "preact/hooks";
+import { Badge, Button, Card, Choices, Empty, Facts, Notice, PageHead } from "../../ui/kit/ui";
 import {
   type Connection,
   type ConnectionChange,
   connectionSet,
   coreAction,
+  coreAdopt,
+  coreInstall,
+  coreRollback,
+  coreVersions,
   keyEntry,
   type Mode,
+  type Versions,
 } from "./host";
 import { StartupSettings } from "./startup";
 import { WindowSettings } from "./window";
@@ -46,12 +51,141 @@ function describe(c: Connection): [string, string][] {
   const rows: [string, string][] = [];
   if (c.target) rows.push(["Core", c.target]);
   if (c.mode === "managed" && c.core) {
-    rows.push(["Process", c.core.state === "running" ? `running, pid ${c.core.pid}` : c.core.state]);
+    const process = {
+      running: `running, pid ${c.core.pid}`,
+      stopped: "stopped",
+      recovering: "recovering",
+      paused: "paused",
+      missing: "not installed",
+    };
+    rows.push(["Process", process[c.core.state]]);
+    if (c.core.version) rows.push(["Current version", c.core.version]);
     if (c.core.detail) rows.push(["Last words", c.core.detail]);
   }
   if (c.mode === "local" || c.mode === "remote")
     rows.push(["Key", c.remembered ? "kept on this device" : "this session only"]);
   return rows;
+}
+
+const OUTCOMES = { done: "Done", cancelled: "Cancelled: nothing changed", failed: "Failed" };
+
+/** The app's own core versions: what is installed and runs, what the core source offers, and a
+ * core program waiting to be adopted. Each change opens the native confirmation. */
+function CoreVersions(props: { connection: Connection }) {
+  const c = props.connection;
+  const [v, setV] = useState<Versions>();
+  // Why the versions could not be read, and why the app refused the last change asked for: a
+  // later successful read clears only the first.
+  const [loadError, setLoadError] = useState<string>();
+  const [refused, setRefused] = useState<string>();
+  // The last outcome's number when a change was asked for: the change waits for its
+  // confirmation until a later outcome arrives.
+  const [waiting, setWaiting] = useState<number>();
+  const latest = useRef(0);
+  // The connection changes when a change has ended (pluxy-connection): read the versions again.
+  // Only the latest read counts.
+  useEffect(() => {
+    const n = ++latest.current;
+    coreVersions().then(
+      (next) => {
+        if (n !== latest.current) return;
+        setV(next);
+        setLoadError(undefined);
+      },
+      (e) => n === latest.current && setLoadError(String(e)),
+    );
+  }, [c]);
+  const seq = v?.outcome?.seq ?? 0;
+  const asked = waiting !== undefined && seq <= waiting;
+  async function ask(run: () => Promise<void>) {
+    setRefused(undefined);
+    setWaiting(seq);
+    try {
+      await run();
+    } catch (e) {
+      setWaiting(undefined);
+      setRefused(String(e));
+    }
+  }
+  if (!v)
+    return loadError ? (
+      <Card title="Core versions">
+        <Notice tone="danger">{loadError}</Notice>
+      </Card>
+    ) : null;
+  const running = c.core?.state === "running" ? c.core.version : undefined;
+  const installed = new Set(v.installed.map((i) => i.id));
+  const available = new Set(v.available.map((a) => a.version));
+  const offered = v.available.filter((a) => !installed.has(a.version));
+  const verb = running ? "Update to" : "Install";
+  return (
+    <Card title="Core versions">
+      {c.core?.adopt && (
+        <>
+          <Notice tone="warn">
+            The app runs {c.core.adopt} only once it is copied into the app's own cores, and runs that copy.
+          </Notice>
+          <div class="actions">
+            <Button disabled={asked} onClick={() => ask(coreAdopt)}>
+              Adopt this core program
+            </Button>
+          </div>
+        </>
+      )}
+      {v.failed && (
+        <Notice tone="danger">
+          Core {v.failed.version} did not start: {v.failed.reason}
+        </Notice>
+      )}
+      {v.installed.length === 0 ? (
+        <Empty>No core installed yet.</Empty>
+      ) : (
+        <Facts
+          rows={v.installed.map((i) => [
+            i.id,
+            <span key={i.id}>
+              {i.kind === "adopted" ? `adopted from ${i.adopted_from}` : "signed release"}{" "}
+              {i.id === running && <Badge tone="ok">running</Badge>}
+              {i.id === v.previous && <Badge tone="muted">previous</Badge>}{" "}
+              {i.id !== running && (
+                <Button disabled={asked} onClick={() => ask(() => coreRollback(i.id))}>
+                  Roll back to {i.id}
+                </Button>
+              )}{" "}
+              {i.kind === "signed" && available.has(i.id) && (
+                <Button disabled={asked} onClick={() => ask(() => coreInstall(i.id))}>
+                  Install {i.id} again
+                </Button>
+              )}
+            </span>,
+          ])}
+        />
+      )}
+      {v.source ? (
+        offered.length > 0 && (
+          <div class="actions">
+            {offered.map((a) => (
+              <Button key={a.version} disabled={asked} onClick={() => ask(() => coreInstall(a.version))}>
+                {verb} {a.version}
+              </Button>
+            ))}
+          </div>
+        )
+      ) : (
+        <Notice tone="muted">Set a core source below to install a core.</Notice>
+      )}
+      {v.source_error && <Notice tone="danger">{v.source_error}</Notice>}
+      {asked && <Notice tone="muted">Confirm or cancel in the pluxy native confirmation window.</Notice>}
+      {v.outcome && !asked && (
+        <Notice tone={v.outcome.result === "failed" ? "danger" : "muted"}>
+          {OUTCOMES[v.outcome.result]} ({v.outcome.action} {v.outcome.version})
+          {v.outcome.detail ? `: ${v.outcome.detail}` : ""}
+        </Notice>
+      )}
+      {loadError && <Notice tone="danger">{loadError}</Notice>}
+      {refused && <Notice tone="danger">{refused}</Notice>}
+    </Card>
+  );
 }
 
 export function ConnectionPage(props: { connection: Connection; onChange: (c: Connection) => void }) {
@@ -60,6 +194,7 @@ export function ConnectionPage(props: { connection: Connection; onChange: (c: Co
   const [url, setUrl] = useState(c.url ?? "");
   const [caFile, setCaFile] = useState(c.ca_file ?? "");
   const [corePath, setCorePath] = useState(c.core_path ?? "");
+  const [coreSource, setCoreSource] = useState(c.core_source ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -78,7 +213,8 @@ export function ConnectionPage(props: { connection: Connection; onChange: (c: Co
   }
 
   const change = (): ConnectionChange => {
-    if (mode === "managed") return { mode, core_path: corePath || undefined };
+    if (mode === "managed")
+      return { mode, core_path: corePath || undefined, core_source: coreSource || undefined };
     return {
       mode: mode ?? "local",
       url,
@@ -98,7 +234,7 @@ export function ConnectionPage(props: { connection: Connection; onChange: (c: Co
               Not signed in to this core: enter its management key in the native dialog.
             </Notice>
           )}
-          {c.mode === "managed" && (
+          {c.mode === "managed" && c.core?.state !== "missing" && (
             <div class="actions">
               <Button disabled={busy} onClick={() => apply(coreAction(c))}>
                 {c.core?.state === "running" ? "Restart core" : "Start core"}
@@ -107,6 +243,7 @@ export function ConnectionPage(props: { connection: Connection; onChange: (c: Co
           )}
         </Card>
       )}
+      {c.mode === "managed" && <CoreVersions connection={c} />}
       <Card title={c.mode ? "Change" : "How should the app reach core?"}>
         <form
           aria-label="Connection"
@@ -122,12 +259,20 @@ export function ConnectionPage(props: { connection: Connection; onChange: (c: Co
         >
           <Choices label="Mode" value={mode} choices={MODES} onChange={setMode} />
           {mode === "managed" && (
-            <Field
-              label="Core program"
-              hint="Empty: the pluxy program installed beside the app."
-              value={corePath}
-              onInput={setCorePath}
-            />
+            <>
+              <Field
+                label="Core source"
+                hint="The full path of an index of signed core releases. The app has no built-in source."
+                value={coreSource}
+                onInput={setCoreSource}
+              />
+              <Field
+                label="Core program (optional)"
+                hint="A core program of your own, by full path, to adopt: the app copies it into its own cores and runs the copy. Empty: the pluxy program beside the app."
+                value={corePath}
+                onInput={setCorePath}
+              />
+            </>
           )}
           {(mode === "local" || mode === "remote") && (
             <Field

@@ -54,6 +54,7 @@ export async function runInstances(o: InstancesRun): Promise<{ problems: string[
       o.bin,
       o.core,
       o.identifier,
+      o.probe,
     ];
     const xvfb = ["xvfb-run", "-a", "-s", "-screen 0 1280x800x24 -nolisten tcp", ...session];
     const proc = spawn("dbus-run-session", ["--", ...xvfb], {
