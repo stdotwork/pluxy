@@ -637,6 +637,8 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 !text.contains("Remember"),
                 "another chain's confirmation offers Remember",
             )?;
+            // An import chain's dialog takes its Confirm only a second after it shows.
+            std::thread::sleep(Duration::from_millis(1300));
             press("alt+o")?;
             let v = answer(&rx)?.map_err(|e| format!("the confirmed relayed launch: {e:?}"))?;
             require(
@@ -676,6 +678,8 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 !text.contains("Remember"),
                 "a page's launch confirmation offers Remember",
             )?;
+            // A page's dialog takes its Confirm only a second after it shows.
+            std::thread::sleep(Duration::from_millis(1300));
             press("alt+o")?;
             let r = page.reply(&id)?;
             require(
