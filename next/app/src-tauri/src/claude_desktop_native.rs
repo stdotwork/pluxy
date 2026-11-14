@@ -41,20 +41,28 @@
 //!   launcher, a cancelled confirmation starts nothing; a confirmed one runs the stand-in with no
 //!   arguments in HOME, with no key and no login canary in its environment; an executable override
 //!   runs the override instead;
+//! - alias: with a login account of the bundled test/probe serving `fake-model` on the app's core,
+//!   `core_alias_create` asks a native confirmation naming the alias, the model, the account and
+//!   that Clear and Restore Backup leave the alias; cancelled, core is unchanged; confirmed, the
+//!   account's `model_alias` holds the alias (forked, the model keeps its name) and core serves
+//!   both names on it; asked again it is already there, unasked; the alias taken for another model,
+//!   or a model core does not serve, is refused unasked and changes nothing;
 //! - uninstall: disabled and removed, no pluxy/claude-desktop process is left and the files are as
 //!   the last step left them;
-//! - audit: the key and the login canary are in no window answer and no confirmation, no
+//! - audit: the key, the login canary, the login account's key and core's management and client
+//!   keys are in no window answer and no confirmation, no
 //!   temporary file is left, and files no step names keep their bytes.
 //!
 //! One line on stderr: `native-test: claude-desktop <JSON>`.
 
-use super::admission::{ok, press, require, settle, start};
+use super::admission::{call as invoke, ok, press, require, settle, start};
 use super::claude_code::{edit, mode};
 use super::program::processes;
 use super::routing::{call, enable, install};
 use super::transactions::{leftovers, link, read, snapshot, unasked};
 use super::vault::{dialog_with, type_key};
 use super::{log, wait_for};
+use crate::App;
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -76,6 +84,11 @@ const EXECUTION: &str = "pluxy/execution";
 const LABEL: &str = "fixture Claude Desktop key";
 const CLIENT: &str = "Claude Desktop";
 const SAME_INSTANT: &str = "an edit made in the same instant by another program may be lost";
+/// The core alias step's login account (of the bundled test/probe, whose sign-ins serve
+/// `fake-model`, `rate-limited` and `server-error`), its model and the alias a row gives it.
+const ACCOUNT: &str = "desktop-alias-1";
+const MODEL: &str = "fake-model";
+const ALIAS: &str = "claude-opus-5-fake";
 /// A confirmation keeps its Confirm button disabled for a second after it shows.
 const ARMED: Duration = Duration::from_millis(1300);
 
@@ -185,6 +198,10 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     )
     .map_err(|e| e.to_string())?;
     let key = keys["key"].as_str().ok_or("no key")?.to_string();
+    let account_key = keys["account"]
+        .as_str()
+        .ok_or("no account key")?
+        .to_string();
     let s = |v: &Value| v.as_str().unwrap_or_default().to_string();
     let p = |v: &Value| PathBuf::from(s(v));
     let login = s(&x["login"]);
@@ -881,6 +898,123 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     )?;
     passed("launch");
 
+    // ---- alias: the alias a row needs, made in core through the management API after a native
+    // confirmation; a cancel changes nothing
+    step(
+        "alias",
+        (|| {
+            let caller = app.state::<App>().conn.lock().unwrap().caller();
+            let body = json!({"id": ACCOUNT, "extension": "test/probe", "method": "api_key",
+                "input": {"api_key": account_key}});
+            let r = caller.call("POST", "/accounts", Some(&body));
+            seen.add(serde_json::to_string(&r).unwrap_or_default());
+            require(
+                r.status == 202,
+                format!("core did not take the login account: {r:?}"),
+            )?;
+            // The accounts core lists as serving name, and the account's model_alias.
+            let served = |name: &str| -> Option<Vec<Value>> {
+                let r = caller.call("GET", "/models", None);
+                seen.add(serde_json::to_string(&r).unwrap_or_default());
+                r.body?["models"]
+                    .as_array()?
+                    .iter()
+                    .find(|m| m["id"] == name)
+                    .and_then(|m| m["accounts"].as_array().cloned())
+            };
+            let aliases = || -> Value {
+                let r = caller.call("GET", "/accounts", None);
+                seen.add(serde_json::to_string(&r).unwrap_or_default());
+                r.body
+                    .and_then(|b| {
+                        b["accounts"]
+                            .as_array()?
+                            .iter()
+                            .find(|a| a["id"] == ACCOUNT)
+                            .map(|a| a["model_alias"].clone())
+                    })
+                    .unwrap_or(json!("no such account"))
+            };
+            wait_for("core serving fake-model on the login account", || {
+                served(MODEL).filter(|a| a.contains(&json!(ACCOUNT)))
+            })?;
+            require(
+                aliases().is_null() && served(ALIAS).is_none(),
+                "the login account starts with an alias",
+            )?;
+            let input = json!({"model": MODEL, "alias": ALIAS});
+            let needles = [ALIAS, MODEL, ACCOUNT, "Restore Backup"];
+            let ask = |cancel: bool| -> Result<Value, String> {
+                let slot = start(main, "core_alias_create", input.clone())?;
+                let text = dialog_with(app, &needles)?;
+                seen.add(text);
+                if cancel {
+                    press("alt+c")?;
+                } else {
+                    std::thread::sleep(ARMED);
+                    press("alt+o")?;
+                }
+                let r = settle(main, &slot)?;
+                seen.add(r.to_string());
+                Ok(r)
+            };
+            // Cancelled: core is as it was.
+            let r = ask(true)?;
+            require(
+                r["ok"] == false,
+                format!("a cancelled alias went ahead: {r}"),
+            )?;
+            require(
+                aliases().is_null() && served(ALIAS).is_none(),
+                "a cancelled alias changed core",
+            )?;
+            // Confirmed: the account renames the model as the row does, keeping its own name.
+            let r = ask(false)?;
+            require(
+                r["ok"] == true && r["value"]["accounts"] == json!([ACCOUNT]),
+                format!("the confirmed alias: {r}"),
+            )?;
+            require(
+                aliases() == json!([{"name": MODEL, "alias": ALIAS, "fork": true}]),
+                format!("the account's model_alias: {}", aliases()),
+            )?;
+            require(
+                served(ALIAS).is_some_and(|a| a.contains(&json!(ACCOUNT)))
+                    && served(MODEL).is_some_and(|a| a.contains(&json!(ACCOUNT))),
+                "core does not serve the alias and the model on the account",
+            )?;
+            // Asked again: already there, nothing asked or written.
+            let (r, asked) = unasked(|| invoke(main, "core_alias_create", input.clone()));
+            let r = r?;
+            seen.add(r.to_string());
+            require(
+                !asked && r["ok"] == true && r["value"]["already"] == true,
+                format!("an alias core already serves: {r}"),
+            )?;
+            // Taken for another model, or a model core does not serve: refused unasked.
+            for (model, says) in [
+                ("rate-limited", "already serves"),
+                ("no-such-model", "serves no model"),
+            ] {
+                let i = json!({"model": model, "alias": ALIAS});
+                let (r, asked) = unasked(|| invoke(main, "core_alias_create", i.clone()));
+                let r = r?;
+                seen.add(r.to_string());
+                require(
+                    !asked
+                        && r["ok"] == false
+                        && r["error"].as_str().is_some_and(|e| e.contains(says)),
+                    format!("{i} should be refused with {says:?}: {r}"),
+                )?;
+            }
+            require(
+                aliases() == json!([{"name": MODEL, "alias": ALIAS, "fork": true}]),
+                "a refused alias changed the account",
+            )
+        })(),
+    )?;
+    passed("alias");
+
     // ---- uninstall: no tool process is left, the files stay as they are
     step(
         "uninstall",
@@ -908,6 +1042,25 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             require(
                 !seen.iter().any(|t| hidden.iter().any(|h| t.contains(h))),
                 "the key or the login canary reached the window or a confirmation",
+            )?;
+            // Core's own keys and the login account's key: in no reply and no confirmation.
+            let config = app
+                .path()
+                .app_data_dir()
+                .map_err(|e| e.to_string())?
+                .join("core")
+                .join("config.json");
+            let cfg: Value =
+                serde_json::from_slice(&std::fs::read(&config).map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())?;
+            let mut secrets = vec![account_key.clone(), s(&cfg["management_key"])];
+            secrets.extend(cfg["client_keys"].as_array().into_iter().flatten().map(s));
+            require(
+                secrets.iter().all(|k| k.len() >= 16)
+                    && !seen
+                        .iter()
+                        .any(|t| secrets.iter().any(|k| t.contains(k.as_str()))),
+                "a core key or the login account's key reached the window or a confirmation",
             )?;
             let mut left = leftovers(&home.join(".config"))?;
             left.extend(leftovers(&home.join("dotfiles"))?);

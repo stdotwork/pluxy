@@ -24,8 +24,9 @@
 //
 // expect.json holds what the check compares with, written out by hand here, never worked out by
 // the package's code: the paths, the link texts and every file's bytes after each step, with
-// `@KEY@` where the key goes. keys.json holds the key the check types into native key entry, made
-// here at random. When the package has not been built (its program or manifest is missing), the
+// `@KEY@` where the key goes. keys.json holds the key the check types into native key entry and
+// the upstream key of the login account its core alias step adds to the app's core, both made here
+// at random. When the package has not been built (its program or manifest is missing), the
 // registry does not list it and the check fails at its first step, installing it.
 
 import { generateKeyPairSync, type KeyObject, randomBytes } from "node:crypto";
@@ -306,7 +307,9 @@ export function buildClaudeDesktopFixtures(
 
   const key = `pluxy-claude-desktop-key-${randomBytes(16).toString("hex")}`;
   const login = `pluxy-claude-desktop-login-${randomBytes(16).toString("hex")}`;
-  writeFileSync(join(root, "keys.json"), JSON.stringify({ key }));
+  // The upstream key of the login account the core alias step adds to the app's core.
+  const account = `pluxy-claude-desktop-account-${randomBytes(16).toString("hex")}`;
+  writeFileSync(join(root, "keys.json"), JSON.stringify({ key, account }));
   writeFileSync(
     join(root, "expect.json"),
     JSON.stringify({
@@ -321,5 +324,5 @@ export function buildClaudeDesktopFixtures(
     }),
   );
   const nonce = writeTrustProfile(home, [curatedFile], publicKey);
-  return { registries: [{ name: "curated", url: curatedFile }], nonce, canaries: [key, login], bin };
+  return { registries: [{ name: "curated", url: curatedFile }], nonce, canaries: [key, login, account], bin };
 }
