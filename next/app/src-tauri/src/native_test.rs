@@ -21,6 +21,8 @@
 //!    (`program_native.rs`, then `swap_native.rs`); with `PLUXY_APP_TEST_VAULT`, only the vault,
 //!    secret delivery and references and journal recovery (`vault_native.rs`), then native
 //!    client-key capture (`client_key_native.rs`); with
+//!    `PLUXY_APP_TEST_SPAWN`, only the host's spawn service, managed runtimes and launch
+//!    environment (`spawn_native.rs`); with
 //!    `PLUXY_APP_TEST_SESSIONS`, only the read-only Codex session reader (`sessions_native.rs`);
 //!    with `PLUXY_APP_TEST_TRANSACTIONS`, only the transaction library's fixture writer
 //!    (`transactions_native.rs`); with `PLUXY_APP_TEST_USAGE`, only the usage hub and its
@@ -75,6 +77,9 @@ mod routing;
 #[cfg(target_os = "linux")]
 #[path = "sessions_native.rs"]
 mod sessions;
+#[cfg(target_os = "linux")]
+#[path = "spawn_native.rs"]
+mod spawn;
 #[cfg(target_os = "linux")]
 #[path = "swap_native.rs"]
 mod swap;
@@ -456,6 +461,15 @@ fn run(app: &AppHandle) -> Result<(), String> {
         vault::run(app, &main, dir.clone().into())?;
         // Native one-time client-key capture (client_key_native.rs), with the same tools.
         client_key::run(app, &main, dir.into())?;
+        log("quit", json!({}));
+        crate::quit(app);
+        return Ok(());
+    }
+    // The host's spawn service, managed runtimes and launch environment (spawn_native.rs), in a
+    // session of its own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_SPAWN") {
+        spawn::run(app, &main, dir.into())?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());
