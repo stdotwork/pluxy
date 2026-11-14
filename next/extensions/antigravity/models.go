@@ -17,7 +17,8 @@ import (
 
 // modelsJSON is the Antigravity model catalog of today's core, the antigravity section of
 // core/internal/registry/models/models.json. Cloud Code names the models an account has; this
-// catalog describes them.
+// catalog describes them. To refresh it by hand, take the antigravity section of models.json in
+// https://github.com/router-for-me/models, the file the old core copied.
 //
 //go:embed models.json
 var modelsJSON []byte

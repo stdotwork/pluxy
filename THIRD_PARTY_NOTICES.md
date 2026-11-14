@@ -1,3 +1,15 @@
+# Third-party notices
+
+This repository once held code from the upstream projects below. Their licence notices are kept
+here, each with the full text of the licence it came with.
+
+## router-for-me/Cli-Proxy-API-Management-Center
+
+The web panel formerly in `extensions/panel/`, from
+<https://github.com/router-for-me/Cli-Proxy-API-Management-Center>. It was removed when the web
+panel in `next/ui` replaced it. Licence text, as it was in `extensions/panel/LICENSE`:
+
+~~~text
 MIT License
 
 Copyright (c) 2026 Router-For.ME
@@ -19,3 +31,4 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+~~~
