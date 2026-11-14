@@ -6,12 +6,12 @@ use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Write};
-use std::net::TcpListener;
+use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 const START_TIMEOUT: Duration = Duration::from_secs(30);
@@ -109,6 +109,41 @@ pub fn ensure_config(dir: &Path) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// The address core is to listen on, from `listen` in the core config at path: an IP address and
+/// port, or `localhost` and a port (`127.0.0.1`, which is where core listens for it).
+pub fn listen_addr(path: &Path) -> Result<SocketAddr, String> {
+    let text = fs::read(path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+    let cfg: Value = serde_json::from_slice(&text)
+        .map_err(|e| format!("{} is not JSON: {e}", path.display()))?;
+    let listen = cfg.get("listen").and_then(Value::as_str).unwrap_or("");
+    if let Ok(a) = listen.parse() {
+        return Ok(a);
+    }
+    match listen.strip_prefix("localhost:").map(str::parse::<u16>) {
+        Some(Ok(port)) => Ok(SocketAddr::from(([127, 0, 0, 1], port))),
+        _ => Err(format!(
+            "{}: listen {listen:?} is not an IP address and port (such as 127.0.0.1:8400), which the app needs to hold its core's port",
+            path.display()
+        )),
+    }
+}
+
+/// Binds addr for the app's core, waiting up to two seconds while it is in use: the previous
+/// core's socket stays open until the last call that could reach it has ended.
+#[cfg(unix)]
+fn bind(addr: SocketAddr) -> Result<TcpListener, String> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match TcpListener::bind(addr) {
+            Ok(l) => return Ok(l),
+            Err(e) if e.kind() == io::ErrorKind::AddrInUse && Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(50))
+            }
+            Err(e) => return Err(format!("listening on {addr} for the app's core: {e}")),
+        }
+    }
+}
+
 /// The management key in the core config at path.
 pub fn management_key(path: &Path) -> Result<String, String> {
     let text = fs::read(path).map_err(|e| format!("reading {}: {e}", path.display()))?;
@@ -150,8 +185,13 @@ pub fn core_program(chosen: Option<&str>) -> Result<PathBuf, String> {
 pub type OnExit = Arc<dyn Fn() + Send + Sync>;
 
 /// Set once the app's core is being stopped or has exited: from then on nothing is sent to its
-/// address, where another program may listen next.
+/// address.
 pub type Gone = Arc<AtomicBool>;
+
+/// The app's copy of its core's listening socket. While any copy is held no other program can
+/// listen on that address, so a call with the management key reaches the core or waits in this
+/// socket, never another program, also while the core drains after a stop or once it has crashed.
+pub type Hold = Arc<TcpListener>;
 
 /// A running core of the app's own. A supervisor thread starts it and stays until it exits:
 /// on Linux the parent-death signal follows the thread that started the process, and the
@@ -164,13 +204,16 @@ pub struct ManagedCore {
     tail: Arc<Mutex<VecDeque<String>>>,
     status: Arc<Mutex<Option<ExitStatus>>>,
     gone: Gone,
+    hold: Option<Hold>,
 }
 
 impl ManagedCore {
     /// Starts the open program (named name in messages) with the config in dir (made if missing)
     /// and waits until core says where it listens. The program runs from that open file, the one
-    /// its caller checked, not from its path again. Core's log goes to the app's stderr, each line
-    /// prefixed `core: `. on_exit runs once core has exited.
+    /// its caller checked, not from its path again. On Unix the app binds core's `listen` address
+    /// itself and hands core the socket (`-listen-fd`), keeping its own copy; core must say it
+    /// listens there. Core's log goes to the app's stderr, each line prefixed `core: `. on_exit
+    /// runs once core has exited.
     pub fn start(
         program: File,
         name: &Path,
@@ -179,6 +222,10 @@ impl ManagedCore {
     ) -> Result<ManagedCore, String> {
         let cfg = ensure_config(dir)?;
         let key = management_key(&cfg)?;
+        #[cfg(unix)]
+        let hold: Option<Hold> = Some(Arc::new(bind(listen_addr(&cfg)?)?));
+        #[cfg(not(unix))]
+        let hold: Option<Hold> = None;
         #[cfg(unix)]
         let fd = {
             use std::os::fd::AsRawFd;
@@ -200,9 +247,24 @@ impl ManagedCore {
                 });
             }
         }
-        cmd.arg("-config")
-            .arg(&cfg)
-            .current_dir(dir)
+        cmd.arg("-config").arg(&cfg);
+        #[cfg(unix)]
+        if let Some(l) = &hold {
+            use std::os::fd::AsRawFd;
+            use std::os::unix::process::CommandExt;
+            let lfd = l.as_raw_fd();
+            cmd.arg("-listen-fd").arg(lfd.to_string());
+            // Only the core inherits the socket: the app's copy closes on exec as usual.
+            unsafe {
+                cmd.pre_exec(move || {
+                    if libc::fcntl(lfd, libc::F_SETFD, 0) != 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
+        cmd.current_dir(dir)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
@@ -224,6 +286,7 @@ impl ManagedCore {
         let (started_tx, started_rx) = mpsc::channel();
         let st = Arc::clone(&status);
         let g = Arc::clone(&gone);
+        let waiting = hold.as_ref().map(Arc::downgrade);
         let name = name.display().to_string();
         std::thread::spawn(move || {
             let spawned = cmd.spawn();
@@ -270,6 +333,9 @@ impl ManagedCore {
             if let Some(f) = on_exit {
                 f();
             }
+            if let Some(w) = waiting {
+                refuse_waiting(w);
+            }
         });
         let (child, stderr) = started_rx.recv().map_err(|e| e.to_string())??;
         let pid = child.lock().unwrap().id();
@@ -301,12 +367,25 @@ impl ManagedCore {
             tail,
             status,
             gone,
+            hold,
         };
         let deadline = Instant::now() + START_TIMEOUT;
         let mut gone: Option<Instant> = None;
         loop {
             match rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(addr) => {
+                    if let Some(l) = &core.hold {
+                        let given = l.local_addr().map_err(|e| e.to_string())?;
+                        let said = addr
+                            .split_once("://")
+                            .and_then(|(_, a)| a.parse::<SocketAddr>().ok());
+                        if said != Some(given) {
+                            core.kill();
+                            return Err(format!(
+                                "the started core is not listening on the socket the app gave it ({given}): it said {addr}"
+                            ));
+                        }
+                    }
                     core.base = addr;
                     return Ok(core);
                 }
@@ -356,6 +435,11 @@ impl ManagedCore {
     /// Set once this core is being stopped or has exited.
     pub fn gone(&self) -> Gone {
         Arc::clone(&self.gone)
+    }
+
+    /// The app's copy of this core's listening socket, for a call to hold while it may send.
+    pub fn hold(&self) -> Option<Hold> {
+        self.hold.clone()
     }
 
     /// None while core runs; why it stopped once it has.
@@ -416,6 +500,30 @@ impl ManagedCore {
         if !self.wait(STOP_TIMEOUT) {
             self.kill();
         }
+    }
+}
+
+/// Once the app's core has exited, fails the calls that still reach the app's copy of its
+/// listening socket (accepted and closed at once) instead of leaving them waiting, until nothing
+/// else holds that socket and it closes.
+fn refuse_waiting(socket: Weak<TcpListener>) {
+    while let Some(l) = socket.upgrade() {
+        let _ = l.set_nonblocking(true);
+        while let Ok((c, _)) = l.accept() {
+            drop(c);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            let mut p = libc::pollfd {
+                fd: l.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            unsafe { libc::poll(&mut p, 1, 100) };
+        }
+        #[cfg(not(unix))]
+        std::thread::sleep(Duration::from_millis(100));
     }
 }
 
@@ -618,6 +726,12 @@ mod tests {
         assert!(core_program(None).unwrap_err().contains("no core program"));
     }
 
+    /// A script line saying the core listens on the socket the app will give it.
+    fn listening(dir: &Path) -> String {
+        let addr = listen_addr(&ensure_config(dir).unwrap()).unwrap();
+        format!("echo 'pluxy: listening on http://{addr}' >&2")
+    }
+
     fn script(dir: &Path, body: &str) -> PathBuf {
         let script = dir.join("core.sh");
         fs::write(&script, format!("#!/bin/sh\n{body}\n")).unwrap();
@@ -634,10 +748,7 @@ mod tests {
     #[test]
     fn the_core_outlives_the_thread_that_started_it() {
         let dir = temp("thread");
-        let program = script(
-            &dir,
-            "echo 'pluxy: listening on http://127.0.0.1:1' >&2\nexec sleep 30",
-        );
+        let program = script(&dir, &format!("{}\nexec sleep 30", listening(&dir)));
         let d = dir.clone();
         let mut core = std::thread::spawn(move || {
             ManagedCore::start(File::open(&program).unwrap(), &program, &d, None).unwrap()
@@ -661,10 +772,7 @@ mod tests {
     #[test]
     fn a_core_exit_is_seen_before_it_is_reaped() {
         let dir = temp("pidfd");
-        let program = script(
-            &dir,
-            "echo 'pluxy: listening on http://127.0.0.1:1' >&2\nexec sleep 30",
-        );
+        let program = script(&dir, &format!("{}\nexec sleep 30", listening(&dir)));
         let core = ManagedCore::start(File::open(&program).unwrap(), &program, &dir, None).unwrap();
         let gone = core.gone();
         // Checked after the lock is let go, so a failure does not poison it for stop().

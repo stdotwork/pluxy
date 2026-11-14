@@ -68,7 +68,7 @@ const t = strings("device", {
   importsAllowed: "allowed for this release",
   importsNotAllowed: "not allowed",
   importsWhy:
-    "This package's pages call native tools' operations. They are refused until you allow them in a native confirmation that lists each operation; a write or launch still asks each time.",
+    "This package's pages call native tools' operations. They are refused until you allow them in a native confirmation that lists each operation; a write, a launch or a call that shows content still asks each time.",
   importsUnverified: "Only a curated package may call native tools, so its calls are refused.",
   allowImports: "Allow native imports…",
   revokeImports: "Revoke native imports",
@@ -163,7 +163,10 @@ function releaseFacts(r: DeviceRelease): [string, ComponentChildren][] {
       t("signer"),
       r.signer ? t("signerValue", { publisher: r.signer.publisher, key: r.signer.key_id }) : undefined,
     ],
-    [t("operations"), r.operations.map(([id, what]) => `${id}: ${what}`).join("; ") || undefined],
+    [
+      t("operations"),
+      r.operations.map(([id, what, effect]) => `${id}: ${what} (${effect})`).join("; ") || undefined,
+    ],
     [
       t("imports"),
       r.imports

@@ -12,13 +12,14 @@
 use crate::artifact::PublisherKeys;
 use crate::client::{certificates, Client, Reply, ROTATE};
 use crate::cores::{self, ConfigSnapshot, Store};
-use crate::managed::{core_program, write_private, Gone, ManagedCore, OnExit};
+use crate::managed::{core_program, write_private, Gone, Hold, ManagedCore, OnExit};
 use crate::recovery::Recovery;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use url::{Host, Url};
 
@@ -64,6 +65,40 @@ impl Settings {
             Ok(b) => serde_json::from_slice(&b).map_err(|e| format!("{}: {e}", path.display())),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Settings::default()),
             Err(e) => Err(format!("{}: {e}", path.display())),
+        }
+    }
+
+    /// Removes what a crash during a save of path left beside it: a regular file named as
+    /// `write_private` names its temporary files, `<file>.<64 lowercase hex digits>.tmp`. Nothing
+    /// else goes: not another name, a folder or a link (a link is never followed or removed).
+    /// Best effort, and only for the app's start, before anything saves: a save in progress
+    /// must not lose its file.
+    pub fn remove_stale_temps(path: &Path) {
+        let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str()))
+        else {
+            return;
+        };
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let file = entry.file_name();
+            let Some(nonce) = file
+                .to_str()
+                .and_then(|f| f.strip_prefix(name))
+                .and_then(|f| f.strip_prefix('.'))
+                .and_then(|f| f.strip_suffix(".tmp"))
+            else {
+                continue;
+            };
+            let is_nonce = nonce.len() == 64
+                && nonce
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+            let is_file = fs::symlink_metadata(entry.path()).is_ok_and(|m| m.file_type().is_file());
+            if is_nonce && is_file {
+                let _ = fs::remove_file(entry.path());
+            }
         }
     }
 
@@ -398,6 +433,9 @@ pub struct Caller {
     client: Option<Client>,
     key: Option<String>,
     gone: Option<Gone>,
+    /// The app's copy of its own core's listening socket, kept open (never read) while this
+    /// caller may send there.
+    _hold: Option<Hold>,
 }
 
 impl Caller {
@@ -412,15 +450,12 @@ impl Caller {
         body: Option<&Value>,
         limit: Option<Duration>,
     ) -> Reply {
-        // The app's own core is stopping or has exited: whatever listens on its address now
-        // may not be it. Still open: a call that passed this check just before a stop or exit
-        // goes out; after a crash, the kernel frees the port as the core exits, a moment
-        // before the app sees the exit (its pidfd) and sets the flag; and when something other
-        // than the app stops the core (SIGTERM or SIGINT from outside), the core closes its
-        // listener at once and drains its calls for up to 10 seconds before it exits, all with
-        // the flag unset. A program that binds the freed port in either window can receive a
-        // call with the key. Only a socket the app holds and hands to the core, or calls without
-        // a bearer key, close that.
+        // The app's own core is stopping or has exited: nothing more goes to its address. A
+        // call that passed this check just before a stop or an exit, or one made while the core
+        // drains after a SIGTERM from outside the app (it closes its listener at once, with the
+        // flag still unset), still goes out, but only to the core or into the app's own copy of
+        // its listening socket (_hold): no other program can listen there while this caller
+        // holds it. Once the core has exited, the app refuses such waiting calls.
         if self
             .gone
             .as_ref()
@@ -492,6 +527,7 @@ impl Connection {
         on_core_exit: Option<OnExit>,
         start_core: bool,
     ) -> Connection {
+        Settings::remove_stale_temps(&dirs.settings());
         let (settings, error) = match Settings::load(&dirs.settings()) {
             Ok(s) => (s, None),
             Err(e) => (Settings::default(), Some(e)),
@@ -1008,7 +1044,13 @@ impl Connection {
         if let Some(ca) = &ca_file {
             summary.push_str(&format!("\nCertificate authority: {}", shown_path(ca)));
         }
-        let previous = self.client.as_ref().map(|c| c.base());
+        // The target last confirmed and saved, not the client in memory: a connection that failed,
+        // or a managed core that stopped, has no client, and the saved target is still the source.
+        let previous = match self.settings.mode {
+            Some(Mode::Local | Mode::Remote) => self.settings.url.as_deref(),
+            Some(Mode::Managed) => Some("the app's own core"),
+            None => None,
+        };
         if previous != Some(base.as_str()) {
             summary.push_str(&format!(
                 "\nSwitches from {} to {base}",
@@ -1028,16 +1070,36 @@ impl Connection {
         })
     }
 
+    /// Whether the connection is still the one target was prepared on.
+    fn ensure_current(&self, target: &KeyTarget) -> Result<(), String> {
+        if self.revision != target.revision {
+            return Err("The connection changed. Open key entry again.".into());
+        }
+        Ok(())
+    }
+
+    /// Checks key and keeps it, all under one borrow: the tests' way. The native dialog uses
+    /// `finish_key_unlocked`, which does not hold the connection while core answers.
     pub(crate) fn finish_key(
+        &mut self,
+        target: KeyTarget,
+        key: &str,
+        remember: bool,
+    ) -> Result<(), String> {
+        self.ensure_current(&target)?;
+        check_key(&target.client, key)?;
+        self.commit_key(target, key, remember)
+    }
+
+    /// Saves a key core accepted and switches to its target; refuses when the connection has
+    /// changed since the target was prepared. The key is saved only after its check passed.
+    fn commit_key(
         &mut self,
         mut target: KeyTarget,
         key: &str,
         remember: bool,
     ) -> Result<(), String> {
-        if self.revision != target.revision {
-            return Err("The connection changed. Open key entry again.".into());
-        }
-        check_key(&target.client, key)?;
+        self.ensure_current(&target)?;
         target.settings.key = remember.then(|| key.to_owned());
         target.settings.save(&self.dirs.settings())?;
         self.stop_core();
@@ -1285,6 +1347,7 @@ impl Connection {
             client: self.client.clone(),
             key: self.key.clone(),
             gone: self.gone.clone(),
+            _hold: self.managed.as_ref().and_then(ManagedCore::hold),
         }
     }
 
@@ -1375,6 +1438,25 @@ impl Connection {
             },
         }
     }
+}
+
+/// Checks key against the target core without holding the connection's lock, which other
+/// commands (and tray Quit) wait for; then, under the lock, refuses if the connection changed
+/// meanwhile, and otherwise keeps the key. Returns the outcome with the view taken under the
+/// same lock.
+pub(crate) fn finish_key_unlocked(
+    conn: &Mutex<Connection>,
+    target: KeyTarget,
+    key: &str,
+    remember: bool,
+) -> (Result<(), String>, View) {
+    let checked = check_key(&target.client, key);
+    let mut c = conn.lock().unwrap();
+    let result = c
+        .ensure_current(&target)
+        .and(checked)
+        .and_then(|()| c.commit_key(target, key, remember));
+    (result, c.view())
 }
 
 /// The version to run when a switch to id did not finish: the version that worked before, which
@@ -1473,38 +1555,22 @@ mod tests {
     use super::*;
 
     /// N1: a call taken before the app's core is stopped refuses from the moment the stop
-    /// begins, while the core drains with its listener closed and something else answers there.
+    /// begins, while the core drains; and no other program can listen on the core's address
+    /// while that call holds the app's copy of its socket.
     #[cfg(target_os = "linux")]
     #[test]
     fn a_caller_refuses_once_its_core_is_being_stopped() {
-        use std::io::{Read, Write};
-        use std::sync::{Arc, Mutex};
         let dir =
             std::env::temp_dir().join(format!("pluxy-stopping-{}", crate::managed::random_key()));
         fs::create_dir_all(&dir).unwrap();
-        // What answers on the core's port once the core has closed its listener.
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let base = format!("http://{}", listener.local_addr().unwrap());
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let keep = seen.clone();
-        std::thread::spawn(move || {
-            for conn in listener.incoming() {
-                let Ok(mut c) = conn else { return };
-                let _ = c.set_read_timeout(Some(std::time::Duration::from_millis(500)));
-                let mut buf = [0u8; 4096];
-                if let Ok(n) = c.read(&mut buf) {
-                    keep.lock().unwrap().extend_from_slice(&buf[..n]);
-                }
-                let _ = c.write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
-                );
-            }
-        });
-        // A core that drains for two seconds after SIGTERM.
+        let addr =
+            crate::managed::listen_addr(&crate::managed::ensure_config(&dir).unwrap()).unwrap();
+        // A core that says it listens on the socket the app gives it, and drains for two
+        // seconds after SIGTERM.
         let program = dir.join("core.sh");
         fs::write(
             &program,
-            format!("#!/bin/sh\necho 'pluxy: listening on {base}' >&2\ntrap 'sleep 2; exit 0' TERM\nwhile :; do sleep 0.1; done\n"),
+            format!("#!/bin/sh\necho 'pluxy: listening on http://{addr}' >&2\ntrap 'sleep 2; exit 0' TERM\nwhile :; do sleep 0.1; done\n"),
         )
         .unwrap();
         {
@@ -1517,19 +1583,22 @@ mod tests {
             client: Some(Client::new(core.base(), None)),
             key: Some(core.key().to_string()),
             gone: Some(core.gone()),
+            _hold: core.hold(),
         };
-        assert_eq!(caller.call("GET", "/status", None).status, 200);
-        seen.lock().unwrap().clear();
         let stopping = std::thread::spawn(move || core.stop());
         std::thread::sleep(std::time::Duration::from_millis(500));
         let r = caller.call("GET", "/status", None);
-        assert_ne!(r.status, 200, "a call went out while the core was stopping");
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        assert!(
-            seen.lock().unwrap().is_empty(),
+        assert_eq!(
+            r.error.as_ref().map(|e| e.message.as_str()),
+            Some("the app's core has stopped"),
             "a call went out while the core was stopping"
         );
         stopping.join().unwrap();
+        assert!(
+            std::net::TcpListener::bind(addr).is_err(),
+            "another program could listen on the core's address while a caller held it"
+        );
+        drop(caller);
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1910,6 +1979,273 @@ mod tests {
             c.finish_key(prepared, &crate::managed::random_key(), false)
                 .unwrap_err(),
             "The connection changed. Open key entry again."
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A connection in local mode on an address nothing listens on, the one the person last
+    /// confirmed, and its folders.
+    fn confirmed_local(url: &str, mode: Mode) -> (PathBuf, Dirs, Connection) {
+        let dir =
+            std::env::temp_dir().join(format!("pluxy-confirmed-{}", crate::managed::random_key()));
+        let dirs = Dirs {
+            config: dir.join("config"),
+            core: dir.join("core"),
+            cores: dir.join("cores"),
+        };
+        Settings {
+            mode: Some(mode),
+            url: Some(url.into()),
+            ..Settings::default()
+        }
+        .save(&dirs.settings())
+        .unwrap();
+        let c = Connection::open(dirs.clone(), None);
+        (dir, dirs, c)
+    }
+
+    /// The confirmation names the target last confirmed and saved, not the client in memory: a
+    /// connection that failed to come up has no client, but the saved target is still the source.
+    #[test]
+    fn the_confirmation_names_the_last_confirmed_target_not_the_client() {
+        let (dir, _dirs, c) = confirmed_local("http://example.com", Mode::Local);
+        assert!(c.client.is_none(), "the saved address is not a local one");
+        let to_local = |c: &Connection, url: &str| {
+            c.prepare_key(Some(Change {
+                mode: Some(Mode::Local),
+                url: Some(url.into()),
+                ..Change::default()
+            }))
+            .unwrap()
+            .summary
+        };
+        assert_eq!(
+            to_local(&c, "http://127.0.0.1:1234"),
+            "Key for http://127.0.0.1:1234\nSwitches from http://example.com to http://127.0.0.1:1234"
+        );
+        let (dir2, _dirs2, c2) = confirmed_local("https://example.com:9443", Mode::Remote);
+        let kept = Change {
+            mode: Some(Mode::Remote),
+            url: Some("https://example.com:9443".into()),
+            ..Change::default()
+        };
+        assert_eq!(
+            c2.prepare_key(Some(kept)).unwrap().summary,
+            "Key for https://example.com:9443",
+            "the saved target itself is no switch"
+        );
+        fs::remove_dir_all(dir).unwrap();
+        fs::remove_dir_all(dir2).unwrap();
+    }
+
+    /// With no saved connection, or the app's own core saved, the confirmation says so.
+    #[test]
+    fn the_confirmation_names_an_unset_or_managed_source() {
+        let dir =
+            std::env::temp_dir().join(format!("pluxy-confirmed-{}", crate::managed::random_key()));
+        let dirs = Dirs {
+            config: dir.join("config"),
+            core: dir.join("core"),
+            cores: dir.join("cores"),
+        };
+        let mut c = Connection::open_at_startup(dirs.clone(), None, false);
+        let change = || Change {
+            mode: Some(Mode::Local),
+            url: Some("http://127.0.0.1:1234".into()),
+            ..Change::default()
+        };
+        assert!(c
+            .prepare_key(Some(change()))
+            .unwrap()
+            .summary
+            .ends_with("Switches from not connected to http://127.0.0.1:1234"));
+        c.settings.mode = Some(Mode::Managed);
+        assert!(c
+            .prepare_key(Some(change()))
+            .unwrap()
+            .summary
+            .ends_with("Switches from the app's own core to http://127.0.0.1:1234"));
+    }
+
+    /// A crash during a settings write leaves a temporary file of the writer's own name; the next
+    /// start removes it, and only it: other names, folders and links stay.
+    #[cfg(unix)]
+    #[test]
+    fn a_stale_settings_temporary_file_is_removed_at_startup() {
+        use std::os::unix::fs::symlink;
+        let (dir, dirs, c) = confirmed_local("http://127.0.0.1:1", Mode::Local);
+        drop(c);
+        let stale = dirs.config.join(format!(
+            "connection.json.{}.tmp",
+            crate::managed::random_key()
+        ));
+        fs::write(&stale, b"{\"key\":\"half written").unwrap();
+        let other_names = [
+            "connection.json.planted.tmp".to_string(),
+            "window.json.tmp".to_string(),
+            format!("window.json.{}.tmp", crate::managed::random_key()),
+            format!("connection.json.{}.bak", crate::managed::random_key()),
+            format!(
+                "connection.json.{}.tmp",
+                crate::managed::random_key().to_uppercase()
+            ),
+        ];
+        for name in &other_names {
+            fs::write(dirs.config.join(name), b"x").unwrap();
+        }
+        let a_folder = dirs.config.join(format!(
+            "connection.json.{}.tmp",
+            crate::managed::random_key()
+        ));
+        fs::create_dir(&a_folder).unwrap();
+        let victim = dirs.config.join("victim");
+        fs::write(&victim, b"untouched").unwrap();
+        let a_link = dirs.config.join(format!(
+            "connection.json.{}.tmp",
+            crate::managed::random_key()
+        ));
+        symlink(&victim, &a_link).unwrap();
+        let saved = fs::read(dirs.settings()).unwrap();
+        let mut c = Connection::open(dirs.clone(), None);
+        assert!(!stale.exists(), "the stale temporary file is still there");
+        for name in &other_names {
+            assert!(dirs.config.join(name).exists(), "{name} was removed");
+        }
+        assert!(a_folder.is_dir());
+        assert!(fs::symlink_metadata(&a_link).unwrap().is_symlink());
+        assert_eq!(fs::read(&victim).unwrap(), b"untouched");
+        assert_eq!(fs::read(dirs.settings()).unwrap(), saved);
+        assert!(c.view().error.is_none());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A fake core that holds a status check until released: signals when the check arrived.
+    fn held_status_core(
+        key: String,
+    ) -> (
+        String,
+        std::sync::mpsc::Receiver<()>,
+        std::sync::mpsc::Sender<()>,
+        std::thread::JoinHandle<()>,
+    ) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let (arrived, reached) = std::sync::mpsc::channel::<()>();
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut head = Vec::new();
+            let mut byte = [0];
+            while !head.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).unwrap();
+                head.push(byte[0]);
+            }
+            let head = String::from_utf8(head).unwrap();
+            assert!(head.starts_with("GET /v0/management/status HTTP/1.1\r\n"));
+            assert!(head.contains(&format!("Bearer {key}")));
+            arrived.send(()).unwrap();
+            let _ = held.recv_timeout(Duration::from_secs(30));
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .unwrap();
+        });
+        (base, reached, release, server)
+    }
+
+    /// Waits for the connection's lock for up to two seconds: false when something keeps it.
+    fn lock_is_free(conn: &std::sync::Mutex<Connection>) -> bool {
+        let until = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < until {
+            if let Ok(g) = conn.try_lock() {
+                drop(g);
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        false
+    }
+
+    /// The new key's check is a network call: other commands go on meanwhile, and the key is
+    /// kept only once the check has passed.
+    #[test]
+    fn the_key_check_does_not_hold_the_connection_lock() {
+        let key = crate::managed::random_key();
+        let (base, reached, release, server) = held_status_core(key.clone());
+        let (dir, dirs, c) = confirmed_local("http://127.0.0.1:1", Mode::Local);
+        let conn = std::sync::Mutex::new(c);
+        let target = conn
+            .lock()
+            .unwrap()
+            .prepare_key(Some(Change {
+                mode: Some(Mode::Local),
+                url: Some(base),
+                ..Change::default()
+            }))
+            .unwrap();
+        let before = fs::read(dirs.settings()).unwrap();
+        std::thread::scope(|s| {
+            let entry = s.spawn(|| finish_key_unlocked(&conn, target, &key, true));
+            reached.recv_timeout(Duration::from_secs(10)).unwrap();
+            let free = lock_is_free(&conn);
+            assert_eq!(
+                fs::read(dirs.settings()).unwrap(),
+                before,
+                "the key was saved before the check passed"
+            );
+            release.send(()).unwrap();
+            let (result, view) = entry.join().unwrap();
+            assert!(free, "the connection lock was held during the key check");
+            result.unwrap();
+            assert!(view.signed_in && view.remembered);
+        });
+        server.join().unwrap();
+        assert_eq!(
+            Settings::load(&dirs.settings()).unwrap().key.as_deref(),
+            Some(key.as_str())
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A connection that changes while the check runs is not overwritten by the key's target:
+    /// nothing is saved and the person is asked to open key entry again.
+    #[test]
+    fn a_connection_changed_during_the_key_check_refuses_the_key() {
+        let key = crate::managed::random_key();
+        let (base, reached, release, server) = held_status_core(key.clone());
+        let (dir, dirs, c) = confirmed_local("http://127.0.0.1:1", Mode::Local);
+        let conn = std::sync::Mutex::new(c);
+        let target = conn
+            .lock()
+            .unwrap()
+            .prepare_key(Some(Change {
+                mode: Some(Mode::Local),
+                url: Some(base),
+                ..Change::default()
+            }))
+            .unwrap();
+        let before = fs::read(dirs.settings()).unwrap();
+        std::thread::scope(|s| {
+            let entry = s.spawn(|| finish_key_unlocked(&conn, target, &key, true));
+            reached.recv_timeout(Duration::from_secs(10)).unwrap();
+            assert!(lock_is_free(&conn), "the connection lock was held");
+            conn.lock().unwrap().sign_out().unwrap();
+            release.send(()).unwrap();
+            let (result, view) = entry.join().unwrap();
+            assert_eq!(
+                result.unwrap_err(),
+                "The connection changed. Open key entry again."
+            );
+            assert!(!view.signed_in);
+        });
+        server.join().unwrap();
+        assert_eq!(fs::read(dirs.settings()).unwrap(), before);
+        assert_eq!(
+            conn.lock().unwrap().settings.url.as_deref(),
+            Some("http://127.0.0.1:1")
         );
         fs::remove_dir_all(dir).unwrap();
     }

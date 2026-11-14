@@ -224,6 +224,29 @@ fn c_name(name: &str) -> Result<std::ffi::CString, String> {
     std::ffi::CString::new(name).map_err(|e| e.to_string())
 }
 
+/// The data folder of native tool id (`publisher/name`, the host-verified package ID) under root
+/// (`<app data>/tools`, beside the vault, never in it): root, then the publisher, then the name,
+/// each opened without following a link (from its parent's descriptor below root), made (0700)
+/// when missing, and checked to be this user's folder that no one else may use. Its path, which
+/// the tool gets as `PLUXY_TOOL_DATA_DIR`; it stays across releases and when the tool is removed.
+pub(crate) fn tool_data_dir(root: &Path, id: &str) -> Result<PathBuf, String> {
+    let part = |s: &str| {
+        !s.is_empty()
+            && !s.starts_with('.')
+            && s.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"-_.".contains(&b))
+    };
+    let (publisher, name) = id
+        .split_once('/')
+        .filter(|(p, n)| part(p) && part(n))
+        .ok_or_else(|| format!("{id:?} is not a package ID"))?;
+    let missing = || format!("{}: could not be made", root.display());
+    let tools = Folder::root(root, true)?.ok_or_else(missing)?;
+    let publisher_dir = tools.folder(publisher, true)?.ok_or_else(missing)?;
+    publisher_dir.folder(name, true)?.ok_or_else(missing)?;
+    Ok(root.join(publisher).join(name))
+}
+
 impl Folder {
     /// A folder of this user's that no one else may use (made so), from its open handle.
     fn checked(f: fs::File, what: &str) -> Result<Folder, String> {

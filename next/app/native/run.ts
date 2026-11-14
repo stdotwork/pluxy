@@ -68,6 +68,18 @@
 // session, native one-time client-key capture (client_key_native.rs): a key the app itself asks
 // its core for serves a fixture agent, is refused to another tool, after its deletion on core and
 // while the app is connected to another core, and never shows in a webview or the app's output.
+// The Codex session reader check (sessions.ts, sessions_native.rs) runs in one more session with
+// that build: the reader (next/app-tools/codex-sessions, built here) lists a copied Codex home
+// exactly as a hand-written expect file says, shows a session only after a native confirmation of
+// each detail call, leaves the Codex home's bytes and modification times as they were, keeps the
+// config.toml and auth.json canaries out of pages, webviews and the app's output, and leaves no
+// reader process when idle or disabled.
+// The usage hub check (usage.ts, usage_native.rs) runs in one more session with that build: the hub
+// and the test-only fixture parser (next/app-tools/agent-usage and usage-fixture, built here) sync a
+// fixture root through the host's jobs, driven from the hub's page, and its report equals a
+// hand-written expect file, also after a repeated sync, an appended and an added file, and a parser
+// disabled mid-file; ingest is refused to everyone but the host and report to another package's page;
+// no hub or parser process is left when idle.
 // The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
@@ -108,6 +120,8 @@ import { descendants, webProcesses } from "./processes";
 import { buildProgramFixtures } from "./program";
 import { buildRoutingFixtures } from "./routing";
 import { missingPrerequisites } from "./services";
+import { buildSessionsFixtures } from "./sessions";
+import { buildUsageFixtures } from "./usage";
 import { buildVaultFixtures } from "./vault";
 
 const app = join(import.meta.dir, "..");
@@ -516,6 +530,8 @@ async function runApp(
   vault = false,
   core?: CoreSource,
   release?: Release,
+  reader = false,
+  usage = false,
 ): Promise<string[]> {
   const { label, bin } = artifact;
   const root = rotation.root ?? mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
@@ -588,7 +604,15 @@ async function runApp(
     }, 100);
     // This device's extension catalog is the same in every mode: check it once, in managed mode.
     const device =
-      mode === "managed" && !admission && !program && !routing && !vault && !core && suite !== "access"
+      mode === "managed" &&
+      !admission &&
+      !program &&
+      !routing &&
+      !vault &&
+      !core &&
+      !reader &&
+      !usage &&
+      suite !== "access"
         ? join(root, "device")
         : undefined;
     const access = suite === "access" ? join(root, "access") : undefined;
@@ -655,6 +679,38 @@ async function runApp(
         JSON.stringify({ version: 0, registries: f.registries }),
       );
     }
+    // The session reader check's signed reader, its registry and trust profile, the Codex home
+    // and its canaries.
+    const sessionsDir = reader ? join(root, "sessions") : undefined;
+    if (sessionsDir) {
+      mkdirSync(sessionsDir);
+      const f = buildSessionsFixtures(sessionsDir, dirs.home, appTools, sessionsReader);
+      nonce = f.nonce;
+      canaries = f.canaries;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
+    // The usage hub check's signed hub and fixture parser, their registry and trust profile.
+    const usageDir = usage ? join(root, "usage") : undefined;
+    if (usageDir) {
+      mkdirSync(usageDir);
+      const f = buildUsageFixtures(
+        usageDir,
+        dirs.home,
+        appTools,
+        join(appToolsTarget, "debug"),
+        programFixture,
+      );
+      nonce = f.nonce;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
     if (curated) {
       mkdirSync(curated);
       if (device) mkdirSync(device);
@@ -675,7 +731,7 @@ async function runApp(
       // The app starts again on the first run's HOME: its marker and profile stay, and so does
       // the nonce the marker holds.
       nonce = JSON.parse(readFileSync(join(dirs.home, MARKER_FILE), "utf8")).nonce;
-    } else if (!programDir && !routingDir && !vaultDir) {
+    } else if (!programDir && !routingDir && !vaultDir && !sessionsDir && !usageDir) {
       try {
         nonce = /^nonce=([0-9a-f]{64})$/m.exec(run(probe, ["trust-marker", dirs.home], app))?.[1] ?? "";
         if (!nonce) throw new Error("it printed no nonce");
@@ -729,6 +785,8 @@ async function runApp(
       ...(programDir ? { PLUXY_APP_TEST_PROGRAM: programDir, PLUXY_TEST_PROGRAM_CANARY: randomUUID() } : {}),
       ...(routingDir ? { PLUXY_APP_TEST_ROUTING: routingDir } : {}),
       ...(vaultDir ? { PLUXY_APP_TEST_VAULT: vaultDir } : {}),
+      ...(sessionsDir ? { PLUXY_APP_TEST_SESSIONS: sessionsDir } : {}),
+      ...(usageDir ? { PLUXY_APP_TEST_USAGE: usageDir } : {}),
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: artifact.identifier } : {}),
       ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
       ...(key ? { PLUXY_APP_TEST_KEY_FILE: keyFile } : {}),
@@ -796,7 +854,11 @@ async function runApp(
         return;
       }
       if (canaries.some((canary) => line.includes(canary))) {
-        problems.push("the vault check's key or backup canary appeared on stdout/stderr");
+        problems.push(
+          reader
+            ? "the session reader check's canary appeared on stdout/stderr"
+            : "the vault check's key or backup canary appeared on stdout/stderr",
+        );
         return;
       }
       // window.ts's, privacy.ts's and access-suite.ts's checks, each shown.
@@ -987,6 +1049,26 @@ async function runApp(
       console.log(`${mode} routing ${JSON.stringify(r ?? {})}`);
       console.log(`${mode} jobs ${JSON.stringify(j ?? {})}`);
       console.log(`${mode}: routing ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
+    if (usage) {
+      const r = steps.get("usage") as { passed?: boolean } | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(r?.passed === true, `the usage hub check did not complete: ${failure}`);
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} usage ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode}: usage ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
+    if (reader) {
+      const r = steps.get("sessions") as { passed?: boolean } | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(r?.passed === true, `the session reader check did not complete: ${failure}`);
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} sessions ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode}: sessions ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
 
@@ -1461,6 +1543,10 @@ const targetDir = resolvePath(tauri, process.env.CARGO_TARGET_DIR ?? "target");
 const probe = join(targetDir, "debug", "examples", "session_probe");
 /** The disposable summary tool the program host check packs into a signed package. */
 const programFixture = join(targetDir, "debug", "examples", "program_fixture");
+/** The app tools' workspace, and the Codex session reader the session reader check packs. */
+const appTools = join(next, "app-tools");
+const appToolsTarget = join(targetDir, "app-tools");
+const sessionsReader = join(appToolsTarget, "debug", "codex-sessions");
 let appImage = ""; // the smoke AppImage the sessions run
 const problems: string[] = [];
 
@@ -1560,6 +1646,21 @@ async function main(): Promise<number> {
     tauri,
   );
   const trustBin = join(targetDir, "debug", "pluxy-app");
+  // The Codex session reader, from the app tools' workspace, when it is there; and the usage hub
+  // and its fixture parser, each when its folder is there.
+  if (existsSync(join(appTools, "Cargo.toml"))) {
+    run("cargo", ["build", "--locked", "-p", "codex-sessions", "--target-dir", appToolsTarget], appTools);
+    const usageTools = ["agent-usage", "usage-fixture"].filter((t) =>
+      existsSync(join(appTools, t, "Cargo.toml")),
+    );
+    if (usageTools.length > 0) {
+      run(
+        "cargo",
+        ["build", "--locked", ...usageTools.flatMap((t) => ["-p", t]), "--target-dir", appToolsTarget],
+        appTools,
+      );
+    }
+  }
   const appImageDir = tempDir("pluxy-app-native-appimage-");
   // The same test trust profile in every run; without a test package, a key no build carries.
   const updaterKey = testPackage?.updater_pubkey ?? "no-test-package";
@@ -1737,6 +1838,53 @@ async function main(): Promise<number> {
           release,
         )),
       );
+      // The Codex session reader check, on the same build.
+      p.push(
+        ...(await runApp(
+          "managed",
+          trusted,
+          updaterKey,
+          managed,
+          undefined,
+          false,
+          false,
+          undefined,
+          undefined,
+          {},
+          false,
+          false,
+          false,
+          false,
+          false,
+          undefined,
+          release,
+          true,
+        )),
+      );
+      // The usage hub check, on the same build.
+      p.push(
+        ...(await runApp(
+          "managed",
+          trusted,
+          updaterKey,
+          managed,
+          undefined,
+          false,
+          false,
+          undefined,
+          undefined,
+          {},
+          false,
+          false,
+          false,
+          false,
+          false,
+          undefined,
+          release,
+          false,
+          true,
+        )),
+      );
       for (const suite of ["window", "window-no-tray", "privacy", "access"] as const)
         p.push(
           ...(await runApp(
@@ -1760,18 +1908,51 @@ async function main(): Promise<number> {
           )),
         );
       problems.push(...p.map((x) => `managed: ${x}`));
-      // The first start runs a stand-in that says where it listens, answers the app's readiness
-      // check (conn.rs ready), then exits; the next start, recovery's, runs the real core. The
-      // app runs the adopted copy of this script from an open file, so its mark is not beside $0.
+      // The first start runs a stand-in that serves on the socket the app hands it (-listen-fd),
+      // says where it listens, answers the app's readiness check (conn.rs ready), then exits; the
+      // next start, recovery's, runs the real core. The app runs the adopted copy of this script
+      // from an open file, so its mark is not beside $0.
       const early = join(prepared, "early-exit.sh");
-      const standIn = join(prepared, "early-exit.ts");
+      const standInSource = join(prepared, "early-exit.go");
+      const standIn = join(prepared, "early-exit");
       writeFileSync(
-        standIn,
-        `const s = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { setTimeout(() => process.exit(7), 500); return Response.json({}); } });\nconsole.error(\`pluxy: listening on http://127.0.0.1:\${s.port}\`);\n`,
+        standInSource,
+        `package main
+
+import (
+\t"fmt"
+\t"net"
+\t"net/http"
+\t"os"
+\t"strconv"
+\t"time"
+)
+
+func main() {
+\tfd := -1
+\tfor i, a := range os.Args {
+\t\tif a == "-listen-fd" && i+1 < len(os.Args) {
+\t\t\tfd, _ = strconv.Atoi(os.Args[i+1])
+\t\t}
+\t}
+\tln, err := net.FileListener(os.NewFile(uintptr(fd), "listen-fd"))
+\tif err != nil {
+\t\tfmt.Fprintln(os.Stderr, "stand-in:", err)
+\t\tos.Exit(2)
+\t}
+\tfmt.Fprintf(os.Stderr, "pluxy: listening on http://%s\\n", ln.Addr())
+\t_ = http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+\t\ttime.AfterFunc(500*time.Millisecond, func() { os.Exit(7) })
+\t\tw.Header().Set("Content-Type", "application/json")
+\t\t_, _ = w.Write([]byte("{}"))
+\t}))
+}
+`,
       );
+      run("go", ["build", "-o", standIn, standInSource], prepared);
       writeFileSync(
         early,
-        `#!/bin/sh\nif [ ! -e '${early}.ran' ]; then\n  : > '${early}.ran'\n  exec '${process.execPath}' '${standIn}'\nfi\nexec '${core}' "$@"\n`,
+        `#!/bin/sh\nif [ ! -e '${early}.ran' ]; then\n  : > '${early}.ran'\n  exec '${standIn}' "$@"\nfi\nexec '${core}' "$@"\n`,
         { mode: 0o755 },
       );
       const e = await runApp(

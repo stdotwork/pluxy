@@ -812,35 +812,38 @@ async fn key_entry(webview: Webview, change: Option<Change>) -> Result<KeyEntryR
         }
         // GTK must remain free to handle IPC/window close while the dialog is open.
         let input = key_entry::request(&app, target.summary.clone());
-        let mut c = st.conn.lock().unwrap();
         let mut error = None;
-        let status = match input {
+        // The key's check is a network call: `finish_key_unlocked` makes it without the lock.
+        let (status, mut connection) = match input {
             Ok(None) => {
                 *st.key_entry_after.lock().unwrap() =
                     Some(std::time::Instant::now() + std::time::Duration::from_secs(1));
-                "cancelled"
+                ("cancelled", st.conn.lock().unwrap().view())
             }
-            Ok(Some(input)) => match c.finish_key(target, &input.key, input.remember) {
-                Ok(()) => "signed_in",
-                Err(e) if e == "core refused this key" => {
-                    error = Some(e);
-                    "wrong_key"
-                }
-                Err(reason) => {
-                    error = Some(reason);
-                    "error"
-                }
-            },
+            Ok(Some(input)) => {
+                let (result, connection) =
+                    conn::finish_key_unlocked(&st.conn, target, &input.key, input.remember);
+                let status = match result {
+                    Ok(()) => "signed_in",
+                    Err(e) if e == "core refused this key" => {
+                        error = Some(e);
+                        "wrong_key"
+                    }
+                    Err(reason) => {
+                        error = Some(reason);
+                        "error"
+                    }
+                };
+                (status, connection)
+            }
             Err(e) => {
                 error = Some(e.into());
-                "error"
+                ("error", st.conn.lock().unwrap().view())
             }
         };
-        let mut connection = c.view();
         if error.is_some() {
             connection.error = error;
         }
-        drop(c);
         show_status(&app, &connection);
         KeyEntryResult { status, connection }
     })
@@ -2770,6 +2773,15 @@ pub fn run() {
                 .state::<App>()
                 .programs
                 .set_private(vault as std::sync::Arc<dyn program::Private>);
+            // Tools get the app's home and a data folder of their own, beside the vault.
+            #[cfg(target_os = "linux")]
+            handle
+                .state::<App>()
+                .programs
+                .set_tool_env(program::ToolEnv {
+                    home: app.path().home_dir()?,
+                    tools: app.path().app_data_dir()?.join("tools"),
+                });
             #[cfg(target_os = "linux")]
             if let Some(message) = handle
                 .state::<App>()
