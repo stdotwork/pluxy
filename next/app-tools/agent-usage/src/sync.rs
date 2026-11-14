@@ -2,10 +2,10 @@
 //! is; the host delivers the jobs' batches and ends to `ingest` between calls. A sync lists each
 //! registered parser's files (a `files` job), then reads the files whose revision changed (`read`
 //! jobs naming them, in chunks), and commits each file's rows when its last part arrives. Parts of
-//! a file not finished when its job ends are dropped. A job the hub has heard nothing of for
-//! `STALE_SECS` (its end may never come: the host delivers an end once, best-effort) is cancelled
-//! and counted as ended, so a run always ends. The run lives in memory: if the hub stops, the next
-//! sync starts over and skips every file already committed.
+//! a file not finished when its job ends are dropped, and the file counts as failed. A job the
+//! hub has heard nothing of for `STALE_SECS` (its end may never come: the host delivers an end
+//! once, best-effort) is cancelled and counted as ended, so a run always ends. The run lives in
+//! memory: if the hub stops, the next sync starts over and skips every file already committed.
 
 use crate::store::{Rows, Store};
 use pluxy_program::Error;
@@ -89,6 +89,8 @@ struct SourceRun {
 struct Staged {
     next: u64,
     rows: Rows,
+    /// Refused (and counted failed) before its last part: its later parts are taken and dropped.
+    refused: bool,
 }
 
 enum Kind {
@@ -239,8 +241,13 @@ impl Sync {
                     s.error = Some(format!(
                         "no word from the parser for {STALE_SECS} seconds: its job was cancelled"
                     ));
-                    if matches!(job.kind, Kind::Files) {
-                        s.phase = Phase::Failed;
+                    match &job.kind {
+                        Kind::Files => s.phase = Phase::Failed,
+                        Kind::Read {
+                            files,
+                            done,
+                            staged,
+                        } => s.failed += unread(files, done, staged),
                     }
                 }
             }
@@ -328,9 +335,17 @@ impl Sync {
                         source.phase = Phase::Failed;
                         source.error = Some(why());
                     }
-                    // Files of the job it did not finish keep their old rows and revision; their
-                    // staged parts go with the job.
-                    Kind::Read { .. } if end != "done" => source.error = Some(why()),
+                    // Files of the job it did not finish keep their old rows and revision, so the
+                    // next sync reads them again; their staged parts go with the job, and they
+                    // count as failed.
+                    Kind::Read {
+                        files,
+                        done,
+                        staged,
+                    } if end != "done" => {
+                        source.failed += unread(&files, &done, &staged);
+                        source.error = Some(why());
+                    }
                     Kind::Read { .. } => {}
                 }
                 Ok(json!({}))
@@ -427,6 +442,19 @@ fn advance(run: &mut Run, i: usize, host: &dyn Host, now: i64) {
     }
 }
 
+/// The files of a `read` job that ended before they were done, and not yet counted failed: those
+/// refused part way were counted when they were.
+fn unread(
+    files: &HashSet<String>,
+    done: &HashSet<String>,
+    staged: &HashMap<String, Staged>,
+) -> u64 {
+    files
+        .iter()
+        .filter(|f| !done.contains(*f) && !staged.get(*f).is_some_and(|s| s.refused))
+        .count() as u64
+}
+
 /// A `files` batch: `{files: [{file, size, mtime_ns}]}`.
 fn files_batch(source: &mut SourceRun, value: &Value) -> Result<Value, Error> {
     let files = value["files"]
@@ -483,7 +511,8 @@ fn listed(store: &mut Store, source: &mut SourceRun, output: &Value) -> Result<(
 
 /// A `read` batch: a part of a file's rows, committed with the file's last part, or the file's
 /// error (its old rows stay). A file with a row before 2000 or more than a day after now, or with
-/// more than `MAX_STAGED_ROWS` rows, fails (its old rows stay) and the job goes on.
+/// more than `MAX_STAGED_ROWS` rows, fails (its old rows stay) and the job goes on: its later
+/// parts are dropped.
 fn read_batch(
     store: &mut Store,
     source: &mut SourceRun,
@@ -499,9 +528,19 @@ fn read_batch(
         .ok_or_else(|| Error::invalid_request("a batch names a file the job does not read"))?
         .to_string();
     if value.get("error").is_some() {
-        staged.remove(&file);
+        // A file already refused was counted when it was.
+        let counted = staged.remove(&file).is_some_and(|s| s.refused);
         done.insert(file);
-        source.failed += 1;
+        if !counted {
+            source.failed += 1;
+        }
+        return Ok(json!({}));
+    }
+    if staged.get(&file).is_some_and(|s| s.refused) {
+        if value["last"] == true {
+            staged.remove(&file);
+            done.insert(file);
+        }
         return Ok(json!({}));
     }
     let bad = |what: &str| Error::invalid_request(format!("a read batch's {what} is wrong"));
@@ -533,10 +572,19 @@ fn read_batch(
         }
     }
     if let Some(why) = refused {
-        staged.remove(&file);
-        done.insert(file);
         source.failed += 1;
         source.error = Some(why);
+        if value["last"] == true {
+            staged.remove(&file);
+            done.insert(file);
+        } else {
+            // Its later parts are taken and dropped until the last: refusing them would end the
+            // whole job.
+            *entry = Staged {
+                refused: true,
+                ..Staged::default()
+            };
+        }
         return Ok(json!({}));
     }
     entry.next += 1;
