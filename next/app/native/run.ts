@@ -78,7 +78,8 @@
 // disabled mid-file; ingest is refused to everyone but the host and report to another package's page;
 // no hub or parser process is left when idle. The Codex parser (next/app-tools/usage-codex) then reads
 // a hand-written Codex home in the run's HOME the same way, with prompt canaries kept out of every
-// report, the hub's store and the app's output.
+// report, the hub's store and the app's output; and the Claude Code parser (next/app-tools/usage-claude)
+// reads a hand-written Claude Code home in the run's HOME beside it, with the same canary checks.
 // The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
@@ -858,7 +859,7 @@ async function runApp(
           reader
             ? "the session reader check's canary appeared on stdout/stderr"
             : usage
-              ? "the usage check's Codex prompt canary appeared on stdout/stderr"
+              ? "the usage check's Codex or Claude Code canary appeared on stdout/stderr"
               : "the vault check's key or backup canary appeared on stdout/stderr",
         );
         return;
@@ -1636,7 +1637,7 @@ async function main(): Promise<number> {
   // and its fixture parser, each when its folder is there.
   if (existsSync(join(appTools, "Cargo.toml"))) {
     run("cargo", ["build", "--locked", "-p", "codex-sessions", "--target-dir", appToolsTarget], appTools);
-    const usageTools = ["agent-usage", "usage-fixture", "usage-codex"].filter((t) =>
+    const usageTools = ["agent-usage", "usage-fixture", "usage-codex", "usage-claude"].filter((t) =>
       existsSync(join(appTools, t, "Cargo.toml")),
     );
     if (usageTools.length > 0) {

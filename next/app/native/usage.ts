@@ -10,6 +10,12 @@
 // prompt, reply, working folder and key canaries in the lines the parser must not carry. Its default
 // roots are used, so the check sets none.
 //
+// The Claude Code parser check (usage-claude, packed the same way) reads a Claude Code home written here
+// by hand in Claude Code's transcript format, in the run's HOME: an original session, a branch of it
+// that copies its history, and a session of another project; one response's content blocks repeat its
+// message ID; prompt, reply, thinking, tool result, summary and working folder canaries, and the raw
+// message and request IDs, must not reach a report, the store or the app's output.
+//
 // Each test archive adds one page to its package's manifest: routing.ts's relay page (`page`), which
 // sends the calls the check posts it on its channel. The hub's own page stays as it is; the parser has
 // no page of its own. The parser's test archive also imports the peer's `summary`, so its `relay` has
@@ -49,7 +55,8 @@ export interface Usage {
   registries: { name: string; url: string }[];
   /** PLUXY_TEST_TRUST_NONCE for the app: the marker's nonce. */
   nonce: string;
-  /** Strings from the Codex home's lines that must not reach any report, the store or the app's output. */
+  /** Strings from the Codex and Claude Code homes' lines that must not reach any report, the store or
+   * the app's output. */
   canaries: string[];
 }
 
@@ -462,6 +469,401 @@ function codexExpected() {
   };
 }
 
+// ---- The Claude Code home: session transcripts in Claude Code's format (one line per content block,
+// each repeating its response's message ID and usage), times UTC (local = UTC + 2 h).
+const L_ONE = "CANARY-CLAUDE-PROMPT-ONE-4b2e";
+const L_TWO = "CANARY-CLAUDE-PROMPT-TWO-e5b8";
+const L_THREE = "CANARY-CLAUDE-PROMPT-THREE-1f94";
+const L_FOUR = "CANARY-CLAUDE-PROMPT-FOUR-58c1";
+const L_REPLY = "CANARY-CLAUDE-REPLY-9a61";
+const L_THINK = "CANARY-CLAUDE-THINKING-0c3f";
+const L_TOOL = "CANARY-CLAUDE-TOOL-RESULT-77d0";
+const L_SUMMARY = "CANARY-CLAUDE-SUMMARY-a3c2";
+const L_CWD = "CANARY-CLAUDE-CWD-6d1b";
+// Raw message and request IDs: the parser sends only a hash of them.
+const M_A1 = "msg_01CANARYa1Hq7Vb2Lk";
+const M_A2 = "msg_01CANARYa2Rt5Wm9Pz";
+const M_B1 = "msg_01CANARYb1Xc3Nd8Qs";
+const M_B2 = "msg_01CANARYb2Ju6Fe4Ty";
+const M_C1 = "msg_01CANARYc1Gw2Kp7Mr";
+const R_A1 = "req_011CANARYa1Zx8Bn3Vq";
+const R_A2 = "req_011CANARYa2Lm4Cs9Wd";
+const R_B1 = "req_011CANARYb1Pq6Dt2Xe";
+const R_B2 = "req_011CANARYb2Hy5Fu7Rg";
+const R_C1 = "req_011CANARYc1Kj3Gv8Sh";
+const CLAUDE_CANARIES = [
+  L_ONE,
+  L_TWO,
+  L_THREE,
+  L_FOUR,
+  L_REPLY,
+  L_THINK,
+  L_TOOL,
+  L_SUMMARY,
+  L_CWD,
+  M_A1,
+  M_A2,
+  M_B1,
+  M_B2,
+  M_C1,
+  R_A1,
+  R_A2,
+  R_B1,
+  R_B2,
+  R_C1,
+];
+const CLAUDE_ID = "pluxy/usage-claude";
+/** The original session, its branch (`/branch` copies the history so far), and one of another project. */
+const SA = "5a1f0c3e-2b4d-4e6f-8a9b-0c1d2e3f4a01";
+const SB = "5a1f0c3e-2b4d-4e6f-8a9b-0c1d2e3f4a02";
+const SC = "5a1f0c3e-2b4d-4e6f-8a9b-0c1d2e3f4a03";
+/** The working folders; Claude Code names a project's folder after its working folder. */
+const CWD_ONE = `/home/${L_CWD}/proj`;
+const CWD_TWO = "/home/user/notes";
+const project = (cwd: string) => cwd.replace(/[^A-Za-z0-9]/g, "-");
+
+const claudeUser = (session: string, cwd: string, at: string, content: unknown) =>
+  JSON.stringify({
+    parentUuid: null,
+    isSidechain: false,
+    userType: "external",
+    cwd,
+    sessionId: session,
+    version: "2.1.30",
+    gitBranch: "main",
+    type: "user",
+    message: { role: "user", content },
+    uuid: `u-${session.slice(-2)}-${at}`,
+    timestamp: at,
+  });
+/** One content block of a response; usage [input, cache write, cache read, output]. */
+const claudeBlock = (
+  session: string,
+  cwd: string,
+  at: string,
+  id: string,
+  request: string | null,
+  model: string,
+  block: object,
+  u: [number, number, number, number],
+) =>
+  JSON.stringify({
+    parentUuid: null,
+    isSidechain: false,
+    userType: "external",
+    cwd,
+    sessionId: session,
+    version: "2.1.30",
+    gitBranch: "main",
+    message: {
+      id,
+      type: "message",
+      role: "assistant",
+      model,
+      content: [block],
+      stop_reason: null,
+      stop_sequence: null,
+      usage: {
+        input_tokens: u[0],
+        cache_creation_input_tokens: u[1],
+        cache_read_input_tokens: u[2],
+        output_tokens: u[3],
+        cache_creation: { ephemeral_5m_input_tokens: u[1], ephemeral_1h_input_tokens: 0 },
+        service_tier: "standard",
+      },
+    },
+    ...(request ? { requestId: request } : {}),
+    type: "assistant",
+    uuid: `a-${session.slice(-2)}-${at}`,
+    timestamp: at,
+  });
+const TEXT = { type: "text", text: L_REPLY };
+const TOOL_USE = { type: "tool_use", id: "toolu_01", name: "Read", input: { file_path: `${CWD_ONE}/a.txt` } };
+
+/** The original's history up to the branch point, as session s writes it. */
+const history = (s: string) => [
+  claudeUser(s, CWD_ONE, "2026-11-09T21:50:00.000Z", L_ONE),
+  // One response, three content blocks, each line repeating its message ID and usage (the last with
+  // the final output count): 23:55 local Monday 11-09, counted once as the last line: input 10, output
+  // 60, cache read 1,000, cache write 200, total 1,270.
+  claudeBlock(
+    s,
+    CWD_ONE,
+    "2026-11-09T21:55:00.000Z",
+    M_A1,
+    R_A1,
+    "claude-sonnet-4-5",
+    { type: "thinking", thinking: L_THINK, signature: "c2ln" },
+    [10, 200, 1000, 50],
+  ),
+  claudeBlock(
+    s,
+    CWD_ONE,
+    "2026-11-09T21:55:01.000Z",
+    M_A1,
+    R_A1,
+    "claude-sonnet-4-5",
+    TEXT,
+    [10, 200, 1000, 50],
+  ),
+  claudeBlock(
+    s,
+    CWD_ONE,
+    "2026-11-09T21:55:02.000Z",
+    M_A1,
+    R_A1,
+    "claude-sonnet-4-5",
+    TOOL_USE,
+    [10, 200, 1000, 60],
+  ),
+  claudeUser(s, CWD_ONE, "2026-11-09T22:10:00.000Z", [
+    { type: "tool_result", tool_use_id: "toolu_01", content: L_TOOL },
+  ]),
+  // 22:20 UTC on 11-09 is 00:20 local Tuesday 11-10 (and 17:20 on 11-09 at -05:00): input 5, output
+  // 40, cache read 1,500, total 1,545.
+  claudeBlock(
+    s,
+    CWD_ONE,
+    "2026-11-09T22:20:00.000Z",
+    M_A2,
+    R_A2,
+    "claude-sonnet-4-5",
+    TEXT,
+    [5, 0, 1500, 40],
+  ),
+];
+const CLAUDE_A = [
+  ...history(SA),
+  // A synthetic message (Claude Code's own, no request): no model, zero tokens, one sample, 00:25
+  // local 11-10 (17:25 on 11-09 at -05:00).
+  claudeBlock(
+    SA,
+    CWD_ONE,
+    "2026-11-09T22:25:00.000Z",
+    "6c0e5f2a-1b3d-4c5e-8f70-a1b2c3d4e5f6",
+    null,
+    "<synthetic>",
+    { type: "text", text: "No response requested." },
+    [0, 0, 0, 0],
+  ),
+  JSON.stringify({ type: "summary", summary: L_SUMMARY, leafUuid: `a-01-2026-11-09T22:20:00.000Z` }),
+];
+/** The branch: the original's history copied (with the branch's session ID), then its own. */
+const CLAUDE_B = [
+  ...history(SB),
+  claudeUser(SB, CWD_ONE, "2026-11-10T09:00:00.000Z", L_THREE),
+  // 11:01 local 11-10, two blocks: input 20, output 100, cache read 2,000, cache write 300, total 2,420.
+  claudeBlock(
+    SB,
+    CWD_ONE,
+    "2026-11-10T09:01:00.000Z",
+    M_B1,
+    R_B1,
+    "claude-opus-4-5",
+    TEXT,
+    [20, 300, 2000, 100],
+  ),
+  claudeBlock(
+    SB,
+    CWD_ONE,
+    "2026-11-10T09:01:01.000Z",
+    M_B1,
+    R_B1,
+    "claude-opus-4-5",
+    TOOL_USE,
+    [20, 300, 2000, 100],
+  ),
+];
+/** Appended to the branch before the third sync: 14:00 local 11-10, input 1, output 9, cache read 3,000,
+ * cache write 10, total 3,020. */
+const CLAUDE_B_APPEND = [
+  claudeUser(SB, CWD_ONE, "2026-11-10T11:59:00.000Z", L_FOUR),
+  claudeBlock(SB, CWD_ONE, "2026-11-10T12:00:00.000Z", M_B2, R_B2, "claude-opus-4-5", TEXT, [1, 10, 3000, 9]),
+];
+const CLAUDE_C = [
+  claudeUser(SC, CWD_TWO, "2026-11-10T11:29:00.000Z", L_TWO),
+  // 13:30 local 11-10: input 100, output 200, total 300.
+  claudeBlock(
+    SC,
+    CWD_TWO,
+    "2026-11-10T11:30:00.000Z",
+    M_C1,
+    R_C1,
+    "claude-haiku-4-5",
+    TEXT,
+    [100, 0, 0, 200],
+  ),
+];
+
+/** Makes the Claude Code home in home/.claude; gives the write the check does later. */
+function claudeHome(home: string) {
+  const one = join(home, ".claude", "projects", project(CWD_ONE));
+  const two = join(home, ".claude", "projects", project(CWD_TWO));
+  mkdirSync(one, { recursive: true });
+  mkdirSync(two, { recursive: true });
+  writeFileSync(join(one, `${SA}.jsonl`), `${CLAUDE_A.join("\n")}\n`);
+  writeFileSync(join(one, `${SB}.jsonl`), `${CLAUDE_B.join("\n")}\n`);
+  writeFileSync(join(two, `${SC}.jsonl`), `${CLAUDE_C.join("\n")}\n`);
+  return { append: { path: join(one, `${SB}.jsonl`), lines: CLAUDE_B_APPEND } };
+}
+
+/** What `report` must answer with the Claude Code parser beside the Codex one (in its last state),
+ * by hand, before and after the branch grows. */
+function claudeExpected() {
+  const fixture = { id: PARSER_ID, label: "Fixture", status: "archived", total: 1547, active_days: 4 };
+  const codex = { id: CODEX_ID, label: "Codex", status: "active", total: 5930, active_days: 2 };
+  const claude = (total: number) => ({
+    id: CLAUDE_ID,
+    label: "Claude Code",
+    status: "active",
+    total,
+    active_days: 2,
+  });
+  const zero = [0, 1, 2, 3, 4].map(() => t(Z));
+  const calendar = (nonzero: Record<string, number>) => ({ start: "2025-11-10", days: 366, nonzero });
+  const input = (sources: string[], offsets: number[][]) => ({
+    range: "7d",
+    granularity: "day",
+    sources,
+    offsets,
+    now: NOW,
+  });
+  const out = (o: object) => ({
+    range: "7d",
+    granularity: "day",
+    buckets: DAYS,
+    previous: t(Z),
+    active_days: 2,
+    ...o,
+  });
+  return {
+    first: [
+      {
+        name: "Claude Code alone",
+        input: input([CLAUDE_ID], OFFSETS),
+        output: out({
+          // 11-09: A1. 11-10: A2, the synthetic message, B1, C1.
+          totals: t([135, 400, 4500, 500, 0, 5535, 5]),
+          series: [...zero, t([10, 60, 1000, 200, 0, 1270, 1]), t([125, 340, 3500, 300, 0, 4265, 4])],
+          by_source: { keys: [CLAUDE_ID], values: [[0], [0], [0], [0], [0], [1270], [4265]] },
+          by_model: {
+            keys: ["claude-sonnet-4-5", "claude-opus-4-5", "claude-haiku-4-5"],
+            values: [...[0, 1, 2, 3, 4].map(() => [0, 0, 0]), [1270, 0, 0], [1545, 2420, 300]],
+          },
+          models: [
+            { model: "claude-sonnet-4-5", total: 2815 },
+            { model: "claude-opus-4-5", total: 2420 },
+            { model: "claude-haiku-4-5", total: 300 },
+          ],
+          sources: [codex, claude(5535), fixture],
+          calendar: calendar({ "2026-11-09": 1270, "2026-11-10": 4265 }),
+          hours: { "0:23": 1270, "1:0": 1545, "1:11": 2420, "1:13": 300 },
+        }),
+      },
+      {
+        name: "Claude Code and Codex",
+        input: input([CLAUDE_ID, CODEX_ID], OFFSETS),
+        output: out({
+          totals: t([3835, 1330, 5800, 500, 210, 11465, 12]),
+          series: [...zero, t([810, 360, 1200, 200, 50, 2570, 3]), t([3025, 970, 4600, 300, 160, 8895, 9])],
+          by_source: {
+            keys: [CODEX_ID, CLAUDE_ID],
+            values: [
+              [0, 0],
+              [0, 0],
+              [0, 0],
+              [0, 0],
+              [0, 0],
+              [1300, 1270],
+              [4630, 4265],
+            ],
+          },
+          by_model: {
+            keys: [
+              "gpt-5.5-codex",
+              "claude-sonnet-4-5",
+              "claude-opus-4-5",
+              "gpt-5.5-mini",
+              "gpt-5.5",
+              "claude-haiku-4-5",
+            ],
+            values: [
+              ...[0, 1, 2, 3, 4].map(() => [0, 0, 0, 0, 0, 0]),
+              [1300, 1270, 0, 0, 0, 0],
+              [2480, 1545, 2420, 1700, 450, 300],
+            ],
+          },
+          models: [
+            { model: "gpt-5.5-codex", total: 3780 },
+            { model: "claude-sonnet-4-5", total: 2815 },
+            { model: "claude-opus-4-5", total: 2420 },
+            { model: "gpt-5.5-mini", total: 1700 },
+            { model: "gpt-5.5", total: 450 },
+            { model: "claude-haiku-4-5", total: 300 },
+          ],
+          sources: [codex, claude(5535), fixture],
+          calendar: calendar({ "2026-11-09": 2570, "2026-11-10": 8895 }),
+          hours: {
+            "0:23": 2570,
+            "1:0": 3345,
+            "1:10": 450,
+            "1:11": 3520,
+            "1:12": 680,
+            "1:13": 300,
+            "1:14": 600,
+          },
+        }),
+      },
+      {
+        // At -05:00 the same instant is 08:30 on 11-10: A2 and the synthetic message fall on 11-09.
+        name: "Claude Code at -05:00",
+        input: input([CLAUDE_ID], [[0, -300]]),
+        output: out({
+          totals: t([135, 400, 4500, 500, 0, 5535, 5]),
+          series: [...zero, t([15, 100, 2500, 200, 0, 2815, 3]), t([120, 300, 2000, 300, 0, 2720, 2])],
+          by_source: { keys: [CLAUDE_ID], values: [[0], [0], [0], [0], [0], [2815], [2720]] },
+          by_model: {
+            keys: ["claude-sonnet-4-5", "claude-opus-4-5", "claude-haiku-4-5"],
+            values: [...[0, 1, 2, 3, 4].map(() => [0, 0, 0]), [2815, 0, 0], [0, 2420, 300]],
+          },
+          models: [
+            { model: "claude-sonnet-4-5", total: 2815 },
+            { model: "claude-opus-4-5", total: 2420 },
+            { model: "claude-haiku-4-5", total: 300 },
+          ],
+          // Every other source's records fall in the same seven local days at -05:00.
+          sources: [codex, claude(5535), fixture],
+          calendar: calendar({ "2026-11-09": 2815, "2026-11-10": 2720 }),
+          hours: { "0:16": 1270, "0:17": 1545, "1:4": 2420, "1:6": 300 },
+        }),
+      },
+    ],
+    after: [
+      {
+        name: "Claude Code alone, the branch grown",
+        input: input([CLAUDE_ID], OFFSETS),
+        output: out({
+          totals: t([136, 409, 7500, 510, 0, 8555, 6]),
+          series: [...zero, t([10, 60, 1000, 200, 0, 1270, 1]), t([126, 349, 6500, 310, 0, 7285, 5])],
+          by_source: { keys: [CLAUDE_ID], values: [[0], [0], [0], [0], [0], [1270], [7285]] },
+          by_model: {
+            keys: ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"],
+            values: [...[0, 1, 2, 3, 4].map(() => [0, 0, 0]), [0, 1270, 0], [5440, 1545, 300]],
+          },
+          models: [
+            { model: "claude-opus-4-5", total: 5440 },
+            { model: "claude-sonnet-4-5", total: 2815 },
+            { model: "claude-haiku-4-5", total: 300 },
+          ],
+          sources: [claude(8555), codex, fixture],
+          calendar: calendar({ "2026-11-09": 1270, "2026-11-10": 7285 }),
+          hours: { "0:23": 1270, "1:0": 1545, "1:11": 2420, "1:13": 300, "1:14": 3020 },
+        }),
+      },
+    ],
+  };
+}
+
 /** Packs and signs tool name from tools (next/app-tools) with program, the relay page and any imports
  * added; undefined when the tool was not built. */
 function pack(
@@ -536,9 +938,10 @@ export function buildUsageFixtures(
   ]);
   const peer = packPeer(root, peerProgram, publicKey, privateKey);
   const codex = pack(root, tools, "usage-codex", join(target, "usage-codex"), publicKey, privateKey);
+  const claude = pack(root, tools, "usage-claude", join(target, "usage-claude"), publicKey, privateKey);
   const curated = join(root, "curated.json");
   const packages: Record<string, object> = {};
-  for (const p of [hub, parser, peer, codex]) {
+  for (const p of [hub, parser, peer, codex, claude]) {
     if (p) packages[p.id] = { releases: [{ version: p.version, artifacts: { [platform()]: p.entry } }] };
   }
   writeFileSync(curated, JSON.stringify({ registry_version: 0, packages }));
@@ -547,6 +950,7 @@ export function buildUsageFixtures(
   writeFileSync(join(usageRoot, "a", "2026-11.jsonl"), `${A.join("\n")}\n`);
   writeFileSync(join(usageRoot, "b.jsonl"), `${B.join("\n")}\n`);
   const codexWrites = codexHome(home);
+  const claudeWrites = claudeHome(home);
   writeFileSync(
     join(root, "expect.json"),
     JSON.stringify({
@@ -560,18 +964,21 @@ export function buildUsageFixtures(
         [PARSER_ID]: parser?.version ?? "0.1.0",
         [PEER_ID]: peer?.version ?? "1.0.0",
         [CODEX_ID]: codex?.version ?? "0.1.0",
+        [CLAUDE_ID]: claude?.version ?? "0.1.0",
       },
       sha256: {
         [HUB_ID]: hub?.sha256 ?? null,
         [PARSER_ID]: parser?.sha256 ?? null,
         [PEER_ID]: peer?.sha256 ?? null,
         [CODEX_ID]: codex?.sha256 ?? null,
+        [CLAUDE_ID]: claude?.sha256 ?? null,
       },
       bin: {
         [HUB_ID]: hub?.bin ?? "bin/agent-usage",
         [PARSER_ID]: parser?.bin ?? "bin/usage-fixture",
         [PEER_ID]: peer?.bin ?? "bin/tool",
         [CODEX_ID]: codex?.bin ?? "bin/usage-codex",
+        [CLAUDE_ID]: claude?.bin ?? "bin/usage-claude",
       },
       root: usageRoot,
       writes: {
@@ -599,8 +1006,28 @@ export function buildUsageFixtures(
         },
         reports: codexExpected(),
       },
+      // The Claude Code parser, enabled after the Codex one: its home is in the run's HOME, its root
+      // defaults.
+      claude: {
+        id: CLAUDE_ID,
+        writes: claudeWrites,
+        canaries: CLAUDE_CANARIES,
+        // Each sync's counts for the source (the original, its branch, the other project's session),
+        // and the Codex source's in the same syncs.
+        syncs: {
+          first: { listed: 3, changed: 3, read: 3, failed: 0 },
+          repeat: { listed: 3, changed: 0, read: 0, failed: 0 },
+          after: { listed: 3, changed: 1, read: 1, failed: 0 },
+          codex: { listed: 4, changed: 0, read: 0, failed: 0 },
+        },
+        reports: claudeExpected(),
+      },
     }),
   );
   const nonce = writeTrustProfile(home, [curated], publicKey);
-  return { registries: [{ name: "curated", url: curated }], nonce, canaries: CODEX_CANARIES };
+  return {
+    registries: [{ name: "curated", url: curated }],
+    nonce,
+    canaries: [...CODEX_CANARIES, ...CLAUDE_CANARIES],
+  };
 }
