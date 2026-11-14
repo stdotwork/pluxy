@@ -45,6 +45,8 @@ pub mod release_config;
 mod release_native;
 #[cfg(target_os = "linux")]
 pub mod route;
+#[cfg(target_os = "linux")]
+pub mod spawn;
 mod startup;
 pub mod trust;
 #[cfg(all(target_os = "linux", feature = "native-test"))]
@@ -117,6 +119,9 @@ struct App {
     /// (`vault.rs`).
     #[cfg(target_os = "linux")]
     vault: std::sync::Arc<vault::Vault>,
+    /// The managed runtimes tools started through the host's spawn service (`spawn.rs`).
+    #[cfg(target_os = "linux")]
+    runtimes: spawn::Runtimes,
     status: Mutex<Option<MenuItem<Wry>>>,
     /// Start, Stop and Restart, in that order.
     core_actions: Mutex<Vec<MenuItem<Wry>>>,
@@ -441,10 +446,26 @@ fn raise_window(app: &AppHandle) -> bool {
     queued.is_ok() && rx.recv_timeout(std::time::Duration::from_secs(15)) == Ok(true)
 }
 
+/// Marks the app as quitting and says whether this call is the one that did. A later quit finds
+/// it marked and does nothing: an app handing over to a new version (`updater::restart_into`)
+/// is quitting already, and exiting under its supervisor would leave a broken update unrolled.
+fn begin_quit(quitting: &AtomicBool) -> bool {
+    !quitting.swap(true, Ordering::SeqCst)
+}
+
+/// Whether a tray item acts now. Once the app is quitting, Open, Quit and Remembered launches do
+/// nothing: they would reopen a window over stopped tools or end the process that waits for a new
+/// version to accept itself. The core items refuse for themselves (`tray_action`).
+fn tray_item_acts(id: &str, quitting: bool) -> bool {
+    !quitting || !matches!(id, "open" | "quit" | "launch-settings")
+}
+
 /// Stops the app's own core, if it runs one, and exits. A local or remote core keeps running.
 fn quit(app: &AppHandle) {
     let st = app.state::<App>();
-    st.quitting.store(true, Ordering::SeqCst);
+    if !begin_quit(&st.quitting) {
+        return;
+    }
     remember_window(app);
     #[cfg(target_os = "linux")]
     st.confirmations.lock().unwrap().invalidate();
@@ -454,6 +475,9 @@ fn quit(app: &AppHandle) {
     tauri::async_runtime::spawn_blocking(move || {
         #[cfg(target_os = "linux")]
         app.state::<App>().programs.stop_all();
+        // The app's managed runtimes stop with it; detached launches are not its own.
+        #[cfg(target_os = "linux")]
+        app.state::<App>().runtimes.stop_all();
         app.state::<App>().conn.lock().unwrap().stop_core();
         app.exit(0);
     });
@@ -556,17 +580,13 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let mut tray = TrayIconBuilder::with_id("pluxy")
         .tooltip("pluxy")
         .menu(&menu)
-        .on_menu_event(|app, e| match e.id().as_ref() {
-            "open" => {
-                let _ = open_window(app);
+        .on_menu_event(|app, e| {
+            if tray_item_acts(
+                e.id().as_ref(),
+                app.state::<App>().quitting.load(Ordering::SeqCst),
+            ) {
+                tray_menu(app, e.id().as_ref());
             }
-            "core-start" | "core-stop" | "core-restart" => tray_action(app, e.id().as_ref()),
-            "quit" => quit(app),
-            #[cfg(target_os = "linux")]
-            "launch-settings" => {
-                let _ = confirmation::settings(app);
-            }
-            _ => {}
         })
         .on_tray_icon_event(|tray, e| {
             if let TrayIconEvent::Click {
@@ -575,7 +595,10 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 ..
             } = e
             {
-                let _ = open_window(tray.app_handle());
+                let app = tray.app_handle();
+                if tray_item_acts("open", app.state::<App>().quitting.load(Ordering::SeqCst)) {
+                    let _ = open_window(app);
+                }
             }
         });
     if let Some(icon) = app.default_window_icon() {
@@ -585,6 +608,21 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     *app.state::<App>().status.lock().unwrap() = Some(status);
     *app.state::<App>().core_actions.lock().unwrap() = vec![start, stop, restart];
     Ok(())
+}
+
+fn tray_menu(app: &AppHandle, id: &str) {
+    match id {
+        "open" => {
+            let _ = open_window(app);
+        }
+        "core-start" | "core-stop" | "core-restart" => tray_action(app, id),
+        "quit" => quit(app),
+        #[cfg(target_os = "linux")]
+        "launch-settings" => {
+            let _ = confirmation::settings(app);
+        }
+        _ => {}
+    }
 }
 
 fn window_view(app: &AppHandle) -> window::View {
@@ -1339,6 +1377,14 @@ fn device_changed_as(
     let (labels, view, mut left) = {
         let mut catalog = st.device.lock().unwrap();
         f(&mut catalog)?;
+        // Disabled or removed: nothing could control its managed runtimes any more. They are
+        // retired under the catalog's lock, so a later enable reopens it only after this.
+        #[cfg(target_os = "linux")]
+        match catalog.get(id) {
+            None => st.runtimes.close(id, true),
+            Some(p) if !p.enabled => st.runtimes.close(id, false),
+            Some(_) => st.runtimes.reopen(id),
+        }
         let mut pages = st.pages.lock().unwrap();
         let labels = pages.device_labels(id);
         for l in &labels {
@@ -2214,6 +2260,8 @@ fn program_status(webview: Webview, package: String) -> Result<Value, String> {
             Ok(j) => status["journals"] = serde_json::to_value(j).map_err(|e| e.to_string())?,
             Err(e) => status["journals_error"] = Value::from(e),
         }
+        // Its managed runtimes: running, ended, or left by a run of the app that did not stop.
+        status["runtimes"] = Value::from(st.runtimes.list(&package));
         Ok(status)
     }
     #[cfg(not(target_os = "linux"))]
@@ -2557,6 +2605,10 @@ fn page_scheme(
 }
 
 pub fn run() {
+    // The launch environment comes from the app's environment as it starts, before anything
+    // changes it; the app's own core file limit is lowered then too (`spawn::capture`).
+    #[cfg(target_os = "linux")]
+    spawn::capture();
     std::hint::black_box(&PLUXY_BUILD_RECEIPT);
     #[cfg(any(feature = "native-test", feature = "artifact-test-trust"))]
     std::hint::black_box(&PLUXY_TEST_BUILD);
@@ -2780,6 +2832,14 @@ pub fn run() {
                 routes: route::Routes::default(),
                 #[cfg(target_os = "linux")]
                 vault: std::sync::Arc::clone(&vault),
+                #[cfg(target_os = "linux")]
+                runtimes: spawn::Runtimes::open(
+                    Some(app.path().app_data_dir()?.join("runtimes.json")),
+                    {
+                        let vault = std::sync::Arc::clone(&vault);
+                        Box::new(move |id| vault.value(id))
+                    },
+                ),
                 status: Mutex::new(None),
                 core_actions: Mutex::new(Vec::new()),
                 shown: Mutex::new(Shown::default()),
@@ -2806,6 +2866,12 @@ pub fn run() {
                 .state::<App>()
                 .programs
                 .set_private(vault as std::sync::Arc<dyn program::Private>);
+            // And their spawn and runtime frames, to the host's spawn service.
+            #[cfg(target_os = "linux")]
+            handle
+                .state::<App>()
+                .programs
+                .set_spawner(route::spawner(handle.clone()));
             // Tools get the app's home and a data folder of their own, beside the vault.
             #[cfg(target_os = "linux")]
             handle
@@ -2921,6 +2987,8 @@ pub fn run() {
             if let Some(st) = app.try_state::<App>() {
                 #[cfg(target_os = "linux")]
                 st.programs.stop_all();
+                #[cfg(target_os = "linux")]
+                st.runtimes.stop_all();
                 st.conn.lock().unwrap().stop_core();
             }
             if let Some(i) = app.try_state::<instance::Instance>() {
@@ -2979,6 +3047,22 @@ mod tests {
             assert_eq!(tray_presentation(&v, false).1, [false; 3]);
             assert_eq!(tray_presentation(&v, true).1, [false; 3]);
         }
+    }
+
+    // While an install hands over to the new version the app is quitting: a tray Quit would exit
+    // the process that waits for the new version and could roll it back, and Open would show a
+    // window over stopped tools.
+    #[test]
+    fn a_quitting_app_ignores_tray_open_quit_and_launches() {
+        for id in ["open", "quit", "launch-settings"] {
+            assert!(tray_item_acts(id, false), "{id}");
+            assert!(!tray_item_acts(id, true), "{id} while quitting");
+        }
+        // The core items decide for themselves, and unknown ids were always ignored.
+        assert!(tray_item_acts("core-start", true));
+        let quitting = AtomicBool::new(false);
+        assert!(begin_quit(&quitting));
+        assert!(!begin_quit(&quitting), "a second quit must not run");
     }
 
     #[test]
