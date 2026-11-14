@@ -182,9 +182,52 @@ impl Parser for Lines {
     }
 }
 
+/// A streamed parser of `.log` files: a row of the lines it was given (hour 3600, model `lines`,
+/// every line one sample, its input the line's length) and one of the lines it skipped for being
+/// too long (model `skipped`, input the count).
+struct Streamed;
+
+impl Parser for Streamed {
+    fn label(&self) -> &str {
+        "Streamed"
+    }
+    fn default_roots(&self, home: &Path) -> Vec<PathBuf> {
+        vec![home.join(".streamed")]
+    }
+    fn wanted(&self, path: &Path) -> bool {
+        log(path)
+    }
+    fn streamed(&self) -> bool {
+        true
+    }
+    fn parse_lines(&self, lines: &mut LineReader, sink: &mut Sink) -> Result<(), Error> {
+        let mut seen = Tokens::default();
+        while let Some(line) = lines.next_line()? {
+            seen.add(&Tokens {
+                input: line.len() as u64,
+                total: line.len() as u64,
+                samples: 1,
+                ..Tokens::default()
+            });
+        }
+        sink.row(3600, "lines", &seen)?;
+        let skipped = lines.skipped();
+        let skipped = Tokens {
+            input: skipped,
+            total: skipped,
+            samples: skipped,
+            ..Tokens::default()
+        };
+        sink.row(3600, "skipped", &skipped)
+    }
+}
+
 struct Producer;
 impl Handler for Producer {
     fn call(&self, call: &Call) -> Result<Value, Error> {
+        if call.input["streamed"] == true {
+            return produce(call, &Streamed);
+        }
         produce(call, &Lines)
     }
 }
@@ -325,6 +368,77 @@ fn a_big_file_is_split_into_parts_within_the_batch_limit() {
         .map(|b| b["rows"].as_array().unwrap().len())
         .sum();
     assert_eq!(rows, 2000);
+    assert_eq!(end["output"], json!({"read": 1, "failed": 0}));
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn a_line_reader_gives_lines_and_skips_and_counts_the_too_long() {
+    let mut data = b"a\r\n\nbc\n".to_vec();
+    data.extend(vec![b'x'; MAX_LINE as usize + 1]);
+    data.extend(b"\nok\n");
+    data.extend(vec![b'y'; MAX_LINE as usize]);
+    data.push(b'\n');
+    data.extend(vec![b'z'; MAX_LINE as usize + 5]);
+    data.extend(b"\nlast");
+    let mut lines = LineReader::new(&data[..]);
+    let mut got = Vec::new();
+    while let Some(l) = lines.next_line().unwrap() {
+        got.push(l.len());
+    }
+    // The line of exactly MAX_LINE bytes is read, the two longer ones skipped; the last line has
+    // no line end.
+    assert_eq!(got, vec![2, 0, 2, 2, MAX_LINE as usize, 4]);
+    assert_eq!(lines.skipped(), 2);
+    // A file that ends inside a too-long line ends there.
+    let data = vec![b'q'; MAX_LINE as usize + 10];
+    let mut lines = LineReader::new(&data[..]);
+    assert!(lines.next_line().unwrap().is_none());
+    assert_eq!(lines.skipped(), 1);
+}
+
+#[test]
+fn a_streamed_parser_reads_a_file_over_the_document_limit_and_counts_a_long_line() {
+    use std::io::Write;
+    let d = folder("streamed");
+    let root = d.join("root");
+    let a = root.join("a.log");
+    std::fs::create_dir_all(&root).unwrap();
+    // Over 16 MiB of small lines, with one over-long line between them.
+    let small = "0123456789\n";
+    let count = (MAX_DOCUMENT as usize / small.len()) + 1000;
+    let mut f = std::io::BufWriter::new(std::fs::File::create(&a).unwrap());
+    for _ in 0..count {
+        f.write_all(small.as_bytes()).unwrap();
+    }
+    f.write_all(&vec![b'x'; MAX_LINE as usize + 1]).unwrap();
+    f.write_all(b"\n").unwrap();
+    f.write_all(small.as_bytes()).unwrap();
+    f.flush().unwrap();
+    drop(f);
+    let size = std::fs::metadata(&a).unwrap().len();
+    assert!(size > MAX_DOCUMENT);
+    // Read whole it is refused; streamed it is read.
+    assert!(read_file(&a).unwrap_err().contains("larger"));
+    let (batches, end) =
+        job(json!({"mode": "read", "roots": [root], "files": [a], "streamed": true}));
+    let rows: Vec<&Value> = batches
+        .iter()
+        .flat_map(|b| b["rows"].as_array().unwrap())
+        .collect();
+    let n = count as u64 + 1;
+    assert_eq!(
+        rows.iter()
+            .map(|r| (
+                r["model"].as_str().unwrap(),
+                r["input"].as_u64().unwrap(),
+                r["samples"].as_u64().unwrap()
+            ))
+            .collect::<Vec<_>>(),
+        // Lines of 10 bytes (the line end is not counted); one skipped.
+        vec![("lines", n * 10, n), ("skipped", 1, 1)]
+    );
+    assert_eq!(batches.last().unwrap()["size"], size);
     assert_eq!(end["output"], json!({"read": 1, "failed": 0}));
     std::fs::remove_dir_all(d).unwrap();
 }
