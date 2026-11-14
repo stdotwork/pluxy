@@ -164,8 +164,12 @@ fn stand_in(records: &Path, name: &str) -> Result<(Vec<String>, String, String),
     Ok((argv, r("cwd").trim_end().to_string(), r("env")))
 }
 
+/// Writes bytes to p with mode 0644, whatever the umask.
 fn write(p: &Path, bytes: &str) -> Result<(), String> {
-    std::fs::write(p, bytes).map_err(|e| format!("{}: {e}", p.display()))
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(p, bytes)
+        .and_then(|()| std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o644)))
+        .map_err(|e| format!("{}: {e}", p.display()))
 }
 
 pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<(), String> {
@@ -334,7 +338,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 &seen,
                 "folders",
                 json!({}),
-                &[&txt(&library)],
+                &["~/.config/Claude-3p/configLibrary"],
                 &hidden,
             )?;
             require(
