@@ -14,7 +14,7 @@ use tauri::{
 
 /// The certificates a feed's https is checked against: the public roots. A native-test build
 /// takes the test feed's own authority from its runner instead; no release build has that code.
-fn roots() -> release::Roots {
+pub(crate) fn roots() -> release::Roots {
     #[cfg(feature = "native-test")]
     if let Ok(p) = std::env::var("PLUXY_APP_TEST_FEED_CA") {
         return std::fs::read(p)

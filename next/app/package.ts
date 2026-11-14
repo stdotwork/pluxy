@@ -7,9 +7,14 @@
 // test builds with tauri build --debug, the native-test and artifact-test-trust features and a test
 // config overlay given with --config: identifier dev.pluxy.desktop.test, product name "pluxy Test",
 // binary pluxy-app-test, the AppImage bundle (the base config keeps bundling off) and a temporary
-// updater public key made here, whose private key is never written. It checks that the AppImage is
-// of type 2, copies it to <out-dir>/pluxy-test_<version>_amd64.AppImage and writes
-// <out-dir>/test-package.json: {"appimage": <path>, "updater_pubkey": <key>}.
+// updater key made here, whose private key stays in this process and is never written. It builds
+// the package twice: at the app's version, and at UPDATE_VERSION, the update the native test
+// installs, which it signs with that key (native/minisign.ts). It checks that each AppImage is of
+// type 2, copies them to <out-dir>/pluxy-test_<version>_amd64.AppImage, copies the first build's
+// program as built (before the bundler patches its bundle type) to <out-dir>/pluxy-app-test,
+// and writes <out-dir>/test-package.json:
+// {"appimage": <path>, "updater_pubkey": <key>, "binary": <path>,
+//  "update": {"appimage": <path>, "version": <version>, "signature": <signature>}}.
 //
 // Tauri's AppImage bundler runs tools it downloads when they are missing from its tools folder.
 // test puts pinned copies there first (BUNDLER_TOOLS, each checked against its SHA-256), gives the
@@ -29,7 +34,6 @@
 // <reason>`; the exit code is 0 only for valid.
 
 import { spawnSync } from "node:child_process";
-import { generateKeyPairSync, randomBytes } from "node:crypto";
 import {
   copyFileSync,
   existsSync,
@@ -42,8 +46,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { appImageHeader, type Pin, pinnedBytes, runtimeBytes } from "./native/appimage";
+import { signUpdate, updaterKey } from "./native/minisign";
 
 const app = import.meta.dir;
 const tauriDir = join(app, "src-tauri");
@@ -56,16 +61,8 @@ function run(cmd: string, args: string[], cwd: string, env?: Record<string, stri
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(" ")} exited with ${r.status}`);
 }
 
-/** A temporary updater public key in the format Tauri's updater reads (base64 of minisign's
- * public key file). Its private key stays in this process and is dropped. */
-function temporaryUpdaterKey(): string {
-  const { publicKey } = generateKeyPairSync("ed25519");
-  const raw = Buffer.from(publicKey.export({ format: "jwk" }).x as string, "base64url");
-  const keyId = randomBytes(8);
-  const id = Buffer.from(keyId).reverse().toString("hex").toUpperCase();
-  const blob = Buffer.concat([Buffer.from("Ed"), keyId, raw]).toString("base64");
-  return Buffer.from(`untrusted comment: minisign public key: ${id}\n${blob}\n`).toString("base64");
-}
+/** The version of the update the test package is built at too (newer than the app's). */
+const UPDATE_VERSION = "0.2.0";
 
 /** The tools tauri-bundler 2.10.4's AppImage bundler (src/bundle/linux/appimage/linuxdeploy.rs,
  * prepare_tools) downloads unless a file of that name is in its tools folder, `$XDG_CACHE_HOME/tauri`.
@@ -163,40 +160,70 @@ async function testPackage(outDir: string) {
     for (const tool of BUNDLER_TOOLS) {
       writeFileSync(join(tools, tool.file), await pinnedBytes(tool), { mode: 0o700 });
     }
-    const pubkey = temporaryUpdaterKey();
-    const overlay = join(work, "tauri.test.conf.json");
+    const key = updaterKey();
+    // One build at each version; the second rebuilds only the app's own crate.
+    const build = (v: string, bundle = true): string => {
+      const overlay = join(work, `tauri.test.${v}.conf.json`);
+      writeFileSync(
+        overlay,
+        JSON.stringify({
+          version: v,
+          identifier: "dev.pluxy.desktop.test",
+          productName: "pluxy Test",
+          mainBinaryName: "pluxy-app-test",
+          bundle: { active: true, targets: ["appimage"] },
+          plugins: { updater: { pubkey: key.pubkey } },
+        }),
+      );
+      run(
+        tauri,
+        [
+          "build",
+          "--ci",
+          "--debug",
+          "--features",
+          "native-test,artifact-test-trust",
+          "--config",
+          overlay,
+          ...(bundle ? [] : ["--no-bundle"]),
+        ],
+        app,
+        env,
+      );
+      if (!bundle) return join(targetDir, "debug", "pluxy-app-test");
+      const expected = [...BUNDLER_TOOLS.map((t) => t.file), ...BUNDLER_SCRIPTS].sort();
+      const found = readdirSync(tools).sort();
+      if (JSON.stringify(found) !== JSON.stringify(expected)) {
+        throw new Error(
+          `the bundler's tools folder holds ${found.join(", ")}, not only ${expected.join(", ")}`,
+        );
+      }
+      const built = join(targetDir, "debug", "bundle", "appimage", `pluxy Test_${v}_amd64.AppImage`);
+      const header = appImageHeader(built);
+      if (!header.elf || header.type !== 2) {
+        throw new Error(`${built} is not a type-2 AppImage (first bytes ${header.hex})`);
+      }
+      const appimage = join(outDir, `pluxy-test_${v}_amd64.AppImage`);
+      copyFileSync(built, appimage);
+      console.log(`test package: ${appimage} (type-2 AppImage, first bytes ${header.hex})`);
+      return appimage;
+    };
+    // The program first, as built: bundling then patches its bundle type in place
+    // (__TAURI_BUNDLE_TYPE_VAR_UNK to _APP), with nothing left to build.
+    const binary = join(outDir, "pluxy-app-test");
+    copyFileSync(build(version, false), binary);
+    const appimage = build(version);
+    const update = build(UPDATE_VERSION);
+    const signature = signUpdate(key, readFileSync(update), basename(update), UPDATE_VERSION);
     writeFileSync(
-      overlay,
+      join(outDir, "test-package.json"),
       JSON.stringify({
-        identifier: "dev.pluxy.desktop.test",
-        productName: "pluxy Test",
-        mainBinaryName: "pluxy-app-test",
-        bundle: { active: true, targets: ["appimage"] },
-        plugins: { updater: { pubkey } },
+        appimage,
+        updater_pubkey: key.pubkey,
+        binary,
+        update: { appimage: update, version: UPDATE_VERSION, signature },
       }),
     );
-    run(
-      tauri,
-      ["build", "--ci", "--debug", "--features", "native-test,artifact-test-trust", "--config", overlay],
-      app,
-      env,
-    );
-    const expected = [...BUNDLER_TOOLS.map((t) => t.file), ...BUNDLER_SCRIPTS].sort();
-    const found = readdirSync(tools).sort();
-    if (JSON.stringify(found) !== JSON.stringify(expected)) {
-      throw new Error(
-        `the bundler's tools folder holds ${found.join(", ")}, not only ${expected.join(", ")}`,
-      );
-    }
-    const built = join(targetDir, "debug", "bundle", "appimage", `pluxy Test_${version}_amd64.AppImage`);
-    const header = appImageHeader(built);
-    if (!header.elf || header.type !== 2) {
-      throw new Error(`${built} is not a type-2 AppImage (first bytes ${header.hex})`);
-    }
-    const appimage = join(outDir, `pluxy-test_${version}_amd64.AppImage`);
-    copyFileSync(built, appimage);
-    writeFileSync(join(outDir, "test-package.json"), JSON.stringify({ appimage, updater_pubkey: pubkey }));
-    console.log(`test package: ${appimage} (type-2 AppImage, first bytes ${header.hex})`);
     console.log(
       `test package: bundler tools pinned: ${BUNDLER_TOOLS.map((t) => `${t.file} ${t.sha256.slice(0, 12)}`).join(", ")}; runtime from LDAI_RUNTIME_FILE; downloads blocked`,
     );
