@@ -1,6 +1,8 @@
 //! For the native test only (`native/run.ts`, built with `--features native-test`). It drives the
 //! real app as the person would and probes what each webview can call:
 //!
+//! 0. with `PLUXY_APP_TEST_CORE_SOURCE`, a session runs only the core steps (`native_core.rs`):
+//!    install, update, rollback, adopt, then quits;
 //! 1. in the window's webview, calls each app command with no arguments, leaving out the two
 //!    that take none and would act: each must get past the command check (and the ones that
 //!    need arguments then fail on those); then gets core's status through the app;
@@ -46,6 +48,9 @@ mod access;
 #[cfg(target_os = "linux")]
 #[path = "admission_native.rs"]
 mod admission;
+#[cfg(target_os = "linux")]
+#[path = "native_core.rs"]
+mod core_updates;
 #[path = "device_native.rs"]
 mod device;
 #[path = "native_ingress.rs"]
@@ -114,6 +119,7 @@ const ACTING: &[&str] = &[
     "sign_out",
     "core_start",
     "core_restart",
+    "core_adopt",
     "key_entry",
     "confirmation_settings",
     "management_key_rotate",
@@ -160,7 +166,7 @@ fn probe_js(calls: &[&str]) -> String {
         inv(cmd, {{}}),
         new Promise((_, r) => setTimeout(() => r(new Error("timed out")), 3000)),
       ]);
-      out.calls[cmd] = {{ ok: true, detail: String(JSON.stringify(v)).slice(0, 200) }};
+      out.calls[cmd] = {{ ok: true, detail: String(JSON.stringify(v)).slice(0, 4000) }};
     }} catch (e) {{
       out.calls[cmd] = {{ ok: false, detail: String(e).slice(0, 300) }};
     }}
@@ -388,6 +394,22 @@ fn run(app: &AppHandle) -> Result<(), String> {
         return rotation_test::after_restart(app);
     }
     let main = wait_for("the window", || app.get_webview(MAIN))?;
+    // The core steps (native_core.rs), in a session of their own. They come before the window's
+    // shell: until a core is installed the window shows only the Connection page.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("PLUXY_APP_TEST_CORE_SOURCE").is_some() {
+        wait_for("the window's IPC", || {
+            eval(
+                &main,
+                "typeof window.__TAURI_INTERNALS__?.invoke === 'function'",
+            )
+            .filter(|v| v == true)
+        })?;
+        core_updates::run(app, &main)?;
+        log("quit", json!({}));
+        crate::quit(app);
+        return Ok(());
+    }
     wait_for("the window's shell", || {
         eval(&main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true)
     })?;

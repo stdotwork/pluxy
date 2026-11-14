@@ -484,3 +484,145 @@ fn the_page_never_writes_html() {
         }
     }
 }
+
+/// A WAL database at dest whose row `b` is only in its -wal (committed, not copied into the
+/// database), with no -shm beside it: as Codex leaves one that a crash stopped.
+fn wal_with_uncheckpointed_rows(dest: &Path) {
+    let scratch = Root::new("wal-source");
+    let db = scratch.join("live.db");
+    let c = Connection::open(&db).unwrap();
+    c.execute_batch(
+        "PRAGMA journal_mode = WAL;
+         CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, updated_at_ms INTEGER);
+         INSERT INTO threads VALUES ('a', 'Checkpointed', 1);
+         PRAGMA wal_checkpoint(TRUNCATE);
+         PRAGMA wal_autocheckpoint = 0;
+         INSERT INTO threads VALUES ('b', 'Only in the WAL', 2);",
+    )
+    .unwrap();
+    fs::create_dir_all(dest.parent().unwrap()).unwrap();
+    fs::copy(&db, dest).unwrap();
+    fs::copy(sidecar(&db, "-wal"), sidecar(dest, "-wal")).unwrap();
+    drop(c);
+}
+
+#[test]
+fn committed_rows_still_in_the_wal_are_read_and_nothing_is_written_beside_it() {
+    let root = Root::new("wal-rows");
+    let db = root.join("sqlite/live.db");
+    wal_with_uncheckpointed_rows(&db);
+    let wal = sidecar(&db, "-wal");
+    assert!(fs::metadata(&wal).unwrap().len() > 0);
+    assert!(!sidecar(&db, "-shm").exists());
+    let before = (fs::read(&db).unwrap(), fs::read(&wal).unwrap());
+    let page = list(&root, 0, 50);
+    assert!(page.warnings.is_empty(), "{:?}", page.warnings);
+    let ids: Vec<&str> = page.sessions.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(ids, ["b", "a"]);
+    assert_eq!(
+        detail(&root, "b", 0, 50, &never).unwrap()["title"],
+        "Only in the WAL"
+    );
+    assert!(!sidecar(&db, "-shm").exists(), "a -shm file appeared");
+    assert_eq!((fs::read(&db).unwrap(), fs::read(&wal).unwrap()), before);
+    // The private copies are gone.
+    let prefix = format!("wal-{}-", std::process::id());
+    assert!(!fs::read_dir(std::env::temp_dir())
+        .unwrap()
+        .flatten()
+        .any(|e| e.file_name().to_string_lossy().starts_with(&prefix)));
+}
+
+#[test]
+fn every_string_from_a_database_or_rollout_is_capped_and_a_page_fits_a_frame() {
+    let root = Root::new("caps");
+    let c = Connection::open(root.join("state_5.sqlite")).unwrap();
+    c.execute_batch("CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, cwd TEXT, model_provider TEXT, model TEXT, rollout_path TEXT, updated_at_ms INTEGER);")
+        .unwrap();
+    let big = "t".repeat(64 << 10);
+    for n in 0..100 {
+        c.execute(
+            "INSERT INTO threads VALUES (?1, ?2, ?2, ?2, ?2, '', ?3)",
+            rusqlite::params![format!("{n:03}{}", "i".repeat(300)), big, n],
+        )
+        .unwrap();
+    }
+    drop(c);
+    let v = list(&root, 0, 100).to_json();
+    let sessions = v["sessions"].as_array().unwrap();
+    assert!(
+        !sessions.is_empty() && sessions.len() < 100,
+        "{}",
+        sessions.len()
+    );
+    assert_eq!(v["has_more"], true);
+    assert!(v.to_string().len() < MAX_LIST + (64 << 10));
+    for s in sessions {
+        assert!(s["id"].as_str().unwrap().len() <= MAX_ID + 3);
+        for k in ["title", "cwd", "provider"] {
+            let t = s[k].as_str().unwrap();
+            assert!(t.len() <= MAX_TEXT + 3 && t.ends_with('…'), "{k}");
+        }
+    }
+    // A detail with a 2 MiB timestamp, role and call ID, and long metadata.
+    let id = "019f1234-abcd-7000-8000-0000000000cc";
+    let huge = "9".repeat(2 << 20);
+    let line = json!({"timestamp": huge, "type": "response_item", "payload": {"type": "function_call_output", "call_id": huge, "output": "x"}});
+    let meta = json!({"type": "session_meta", "payload": {"id": id, "title": big, "cwd": big, "model_provider": big}});
+    let msg = json!({"type": "response_item", "payload": {"type": "message", "role": huge, "content": "y"}});
+    write(
+        &root.join(format!("sessions/rollout-{id}.jsonl")),
+        &format!("{meta}\n{line}\n{msg}\n"),
+    );
+    let d = detail(&root, id, 0, 50, &never).unwrap();
+    assert!(d.to_string().len() <= MAX_DETAIL);
+    for k in ["title", "cwd", "provider"] {
+        assert!(d[k].as_str().unwrap().len() <= MAX_TEXT + 3, "{k}");
+    }
+    let m = &d["messages"];
+    assert!(m[0]["timestamp"].as_str().unwrap().len() <= MAX_SHORT + 3);
+    assert!(m[0]["call_id"].as_str().unwrap().len() <= MAX_SHORT + 3);
+    assert!(m[1]["role"].as_str().unwrap().len() <= MAX_SHORT + 3);
+}
+
+#[test]
+fn a_session_index_over_16_mib_is_a_warning_and_not_read() {
+    let root = Root::new("big-index");
+    let id = "019f1234-abcd-7000-8000-0000000000dd";
+    write(&root.join(format!("sessions/rollout-{id}.jsonl")), "");
+    let mut index = format!("{}\n", json!({"id": id, "thread_name": "Named"}));
+    index.push_str(&" ".repeat(16 << 20));
+    write(&root.join("session_index.jsonl"), &index);
+    let page = list(&root, 0, 50);
+    assert_eq!(page.sessions[0].title, "");
+    assert!(
+        page.warnings
+            .iter()
+            .any(|w| w.contains("larger than 16 MiB")),
+        "{:?}",
+        page.warnings
+    );
+}
+
+#[test]
+fn linked_databases_and_index_are_skipped() {
+    let root = Root::new("linked-db");
+    let outside = Root::new("linked-db-outside");
+    let db = outside.join("real.db");
+    sql(&db, "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT); INSERT INTO threads VALUES ('x', 'Linked');");
+    fs::create_dir_all(root.join("sqlite")).unwrap();
+    std::os::unix::fs::symlink(&db, root.join("sqlite/linked.db")).unwrap();
+    std::os::unix::fs::symlink(&db, root.join("state_5.sqlite")).unwrap();
+    let id = "019f1234-abcd-7000-8000-0000000000ee";
+    write(&root.join(format!("sessions/rollout-{id}.jsonl")), "");
+    let index = outside.join("index.jsonl");
+    write(
+        &index,
+        &format!("{}\n", json!({"id": id, "thread_name": "Through a link"})),
+    );
+    std::os::unix::fs::symlink(&index, root.join("session_index.jsonl")).unwrap();
+    let page = list(&root, 0, 50);
+    assert!(page.databases.is_empty(), "{:?}", page.databases);
+    assert_eq!(page.sessions.len(), 1);
+    assert_eq!(page.sessions[0].title, "");
+}

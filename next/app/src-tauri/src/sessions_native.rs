@@ -14,7 +14,8 @@
 //!   the page gets the detail `expect.json` says. The next detail page asks again (never remembered);
 //! - idle: once the page closes, no reader process is left after the idle stop;
 //! - the reader's own page: opened, it starts the reader with its list call;
-//! - disable: no reader process is left once the reader is disabled;
+//! - disable: the reader runs (a list from the window) right before it is disabled, and no reader
+//!   process is left once it is;
 //! - sources: every file in the Codex home has the same bytes, kind and modification time as
 //!   before, and no file was added (no `-wal` or `-shm` beside the WAL database);
 //! - audit: neither canary of config.toml and auth.json reached a reply or any webview (DOM,
@@ -25,7 +26,7 @@
 use super::admission::{dialog_text, ok, press, require};
 use super::key_entry_test::{clean_webview, watch};
 use super::program::processes;
-use super::routing::{enable, install, showing, Page};
+use super::routing::{call, enable, install, showing, Page};
 use super::{eval, log, wait_for};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -296,7 +297,16 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         app.get_webview(&label).is_none().then_some(())
     })?;
 
-    // Disabled: no reader process is left.
+    // Disabled: no reader process is left. A list from the window first, so it runs right before.
+    let r = call(main, &id, "list", json!({}))?;
+    require(
+        r["ok"] == true,
+        format!("the window's list before disabling: {r}"),
+    )?;
+    require(
+        !processes(&program).is_empty(),
+        "the reader is not running right before it is disabled",
+    )?;
     let t = Instant::now();
     ok(main, "device_enable", json!({"id": id, "enabled": false}))?;
     wait_for("the reader to stop when disabled", || {

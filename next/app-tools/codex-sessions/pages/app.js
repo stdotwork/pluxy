@@ -86,6 +86,8 @@ const size = (n) =>
 
 let pluxy;
 let offset = 0;
+/** The offsets of the pages before this one, for Previous page. */
+const earlier = [];
 
 /** Shows the list from offset n. */
 function go(n) {
@@ -162,13 +164,18 @@ async function showList() {
         {
           type: "button",
           disabled: offset === 0,
-          onclick: () => go(Math.max(0, offset - PAGE_SIZE)),
+          onclick: () => go(earlier.pop() ?? 0),
         },
         t.previousPage,
       ),
       el(
         "button",
-        { type: "button", disabled: !page.has_more, onclick: () => go(offset + PAGE_SIZE) },
+        { type: "button", disabled: !page.has_more, onclick: () => {
+            // A page holds fewer sessions when theirs are long: the next starts after them.
+            earlier.push(offset);
+            go(page.offset + page.sessions.length);
+          },
+        },
         t.nextPage,
       ),
     ),
@@ -199,6 +206,7 @@ function home(current) {
     try {
       await call("settings", { codex_home: value });
       offset = 0;
+      earlier.length = 0;
       await showList();
     } catch (e) {
       message.textContent = fill(t.settingsFailed, { error: errorText(e) });
