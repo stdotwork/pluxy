@@ -10,7 +10,7 @@ mod config;
 
 use config::{Checked, Model, Settings};
 use pluxy_program::{run, Call, Error, Handler};
-use pluxy_transactions::{backup_call, data_dir, Pin, Selection, Target, Transactions};
+use pluxy_transactions::{backup_call, data_dir, sha256_of, Pin, Selection, Target, Transactions};
 use serde_json::{json, Value};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -49,6 +49,31 @@ fn selection(input: &Value) -> Result<Selection, Error> {
     }
 }
 
+/// What a preview shows of the config in bytes. A config Grok Build would not take, or Apply
+/// could not edit, is pinned all the same, so Restore Backup still reaches it: its `state` is
+/// `refused` and `reason` says why apply and clear refuse it.
+fn settings_of(bytes: Option<&[u8]>, base_url: Option<&str>) -> Value {
+    config::read_back(bytes, base_url)
+        .unwrap_or_else(|e| json!({"state": "refused", "reason": e.message}))
+}
+
+/// Runs read (a preview and the config's bytes) again once when the bytes it read are not the
+/// ones it pinned (another program wrote the file between the two reads); refuses if they differ
+/// again, so the values shown are always those of the file pinned.
+fn pinned_read(
+    mut read: impl FnMut() -> Result<(Value, Option<Vec<u8>>), Error>,
+) -> Result<(Value, Option<Vec<u8>>), Error> {
+    for _ in 0..2 {
+        let (v, bytes) = read()?;
+        if v["targets"][0]["sha256"] == json!(sha256_of(bytes.as_deref())) {
+            return Ok((v, bytes));
+        }
+    }
+    Err(Error::unavailable(
+        "the config changed while it was read: read it again",
+    ))
+}
+
 /// field of v as a short text: 1 to 240 characters with no control characters (none empty when
 /// may_be_empty), and with no white space when bare.
 fn text(v: &Value, field: &str, may_be_empty: bool, bare: bool) -> Result<String, Error> {
@@ -83,6 +108,12 @@ fn settings(input: &Value, key: &str) -> Result<Settings, Error> {
     {
         return Err(Error::invalid_request(
             "the key is empty or not a usable key",
+        ));
+    }
+    // Grok Build expands `$NAME` in its config's strings, so such a key would not be the key.
+    if key.contains('$') {
+        return Err(Error::invalid_request(
+            "the key holds a $, which Grok Build would read as a variable: use a key without one",
         ));
     }
     let list = input["models"]
@@ -157,11 +188,13 @@ impl Handler for Grok {
         match call.op.as_str() {
             "preview" => {
                 let sel = selection(input)?;
-                // A config Grok Build would not take is refused before anything is pinned.
-                let (_, bytes) = Target::resolve(&sel)?.read_now()?;
-                let read = config::read_back(bytes.as_deref(), input["base_url"].as_str())?;
-                let mut v = Transactions::new(call, data_dir()?).preview(SET, &[sel])?;
-                v["settings"] = read;
+                let tx = Transactions::new(call, data_dir()?);
+                let (mut v, bytes) = pinned_read(|| {
+                    let v = tx.preview(SET, std::slice::from_ref(&sel))?;
+                    let (_, bytes) = Target::resolve(&sel)?.read_now()?;
+                    Ok((v, bytes))
+                })?;
+                v["settings"] = settings_of(bytes.as_deref(), input["base_url"].as_str());
                 Ok(v)
             }
             "apply" => {
@@ -216,6 +249,10 @@ impl Handler for Grok {
 #[cfg(test)]
 #[path = "config_tests.rs"]
 mod config_tests;
+
+#[cfg(test)]
+#[path = "main_tests.rs"]
+mod main_tests;
 
 #[cfg(test)]
 #[path = "manifest_tests.rs"]

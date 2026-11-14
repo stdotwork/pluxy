@@ -5,7 +5,7 @@
 //   execution program), packed with their own manifests into signed curated packages;
 // - in the run's HOME, Grok Build's user config `~/.grok/config.toml` as a person keeps it: a
 //   comment, their default model, a model entry of their own and a table this check knows nothing
-//   of; beside it `~/.grok/auth.json`, holding a login canary, which no step may touch;
+//   of (mode 0644, which Apply makes owner-only); beside it `~/.grok/auth.json`, holding a login canary, which no step may touch;
 // - a stow layout: `~/.config/grok-stow/config.toml` is a relative link to
 //   `~/dotfiles/grok/.grok/config.toml` (mode 0640), beside `keep.toml`;
 // - a chezmoi-style root: `~/.grok-root` is an absolute link to the folder
@@ -112,7 +112,7 @@ function configs(home: string, login: string) {
   const brokenBytes = '[models\ndefault = "grok-4.6"\n';
   const unknownBytes = 'models = "grok-4.6"\n';
 
-  put(config, original, 0o600);
+  put(config, original, 0o644);
   put(auth, authBytes, 0o600);
   put(stowTarget, stowOriginal, 0o640);
   put(join(dotfiles, "keep.toml"), keep);
@@ -174,6 +174,8 @@ function configs(home: string, login: string) {
         "[ui]\nfuture_flag = true\n",
       // The person's edit of their own model entry.
       edited_own: ['model = "qwen-coder"', 'model = "qwen-coder-2"'],
+      // An applied file made into one Grok Build would not take (its table header broken).
+      corrupt: ["[ui]", "[ui"],
       // Their edit of a model entry Apply wrote, too.
       edited_written: ["context_window = 400000", "context_window = 300000"],
       // Clear after both edits: their default model comes back, their own entry keeps its edit,

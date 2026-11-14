@@ -173,12 +173,19 @@ fn plain_value(v: &Value) -> Json {
 }
 
 /// What a preview shows of the config in bytes, never the key: whether it points Grok Build at
-/// the core (at base_url, when given), the default model, pluxy's model entries and how many
-/// entries an older app left.
+/// the core (at base_url, when given), the default model, pluxy's model entries (each one's model
+/// as the entry names it when it has no `model` of its own) and how many entries an older app left.
+/// It is configured only when every pluxy entry is whole: a model, the Chat Completions API, the
+/// default's base URL and a key; an entry missing any of them needs repair.
 pub fn read_back(bytes: Option<&[u8]>, base_url: Option<&str>) -> Result<Json, Error> {
     let doc = parse(bytes)?;
     let root = doc.as_table();
-    let s = |t: &Table, k: &str| t.get(k).and_then(Item::as_str).map(str::to_string);
+    let s = |t: &Table, k: &str| {
+        t.get(k)
+            .and_then(Item::as_str)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
     let default = root
         .get("models")
         .and_then(Item::as_table)
@@ -195,21 +202,26 @@ pub fn read_back(bytes: Option<&[u8]>, base_url: Option<&str>) -> Result<Json, E
         .flat_map(|t| t.iter())
         .filter(|(k, _)| k.starts_with(LEGACY))
         .count();
+    // An entry's model: its own `model`, else the one its name says.
+    let model_of =
+        |k: &str, t: &Table| s(t, "model").unwrap_or_else(|| k[PREFIX.len()..].to_string());
     let chosen = default
         .as_deref()
-        .and_then(|d| ours.iter().find(|(k, _)| *k == d))
-        .map(|(_, t)| *t);
-    let pointed = chosen.and_then(|t| s(t, "base_url"));
-    let key_set = chosen
-        .and_then(|t| s(t, "api_key"))
-        .is_some_and(|k| !k.is_empty());
+        .and_then(|d| ours.iter().find(|(k, _)| *k == d));
+    let pointed = chosen.and_then(|(_, t)| s(t, "base_url"));
+    let key_set = chosen.and_then(|(_, t)| s(t, "api_key")).is_some();
+    let whole = |t: &Table| {
+        s(t, "model").is_some()
+            && s(t, "api_backend").as_deref() == Some(BACKEND)
+            && s(t, "api_key").is_some()
+            && s(t, "base_url") == pointed
+    };
     let want = base_url.map(base_url_of);
     let state = if ours.is_empty() {
         "not-configured"
-    } else if key_set
-        && pointed.is_some()
+    } else if pointed.is_some()
         && want.as_ref().is_none_or(|w| Some(w) == pointed.as_ref())
-        && ours.iter().all(|(_, t)| s(t, "base_url") == pointed)
+        && ours.iter().all(|(_, t)| whole(t))
     {
         "configured"
     } else {
@@ -220,9 +232,9 @@ pub fn read_back(bytes: Option<&[u8]>, base_url: Option<&str>) -> Result<Json, E
         "base_url": pointed,
         "key_set": key_set,
         "default": default,
-        "model": chosen.and_then(|t| s(t, "model")),
-        "models": ours.iter().map(|(_, t)| json!({
-            "model": s(t, "model"),
+        "model": chosen.map(|(k, t)| model_of(k, t)),
+        "models": ours.iter().map(|(k, t)| json!({
+            "model": model_of(k, t),
             "name": s(t, "name"),
             "context_window": t.get("context_window").and_then(Item::as_integer),
         })).collect::<Vec<_>>(),

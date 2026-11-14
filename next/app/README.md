@@ -863,15 +863,18 @@ the Claude Code page it is the window's own page, because **Apply** gives the to
 a selected file (such as `$GROK_HOME/config.toml`; a link is followed and kept) or a file in a
 selected folder; it shows the status, the file it writes to, Grok Build's default model now and
 whether a key is in pluxy's entry, never the key, and notes model entries an older app left
-(`cpa-gui/…`), which pluxy leaves alone. The **Model catalog** holds the models pluxy's entries
+(`cpa-gui/…`), which pluxy leaves alone. A file Grok Build would not take shows as refused, with the
+reason: Apply and Close configuration stay off, Restore Backup and the backups stay available. The **Model catalog** holds the models pluxy's entries
 list: those the file has, and the core's served models, added (all selected, as the old app wrote
 them all) when **Refresh models** is pressed, never in the background. Each can be left out or
-given its **Context window**; the **Default model** is one of the selected models. The
-**Authentication Key** is one of the vault's secrets, or a new one through native key entry.
+given its **Context window**; the **Default model** is one of the selected models. Apply stays off,
+with a notice, while more than 256 models are selected. The **Authentication Key** is one of the
+vault's plain secrets or this tool's client keys, or a new one through native key entry.
 
 **Connect in One Click** (or **Update Configuration** / **Repair Connection** once applied),
-**Close configuration** (Clear) and **Restore Backup** each preview the file again and call the
-tool, whose native confirmation names the file, the key's label for Apply, and that an edit made in
+**Close configuration** (Clear) and **Restore Backup** call the tool on the file the last preview
+pinned (changing the file selection drops that preview; the tool refuses a file changed since),
+whose native confirmation names the file, the key's label for Apply, and that an edit made in
 the same instant by another program may be lost; **Backup and restore** keeps the file in manual
 backups, as on the Claude Code page. **Start CLI** asks the tool for its recipe (`~/.grok/bin/grok`
 when Grok Build's installer put it there, else `grok` from PATH, in a terminal with no arguments)

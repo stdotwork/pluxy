@@ -322,8 +322,8 @@ nothing.
 
 | Operation | Effect | Input | Output |
 | --- | --- | --- | --- |
-| `preview` | `read` | `targets`: one selection (`file`, or `root` and `path`), by default `~/.grok/config.toml` in the app's `HOME`; `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `settings`: `state` (`not-configured`, `configured`, `needs-update`), `base_url`, `key_set`, `default` (`models.default` as the file has it), `model` (the default's model when it is pluxy's entry), `models` (pluxy's entries: `model`, `name`, `context_window`), `legacy` (how many `cpa-gui/` entries an older app left); never the key |
-| `apply` | `write`; secret `key` (value) | One pin, `base_url`, `key`, `model` (the default: one of `models`), `models`: 1 to 256 of `{model, name, context_window}` (`name` empty: the model) | The library's outcome |
+| `preview` | `read` | `targets`: one selection (`file`, or `root` and `path`), by default `~/.grok/config.toml` in the app's `HOME`; `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `settings`: `state` (`not-configured`, `configured`, `needs-update`), `base_url`, `key_set`, `default` (`models.default` as the file has it), `model` (the default's model when it is pluxy's entry), `models` (pluxy's entries: `model`, else the one the entry's name says, `name`, `context_window`), `legacy` (how many `cpa-gui/` entries an older app left); for a file Grok Build would not take, `{state: "refused", reason}`, the file still pinned; never the key |
+| `apply` | `write`; secret `key` (value) | One pin, `base_url`, `key` (refused when it holds a `$`: Grok Build expands `$NAME` in its strings), `model` (the default: one of `models`), `models`: 1 to 256 of `{model, name, context_window}` (`name` empty: the model) | The library's outcome |
 | `clear` | `write` | One pin | The library's outcome: the values Apply wrote go, edits made since stay |
 | `restore` | `write` | One pin | The library's outcome: the original bytes back (Restore Backup) |
 | `status` | `read` | — | The library's status |
@@ -346,9 +346,14 @@ on a temporary home, read 2026-11-14):
 
 Clear's three-way merge (TOML, values compared whatever their formatting) brings back the person's
 default model, unless they changed it since, and removes the untouched entries; a value the person
-changed in a pluxy entry stays. A file Apply created and nothing else changed is removed. Every
-operation but `restore` refuses, before writing, a file Grok Build would not take or Apply cannot
-edit: not UTF-8 or not TOML (Grok Build itself refuses such a file), `models` or `model` not a
+changed in a pluxy entry stays. A file Apply created and nothing else changed is removed. Apply
+leaves the file owner-only (0600: it holds the key); Clear and Restore Backup keep the mode it has.
+The state is `configured` only when every pluxy entry is whole (a `model`, `api_backend =
+"chat_completions"`, a key and the default's `base_url`); an entry missing any of them reads as
+`needs-update`, so the page offers Repair Connection. A preview reads the file again once if it
+changed between the pin and the read, and refuses if it changed again. Apply and Clear refuse,
+before writing, a file Grok Build would not take or Apply cannot edit (a preview still pins it and
+reports it refused, so Restore Backup reaches it): not UTF-8 or not TOML (Grok Build itself refuses such a file), `models` or `model` not a
 table, `models.default` not a string, or a `model."pluxy/…"` entry not a table. Grok Build has no
 version or schema field, and no version bound is assumed. A missing or empty file is an empty one.
 The tool's environment has no `GROK_HOME`: a person who moved Grok Build's folder selects the file

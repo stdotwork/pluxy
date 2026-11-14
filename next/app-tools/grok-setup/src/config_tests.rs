@@ -149,6 +149,44 @@ fn read_back_shows_the_state_and_never_the_key() {
 }
 
 #[test]
+fn entries_missing_a_model_or_on_another_api_need_repair_and_show_their_name() {
+    // The second entry has no `model`: its row shows the model its name says.
+    let no_model = APPLIED.replace("model = \"claude-opus-5-5\"\n", "");
+    let r = read_back(Some(no_model.as_bytes()), None).unwrap();
+    assert_eq!(r["state"], "needs-update");
+    assert_eq!(r["models"][1]["model"], "claude-opus-5-5");
+    // Another API on one entry.
+    let other = APPLIED.replacen(
+        "api_backend = \"chat_completions\"\ncontext_window = 200000",
+        "api_backend = \"responses\"\ncontext_window = 200000",
+        1,
+    );
+    assert_ne!(other, APPLIED);
+    assert_eq!(
+        read_back(Some(other.as_bytes()), None).unwrap()["state"],
+        "needs-update"
+    );
+    // No key on the second entry (the default keeps its own).
+    let i = APPLIED.rfind("api_key = \"the-key\"\n").unwrap();
+    let keyless = format!(
+        "{}{}",
+        &APPLIED[..i],
+        &APPLIED[i + "api_key = \"the-key\"\n".len()..]
+    );
+    assert_eq!(
+        read_back(Some(keyless.as_bytes()), None).unwrap()["state"],
+        "needs-update"
+    );
+    // The default entry with no `model`: the read-back model is its name's.
+    let default_bare = APPLIED.replacen("model = \"gpt-6.1-sol\"\n", "", 1);
+    let r = read_back(Some(default_bare.as_bytes()), None).unwrap();
+    assert_eq!(
+        (r["state"].clone(), r["model"].clone()),
+        (json!("needs-update"), json!("gpt-6.1-sol"))
+    );
+}
+
+#[test]
 fn files_grok_build_would_not_take_are_refused() {
     for (bytes, says) in [
         ("[models\ndefault = \"x\"\n", "not TOML"),
@@ -265,5 +303,8 @@ fn the_input_is_checked() {
         assert!(crate::settings(&i, "k").is_err(), "{field} {bad}");
     }
     assert!(crate::settings(&ok, "").is_err());
+    // Grok Build would expand a `$NAME` in the key.
+    let e = crate::settings(&ok, "pluxy-$HOME-key").unwrap_err();
+    assert!(e.message.contains("$"), "{e}");
     assert!(crate::settings(&ok, "a key").is_err());
 }

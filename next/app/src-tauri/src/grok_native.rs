@@ -9,18 +9,23 @@
 //! - install: pluxy/grok-setup and pluxy/execution install from the curated registry and are
 //!   enabled through their native confirmations, which say "full access to your user account";
 //! - key: the key is typed into native key entry; the window gets only its ID;
-//! - unknown: a preview of each file Grok Build would not take (`expect.json`'s `refused`) is
-//!   refused unasked and changes nothing; a preview of the person's file (a read, asked nothing)
-//!   pins it and reads its values back, with no key;
+//! - unknown: a preview of each file Grok Build would not take (`expect.json`'s `refused`) pins it
+//!   unasked, reports it refused with the reason and changes nothing; a preview of the person's
+//!   file (a read, asked nothing) pins it and reads its values back, with no key;
 //! - apply: asks a native confirmation naming the file, the key's label and the same-instant
 //!   sentence, never the key; then config.toml holds exactly the bytes `expect.json` says
-//!   (comments, the person's own models and unknown settings kept), and the preview reads it back
-//!   as configured; the login canary file is untouched;
-//! - restore: after the person's edit, Restore Backup puts the original bytes back;
-//! - clear: applied again and edited twice by the person, Clear takes out only the untouched
-//!   values: their default model comes back, their edit of a written model and their own setting
-//!   stay;
-//! - stow: an apply through the selected link changes only its target, the link keeps its inode
+//!   (comments, the person's own models and unknown settings kept), owner only (0600, from 0644),
+//!   and the preview reads it back as configured; the login canary file is untouched;
+//! - restore: after the person's edit and a mode of their own (0640), Restore Backup puts the
+//!   original bytes back and keeps that mode;
+//! - clear: applied again (0600 again) and edited twice by the person, who sets 0644, Clear takes
+//!   out only the untouched values: their default model comes back, their edit of a written model
+//!   and their own setting stay, and so does their mode;
+//! - corrupt: applied again, then made into a file Grok Build would not take, the preview reports
+//!   it refused, a confirmed Clear is refused and changes nothing, and Restore Backup puts back
+//!   the file as it was before that apply;
+//! - stow: an apply through the selected link changes only its target (0640 becomes 0600), the
+//!   link keeps its inode
 //!   and text; once the target is replaced, a confirmed write fails as changed and writes
 //!   nothing; a new preview's restore puts the original back through the link;
 //! - root: an apply to a file inside the selected root creates it, the root link kept; clear
@@ -49,6 +54,7 @@ use super::vault::{dialog_with, type_key};
 use super::{log, wait_for};
 use serde_json::{json, Value};
 use std::cell::RefCell;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tauri::{AppHandle, Manager, Webview};
@@ -81,24 +87,6 @@ fn read_op(main: &Webview, seen: &Seen, op: &str, input: Value) -> Result<Value,
     require(!asked, format!("{op} asked a native confirmation"))?;
     require(r["ok"] == true, format!("{op} {input}: {r}"))?;
     Ok(r["value"].clone())
-}
-
-/// A read operation that must be refused, unasked, saying says.
-fn read_refused(
-    main: &Webview,
-    seen: &Seen,
-    op: &str,
-    input: Value,
-    says: &str,
-) -> Result<(), String> {
-    let (r, asked) = unasked(|| call(main, PACKAGE, op, input.clone()));
-    let r = r?;
-    seen.add(r.to_string());
-    require(!asked, format!("{op} {input} asked a native confirmation"))?;
-    require(
-        r["ok"] == false && r["error"].as_str().is_some_and(|e| e.contains(says)),
-        format!("{op} {input} should be refused with {says:?}: {r}"),
-    )
 }
 
 /// A write operation of the package from the window, its confirmation (naming every one of
@@ -307,7 +295,16 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         (|| {
             require(!refused.is_empty(), "expect.json lists no refused file")?;
             for (f, _, says) in &refused {
-                read_refused(main, &seen, "preview", file(f), says)?;
+                let v = read_op(main, &seen, "preview", file(f))?;
+                let st = &v["settings"];
+                require(
+                    v["targets"][0]["target"] == json!(txt(f))
+                        && st["state"] == "refused"
+                        && st["reason"]
+                            .as_str()
+                            .is_some_and(|r| r.contains(says.as_str())),
+                    format!("the preview of {} should report it refused: {v}", txt(f)),
+                )?;
             }
             refused_unchanged()?;
             // The positive control on the same route: the person's file, the default one.
@@ -356,7 +353,10 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 read(&config) == Some(bytes("applied")),
                 format!("the applied config: {:?}", read(&config)),
             )?;
-            require(mode(&config) == 0o600, "the config's mode changed")?;
+            require(
+                mode(&config) == 0o600,
+                format!("the applied config's mode: {:o}", mode(&config)),
+            )?;
             let v = read_op(main, &seen, "preview", file(&config))?;
             require(
                 v["applied"] == true && v["settings"] == x["read_applied"],
@@ -373,6 +373,8 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         (|| {
             let (from, to) = pair("edited_own");
             edit(&config, &from, &to)?;
+            std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o640))
+                .map_err(|e| e.to_string())?;
             let v = read_op(main, &seen, "preview", file(&config))?;
             require(
                 v["edited"] == json!([true]),
@@ -389,8 +391,12 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             require(o["outcome"] == "restored", format!("the restore: {o}"))?;
             require(
-                read(&config) == Some(bytes("original")) && mode(&config) == 0o600,
-                format!("the restored config: {:?}", read(&config)),
+                read(&config) == Some(bytes("original")) && mode(&config) == 0o640,
+                format!(
+                    "the restored config ({:o}): {:?}",
+                    mode(&config),
+                    read(&config)
+                ),
             )?;
             untouched()
         })(),
@@ -412,10 +418,16 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 &hidden,
             )?;
             require(read(&config) == Some(bytes("applied")), "the second apply")?;
+            require(
+                mode(&config) == 0o600,
+                format!("the second apply's mode: {:o}", mode(&config)),
+            )?;
             for k in ["edited_own", "edited_written"] {
                 let (from, to) = pair(k);
                 edit(&config, &from, &to)?;
             }
+            std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o644))
+                .map_err(|e| e.to_string())?;
             let v = read_op(main, &seen, "preview", file(&config))?;
             let o = written(
                 app,
@@ -428,13 +440,82 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             require(o["outcome"] == "cleared", format!("the clear: {o}"))?;
             require(
-                read(&config) == Some(bytes("cleared")),
-                format!("the cleared config: {:?}", read(&config)),
+                read(&config) == Some(bytes("cleared")) && mode(&config) == 0o644,
+                format!(
+                    "the cleared config ({:o}): {:?}",
+                    mode(&config),
+                    read(&config)
+                ),
             )?;
             untouched()
         })(),
     )?;
     passed("clear");
+
+    // ---- corrupt: an applied file Grok Build would not take; Clear is refused, Restore Backup
+    // still puts it back
+    step(
+        "corrupt",
+        (|| {
+            let v = read_op(main, &seen, "preview", file(&config))?;
+            written(
+                app,
+                main,
+                &seen,
+                "apply",
+                apply_input(&v),
+                &[&txt(&config), LABEL],
+                &hidden,
+            )?;
+            let (from, to) = pair("corrupt");
+            edit(&config, &from, &to)?;
+            let corrupt = read(&config);
+            let v = read_op(main, &seen, "preview", file(&config))?;
+            let st = &v["settings"];
+            require(
+                v["applied"] == true
+                    && st["state"] == "refused"
+                    && st["reason"]
+                        .as_str()
+                        .is_some_and(|r| r.contains("not TOML")),
+                format!("the corrupt file's preview: {v}"),
+            )?;
+            let r = answered(
+                app,
+                main,
+                &seen,
+                "clear",
+                pins(&v),
+                &[&txt(&config)],
+                &hidden,
+                false,
+            )?;
+            require(
+                r["ok"] == false && r["error"].as_str().is_some_and(|e| e.contains("not TOML")),
+                format!("a clear of the corrupt file should be refused: {r}"),
+            )?;
+            require(
+                read(&config) == corrupt,
+                "the refused clear changed the file",
+            )?;
+            let o = written(
+                app,
+                main,
+                &seen,
+                "restore",
+                pins(&v),
+                &[&txt(&config)],
+                &hidden,
+            )?;
+            require(o["outcome"] == "restored", format!("the restore: {o}"))?;
+            require(
+                read(&config) == Some(bytes("cleared")),
+                format!("the config restored: {:?}", read(&config)),
+            )?;
+            untouched()
+        })(),
+    )?;
+    passed("corrupt");
 
     // ---- stow: only the link's target changes; a replaced target refuses writes
     step(
@@ -457,7 +538,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 &hidden,
             )?;
             require(
-                read(&stow_target) == Some(bytes("stow_applied")) && mode(&stow_target) == 0o640,
+                read(&stow_target) == Some(bytes("stow_applied")) && mode(&stow_target) == 0o600,
                 format!("the stow target after apply: {:?}", read(&stow_target)),
             )?;
             require(
