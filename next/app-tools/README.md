@@ -10,6 +10,7 @@ reference: this folder implements it, it does not change it.
 ```bash
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
 cargo build --release --locked -p codex-sessions   # a small, stripped program
+cargo build --locked -p pluxy-transactions --example fixture-writer   # the native test's fixture
 ```
 
 ## `lib/program`
@@ -30,6 +31,59 @@ Each call runs on a thread of its own that ends with the call; the thread that r
 routes cancels and the answers to a call's own calls and vault frames. An answer too large for a
 frame fails its call with `internal` instead of breaking the pipe. Jobs come with the host's jobs
 contract.
+
+## `lib/transactions`
+
+Link-preserving, journalled config writes for any writer tool (`pluxy-transactions`), a client of
+the host's vault (backups and journals) through the contract's `vault` frames; it keeps no
+journal store of its own. Linux.
+
+| Item | What it does |
+| --- | --- |
+| `Selection` | What the person selected: `File(path)`, a config file that may be a link (as stow makes), or `Root { root, path }`, a file inside a root folder that may be a link (as chezmoi can make), `path` being slash-separated parts inside it. |
+| `Transactions::new(vault, data)` | The operations for one call: `vault` is the `Call` (or any `Vault`), `data` the tool's data folder (`data_dir()`, `PLUXY_TOOL_DATA_DIR`), where the state file `transactions.json` (0600) keeps each set's targets and backup IDs. |
+| `preview(set, selections)` | Resolves and pins each selection: `{"set", "targets": [<pin>], "applied", "edited"}`. A pin names the selected path, its link's text, the file it resolves to, the identities (device and inode) of the link, the root, the file's folder and the file, and the file's SHA-256. A link inside a selected root, a part that leaves it (`..`, `.`, empty) and anything but a regular file are refused. A read: it asks nothing. |
+| `apply(set, pins, image, merge, written)` | Writes each pinned target with what `image` makes of its bytes now, and records `set` as applied: its original images (with the person's edits since the last apply promoted into them by `merge`) and its applied images, as vault backups. |
+| `clear(set, pins, merge, written)` | Each target becomes what `merge` makes of its original, its applied image and its bytes now: the writer's untouched values go, the person's edits stay. |
+| `restore(set, pins, written)` | Puts the original bytes back (removing a file that did not exist). |
+| `reconcile(journals)` | For `Handler::reconcile`: each open journal the host names, reconciled from what is on disk (below). |
+| `status()` | The applied sets and the latest recovery reports. |
+| `Merge`, `Json`, `merge_value` | The three-way merge, and the one for JSON files (written with two-space indentation, keys sorted, no comments: a format that must keep order or comments brings its own `Merge`). |
+| `Target`, `Pin` | Resolving and pinning, and the checked reads and writes, for a writer that needs them directly. |
+
+How a write goes:
+
+- The pins come back in the write's input, so the operation's native confirmation (which shows
+  the exact input) names the selected path and the file it resolves to. The write resolves the
+  selection again and refuses, asking for a new preview, if the link points elsewhere (or is
+  another link, even with the same text), the file was replaced (as editors save, by rename) or
+  modified since the preview. Only the target changes: a link stays the same link with the same
+  text.
+- Each file is written through a handle on its folder (cap-std), never by its path again: a new
+  file beside it (the old file's mode, or 0600 for a new file), checked once more, then renamed
+  over it, the folder flushed, and the file checked to be the one written. The whole operation is
+  checked again at its end. At most 8 files of at most 256 KiB each.
+- Before the first write, the old bytes go into vault backups and the operation into a vault
+  journal (`journal.begin`, its `intent` naming each file's pin and SHA-256s before and after).
+  A write that fails puts back the files already written, newest first, except one another
+  program changed meanwhile, which stays as that program left it; the journal ends rolled back.
+  If putting one back fails, the journal stays open for the next start.
+- Once all are written, the state file records the set and the journal, then the journal is
+  committed, and backups no set names any more are deleted.
+- After a crash, the next start's describe names the open journal: `reconcile` commits it if the
+  state file names it or every file holds its new bytes (saving the set's record), and otherwise
+  puts back, from the backups, each file that holds the new bytes, leaving any file another
+  program changed since, and ends it rolled back. It never writes the new bytes again, and
+  repeating it changes nothing more.
+
+Other programs do not take part in these checks: a write between the last check and the rename,
+or after the final check, is not seen, and several files are journalled, not written atomically.
+This is cooperative write correctness for a full-access tool, not a confinement.
+
+The example `fixture-writer` (`examples/fixture-writer`, package `pluxy/fixture-writer`) is the
+library's test fixture, never a curated tool: it sets top-level values in JSON files with
+`preview`, `apply`, `clear`, `restore` and `status`, and `crash_after` makes `apply` exit after
+that many files. The desktop app's native test packs it (`next/app/native/transactions.ts`).
 
 ## `codex-sessions`
 
