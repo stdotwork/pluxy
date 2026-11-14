@@ -294,6 +294,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "usage-opencode"
+version = "0.1.0"
+dependencies = [
+ "pluxy-program",
+ "pluxy-usage",
+ "rusqlite",
+ "serde_json",
+]
+
+[[package]]
 name = "vcpkg"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -227,6 +227,29 @@ pub struct Found {
     pub mtime_ns: i64,
 }
 
+/// A part of a source file that a `files` job lists as a file of the hub's of its own
+/// (`Parser::entries`): its ID and revision.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Entry {
+    pub id: String,
+    pub size: u64,
+    pub mtime_ns: i64,
+}
+
+/// What a source file lists as in a `files` job (`Parser::entries`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Listing {
+    /// The file itself: `file_id_under`, its size and modification time.
+    Itself,
+    /// Its parts, each a file of the hub's of its own. A part listed by more than one file (the
+    /// same ID under two roots) is listed once, at its newest revision (by time, then size); a
+    /// part whose ID is longer than `MAX_PATH` is left out and the listing counts as cut short.
+    Parts(Vec<Entry>),
+    /// Its parts cannot be listed now: the file is listed as itself, so a read of it reports why,
+    /// and the listing counts as cut short, so the hub marks none of the source's files gone.
+    Failed,
+}
+
 fn mtime_ns(m: &std::fs::Metadata) -> i64 {
     m.mtime()
         .saturating_mul(1_000_000_000)
@@ -425,6 +448,24 @@ pub trait Parser: Send + Sync {
     fn locate(&self, roots: &[PathBuf], id: &str) -> Option<PathBuf> {
         locate(roots, id, &|p| self.wanted(p))
     }
+    /// What a source file found under root lists as: by default the file itself. A parser of a
+    /// file that holds many records (such as a database of sessions) may list each part as an
+    /// entry of its own, with its own ID and revision, so the hub reads only the parts that changed
+    /// and keeps each part's rows apart; it reads them with `read_entry`.
+    fn entries(&self, _root: &Path, _found: &Found) -> Listing {
+        Listing::Itself
+    }
+    /// Reads the entry id names when it is a part of a file that `entries` listed: sets the sink's
+    /// revision to the part's as read (`Sink::revise`) before any row, then gives it the rows.
+    /// None (the default): id names a whole file, which the library locates and reads.
+    fn read_entry(
+        &self,
+        _roots: &[PathBuf],
+        _id: &str,
+        _sink: &mut Sink,
+    ) -> Option<Result<(), Error>> {
+        None
+    }
     /// Turns one file's bytes (a file of at most `MAX_DOCUMENT` bytes) into rows, handed to sink
     /// as they are read. A record counted twice in one file (a repeated message ID, a cumulative
     /// counter) is the parser's to deduplicate; the hub replaces a file's rows as a whole.
@@ -525,6 +566,17 @@ impl<'a> Sink<'a> {
         Ok(())
     }
 
+    /// Sets the revision (size and modification time) the file's parts carry, for an entry a parser
+    /// reads itself (`Parser::read_entry`); refused once a part was sent.
+    pub fn revise(&mut self, size: u64, mtime_ns: i64) -> Result<(), Error> {
+        if self.part > 0 {
+            return Err(Error::internal("a revision set after a part was sent"));
+        }
+        self.size = size;
+        self.mtime_ns = mtime_ns;
+        Ok(())
+    }
+
     /// Sends the rows so far as a part of their own, if there are any.
     pub fn end_part(&mut self) -> Result<(), Error> {
         if self.rows.is_empty() && self.events.is_empty() {
@@ -621,7 +673,8 @@ fn finished(parsed: Result<(), Error>, sink: Sink) -> Result<Result<(), String>,
 
 /// Runs a job of schema 1 for parser, as the hub's job input asks:
 ///
-/// - `{"mode": "files", "roots"?}`: lists the source files, newest first, in batches
+/// - `{"mode": "files", "roots"?}`: lists the source files' entries (`Parser::entries`, by default
+///   each file), newest first, at most `MAX_FILES`, in batches
 ///   `{"files": [{"file", "size", "mtime_ns"}]}`, and answers
 ///   `{"label", "roots", "count", "truncated"}`;
 /// - `{"mode": "read", "roots"?, "files": [IDs]}`: reads each file named, sending its rows in
@@ -640,15 +693,56 @@ pub fn produce(call: &Call, parser: &dyn Parser) -> Result<Value, Error> {
     match input["mode"].as_str() {
         Some("files") => {
             let wanted = |p: &Path| parser.wanted(p);
-            let (found, truncated) = scan(&roots, &wanted, &|| call.cancelled())?;
-            let items: Vec<Value> = found
-                .iter()
-                .filter_map(|f| {
-                    // The root a scan found it under: the first that holds it.
-                    let root = roots.iter().find(|r| f.path.starts_with(r))?;
-                    let id = parser.file_id_under(root, &f.path)?;
-                    Some(json!({"file": id, "size": f.size, "mtime_ns": f.mtime_ns}))
-                })
+            let (found, mut truncated) = scan(&roots, &wanted, &|| call.cancelled())?;
+            let mut entries = Vec::new();
+            // Parts by ID, each at its newest revision.
+            let mut parts: BTreeMap<String, Entry> = BTreeMap::new();
+            for f in &found {
+                if call.cancelled() {
+                    return Err(Error::cancelled());
+                }
+                // The root a scan found it under: the first that holds it.
+                let Some(root) = roots.iter().find(|r| f.path.starts_with(r)) else {
+                    continue;
+                };
+                let listing = parser.entries(root, f);
+                if listing == Listing::Failed {
+                    truncated = true;
+                }
+                match listing {
+                    Listing::Itself | Listing::Failed => {
+                        entries.extend(parser.file_id_under(root, &f.path).map(|id| Entry {
+                            id,
+                            size: f.size,
+                            mtime_ns: f.mtime_ns,
+                        }))
+                    }
+                    Listing::Parts(list) => {
+                        for e in list {
+                            if e.id.is_empty() || e.id.len() > MAX_PATH {
+                                truncated = true;
+                                continue;
+                            }
+                            match parts.get(&e.id) {
+                                Some(o) if (o.mtime_ns, o.size) >= (e.mtime_ns, e.size) => {}
+                                _ => {
+                                    parts.insert(e.id.clone(), e);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            entries.extend(parts.into_values());
+            // Newest first; the files' own order kept between equal times.
+            entries.sort_by_key(|e| std::cmp::Reverse(e.mtime_ns));
+            if entries.len() > MAX_FILES {
+                entries.truncate(MAX_FILES);
+                truncated = true;
+            }
+            let items: Vec<Value> = entries
+                .into_iter()
+                .map(|e| json!({"file": e.id, "size": e.size, "mtime_ns": e.mtime_ns}))
                 .collect();
             let count = items.len();
             chunked(call, "files", items)?;
@@ -673,31 +767,33 @@ pub fn produce(call: &Call, parser: &dyn Parser) -> Result<Value, Error> {
                 if !done.insert(id) {
                     continue;
                 }
-                let located = parser
-                    .locate(&roots, id)
-                    .ok_or_else(|| "not one of this source's files".to_string());
+                // An entry the parser reads itself, else a file the library locates and reads.
                 // A streamed file is read as far as its size when opened, as that is the
                 // revision its rows are for.
-                let outcome = match located {
-                    Ok(path) if parser.streamed() => match open_file(&path) {
-                        Ok((file, size, mtime)) => {
-                            let mut sink = Sink::new(call, id, size, mtime);
-                            let reader = std::io::BufReader::new(file.take(size));
-                            let parsed =
-                                parser.parse_lines(&mut LineReader::new(reader), &mut sink);
-                            finished(parsed, sink)?
-                        }
-                        Err(e) => Err(e),
+                let mut entry = Sink::new(call, id, 0, 0);
+                let outcome = match parser.read_entry(&roots, id, &mut entry) {
+                    Some(parsed) => finished(parsed, entry)?,
+                    None => match parser.locate(&roots, id) {
+                        None => Err("not one of this source's files".to_string()),
+                        Some(path) if parser.streamed() => match open_file(&path) {
+                            Ok((file, size, mtime)) => {
+                                let mut sink = Sink::new(call, id, size, mtime);
+                                let reader = std::io::BufReader::new(file.take(size));
+                                let parsed =
+                                    parser.parse_lines(&mut LineReader::new(reader), &mut sink);
+                                finished(parsed, sink)?
+                            }
+                            Err(e) => Err(e),
+                        },
+                        Some(path) => match read_file(&path) {
+                            Ok((bytes, size, mtime)) => {
+                                let mut sink = Sink::new(call, id, size, mtime);
+                                let parsed = parser.parse(&bytes, &mut sink);
+                                finished(parsed, sink)?
+                            }
+                            Err(e) => Err(e),
+                        },
                     },
-                    Ok(path) => match read_file(&path) {
-                        Ok((bytes, size, mtime)) => {
-                            let mut sink = Sink::new(call, id, size, mtime);
-                            let parsed = parser.parse(&bytes, &mut sink);
-                            finished(parsed, sink)?
-                        }
-                        Err(e) => Err(e),
-                    },
-                    Err(e) => Err(e),
                 };
                 call.check()?;
                 match outcome {

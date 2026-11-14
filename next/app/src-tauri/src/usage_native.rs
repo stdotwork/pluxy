@@ -33,6 +33,14 @@
 //!   content-block lines count once, a branch session's copy of the original's history counts
 //!   once, also after the branch grows); no prompt, reply, folder or raw message ID reaches a
 //!   report, the hub's store or (by run.ts) the app's output;
+//! - the OpenCode parser (pluxy/usage-opencode, a real package): installed and enabled after the
+//!   Claude Code step, it reads an OpenCode home written by hand in the run's HOME (a database with
+//!   OpenCode's old and current message tables, and JSON message files) with its default roots;
+//!   the reports equal the expected totals (a message in the JSON store and in both tables counts
+//!   once, as does a fork's copy of its parent's history), a repeated sync reads nothing, and after
+//!   a message is added to the database only its session is read; the database stays byte for byte
+//!   as written with no file added beside it; no prompt, title, folder or raw ID reaches a report,
+//!   the hub's store or (by run.ts) the app's output; disabled, the parser is not scheduled;
 //! - the hub's own page: opened, it starts the hub;
 //! - idle: once nothing uses them, no hub, parser or peer process is left.
 //!
@@ -666,6 +674,123 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 processes(&program(&claude)).is_empty().then_some(())
             })?;
             Ok(())
+        })(),
+    )?;
+    page.close(main)?;
+
+    // ---- the OpenCode parser: a real package, its default roots in the run's HOME, the Codex and
+    // Claude Code parsers still enabled.
+    let opencode = expect["opencode"]["id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let canaries: Vec<String> = expect["opencode"]["canaries"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|c| c.as_str().map(String::from))
+        .collect();
+    let files = &expect["opencode"]["files"];
+    let path = |k: &str| PathBuf::from(files[k].as_str().unwrap_or_default());
+    // The database is byte for byte the copy written as want, and its folder holds nothing new.
+    let untouched = |want: &str, what: &str| -> Result<(), String> {
+        let db = std::fs::read(path("db")).map_err(|e| e.to_string())?;
+        let copy = std::fs::read(path(want)).map_err(|e| e.to_string())?;
+        require(db == copy, format!("{what}: the OpenCode database changed"))?;
+        let mut names: Vec<String> = std::fs::read_dir(path("folder"))
+            .map_err(|e| e.to_string())?
+            .filter_map(|e| e.ok().and_then(|e| e.file_name().into_string().ok()))
+            .collect();
+        names.sort();
+        require(
+            json!(names) == files["entries"],
+            format!("{what}: the OpenCode database's folder holds {names:?}"),
+        )
+    };
+    let mut page = Page::open(app, main, &hub)?;
+    step(
+        "opencode",
+        (|| {
+            install(
+                main,
+                "curated",
+                &opencode,
+                expect["versions"][&opencode].as_str().unwrap_or_default(),
+            )?;
+            require(
+                program(&opencode).is_file(),
+                format!("{} is not installed", program(&opencode).display()),
+            )?;
+            enable(app, main, &opencode)?;
+            let mut seen = String::new();
+            let mut check = |page: &mut Page, sync: &str, cases: &str| -> Result<(), String> {
+                let s = synced(page, &hub, true)?;
+                require(
+                    counts(&s, &opencode) == expect["opencode"]["syncs"][sync],
+                    format!("the {sync} sync of the OpenCode source: {s}"),
+                )?;
+                for other in [&codex, &claude] {
+                    let name = if *other == codex { "codex" } else { "claude" };
+                    require(
+                        counts(&s, other) == expect["opencode"]["syncs"][name],
+                        format!("the {sync} sync of the {name} source beside OpenCode: {s}"),
+                    )?;
+                }
+                for case in expect["opencode"]["reports"][cases]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                {
+                    let got = unasked(page, &hub, "report", case["input"].clone())?;
+                    seen.push_str(&got.to_string());
+                    let what = format!("opencode {sync} ({})", case["name"]);
+                    matches(&got, &case["output"], &what)?;
+                }
+                Ok(())
+            };
+            check(&mut page, "first", "first")?;
+            untouched("before", "after the first sync")?;
+            check(&mut page, "repeat", "first")?;
+            untouched("before", "after the repeated sync")?;
+            // A new message in the database: only its session is read again.
+            std::fs::copy(path("after"), path("db")).map_err(|e| e.to_string())?;
+            check(&mut page, "after", "after")?;
+            untouched("after", "after the third sync")?;
+            // No prompt, title, summary, reply, folder or raw session or message ID in any report or in
+            // the hub's store.
+            no_canary(&canaries, &seen, "a report")?;
+            let data = app
+                .path()
+                .app_data_dir()
+                .map_err(|e| e.to_string())?
+                .join("tools")
+                .join(&hub);
+            // The same search finds what the store does hold (a positive control).
+            let stored = folder_text(&data)?;
+            require(
+                stored.contains("gpt-5.5-mini") && seen.contains("gpt-5.5-mini"),
+                "the store and the reports should hold the OpenCode models: the canary search reads nothing",
+            )?;
+            no_canary(&canaries, &stored, "the hub's store")?;
+            wait_for("the OpenCode parser to stop when idle", || {
+                processes(&program(&opencode)).is_empty().then_some(())
+            })?;
+            // Disabled, the parser is not scheduled and scans nothing.
+            ok(
+                main,
+                "device_enable",
+                json!({"id": opencode, "enabled": false}),
+            )?;
+            let s = synced(&mut page, &hub, true)?;
+            require(
+                counts(&s, &opencode).is_null(),
+                format!("a sync with the OpenCode parser disabled schedules it: {s}"),
+            )?;
+            require(
+                processes(&program(&opencode)).is_empty(),
+                "a disabled OpenCode parser was started",
+            )?;
+            untouched("after", "after the sync with the parser disabled")
         })(),
     )?;
     page.close(main)?;
