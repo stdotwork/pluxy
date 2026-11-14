@@ -90,6 +90,14 @@
 // a hand-written Codex home in the run's HOME the same way, with prompt canaries kept out of every
 // report, the hub's store and the app's output; so does the Oh My Pi parser (next/app-tools/usage-omp)
 // on an Oh My Pi home, and a disabled parser scans nothing.
+// The transaction library check (transactions.ts, transactions_native.rs) runs in one more
+// session with that build: the library's fixture writer (next/app-tools/lib/transactions, example
+// fixture-writer, built here) writes selected stow and chezmoi link targets after a native
+// confirmation naming the link and its target, changing only those targets and keeping each link's
+// identity and text; a retargeted link or a replaced target refuses, an edit made between preview
+// and apply is kept, clear keeps the person's later edits, restore puts the original bytes back, a
+// failed second write rolls the first back, and after a crash the next start rolls back or commits
+// from disk, never over a competing edit.
 // The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
@@ -131,6 +139,7 @@ import { buildProgramFixtures } from "./program";
 import { buildRoutingFixtures } from "./routing";
 import { missingPrerequisites } from "./services";
 import { buildSessionsFixtures } from "./sessions";
+import { buildTransactionsFixtures } from "./transactions";
 import { runUpdate } from "./update";
 import { buildUsageFixtures } from "./usage";
 import { buildVaultFixtures } from "./vault";
@@ -524,9 +533,10 @@ interface Rotation {
  * stages. earlyExit: the app's setup waits for its core's exit callback before the app state
  * exists (PLUXY_APP_TEST_EARLY_EXIT), and only the recovery of that core is checked. admission:
  * the session checks only signed native-tier admission; program: only the program host and swap
- * checks; routing: only the cross-package routing check; vault: only the vault check. core:
- * the session runs only the core steps, against that core source. release: the app starts with
- * that release installed and selected. */
+ * checks; routing: only the cross-package routing check; vault: only the vault check; reader: only
+ * the session reader check; transactions: only the transaction library check. core: the session
+ * runs only the core steps, against that core source. release: the app starts with that release
+ * installed and selected. */
 async function runApp(
   mode: Mode,
   artifact: Artifact,
@@ -547,6 +557,7 @@ async function runApp(
   release?: Release,
   reader = false,
   usage = false,
+  transactions = false,
 ): Promise<string[]> {
   const { label, bin } = artifact;
   const root = rotation.root ?? mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
@@ -626,6 +637,7 @@ async function runApp(
       !vault &&
       !core &&
       !reader &&
+      !transactions &&
       !usage &&
       suite !== "access"
         ? join(root, "device")
@@ -727,6 +739,19 @@ async function runApp(
         JSON.stringify({ version: 0, registries: f.registries }),
       );
     }
+    // The transaction library check's signed fixture writer, its registry and trust profile, and
+    // the stow and chezmoi config files.
+    const transactionsDir = transactions ? join(root, "transactions") : undefined;
+    if (transactionsDir) {
+      mkdirSync(transactionsDir);
+      const f = buildTransactionsFixtures(transactionsDir, dirs.home, appTools, fixtureWriter);
+      nonce = f.nonce;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
     if (curated) {
       mkdirSync(curated);
       if (device) mkdirSync(device);
@@ -747,7 +772,7 @@ async function runApp(
       // The app starts again on the first run's HOME: its marker and profile stay, and so does
       // the nonce the marker holds.
       nonce = JSON.parse(readFileSync(join(dirs.home, MARKER_FILE), "utf8")).nonce;
-    } else if (!programDir && !routingDir && !vaultDir && !sessionsDir && !usageDir) {
+    } else if (!programDir && !routingDir && !vaultDir && !sessionsDir && !usageDir && !transactionsDir) {
       try {
         nonce = /^nonce=([0-9a-f]{64})$/m.exec(run(probe, ["trust-marker", dirs.home], app))?.[1] ?? "";
         if (!nonce) throw new Error("it printed no nonce");
@@ -802,6 +827,7 @@ async function runApp(
       ...(routingDir ? { PLUXY_APP_TEST_ROUTING: routingDir } : {}),
       ...(vaultDir ? { PLUXY_APP_TEST_VAULT: vaultDir } : {}),
       ...(sessionsDir ? { PLUXY_APP_TEST_SESSIONS: sessionsDir } : {}),
+      ...(transactionsDir ? { PLUXY_APP_TEST_TRANSACTIONS: transactionsDir } : {}),
       ...(usageDir ? { PLUXY_APP_TEST_USAGE: usageDir } : {}),
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: artifact.identifier } : {}),
       ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
@@ -1067,6 +1093,16 @@ async function runApp(
       console.log(`${mode} routing ${JSON.stringify(r ?? {})}`);
       console.log(`${mode} jobs ${JSON.stringify(j ?? {})}`);
       console.log(`${mode}: routing ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
+    if (transactions) {
+      const r = steps.get("transactions") as { passed?: boolean } | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(r?.passed === true, `the transaction library check did not complete: ${failure}`);
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} transactions ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode}: transactions ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
 
@@ -1577,6 +1613,8 @@ const programFixture = join(targetDir, "debug", "examples", "program_fixture");
 const appTools = join(next, "app-tools");
 const appToolsTarget = join(targetDir, "app-tools");
 const sessionsReader = join(appToolsTarget, "debug", "codex-sessions");
+/** The transaction library's fixture writer the transaction library check packs. */
+const fixtureWriter = join(appToolsTarget, "debug", "examples", "fixture-writer");
 let appImage = ""; // the smoke AppImage the sessions run
 const problems: string[] = [];
 
@@ -1690,6 +1728,23 @@ async function main(): Promise<number> {
         appTools,
       );
     }
+  }
+  // The transaction library's fixture writer, when the library is there.
+  if (existsSync(join(appTools, "lib", "transactions", "Cargo.toml"))) {
+    run(
+      "cargo",
+      [
+        "build",
+        "--locked",
+        "-p",
+        "pluxy-transactions",
+        "--example",
+        "fixture-writer",
+        "--target-dir",
+        appToolsTarget,
+      ],
+      appTools,
+    );
   }
   const appImageDir = tempDir("pluxy-app-native-appimage-");
   // The same test trust profile in every run; without a test package, a key no build carries.
@@ -1888,6 +1943,31 @@ async function main(): Promise<number> {
           false,
           undefined,
           release,
+          true,
+        )),
+      );
+      // The transaction library check, on the same build.
+      p.push(
+        ...(await runApp(
+          "managed",
+          trusted,
+          updaterKey,
+          managed,
+          undefined,
+          false,
+          false,
+          undefined,
+          undefined,
+          {},
+          false,
+          false,
+          false,
+          false,
+          false,
+          undefined,
+          release,
+          false,
+          false,
           true,
         )),
       );
