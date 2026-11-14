@@ -198,7 +198,7 @@ async function launch(label: string, program: string, extra: Record<string, stri
     });
   });
   const failed = steps.find(([s]) => s === "failed");
-  check(!failed, `${label}: the app's check failed: ${JSON.stringify(failed?.[1]).slice(0, 2000)}`);
+  if (failed) check(false, `${label}: the app's check failed: ${JSON.stringify(failed[1]).slice(0, 2000)}`);
   if (failed) say(`${label}: last lines:\n  ${tail.join("\n  ")}`);
   const step = (name: string) => steps.filter(([s]) => s === name).map(([, v]) => v);
   return { ended, step };

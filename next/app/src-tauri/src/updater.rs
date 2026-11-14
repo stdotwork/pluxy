@@ -644,7 +644,31 @@ pub fn supervise(r: Restart) {
             detail,
         },
     );
-    let _ = start(&p.appimage);
+    // The earlier version's AppImage has the same contents as this one's: run without FUSE
+    // (APPIMAGE_EXTRACT_AND_RUN) it would unpack into the folder this one's runtime, its parent,
+    // deletes once this process ends. So it starts once that runtime has ended.
+    let extracted = std::env::var_os("APPDIR")
+        .map(PathBuf::from)
+        .and_then(|d| {
+            d.file_name()
+                .map(|n| n.to_string_lossy().starts_with("appimage_extracted_"))
+        })
+        .unwrap_or(false);
+    let wait_for = if extracted {
+        // SAFETY: getppid has no preconditions.
+        unsafe { libc::getppid() }
+    } else {
+        std::process::id() as i32
+    };
+    let _ = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(r#"p=$1; a=$2; shift 2; while kill -0 "$p" 2>/dev/null; do sleep 0.2; done; exec "$a" "$@""#)
+        .arg("sh")
+        .arg(wait_for.to_string())
+        .arg(&p.appimage)
+        .args(&args)
+        .process_group(0)
+        .spawn();
 }
 
 /// At startup, after the profile lock: the version an install started accepts itself once the
