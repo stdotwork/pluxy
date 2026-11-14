@@ -1,20 +1,50 @@
 //! The hub's SQLite store, the only place usage is kept: per source file, its revision (size and
-//! modification time) and its rows per UTC hour and model; the sources seen, with their labels
-//! and custom roots; the settings and the last sync time. Only the hub writes it.
+//! modification time) and its rows per UTC hour and model; per source, its keyed events (schema 2:
+//! one record counted once whichever files hold it) and the files that reference each; the
+//! sources seen, with their labels and custom roots; the settings and the last sync time. Only the
+//! hub writes it.
 
 use pluxy_usage::Tokens;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-/// The store's own format version, in `meta`.
-const FORMAT: &str = "1";
+/// The store's own format version, in `meta`: 2 adds keyed events. A store of format 1 is moved to
+/// 2 in place when opened, its rows kept.
+const FORMAT: &str = "2";
 /// The sync intervals the person may choose, in minutes (0: off), and the default.
 pub const INTERVALS: [u64; 5] = [0, 5, 15, 30, 60];
 pub const DEFAULT_INTERVAL: u64 = 5;
 
 /// A file's rows, summed per (UTC hour, model).
 pub type Rows = BTreeMap<(i64, String), Tokens>;
+/// A file's keyed events: key to (UTC hour, model, tokens).
+pub type Events = BTreeMap<String, (i64, String, Tokens)>;
+
+/// The tables format 2 adds.
+const EVENTS: &str = "CREATE TABLE IF NOT EXISTS events (
+       id INTEGER PRIMARY KEY, source TEXT NOT NULL, key TEXT NOT NULL,
+       hour INTEGER NOT NULL, model TEXT NOT NULL,
+       input INTEGER NOT NULL, output INTEGER NOT NULL, cache_read INTEGER NOT NULL,
+       cache_write INTEGER NOT NULL, reasoning INTEGER NOT NULL, total INTEGER NOT NULL,
+       samples INTEGER NOT NULL,
+       UNIQUE (source, key));
+     CREATE INDEX IF NOT EXISTS events_hour ON events (hour);
+     CREATE TABLE IF NOT EXISTS refs (
+       file INTEGER NOT NULL REFERENCES files (id) ON DELETE CASCADE,
+       event INTEGER NOT NULL REFERENCES events (id) ON DELETE CASCADE,
+       PRIMARY KEY (file, event)) WITHOUT ROWID;
+     CREATE INDEX IF NOT EXISTS refs_event ON refs (event);";
+
+/// Every row the queries count: a file's rows, and each keyed event once.
+const ALL_ROWS: &str = "(SELECT f.source AS source, u.hour AS hour, u.model AS model,
+       u.input AS input, u.output AS output, u.cache_read AS cache_read,
+       u.cache_write AS cache_write, u.reasoning AS reasoning, u.total AS total,
+       u.samples AS samples
+     FROM usage u JOIN files f ON f.id = u.file
+     UNION ALL
+     SELECT source, hour, model, input, output, cache_read, cache_write, reasoning, total, samples
+     FROM events)";
 
 fn e(err: rusqlite::Error) -> String {
     err.to_string()
@@ -78,11 +108,20 @@ impl Store {
             .optional()
             .map_err(e)?;
         match format.as_deref() {
-            None => {
-                db.execute("INSERT INTO meta VALUES ('format', ?1)", [FORMAT])
-                    .map_err(e)?;
-            }
             Some(FORMAT) => {}
+            // New, or format 1: add format 2's tables and say so, in one transaction.
+            None | Some("1") => {
+                db.execute_batch(&format!(
+                    "BEGIN; {EVENTS}
+                     INSERT INTO meta VALUES ('format', '{FORMAT}')
+                       ON CONFLICT (key) DO UPDATE SET value = '{FORMAT}';
+                     COMMIT;"
+                ))
+                .map_err(|err| {
+                    let _ = db.execute_batch("ROLLBACK");
+                    e(err)
+                })?;
+            }
             Some(other) => return Err(format!("the store's format {other} is not known")),
         }
         Ok(Store {
@@ -215,6 +254,7 @@ impl Store {
                 "SELECT s.source, s.label, s.roots, s.last_scan,
                    (SELECT COUNT(*) FROM files f WHERE f.source = s.source),
                    (SELECT COUNT(*) FROM usage u JOIN files f ON f.id = u.file WHERE f.source = s.source)
+                   + (SELECT COUNT(*) FROM events v WHERE v.source = s.source)
                  FROM sources s ORDER BY s.source",
             )
             .map_err(e)?;
@@ -251,8 +291,10 @@ impl Store {
         rows.collect::<Result<_, _>>().map_err(e)
     }
 
-    /// Replaces file's rows and revision with rows, size and mtime_ns, in one transaction: a
-    /// reader sees the old rows or the new, never part of either.
+    /// Replaces file's rows, references and revision with rows, events, size and mtime_ns, in one
+    /// transaction: a reader sees the old rows or the new, never part of either. Each event is
+    /// kept once per source by its key, with this read's values, and referenced by the file; an
+    /// event the file referenced before and no file references now is deleted.
     pub fn replace_file(
         &mut self,
         source: &str,
@@ -260,6 +302,7 @@ impl Store {
         size: u64,
         mtime_ns: i64,
         rows: &Rows,
+        events: &Events,
     ) -> Result<(), String> {
         let tx = self.db.transaction().map_err(e)?;
         tx.execute(
@@ -282,6 +325,19 @@ impl Store {
             .map_err(e)?;
         tx.execute("DELETE FROM usage WHERE file = ?1", [id])
             .map_err(e)?;
+        let before: Vec<i64> = {
+            let mut st = tx
+                .prepare("SELECT event FROM refs WHERE file = ?1")
+                .map_err(e)?;
+            let ids = st
+                .query_map([id], |r| r.get(0))
+                .map_err(e)?
+                .collect::<Result<_, _>>()
+                .map_err(e)?;
+            ids
+        };
+        tx.execute("DELETE FROM refs WHERE file = ?1", [id])
+            .map_err(e)?;
         {
             let mut st = tx
                 .prepare("INSERT INTO usage VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)")
@@ -292,6 +348,39 @@ impl Store {
                     id, hour, model, v[0], v[1], v[2], v[3], v[4], v[5], v[6]
                 ])
                 .map_err(e)?;
+            }
+            let mut event = tx
+                .prepare(
+                    "INSERT INTO events (source, key, hour, model, input, output, cache_read,
+                       cache_write, reasoning, total, samples)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                     ON CONFLICT (source, key) DO UPDATE SET hour = ?3, model = ?4, input = ?5,
+                       output = ?6, cache_read = ?7, cache_write = ?8, reasoning = ?9,
+                       total = ?10, samples = ?11
+                     RETURNING id",
+                )
+                .map_err(e)?;
+            let mut refer = tx
+                .prepare("INSERT OR IGNORE INTO refs (file, event) VALUES (?1, ?2)")
+                .map_err(e)?;
+            for (key, (hour, model, t)) in events {
+                let v = t.values().map(|n| n as i64);
+                let event_id: i64 = event
+                    .query_row(
+                        params![source, key, hour, model, v[0], v[1], v[2], v[3], v[4], v[5], v[6]],
+                        |r| r.get(0),
+                    )
+                    .map_err(e)?;
+                refer.execute(params![id, event_id]).map_err(e)?;
+            }
+            let mut orphan = tx
+                .prepare(
+                    "DELETE FROM events WHERE id = ?1
+                       AND NOT EXISTS (SELECT 1 FROM refs WHERE event = ?1)",
+                )
+                .map_err(e)?;
+            for event_id in before {
+                orphan.execute([event_id]).map_err(e)?;
             }
         }
         tx.commit().map_err(e)
@@ -324,13 +413,13 @@ impl Store {
     pub fn rows(&self, from: i64, to: i64) -> Result<Vec<(String, i64, String, Tokens)>, String> {
         let mut st = self
             .db
-            .prepare(
-                "SELECT f.source, u.hour, u.model, SUM(u.input), SUM(u.output), SUM(u.cache_read),
-                   SUM(u.cache_write), SUM(u.reasoning), SUM(u.total), SUM(u.samples)
-                 FROM usage u JOIN files f ON f.id = u.file
-                 WHERE u.hour >= ?1 AND u.hour <= ?2
-                 GROUP BY f.source, u.hour, u.model",
-            )
+            .prepare(&format!(
+                "SELECT source, hour, model, SUM(input), SUM(output), SUM(cache_read),
+                   SUM(cache_write), SUM(reasoning), SUM(total), SUM(samples)
+                 FROM {ALL_ROWS}
+                 WHERE hour >= ?1 AND hour <= ?2
+                 GROUP BY source, hour, model"
+            ))
             .map_err(e)?;
         let rows = st
             .query_map([from, to], |r| {
@@ -348,10 +437,9 @@ impl Store {
     pub fn hourly_totals(&self) -> Result<Vec<(String, i64, u64)>, String> {
         let mut st = self
             .db
-            .prepare(
-                "SELECT f.source, u.hour, SUM(u.total) FROM usage u JOIN files f ON f.id = u.file
-                 GROUP BY f.source, u.hour",
-            )
+            .prepare(&format!(
+                "SELECT source, hour, SUM(total) FROM {ALL_ROWS} GROUP BY source, hour"
+            ))
             .map_err(e)?;
         let rows = st
             .query_map([], |r| {
@@ -364,7 +452,12 @@ impl Store {
     /// The first hour any row has.
     pub fn first_hour(&self) -> Result<Option<i64>, String> {
         self.db
-            .query_row("SELECT MIN(hour) FROM usage", [], |r| r.get(0))
+            .query_row(
+                "SELECT MIN(hour) FROM (SELECT MIN(hour) AS hour FROM usage
+                   UNION ALL SELECT MIN(hour) FROM events)",
+                [],
+                |r| r.get(0),
+            )
             .map_err(e)
     }
 
@@ -373,7 +466,8 @@ impl Store {
     pub fn clear(&mut self) -> Result<(), String> {
         let tx = self.db.transaction().map_err(e)?;
         tx.execute_batch(
-            "DELETE FROM usage; DELETE FROM files; UPDATE sources SET last_scan = NULL;
+            "DELETE FROM refs; DELETE FROM events; DELETE FROM usage; DELETE FROM files;
+             UPDATE sources SET last_scan = NULL;
              DELETE FROM meta WHERE key = 'last_sync';",
         )
         .map_err(e)?;
@@ -381,7 +475,8 @@ impl Store {
         self.db.execute_batch("VACUUM").map_err(e)
     }
 
-    /// The store's size on disk (with its journal) and its rows and files.
+    /// The store's size on disk (with its journal), its rows (a file's rows and each keyed event
+    /// once) and files.
     pub fn storage(&self) -> Result<(u64, u64, u64), String> {
         let mut bytes = 0;
         for suffix in ["", "-journal", "-wal", "-shm"] {
@@ -397,7 +492,7 @@ impl Store {
         };
         Ok((
             bytes,
-            count("SELECT COUNT(*) FROM usage")?,
+            count("SELECT COUNT(*) FROM usage")? + count("SELECT COUNT(*) FROM events")?,
             count("SELECT COUNT(*) FROM files")?,
         ))
     }

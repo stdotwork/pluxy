@@ -7,9 +7,9 @@
 //! and counted as ended, so a run always ends. The run lives in memory: if the hub stops, the next
 //! sync starts over and skips every file already committed.
 
-use crate::store::{Rows, Store};
+use crate::store::{Events, Rows, Store};
 use pluxy_program::Error;
-use pluxy_usage::{Row, KIND, MAX_FILES, MAX_PATH};
+use pluxy_usage::{Row, KIND, MAX_FILES, MAX_PATH, SCHEMA_KEYED};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -24,7 +24,7 @@ const MAX_LABEL: usize = 64;
 /// Seconds with no delivery after which a job is cancelled and counted as ended: above the
 /// host's ten-second bound on a delivery's wait.
 pub const STALE_SECS: i64 = 60;
-/// Distinct (hour, model) rows one file may stage; a file past it fails.
+/// Distinct (hour, model) rows and keyed events one file may stage; a file past it fails.
 pub const MAX_STAGED_ROWS: usize = 100_000;
 /// The earliest hour a row may name (2000-01-01 UTC), and how far past now (a day).
 pub const MIN_HOUR: i64 = 946_684_800;
@@ -89,6 +89,7 @@ struct SourceRun {
 struct Staged {
     next: u64,
     rows: Rows,
+    events: Events,
 }
 
 enum Kind {
@@ -295,6 +296,8 @@ impl Sync {
             ));
         }
         let value = &d["value"];
+        // Keyed rows are schema 2's: a producer at schema 1 may send none.
+        let keyed = d["source"]["schema"].as_u64() == Some(SCHEMA_KEYED);
         match d["event"].as_str() {
             Some("batch") => {
                 let job = run.jobs.get_mut(&job_id).unwrap_or_else(|| unreachable!());
@@ -305,7 +308,7 @@ impl Sync {
                         files,
                         done,
                         staged,
-                    } => read_batch(store, source, files, done, staged, value, now),
+                    } => read_batch(store, source, files, done, staged, value, keyed, now),
                 }
             }
             Some(end @ ("done" | "failed" | "cancelled")) => {
@@ -483,7 +486,10 @@ fn listed(store: &mut Store, source: &mut SourceRun, output: &Value) -> Result<(
 
 /// A `read` batch: a part of a file's rows, committed with the file's last part, or the file's
 /// error (its old rows stay). A file with a row before 2000 or more than a day after now, or with
-/// more than `MAX_STAGED_ROWS` rows, fails (its old rows stay) and the job goes on.
+/// more than `MAX_STAGED_ROWS` rows, fails (its old rows stay) and the job goes on. A keyed row
+/// (keyed: the producer is at schema 2) is an event of the file; a key seen again in the file
+/// replaces the event.
+#[allow(clippy::too_many_arguments)]
 fn read_batch(
     store: &mut Store,
     source: &mut SourceRun,
@@ -491,6 +497,7 @@ fn read_batch(
     done: &mut HashSet<String>,
     staged: &mut HashMap<String, Staged>,
     value: &Value,
+    keyed: bool,
     now: i64,
 ) -> Result<Value, Error> {
     let file = value["file"]
@@ -516,18 +523,27 @@ fn read_batch(
     let mut refused = None;
     for r in value["rows"].as_array().ok_or_else(|| bad("rows"))? {
         let row = Row::from_json(r).map_err(|e| bad(&e))?;
+        if row.key.is_some() && !keyed {
+            return Err(bad("row (a key needs schema 2)"));
+        }
         if row.hour < MIN_HOUR || row.hour > now + MAX_AHEAD {
             refused = Some(format!(
                 "{file}: a row's hour is before 2000 or more than a day from now"
             ));
             break;
         }
-        entry
-            .rows
-            .entry((row.hour, model_name(&row.model)))
-            .or_default()
-            .add(&row.tokens);
-        if entry.rows.len() > MAX_STAGED_ROWS {
+        let model = model_name(&row.model);
+        match row.key {
+            Some(key) => {
+                entry.events.insert(key, (row.hour, model, row.tokens));
+            }
+            None => entry
+                .rows
+                .entry((row.hour, model))
+                .or_default()
+                .add(&row.tokens),
+        }
+        if entry.rows.len() + entry.events.len() > MAX_STAGED_ROWS {
             refused = Some(format!("{file}: more than {MAX_STAGED_ROWS} rows"));
             break;
         }
@@ -543,9 +559,9 @@ fn read_batch(
     if value["last"] == true {
         let size = value["size"].as_u64().ok_or_else(|| bad("size"))?;
         let mtime = value["mtime_ns"].as_i64().ok_or_else(|| bad("mtime_ns"))?;
-        let rows = staged.remove(&file).map(|s| s.rows).unwrap_or_default();
+        let staged = staged.remove(&file).unwrap_or_default();
         store
-            .replace_file(&source.id, &file, size, mtime, &rows)
+            .replace_file(&source.id, &file, size, mtime, &staged.rows, &staged.events)
             .map_err(Error::internal)?;
         done.insert(file);
         source.read += 1;

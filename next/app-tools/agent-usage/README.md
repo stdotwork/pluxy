@@ -5,8 +5,8 @@ It is an optional native tool. It reads no agent's files itself: usage parsers, 
 its own, read them and send the hub their rows through the host's [jobs](../../app/app-host/README.md#jobs).
 The hub keeps the rows in its own SQLite store and answers the page.
 
-This page is the reference for the hub's operations, its store and **schema 1**, the versioned
-ingest API parsers are built on.
+This page is the reference for the hub's operations, its store and **schemas 1 and 2**, the
+versioned ingest API parsers are built on.
 
 ## Operations
 
@@ -21,7 +21,7 @@ ingest API parsers are built on.
 | `clear` | `write`: each call asks the person | `{}` | `{"cleared": true}`; refused while a sync runs |
 | `ingest` | the deliver operation | A job's delivery | `{}` |
 
-The hub consumes kind `pluxy/agent-usage/usage` at schema 1, delivered to `ingest`. Only the host
+The hub consumes kind `pluxy/agent-usage/usage` at schemas 1 and 2, delivered to `ingest`. Only the host
 calls `ingest`: the window, pages and other tools are refused it. The hub exports nothing, so no
 other tool may call any of its operations; its own page calls them all.
 
@@ -94,8 +94,10 @@ The calendar and hours follow the source filter but not the range.
 
 `usage.db` in the hub's data folder (`PLUXY_TOOL_DATA_DIR`), which the app keeps when the hub is
 updated or removed; the hub makes it readable by the person's account only. It holds, per source and file, the file's size and modification time and its
-rows per UTC hour and model; each source's label and custom roots; the interval and the last sync
-time. Rows are kept until the person clears them (`clear`), which deletes every row and file
+rows per UTC hour and model; per source, its keyed events ([schema 2](#schema-2)) and which files
+hold each; each source's label and custom roots; the interval and the last sync time. A store an
+earlier hub made (format 1) is moved to format 2 when the hub opens it, its rows kept; a hub of
+that earlier version cannot read a format 2 store, and offers Clear Agent history. Rows are kept until the person clears them (`clear`), which deletes every row and file
 revision, so the next sync reads every file again. When the store cannot be read (it is damaged), every
 operation says so, and `clear` deletes it and starts an empty one. To delete the store itself,
 delete the hub's data folder while the app is not running.
@@ -153,8 +155,34 @@ Rules:
 - The host names a batch's source; a parser cannot. A batch the hub refuses (a file the job does
   not read, a part out of order, a row's field out of bounds) fails the job.
 
-A change to these fields or rules that a hub at schema 1 would misread is schema 2: parsers then
-declare it, and the hub accepts both while parsers move.
+A change to these fields or rules that a hub would misread is a new schema: parsers then declare
+it, and the hub accepts the old and the new while parsers move.
+
+## Schema 2
+
+Schema 1 with one more field: a row may carry a `key`, which makes it an **event**, one record
+counted once by its source whichever files hold it, such as a Claude Code response that a branched
+session copies into a second transcript. A parser that sends keys declares schema 2:
+
+```json
+"produces": [{"kind": "pluxy/agent-usage/usage", "schema": 2, "operation": "scan"}]
+```
+
+| Field | Meaning |
+| --- | --- |
+| `key` | In a row, optional: the event's stable key within its source, 1 to 128 bytes. A parser builds it from the record's own IDs (a hash of them, so no raw ID leaves it); the same record in another file has the same key |
+
+Rules, beside schema 1's:
+
+- A keyed row is one event: the parser sends each key of a file once, its `samples` normally 1,
+  and does not sum two events into one row. Rows without a key are as in schema 1.
+- When a file's last part arrives, the hub replaces its references with the keys this read sent,
+  in the same transaction as its rows and revision. An event is stored once per source and key,
+  with the values of the file read last that has it. An event no file references any more (every
+  file that held it was read again without it) is deleted; a file that is gone from its folder
+  keeps its references, as it keeps its rows.
+- Reports and `storage` count each event once, beside every file's rows.
+- A key from a parser that declares schema 1 is refused, failing the job (a refused batch).
 
 ## The page
 

@@ -5,7 +5,7 @@ use super::*;
 use pluxy_usage::Tokens;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use store::Rows;
+use store::{Events, Rows};
 use sync::Host;
 
 /// A store in a new folder of its own.
@@ -56,13 +56,28 @@ fn a_files_rows_and_revision_are_replaced_together_or_not_at_all() {
         10,
         100,
         &rows(&[(0, "m", tok(1, 1, 2)), (3600, "m", tok(2, 0, 2))]),
+        &Events::new(),
     )
     .unwrap();
-    s.replace_file("p/a", "f2", 5, 50, &rows(&[(0, "m", tok(7, 0, 7))]))
-        .unwrap();
+    s.replace_file(
+        "p/a",
+        "f2",
+        5,
+        50,
+        &rows(&[(0, "m", tok(7, 0, 7))]),
+        &Events::new(),
+    )
+    .unwrap();
     // Replaced as a whole: the old hour 3600 row is gone.
-    s.replace_file("p/a", "f1", 20, 200, &rows(&[(0, "m", tok(4, 0, 4))]))
-        .unwrap();
+    s.replace_file(
+        "p/a",
+        "f1",
+        20,
+        200,
+        &rows(&[(0, "m", tok(4, 0, 4))]),
+        &Events::new(),
+    )
+    .unwrap();
     let want = vec![("p/a".to_string(), 0, "m".to_string(), 11, 11)];
     assert_eq!(stored(&s), want);
     // A replace that fails part way (a trigger refuses its second row) leaves the old rows and
@@ -79,6 +94,7 @@ fn a_files_rows_and_revision_are_replaced_together_or_not_at_all() {
         30,
         300,
         &rows(&[(0, "a", tok(100, 0, 100)), (0, "boom", tok(1, 0, 1))]),
+        &Events::new(),
     );
     assert!(r.unwrap_err().contains("refused"));
     assert_eq!(stored(&s), want);
@@ -89,8 +105,15 @@ fn a_files_rows_and_revision_are_replaced_together_or_not_at_all() {
 #[test]
 fn clear_deletes_history_and_revisions_and_keeps_settings() {
     let (mut s, d) = store("clear");
-    s.replace_file("p/a", "f1", 10, 100, &rows(&[(0, "m", tok(1, 1, 2))]))
-        .unwrap();
+    s.replace_file(
+        "p/a",
+        "f1",
+        10,
+        100,
+        &rows(&[(0, "m", tok(1, 1, 2))]),
+        &Events::new(),
+    )
+    .unwrap();
     s.set_roots("p/a", Some(&["/r".to_string()])).unwrap();
     s.set_label("p/a", "A").unwrap();
     s.set_interval(30).unwrap();
@@ -617,6 +640,279 @@ fn the_store_is_private_and_clear_replaces_one_that_will_not_open() {
     std::fs::remove_dir_all(d).unwrap();
 }
 
+/// Keyed events (schema 2): key, hour, model and tokens.
+fn events(list: &[(&str, i64, &str, Tokens)]) -> Events {
+    list.iter()
+        .map(|(k, h, m, t)| (k.to_string(), (*h, m.to_string(), *t)))
+        .collect()
+}
+
+/// Every hour's total per source, sorted.
+fn hourly(s: &Store) -> Vec<(String, i64, u64)> {
+    let mut v = s.hourly_totals().unwrap();
+    v.sort();
+    v
+}
+
+#[test]
+fn a_keyed_event_counts_once_across_files_and_goes_when_no_file_references_it() {
+    let (mut s, d) = store("events");
+    // A session (f1) and its branch (f2), which copies k1 and k2 and adds k3; f1 also has a plain
+    // row. Counted once: hour 0 holds the plain 2; NOV10 holds k1 10 + k3 5 = 15; NOV10 + H holds
+    // k2 20. Summed per file it would be 2 + 10 + 20 + 10 + 20 + 5 = 67, not 37.
+    let k1 = (NOV10, "m", tok(10, 0, 10));
+    let k2 = (NOV10 + H, "m", tok(20, 0, 20));
+    s.replace_file(
+        "p/c",
+        "f1",
+        1,
+        1,
+        &rows(&[(0, "m", tok(2, 0, 2))]),
+        &events(&[("k1", k1.0, k1.1, k1.2), ("k2", k2.0, k2.1, k2.2)]),
+    )
+    .unwrap();
+    s.replace_file(
+        "p/c",
+        "f2",
+        1,
+        1,
+        &Rows::new(),
+        &events(&[
+            ("k1", k1.0, k1.1, k1.2),
+            ("k2", k2.0, k2.1, k2.2),
+            ("k3", NOV10, "m", tok(5, 0, 5)),
+        ]),
+    )
+    .unwrap();
+    let both = vec![
+        ("p/c".to_string(), 0, "m".to_string(), 2, 2),
+        ("p/c".to_string(), NOV10, "m".to_string(), 15, 15),
+        ("p/c".to_string(), NOV10 + H, "m".to_string(), 20, 20),
+    ];
+    assert_eq!(stored(&s), both);
+    assert_eq!(
+        hourly(&s),
+        vec![
+            ("p/c".to_string(), 0, 2),
+            ("p/c".to_string(), NOV10, 15),
+            ("p/c".to_string(), NOV10 + H, 20)
+        ]
+    );
+    assert_eq!(s.first_hour().unwrap(), Some(0));
+    // Rows: one plain row and three events.
+    assert_eq!(s.storage().unwrap().1, 4);
+    assert_eq!(s.sources().unwrap()[0].rows, 4);
+    // f1 read again without its events (rewound): f2 still references k1 and k2.
+    s.replace_file(
+        "p/c",
+        "f1",
+        2,
+        2,
+        &rows(&[(0, "m", tok(2, 0, 2))]),
+        &Events::new(),
+    )
+    .unwrap();
+    assert_eq!(stored(&s), both);
+    // f2 read again without them: no file references k1, k2 or k3, so they go.
+    s.replace_file("p/c", "f2", 2, 2, &Rows::new(), &Events::new())
+        .unwrap();
+    assert_eq!(
+        stored(&s),
+        vec![("p/c".to_string(), 0, "m".to_string(), 2, 2)]
+    );
+    assert_eq!(s.storage().unwrap().1, 1);
+    // A key is per source: another source's k1 is its own event, and the file read last gives
+    // an event its values.
+    s.replace_file(
+        "p/c",
+        "f1",
+        3,
+        3,
+        &Rows::new(),
+        &events(&[("k1", NOV10, "m", tok(10, 0, 10))]),
+    )
+    .unwrap();
+    s.replace_file(
+        "p/d",
+        "x",
+        1,
+        1,
+        &Rows::new(),
+        &events(&[("k1", NOV10, "m", tok(1, 0, 1))]),
+    )
+    .unwrap();
+    s.replace_file(
+        "p/d",
+        "y",
+        1,
+        1,
+        &Rows::new(),
+        &events(&[("k1", NOV10, "M", tok(4, 0, 4))]),
+    )
+    .unwrap();
+    assert_eq!(
+        stored(&s),
+        vec![
+            ("p/c".to_string(), NOV10, "m".to_string(), 10, 10),
+            ("p/d".to_string(), NOV10, "M".to_string(), 4, 4),
+        ]
+    );
+    // Clear deletes events with the rows.
+    s.clear().unwrap();
+    assert!(stored(&s).is_empty());
+    assert_eq!(s.storage().unwrap().1, 0);
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn a_format_1_store_moves_to_format_2_in_place_keeping_its_rows() {
+    let d = std::env::temp_dir().join(format!("pluxy-agent-usage-format1-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    let path = d.join("usage.db");
+    // The store as the hub at format 1 left it.
+    {
+        let old = rusqlite::Connection::open(&path).unwrap();
+        old.execute_batch(
+            "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
+             CREATE TABLE sources (
+               source TEXT PRIMARY KEY, label TEXT NOT NULL DEFAULT '', roots TEXT,
+               last_scan INTEGER) WITHOUT ROWID;
+             CREATE TABLE files (
+               id INTEGER PRIMARY KEY, source TEXT NOT NULL, file TEXT NOT NULL,
+               size INTEGER NOT NULL, mtime_ns INTEGER NOT NULL, present INTEGER NOT NULL DEFAULT 1,
+               UNIQUE (source, file));
+             CREATE TABLE usage (
+               file INTEGER NOT NULL REFERENCES files (id) ON DELETE CASCADE,
+               hour INTEGER NOT NULL, model TEXT NOT NULL,
+               input INTEGER NOT NULL, output INTEGER NOT NULL, cache_read INTEGER NOT NULL,
+               cache_write INTEGER NOT NULL, reasoning INTEGER NOT NULL, total INTEGER NOT NULL,
+               samples INTEGER NOT NULL,
+               PRIMARY KEY (file, hour, model)) WITHOUT ROWID;
+             CREATE INDEX usage_hour ON usage (hour);
+             INSERT INTO meta VALUES ('format', '1'), ('interval', '15'), ('last_sync', '99');
+             INSERT INTO sources VALUES ('p/a', 'A', '[\"/r\"]', 98);
+             INSERT INTO files VALUES (1, 'p/a', 'f1', 10, 100, 1);
+             INSERT INTO usage VALUES (1, 3600, 'm', 6, 1, 0, 0, 0, 7, 2);",
+        )
+        .unwrap();
+    }
+    let mut s = Store::open(&path).unwrap();
+    assert_eq!(
+        stored(&s),
+        vec![("p/a".to_string(), 3600, "m".to_string(), 6, 7)]
+    );
+    assert_eq!(s.revisions("p/a").unwrap()["f1"], (10, 100));
+    assert_eq!(
+        (s.interval().unwrap(), s.last_sync().unwrap()),
+        (15, Some(99))
+    );
+    assert_eq!(s.roots("p/a").unwrap(), Some(vec!["/r".to_string()]));
+    let side = rusqlite::Connection::open(&path).unwrap();
+    let format: String = side
+        .query_row("SELECT value FROM meta WHERE key = 'format'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(format, "2");
+    // Keyed events now go in beside the old rows.
+    s.replace_file(
+        "p/a",
+        "f2",
+        1,
+        1,
+        &Rows::new(),
+        &events(&[("k", 3600, "m", tok(4, 0, 4))]),
+    )
+    .unwrap();
+    assert_eq!(
+        stored(&s),
+        vec![("p/a".to_string(), 3600, "m".to_string(), 10, 11)]
+    );
+    drop(s);
+    // Opened again, it is format 2 as it is; a format the hub does not know is refused.
+    assert_eq!(stored(&Store::open(&path).unwrap()).len(), 1);
+    side.execute("UPDATE meta SET value = '3' WHERE key = 'format'", [])
+        .unwrap();
+    assert!(Store::open(&path).err().unwrap().contains("format 3"));
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+/// row with a key.
+fn keyed(hour: i64, model: &str, input: u64, key: &str) -> Value {
+    let mut r = row(hour, model, input);
+    r["key"] = json!(key);
+    r
+}
+
+/// A delivery from a producer at schema.
+fn at_schema(mut d: Value, schema: u64) -> Value {
+    d["source"]["schema"] = json!(schema);
+    d
+}
+
+#[test]
+fn a_schema_2_producers_keyed_rows_count_once_and_a_schema_1_producer_may_send_no_key() {
+    let (mut s, d) = store("schema2");
+    let host = FakeHost::new(&["p/a"]);
+    let mut sync = Sync::new();
+    sync.step(&mut s, &host, true, T0).unwrap();
+    let (job, _) = host.last();
+    list(
+        &mut sync,
+        &mut s,
+        &job,
+        "p/a",
+        &[("f1", 10), ("f2", 20), ("f3", 30)],
+    );
+    sync.step(&mut s, &host, false, T0 + 1).unwrap();
+    let (read, _) = host.last();
+    let batch = |file: &str, size: u64, rows: Value| {
+        delivery(&read, "p/a", "batch", part(file, size, 0, true, rows))
+    };
+    // A producer at schema 1 sending a key fails the job's batch: nothing is stored.
+    let refused = sync.ingest(
+        &mut s,
+        T0 + 1,
+        &at_schema(batch("f3", 30, json!([keyed(NOV10 + H, "m", 9, "k9")])), 1),
+    );
+    assert!(refused.unwrap_err().message.contains("key"));
+    // f1: k1 (5) and a plain row (1); f2, a branch of f1: k1 again (5) and k2 (3). Counted once:
+    // 5 + 1 + 3 = 9 in the hour, not 14.
+    for (file, size, rows) in [
+        (
+            "f1",
+            10,
+            json!([keyed(NOV10 + H, "m", 5, "k1"), row(NOV10 + H, "m", 1)]),
+        ),
+        (
+            "f2",
+            20,
+            json!([
+                keyed(NOV10 + H, "m", 5, "k1"),
+                keyed(NOV10 + H, "m", 3, "k2")
+            ]),
+        ),
+    ] {
+        sync.ingest(&mut s, T0 + 1, &at_schema(batch(file, size, rows), 2))
+            .unwrap();
+    }
+    // A key longer than 128 bytes is a bad row.
+    let long = "k".repeat(129);
+    assert!(sync
+        .ingest(
+            &mut s,
+            T0 + 1,
+            &at_schema(batch("f3", 30, json!([keyed(NOV10 + H, "m", 1, &long)])), 2),
+        )
+        .is_err());
+    assert_eq!(
+        stored(&s),
+        vec![("p/a".into(), NOV10 + H, "m".into(), 9, 9)]
+    );
+    std::fs::remove_dir_all(d).unwrap();
+}
+
 /// Noon on 2026-11-10 UTC: the syncs' time.
 const T0: i64 = NOV10 + 43_200;
 /// 2026-11-10 00:00 UTC, a Tuesday.
@@ -646,6 +942,7 @@ fn reports_bucket_hours_in_the_viewers_zone() {
             (NOV10 - 86_400 - 2 * H, "m2", tok(100, 0, 100)),
             (NOV10 + 10 * H, "m1", tok(1000, 0, 1000)),
         ]),
+        &Events::new(),
     )
     .unwrap();
     s.replace_file(
@@ -654,6 +951,7 @@ fn reports_bucket_hours_in_the_viewers_zone() {
         1,
         1,
         &rows(&[(1_788_256_800, "m3", tok(5, 0, 5))]),
+        &Events::new(),
     )
     .unwrap();
     let now = NOV10 + 13 * H; // 15:00 local
@@ -780,7 +1078,8 @@ fn a_trend_stacks_the_top_six_and_the_rest_as_other() {
         .map(|i| (NOV10, format!("m{i}"), tok(9 - i, 0, 9 - i)))
         .collect();
     let r: Rows = list.into_iter().map(|(h, m, t)| ((h, m), t)).collect();
-    s.replace_file("p/a", "f1", 1, 1, &r).unwrap();
+    s.replace_file("p/a", "f1", 1, 1, &r, &Events::new())
+        .unwrap();
     let out = ask(
         &s,
         json!({"range": "today", "offsets": [[0, 0]], "now": NOV10 + 600}),
@@ -820,7 +1119,8 @@ fn the_last_24_hours_are_24_utc_hours_across_a_clock_change() {
     // One token in each of the 30 UTC hours to 13:00.
     let list: Vec<(i64, &str, Tokens)> =
         (0..30).map(|k| (now - k * H, "m", tok(1, 0, 1))).collect();
-    s.replace_file("p/a", "f1", 1, 1, &rows(&list)).unwrap();
+    s.replace_file("p/a", "f1", 1, 1, &rows(&list), &Events::new())
+        .unwrap();
     let r = ask(
         &s,
         json!({"range": "24h", "offsets": offsets, "now": now}),
@@ -849,6 +1149,7 @@ fn a_report_always_fits_a_frame() {
         1,
         1,
         &rows(&[(0, "m", tok(1, 0, 1)), (NOV10, "m", tok(1, 0, 1))]),
+        &Events::new(),
     )
     .unwrap();
     let r = ask(
@@ -881,7 +1182,7 @@ fn a_report_always_fits_a_frame() {
             })
             .collect();
         let r: Rows = list.into_iter().map(|(h, m, t)| ((h, m), t)).collect();
-        s2.replace_file(src, "f", 1, 1, &r).unwrap();
+        s2.replace_file(src, "f", 1, 1, &r, &Events::new()).unwrap();
     }
     let r = ask(
         &s2,
@@ -896,7 +1197,8 @@ fn a_report_always_fits_a_frame() {
     let many: Rows = (0..205)
         .map(|m| ((NOV10, format!("m{m:03}")), tok(1, 0, 1)))
         .collect();
-    s3.replace_file("p/a", "f", 1, 1, &many).unwrap();
+    s3.replace_file("p/a", "f", 1, 1, &many, &Events::new())
+        .unwrap();
     let r = ask(
         &s3,
         json!({"range": "today", "offsets": [[0, 0]], "now": NOV10 + 60}),
