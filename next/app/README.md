@@ -845,6 +845,35 @@ version** puts it back over whatever the file holds now (a file absent in the ba
 no automatic backup is made) and **Delete this version** deletes only that backup, each in the
 tool's native confirmation.
 
+## Oh My Pi
+
+The Oh My Pi page sets up and starts Oh My Pi with this core (`src/omp.tsx`). It needs the curated
+native tool `pluxy/omp-setup` ([app tools](../app-tools/README.md#omp-setup)) and, for **Start
+CLI**, the execution program, both installed and enabled on the Device extensions page. Like the
+Claude Code page it is the window's own page, because **Apply** gives the tool the client key.
+
+**Read settings** previews Oh My Pi's two files, `models.yml` and `config.yml`: in its agent folder
+(`~/.omp/agent`), in a selected agent folder (for example a profile's
+`~/.omp/profiles/<name>/agent`, or the folder `PI_CODING_AGENT_DIR` names; the folder may be a link,
+as chezmoi can make) or as two selected files (a link, as stow makes, is followed and kept). It
+shows whether pluxy's integration is applied, the files it writes to, whether a key is in the models
+file and the default model role, never the key, and warns when the old desktop app's
+`easy-cliproxyapi` provider is still there. **Default model** is the model Oh My Pi starts with
+through this core (the core's served models are suggested; **Refresh models** reloads them); Oh My
+Pi lists the core's other models itself. The **Authentication Key** is one of the vault's secrets,
+or a new one through native key entry (**Add key…**).
+
+**Connect in One Click** (or **Update Configuration** / **Repair Connection** once applied),
+**Clear integration** and **Restore Backup** each preview the files again and call the tool, whose
+native confirmation names both files it resolves to, the key's label for Apply, and that an edit
+made in the same instant by another program may be lost; comments and everything else in the files
+stay, including the person's own models under the pluxy provider. **Backup and restore** is the
+shared backup browser. **Start CLI** asks the tool for its recipe (`omp` in a terminal, no
+arguments; `~/.bun/bin/omp` or `~/.local/bin/omp`, where bun and Oh My Pi's install script put it,
+when one exists) and starts it through the launcher in the chosen working directory (recently used
+ones offered), terminal and optional program path. Each launch's confirmation shows it in full; the
+key is not part of a launch: Oh My Pi reads it from its models file. Oh My Pi has no desktop app.
+
 ## Build and check
 
 Bun `1.4.3`, a stable Rust toolchain (CI uses 1.97.0), and on Linux the WebKitGTK 4.1 and
