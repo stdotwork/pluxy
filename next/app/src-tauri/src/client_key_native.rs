@@ -43,26 +43,20 @@ const OTHER: &str = "pluxy/consumer";
 const LABEL: &str = "fixture agent key";
 const ENTRY: &str = "pluxy client key";
 
-/// The client keys in the core config at path: each `sk-` and 26 base32 characters, as core
-/// makes them (`rand.Text`).
+/// The client keys in the core config at path, its `client_keys` (the app writes that config as
+/// JSON, and core keeps a JSON config JSON when it changes it).
 fn core_keys(path: &Path) -> Result<BTreeSet<String>, String> {
-    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let b = text.as_bytes();
-    let mut out = BTreeSet::new();
-    let mut i = 0;
-    while let Some(at) = text[i..].find("sk-").map(|a| a + i) {
-        let end = at + 3 + 26;
-        if end <= b.len()
-            && b[at + 3..end]
-                .iter()
-                .all(|c| c.is_ascii_uppercase() || (b'2'..=b'7').contains(c))
-            && b.get(end).is_none_or(|c| !c.is_ascii_alphanumeric())
-        {
-            out.insert(text[at..end].to_string());
-        }
-        i = at + 3;
-    }
-    Ok(out)
+    let text = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let cfg: Value = serde_json::from_slice(&text)
+        .map_err(|e| format!("{} is not JSON: {e}", path.display()))?;
+    let keys = cfg["client_keys"]
+        .as_array()
+        .ok_or_else(|| format!("{} has no client_keys list", path.display()))?;
+    Ok(keys
+        .iter()
+        .filter_map(Value::as_str)
+        .map(String::from)
+        .collect())
 }
 
 /// Adds key to the file the runner audits the app's output for.
