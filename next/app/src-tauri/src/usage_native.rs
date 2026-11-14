@@ -20,6 +20,12 @@
 //!   disabled; its job is cancelled, the part delivered leaves no row, the report is unchanged and
 //!   shows the parser archived with its rows kept; the next sync schedules nothing and starts no
 //!   parser;
+//! - the Codex parser (pluxy/usage-codex, a real package): installed and enabled after the cancel
+//!   step, it reads a Codex home written by hand in the run's HOME with its default roots; the
+//!   report for its source equals the expected two-date totals (one session copied to the archive
+//!   counts once), a repeated sync reads nothing, and after a session grows and another is rewound
+//!   (truncated) each is read and counted once; no prompt canary of the Codex home reaches a
+//!   report, the hub's store or (by run.ts) the app's output;
 //! - the hub's own page: opened, it starts the hub;
 //! - idle: once nothing uses them, no hub, parser or peer process is left.
 //!
@@ -219,6 +225,40 @@ fn write_lines(spec: &Value) -> Result<(), String> {
         writeln!(f, "{}", line.as_str().unwrap_or_default()).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// Rewrites the file of spec to its first `keep` lines.
+fn keep_lines(spec: &Value) -> Result<(), String> {
+    let path = Path::new(spec["path"].as_str().unwrap_or_default());
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let keep = spec["keep"].as_u64().unwrap_or(0) as usize;
+    let kept: String = text.split_inclusive('\n').take(keep).collect();
+    std::fs::write(path, kept).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Fails when any canary is in the text.
+fn no_canary(canaries: &[String], text: &str, what: &str) -> Result<(), String> {
+    match canaries.iter().find(|c| text.contains(c.as_str())) {
+        Some(c) => Err(format!("{what} holds the canary {c}")),
+        None => Ok(()),
+    }
+}
+
+/// Every file under dir, as lossy text, for a canary search.
+fn folder_text(dir: &Path) -> Result<String, String> {
+    let mut text = String::new();
+    let mut files = 0;
+    for entry in std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))? {
+        let path = entry.map_err(|e| e.to_string())?.path();
+        if path.is_file() {
+            text.push_str(&String::from_utf8_lossy(
+                &std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?,
+            ));
+            files += 1;
+        }
+    }
+    require(files > 0, format!("{} holds no file", dir.display()))?;
+    Ok(text)
 }
 
 pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<(), String> {
@@ -447,6 +487,97 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 processes(&program(&parser)).is_empty(),
                 "a disabled parser was started",
             )
+        })(),
+    )?;
+    page.close(main)?;
+
+    // ---- the Codex parser: a real package, its default roots in the run's HOME.
+    let codex = expect["codex"]["id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let canaries: Vec<String> = expect["codex"]["canaries"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|c| c.as_str().map(String::from))
+        .collect();
+    let mut page = Page::open(app, main, &hub)?;
+    step(
+        "codex",
+        (|| {
+            install(
+                main,
+                "curated",
+                &codex,
+                expect["versions"][&codex].as_str().unwrap_or_default(),
+            )?;
+            require(
+                program(&codex).is_file(),
+                format!("{} is not installed", program(&codex).display()),
+            )?;
+            enable(app, main, &codex)?;
+            let mut seen = String::new();
+            let mut check =
+                |page: &mut Page, sync: &str, cases: &Value, what: &str| -> Result<(), String> {
+                    let s = synced(page, &hub, true)?;
+                    require(
+                        counts(&s, &codex) == expect["codex"]["syncs"][sync],
+                        format!("the {what} sync of the Codex source: {s}"),
+                    )?;
+                    for case in cases.as_array().into_iter().flatten() {
+                        let got = unasked(page, &hub, "report", case["input"].clone())?;
+                        seen.push_str(&got.to_string());
+                        matches(&got, &case["output"], &format!("codex {what}"))?;
+                    }
+                    Ok(())
+                };
+            check(
+                &mut page,
+                "first",
+                &expect["codex"]["reports"]["first"],
+                "first",
+            )?;
+            check(
+                &mut page,
+                "repeat",
+                &expect["codex"]["reports"]["first"],
+                "repeated",
+            )?;
+            write_lines(&expect["codex"]["writes"]["append"])?;
+            keep_lines(&expect["codex"]["writes"]["rewind"])?;
+            check(
+                &mut page,
+                "after",
+                &expect["codex"]["reports"]["after"],
+                "appended and rewound",
+            )?;
+            // A third sync changes nothing.
+            check(
+                &mut page,
+                "repeat",
+                &expect["codex"]["reports"]["after"],
+                "last",
+            )?;
+            // No prompt, reply, folder or key text in any report or in the hub's store.
+            no_canary(&canaries, &seen, "a report")?;
+            let data = app
+                .path()
+                .app_data_dir()
+                .map_err(|e| e.to_string())?
+                .join("tools")
+                .join(&hub);
+            // The same search finds what the store does hold (a positive control).
+            let stored = folder_text(&data)?;
+            require(
+                stored.contains("gpt-5.5-mini") && seen.contains("gpt-5.5-mini"),
+                "the store and the reports should hold the Codex models: the canary search reads nothing",
+            )?;
+            no_canary(&canaries, &stored, "the hub's store")?;
+            wait_for("the Codex parser to stop when idle", || {
+                processes(&program(&codex)).is_empty().then_some(())
+            })?;
+            Ok(())
         })(),
     )?;
     page.close(main)?;
