@@ -31,7 +31,7 @@ them. App-only packages omit provider fields; no dummy provider is needed.
 | `imports` | Optional, both tiers: at most 16 entries `{"package": <ID>, "contract": [<accepted export contracts>], "operations": [<IDs>], "required": <bool, default true>}`, one per package, never the package itself. See [Calls between packages](#calls-between-packages). |
 | `state` | Native only: `version` written by this release and nonempty `readable_versions` list. Check state compatibility before swap or rollback. |
 | `produces` | Native only, optional: at most 8 entries `{"kind": "<package ID>/<stream>", "schema": <nonnegative integer>, "operation": <declared ID>}`, each kind once: the kinds of data it produces as [jobs](#jobs), at which schema version, by which operation. |
-| `consumes` | Native only, optional: at most 8 entries `{"kind": "<its own ID>/<stream>", "schema": [<accepted schema versions>], "deliver": <declared ID>}`, each kind once: the kinds it consumes, in its own namespace, and the operation the host delivers their batches to, which no package may export. |
+| `consumes` | Native only, optional: at most 8 entries `{"kind": "<its own ID>/<stream>", "schema": [<accepted schema versions>], "deliver": <declared ID>}`, each kind once: the kinds it consumes, in its own namespace, and the operation the host delivers their batches to, which no package may export and no `produces` entry may name. |
 
 Resource and operation IDs use 1 to 32 lower-case letters, digits and hyphens, starting with a
 letter or digit, and are unique within their respective lists. State and host contract versions
@@ -464,7 +464,9 @@ would call an import; the host answers on its stdin with a `result` or `error` f
   and the job is pinned to the producer's release. A consumer that reaches the producer through
   its imports is refused (a job could wait on its own consumer). It is answered at once with
   `{"job": "j-<n>"}`, an ID the host issues. A consumer has at most four jobs at once, the host
-  sixteen; one more is refused with `unavailable`.
+  sixteen; one more is refused with `unavailable`. A job counts, and a change to either package
+  reaches it, from before it is granted: a change while it is granted or confirmed refuses it
+  with `cancelled`.
 - `cancel` cancels one of the caller's own jobs; any other ID is refused with `permission`.
 
 ### Running a job
@@ -489,9 +491,19 @@ followed by the producer, pinned to the consumer's release, one at a time and in
 and then one end: `{"job", "kind", "event": "done", "output", "batches", "source"}` (the
 producer's output, after every batch) or `"event": "failed"` or `"cancelled"` with an `error`.
 A deliver operation's input schema must accept these. Each batch is granted again first: if
-either package changed, the job is cancelled and nothing more of it is delivered; the end is
-delivered only while the consumer is still that release. A delivery the consumer does not take
-fails the job. The window, pages and other tools are refused the deliver operation: only the host
+either package changed, the job is cancelled and nothing more of it is delivered. The end is
+`done` only while both packages are still those releases and the producer's output is at most
+48 KiB; otherwise it is `cancelled` or `failed`, saying why. It is delivered only while the
+consumer is still that release, once and best-effort: if the consumer does not take it (it
+crashed, is stopping or busy, or its schema refuses it), it is not sent again, the job is over,
+and a `cancel` of its ID is refused as no job under way. A batch the consumer does not take fails
+the job.
+
+A delivery waits at most ten seconds (the startup limit) for the consumer's turn, since calls to
+one package run one at a time. A consumer must therefore answer the call that started a job
+before its deliveries can arrive, and never wait for its own job inside a call; a consumer kept
+busy longer (by another call, or a native confirmation one of its calls waits for) fails the job,
+saying it stayed busy. The window, pages and other tools are refused the deliver operation: only the host
 calls it, so a batch's source is always the host's. The consumer is leased while its job runs;
 the producer, as for any call, while its call runs. A change to either package cancels its jobs,
 and closing the window cancels every call, jobs' included.

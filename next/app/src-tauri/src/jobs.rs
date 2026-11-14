@@ -21,8 +21,8 @@ use std::time::Duration;
 
 /// Batches a producer may have sent and not had acknowledged.
 pub const WINDOW: u64 = 4;
-/// The largest batch value, as JSON: its delivery, with the host's envelope, stays within a
-/// call's input limit.
+/// The largest batch value, and the largest producer output, as JSON: its delivery, with the
+/// host's envelope, stays within a call's input limit.
 pub const MAX_BATCH: usize = 48 << 10;
 /// Jobs one consumer may have at once.
 pub const MAX_PER_CONSUMER: usize = 4;
@@ -246,6 +246,25 @@ pub fn pump(
                 }
             }
             Next::End(mut end) => {
+                if end["event"] == "done" {
+                    // Done only while both sides are as granted, and with an output that fits.
+                    if let Err(e) = valid() {
+                        end = ending(&fail(
+                            "cancelled",
+                            format!("its registration ended: {}", e.message),
+                        ));
+                    } else if serde_json::to_vec(&end["output"]).map_or(usize::MAX, |b| b.len())
+                        > MAX_BATCH
+                    {
+                        end = ending(&fail(
+                            "invalid_request",
+                            format!(
+                                "{}'s output is larger than {MAX_BATCH} bytes, which a delivery cannot carry",
+                                job.producer
+                            ),
+                        ));
+                    }
+                }
                 if consumer_valid() {
                     end["job"] = json!(job.id);
                     end["kind"] = json!(job.kind);
@@ -284,6 +303,33 @@ impl Jobs {
         let job = Arc::new(Job::new(consumer, producer, kind));
         all.push(Arc::clone(&job));
         Ok(job)
+    }
+
+    /// A new job, as `add`, kept only if grant allows it: the job counts, and a revocation
+    /// reaches it, from before grant decides.
+    pub fn start<G>(
+        &self,
+        consumer: &str,
+        producer: &str,
+        kind: &str,
+        grant: impl FnOnce() -> Result<G, CallError>,
+    ) -> Result<(Arc<Job>, G), CallError> {
+        let job = self.add(consumer, producer, kind)?;
+        let r = grant().and_then(|g| match job.state.lock().unwrap().why.clone() {
+            // Revoked (or cancelled) while it was granted or confirmed.
+            Some(why) => Err(fail(
+                "cancelled",
+                format!("it ended while it started: {}", why.message),
+            )),
+            None => Ok(g),
+        });
+        match r {
+            Ok(g) => Ok((job, g)),
+            Err(e) => {
+                self.remove(&job);
+                Err(e)
+            }
+        }
     }
 
     /// Job ended: it no longer counts.
@@ -433,6 +479,59 @@ mod tests {
         assert_eq!(got.len(), 1, "{got:?}");
         assert_eq!(got[0]["event"], "cancelled");
         assert_eq!(got[0]["batches"], 0);
+    }
+
+    #[test]
+    fn a_done_end_needs_both_sides_and_an_output_that_fits() {
+        // The producer changed after its last batch: the end is cancelled, not done.
+        let job = Job::new("c", "p", "c/items");
+        job.finished(Ok(json!({"sent": 0})));
+        let got = delivered(&job, false);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0]["event"], "cancelled", "{got:?}");
+        // An output too large to deliver fails the job, saying so.
+        let job = Job::new("c", "p", "c/items");
+        job.finished(Ok(json!({"pad": "x".repeat(MAX_BATCH)})));
+        let got = delivered(&job, true);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0]["event"], "failed", "{got:?}");
+        assert!(got[0]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("larger"));
+        // The control: a small output, both sides as granted, is delivered as done.
+        let job = Job::new("c", "p", "c/items");
+        job.finished(Ok(json!({"sent": 0})));
+        assert_eq!(delivered(&job, true)[0]["event"], "done");
+    }
+
+    #[test]
+    fn a_revocation_while_a_job_starts_refuses_it() {
+        let jobs = Jobs::default();
+        // The control: granted, it starts and counts.
+        let (job, ()) = jobs.start("c", "p", "c/items", || Ok(())).unwrap();
+        assert!(!job.cancel.load(Ordering::SeqCst));
+        jobs.remove(&job);
+        // Revoked while it was being granted (or confirmed): refused, and it no longer counts.
+        let e = jobs
+            .start("c", "p", "c/items", || {
+                jobs.revoke("p");
+                Ok(())
+            })
+            .err()
+            .unwrap();
+        assert_eq!(e.code, "cancelled", "{e:?}");
+        // A grant that refuses: refused with its error, and it no longer counts.
+        let e = jobs
+            .start("c", "p", "c/items", || -> Result<(), CallError> {
+                Err(fail("permission", "no"))
+            })
+            .err()
+            .unwrap();
+        assert_eq!(e.code, "permission");
+        for _ in 0..MAX_PER_CONSUMER {
+            jobs.add("c", "p", "c/items").unwrap();
+        }
     }
 
     #[test]

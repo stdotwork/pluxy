@@ -1905,13 +1905,28 @@ fn produced_and_consumed_kinds_are_validated() {
     };
     let produce = serde_json::json!({"kind": "pluxy/hub/items", "schema": 1, "operation": "op"});
     let consume = serde_json::json!({"kind": "pluxy/a/items", "schema": [1], "deliver": "op"});
-    // The controls: a kind produced for another package, and one consumed in its own namespace.
+    // The controls: a kind produced for another package, and one consumed in its own namespace,
+    // each by its own operation.
+    let two_ops = |extra: Value| {
+        let mut e = serde_json::json!({"operations": [
+            {"id": "op", "description": "d",
+                "input_schema": {"type": "object"}, "output_schema": {"type": "object"}},
+            {"id": "scan", "description": "d",
+                "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}]});
+        if let (Some(m), Value::Object(x)) = (e.as_object_mut(), extra) {
+            m.extend(x);
+        }
+        e
+    };
     let (p, c) = check(
         "native",
-        serde_json::json!({"produces": [produce], "consumes": [consume]}),
+        two_ops(serde_json::json!({"produces": [
+            {"kind": "pluxy/hub/items", "schema": 1, "operation": "scan"}],
+            "consumes": [consume]})),
     )
     .unwrap();
     assert_eq!((p.len(), c.len(), c[0].deliver.as_str()), (1, 1, "op"));
+    assert!(check("native", serde_json::json!({"produces": [produce]})).is_ok());
     for (tier, bad, says) in [
         ("web", serde_json::json!({"produces": [produce]}), "jobs"),
         ("web", serde_json::json!({"consumes": [consume]}), "jobs"),
@@ -1935,6 +1950,11 @@ fn produced_and_consumed_kinds_are_validated() {
             serde_json::json!({"consumes": [consume],
                 "exports": {"contract": 1, "operations": ["op"]}}),
             "cannot be exported",
+        ),
+        (
+            "native",
+            serde_json::json!({"produces": [produce], "consumes": [consume]}),
+            "also a deliver operation",
         ),
         (
             "native",

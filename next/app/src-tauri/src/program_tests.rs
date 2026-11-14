@@ -882,6 +882,7 @@ fn a_call_allowed_for_another_release_is_refused() {
             expect: Some((sha.into(), generation)),
             extra: Box::new(()),
             feed: None,
+            turn_bounded: false,
         })
     };
     let e = h
@@ -1580,5 +1581,43 @@ fn a_clean_stop_ends_the_crashes_in_a_row() {
     h.call(ID, "crash", json!({}), None).unwrap_err();
     until("the crash", 5, || h.status(ID).pid.is_none());
     assert_eq!(h.status(ID).crashes, 1);
+    h.stop_all();
+}
+
+#[test]
+fn a_call_with_a_bounded_turn_gives_up_waiting_for_a_busy_package() {
+    let h = Arc::new(host(Value::Null));
+    // A call holds the package's turn longer than the startup limit (3 s here).
+    let slow = call_in_thread(&h, "slow", json!({"ms": 4500}));
+    until("the slow call", 5, || {
+        h.0.slots()
+            .get(ID)
+            .is_some_and(|s| s.gate.turn.lock().unwrap().0)
+    });
+    let started = Instant::now();
+    let e = h
+        .run_call_with(
+            h.begin_call(None).unwrap(),
+            ID,
+            "summary",
+            json!({"items": []}),
+            Arc::new(Context {
+                chain: vec![Hop::Main],
+                expect: None,
+                extra: Box::new(()),
+                feed: None,
+                turn_bounded: true,
+            }),
+            Cancel::default(),
+        )
+        .unwrap_err();
+    assert!(
+        e.message.contains("busy") && started.elapsed() < Duration::from_millis(4200),
+        "{e} after {:?}",
+        started.elapsed()
+    );
+    // The control: an ordinary call waits for the turn and is answered.
+    assert!(summary(&h, &["a"]).is_ok());
+    slow.join().unwrap().unwrap();
     h.stop_all();
 }

@@ -171,6 +171,12 @@ pub(super) fn validate(
         if !kinds.insert(c.kind.as_str()) {
             return Err(format!("app.consumes names kind {} more than once", c.kind));
         }
+        if produces.iter().any(|p| p.operation == c.deliver) {
+            return Err(format!(
+                "app.produces: operation {} is also a deliver operation, which takes only the host's deliveries",
+                c.deliver
+            ));
+        }
         if exports.is_some_and(|e| e.operations.contains(&c.deliver)) {
             return Err(format!(
                 "app.consumes: deliver operation {} takes only the host's deliveries and cannot be exported",
@@ -361,6 +367,8 @@ impl Catalog {
                 caller.0
             )));
         }
+        // A deliver operation is the host's alone, even named as a job's.
+        host_only(&a, &p.operation)?;
         let op = a
             .operations
             .iter()

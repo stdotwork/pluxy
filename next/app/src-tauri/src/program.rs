@@ -233,6 +233,9 @@ pub struct Context {
     pub extra: Box<dyn std::any::Any + Send + Sync>,
     /// A job's call: where its batches go.
     pub feed: Option<Arc<dyn Feed>>,
+    /// Its wait for the package's turn is bounded by the startup limit (a job's delivery): past
+    /// it, the call fails, saying the package was busy.
+    pub turn_bounded: bool,
 }
 
 /// Where a job's call's batches go (the router's `jobs.rs`).
@@ -254,6 +257,7 @@ impl Context {
             expect: None,
             extra: Box::new(()),
             feed: None,
+            turn_bounded: false,
         }
     }
 }
@@ -960,9 +964,20 @@ impl Host {
                 ));
             }
             turn.1 += 1;
+            let waiting = Instant::now();
             while turn.0 {
                 let (t, _) = gate.turned.wait_timeout(turn, TICK).unwrap();
                 turn = t;
+                if context.turn_bounded && waiting.elapsed() >= self.0.limits.startup {
+                    turn.1 -= 1;
+                    return Err(fail(
+                        "unavailable",
+                        format!(
+                            "{id} stayed busy with another call for {} s",
+                            self.0.limits.startup.as_secs()
+                        ),
+                    ));
+                }
                 if cancel.is_set() || run.ending() {
                     turn.1 -= 1;
                     return Err(if run.ending() {

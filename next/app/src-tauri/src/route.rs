@@ -290,6 +290,7 @@ fn dispatch(
         expect: Some((grant.target.sha256().into(), grant.target.installed_at())),
         extra: Box::new(origin),
         feed: None,
+        turn_bounded: false,
     };
     app.state::<App>().programs.run_call_with(
         call,
@@ -395,36 +396,33 @@ fn start_job(
             .job_grant(caller, &kind, (producer, sha256, generation), &roots())
             .map_err(refused)
     };
-    let g = grant()?;
-    let chain = rules::extend(&o.context.chain, &o.caller, producer)?;
-    // Counted before it is confirmed, so the bounds hold for the confirmations too.
-    let job = st.routes.jobs.add(caller.0, producer, &kind)?;
-    let mut packages = parent.packages.clone();
-    packages.push(g.consumer.package());
-    let origin = Origin {
-        packages,
-        // A job is started by a tool: it never uses a gesture.
-        gesture: Arc::new(Mutex::new(None)),
-    };
-    let input = i["input"].clone();
-    let ready = checked(
-        app,
-        &g.producer,
-        &|| grant().map(|g| g.producer),
-        &chain,
-        &origin,
-        &input,
-        &o.cancel,
-    )
-    // The consumer stays up for the job's deliveries.
-    .and_then(|_| st.programs.lease(caller.0));
-    let lease = match ready {
-        Ok(lease) => lease,
-        Err(e) => {
-            st.routes.jobs.remove(&job);
-            return Err(e);
-        }
-    };
+    // Counted, and reachable by a revocation, before it is granted and confirmed: the bounds hold
+    // for the confirmations too, and a change while it starts refuses it.
+    let (job, (g, chain, origin, input, lease)) =
+        st.routes.jobs.start(caller.0, producer, &kind, || {
+            let g = grant()?;
+            let chain = rules::extend(&o.context.chain, &o.caller, producer)?;
+            let mut packages = parent.packages.clone();
+            packages.push(g.consumer.package());
+            let origin = Origin {
+                packages,
+                // A job is started by a tool: it never uses a gesture.
+                gesture: Arc::new(Mutex::new(None)),
+            };
+            let input = i["input"].clone();
+            checked(
+                app,
+                &g.producer,
+                &|| grant().map(|g| g.producer),
+                &chain,
+                &origin,
+                &input,
+                &o.cancel,
+            )?;
+            // The consumer stays up for the job's deliveries.
+            let lease = st.programs.lease(caller.0)?;
+            Ok((g, chain, origin, input, lease))
+        })?;
     let id = job.id.clone();
     let (a, j) = (app.clone(), Arc::clone(&job));
     let spawned = std::thread::Builder::new()
@@ -479,6 +477,7 @@ fn run_job(
         expect: Some((p.1.clone(), p.2)),
         extra: Box::new(origin),
         feed: Some(Arc::clone(job) as Arc<dyn program::Feed>),
+        turn_bounded: false,
     };
     let op = g.producer.op.id.clone();
     let producer = p.0.clone();
@@ -507,6 +506,8 @@ fn run_job(
                 gesture: Arc::new(Mutex::new(None)),
             }),
             feed: None,
+            // A consumer busy past the startup limit fails the job rather than hold it.
+            turn_bounded: true,
         };
         // A batch's delivery ends with the job; its end is delivered after.
         let cancel = if end {
@@ -527,6 +528,14 @@ fn run_job(
                 )
             })
             .map(|_| ())
+            .map_err(|mut e| {
+                if e.message.contains("stayed busy") {
+                    e.message.push_str(
+                        ": a consumer must answer the call that started a job before its deliveries can arrive, and never wait for its own job inside a call",
+                    );
+                }
+                e
+            })
     };
     std::thread::scope(|s| {
         s.spawn(move || {

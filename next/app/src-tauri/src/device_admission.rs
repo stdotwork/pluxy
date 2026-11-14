@@ -251,14 +251,6 @@ impl Admitted {
     pub fn exports(&self) -> Option<&ExportDecl> {
         self.exports.as_ref()
     }
-    /// The kinds it produces as jobs.
-    pub fn produces(&self) -> &[ProduceDecl] {
-        &self.produces
-    }
-    /// The kinds it consumes, and the operations it takes their deliveries with.
-    pub fn consumes(&self) -> &[ConsumeDecl] {
-        &self.consumes
-    }
     /// It, as native confirmations name a package: ID, source, digest, signer and key,
     /// contracts and generation.
     #[cfg(target_os = "linux")]
