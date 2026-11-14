@@ -22,6 +22,9 @@ permissions:
 
 env:
   CGO_ENABLED: 1
+  # The browser-test container can write the checkout, so a planted go.mod must not make a later
+  # step or setup-go's post-step switch Go toolchains. next/go.mod's go line is what setup-go installs.
+  GOTOOLCHAIN: local
 
 defaults:
   run:
@@ -102,12 +105,17 @@ jobs:
           gomodcache="$(go env GOMODCACHE)"
           bun="$(readlink -f "$(command -v bun)")"
           bun_dir="$(dirname "$bun")"
-          # setup-go saves this job's Go caches for later jobs, release builds among them, so the
-          # container reads the module cache without writing to it and builds in its own GOCACHE.
+          # setup-go saves this job's Go caches for later runs (pull-request runs of the release
+          # workflow's pack job among them), so the container reads the module cache without writing
+          # to it and builds in its own GOCACHE.
           # Unlike the Test step, cgo is off here: the image has no C compiler, and next/ has no cgo code.
           # playwright test runs on the image's own Node (26 in 1.65.0), not on the Node 24 this job sets up.
           # .git is mounted read-only over the checkout: the checkout's post-step runs git there with
           # the job token in its environment, so the image must not be able to change git's config.
+          # A submodule's .git file would sit in the writable checkout, outside that read-only mount,
+          # so fail rather than let the image repoint it. The image can write the rest of the
+          # checkout, so keep this the job's last step that runs anything from it.
+          if [ -e "$GITHUB_WORKSPACE/.gitmodules" ]; then echo "::error::a submodule's .git file would sit in the writable checkout, outside the read-only .git mount; mount those read-only too, or mount less of the checkout" >&2; exit 1; fi
           docker run --rm --init --ipc=host \
             --user "$(id -u):$(id -g)" \
             -e CI -e HOME=/tmp -e CGO_ENABLED=0 \
