@@ -450,7 +450,13 @@ async function runApp(
     const usageDir = usage ? join(root, "usage") : undefined;
     if (usageDir) {
       mkdirSync(usageDir);
-      const f = buildUsageFixtures(usageDir, dirs.home, appTools, join(appToolsTarget, "debug"));
+      const f = buildUsageFixtures(
+        usageDir,
+        dirs.home,
+        appTools,
+        join(appToolsTarget, "debug"),
+        programFixture,
+      );
       nonce = f.nonce;
       roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
       writeFileSync(

@@ -1,12 +1,14 @@
 // Fixtures for the native test's check of the usage hub (src-tauri/src/usage_native.rs): the hub
 // pluxy/agent-usage and the test-only fixture parser pluxy/usage-fixture, from next/app-tools (which
-// run.ts builds), each in a signed native package; a curated registry listing them; the run's test
-// trust profile; and the fixture parser's usage files in a root of their own (not its default, so the
-// check must set it).
+// run.ts builds), each in a signed native package; pluxy/usage-peer, routing.ts's fixture tool
+// exporting its `summary`; a curated registry listing the three; the run's test trust profile; and the
+// fixture parser's usage files in a root of their own (not its default, so the check must set it).
 //
 // Each test archive adds one page to its package's manifest: routing.ts's relay page (`page`), which
 // sends the calls the check posts it on its channel. The hub's own page stays as it is; the parser has
-// no page of its own. Neither relay page is in a released package.
+// no page of its own. The parser's test archive also imports the peer's `summary`, so its `relay` has
+// a call it may make: the positive control for the hub's `ingest` refused on the same route. Neither
+// relay page nor that import is in a released package.
 //
 // expect.json holds what the check compares with, written out by hand here, never worked out by the
 // hub's or the parser's code: the records below, in a +02:00 zone with no daylight saving, reported at
@@ -27,10 +29,13 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { artifact, type Fixture, platform, writeTrustProfile } from "./admission";
-import { PAGE_SCRIPT } from "./routing";
+import { native, PAGE_SCRIPT, pack as packPackage, summary } from "./routing";
 
 export const HUB_ID = "pluxy/agent-usage";
 export const PARSER_ID = "pluxy/usage-fixture";
+export const PEER_ID = "pluxy/usage-peer";
+/** What the parser relays to the peer's `summary`, and its answer. */
+const PEER_ITEMS = ["usage", "positive", "control"];
 
 export interface Usage {
   /** The registries file the app's config should hold. */
@@ -246,8 +251,8 @@ function expected() {
   };
 }
 
-/** Packs and signs tool name from tools (next/app-tools) with program, the relay page added; undefined
- * when the tool was not built. */
+/** Packs and signs tool name from tools (next/app-tools) with program, the relay page and any imports
+ * added; undefined when the tool was not built. */
 function pack(
   root: string,
   tools: string,
@@ -255,6 +260,7 @@ function pack(
   program: string,
   publicKey: KeyObject,
   privateKey: KeyObject,
+  imports?: object[],
 ) {
   const source = join(tools, name);
   const manifestPath = join(source, "pluxy-extension.json");
@@ -267,6 +273,7 @@ function pack(
   else mkdirSync(join(dir, ui.dir));
   ui.pages = [...ui.pages, { id: "page", title: "Probe", short: "Probe", path: "probe.html" }];
   manifest.app.ui = ui;
+  if (imports) manifest.app.imports = imports;
   writeFileSync(
     join(dir, ui.dir, "probe.html"),
     '<!doctype html><meta charset="utf-8"><title>Probe</title><script src="probe.js"></script><p>Probe</p>',
@@ -289,15 +296,37 @@ function pack(
   return { id: f.id, version: f.version, bin, ...artifact(root, f.file, f, publicKey, privateKey) };
 }
 
+/** Packs and signs the peer with program (the built fixture tool); undefined when it was not built. */
+function packPeer(root: string, program: string, publicKey: KeyObject, privateKey: KeyObject) {
+  if (!existsSync(program)) return undefined;
+  const p = native(PEER_ID, "1.0.0", {
+    operations: [summary],
+    exports: { contract: 1, operations: ["summary"] },
+  });
+  const file = packPackage(root, p, program);
+  const f: Fixture = { file, id: p.id, version: p.version, tier: "native" };
+  return { id: p.id, version: p.version, bin: "bin/tool", ...artifact(root, file, f, publicKey, privateKey) };
+}
+
 /** Builds the fixtures in root and the test trust profile in home (the app's HOME), with the built hub
- * and parser programs in target (the app tools' target folder, debug) from tools (next/app-tools). */
-export function buildUsageFixtures(root: string, home: string, tools: string, target: string): Usage {
+ * and parser programs in target (the app tools' target folder, debug) from tools (next/app-tools), and
+ * the peer's program peerProgram (the native test's built fixture tool). */
+export function buildUsageFixtures(
+  root: string,
+  home: string,
+  tools: string,
+  target: string,
+  peerProgram: string,
+): Usage {
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
   const hub = pack(root, tools, "agent-usage", join(target, "agent-usage"), publicKey, privateKey);
-  const parser = pack(root, tools, "usage-fixture", join(target, "usage-fixture"), publicKey, privateKey);
+  const parser = pack(root, tools, "usage-fixture", join(target, "usage-fixture"), publicKey, privateKey, [
+    { package: PEER_ID, contract: [1], operations: ["summary"], required: true },
+  ]);
+  const peer = packPeer(root, peerProgram, publicKey, privateKey);
   const curated = join(root, "curated.json");
   const packages: Record<string, object> = {};
-  for (const p of [hub, parser]) {
+  for (const p of [hub, parser, peer]) {
     if (p) packages[p.id] = { releases: [{ version: p.version, artifacts: { [platform()]: p.entry } }] };
   }
   writeFileSync(curated, JSON.stringify({ registry_version: 0, packages }));
@@ -310,10 +339,24 @@ export function buildUsageFixtures(root: string, home: string, tools: string, ta
     JSON.stringify({
       hub: HUB_ID,
       parser: PARSER_ID,
+      peer: PEER_ID,
+      peer_call: { items: PEER_ITEMS, count: 3, longest: "positive" },
       kind: "pluxy/agent-usage/usage",
-      versions: { [HUB_ID]: hub?.version ?? "0.1.0", [PARSER_ID]: parser?.version ?? "0.1.0" },
-      sha256: { [HUB_ID]: hub?.sha256 ?? null, [PARSER_ID]: parser?.sha256 ?? null },
-      bin: { [HUB_ID]: hub?.bin ?? "bin/agent-usage", [PARSER_ID]: parser?.bin ?? "bin/usage-fixture" },
+      versions: {
+        [HUB_ID]: hub?.version ?? "0.1.0",
+        [PARSER_ID]: parser?.version ?? "0.1.0",
+        [PEER_ID]: peer?.version ?? "1.0.0",
+      },
+      sha256: {
+        [HUB_ID]: hub?.sha256 ?? null,
+        [PARSER_ID]: parser?.sha256 ?? null,
+        [PEER_ID]: peer?.sha256 ?? null,
+      },
+      bin: {
+        [HUB_ID]: hub?.bin ?? "bin/agent-usage",
+        [PARSER_ID]: parser?.bin ?? "bin/usage-fixture",
+        [PEER_ID]: peer?.bin ?? "bin/tool",
+      },
       root: usageRoot,
       writes: {
         append: { path: join(usageRoot, "a", "2026-11.jsonl"), lines: APPEND },

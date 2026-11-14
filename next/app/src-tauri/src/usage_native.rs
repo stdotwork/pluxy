@@ -4,11 +4,11 @@
 //! both tools and their relay pages packed by `native/usage.ts`, whose `expect.json` holds every
 //! expected value, written by hand:
 //!
-//! - install and enable: both install from the curated registry and are enabled through their
-//!   native confirmations;
+//! - install and enable: both, and pluxy/usage-peer (a tool the parser's test archive imports),
+//!   install from the curated registry and are enabled through their native confirmations;
 //! - ingest is the host's alone: the window, the hub's own page and the parser (a tool) calling
-//!   the hub's deliver operation are refused; the window's and the page's calls of `sources` on the
-//!   same routes are the positive controls;
+//!   the hub's deliver operation are refused; the window's and the page's calls of `sources`, and
+//!   the parser's relay of the peer's `summary`, on the same routes are the positive controls;
 //! - roots: the hub's page sets the parser's root, which asks a native confirmation naming it;
 //! - sync: the page drives a sync with `sync` calls until it is done, the host running the parser's
 //!   jobs; `report` then gives exactly the expected values (the hub's buckets in the page's zone);
@@ -21,7 +21,7 @@
 //!   shows the parser archived with its rows kept; the next sync schedules nothing and starts no
 //!   parser;
 //! - the hub's own page: opened, it starts the hub;
-//! - idle: once nothing uses them, no hub or parser process is left.
+//! - idle: once nothing uses them, no hub, parser or peer process is left.
 //!
 //! One line on stderr: `native-test: usage <JSON>`.
 
@@ -228,6 +228,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     .map_err(|e| e.to_string())?;
     let hub = expect["hub"].as_str().unwrap_or_default().to_string();
     let parser = expect["parser"].as_str().unwrap_or_default().to_string();
+    let peer = expect["peer"].as_str().unwrap_or_default().to_string();
     let store = app
         .path()
         .app_data_dir()
@@ -242,11 +243,12 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     let mut out = json!({});
     let step = |name: &str, r: Result<(), String>| r.map_err(|e| format!("usage {name}: {e}"));
 
-    // ---- install and enable: the parser first, so a missing hub fails at its own step.
+    // ---- install and enable: the peer and the parser first, so a missing hub fails at its own
+    // step; the peer is enabled before the parser, which requires it.
     step(
         "install",
         (|| {
-            for id in [&parser, &hub] {
+            for id in [&peer, &parser, &hub] {
                 install(
                     main,
                     "curated",
@@ -263,6 +265,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 text.contains(expect["kind"].as_str().unwrap_or_default()),
                 format!("the hub's confirmation should name the kind it consumes: {text}"),
             )?;
+            enable(app, main, &peer)?;
             enable(app, main, &parser)?;
             Ok(())
         })(),
@@ -290,6 +293,19 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                     .as_array()
                     .is_some_and(|a| a.iter().any(|x| x["id"] == parser.as_str())),
                 format!("the hub's sources should list the parser: {s}"),
+            )?;
+            let want = &expect["peer_call"];
+            let r = call(
+                main,
+                &parser,
+                "relay",
+                json!({"package": peer, "op": "summary", "input": {"items": want["items"]}}),
+            )?;
+            require(
+                r["ok"] == true
+                    && r["value"]["output"]["count"] == want["count"]
+                    && r["value"]["output"]["longest"] == want["longest"],
+                format!("the parser's relay of the peer's summary should succeed: {r}"),
             )?;
             let r = call(
                 main,
@@ -476,12 +492,15 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         })(),
     )?;
 
-    // ---- idle: neither tool is left running.
+    // ---- idle: no tool is left running.
     step(
         "idle",
         (|| {
             wait_for("the hub to stop when idle", || {
                 processes(&program(&hub)).is_empty().then_some(())
+            })?;
+            wait_for("the peer to stop when idle", || {
+                processes(&program(&peer)).is_empty().then_some(())
             })?;
             require(
                 processes(&program(&parser)).is_empty(),
