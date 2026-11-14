@@ -38,6 +38,13 @@
 // binary is refused. Then the release command (package.ts release) must pass a clean release
 // build and a clean AppImage, and refuse the test package (renamed or not) and an AppImage holding
 // a test-feature binary.
+// In a session of its own (update.ts, update-session.ts, update_native.rs), the signed
+// application update: the test package refuses to update without its trust profile and when its
+// program says it came from a .deb, an .rpm or no package; refuses a lower feed, a bad signature
+// and a signed version other than the announced one; cancels a download; undoes an update whose
+// new version does not accept itself; updates v1 to v2, stopping and starting its own core; and
+// rolls back to v1 only through the native confirmation, refusing a version never installed and a
+// changed kept copy.
 // In managed mode it then runs the window checks (window.ts, native_window.rs) in two more
 // sessions, one with a tray watcher and one without, and the Access checks (access-suite.ts,
 // access_native.rs) in another, with the desktop portal's file chooser (GTK_USE_PORTAL=1).
@@ -64,7 +71,10 @@
 // typed into native key entry reaches a writer tool and a final consumer only on their pipes after
 // native confirmation, an execution tool gets only references, references refused to another
 // recipient, call or release, open journals reconciled after a crash without a second write, and
-// the key and a backup canary absent from webviews, logs and the app's output.
+// the key and a backup canary absent from webviews, logs and the app's output. Then, in that
+// session, native one-time client-key capture (client_key_native.rs): a key the app itself asks
+// its core for serves a fixture agent, is refused to another tool, after its deletion on core and
+// while the app is connected to another core, and never shows in a webview or the app's output.
 // The Codex session reader check (sessions.ts, sessions_native.rs) runs in one more session with
 // that build: the reader (next/app-tools/codex-sessions, built here) lists a copied Codex home
 // exactly as a hand-written expect file says, shows a session only after a native confirmation of
@@ -121,6 +131,7 @@ import { buildProgramFixtures } from "./program";
 import { buildRoutingFixtures } from "./routing";
 import { missingPrerequisites } from "./services";
 import { buildSessionsFixtures } from "./sessions";
+import { runUpdate } from "./update";
 import { buildUsageFixtures } from "./usage";
 import { buildVaultFixtures } from "./vault";
 
@@ -148,6 +159,10 @@ interface TestPackage {
   appimage: string;
   /** The temporary updater public key compiled into it (no private key is kept). */
   updater_pubkey: string;
+  /** Its program as built, before the bundler patched its bundle type. */
+  binary: string;
+  /** The same package at a newer version, and its signature by the updater key. */
+  update: { appimage: string; version: string; signature: string };
 }
 /** Which app a run starts, and what its updater gate must say. */
 interface Artifact {
@@ -954,6 +969,18 @@ async function runApp(
       !output.some((line) => rotated.some((k) => line.includes(k))),
       "a management key from the rotation check appeared on stdout/stderr",
     );
+    // The client keys the client-key check captured (client_key_native.rs), as it learned them.
+    const clientKeysFile = vaultDir ? join(vaultDir, "client-keys") : undefined;
+    const clientKeys =
+      clientKeysFile && existsSync(clientKeysFile)
+        ? readFileSync(clientKeysFile, "utf8")
+            .split("\n")
+            .filter((k) => k.length > 0)
+        : [];
+    check(
+      !output.some((line) => clientKeys.some((k) => line.includes(k))),
+      "a client key from the client-key check appeared on stdout/stderr",
+    );
     if (suite) {
       check(suitePassed, `the ${suite} checks failed`);
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
@@ -1067,8 +1094,12 @@ async function runApp(
       const r = steps.get("vault") as { passed?: boolean } | undefined;
       const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
       check(r?.passed === true, `the vault check did not complete: ${failure}`);
+      const c = steps.get("client_keys") as { passed?: boolean } | undefined;
+      check(c?.passed === true, `the client-key check did not complete: ${failure}`);
+      check(clientKeys.length === 2, `the client-key check noted ${clientKeys.length} keys, not 2`);
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode} vault ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode} client keys ${JSON.stringify(c ?? {})}`);
       console.log(`${mode}: vault ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
@@ -1279,7 +1310,7 @@ async function runApp(
 
     check(steps.get("confirmations")?.passed === true, "native confirmation checks did not complete");
 
-    checkRelease(steps.get("release"), feed, browserLog, check);
+    checkRelease(steps.get("release"), feed, browserLog, artifact.gate, check);
     console.log(`${mode} release ${JSON.stringify(steps.get("release"))}`);
     const rotationStep = steps.get("rotation");
     const managed = mode === "managed";
@@ -1381,6 +1412,7 @@ function checkRelease(
   release: Record<string, any> | undefined,
   feed: Feed,
   browserLog: string,
+  gate: Artifact["gate"],
   check: (ok: unknown, what: string) => void,
 ) {
   check(release, "the release feed check did not finish");
@@ -1391,6 +1423,17 @@ function checkRelease(
   const escaped = `${feed.base}/escaped/a%5B1%5D?q=x%7Cy`;
   const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   check(release.no_default === true, "release settings existed before any feed was confirmed");
+  // With 0.2.0 on the feed, Update Now is refused, on the page and by its command: a build without
+  // updater trust is not configured for it, and the fixture has no signed update for the test package.
+  const u = release.updater ?? {};
+  const why = gate === "passes" ? /no update for this system/ : /not configured/;
+  check(
+    why.test(String(u.reason)) &&
+      u.offered === false &&
+      u.call?.ok === false &&
+      why.test(String(u.call?.error)),
+    `Update Now was offered or started without ${why}: ${JSON.stringify(u)}`,
+  );
   check(release.confirmed === true, "the confirmed feed was not kept in release.json");
   check(
     same(release.stable, { app: "0.2.0", core: "1.4.0", installed_app: appVersion }),
@@ -1973,6 +2016,27 @@ func main() {
       });
       if (inst.setup !== undefined) throw new SetupError(inst.setup);
       problems.push(...inst.problems.map((x) => `instances: ${x}`));
+
+      // The signed application update (update.ts, update-session.ts, update_native.rs): the
+      // test package updates itself to its signed newer version and back, and refuses the rest.
+      if (testPackage) {
+        const upd = await runUpdate({
+          packageJson: join(packageDir, "test-package.json"),
+          pubkey: testPackage.updater_pubkey,
+          probe,
+          appImage,
+          core,
+          identifier: TEST_ID,
+          timeoutMs: 900_000,
+          sessions,
+          stopSession,
+          removeRun,
+        });
+        if (upd.setup !== undefined) throw new SetupError(upd.setup);
+        problems.push(...upd.problems.map((x) => `update: ${x}`));
+      } else {
+        problems.push("update: there is no test package to update");
+      }
     } finally {
       rmSync(prepared, { recursive: true, force: true });
     }
