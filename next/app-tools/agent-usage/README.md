@@ -189,7 +189,9 @@ Rules, beside schema 1's:
 *Agent usage*: the time range and granularity, source chips, the Total tokens and Cache hit rate
 cards, the Trend (by source or by model) and Token mix charts, the Activity calendar and hours, the
 Models, Agent sources and Details tables, the sync status, *Sync now*, the sync interval, each
-source's folders, the store's size and *Clear Agent history*. It is plain HTML, ES modules and SVG
+source's folders, the store's size and *Clear Agent history*. Each source keeps one colour, by its place among the
+sources' IDs, in its chip, the Trend and the Agent sources table (with a bar of its share), so
+sources compare across ranges and filters; a bar's tooltip gives its total and each part's. It is plain HTML, ES modules and SVG
 in [`pages/`](pages), with the theme's `--px-*` tokens; `pages/view.js` works out every text and
 number it shows, and `next/app/tests/agent-usage-page.test.ts` tests it. The page sets text and
 attributes only, never HTML.

@@ -187,6 +187,77 @@ describe("charts", () => {
   });
 });
 
+describe("comparing sources", () => {
+  // Claude Code and Codex together, as the usage native check's combined report has them, and the
+  // fixture parser archived.
+  const CLAUDE = "pluxy/usage-claude";
+  const CODEX = "pluxy/usage-codex";
+  const FIXTURE = "pluxy/usage-fixture";
+  const sources = [
+    { id: CODEX, label: "Codex", status: "active", total: 5930, active_days: 2 },
+    { id: CLAUDE, label: "Claude Code", status: "active", total: 5535, active_days: 2 },
+    { id: FIXTURE, label: "Fixture", status: "archived", total: 1547, active_days: 4 },
+  ];
+  const both = report({
+    sources,
+    by_source: {
+      keys: [CODEX, CLAUDE],
+      values: [
+        [0, 0],
+        [0, 0],
+        [0, 0],
+        [0, 0],
+        [0, 0],
+        [1300, 1270],
+        [4630, 4265],
+      ],
+    },
+  });
+  // The same sources ranked the other way, with Claude Code alone selected.
+  const flipped = report({
+    sources: [sources[1], sources[0], sources[2]].map((s) => (s.id === CLAUDE ? { ...s, total: 8555 } : s)),
+    by_source: { keys: [CLAUDE], values: [[0], [0], [0], [0], [0], [1270], [7285]] },
+  });
+  // The old page's palette by place among the IDs sorted: usage-claude, usage-codex, usage-fixture.
+  const color = { [CLAUDE]: "#3b82f6", [CODEX]: "#10b981", [FIXTURE]: "#8b5cf6" };
+
+  test("each source keeps its colour in the trend, the chips and the Sources table", () => {
+    for (const r of [both, flipped]) {
+      for (const k of v.trend(r, "source").keys) expect(k.color).toBe(color[k.key as keyof typeof color]);
+      for (const c of v.chips(r, []).slice(1)) expect(c.color).toBe(color[c.id as keyof typeof color]);
+      for (const row of v.sourcesTable(r, [CLAUDE]).rows)
+        expect(row.color).toBe(color[row.id as keyof typeof color]);
+    }
+    expect(v.trend(both, "source").keys.map((k: { color: string }) => k.color)).toEqual([
+      "#10b981",
+      "#3b82f6",
+    ]);
+    // Models keep the series colours by rank.
+    expect(v.trend(both, "model").keys.map((k: { color: string }) => k.color)).toEqual([
+      "#3b82f6",
+      "#f59e0b",
+    ]);
+  });
+
+  test("the Sources table gives each source's share for its bar", () => {
+    // 5,930, 5,535 and 1,547 of 13,012.
+    const rows = v.sourcesTable(both, []).rows;
+    expect(rows.map((r: { cells: string[] }) => r.cells[1])).toEqual(["45.6%", "42.5%", "11.9%"]);
+    expect(rows[0].share).toBeCloseTo(0.4557, 4);
+    expect(rows[1].share).toBeCloseTo(0.4254, 4);
+    expect(rows[2].share).toBeCloseTo(0.1189, 4);
+  });
+
+  test("a bar's hover text breaks its total down, top part first", () => {
+    const bars = v.trend(both, "source").bars;
+    expect(bars[6].tip).toBe("2026-11-10: 8,895\nClaude Code: 4,265\nCodex: 4,630");
+    expect(bars[5].tip).toBe("2026-11-09: 2,570\nClaude Code: 1,270\nCodex: 1,300");
+    expect(bars[1].tip).toBe("2026-11-05: 0");
+    // The token mix: 11-10 of the fixture report, 50 cache read, no cache write, 50 input, 15 output.
+    expect(v.tokenMix(report()).bars[6].tip).toBe("2026-11-10: 115\nOutput: 15\nInput: 50\nCache read: 50");
+  });
+});
+
 describe("activity", () => {
   test("calendar cells by week and weekday, with quartile levels", () => {
     const c = v.calendar(report());

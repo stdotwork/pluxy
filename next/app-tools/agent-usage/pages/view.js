@@ -86,6 +86,30 @@ export const TOKEN_COLORS = {
 export const MIX = ["cache_read", "cache_write", "input", "output"];
 const SERIES = ["#3b82f6", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444", "#06b6d4", "#ec4899"];
 const OTHER_COLOR = "#9ca3af";
+/** Colours of the sources, as the old page had them. */
+export const SOURCE_COLORS = [
+  "#3b82f6",
+  "#10b981",
+  "#8b5cf6",
+  "#0ea5e9",
+  "#ec4899",
+  "#f59e0b",
+  "#14b8a6",
+  "#6366f1",
+  "#ef4444",
+  "#84cc16",
+  "#a855f7",
+];
+
+/** A source's colour, the same in the chips, the trend and the Sources table whatever the range
+ * or filter: by its place among every source the report knows, by ID. */
+export function sourceColor(report, id) {
+  const i = report.sources
+    .map((s) => s.id)
+    .sort()
+    .indexOf(id);
+  return i < 0 ? OTHER_COLOR : SOURCE_COLORS[i % SOURCE_COLORS.length];
+}
 /** Models shown before "Show all". */
 export const MODELS_SHOWN = 8;
 /** Bars that get a value label above them. */
@@ -192,7 +216,7 @@ export function trend(report, groupBy) {
     key,
     label: keyLabel(key, groupBy, report.sources),
     title: groupBy === "source" && key !== OTHER ? `${keyLabel(key, groupBy, report.sources)} · ${key}` : null,
-    color: key === OTHER ? OTHER_COLOR : SERIES[i % SERIES.length],
+    color: key === OTHER ? OTHER_COLOR : groupBy === "source" ? sourceColor(report, key) : SERIES[i % SERIES.length],
   }));
   const bars = report.buckets.map((bucket, b) => {
     let y = 0;
@@ -202,9 +226,19 @@ export function trend(report, groupBy) {
       y += value;
       return s;
     });
-    return { bucket, label: bucketLabel(bucket, report.granularity), total: y, segments };
+    return bar(bucket, report.granularity, y, segments, keys);
   });
   return bars_(keys, bars);
+}
+
+/** A bar, with its hover text: the bucket and its total, then each part with tokens, top first. */
+function bar(bucket, granularity, total, segments, keys) {
+  const label = bucketLabel(bucket, granularity);
+  const lines = [`${label.full}: ${full(total)}`];
+  for (let i = segments.length - 1; i >= 0; i--) {
+    if (segments[i].value > 0) lines.push(`${keys[i].label}: ${full(segments[i].value)}`);
+  }
+  return { bucket, label, total, segments, tip: lines.join("\n") };
 }
 
 /** The token mix: each bucket's four parts. */
@@ -218,7 +252,7 @@ export function tokenMix(report) {
       y += value;
       return s;
     });
-    return { bucket, label: bucketLabel(bucket, report.granularity), total: y, segments };
+    return bar(bucket, report.granularity, y, segments, keys);
   });
   return bars_(keys, bars);
 }
@@ -297,13 +331,16 @@ export function modelsTable(report, all) {
   };
 }
 
-/** The Sources table: label (with its package ID and any archived note), share, total and active days. */
+/** The Sources table: label (with its colour, package ID and any archived note), share (with its
+ * bar), total and active days. */
 export function sourcesTable(report, selected) {
   const sum = report.sources.reduce((a, s) => a + s.total, 0);
   return {
     header: [t.sources, t.share, t.totalTokens, t.days],
     rows: report.sources.map((s) => ({
       id: s.id,
+      color: sourceColor(report, s.id),
+      share: sum > 0 ? s.total / sum : 0,
       cells: [s.label, percent(sum > 0 ? s.total / sum : 0, 1), compact(s.total), String(s.active_days)],
       note: s.status === "archived" ? `${s.id} · ${t.archived}` : s.id,
       dimmed: selected.length > 0 && !selected.includes(s.id),
@@ -348,6 +385,7 @@ export function chips(report, selected) {
       .map((s) => ({
         id: s.id,
         label: s.label,
+        color: sourceColor(report, s.id),
         total: compact(s.total),
         active: selected.includes(s.id),
         title: s.status === "archived" ? `${s.label} · ${s.id} · ${t.archived}` : `${s.label} · ${s.id}`,
