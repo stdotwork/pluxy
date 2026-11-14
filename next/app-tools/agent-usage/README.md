@@ -145,8 +145,9 @@ Rules:
   records summed into a row.
 - The hub stores a model name trimmed, in lower case and without any path before its last `/`.
 - Every batch and the output are at most 48 KiB, as the host requires. A source lists at most
-  20,000 files, folders at most 8 deep below a root, without following links; a file larger than
-  16 MiB is not read.
+  20,000 files, folders at most 8 deep below a root, without following links; a parser that reads
+  a file whole (as the library `pluxy-usage` has it) refuses one larger than 16 MiB, and one that
+  reads lines skips a line over 16 MiB.
 - A row's `hour` is from 2000-01-01 to a day after the hub's time, and a file has at most 100,000
   rows (distinct hours and models); otherwise the file fails and the job goes on.
 - The host names a batch's source; a parser cannot. A batch the hub refuses (a file the job does

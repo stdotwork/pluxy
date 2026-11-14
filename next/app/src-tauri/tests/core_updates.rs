@@ -868,13 +868,14 @@ fn calls_stop_when_the_core_is_gone() {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     assert_eq!(f.conn.view().core.unwrap().state, "stopped");
-    let seen = impostor(std::net::TcpListener::bind(&listen).unwrap());
+    // The app keeps the stopped core's socket, so another listener cannot take its address.
+    let seen = std::net::TcpListener::bind(&listen).ok().map(impostor);
     let r = f.conn.caller().call("GET", "/status", None);
     assert_ne!(r.status, 200, "a call reached the new listener");
     std::thread::sleep(std::time::Duration::from_millis(200));
     assert!(
-        seen.lock().unwrap().is_empty(),
-        "a call reached the new listener"
+        seen.is_none(),
+        "another listener took the stopped core's address"
     );
 }
 
@@ -889,14 +890,121 @@ fn calls_after_a_stop_go_nowhere() {
         serde_json::from_slice(&std::fs::read(f.root.join("core/config.json")).unwrap()).unwrap();
     let listen = cfg["listen"].as_str().unwrap().to_string();
     f.conn.stop_core();
-    let seen = impostor(std::net::TcpListener::bind(&listen).unwrap());
+    // A caller taken before holds the app's copy of the core's socket.
+    assert!(
+        std::net::TcpListener::bind(&listen).is_err(),
+        "another listener took the address while a caller could still send there"
+    );
     for c in [before, f.conn.caller()] {
         assert_ne!(c.call("GET", "/status", None).status, 200);
     }
+    // Once nothing can send there, the app lets the address go; calls taken now have no address.
+    let seen = impostor(
+        take_port(&listen, std::time::Duration::from_secs(2))
+            .expect("the app kept the stopped core's address"),
+    );
+    assert_ne!(f.conn.caller().call("GET", "/status", None).status, 200);
     std::thread::sleep(std::time::Duration::from_millis(200));
     assert!(
         seen.lock().unwrap().is_empty(),
         "a call reached the new listener"
+    );
+}
+
+/// The core's listen address, from its config.
+fn listen(root: &Path) -> String {
+    let cfg: Value =
+        serde_json::from_slice(&std::fs::read(root.join("core/config.json")).unwrap()).unwrap();
+    cfg["listen"].as_str().unwrap().to_string()
+}
+
+/// Tries to bind addr for up to t, as another program on this computer would once the core's
+/// port is free.
+fn take_port(addr: &str, t: std::time::Duration) -> Option<std::net::TcpListener> {
+    let deadline = std::time::Instant::now() + t;
+    loop {
+        if let Ok(l) = std::net::TcpListener::bind(addr) {
+            return Some(l);
+        }
+        if std::time::Instant::now() > deadline {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// P8d-f1: after the app's core crashes, no other program can take its port while the app could
+/// still send a call there, so the management key never reaches one.
+#[test]
+fn after_a_crash_the_key_never_reaches_a_program_on_the_cores_port() {
+    let mut f = fixture("crash-port");
+    f.install("1.0.0").unwrap();
+    let key = management_key(&f.root);
+    let addr = listen(&f.root);
+    let before = f.conn.caller();
+    assert_eq!(before.call("GET", "/status", None).status, 200);
+    let pid = f.conn.core_pid().unwrap();
+    unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+    let seen = take_port(&addr, std::time::Duration::from_secs(2)).map(impostor);
+    for c in [before, f.conn.caller()] {
+        assert_ne!(c.call("GET", "/status", None).status, 200);
+    }
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    if let Some(seen) = &seen {
+        let sent = String::from_utf8_lossy(&seen.lock().unwrap()).into_owned();
+        assert!(
+            !sent.contains(&key),
+            "the management key went to another program on the core's port"
+        );
+    }
+    assert!(
+        seen.is_none(),
+        "another program took the crashed core's port while the app could still send the key there"
+    );
+}
+
+/// P8d-f2: a SIGTERM from outside the app makes the core close its listener and drain; no other
+/// program can take the port then, and no call carries the key to one.
+#[test]
+fn after_an_outside_stop_the_key_never_reaches_a_program_on_the_cores_port() {
+    use std::io::Write;
+    let mut f = fixture("outside-stop");
+    f.install("1.0.0").unwrap();
+    let key = management_key(&f.root);
+    let addr = listen(&f.root);
+    // A connection with a request still arriving keeps the core draining after the SIGTERM.
+    let mut busy = std::net::TcpStream::connect(&addr).unwrap();
+    busy.write_all(b"GET /v0/management/status HTTP/1.1\r\n")
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let pid = f.conn.core_pid().unwrap();
+    unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(alive(pid), "the core did not drain");
+    let seen = take_port(&addr, std::time::Duration::from_secs(1)).map(impostor);
+    let caller = f.conn.caller();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(caller.call("GET", "/status", None).status);
+    });
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    // The core finishes draining and exits.
+    drop(busy);
+    let status = rx
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .expect("a call during the drain never ended");
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    if let Some(seen) = &seen {
+        let sent = String::from_utf8_lossy(&seen.lock().unwrap()).into_owned();
+        assert!(
+            !sent.contains(&key),
+            "the management key went to another program on the core's port"
+        );
+    }
+    assert_ne!(status, 200, "a call during the drain was answered");
+    assert!(
+        seen.is_none(),
+        "another program took the draining core's port while the app could still send the key there"
     );
 }
 
