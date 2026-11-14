@@ -15,8 +15,15 @@ mod fixture;
 #[link_section = ".init_array"]
 static FIXTURE: extern "C" fn() = {
     extern "C" fn run_fixture() {
+        // The spawn tests' agent (`spawn_tests.rs`) is started with `AGENT` as its first argument.
+        let agent = std::fs::read("/proc/self/cmdline").is_ok_and(|c| {
+            c.split(|b| *b == 0)
+                .nth(1)
+                .is_some_and(|a| a.starts_with(fixture::AGENT.as_bytes()))
+        });
         if std::env::var_os("PLUXY_EXTENSION_ID").is_some()
             || std::env::var_os(fixture::CHILD).is_some()
+            || agent
         {
             fixture::main();
         }

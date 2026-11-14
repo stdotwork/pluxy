@@ -41,6 +41,8 @@ pub mod release_config;
 mod release_native;
 #[cfg(target_os = "linux")]
 pub mod route;
+#[cfg(target_os = "linux")]
+pub mod spawn;
 mod startup;
 pub mod trust;
 mod updates;
@@ -106,6 +108,9 @@ struct App {
     /// (`vault.rs`).
     #[cfg(target_os = "linux")]
     vault: std::sync::Arc<vault::Vault>,
+    /// The managed runtimes tools started through the host's spawn service (`spawn.rs`).
+    #[cfg(target_os = "linux")]
+    runtimes: spawn::Runtimes,
     status: Mutex<Option<MenuItem<Wry>>>,
     /// Start, Stop and Restart, in that order.
     core_actions: Mutex<Vec<MenuItem<Wry>>>,
@@ -439,6 +444,9 @@ fn quit(app: &AppHandle) {
     tauri::async_runtime::spawn_blocking(move || {
         #[cfg(target_os = "linux")]
         app.state::<App>().programs.stop_all();
+        // The app's managed runtimes stop with it; detached launches are not its own.
+        #[cfg(target_os = "linux")]
+        app.state::<App>().runtimes.stop_all();
         app.state::<App>().conn.lock().unwrap().stop_core();
         app.exit(0);
     });
@@ -1318,16 +1326,18 @@ fn device_changed_as(
     stop_tool: bool,
 ) -> Result<device::View, String> {
     let st = app.state::<App>();
-    let (labels, view, mut left) = {
+    let (labels, view, mut left, gone) = {
         let mut catalog = st.device.lock().unwrap();
         f(&mut catalog)?;
+        // Disabled or removed: nothing could control its managed runtimes any more.
+        let gone = catalog.get(id).is_none_or(|p| !p.enabled);
         let mut pages = st.pages.lock().unwrap();
         let labels = pages.device_labels(id);
         for l in &labels {
             pages.unbind(l);
         }
         let left: Vec<String> = catalog.take_cleanup().into_iter().collect();
-        (labels, device_view(&st, &catalog), left)
+        (labels, device_view(&st, &catalog), left, gone)
     };
     left.extend(close_webviews(app, labels));
     // A native tool runs only as the release it was admitted as: any change stops it, and its
@@ -1336,8 +1346,14 @@ fn device_changed_as(
     if stop_tool {
         st.programs.stop(id);
     }
+    // Off this thread, which may be the main one: each takes up to the stop grace.
+    #[cfg(target_os = "linux")]
+    if gone {
+        let (app, id) = (app.clone(), id.to_string());
+        std::thread::spawn(move || app.state::<App>().runtimes.stop_package(&id));
+    }
     #[cfg(not(target_os = "linux"))]
-    let _ = stop_tool;
+    let _ = (stop_tool, gone);
     let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-device", ());
     if left.is_empty() {
         Ok(view)
@@ -2192,6 +2208,8 @@ fn program_status(webview: Webview, package: String) -> Result<Value, String> {
             Ok(j) => status["journals"] = serde_json::to_value(j).map_err(|e| e.to_string())?,
             Err(e) => status["journals_error"] = Value::from(e),
         }
+        // Its managed runtimes: running, ended, or left by a run of the app that did not stop.
+        status["runtimes"] = Value::from(st.runtimes.list(&package));
         Ok(status)
     }
     #[cfg(not(target_os = "linux"))]
@@ -2487,6 +2505,10 @@ fn page_scheme(
 }
 
 pub fn run() {
+    // The launch environment comes from the app's environment as it starts, before anything
+    // changes it; the app's own core file limit is lowered then too (`spawn::capture`).
+    #[cfg(target_os = "linux")]
+    spawn::capture();
     std::hint::black_box(&PLUXY_BUILD_RECEIPT);
     #[cfg(any(feature = "native-test", feature = "artifact-test-trust"))]
     std::hint::black_box(&PLUXY_TEST_BUILD);
@@ -2673,6 +2695,14 @@ pub fn run() {
                 routes: route::Routes::default(),
                 #[cfg(target_os = "linux")]
                 vault: std::sync::Arc::clone(&vault),
+                #[cfg(target_os = "linux")]
+                runtimes: spawn::Runtimes::open(
+                    Some(app.path().app_data_dir()?.join("runtimes.json")),
+                    {
+                        let vault = std::sync::Arc::clone(&vault);
+                        Box::new(move |id| vault.value(id))
+                    },
+                ),
                 status: Mutex::new(None),
                 core_actions: Mutex::new(Vec::new()),
                 shown: Mutex::new(Shown::default()),
@@ -2697,6 +2727,12 @@ pub fn run() {
                 .state::<App>()
                 .programs
                 .set_private(vault as std::sync::Arc<dyn program::Private>);
+            // And their spawn and runtime frames, to the host's spawn service.
+            #[cfg(target_os = "linux")]
+            handle
+                .state::<App>()
+                .programs
+                .set_spawner(route::spawner(handle.clone()));
             #[cfg(target_os = "linux")]
             if let Some(message) = handle
                 .state::<App>()
@@ -2798,6 +2834,8 @@ pub fn run() {
             if let Some(st) = app.try_state::<App>() {
                 #[cfg(target_os = "linux")]
                 st.programs.stop_all();
+                #[cfg(target_os = "linux")]
+                st.runtimes.stop_all();
                 st.conn.lock().unwrap().stop_core();
             }
             if let Some(i) = app.try_state::<instance::Instance>() {

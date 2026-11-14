@@ -57,6 +57,9 @@
 //! whose describe leaves one open fails), and say what must never be shown: every secret value and
 //! reference is redacted from its log lines, the errors and status it causes and the outputs of its
 //! calls. A call the router gives secrets to (`Context::secrets`) carries them in its frame only.
+//!
+//! A tool's `spawn` and `runtime` frames, for a host call it serves, go to the host's spawn service
+//! (`Host::set_spawner`, `spawn.rs`), on a thread of their own; their IDs count among its own calls.
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -280,6 +283,11 @@ pub struct Outbound {
 
 /// Decides and makes a tool's call (`Host::set_route`).
 pub type Route = Arc<dyn Fn(Outbound) -> Result<Value, CallError> + Send + Sync>;
+
+/// Answers a tool's `spawn` and `runtime` frames (`Host::set_spawner`): the calling tool, the
+/// context of the host call it sent the frame for, and the frame.
+pub type Spawner =
+    Arc<dyn Fn(&Hop, &Arc<Context>, &Value) -> Result<Value, CallError> + Send + Sync>;
 
 /// The host-private services a tool reaches through the host (`Host::set_private`): the app's
 /// vault.
@@ -510,6 +518,7 @@ struct Run {
     outbound: Mutex<HashMap<String, Arc<AtomicBool>>>,
     route: Option<Route>,
     private: Option<Arc<dyn Private>>,
+    spawner: Option<Spawner>,
     /// The describe call it is answering, while it does: its `vault` frames may name it.
     describing: Mutex<Option<(String, Vec<String>)>>,
     /// Its last stderr line, as logged: why it stopped, if it says.
@@ -598,6 +607,7 @@ struct Inner {
     tickets: Mutex<HashMap<String, Arc<AtomicBool>>>,
     route: OnceLock<Route>,
     private: OnceLock<Arc<dyn Private>>,
+    spawner: OnceLock<Spawner>,
     /// Every call under way, by number, to cancel them all.
     calls: Mutex<HashMap<u64, Arc<AtomicBool>>>,
     /// The app is quitting: no tool starts and no lease is given.
@@ -719,6 +729,7 @@ impl Host {
             tickets: Mutex::new(HashMap::new()),
             route: OnceLock::new(),
             private: OnceLock::new(),
+            spawner: OnceLock::new(),
             calls: Mutex::new(HashMap::new()),
             closing: AtomicBool::new(false),
         }))
@@ -733,6 +744,12 @@ impl Host {
     /// come from. Without them, `vault` frames are refused and describe names no journal.
     pub fn set_private(&self, private: Arc<dyn Private>) {
         let _ = self.0.private.set(private);
+    }
+
+    /// Sets the host's spawn service, which answers tools' `spawn` and `runtime` frames. Without
+    /// it, they are refused.
+    pub fn set_spawner(&self, spawner: Spawner) {
+        let _ = self.0.spawner.set(spawner);
     }
 
     /// A lease on tool id, starting it if it is not running (once, however many ask at once).
@@ -1520,6 +1537,7 @@ fn new_run(
         outbound: Mutex::new(HashMap::new()),
         route: inner.route.get().cloned(),
         private: inner.private.get().cloned(),
+        spawner: inner.spawner.get().cloned(),
         describing: Mutex::new(None),
         last_line: Mutex::new(None),
     });
@@ -1807,7 +1825,7 @@ fn handshake(
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Leader {
+pub(crate) enum Leader {
     Running,
     /// Exited, not reaped yet: until it is reaped its process group's number cannot be reused,
     /// so the group can still be killed safely.
@@ -1817,7 +1835,7 @@ enum Leader {
 }
 
 /// The tool's state, without reaping it.
-fn leader(pid: u32) -> Leader {
+pub(crate) fn leader(pid: u32) -> Leader {
     let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
     let r = unsafe {
         libc::waitid(
@@ -2110,6 +2128,10 @@ fn deliver(run: &Arc<Run>, frame: &[u8], said_hello: &mut bool) -> Result<(), St
             vault(run, id, &v);
             return Ok(());
         }
+        "spawn" | "runtime" => {
+            spawn(run, id, &v);
+            return Ok(());
+        }
         "cancel" => {
             if let Some(f) = run.outbound.lock().unwrap().get(id) {
                 f.store(true, Ordering::SeqCst);
@@ -2218,6 +2240,77 @@ fn outbound(run: &Arc<Run>, id: &str, v: &Value) {
     if let Err(e) = spawned {
         run.outbound.lock().unwrap().remove(id);
         refuse("unavailable", format!("starting the call: {e}"));
+    }
+}
+
+/// A tool's `spawn` or `runtime` frame v with ID id, for a host call it serves (`for`): the host's
+/// spawn service answers it on a thread of its own (a stop waits for the runtime to end), and the
+/// answer goes back on the tool's stdin. Its ID counts among the tool's own calls (`outbound`).
+fn spawn(run: &Arc<Run>, id: &str, v: &Value) {
+    let refuse = |code: &str, message: String| {
+        if run.ending() {
+            return;
+        }
+        if run.queued.load(Ordering::SeqCst) >= MAX_QUEUED {
+            return run.violation(format!(
+                "sent requests faster than it read the answers ({MAX_QUEUED} frames waited for its stdin)"
+            ));
+        }
+        let _ = run.send(&json!({"type": "error", "id": id,
+            "error": {"code": code, "message": message}}));
+    };
+    if !valid_ticket(id) {
+        return refuse(
+            "invalid_request",
+            "a request ID is 1 to 64 letters, digits, '-', '_' or '.'".into(),
+        );
+    }
+    let Some(serves) = v["for"].as_str() else {
+        return refuse(
+            "invalid_request",
+            "a spawn or runtime request names the host call it is for".into(),
+        );
+    };
+    let Some((context, _, _)) = run.serving.lock().unwrap().get(serves).cloned() else {
+        return refuse(
+            "permission",
+            format!("{serves} is not a call {} is serving", run.spec.id),
+        );
+    };
+    let Some(spawner) = run.spawner.clone() else {
+        return refuse("unsupported", "this host spawns nothing".into());
+    };
+    {
+        let mut out = run.outbound.lock().unwrap();
+        if out.contains_key(id) {
+            return refuse("invalid_request", format!("request ID {id} is in use"));
+        }
+        if out.len() >= MAX_PENDING {
+            return refuse(
+                "unavailable",
+                format!("{} has {MAX_PENDING} calls of its own already", run.spec.id),
+            );
+        }
+        out.insert(id.to_string(), Arc::new(AtomicBool::new(false)));
+    }
+    let tool = Hop::Package {
+        id: run.spec.id.clone(),
+        sha256: run.spec.sha256.clone(),
+        generation: run.spec.generation,
+    };
+    let (r, rid, frame) = (Arc::clone(run), id.to_string(), v.clone());
+    let spawned = spawn_named("pluxy-prog-spawn", move || {
+        let answer = match spawner(&tool, &context, &frame) {
+            Ok(output) => json!({"type": "result", "id": rid, "output": output}),
+            Err(e) => json!({"type": "error", "id": rid,
+                "error": {"code": e.code, "message": e.message}}),
+        };
+        r.outbound.lock().unwrap().remove(&rid);
+        let _ = r.send(&answer);
+    });
+    if let Err(e) = spawned {
+        run.outbound.lock().unwrap().remove(id);
+        refuse("unavailable", format!("starting the request: {e}"));
     }
 }
 

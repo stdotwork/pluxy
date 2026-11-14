@@ -412,8 +412,9 @@ A call goes ahead only if all of these hold, checked again for each call:
   remembered approval, and only of exactly that launch. A call with a tool hop in its chain is
   prepared as an import, whoever started it, and never uses or saves a remembered approval; a
   chain a page started always asks too. Neither dialog offers "remember". The host
-  confirms the launch; the operation receives it as its input, as with any call (the host's own
-  launcher comes later). The confirmation's rate and pending limits are checked before an
+  confirms the launch, with its lifetime and launch environment; the operation receives it as its
+  input, as with any call, and may ask the host to spawn it
+  ([Launches and managed runtimes](#launches-and-managed-runtimes)). The confirmation's rate and pending limits are checked before an
   executable is hashed, and it is hashed without holding the confirmations' lock. A call cancelled
   while its confirmation is open (its ticket, the window closing, its page closing or its consent
   revoked) withdraws it, and the dialog closes. Once confirmed, the call is granted again and runs
@@ -422,6 +423,114 @@ A call goes ahead only if all of these hold, checked again for each call:
 A routed call is then a call like any other: it is registered so a cancel and the window's
 closing reach it, and it goes through the same limits, per-package turn, backoff, quarantine and
 unknown-outcome rules as a call from the window.
+
+## Launches and managed runtimes
+
+The host spawns what a person confirmed; a tool never starts an agent itself through the host by
+naming a program. A `launch` operation's input names `executable`, `argv` (the arguments after the
+program's name) and `cwd`, and may name:
+
+- `lifetime`: `detached` (the default: an agent or a terminal that is no longer the app's) or
+  `managed` (a runtime the app keeps and stops);
+- `environment`: `{"set": {NAME: value}, "unset": [NAME], "inherit": [NAME], "secrets": {NAME: <secret field>}}`,
+  at most 64 names in each: variables set, session values removed, variables of the app's own
+  environment passed on by name, and variables that get the secret of one of the launch's secret
+  fields (a reference field the router filled). Names are letters, digits and `_`; `PLUXY_*`,
+  `LD_*`, `APPIMAGE`, `APPDIR`, `ARGV0` and `OWD` can never be set, inherited or given a secret.
+
+The native confirmation shows the lifetime and each variable: its name, a set value, "inherited
+from the app's environment", "removed", or the secret's label and ID; never an inherited value or
+a secret's value. Its environment revision is a SHA-256 of the policy (its version and the
+selected names below), the lifetime and the request, so a remembered approval of one launch does
+not stand for one with another lifetime or environment. Session values themselves (the display,
+the bus address, `PATH`'s entries) are not part of it.
+
+While the target serves that call, it asks the host to spawn the confirmed launch:
+
+```json
+{"type":"spawn","id":"s-1","for":"c-2"}
+```
+
+The frame names nothing else: the host spawns exactly the launch it confirmed for that call and
+that tool's release, once, and answers `{"lifetime":"detached"}` or
+`{"lifetime":"managed","runtime":"rt-<hex>","pid":1234}`. A second spawn for the call, a spawn for
+a call that confirmed no launch, and one for a call the tool is not serving are refused with
+`permission`; a launch whose executable or cwd changed since its confirmation, or whose secret was
+removed from the vault, fails with `unavailable`. The call the spawn served may then end: what it
+started does not end with it.
+
+### What a launch gets
+
+- The executable the confirmation opened, run from that opened file (never its path again), with
+  the confirmed argv and the executable as named as `argv[0]`; for a script (`#!`), the
+  interpreter gets the opened file's `/proc/self/fd` path. It starts in the cwd the confirmation
+  opened.
+- /dev/null on stdin, stdout and stderr, and no other descriptor of the app's: no tool pipe, vault
+  file or socket.
+- The launch environment, and nothing else of the app's: the app's own environment as it started
+  holds `HOME`, `USER`, `LOGNAME`, `SHELL`, `PATH`, `LANG`, `LANGUAGE`, `LC_*`, `TZ`, `TERM`,
+  `COLORTERM`, `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`, `DBUS_SESSION_BUS_ADDRESS`, the XDG
+  folders and session values (`XDG_RUNTIME_DIR`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
+  `XDG_CACHE_HOME`, `XDG_STATE_HOME`, `XDG_CONFIG_DIRS`, `XDG_DATA_DIRS`, `XDG_SESSION_TYPE`,
+  `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP`) and the proxy variables (`http_proxy`,
+  `https_proxy`, `no_proxy`, `all_proxy`, and the same in capitals); those it has are passed on,
+  but those the launch removes. When the app runs as an AppImage, entries inside its own folder
+  are taken out of `PATH`, `XDG_DATA_DIRS` and `XDG_CONFIG_DIRS`. Then come the variables the launch
+  inherits by name, those it sets, and its secrets, which the host resolves from the vault at the
+  spawn: the tool that asked holds references only. No shell is run to read a login environment.
+- A process given a secret's value has its core file size limits set to zero, soft and hard, so
+  neither it nor any process it starts writes core files. Other launches get the limits the app
+  started with.
+
+### Detached and managed
+
+A **detached** launch is started by a short-lived wrapper process, which starts it in a session and
+process group of its own with no parent-death signal and exits; the app reaps the wrapper. The app
+never signals a detached launch again: it runs on after its tool stops when idle, crashes, is
+swapped, disabled or removed, and after the app quits.
+
+A **managed** runtime is the app's. It leads a process group of its own (never its tool's) and gets
+SIGTERM if the app dies without stopping it. The host keeps its live process (so its process ID is
+never another process's while the host may signal it), a start token and its exit status, on a
+dedicated thread that started it and stays until it is reaped. It belongs to its package, whatever
+release or generation of the package's tool asks: a tool restarted after a crash or swapped for an
+update controls the runtimes its package started. While serving a call, a tool sends:
+
+```json
+{"type":"runtime","id":"u-1","for":"c-5","op":"status","runtime":"rt-<hex>"}
+```
+
+| `op` | `output` |
+| --- | --- |
+| `list` | `{"runtimes": [<status>...]}`: its package's runtimes |
+| `status` | `{"runtime", "package", "state", "pid", "started", "restarts", "executable", "argv"}`, with `exit` once it ended; `state` is `running`, `stopping`, `exited` or `unknown` |
+| `stop` | the status once it has been reaped: SIGTERM to its process group, SIGKILL to the group after five seconds, or as soon as its leader exits |
+| `restart` | the status once it runs again: stopped as above, then the same confirmed launch started again, unless its executable or cwd changed since it was confirmed (launch it again) or a secret it gets was removed |
+
+Another package's runtime is `not_found`, as one that never was. A package keeps at most eight
+runtimes, running or ended; the oldest ended one makes room. A runtime whose leader exits on its
+own has the rest of its group killed as it is reaped. The window's `program_status` lists the
+package's runtimes too. The app's quit stops every managed runtime (and starts none after);
+disabling or removing the package stops its runtimes, since nothing could control them then. A
+tool's idle stop, crash or swap stops none.
+
+If the app itself dies, the runtime's leader gets SIGTERM, but a descendant that ignores it or
+starts a session of its own lives on as an orphan: a process group and a parent-death signal are
+not crash cleanup of every descendant, and the host adds no crash supervisor. The app's data
+folder holds `runtimes.json` (owner-only), naming the runtimes running; the next start reports each
+as `unknown` and never signals it: a process ID alone does not prove the process is still that
+runtime.
+
+### The app's own core files
+
+At its start the app lowers its own soft core file size limit to zero, keeping the hard limit: it
+holds the vault's secrets, and its tools, which inherit the limit, receive secret values on their
+pipes. A developer can raise it again for a running app (`prlimit --core=unlimited --pid <app>`).
+The app does not mark itself undumpable (`PR_SET_DUMPABLE`): that would also stop same-user
+debugging and crash reports, and a process of the same user is not kept out anyway. The limit
+covers core files the kernel writes; a core dump handler run by the kernel (a `|` pattern in
+`/proc/sys/kernel/core_pattern`) is told the limit and is trusted to keep to it, as
+systemd-coredump does.
 
 ## Secrets, references and the vault
 
