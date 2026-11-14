@@ -15,11 +15,37 @@
     "operations": [
       {
         "id": "preview",
-        "description": "Pin Pi's three files in its agent folder (by default ~/.pi/agent, or a selected agent folder): cliproxyapi.json, settings.json and cliproxyapi-models.json, and read them back with the state of pluxy's Pi plugin, never the key",
+        "description": "Pin Pi's three files, cliproxyapi.json, settings.json and cliproxyapi-models.json, in one agent folder (by default ~/.pi/agent, or a selected agent folder, or the three files selected, links followed) and read them back with the state of pluxy's Pi plugin, never the key; files Pi would not take are pinned and reported refused",
         "effect": "read",
         "input_schema": {
           "type": "object",
           "properties": {
+            "targets": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "root": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
             "folder": {
               "type": "string",
               "minLength": 1,

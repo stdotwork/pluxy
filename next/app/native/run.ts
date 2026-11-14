@@ -128,7 +128,8 @@
 // naming the three files and the key's label, keeping the person's later edits; the adapter folder
 // is installed, updated and removed with them, and a folder whose adapter is not pluxy's refuses an
 // apply; through a stow link and a chezmoi-style root it changes only the target, a replaced target
-// refuses, folders Pi would not take refuse; its recipe starts a stand-in pi (from the PATH, then
+// refuses, files Pi would not take are reported refused, Clear refuses them and Restore
+// Backup still puts them back; its recipe starts a stand-in pi (from the PATH, then
 // from ~/.local/bin, then from Pi's own bin folder, which comes first) in a terminal through the
 // launcher with no key in argv or environment; the key and a login canary stay out of every window
 // answer, confirmation and the app's output, and removing the package leaves no process.

@@ -16,7 +16,7 @@ mod pi;
 use pi::{PiMerge, Settings};
 use pluxy_program::{run, Call, Error, Handler};
 use pluxy_transactions::{
-    backup_call, data_dir, json_leaves, Pin, Selection, Target, Transactions,
+    backup_call, data_dir, json_leaves, sha256_of, Pin, Selection, Target, Transactions,
 };
 use serde_json::{json, Value};
 use std::os::unix::fs::PermissionsExt;
@@ -41,10 +41,25 @@ fn home() -> Result<PathBuf, Error> {
         .ok_or_else(|| Error::unavailable("the app gave no home folder (HOME)"))
 }
 
-/// The selections a preview names: the three files in a selected agent folder (`folder`, which
-/// may be a link), or in `~/.pi/agent` (the tool's environment has no PI_CODING_AGENT_DIR: a
-/// person who moved the folder selects it).
+/// The selections a preview names: its three targets (`file`, which may be a link, as stow makes:
+/// it is followed and kept), the three files in a selected agent folder (`folder`, which may
+/// itself be a link, as chezmoi can make; files in it may not), or in `~/.pi/agent` (the tool's
+/// environment has no PI_CODING_AGENT_DIR: a person who moved the folder selects it). Pi makes
+/// its agent folder when it first runs; before that there is nothing to set up, and the tool
+/// makes no folder.
 fn selections(input: &Value) -> Result<[Selection; 3], Error> {
+    if let Some(targets) = input.get("targets") {
+        return match targets.as_array().map(Vec::as_slice) {
+            Some([a, b, c]) => Ok([
+                Selection::from_json(a)?,
+                Selection::from_json(b)?,
+                Selection::from_json(c)?,
+            ]),
+            _ => Err(Error::invalid_request(
+                "targets holds cliproxyapi.json, settings.json and cliproxyapi-models.json",
+            )),
+        };
+    }
     if let Some(folder) = input.get("folder") {
         let root = PathBuf::from(folder.as_str().unwrap_or_default());
         if !root.is_absolute() {
@@ -56,7 +71,33 @@ fn selections(input: &Value) -> Result<[Selection; 3], Error> {
         }));
     }
     let agent = home()?.join(".pi").join("agent");
+    if !agent.is_dir() {
+        return Err(Error::invalid_request(format!(
+            "{} does not exist yet: run Pi once (it makes the folder), then read the settings again",
+            agent.display()
+        )));
+    }
     Ok(FILES.map(|name| Selection::File(agent.join(name))))
+}
+
+/// A preview and the bytes of cliproxyapi.json and settings.json.
+type Read = (Value, [Option<Vec<u8>>; 2]);
+
+/// Runs read (a preview and the two files' bytes) again once when the bytes it read are not the
+/// ones it pinned (another program wrote a file between the two reads); refuses if they differ
+/// again, so the values shown are always those of the files pinned.
+fn pinned_read(mut read: impl FnMut() -> Result<Read, Error>) -> Result<Read, Error> {
+    for _ in 0..2 {
+        let (v, bytes) = read()?;
+        let same =
+            (0..2).all(|i| v["targets"][i]["sha256"] == json!(sha256_of(bytes[i].as_deref())));
+        if same {
+            return Ok((v, bytes));
+        }
+    }
+    Err(Error::unavailable(
+        "a configuration file changed while it was read: read it again",
+    ))
 }
 
 /// A selection's agent folder (as the person gave it, not a link's target) and file name.
@@ -191,18 +232,25 @@ impl Handler for Pi {
             "preview" => {
                 let sels = selections(input)?;
                 let agent = agent_of(&[&sels[0], &sels[1], &sels[2]])?;
-                // Files Pi would not take are refused before anything is pinned.
-                let (_, config) = Target::resolve(&sels[0])?.read_now()?;
-                let (_, settings) = Target::resolve(&sels[1])?.read_now()?;
+                let tx = Transactions::new(call, data_dir()?);
+                let (mut v, [config, settings]) = pinned_read(|| {
+                    let v = tx.preview(SET, &sels)?;
+                    let (_, a) = Target::resolve(&sels[0])?.read_now()?;
+                    let (_, b) = Target::resolve(&sels[1])?.read_now()?;
+                    Ok((v, [a, b]))
+                })?;
+                // Files Pi would not take are pinned all the same, so Restore Backup and the
+                // backups still reach them: `state` is `refused` and `reason` says why apply and
+                // clear refuse them.
                 let state = adapter::state(&agent);
                 let mut read = pi::read_back(
                     config.as_deref(),
                     settings.as_deref(),
                     input["base_url"].as_str(),
                     matches!(state, adapter::State::Installed(_)),
-                )?;
+                )
+                .unwrap_or_else(|e| json!({"state": "refused", "reason": e.message}));
                 read["adapter"] = state.to_json();
-                let mut v = Transactions::new(call, data_dir()?).preview(SET, &sels)?;
                 v["pi"] = read;
                 Ok(v)
             }

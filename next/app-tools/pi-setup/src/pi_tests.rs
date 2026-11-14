@@ -461,3 +461,50 @@ fn the_carried_copy_keeps_its_cache_in_its_own_folder() {
     assert!(!stream.contains("tmpdir()"));
     assert!(stream.contains(r#"join(dirname(fileURLToPath(import.meta.url)), "..", ".cache")"#));
 }
+
+#[test]
+fn a_preview_reads_again_once_when_a_file_changed_between_its_reads() {
+    use serde_json::json;
+    let pinned = |a: &[u8], b: &[u8]| {
+        json!({"targets": [
+            {"sha256": pluxy_transactions::sha256_of(Some(a))},
+            {"sha256": pluxy_transactions::sha256_of(Some(b))},
+        ]})
+    };
+    // Changed during the first read only: the second read's values are shown.
+    let mut n = 0;
+    let (_, [a, _]) = crate::pinned_read(|| {
+        n += 1;
+        let bytes = if n == 1 {
+            b"other".to_vec()
+        } else {
+            b"now".to_vec()
+        };
+        Ok((pinned(b"now", b"s"), [Some(bytes), Some(b"s".to_vec())]))
+    })
+    .unwrap();
+    assert_eq!(a.as_deref(), Some(&b"now"[..]));
+    // Changed during both: refused.
+    let e = crate::pinned_read(|| {
+        Ok((
+            pinned(b"x", b"s"),
+            [Some(b"y".to_vec()), Some(b"s".to_vec())],
+        ))
+    })
+    .unwrap_err();
+    assert!(e.message.contains("changed while it was read"));
+}
+
+#[test]
+fn a_preview_takes_the_three_files_selected() {
+    use serde_json::json;
+    let input = json!({"targets": [
+        {"file": "/s/cliproxyapi.json"}, {"file": "/s/settings.json"}, {"file": "/s/cliproxyapi-models.json"},
+    ]});
+    let sels = crate::selections(&input).unwrap();
+    assert_eq!(
+        crate::agent_of(&[&sels[0], &sels[1], &sels[2]]).unwrap(),
+        PathBuf::from("/s")
+    );
+    assert!(crate::selections(&json!({"targets": [{"file": "/s/settings.json"}]})).is_err());
+}

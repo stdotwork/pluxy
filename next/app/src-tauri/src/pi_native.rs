@@ -9,12 +9,13 @@
 //! - install: pluxy/pi-setup and pluxy/execution install from the curated registry and are enabled
 //!   through their native confirmations, which say "full access to your user account";
 //! - key: the key is typed into native key entry; the window gets only its ID;
-//! - unknown: a preview of a folder whose packages is an object, or whose settings are not JSON, is
-//!   refused unasked and changes nothing; a preview of a folder whose adapter is not pluxy's
+//! - unknown: a preview of a folder whose packages is an object, or whose settings are not JSON,
+//!   pins its files unasked, reports them refused with the reason and changes nothing; a preview of a folder whose adapter is not pluxy's
 //!   succeeds, and a confirmed apply to it is refused and changes nothing; a preview of the
 //!   person's files (a read, asked nothing) reads the state back, with no key;
 //! - apply: asks a native confirmation naming the three files, the key's label and the same-instant
-//!   sentence, never the key; then the files hold exactly the bytes `expect.json` says, modes kept,
+//!   sentence, never the key; then the files hold exactly the bytes `expect.json` says, owner only
+//!   (0600: settings.json was 0644),
 //!   the adapter folder holds exactly the bundle, and the preview reads the config back as
 //!   configured;
 //! - plugin_update: an installed adapter of an older version, with a file the bundle does not have,
@@ -25,10 +26,13 @@
 //! - restore: after the person's edit, Restore Backup puts the three originals back, the cache too;
 //! - clear: applied again and edited by the person, Clear takes out only pluxy's values; their own
 //!   entries and settings stay, as the expected bytes say;
+//! - corrupt: applied again, then settings.json made into a file Pi would not take: the preview
+//!   reports it refused, a confirmed Clear is refused and changes nothing, and Restore Backup puts
+//!   back the files as they were before that apply and removes the adapter folder;
 //! - backups: a Manual Backup, a diff naming the setting the person changed and never its value,
 //!   restore over that edit, delete;
-//! - stow: an apply through the stow folder changes only the links' targets, the links keep their
-//!   inodes and text; once a target is replaced, a confirmed write fails as changed and writes
+//! - stow: an apply through the selected links changes only their targets (0640 becomes 0600), the
+//!   links keep their inodes and text, and the adapter folder goes beside the links; once a target is replaced, a confirmed write fails as changed and writes
 //!   nothing; a new preview's restore puts the originals back through the links;
 //! - root: an apply to the selected root creates the files and the adapter folder, the root link
 //!   kept; clear removes them;
@@ -87,24 +91,6 @@ fn read_op(main: &Webview, seen: &Seen, op: &str, input: Value) -> Result<Value,
     require(!asked, format!("{op} asked a native confirmation"))?;
     require(r["ok"] == true, format!("{op} {input}: {r}"))?;
     Ok(r["value"].clone())
-}
-
-/// A read operation that must be refused, unasked, saying says.
-fn read_refused(
-    main: &Webview,
-    seen: &Seen,
-    op: &str,
-    input: Value,
-    says: &str,
-) -> Result<(), String> {
-    let (r, asked) = unasked(|| call(main, PACKAGE, op, input.clone()));
-    let r = r?;
-    seen.add(r.to_string());
-    require(!asked, format!("{op} {input} asked a native confirmation"))?;
-    require(
-        r["ok"] == false && r["error"].as_str().is_some_and(|e| e.contains(says)),
-        format!("{op} {input} should be refused with {says:?}: {r}"),
-    )
 }
 
 /// A write operation of the package from the window, its confirmation (naming every one of
@@ -373,20 +359,17 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     step(
         "unknown",
         (|| {
-            read_refused(
-                main,
-                &seen,
-                "preview",
-                json!({"folder": txt(&unknown)}),
-                "packages",
-            )?;
-            read_refused(
-                main,
-                &seen,
-                "preview",
-                json!({"folder": txt(&broken)}),
-                "JSON",
-            )?;
+            // Files Pi would not take are pinned all the same and reported refused, with why.
+            for (q, says) in [(&unknown, "packages"), (&broken, "JSON")] {
+                let v = read_op(main, &seen, "preview", json!({"folder": txt(q)}))?;
+                let c = &v["pi"];
+                require(
+                    v["targets"][1]["target"] == json!(txt(&q.join("settings.json")))
+                        && c["state"] == "refused"
+                        && c["reason"].as_str().is_some_and(|r| r.contains(says)),
+                    format!("the preview of {} should report it refused: {v}", txt(q)),
+                )?;
+            }
             // A folder whose adapter is not pluxy's previews, and a confirmed apply to it is refused.
             let fv = read_op(main, &seen, "preview", json!({"folder": txt(&foreign)}))?;
             require(
@@ -481,7 +464,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 read(&cliproxy) == Some(bytes("cliproxy_applied"))
                     && mode(&cliproxy) == 0o600
                     && read(&settings) == Some(bytes("settings_applied"))
-                    && mode(&settings) == 0o644
+                    && mode(&settings) == 0o600
                     && !cache.exists(),
                 format!(
                     "the applied files: {:?} {:?} cache present: {}",
@@ -643,6 +626,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                     && read(&cliproxy) == Some(bytes("cliproxy_original"))
                     && read(&cache) == Some(bytes("cache_original"))
                     && mode(&cliproxy) == 0o600
+                    && mode(&settings) == 0o600
                     && !adapter.exists(),
                 format!(
                     "the restored files: {:?} {:?} {:?}",
@@ -708,6 +692,78 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         })(),
     )?;
     passed("clear");
+
+    // ---- corrupt: an applied settings file Pi would not take; Clear is refused, Restore Backup
+    // still puts the files back
+    step(
+        "corrupt",
+        (|| {
+            let v = read_op(main, &seen, "preview", json!({}))?;
+            written(
+                app,
+                main,
+                &seen,
+                "apply",
+                apply_input(&v, &secret),
+                &[&txt(&cliproxy), &txt(&settings), &txt(&cache), LABEL],
+                &hidden,
+            )?;
+            adapter_is(&adapter, &bundled(&x, &marker)?)?;
+            let (from, to) = edit_pair("corrupt");
+            edit(&settings, &from, &to)?;
+            let corrupt = read(&settings);
+            let v = read_op(main, &seen, "preview", json!({}))?;
+            let c = &v["pi"];
+            require(
+                v["applied"] == true
+                    && c["state"] == "refused"
+                    && c["reason"].as_str().is_some_and(|r| r.contains("JSON"))
+                    && c["adapter"]["installed"] == true,
+                format!("the corrupt file's preview: {v}"),
+            )?;
+            let r = confirmed(
+                app,
+                main,
+                &seen,
+                "clear",
+                json!({"targets": v["targets"]}),
+                &[&txt(&settings)],
+                &hidden,
+            )?;
+            require(
+                r["ok"] == false && r["error"].as_str().is_some_and(|e| e.contains("JSON")),
+                format!("a clear of the corrupt file should be refused: {r}"),
+            )?;
+            require(
+                read(&settings) == corrupt && adapter.exists(),
+                "the refused clear changed the files",
+            )?;
+            let o = written(
+                app,
+                main,
+                &seen,
+                "restore",
+                json!({"targets": v["targets"]}),
+                &[&txt(&settings)],
+                &hidden,
+            )?;
+            require(o["outcome"] == "restored", format!("the restore: {o}"))?;
+            require(
+                read(&settings) == Some(bytes("settings_cleared"))
+                    && read(&cliproxy) == Some(bytes("cliproxy_original"))
+                    && read(&cache) == Some(bytes("cache_original"))
+                    && !adapter.exists(),
+                format!(
+                    "the files restored: {:?} {:?} {:?}",
+                    read(&settings),
+                    read(&cliproxy),
+                    read(&cache)
+                ),
+            )?;
+            Ok(())
+        })(),
+    )?;
+    passed("corrupt");
 
     // ---- backups: a manual backup, diff by name, restore, delete
     step(
@@ -789,9 +845,15 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     step(
         "stow",
         (|| {
+            // The links themselves are selected (a link inside a selected folder is refused).
+            let stow_sel = json!({"targets": [
+                {"file": txt(&stow_cliproxy)},
+                {"file": txt(&stow_settings)},
+                {"file": txt(&stow.join("cliproxyapi-models.json"))},
+            ]});
             let (ino_settings, _) = link(&stow_settings)?;
             let (ino_cliproxy, _) = link(&stow_cliproxy)?;
-            let v = read_op(main, &seen, "preview", json!({"folder": txt(&stow)}))?;
+            let v = read_op(main, &seen, "preview", stow_sel.clone())?;
             require(
                 v["targets"][0]["target"] == json!(txt(&stow_target_cliproxy))
                     && v["targets"][0]["link"] == json!(stow_cliproxy_text)
@@ -810,7 +872,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             require(
                 read(&stow_target_settings) == Some(bytes("stow_settings_applied"))
-                    && mode(&stow_target_settings) == 0o640
+                    && mode(&stow_target_settings) == 0o600
                     && read(&stow_target_cliproxy) == Some(bytes("stow_cliproxy_applied")),
                 format!(
                     "the stow targets after apply: {:?} {:?}",
@@ -834,7 +896,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 "the stow apply put an adapter folder among the targets",
             )?;
             // The target replaced (as an editor saves, by rename) after a preview.
-            let v = read_op(main, &seen, "preview", json!({"folder": txt(&stow)}))?;
+            let v = read_op(main, &seen, "preview", stow_sel.clone())?;
             let replaced = read(&stow_target_settings).unwrap_or_default();
             let tmp = dotfiles.join("settings.json.new");
             std::fs::write(&tmp, &replaced).map_err(|e| e.to_string())?;
@@ -858,7 +920,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 "the refused write changed a file",
             )?;
             // A new preview's restore puts the originals back through the links.
-            let v = read_op(main, &seen, "preview", json!({"folder": txt(&stow)}))?;
+            let v = read_op(main, &seen, "preview", stow_sel.clone())?;
             written(
                 app,
                 main,

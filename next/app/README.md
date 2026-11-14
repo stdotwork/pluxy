@@ -863,8 +863,10 @@ Pi reaches the core through the CLIProxyAPI provider plugin. The tool carries a 
 it and installs it as a local Pi package in Pi's agent folder; it never runs `pi install` or npm.
 **Read settings** previews Pi's files, `cliproxyapi.json`, `settings.json` and the plugin's model
 cache `cliproxyapi-models.json`, in its agent folder (`~/.pi/agent`) or in a selected agent folder
-(the one `PI_CODING_AGENT_DIR` names; the folder may be a link, as chezmoi can make; a file in it
-may be a link, as stow makes, which is followed and kept). It shows whether the plugin is
+(the one `PI_CODING_AGENT_DIR` names; the folder may be a link, as chezmoi can make), or as the
+linked files in a folder (links, as stow makes, are followed and kept). Files Pi would not take
+are still read: the page says why, leaves Apply, Clear and Uninstall off, and keeps Restore Backup
+and the backups. It shows whether the plugin is
 installed and its version (with **Update available** when the tool carries another), whether
 pluxy's integration is applied, the files it writes to, whether a key is in `cliproxyapi.json` and
 Pi's default provider and model, never the key; it warns when `settings.json` still lists the npm

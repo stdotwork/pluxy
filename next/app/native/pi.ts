@@ -330,6 +330,7 @@ function configs(home: string, login: string) {
       quiet: ['"theme": "dark",', '"theme": "dark",\n  "quietStartup": true,'],
       mcp: ['"./pluxy-cliproxyapi-provider"\n', '"./pluxy-cliproxyapi-provider",\n    "npm:pi-mcp"\n'],
       backup: ['"theme": "dark"', '"theme": "pi-theme-canary"'],
+      corrupt: ['"theme": "dark",', '"theme": "dark",,'],
     },
     // The backup browser's step, from the cleared files: the diff a restore of a backup taken
     // before the backup edit shows (setting names, never a value), and the values no answer may hold.

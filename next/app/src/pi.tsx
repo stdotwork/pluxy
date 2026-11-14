@@ -37,6 +37,9 @@ const t = strings("pi", {
   fileDefault: "Pi's agent folder",
   fileDefaultNote: "~/.pi/agent",
   fileFolder: "A selected agent folder",
+  fileLinks: "Linked files in a folder",
+  linksHint:
+    "A full path to the folder holding cliproxyapi.json and settings.json as links (as stow makes); each link is followed and kept",
   folder: "Folder",
   folderHint:
     "A full path, such as the folder PI_CODING_AGENT_DIR names; the folder may be a link (as chezmoi can make)",
@@ -85,6 +88,9 @@ const t = strings("pi", {
   clearHint:
     "Remove pluxy's integration settings and the plugin, and keep other settings. Restart Pi afterward.",
   restore: "Restore Backup",
+  refused: "Pi would not take these files",
+  refusedHint:
+    "Apply, Clear and Uninstall leave them alone until they are fixed; Restore Backup puts back the files as they were before the first apply.",
   restoreHint: "Put the three files back as they were before the first apply.",
   plugin: "Plugin management",
   installedVersion: "Installed plugin version: {version}",
@@ -117,14 +123,16 @@ interface PiAdapter {
 }
 
 interface PiConfig {
-  state: "configured" | "not-configured" | "needs-update";
-  base_url: string | null;
-  key_set: boolean;
-  provider: string;
-  default_provider: string | null;
-  model: string | null;
-  registered: boolean;
-  legacy: boolean;
+  /** refused: Pi would not take a file (reason says why); the other fields are then absent. */
+  state: "configured" | "not-configured" | "needs-update" | "refused";
+  reason?: string;
+  base_url?: string | null;
+  key_set?: boolean;
+  provider?: string;
+  default_provider?: string | null;
+  model?: string | null;
+  registered?: boolean;
+  legacy?: boolean;
   adapter: PiAdapter;
 }
 
@@ -221,7 +229,7 @@ function StartCli(props: { available: boolean }) {
 
 export function PiPage() {
   const { api } = useKit();
-  const [where, setWhere] = useState<"default" | "folder">("default");
+  const [where, setWhere] = useState<"default" | "folder" | "links">("default");
   const [folder, setFolder] = useState("");
   const [preview, setPreview] = useState<Preview>();
   const [model, setModel] = useState("");
@@ -241,7 +249,16 @@ export function PiPage() {
       () => setCore(undefined),
     );
   }, []);
-  const selection = () => (where === "folder" ? { folder: folder.trim() } : {});
+  const selection = () =>
+    where === "folder"
+      ? { folder: folder.trim() }
+      : where === "links"
+        ? {
+            targets: ["cliproxyapi.json", "settings.json", "cliproxyapi-models.json"].map((n) => ({
+              file: `${folder.trim().replace(/\/+$/, "")}/${n}`,
+            })),
+          }
+        : {};
   const read = useAction(() => {});
   const load = () =>
     read.run(async () => {
@@ -307,6 +324,7 @@ export function PiPage() {
   const addKey = useAction(secrets.reload);
   const cfg = preview?.pi;
   const adapter = cfg?.adapter;
+  const refusedFiles = cfg?.state === "refused";
   const applyLabel = !adapter?.installed
     ? t("install")
     : !preview?.applied
@@ -330,16 +348,17 @@ export function PiPage() {
           choices={[
             { value: "default", label: t("fileDefault"), note: t("fileDefaultNote") },
             { value: "folder", label: t("fileFolder") },
+            { value: "links", label: t("fileLinks") },
           ]}
-          onChange={(v: "default" | "folder") => {
+          onChange={(v: "default" | "folder" | "links") => {
             setWhere(v);
             setPreview(undefined);
           }}
         />
-        {where === "folder" && (
+        {where !== "default" && (
           <Text
             label={t("folder")}
-            hint={t("folderHint")}
+            hint={where === "links" ? t("linksHint") : t("folderHint")}
             value={folder}
             onInput={(v) => {
               setFolder(v);
@@ -371,78 +390,96 @@ export function PiPage() {
               ],
               [
                 t("status"),
-                preview.applied
-                  ? t("applied")
-                  : cfg.state === "configured"
-                    ? t("configured")
-                    : cfg.state === "needs-update"
-                      ? t("needsUpdate")
-                      : t("notConfigured"),
+                refusedFiles
+                  ? t("refused")
+                  : preview.applied
+                    ? t("applied")
+                    : cfg.state === "configured"
+                      ? t("configured")
+                      : cfg.state === "needs-update"
+                        ? t("needsUpdate")
+                        : t("notConfigured"),
               ],
               [t("configFile"), preview.targets[0]?.target ?? ""],
               [t("settingsFile"), preview.targets[1]?.target ?? ""],
               [t("cacheFile"), preview.targets[2]?.target ?? ""],
-              [t("keySet"), cfg.key_set ? t("yes") : t("no")],
-              [t("defaultProvider"), cfg.default_provider ?? t("none")],
-              [t("defaultModel"), cfg.model ?? t("none")],
+              ...(refusedFiles
+                ? []
+                : ([
+                    [t("keySet"), cfg.key_set ? t("yes") : t("no")],
+                    [t("defaultProvider"), cfg.default_provider ?? t("none")],
+                    [t("defaultModel"), cfg.model ?? t("none")],
+                  ] as [string, string][])),
             ]}
           />
+        )}
+        {refusedFiles && (
+          <Notice tone="warn">
+            {cfg?.reason} {t("refusedHint")}
+          </Notice>
         )}
         {cfg?.legacy && <Notice tone="warn">{t("legacy")}</Notice>}
       </Card>
       {preview && cfg && adapter && (
         <>
-          <Card title={t("model")}>
-            <p class="muted">{t("modelHint")}</p>
-            <datalist id={listId}>
-              {served.map((m) => (
-                <option key={m} value={m} />
-              ))}
-            </datalist>
-            <Text label={t("modelLabel")} value={model} list={listId} onInput={setModel} />
-            {!validModel(model.trim()) && <Notice tone="warn">{t("invalidModel")}</Notice>}
-            {fetchModels.error && <Notice tone="danger">{fetchModels.error}</Notice>}
-            <Button onClick={refresh} disabled={fetchModels.busy || busy}>
-              {t("refresh")}
-            </Button>
-          </Card>
-          <Card title={t("key")}>
-            <p class="muted">{t("keyHint")}</p>
-            {secrets.error && <Notice tone="danger">{secrets.error}</Notice>}
-            {keys.length > 0 ? (
-              <Choices
-                label={t("key")}
-                value={secret || undefined}
-                choices={keys.map((s) => ({ value: s.id, label: s.label }))}
-                onChange={setSecret}
-              />
-            ) : (
-              <p class="muted">{t("noKeys")}</p>
-            )}
-            {addKey.error && <Notice tone="danger">{addKey.error}</Notice>}
-            <Button
-              disabled={addKey.busy}
-              onClick={() =>
-                addKey.run(async () => {
-                  const r = await reply<{ id: string }>("vault_secret_add", { label: t("keyLabel") });
-                  if (r.body) setSecret(r.body.id);
-                  return r;
-                })
-              }
-            >
-              {t("addKey")}
-            </Button>
-          </Card>
+          {!refusedFiles && (
+            <>
+              <Card title={t("model")}>
+                <p class="muted">{t("modelHint")}</p>
+                <datalist id={listId}>
+                  {served.map((m) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
+                <Text label={t("modelLabel")} value={model} list={listId} onInput={setModel} />
+                {!validModel(model.trim()) && <Notice tone="warn">{t("invalidModel")}</Notice>}
+                {fetchModels.error && <Notice tone="danger">{fetchModels.error}</Notice>}
+                <Button onClick={refresh} disabled={fetchModels.busy || busy}>
+                  {t("refresh")}
+                </Button>
+              </Card>
+              <Card title={t("key")}>
+                <p class="muted">{t("keyHint")}</p>
+                {secrets.error && <Notice tone="danger">{secrets.error}</Notice>}
+                {keys.length > 0 ? (
+                  <Choices
+                    label={t("key")}
+                    value={secret || undefined}
+                    choices={keys.map((s) => ({ value: s.id, label: s.label }))}
+                    onChange={setSecret}
+                  />
+                ) : (
+                  <p class="muted">{t("noKeys")}</p>
+                )}
+                {addKey.error && <Notice tone="danger">{addKey.error}</Notice>}
+                <Button
+                  disabled={addKey.busy}
+                  onClick={() =>
+                    addKey.run(async () => {
+                      const r = await reply<{ id: string }>("vault_secret_add", { label: t("keyLabel") });
+                      if (r.body) setSecret(r.body.id);
+                      return r;
+                    })
+                  }
+                >
+                  {t("addKey")}
+                </Button>
+              </Card>
+            </>
+          )}
           <Card>
             {write.error && <Notice tone="danger">{write.error}</Notice>}
             <Button
               variant="primary"
               onClick={apply}
-              disabled={busy || !validModel(model.trim()) || !secret || !core}
+              disabled={busy || refusedFiles || !validModel(model.trim()) || !secret || !core}
             >
               {applyLabel}
             </Button>
-            <ConfirmButton disabled={busy || !preview.applied} onConfirm={() => undo("clear")}>
+            <ConfirmButton
+              disabled={busy || refusedFiles || !preview.applied}
+              onConfirm={() => undo("clear")}
+            >
               {t("clear")}
             </ConfirmButton>
             <small class="hint">{t("clearHint")}</small>
@@ -464,13 +501,13 @@ export function PiPage() {
               {t("updatePlugin")}
             </Button>
             <ConfirmButton
-              disabled={busy || !(adapter.installed || cfg.registered)}
+              disabled={busy || refusedFiles || !(adapter.installed || cfg.registered)}
               onConfirm={uninstallPlugin}
             >
               {t("uninstallPlugin")}
             </ConfirmButton>
           </Card>
-          <Backups pkg={PACKAGE} pins={async () => pins()} disabled={busy} onChange={load} />
+          <Backups pkg={PACKAGE} pins={async () => preview.targets} disabled={busy} onChange={load} />
         </>
       )}
       <StartCli available={!unavailable} />

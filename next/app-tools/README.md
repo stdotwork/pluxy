@@ -322,7 +322,7 @@ host's vault, and its manual backups (the backup browser). It exports nothing.
 
 | Operation | Effect | Input | Output |
 | --- | --- | --- | --- |
-| `preview` | `read` | `folder` (optional): an agent folder (it may be a link); by default `~/.pi/agent` in the app's `HOME` (below); `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `pi`: `state` (`not-configured`: the plugin is not listed; `configured`; `needs-update`), `base_url` (cliproxyapi.json's), `key_set`, `provider` (the plugin's provider ID), `default_provider`, `model` (Pi's default model), `registered` (settings.json lists pluxy's plugin), `legacy` (it lists an older app's npm copy), `adapter`: `installed`, `version`, `bundled`, `update`, `foreign` (a folder of that name pluxy did not install); never the key |
+| `preview` | `read` | `targets`: the three files' selections (`file`, which may be a link, as stow makes; or `root` and `path`), in one folder; or `folder`: an agent folder (it may be a link, as chezmoi can make; a link inside it is refused, so linked files are selected as `targets`); by default the three files in `~/.pi/agent` in the app's `HOME` (below), which must exist (Pi makes it when it first runs); `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `pi`: `state` (`not-configured`: the plugin is not listed; `configured`; `needs-update`), `base_url` (cliproxyapi.json's), `key_set`, `provider` (the plugin's provider ID), `default_provider`, `model` (Pi's default model), `registered` (settings.json lists pluxy's plugin), `legacy` (it lists an older app's npm copy), `adapter`: `installed`, `version`, `bundled`, `update`, `foreign` (a folder of that name pluxy did not install); never the key. Files Pi would not take are pinned all the same, so Restore Backup and the backups reach them: `state` is `refused`, `reason` says why, and `adapter` is still there. A file another program writes between the preview's two reads is read again once, else the preview is refused |
 | `apply` | `write`; secret `key` (value) | Three pins, `base_url`, `key`, `model` (one model ID) | The library's outcome and `adapter`: `installed` or `kept` |
 | `update` | `write` | `folder`: the agent folder | `{"outcome": "updated", "version"}` |
 | `uninstall` | `write` | Three pins | The library's outcome and `adapter_removed` |
@@ -385,7 +385,7 @@ as in the old app. Clear, Restore Backup and Uninstall remove pluxy's plugin fol
 plugin would not take: `settings.json` or `cliproxyapi.json` not strict JSON (a byte order mark
 too) or not an object, `packages` not a list of package sources (a string, or an object with a
 string `source`), `defaultProvider`, `defaultModel`, `baseUrl`, `apiKey` or `providerId` not text.
-A missing file is an empty one; the cache is not checked (Apply removes it). Neither file has a
+Clear and Uninstall refuse such files too; Restore Backup still puts the originals back. A missing file is an empty one; the cache is not checked (Apply removes it). Apply writes the files owner-only (the library takes away the group's and others' bits), since `cliproxyapi.json` holds the key. Neither file has a
 version field, so none is checked. The key may not hold spaces; the model is one ID without spaces.
 
 ## `execution`
