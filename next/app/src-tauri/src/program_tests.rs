@@ -1840,6 +1840,10 @@ fn a_tool_gets_its_home_and_its_own_data_folder_and_a_planted_link_refuses_the_s
             "PLUXY_TOOL_DATA_DIR"
         ])
     );
+    assert_eq!(
+        (a["home"].clone(), a["data_dir"].clone()),
+        (json!(home), json!(tools.join("pluxy/test")))
+    );
     for dir in [tools.clone(), tools.join("pluxy"), tools.join("pluxy/test")] {
         let m = std::fs::symlink_metadata(&dir).unwrap();
         assert!(m.is_dir(), "{}", dir.display());
