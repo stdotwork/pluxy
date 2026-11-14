@@ -184,7 +184,11 @@ What it reads, as the old desktop app's session manager did:
 - `session_index.jsonl`: a rollout's title and update time, else the file's modification time.
   An index larger than 16 MiB becomes a warning and is not read.
 
-Links to databases, rollouts and the index are skipped (the Codex home itself may be a link).
+Links to databases, rollouts and the index are skipped, and so is a `sqlite/`, `sessions/` or
+`archived_sessions/` folder that is itself a link (a warning names it), and a database whose
+`-wal` or `-shm` file is a link (a warning names it). The Codex home itself may be a link.
+`detail` finds a thread whose database ID is stored with Codex's `local:` prefix by its ID with or
+without the prefix.
 
 The reader adds no file beside a database that no Codex process has open.
 In WAL mode a reader needs SQLite's shared-memory file (`-shm`), which SQLite would create, so
