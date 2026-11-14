@@ -21,6 +21,8 @@ mod command_names;
 #[cfg(target_os = "linux")]
 pub mod confirmation;
 pub mod conn;
+mod core_updates;
+pub mod cores;
 pub mod device;
 pub mod instance;
 mod key_entry;
@@ -53,6 +55,7 @@ pub mod window;
 pub use command_names::COMMANDS;
 
 use conn::{Change, Connection, Dirs, Mode, View};
+use core_updates::{core_adopt, core_install, core_rollback, core_versions};
 use pages::{Binding, Pages};
 use serde::Deserialize;
 use serde_json::Value;
@@ -76,6 +79,8 @@ pub const MAIN: &str = "main";
 struct App {
     startup: Mutex<(startup::Store, startup::Preferences)>,
     conn: Mutex<Connection>,
+    /// A change of the app's own core waiting for its native confirmation (`core_updates.rs`).
+    core_change: Mutex<Option<core_updates::Pending>>,
     #[cfg(target_os = "linux")]
     confirmations: Mutex<confirmation::Confirmations>,
     /// The page webviews' own web context's folder: nothing shared with the window's.
@@ -147,6 +152,7 @@ fn status_text(v: &View) -> String {
         (Some(Mode::Managed), Some(t), Some(c)) if c.state == "running" => {
             format!("Core running at {t}")
         }
+        (Some(Mode::Managed), _, Some(c)) if c.state == "missing" => "No core installed".into(),
         (Some(Mode::Managed), _, Some(c)) if c.state == "paused" => {
             "Core recovery paused — Start core to try again".into()
         }
@@ -812,35 +818,38 @@ async fn key_entry(webview: Webview, change: Option<Change>) -> Result<KeyEntryR
         }
         // GTK must remain free to handle IPC/window close while the dialog is open.
         let input = key_entry::request(&app, target.summary.clone());
-        let mut c = st.conn.lock().unwrap();
         let mut error = None;
-        let status = match input {
+        // The key's check is a network call: `finish_key_unlocked` makes it without the lock.
+        let (status, mut connection) = match input {
             Ok(None) => {
                 *st.key_entry_after.lock().unwrap() =
                     Some(std::time::Instant::now() + std::time::Duration::from_secs(1));
-                "cancelled"
+                ("cancelled", st.conn.lock().unwrap().view())
             }
-            Ok(Some(input)) => match c.finish_key(target, &input.key, input.remember) {
-                Ok(()) => "signed_in",
-                Err(e) if e == "core refused this key" => {
-                    error = Some(e);
-                    "wrong_key"
-                }
-                Err(reason) => {
-                    error = Some(reason);
-                    "error"
-                }
-            },
+            Ok(Some(input)) => {
+                let (result, connection) =
+                    conn::finish_key_unlocked(&st.conn, target, &input.key, input.remember);
+                let status = match result {
+                    Ok(()) => "signed_in",
+                    Err(e) if e == "core refused this key" => {
+                        error = Some(e);
+                        "wrong_key"
+                    }
+                    Err(reason) => {
+                        error = Some(reason);
+                        "error"
+                    }
+                };
+                (status, connection)
+            }
             Err(e) => {
                 error = Some(e.into());
-                "error"
+                ("error", st.conn.lock().unwrap().view())
             }
         };
-        let mut connection = c.view();
         if error.is_some() {
             connection.error = error;
         }
-        drop(c);
         show_status(&app, &connection);
         KeyEntryResult { status, connection }
     })
@@ -2525,6 +2534,10 @@ pub fn run() {
             core_start,
             core_restart,
             core_call,
+            core_versions,
+            core_install,
+            core_rollback,
+            core_adopt,
             key_entry,
             management_key_rotate,
             sign_out,
@@ -2629,7 +2642,9 @@ pub fn run() {
             if let Some(w) = &access_store.warning {
                 eprintln!("pluxy-app: {w}");
             }
-            let core = app.path().app_data_dir()?.join("core");
+            let data = app.path().app_data_dir()?;
+            let core = data.join("core");
+            let cores = data.join("cores");
             // When the app's core exits, the tray and the window show it. Off this thread: the
             // exit may come while a connection change holds the connection.
             let handle = app.handle().clone();
@@ -2651,7 +2666,11 @@ pub fn run() {
             });
             let window_prefs = window::Store::open(config.join("window.json"));
             let conn = Connection::open_at_startup(
-                Dirs { config, core },
+                Dirs {
+                    config,
+                    core,
+                    cores,
+                },
                 Some(on_exit),
                 preferences.start_core_on_launch,
             );
@@ -2676,6 +2695,7 @@ pub fn run() {
             app.manage(App {
                 startup: Mutex::new((startup_store, preferences)),
                 conn: Mutex::new(conn),
+                core_change: Mutex::new(None),
                 #[cfg(target_os = "linux")]
                 confirmations: Mutex::new(confirmations),
                 pages_dir,
@@ -2860,6 +2880,8 @@ mod tests {
             core: Some(conn::CoreView {
                 state,
                 pid: None,
+                version: None,
+                adopt: None,
                 detail: None,
             }),
             version,

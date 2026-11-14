@@ -20,7 +20,7 @@ its config folder (on Linux `~/.config/dev.pluxy.desktop/`), readable only by yo
 
 | Mode | What the app does | When the app quits |
 | --- | --- | --- |
-| Run core here (`managed`) | Starts the core program (`pluxy` beside the app, or one you name by full path) with a config of its own, `core/config.json` in the app's data folder. The first start writes that config with a free loopback port, which then stays the core's, new random keys, and folders for credentials and packages beside it. After that the file is yours to edit; the app only reads its `management_key`. | Stops that core (SIGTERM, then a kill after 10 seconds). On Linux the core also gets SIGTERM if the app dies without stopping it. |
+| Run core here (`managed`) | Runs one of its own core versions ([below](#the-apps-own-core)) with a config of its own, `core/config.json` in the app's data folder. The first start writes that config with a free loopback port, which then stays the core's, new random keys, and folders for credentials and packages beside it. After that the file is yours to edit; the app only reads its `management_key`. | Stops that core (SIGTERM, then a kill after 10 seconds). On Linux the core also gets SIGTERM if the app dies without stopping it. |
 | Core on this computer (`local`) | Connects to a core that already runs on a loopback address (`127.0.0.0/8`, `::1` or `localhost`), such as a system service. You give its address and management key. | Leaves it running. The app never starts or stops it. |
 | Remote core (`remote`) | Connects over https only, so the key is never sent in the clear. You can name a PEM file of certificate authorities to trust for that core, for a certificate you made yourself; without one, the usual public roots are used. The core's address is shown next to the app's name. | Leaves it running. |
 
@@ -32,11 +32,14 @@ The native side holds the management key. On Linux, "Enter management key" on th
 page opens a GTK dialog with a hidden entry, "Keep the key on this device", and OK/Cancel.
 Before opening it, native code validates the mode, origin and certificate authority file. The
 dialog identifies the target origin, any custom certificate authority, and an origin switch.
-Reopening after Cancel waits one second.
+The origin switch names the connection you last confirmed and the app saved (not the client
+in memory, which may be down). Reopening after Cancel waits one second.
 The key goes directly from that dialog to native connection state; no webview receives it.
 Cancel, a refused key or a failed settings write preserves the old connection. Settings use a
 unique exclusive temporary file at mode 0600, followed by file sync, rename and directory sync
-on Unix. Validation and transport failures report specific reasons without request or key text.
+on Unix; at startup the app removes a leftover temporary file of that name (a crash mid-save),
+and nothing else. The app checks the key against core without holding its connection state, so
+other commands go on meanwhile, and refuses the key if the connection changed during the check. Validation and transport failures report specific reasons without request or key text.
 The window calls core through the
 `core_call` command, and the native side adds the key and sends the call to
 `<core>/v0/management/...` only, following no redirects and, for a core on this computer, no
@@ -58,6 +61,98 @@ without a reply it says the key may have changed and where to find it.
 
 Until the app is connected and signed in, the window shows only the Connection page, so a wrong
 address or key can always be fixed there.
+
+## The app's own core
+
+In managed mode the app runs only core versions it installed itself, each in a folder of its own
+under `cores/versions/` in the app's data folder. Until one is installed, the app runs no core
+and the window shows only the Connection page, with **Core versions**. There, the app lists
+what is installed, which version runs and which ran before it, and what the core source offers.
+
+The **core source** is the full path of an index file. The app has no built-in source and reads
+nothing until you set one. The index has the release feed's format (format 1, `releases`); the
+app reads only releases with `product` `core`, their `version`, and their `artifacts`:
+
+```json
+{"product":"core","version":"2.0.0","channel":"stable","published":"2026-11-01T00:00:00Z",
+ "artifacts":[{"platform":"linux/amd64","url":"pluxy-core-2.0.0-linux-amd64.tar.gz",
+   "descriptor":"{\"id\":\"pluxy/core\",\"version\":\"2.0.0\",\"tier\":\"native\",\"platform\":\"linux/amd64\",\"size\":1234,\"sha256\":\"…\"}",
+   "signature":"<128 lower-case hex digits>","key_id":"…"}]}
+```
+
+| Field | Rule |
+| --- | --- |
+| `platform` | `<os>/<arch>` as Go names them, such as `linux/amd64` |
+| `url` | For now a file name beside the index |
+| `descriptor` | The exact signed descriptor bytes ([signed descriptor contract](app-host/README.md#signed-descriptor-bytes)), as a JSON string: `id` `pluxy/core`, `tier` `native`, the release's `version` and this platform |
+| `signature` | The detached Ed25519 signature of those bytes |
+| `key_id` | The publisher key that signed it |
+
+The archive is a gzip tar file of the core's folder, as provider releases are packed: `pluxy` at
+the top, and anything beside it, such as `bundled/`. It may hold only regular files and folders,
+no links, devices or names that leave the folder, at most 10,000 entries, and at most 512 MiB
+decompressed in all (headers and the data of folder entries count too). Each file is made from
+the folder before it, following no links. Release versions may not start with `custom-`, which
+adopted programs use.
+
+**Install** (or **Update to** a newer version): the app copies the archive into its own folder and
+checks it with the shared verifier (`src-tauri/src/artifact.rs`) and the app's trust
+(`src-tauri/src/trust.rs`): the signature over the exact descriptor bytes with a publisher key
+trusted for this exact source (publisher `pluxy`), then the archive's size and SHA-256. Only then
+does the native confirmation open, showing the version, source, key and digest, and that a core
+has full access to your user account. A release that fails a check is refused before any
+dialog, and nothing is installed. Release builds have no publisher keys yet, so they refuse
+every release; test builds trust only a test runner's temporary roots (below).
+
+Once confirmed, the app unpacks the archive into a new version folder, records each file's
+SHA-256 (in `cores/records/`, apart from the folders), and makes the files read-only. Before
+every start it opens every file beneath the version's folder without following links, checks
+that it is a regular file of the recorded size, then its digest, and runs the core from the
+program file it just checked, not from its path again. A changed version does not start:
+**Install … again** installs the same release over it, through the same checks and confirmation;
+a changed adopted copy is copied in again by adopting the same program again.
+
+**Switching** to a version (an install, **Roll back to** an installed version, or an adoption)
+stops the running core, keeps a copy of `core/config.json` (or a mark that there was none) and
+records the new version as the candidate, then starts it. It counts as started once it says
+where it listens, on this computer, every socket listening on that port belongs to the process
+the app started (read from `/proc` on Linux, before the app sends anything there), it answers
+`GET /v0/management/status` with the app's management key and, for a release, reports the
+version it was signed as, and the app has saved the new selection. If not, the app puts the
+config back as it was, removes a version it installed for this switch, and runs the version that
+worked before (when the switch was to the selected version itself, and reinstalled it, copied a
+damaged adopted program in again, or ran it with **Roll back to** and it failed, the one before it,
+which is then selected once it runs); the page says why the new one did not start. If the config
+cannot be put back, no core runs: the candidate stays recorded with the copy, and the app tries
+again at its next start. Once it is put back, a mark beside the config says so, and a later start
+does not put it back again over your edits, unless the app could save neither the failure nor that
+mark: then the next start puts the same config back once more. If the app stops while a version
+starts, it does the same at its next start, also when that was a reinstall or rollback of the
+selected version; a copy it cannot read is an error, and the config is left as it is. From the
+moment the app begins to stop its core, or sees it exit, it sends nothing more to that address. The
+app keeps the running version and the one before it, and removes older ones after a switch. Rolling
+back reaches only an installed version.
+
+A **core program** you name on the Connection page (or `pluxy` beside the app) is never run in
+place. **Adopt this core program** shows its path, size and SHA-256 in the native confirmation;
+once confirmed, the app copies it into a version of its own, `custom-<its SHA-256>`, if it is
+still a regular file of that size and digest (at most 512 MiB; a FIFO or device is refused
+without being read), and runs the copy. Only the program is copied, nothing beside it (such as
+`bundled/`), so an adopted core starts without the bundled packages a release brings. An adopted
+program has no signature.
+
+The app only ever stops the core process it started. A core it did not start, such as a system
+service or another core of yours on this computer, is never stopped or signalled.
+
+Each change works once: while one waits for its confirmation, another is refused. The window
+hears `pluxy-connection` when it has ended, and `core_versions` says whether it was done,
+cancelled or failed.
+
+What these checks guard against: a damaged or substituted download, and other users of this
+computer. They do not guard against your own user account. A program running as your user can
+rewrite the app's core store, as it can replace the app itself: the installed records and version
+folders (or the folders above them), a staged archive between its check and its unpacking, and a
+checked program, or the files beside it, before the core runs or reads them.
 
 ## The window and the tray
 
@@ -183,6 +278,8 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `key_entry` | Opens native key entry, checks the key against core, and returns only signed-in, wrong-key, cancelled or error status plus the connection without its key |
 | `core_start` | Starts the app's own core only if it is not running (managed mode) |
 | `core_restart` | Starts the app's own core again (managed mode) |
+| `core_versions` | The app's own core versions, what the core source offers, and how the last change ended |
+| `core_install`, `core_rollback`, `core_adopt` | Asks to install a release from the core source, to run an installed version again, or to adopt the chosen core program; each opens a native confirmation (Linux) and applies nothing itself |
 | `core_call` | One management API call to the connected core; refuses the management key's own routes |
 | `management_key_rotate` | Rotates the management key natively after the native confirmation, keeps and shows the new key natively, and returns only how it went (200 with how the key is kept, 204 when cancelled) |
 | `sign_out` | Forgets the key (local and remote modes) |
@@ -635,7 +732,12 @@ started by `go run ./e2e/panelcore` from `next/`, on random loopback ports in te
 
 `bun run test:native` runs the native test: it builds the app with the `native-test` and
 `artifact-test-trust` features and runs it on a private X server (`xvfb-run`) with a private session bus (`dbus-run-session`),
-a fresh HOME and XDG folders, once in each mode. In each it checks that the window's webview
+a fresh HOME and XDG folders, once in each mode. The app runs only a core in its own store, so
+each managed run but the core steps' (below) starts with one there: the signed test release 2.0.0,
+installed as a confirmed install would (`session_probe install-core`), whose bundled test
+packages the sign-ins and pages need beside the core's program; the startup runs and the
+early-exit run instead adopt their core program first (`session_probe adopt-core`), which copies
+the program alone. In each it checks that the window's webview
 reaches every command, that at the top of an extension page's webview Tauri refuses every app
 command and the plugin commands tried, and that no app command is reached from that webview
 or its frame. It also runs a test-only sandboxed frame
@@ -660,8 +762,8 @@ app's handler, which the test confirms from the handler's own refusal; in local 
 every lifecycle click must be refused that way. It ends with a core running and checks that
 the core does not outlive the app once it quits, whichever of the app's ways of stopping it
 does so. Every tray operation asserts zero renderer processes and webviews.
-A second managed run starts a stand-in core that says where it listens and exits at once, and
-holds the app's setup until that core's exit callback has run, before the app state exists. It
+A second managed run starts a stand-in core that says where it listens, answers the app's
+readiness check and then exits, and holds the app's setup until that core's exit callback has run, before the app state exists. It
 checks that the app still starts the real core again, with one recovery attempt, and that the
 core does not outlive the app.
 In separate runs, the startup sequence enables login registration through the main webview command,
@@ -743,17 +845,17 @@ file.
 
 In managed mode, two more sessions run the window checks (`native/window.ts`, which launches
 the app through the stages in `src-tauri/src/native_window.rs`), one with a tray watcher and
-one without. They close the window as its window manager would (a GTK delete event) and answer
-the prompt in the window: Cancel keeps it, Minimize to Tray and the remembered choices close it
-with no webview or web process left, and the app's own tray item (through the watcher and its
-menu, `session_probe tray`) opens it again at the size and place it had; Exit App, from the
-prompt or the setting, quits and stops the app's own core; the next launch opens where the
-window was. A pending test sign-in's polls are counted while the window shows, while it is
-unmapped (as a window manager minimizes it; GDK then reports it minimized) and once it is mapped
-again. Without a tray watcher, closing quits without asking, with Minimize to Tray or Ask saved.
+one without. They close the window as its window manager would (a GTK delete event) and answer the prompt in the window:
+Cancel keeps it, Minimize to Tray and the remembered choices close it with no webview or web
+process left, and the app's own tray item (through the watcher and its menu, `session_probe tray`)
+opens it again at the size and place it had; Exit App, from the prompt or the setting, quits and
+stops the app's own core; the next launch opens where the window was. A pending test sign-in's
+polls are counted while the window shows, while it is unmapped (as a window manager minimizes it;
+GDK then reports it minimized) and once it is mapped again. Without a tray watcher, closing quits
+without asking, with Minimize to Tray or Ask saved.
 
-Then, in a session of its own (`native/instances-session.ts`), it launches the app again and
-again on one profile and checks that each later launch exits 0 within 10 seconds, starts no app or core of its own (it counts the
+Then, in a session of its own (`native/instances-session.ts`), with the core program adopted in
+each profile, it launches the app again and again on one profile and checks that each later launch exits 0 within 10 seconds, starts no app or core of its own (it counts the
 app and core processes), and has the first show its window, also after the window was hidden and
 after it was closed to the tray, and for a login launch (`--autostart` with Silent Launch on) as
 well; that the socket is in the runtime folder, where `instance/address`
@@ -769,6 +871,25 @@ authenticate, bad keys and Cancel preserve the connection and saved settings, an
 keep choice controls persistence. Random keys are generated at runtime. The test inspects the
 main and page webviews' DOM, input values, storage and native callback/event payloads, and the
 app's stdout/stderr, for key canaries without passing those canaries to JavaScript.
+
+The core steps run in a managed session of their own, on the build with the
+`artifact-test-trust` feature, which starts with no core installed and with signed test releases
+the runner makes in a temporary folder: cores 1.0.0 and 2.0.0 (built with Go, the version set at link time, with
+the bundled test packages), a 3.0.0 that breaks its config and exits, and a 2.1.0 whose signature
+does not verify, signed by an Ed25519 key generated for the run that never leaves the runner's
+memory. Its trust profile starts with no roots. Through the window's commands and the real
+dialog (`src-tauri/src/native_core.rs`), it checks that the app is not connected with no core;
+that an install is refused without roots, before any dialog and with nothing installed; that the
+same install with the run's root, confirmed, runs 1.0.0 from the app's folder and connects; that
+the bad signature is refused before any dialog; that 2.0.0 replaces 1.0.0 (whose process is gone)
+with the config unchanged; that after 3.0.0 the config is restored and 2.0.0 runs again; that an
+unknown rollback target is refused, a cancelled rollback changes nothing and a confirmed one runs
+1.0.0; and that a core program does not run until it is adopted, after which the app's copy runs
+and the program itself does not. A sentinel core the runner started before the app must still
+answer, with its config and program unchanged, after the app has quit. `cargo test` covers a
+crash while a version starts,
+changed installed files, hostile archives and a version that is not what it was signed as
+(`tests/core_updates.rs`).
 
 The native run also builds the [test package](#packages) and runs the AppImage itself through the
 same checks in local mode, native key entry included. Every run's app first reports its updater
@@ -903,6 +1024,9 @@ There is no updater yet; the signed-update slice calls this gate.
   does opening an address in the browser.
 - Release notes tables show their columns left-aligned whatever alignment the Markdown asks for:
   the renderer writes alignment as inline style, which the notes' policy refuses.
+- The app's own core comes only from a local index file for now; an https source joins with the
+  release feed. Installing, rolling back and adopting need the native confirmation, so they work
+  on Linux only, and the core store builds on Unix only.
 - Recovery history lasts for the current app process; quitting the app ends its recovery window.
   A supervisor thread starts the core and stays until it exits, since on Linux the parent-death
   signal follows the thread that started it.

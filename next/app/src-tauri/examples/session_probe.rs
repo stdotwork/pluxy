@@ -8,6 +8,11 @@
 //! session_probe watcher            register a status notifier item with the watcher and see it listed
 //! session_probe portal             the portal frontend answers, with the gtk backend behind it
 //! session_probe owner <name>       prints pid=<process that owns the bus name>
+//! session_probe adopt-core <cores> <program>
+//!                                  adopts the program into the app's cores folder and selects it
+//! session_probe install-core <cores> <source> <version>
+//!                                  installs a signed release from the core source into the app's
+//!                                  cores folder and selects it, trusting HOME's test roots
 //! session_probe trust-marker <home> writes the test trust marker (trust::write_test_marker) in
 //!                                  a run's private HOME; prints nonce=<its nonce>
 //! ```
@@ -32,12 +37,14 @@ fn main() {
         ["portal"] => linux::portal(),
         ["owner", name] => linux::owner(name),
         ["tray", pid, action] => linux::tray(pid, action),
+        ["adopt-core", cores, program] => adopt_core(cores, program),
+        ["install-core", cores, source, version] => install_core(cores, source, version),
         // The same gate as trust::write_test_marker.
         #[cfg(debug_assertions)]
         ["trust-marker", home] => pluxy_app::trust::write_test_marker(std::path::Path::new(home))
             .map(|nonce| vec![format!("nonce={nonce}")]),
         _ => Err(
-            "usage: session_probe documents <file> | documents-delete <doc> | watcher | portal | owner <name> | tray <pid> <action> | trust-marker <home>"
+            "usage: session_probe documents <file> | documents-delete <doc> | watcher | portal | owner <name> | tray <pid> <action> | trust-marker <home> | adopt-core <cores> <program> | install-core <cores> <source> <version>"
                 .into(),
         ),
     };
@@ -48,6 +55,39 @@ fn main() {
             std::process::exit(1);
         }
     }
+}
+
+/// Adopts program into the app's cores folder with the app's own store, as a confirmed
+/// `core_adopt` would, and selects it: the app then runs it as its own core when it starts.
+#[cfg(target_os = "linux")]
+fn adopt_core(cores: &str, program: &str) -> Result<Vec<String>, String> {
+    use pluxy_app::cores::Store;
+    let store = Store::open(std::path::Path::new(cores))?;
+    let path = std::path::Path::new(program);
+    let (sha256, size) = Store::inspect(path)?;
+    let (id, _) = store.adopt(path, &sha256, size)?;
+    let mut state = store.state()?;
+    state.selected = Some(id.clone());
+    store.save_state(&state)?;
+    Ok(vec![format!("id={id}")])
+}
+
+/// Installs version from the core source into the app's cores folder with the app's own store
+/// and trust (the test roots of HOME's trust profile, so the probe needs the
+/// `artifact-test-trust` feature for any release to verify), as a confirmed `core_install` would,
+/// and selects it: the app then runs it, with whatever its archive holds beside the program,
+/// when it starts.
+#[cfg(target_os = "linux")]
+fn install_core(cores: &str, source: &str, version: &str) -> Result<Vec<String>, String> {
+    use pluxy_app::cores::Store;
+    let home = std::env::var_os("HOME").ok_or("install-core needs HOME")?;
+    let trust = pluxy_app::trust::TrustStore::load(std::path::Path::new(&home))?;
+    let store = Store::open(std::path::Path::new(cores))?;
+    let id = store.install(store.stage(&trust, source, version)?)?;
+    let mut state = store.state()?;
+    state.selected = Some(id.clone());
+    store.save_state(&state)?;
+    Ok(vec![format!("id={id}")])
 }
 
 #[cfg(target_os = "linux")]

@@ -598,10 +598,12 @@ impl Confirmations {
 
     /// For the main window's command handlers only, after their caller check, with an action
     /// native code built from verified records (enabling a native tool, granting a file or
-    /// folder through Access), from a setting it checked (changing the release feed) and, for the
-    /// router, the window's own direct call of a launch. Never page data, and never a call with a
-    /// tool hop (`prepare_import`). Those actions have no launch, except the router's, which may
-    /// use a remembered approval after a native gesture.
+    /// folder through Access, installing or rolling back the app's own core from a signed
+    /// release), from a setting or program it checked (changing the release feed, adopting a
+    /// core program whose path, size and SHA-256 it read) and, for the router, the window's own
+    /// direct call of a launch. Never page data, and never a call with a tool hop
+    /// (`prepare_import`). Those actions have no launch, except the router's, which may use a
+    /// remembered approval after a native gesture.
     pub(crate) fn prepare_main(&mut self, action: Action) -> Result<Prepared, String> {
         self.prepare(action, Origin::Main)
     }
