@@ -231,6 +231,69 @@ fn journals_are_begun_ended_once_and_named_until_then() {
 }
 
 #[test]
+fn a_journal_intent_or_backup_label_holding_a_secret_or_reference_is_refused() {
+    let (d, v) = vault();
+    let w = holder("pluxy/w", 1);
+    let s = v.add_secret("client key", KEY).unwrap();
+    let r = v.mint(&s, &w, v.begin_call()).unwrap();
+    let data = base64::engine::general_purpose::STANDARD.encode(b"bytes");
+    let refused_without_naming = |e: Refused| {
+        assert_eq!(e.code, "invalid_request");
+        assert!(!e.message.contains(KEY) && !e.message.contains(&r), "{e:?}");
+    };
+    for intent in [
+        json!({"note": format!("use {KEY} here")}),
+        json!({"nested": [{"deep": r}]}),
+        json!({KEY: 1}),
+        json!({"ref": format!("<{r}>")}),
+    ] {
+        let e = v
+            .request(
+                &w,
+                "apply",
+                None,
+                &json!({"op": "journal.begin", "intent": intent}),
+            )
+            .unwrap_err();
+        refused_without_naming(e);
+    }
+    for label in [format!("copy of {KEY}"), r.clone()] {
+        let e = v
+            .request(
+                &w,
+                "apply",
+                None,
+                &json!({"op": "backup.put", "label": label, "data": data}),
+            )
+            .unwrap_err();
+        refused_without_naming(e);
+    }
+    // Nothing was kept, on disk either.
+    assert!(v.open_journals("pluxy/w").unwrap().is_empty());
+    let listed = v
+        .request(&w, "apply", None, &json!({"op": "backup.list"}))
+        .unwrap();
+    assert_eq!(listed["backups"], json!([]));
+    let again = Vault::open(d.0.join("vault"));
+    assert!(again.open_journals("pluxy/w").unwrap().is_empty());
+    // Text without either is kept as before.
+    v.request(
+        &w,
+        "apply",
+        None,
+        &json!({"op": "journal.begin", "intent": {"file": "/x"}}),
+    )
+    .unwrap();
+    v.request(
+        &w,
+        "apply",
+        None,
+        &json!({"op": "backup.put", "label": "original", "data": data}),
+    )
+    .unwrap();
+}
+
+#[test]
 fn backups_are_the_packages_own_private_files() {
     let (d, v) = vault();
     let w = holder("pluxy/w", 1);
