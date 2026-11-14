@@ -101,8 +101,9 @@ How a write goes:
   setgid and sticky left out; 0600, or the original's, for a file that did not exist) and renamed
   over it, the folder flushed, and the file checked to be the one written. An apply writes a
   writer's values, a key among them, so the file it writes is owner-only: the group's and others'
-  bits are taken away (an existing 0644 file becomes 0600); clear, restore and recovery keep the
-  mode the file has. The whole operation is checked again at its end. At most 8 files of at most
+  bits are taken away (an existing 0644 file becomes 0600); clear and restore keep the mode the
+  file has. A rolled-back write, in the call or by recovery, puts back the mode the file had
+  before it as well as its bytes: the file is left exactly as it was. The whole operation is checked again at its end. At most 8 files of at most
   256 KiB each.
 - The written file is a new file: hard links to the old one keep the old bytes, and its owner,
   ACLs, extended attributes and security label are not copied.
