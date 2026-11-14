@@ -593,7 +593,14 @@ async function runApp(
     }, 100);
     // This device's extension catalog is the same in every mode: check it once, in managed mode.
     const device =
-      mode === "managed" && !admission && !program && !routing && !vault && !core && !reader && suite !== "access"
+      mode === "managed" &&
+      !admission &&
+      !program &&
+      !routing &&
+      !vault &&
+      !core &&
+      !reader &&
+      suite !== "access"
         ? join(root, "device")
         : undefined;
     const access = suite === "access" ? join(root, "access") : undefined;
