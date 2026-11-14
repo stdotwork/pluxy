@@ -26,9 +26,9 @@ them. App-only packages omit provider fields; no dummy provider is needed.
 | `config` | Optional settings, using the existing [config format](../../ui/extension-pages/README.md#config), with its own version. App settings belong to this device. |
 | `resources` | Web only: requested broker resources, each with an `id`, `kind` (`file` or `subtree`) and nonempty `operations` list. A declaration grants no access. |
 | `programs` | Native only: platform (`GOOS/GOARCH`) to relative executable path, as for provider programs. At least one entry is required. |
-| `operations` | Native only: declared operations, each with an `id`, plain `description`, `input_schema` and `output_schema` JSON objects, and an optional `effect` (`read`, `write` or `launch`; absent means `write`). At least one is required. |
+| `operations` | Native only: declared operations, each with an `id`, plain `description`, `input_schema` and `output_schema` JSON objects, an optional `effect` (`read`, `write` or `launch`; absent means `write`) and optional `secrets`: at most four input fields that carry a secret, each `"value"` (the tool receives the secret) or `"reference"` (it receives only a reference to it; a `launch` operation's are references only); each must be a `string` property of the input schema. See [Secrets, references and the vault](#secrets-references-and-the-vault). At least one operation is required. |
 | `exports` | Native only, optional: `{"contract": <nonnegative integer>, "operations": [<declared IDs>]}`, the operations other packages may import and the version of that export contract. |
-| `imports` | Optional, both tiers: at most 16 entries `{"package": <ID>, "contract": [<accepted export contracts>], "operations": [<IDs>], "required": <bool, default true>}`, one per package, never the package itself. See [Calls between packages](#calls-between-packages). |
+| `imports` | Optional, both tiers: at most 16 entries `{"package": <ID>, "contract": [<accepted export contracts>], "operations": [<IDs>], "required": <bool, default true>, "secrets": [<IDs>]}`, one per package, never the package itself. `secrets` (native tools only) lists the imported operations it may pass secret references to. See [Calls between packages](#calls-between-packages). |
 | `state` | Native only: `version` written by this release and nonempty `readable_versions` list. Check state compatibility before swap or rollback. |
 
 Resource and operation IDs use 1 to 32 lower-case letters, digits and hyphens, starting with a
@@ -36,8 +36,8 @@ letter or digit, and are unique within their respective lists. State and host co
 are nonnegative integers. Paths must stay inside the
 package. Web packages cannot declare programs, native operations or state; native packages cannot
 request folder grants through `resources`. Resources describe exact files or bounded subtrees
-selected later by the user, never automatic home-directory access. Jobs and secret references
-belong to their later host contracts; these fields do not introduce them.
+selected later by the user, never automatic home-directory access. Jobs belong to a later host
+contract; these fields do not introduce them.
 
 Package release, manifest, provider protocol, UI, config and app contribution versions are
 separate. App program negotiation is separate too. A mixed package can be compatible with core
@@ -276,7 +276,9 @@ anything a caller passes. On top of the rules above:
 - Stderr lines are logged prefixed with the tool's ID, at most 8 KiB each (a longer one is left
   out with a note) and 50 a second (the rest are left out and counted), with control and format
   characters (such as U+202E) escaped and the values the host knows the tool must not show
-  removed. The last 20 lines, kept whether or not the rate let them into the log, and the count
+  removed: every secret value in the vault and every reference the host gave (see
+  [Secrets, references and the vault](#secrets-references-and-the-vault)). The last 20 lines,
+  kept whether or not the rate let them into the log, and the count
   of those left out, say why it stopped. Error messages and hello or describe values a tool
   sends reach the window and the status escaped the same way.
 - A tool that exits on its own, breaks its pipe or leaves a cancel unanswered has **crashed**.
@@ -313,7 +315,7 @@ anything a caller passes. On top of the rules above:
   release go in no set order. The package's pages close at the switch. A cancelled confirmation
   or a candidate that fails installs nothing; the old release stays active and serving.
 
-Still to come: jobs, secrets, and Windows and macOS.
+Still to come: jobs, and Windows and macOS.
 
 ## Calls between packages
 
@@ -402,7 +404,8 @@ A call goes ahead only if all of these hold, checked again for each call:
   nothing.
 - The target is not already in the chain (no call back into the chain), and the chain is at most
   five hops long, the requester and four tools.
-- The input is at most 64 KiB and matches the operation's input schema.
+- The input is at most 64 KiB and matches the operation's input schema, and its secret fields
+  are filled as [Secrets, references and the vault](#secrets-references-and-the-vault) says.
 - A `write` call has a fresh native confirmation naming the whole chain and the exact input. A
   `launch` call has a fresh native confirmation of the exact executable, `argv` and `cwd`. Only
   the window's own direct call, made from a native gesture (a native button press), may use a
@@ -419,6 +422,113 @@ A call goes ahead only if all of these hold, checked again for each call:
 A routed call is then a call like any other: it is registered so a cancel and the window's
 closing reach it, and it goes through the same limits, per-package turn, backoff, quarantine and
 unknown-outcome rules as a call from the window.
+
+## Secrets, references and the vault
+
+The app keeps a host-private **vault** in its data folder (`vault`, owner-only: 0700, files
+0600): the secrets the person entered, and each native tool's backups and journals. It is never a
+folder a package names or reads through the host, and no window or page API gives its paths, a
+secret's value, a backup's bytes or a journal's intent. A native tool has the user's full access
+and could read it directly: this separates APIs and storage, it is not an operating-system
+sandbox, and it does not protect a secret from another program of the same user.
+
+### Secrets and references
+
+A secret enters only through native key entry (`vault_secret_add`, the app README's Commands):
+GTK's hidden entry reads it, and the window gets back its opaque ID (`s-` and 32 hexadecimal
+digits) and label, never the value. An operation's `secrets` fields carry secrets:
+
+- From the window, a secret field holds a vault secret's ID.
+- From a native tool, it holds a reference the host gave that tool in the call it is serving,
+  passed on to an operation its import lists in `secrets`.
+- From a page, never: a page cannot pass secrets.
+- A secret's value or a reference anywhere else in an input is refused: in any other field's
+  value or name, at any depth, or as the whole input. The refusal is the one any input that does
+  not match the operation's schema gets, so it does not say whether a string was a secret. A
+  field filled any other way is refused too.
+
+A call that delivers a secret's value (a `value` field), or one the window gives a secret to,
+asks a native confirmation naming each secret, its label and the tool that gets it, even for a
+`read` operation. A launch's secrets are references only (a manifest with a `value` field on a
+`launch` operation is invalid), so a remembered launch approval never stands for a value's
+delivery; it is remembered only with the same secrets' IDs, which its dialog and its Remember
+checkbox name. Passing a reference on to a
+`reference` field asks nothing more. The tool then finds, in each secret field, a new reference
+(`r-` and 32 hexadecimal digits) of its own, and a `value` field's secret in the call frame's
+`secrets`, by that reference:
+
+```json
+{"type":"call","id":"c-4","op":"apply","input":{"key":"r-<hex>","file":"/home/me/.config/x.json"},
+ "chain":[{"kind":"main"}],"secrets":{"r-<hex>":"<the secret>"}}
+```
+
+A reference is bound to its secret, to the release of the tool it was given to (ID, digest and
+generation) and to the call it was given in, and so to that call's chain. It is refused when
+another tool presents it, when another release of the tool does (after an update or rollback),
+in any other call of the tool, after its call has ended, and once its secret is removed. A tool
+that only receives references (an execution program) never receives the secret. References live
+in the app's memory only.
+
+The host never shows a secret's value or a reference: they are replaced by `[redacted]` in a
+tool's logged stderr lines and its status, in the errors leaving the host, and in every call's
+output, whether it goes to the window, a page or a calling tool. Overlapping values are replaced
+as one, and a removed secret's value is still replaced until the app restarts. Only exact values
+are replaced: a tool that encodes a secret otherwise can still show it.
+
+### Vault frames
+
+While a tool serves a host call, it may send `vault` frames on its stdout for it (`for`), answered
+on its stdin like its own calls, with `result` or `error`. While it answers a describe on its
+package's turn (one that names journals or unknown outcomes), it may send them for that describe
+too, only to read backups (`backup.get`, `backup.list`) and to end the journals that describe named
+(`journal.commit`, `journal.end`):
+
+```json
+{"type":"vault","id":"v-1","for":"c-4","op":"journal.begin","intent":{"file":"/home/me/.config/x.json","sha256":"<hex>"}}
+```
+
+| `op` | Fields | `output` |
+| --- | --- | --- |
+| `backup.put` | `label` (at most 64 characters), `data` (base64, at most 512 KiB) | `{"backup": "b-<hex>"}` |
+| `backup.get` | `backup` | `{"backup", "label", "size", "created", "data"}` |
+| `backup.list` | none | `{"backups": [{"backup", "label", "size", "created"}]}` |
+| `backup.delete` | `backup` | `{}` |
+| `journal.begin` | `intent` (a JSON object of at most 16 KiB) | `{"journal": "j-<hex>"}` |
+| `journal.commit` | `journal` | `{"journal", "outcome": "committed"}` |
+| `journal.end` | `journal`, `outcome` (`committed` or `rolled_back`) | `{"journal", "outcome"}` |
+
+Backups and journals belong to the package, whatever its release, and stay when it is removed; a
+package keeps at most 256 backups. In a call, a tool commits or ends only a journal its own release
+began; in describe, any journal that describe named. The vault's folders are opened without
+following links, and files in a package's folder that its records do not name (a write cut
+short, a removal that failed) are removed the next time they are read. Errors, which never name
+another journal: `invalid_request` for bad fields or a journal ended already with another outcome,
+`not_found` for another package's or an unknown ID (or a journal the tool may not end),
+`unavailable` when the vault cannot be read or written, a second journal is begun while one is
+open, or the package keeps 256 backups, `permission` for a `for` the tool is not serving or an
+`op` describe may not send, and `unsupported` for an unknown `op`.
+
+### Journals and recovery
+
+A tool that writes begins a journal before the write, naming what it means to write in `intent`
+(such as each file and the SHA-256 of its new bytes), keeps the old bytes as a backup, and commits
+the journal once the write is done. A journal still open when the tool or the app stopped is kept
+on disk, and the package's next start names it in describe, with the calls of unknown outcome and
+on the package's turn:
+
+```json
+{"type":"call","id":"c-9","op":"describe","contract_version":0,"unknown":[...],
+ "journals":[{"id":"j-<hex>","op":"apply","generation":1700000000,"began":1700000001000,"intent":{...}}]}
+```
+
+The tool must reconcile each before it answers: look at what is on disk and end the journal as
+`committed` (the write took effect) or `rolled_back` (it did not, or the tool put the old bytes
+back), never by writing again. A start whose describe leaves one open fails, and so does one whose
+journals cannot be read (the status says why, in `journals_error`). Ending a journal
+again with the same outcome is answered the same, with `"again": true`, because delivery may
+repeat; another outcome is refused. While one is open, no other journal begins. A swap's
+candidate is told of none, as of unknown outcomes. The window's `program_status` lists the
+package's open and recently ended journals and whether each was reconciled after a crash.
 
 ## Shared manifest fixtures
 

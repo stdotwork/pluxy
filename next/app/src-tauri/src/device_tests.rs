@@ -1950,6 +1950,76 @@ fn imports_exports_and_effects_are_validated() {
         let e = check(tier, bad.clone()).unwrap_err();
         assert!(e.contains(says), "{bad}: {e}");
     }
+    // Secret fields: string properties of the input, value or reference; imports may pass
+    // secret references only to operations they list, and a web package's never.
+    let secret = |secrets: Value, schema: Value| {
+        serde_json::json!({"operations": [{"id": "op", "description": "d", "effect": "read",
+            "secrets": secrets, "input_schema": schema, "output_schema": {"type": "object"}}]})
+    };
+    let keyed = serde_json::json!({"type": "object", "properties": {"key": {"type": "string"}}});
+    let ok = check(
+        "native",
+        secret(serde_json::json!({"key": "reference"}), keyed.clone()),
+    )
+    .unwrap();
+    assert!(ok.is_empty());
+    // A launch's references are allowed (the control for its value's refusal below).
+    assert!(check(
+        "native",
+        serde_json::json!({"operations": [{"id": "op", "description": "d", "effect": "launch",
+            "secrets": {"key": "reference"}, "output_schema": {"type": "object"},
+            "input_schema": {"type": "object", "required": ["executable", "argv", "cwd"],
+                "properties": {"key": {"type": "string"}}}}]}),
+    )
+    .is_ok());
+    let mut passing = import("pluxy/b", &[1], &["op"], true);
+    passing["secrets"] = serde_json::json!(["op"]);
+    assert_eq!(
+        check("native", serde_json::json!({"imports": [passing]})).unwrap()[0].secrets,
+        vec!["op".to_string()]
+    );
+    let mut stray = import("pluxy/b", &[1], &["op"], true);
+    stray["secrets"] = serde_json::json!(["other"]);
+    for (tier, bad, says) in [
+        (
+            "native",
+            secret(serde_json::json!({"key": "copy"}), keyed.clone()),
+            "value or reference",
+        ),
+        (
+            "native",
+            secret(
+                serde_json::json!({"key": "value"}),
+                serde_json::json!({"type": "object"}),
+            ),
+            "string property",
+        ),
+        (
+            "native",
+            secret(
+                serde_json::json!({"key": "value"}),
+                serde_json::json!({"type": "object", "properties": {"key": {"type": "integer"}}}),
+            ),
+            "string property",
+        ),
+        ("native", serde_json::json!({"imports": [stray]}), "secrets"),
+        (
+            "native",
+            serde_json::json!({"operations": [{"id": "op", "description": "d", "effect": "launch",
+                "secrets": {"key": "value"}, "output_schema": {"type": "object"},
+                "input_schema": {"type": "object", "required": ["executable", "argv", "cwd"],
+                    "properties": {"key": {"type": "string"}}}}]}),
+            "a launch's secret field key is a reference",
+        ),
+        (
+            "web",
+            serde_json::json!({"imports": [passing]}),
+            "cannot pass secrets",
+        ),
+    ] {
+        let e = check(tier, bad.clone()).unwrap_err();
+        assert!(e.contains(says), "{bad}: {e}");
+    }
     let many: Vec<Value> = (0..17)
         .map(|i| import(&format!("pluxy/t{i}"), &[1], &["op"], true))
         .collect();

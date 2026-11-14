@@ -1143,6 +1143,8 @@ struct Operation {
     input_schema: Value,
     output_schema: Value,
     effect: Option<String>,
+    /// Input fields that carry a secret: `value` (delivered to the tool) or `reference`.
+    secrets: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -1292,7 +1294,7 @@ impl App {
         if let Some(c) = &self.config {
             c.validate().map_err(|e| format!("app: {e}"))?;
         }
-        imports::validate_imports(self.imports.as_deref())?;
+        imports::validate_imports(self.imports.as_deref(), self.tier == "web")?;
         if self.tier == "web" {
             if self.programs.is_some()
                 || self.operations.is_some()
@@ -1349,6 +1351,7 @@ impl App {
                 return Err("app.operations schemas must be JSON objects".into());
             }
             imports::validate_effect(op)?;
+            imports::validate_secrets(op)?;
         }
         imports::validate_exports(self.exports.as_ref(), ops)?;
         match &self.state {
