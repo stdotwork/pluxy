@@ -22,7 +22,7 @@ fn env(name: &str) -> Result<String, String> {
 /// Clicks the element selector names: a button, input or link itself, otherwise the button
 /// inside it (the kit's buttons sit in a marked wrapper), once it is there and enabled. Fails
 /// when there is still nothing to click.
-fn click(main: &Webview, selector: &str) -> Result<(), String> {
+pub(crate) fn click(main: &Webview, selector: &str) -> Result<(), String> {
     let js = format!(
         "(e => {{ const t = e?.matches('button, input, a') ? e : e?.querySelector('button'); \
          if (!t || t.disabled) return false; t.click(); return true; }})(document.querySelector({}))",
@@ -35,7 +35,7 @@ fn click(main: &Webview, selector: &str) -> Result<(), String> {
 }
 
 /// A data attribute of the first element matching selector, once it equals want.
-fn wait_attr(
+pub(crate) fn wait_attr(
     main: &Webview,
     what: &str,
     selector: &str,
@@ -51,7 +51,7 @@ fn wait_attr(
         .map_err(|e| format!("{e}: {selector} {attr} is {:?}", eval(main, &expr)))
 }
 
-fn attr(main: &Webview, selector: &str, attr: &str) -> Value {
+pub(crate) fn attr(main: &Webview, selector: &str, attr: &str) -> Value {
     eval(
         main,
         &format!(
@@ -64,7 +64,7 @@ fn attr(main: &Webview, selector: &str, attr: &str) -> Value {
 }
 
 /// The text the native confirmation shows, read from its GTK labels.
-fn dialog_text(app: &AppHandle) -> Result<String, String> {
+pub(crate) fn dialog_text(app: &AppHandle) -> Result<String, String> {
     let (tx, rx) = mpsc::channel();
     app.run_on_main_thread(move || {
         fn labels(w: &gtk::Widget, out: &mut String) {
@@ -119,6 +119,26 @@ fn ask_source(app: &AppHandle, main: &Webview, url: &str) -> Result<String, Stri
         "true",
     )?;
     Ok(text)
+}
+
+/// Sets the feed to url through its native confirmation, confirmed.
+pub(crate) fn set_source(app: &AppHandle, main: &Webview, url: &str) -> Result<(), String> {
+    wait_for("the Version Management page", || {
+        eval(
+            main,
+            "document.querySelector('[data-part=release-source-input]') !== null",
+        )
+        .filter(|v| v == true)
+    })?;
+    ask_source(app, main, url)?;
+    key(DIALOG, "alt+o")?;
+    wait_attr(
+        main,
+        "the confirmed feed",
+        "[data-part=release-source]",
+        "source",
+        url,
+    )
 }
 
 fn browser_log(path: &str) -> Vec<String> {
@@ -232,6 +252,23 @@ pub(crate) fn run(
     evidence["stable"] = json!({
         "app": attr(main, app_card, "latest"), "core": attr(main, core_card, "latest"),
         "installed_app": attr(main, app_card, "installed"),
+    });
+    // The feed offers 0.2.0 but the updater refuses it, on the page and to Update Now's own
+    // command: a build without updater trust is not configured, and the fixture's 0.2.0 has no
+    // signed update for the test package (the runner checks which).
+    let reason = wait_for("the updater's reason", || {
+        Some(attr(main, "[data-part=app-update]", "reason"))
+            .filter(|r| r.as_str().is_some_and(|s| !s.is_empty()))
+    })?;
+    main.eval("window.__updateCall = null; window.__TAURI_INTERNALS__.invoke('app_update_start').then(() => window.__updateCall = {ok: true}, e => window.__updateCall = {ok: false, error: String(e)})")
+        .map_err(|e| e.to_string())?;
+    let call = wait_for("app_update_start to answer", || {
+        eval(main, "window.__updateCall").filter(|v| !v.is_null())
+    })?;
+    evidence["updater"] = json!({
+        "reason": reason,
+        "offered": eval(main, "document.querySelector('[data-part=app-update-now]') !== null"),
+        "call": call,
     });
     let checked = attr(main, "[data-part=release-checked]", "at");
     if checked.as_str().is_none_or(str::is_empty) {
