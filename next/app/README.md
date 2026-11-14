@@ -145,6 +145,12 @@ Each change works once: while one waits for its confirmation, another is refused
 hears `pluxy-connection` when it has ended, and `core_versions` says whether it was done,
 cancelled or failed.
 
+What these checks guard against: a damaged or substituted download, and other users of this
+computer. They do not guard against your own user account. A program running as your user can
+rewrite the app's core store, as it can replace the app itself: the installed records and version
+folders (or the folders above them), a staged archive between its check and its unpacking, and a
+checked program, or the files beside it, before the core runs or reads them.
+
 ## The window and the tray
 
 What closing the window does is the Connection page's **Close behavior**: **Ask every time**
