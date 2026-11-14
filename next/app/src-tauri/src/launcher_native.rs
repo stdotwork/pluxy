@@ -181,6 +181,9 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     )
     .map_err(|e| e.to_string())?;
     let key = keys["key"].as_str().ok_or("no key")?.to_string();
+    // The execution program's release, from its manifest (none before it exists).
+    let execution_version =
+        std::fs::read_to_string(fixtures.join("execution-version")).unwrap_or_default();
     let bin = std::fs::canonicalize(fixtures.join("bin")).map_err(|e| e.to_string())?;
     let terminal = bin.join("x-terminal-emulator");
     let agent = bin.join("pluxy-agent");
@@ -235,8 +238,8 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     step(
         "enable",
         (|| {
-            for id in [EXECUTION, RELAY] {
-                install(main, "curated", id, "1.0.0")?;
+            for (id, version) in [(EXECUTION, execution_version.as_str()), (RELAY, "1.0.0")] {
+                install(main, "curated", id, version)?;
                 enable(app, main, id)?;
             }
             install(main, "curated", PAGE, "1.0.0")?;

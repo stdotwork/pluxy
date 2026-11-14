@@ -67,6 +67,8 @@ export function buildLauncherFixtures(
       },
       execution,
     ]);
+    // The check installs the release its manifest names.
+    writeFileSync(join(root, "execution-version"), m.version);
   }
   packages.push([
     native("pluxy/launch-relay", "1.0.0", { operations: [relay], imports: [launchImport] }),
