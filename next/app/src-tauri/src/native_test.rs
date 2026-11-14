@@ -18,7 +18,8 @@
 //!    (`access_native.rs`, `PLUXY_APP_TEST_ACCESS_STAGE`);
 //!    with `PLUXY_APP_TEST_ADMISSION`, a session checks only signed native-tier admission
 //!    (`admission_native.rs`) and quits; with `PLUXY_APP_TEST_PROGRAM`, only the program host
-//!    (`program_native.rs`, then `swap_native.rs`);
+//!    (`program_native.rs`, then `swap_native.rs`); with `PLUXY_APP_TEST_VAULT`, only the vault,
+//!    secret delivery and references and journal recovery (`vault_native.rs`);
 //! 5. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!
@@ -61,6 +62,9 @@ mod routing;
 #[cfg(target_os = "linux")]
 #[path = "swap_native.rs"]
 mod swap;
+#[cfg(target_os = "linux")]
+#[path = "vault_native.rs"]
+mod vault;
 pub use ingress::{
     count as ingress_count, forwarded as ingress_forwarded, operation as ingress_operation,
 };
@@ -411,6 +415,15 @@ fn run(app: &AppHandle) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_ROUTING") {
         routing::run(app, &main, dir.into())?;
+        log("quit", json!({}));
+        crate::quit(app);
+        return Ok(());
+    }
+    // The vault, secret delivery and references, and journal recovery (vault_native.rs), in a
+    // session of its own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_VAULT") {
+        vault::run(app, &main, dir.into())?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());

@@ -105,8 +105,10 @@ jobs:
         working-directory: next/app/src-tauri
         run: cargo test --locked --features artifact-test-trust --test artifact_trust --test release_config
       # The real app on Xvfb in each mode: extension page webviews cannot call app commands.
-      # It also builds the test AppImage and a release build for the release gate's checks; it
-      # took 10 minutes in PR #224's run, so this allows about 2.5 times that.
+      # It also builds the test AppImage and a release build for the release gate's checks. It
+      # took 21 minutes on main after the program host, routing and access suites landed, and 23
+      # to 24 minutes with the vault suite, so this allows about twice that for the suites still
+      # being added.
       - name: Native test
-        timeout-minutes: 25
+        timeout-minutes: 45
         run: bun run test:native

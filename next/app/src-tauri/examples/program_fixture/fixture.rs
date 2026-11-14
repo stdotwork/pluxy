@@ -16,7 +16,26 @@
 //!   answering with the host's answer to that;
 //! - `slow` after `ms` milliseconds, with its version, process and when it answered;
 //! - `crash` never: it exits at once with status 3;
-//! - `flood` never: it sends 2000 call frames the host refuses, and reads nothing more.
+//! - `flood` never: it sends 2000 call frames the host refuses, and reads nothing more;
+//! - `apply`, the vault check's writer (`src/vault_native.rs`): takes the secret the host delivered
+//!   for its `key` reference, keeps the file's old bytes as a vault backup, begins a vault journal
+//!   naming the new bytes' SHA-256, writes the file (and counts its writes in `<file>.writes`),
+//!   logs the key on stderr and, unless `crash` is set, commits the journal (`crash_before` exits
+//!   before it writes the file; `leave_open` marks the journal's intent so that describe leaves it
+//!   open, as a tool that never reconciles would); it then writes its
+//!   reference to `leak` and forwards a reference (its own, or `forward.key_from`'s, or the raw
+//!   value with `forward.raw`) to `forward.package`'s `forward.op`, and answers with the key in
+//!   `echo`, as a leaky tool would;
+//! - `report` with the journals it reconciled at its last describe and the last key it took;
+//! - `run`, the vault check's execution program: appends the frame it got to `record`, then calls
+//!   `consumer` with its own reference (or `steal`'s) and `out`, and appends the answer it got
+//!   back to `record` too;
+//! - `deliver`, the vault check's final consumer: writes the secret delivered for `key` to `out`.
+//!
+//! In describe, it reconciles each open vault journal the host names, never redoing it: it ends it
+//! as `committed` when the file holds the bytes the journal names, `rolled_back` otherwise, and
+//! leaves open one whose intent says `leave_open`. With `describe_vault` in `fixture.json`, it also
+//! sends that vault request in describe; `report` gives the host's answer with the journals.
 //!
 //! Each answer of summary, store, launch and relay also carries the `chain` the host's call named.
 //!
@@ -75,6 +94,8 @@ struct Mode {
     stderr_burst: usize,
     /// Exits with status 3 right after it has described itself.
     exit_after_describe: bool,
+    /// A vault request it sends in describe, for the describe.
+    describe_vault: Option<Value>,
 }
 
 impl Mode {
@@ -111,6 +132,7 @@ impl Mode {
             error_message: s("error_message"),
             stderr_burst: v["stderr_burst"].as_u64().unwrap_or_default() as usize,
             exit_after_describe: v["exit_after_describe"] == true,
+            describe_vault: v.get("describe_vault").cloned(),
         }
     }
 }
@@ -192,6 +214,155 @@ fn relay(input: &mut impl Read, output: &mut impl Write, f: &Value, n: u64) -> V
         }
     }
     json!({"error": {"code": "extension_unavailable", "message": "the host closed the pipe"}})
+}
+
+/// Sends frame (a vault request or a call through the host) and waits for the host's answer
+/// to it: `{"output": ...}` or `{"error": ...}`.
+fn ask(input: &mut impl Read, output: &mut impl Write, frame: Value) -> Value {
+    let rid = frame["id"].clone();
+    write_frame(output, &frame);
+    while let Some(m) = read_frame(input) {
+        match m["type"].as_str() {
+            Some("result") if m["id"] == rid => return json!({"output": m["output"]}),
+            Some("error") if m["id"] == rid => return json!({"error": m["error"]}),
+            _ => {}
+        }
+    }
+    json!({"error": {"code": "extension_unavailable", "message": "the host closed the pipe"}})
+}
+
+fn sha256_hex(b: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(b)
+        .iter()
+        .map(|x| format!("{x:02x}"))
+        .collect()
+}
+
+/// The secret the host delivered with call frame f for its input field, if any.
+fn delivered(f: &Value, field: &str) -> Option<String> {
+    let reference = f["input"][field].as_str()?;
+    f["secrets"][reference].as_str().map(String::from)
+}
+
+/// The vault check's writer: see the module's `apply`.
+fn apply(
+    input: &mut impl Read,
+    output: &mut impl Write,
+    f: &Value,
+    n: &mut u64,
+    last_key: &mut Value,
+) -> Value {
+    let mut next = || {
+        *n += 1;
+        format!("v-{n}")
+    };
+    let i = &f["input"];
+    let Some(key) = delivered(f, "key") else {
+        return error(
+            &f["id"],
+            "invalid_request",
+            "no secret was delivered for key",
+        );
+    };
+    *last_key = json!(key);
+    let file = std::path::PathBuf::from(i["file"].as_str().unwrap_or_default());
+    let old = std::fs::read(&file).unwrap_or_default();
+    use base64::Engine;
+    let backup = ask(
+        input,
+        output,
+        json!({"type": "vault", "id": next(), "for": f["id"], "op": "backup.put",
+            "label": "original", "data": base64::engine::general_purpose::STANDARD.encode(&old)}),
+    );
+    let content = format!("key={key}\n");
+    let journal = ask(
+        input,
+        output,
+        json!({"type": "vault", "id": next(), "for": f["id"], "op": "journal.begin",
+            "intent": {"file": file, "sha256": sha256_hex(content.as_bytes()),
+                "leave_open": i["leave_open"] == true}}),
+    );
+    let Some(j) = journal["output"]["journal"].as_str().map(String::from) else {
+        return error(&f["id"], "internal", &format!("journal.begin: {journal}"));
+    };
+    if i["crash_before"] == true {
+        std::process::exit(3);
+    }
+    let tmp = file.with_extension("tmp");
+    let writes = file.with_extension("writes");
+    let count: u64 = std::fs::read_to_string(&writes)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0);
+    if std::fs::write(&tmp, &content).is_err()
+        || std::fs::rename(&tmp, &file).is_err()
+        || std::fs::write(&writes, format!("{}", count + 1)).is_err()
+    {
+        return error(&f["id"], "internal", "could not write the file");
+    }
+    eprintln!("writer: applied key {key} to {}", file.display());
+    if i["crash"] == true {
+        std::process::exit(3);
+    }
+    let commit = ask(
+        input,
+        output,
+        json!({"type": "vault", "id": next(), "for": f["id"], "op": "journal.commit", "journal": j}),
+    );
+    if let Some(path) = i["leak"].as_str() {
+        let _ = std::fs::write(path, i["key"].as_str().unwrap_or_default());
+    }
+    let mut answer = Value::Null;
+    if let Some(fw) = i.get("forward").filter(|v| v.is_object()) {
+        let reference = if fw["raw"] == true {
+            json!(key)
+        } else if let Some(p) = fw["key_from"].as_str() {
+            json!(std::fs::read_to_string(p).unwrap_or_default())
+        } else {
+            i["key"].clone()
+        };
+        let mut call_input = fw["input"].clone();
+        if !call_input.is_object() {
+            call_input = json!({});
+        }
+        call_input["key"] = reference;
+        answer = ask(
+            input,
+            output,
+            json!({"type": "call", "id": next(), "for": f["id"], "package": fw["package"],
+                "op": fw["op"], "input": call_input}),
+        );
+    }
+    json!({"type": "result", "id": f["id"], "output": {"written": true, "echo": key,
+        "backup": backup, "journal": journal, "commit": commit, "answer": answer,
+        "chain": f["chain"]}})
+}
+
+/// Reconciles the open vault journals describe frame d names (see the module's description).
+fn reconcile(input: &mut impl Read, output: &mut impl Write, d: &Value, n: &mut u64) -> Value {
+    let mut done = Vec::new();
+    for j in d["journals"].as_array().into_iter().flatten() {
+        if j["intent"]["leave_open"] == true {
+            continue;
+        }
+        let file = j["intent"]["file"].as_str().unwrap_or_default();
+        let now = std::fs::read(file).unwrap_or_default();
+        let outcome = if sha256_hex(&now) == j["intent"]["sha256"].as_str().unwrap_or_default() {
+            "committed"
+        } else {
+            "rolled_back"
+        };
+        *n += 1;
+        let reply = ask(
+            input,
+            output,
+            json!({"type": "vault", "id": format!("v-{n}"), "for": d["id"], "op": "journal.end",
+                "journal": j["id"], "outcome": outcome}),
+        );
+        done.push(json!({"journal": j["id"], "outcome": outcome, "reply": reply}));
+    }
+    json!(done)
 }
 
 /// Its child's process ID, for the SIGTERM handler.
@@ -310,6 +481,10 @@ pub fn main() -> ! {
     let mut waiting: Option<Value> = None;
     let mut relayed = 0u64;
     let mut reported = Value::Null;
+    // The vault check's: journals reconciled at the last describe, frames asked, the last key.
+    let mut reconciled = json!([]);
+    let mut asked = 0u64;
+    let mut last_key = Value::Null;
     let version = manifest["version"].clone();
     let at = || {
         std::time::SystemTime::now()
@@ -323,6 +498,17 @@ pub fn main() -> ! {
         match (f["type"].as_str(), f["op"].as_str()) {
             (Some("call"), Some("describe")) => {
                 reported = f["unknown"].clone();
+                reconciled = reconcile(&mut input, &mut output, &f, &mut asked);
+                if let Some(mut req) = mode.describe_vault.clone() {
+                    asked += 1;
+                    req["type"] = json!("vault");
+                    req["id"] = json!(format!("v-{asked}"));
+                    req["for"] = id.clone();
+                    let reply = ask(&mut input, &mut output, req);
+                    if let Some(list) = reconciled.as_array_mut() {
+                        list.push(json!({"describe_vault": reply}));
+                    }
+                }
                 let mut ops = manifest["app"]["operations"].clone();
                 if let (Some(extra), Some(list)) = (&mode.extra_operation, ops.as_array_mut()) {
                     list.push(json!({"id": extra, "description": "Not in the manifest",
@@ -434,6 +620,69 @@ pub fn main() -> ! {
                                 "version": version, "pid": std::process::id(), "at": at()}}),
                         );
                     }
+                    "apply" => {
+                        let r = apply(&mut input, &mut output, &f, &mut asked, &mut last_key);
+                        write_frame(&mut output, &r);
+                    }
+                    "report" => write_frame(
+                        &mut output,
+                        &json!({"type": "result", "id": id, "output":
+                            {"reconciled": reconciled, "echo": last_key, "calls": calls,
+                             "version": version}}),
+                    ),
+                    "run" => {
+                        let i = &f["input"];
+                        if let Some(record) = i["record"].as_str() {
+                            if let Ok(mut file) = std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(record)
+                            {
+                                let _ = writeln!(file, "{f}");
+                            }
+                        }
+                        let reference = match i["steal"].as_str() {
+                            Some(p) => json!(std::fs::read_to_string(p).unwrap_or_default()),
+                            None => i["key"].clone(),
+                        };
+                        asked += 1;
+                        let answer = ask(
+                            &mut input,
+                            &mut output,
+                            json!({"type": "call", "id": format!("v-{asked}"), "for": id,
+                                "package": i["consumer"]["package"], "op": i["consumer"]["op"],
+                                "input": {"key": reference, "out": i["out"]}}),
+                        );
+                        if let Some(record) = i["record"].as_str() {
+                            if let Ok(mut file) =
+                                std::fs::OpenOptions::new().append(true).open(record)
+                            {
+                                let _ = writeln!(file, "{answer}");
+                            }
+                        }
+                        write_frame(
+                            &mut output,
+                            &json!({"type": "result", "id": id, "output":
+                                {"answer": answer, "chain": chain}}),
+                        );
+                    }
+                    "deliver" => match delivered(&f, "key") {
+                        Some(key)
+                            if f["input"]["out"]
+                                .as_str()
+                                .is_some_and(|out| std::fs::write(out, &key).is_ok()) =>
+                        {
+                            write_frame(
+                                &mut output,
+                                &json!({"type": "result", "id": id, "output":
+                                    {"received": true, "chain": chain}}),
+                            )
+                        }
+                        _ => write_frame(
+                            &mut output,
+                            &error(&id, "invalid_request", "no secret was delivered for key"),
+                        ),
+                    },
                     "crash" => std::process::exit(3),
                     "flood" => {
                         for i in 0..2000 {
