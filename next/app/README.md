@@ -10,7 +10,7 @@ from packages installed on this device, open in webviews of their own.
 | `src/` | The window: the kit's shell and pages, the app's host (`host.ts`), the Connection page, and how extension pages are drawn (`nativePage.tsx`) |
 | `page/` | The small document an extension page's webview loads, which holds the page's sandboxed frame, and the release notes' style sheet |
 | `src-tauri/` | The native side: commands, the connection to core, the app's own core, extension page webviews, the tray |
-| `native/` | The native test (`run.ts`) |
+| `native/` | The native test (`run.ts`), its sessions and fixtures |
 | `package.ts` | The test-package and release-package commands ([Packages](#packages)) |
 
 ## How the app reaches core
@@ -450,10 +450,60 @@ takes a new format number, which this app refuses.
 | `published` | RFC 3339 in UTC, ending in `Z`, on a day its month has; second 60 (a leap second) is refused |
 | `notes` | Optional Markdown, at most 64 KiB |
 | `notes_url` | Optional `https://` address with a host and no user name or password, at most 2048 bytes as given and once normalised (percent-encoded) |
+| `update` | Optional, app releases only: signed update artifacts by the updater's target name; the app reads `linux-x86_64-appimage`. Each is `{"url": <https address, as notes_url>, "signature": <Tauri updater signature, base64, at most 4096 characters>, "size": <exact bytes, 1 to 1 GiB>}` |
 
 The whole feed is at most 1 MiB. The feed is not signed: https is its only protection, and
 nothing in it is trusted as markup. Signed update artifacts have their own signatures. Production
 feed addresses, keys and formats are decided at release; until then there is no built-in feed.
+
+### Application update
+
+Version Management's Application Update card offers **Update Now** when the feed's latest app
+release on the chosen channel is newer than the running version and has an artifact for this
+system, and says why not otherwise. It uses the stock Tauri updater plugin
+(`tauri-plugin-updater` 2.14.1) for its release check and signature check only, and replaces the
+AppImage itself, in this order (`src-tauri/src/updater.rs`):
+
+1. The updater gate ([below](#the-updater-gate)) must pass. The plugin is registered only when
+   the gate passes as the app starts, and the gate runs again before each use: a build without
+   updater trust never loads it and says the updater is not configured.
+2. The installation must be an AppImage this updater can replace: the bundle type Tauri's bundler
+   compiles into the program is AppImage, `APPIMAGE` names an absolute regular file (not a link)
+   of this user's that no one else can write to, in such a folder, with a type-2 AppImage header,
+   and the program runs from inside it (`APPDIR`). A .deb or .rpm install is refused with how to
+   update through the package manager, and anything else as an unknown format, before anything is
+   downloaded, even when the feed has a signed update. The stock plugin would itself run
+   `pkexec dpkg -i` or `rpm -U` for those.
+3. The plugin restores the release from the feed (`restore_update`): its default comparison
+   allows only a version newer than the running one, and the signature must carry the announced
+   version. No custom comparison is set, so the feed can never offer a downgrade.
+4. The app downloads the artifact itself, as it reads the feed (https only, no redirects, the same
+   certificate roots), exactly the announced size, showing progress. A server that sends nothing
+   for 30 seconds fails the download; **Cancel Download** stops it within that time and changes
+   nothing.
+5. The plugin checks the signature against the compiled updater key; the bytes must be a type-2
+   AppImage.
+6. The running version's AppImage is kept in the app's data folder (`updates/kept/`, the last
+   three versions), pinned by its SHA-256 in `updates/history.json`, and `updates/pending.json`
+   records the install. The app records the AppImage's digest as it starts; if the file has
+   changed since, nothing is kept or installed and the page asks for a restart first. Then the app
+   writes the new AppImage over the old one in one step: a temporary file in the same folder,
+   flushed to disk, renamed over it, and the folder flushed.
+7. The app stops as Quit does (its native tools and its own core stop) and hides its window, but
+   keeps its profile lock and hands it to the new AppImage it starts, so no other launch takes the
+   profile meanwhile; the tray stays responsive while it waits. It waits up to 90 seconds for
+   the new version to accept itself: once it has started, with the installed file's digest the one
+   pinned, it writes `updates/accepted.json`. If it ends first or does not accept in time, the kept
+   copy (checked against its digest) is put back the same way, the page later says the update
+   failed, and the earlier version starts again with the lock. If the kept copy cannot be put back,
+   nothing is started, and the page says which file in `updates/kept/` to copy over the AppImage.
+
+**Roll back to <version>…** lists versions that ran here and were kept. It restores only such a
+copy, only while it still has its pinned digest, and only after the native confirmation (with
+the version, digest and file); then the same restart and acceptance follow. It passes the
+updater gate first, as Update Now does, so a build without updater trust refuses it. A version
+never installed here, or a kept copy that changed, is refused without a dialog. While its
+confirmation is open, Update Now and other rollbacks wait.
 
 ## Extensions on this device
 
@@ -875,6 +925,21 @@ core of its own; that after the first app is killed with SIGKILL (its lock file 
 the next launch becomes the app, starts its core and is the one a later launch raises; and that
 the socket and its address are gone when the app quits. The other profile's data folder is too long
 for a socket path, and a second launch of it still raises it.
+
+Then, in another session (`native/update.ts`, `native/update-session.ts`, `update_native.rs`),
+the [application update](#application-update) on one profile with a test trust profile, against
+a fake https feed whose releases the check switches: the test package refuses Update Now without
+its trust profile's nonce, and as its own program with the bundle type a .deb, an .rpm or no
+package gives it (patched as Tauri's bundler patches it; the .deb one with `APPIMAGE` pointing at
+the AppImage), with a rollback refused for the same reason each time, before any download and with stand-ins for `pkexec`, `sudo`, `dpkg`, `rpm`, `apt`,
+`dnf` and `zypper` never run; then the AppImage, in managed mode, refuses a lower feed, a
+signature by an untrusted key (with the trusted key's ID), a signed version other than the
+announced one and the window's direct call of the plugin, cancels a slow download, undoes an
+update whose new version exits instead of accepting itself, updates 0.1.0 to 0.2.0 with its core
+stopped and started again, refuses rollbacks to a version never installed and to a changed kept
+copy without a dialog, cancels one in the native confirmation, and rolls back to 0.1.0. The
+session checks the installed AppImage's digest after each step, its feed's downloads and the
+versions that ran itself.
 The `native-test` feature is for that test alone; release builds never have it.
 
 In local and remote modes, the test also drives the real GTK dialog with `xdotool`: good keys
@@ -932,7 +997,9 @@ against the public roots only. A stand-in browser, the run's default `https` han
 its own XDG folders, logs each address it is asked to open. The check confirms a feed address in
 the real dialog, then cancels a second change and finds the old address, its file and its copy
 kept; asks for a third, finds Channel disabled, changes the channel by a direct call and confirms,
-and finds the change not applied and the page saying why; checks for updates and reads the stable and the Preview (latest) versions; opens hostile
+and finds the change not applied and the page saying why; checks for updates and reads the stable and the Preview (latest) versions, and finds
+Update Now not offered and refused (a build without updater trust is not configured for it, and the
+fixture has no signed update for the test package); opens hostile
 notes and finds no script, image, frame, handler or extra link, the Markdown rendered and the
 raw HTML left out; probes every app and plugin command from the notes webview (each refused)
 with the window's `release_get` as control; navigates the notes webview to an address the notes
@@ -981,10 +1048,14 @@ bun run package:release [AppImage...]   # the release gate: builds and checks; u
 `package:test` is for checks only, never for release. It builds a debug app with the
 `native-test` and `artifact-test-trust` features and a config overlay given with `--config`:
 identifier `dev.pluxy.desktop.test`, product name `pluxy Test`, binary `pluxy-app-test`, the
-AppImage bundle, and a temporary updater public key made for that build (its private key is never
-written). It checks that the result is an AppImage of type 2 (an ELF file with `AI\x02` at
-offset 8) and writes `<out-dir>/pluxy-test_<version>_amd64.AppImage` and `test-package.json`
-(the AppImage's path and the key). Tauri's AppImage bundler would download the tools it runs
+AppImage bundle, and a temporary updater key made for that build (its private key stays in the
+command's memory and is never written). It builds the package twice, at the app's version and at
+0.2.0, and signs the second with that key (minisign's prehashed signature, with the version in its
+trusted comment, as Tauri's updater reads it: `native/minisign.ts`), for the native test to update
+to. It checks that each result is an AppImage of type 2 (an ELF file with `AI\x02` at offset 8)
+and writes `<out-dir>/pluxy-test_<version>_amd64.AppImage` for each, the first build's program as
+built (`pluxy-app-test`, before the bundler patches its bundle type) and `test-package.json` (the
+paths, the public key and the update's signature). Tauri's AppImage bundler would download the tools it runs
 (linuxdeploy, its AppImage plugin and AppRun) into its tools folder when they are missing there,
 unpinned. The test command puts pinned copies there first, each checked against its SHA-256
 (`BUNDLER_TOOLS` in `package.ts`), and gives the AppImage plugin the pinned AppImage runtime
@@ -1011,7 +1082,7 @@ when its compiled identifier and product name are the test package's, the runner
 profile in HOME loads ([test trust](#package-signatures-and-trust)), and the profile's updater
 key equals the compiled `plugins.updater.pubkey`. With the `native-test` feature the app reports
 the gate's result, with the marker, identifier and product name it read, as its first step.
-There is no updater yet; the signed-update slice calls this gate.
+The app's updater ([Application update](#application-update)) calls it.
 
 ## Limits
 
@@ -1030,7 +1101,12 @@ There is no updater yet; the signed-update slice calls this gate.
 - Tested on Linux only. On Windows the page document's address is
   `http://pluxy-page.localhost/`; neither Windows nor macOS has been run.
 - No installer or bundled core yet: the only package is the test AppImage, which is not for release.
-  Version Management shows releases; it does not install them.
+  The app updates only itself, only as an AppImage, on Linux x86_64, and only with test updater
+  trust until release keys exist. Rollback keeps the last three versions that ran on this
+  profile; a new version that hangs is stopped after 90 seconds and the earlier one put back, but
+  one that crashes later, after accepting itself, is not. If the old app itself is killed during
+  those 90 seconds, nothing puts the earlier version back: copy the newest file in
+  `updates/kept/` in the app's data folder over the AppImage to run it again.
 - Changing the release feed needs the native confirmation, so it works on Linux only, and so
   does opening an address in the browser.
 - Release notes tables show their columns left-aligned whatever alignment the Markdown asks for:
