@@ -95,6 +95,7 @@ Flags:
 - `-safe-mode`: start with no extensions: client requests fail, the management API works.
 - `-watch-interval`: how often core looks for changes to the config file; `0` turns the watch off (default `1s`).
 - `-bundled`: the index of the bundled packages (default `bundled/index.json` beside the program, when it exists); see [Packages](#packages).
+- `-listen-fd`: serve on the listening TCP socket inherited at this file descriptor instead of binding `listen` (which must still be set). A program that starts core, such as the desktop app in managed mode, binds the socket, hands it over and keeps its own copy, so no other program can take the port while core stops or after it exits.
 - `-import-auth`: copy the credential files of today's core's auth folder into the credential store, then exit; see [config.yaml with today's key names](#configyaml-with-todays-key-names).
 
 A running core answers `curl http://127.0.0.1:8400/healthz` with `ok`.
