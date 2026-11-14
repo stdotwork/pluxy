@@ -44,6 +44,13 @@ export async function runUpdate(o: UpdateRun): Promise<{ problems: string[]; set
       JSON.stringify({ mode: "managed", core_path: o.core }),
       { mode: 0o600 },
     );
+    // The app runs only a core in its own store: adopt the core program first, as the window's
+    // Adopt would (and as run.ts and instances-session.ts do for their managed runs).
+    const adopted = spawnSync(o.probe, ["adopt-core", join(dirs.data, o.identifier, "cores"), o.core], {
+      encoding: "utf8",
+    });
+    if (adopted.status !== 0)
+      return { problems: [`session_probe adopt-core exited with ${adopted.status}: ${adopted.stderr}`] };
     writeFileSync(
       join(dirs.config, o.identifier, "window.json"),
       JSON.stringify({ close_behavior: "minimize-to-tray" }),
