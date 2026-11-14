@@ -1331,7 +1331,7 @@ async function runApp(
     }
 
     if (claudeDesktop) {
-      const r = steps.get("claude-desktop") as { passed?: boolean } | undefined;
+      const r = steps.get("claude_desktop") as { passed?: boolean } | undefined;
       const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
       check(r?.passed === true, `the Claude Desktop check did not complete: ${failure}`);
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
