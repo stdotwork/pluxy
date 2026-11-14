@@ -86,6 +86,12 @@
 // each detail call, leaves the Codex home's bytes and modification times as they were, keeps the
 // config.toml and auth.json canaries out of pages, webviews and the app's output, and leaves no
 // reader process when idle or disabled.
+// The usage hub check (usage.ts, usage_native.rs) runs in one more session with that build: the hub
+// and the test-only fixture parser (next/app-tools/agent-usage and usage-fixture, built here) sync a
+// fixture root through the host's jobs, driven from the hub's page, and its report equals a
+// hand-written expect file, also after a repeated sync, an appended and an added file, and a parser
+// disabled mid-file; ingest is refused to everyone but the host and report to another package's page;
+// no hub or parser process is left when idle.
 // The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
@@ -129,6 +135,7 @@ import { buildRoutingFixtures } from "./routing";
 import { missingPrerequisites } from "./services";
 import { buildSessionsFixtures } from "./sessions";
 import { buildSpawnFixtures } from "./spawn";
+import { buildUsageFixtures } from "./usage";
 import { buildVaultFixtures } from "./vault";
 
 const app = join(import.meta.dir, "..");
@@ -577,6 +584,7 @@ async function runApp(
   release?: Release,
   spawnCheck = false,
   reader = false,
+  usage = false,
   launcherCheck = false,
 ): Promise<string[]> {
   const { label, bin } = artifact;
@@ -659,6 +667,7 @@ async function runApp(
       !spawnCheck &&
       !launcherCheck &&
       !reader &&
+      !usage &&
       suite !== "access"
         ? join(root, "device")
         : undefined;
@@ -776,6 +785,24 @@ async function runApp(
         JSON.stringify({ version: 0, registries: f.registries }),
       );
     }
+    // The usage hub check's signed hub and fixture parser, their registry and trust profile.
+    const usageDir = usage ? join(root, "usage") : undefined;
+    if (usageDir) {
+      mkdirSync(usageDir);
+      const f = buildUsageFixtures(
+        usageDir,
+        dirs.home,
+        appTools,
+        join(appToolsTarget, "debug"),
+        programFixture,
+      );
+      nonce = f.nonce;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
     if (curated) {
       mkdirSync(curated);
       if (device) mkdirSync(device);
@@ -796,7 +823,15 @@ async function runApp(
       // The app starts again on the first run's HOME: its marker and profile stay, and so does
       // the nonce the marker holds.
       nonce = JSON.parse(readFileSync(join(dirs.home, MARKER_FILE), "utf8")).nonce;
-    } else if (!programDir && !routingDir && !vaultDir && !spawnDir && !sessionsDir && !launcherDir) {
+    } else if (
+      !programDir &&
+      !routingDir &&
+      !vaultDir &&
+      !spawnDir &&
+      !sessionsDir &&
+      !launcherDir &&
+      !usageDir
+    ) {
       try {
         nonce = /^nonce=([0-9a-f]{64})$/m.exec(run(probe, ["trust-marker", dirs.home], app))?.[1] ?? "";
         if (!nonce) throw new Error("it printed no nonce");
@@ -856,6 +891,7 @@ async function runApp(
       // The probe clicks the tray's Start… items through the real watcher's dbusmenu.
       ...(launcherDir ? { PLUXY_APP_TEST_LAUNCHER: launcherDir, PLUXY_APP_TEST_PROBE: probe } : {}),
       ...(sessionsDir ? { PLUXY_APP_TEST_SESSIONS: sessionsDir } : {}),
+      ...(usageDir ? { PLUXY_APP_TEST_USAGE: usageDir } : {}),
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: artifact.identifier } : {}),
       ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
       ...(key ? { PLUXY_APP_TEST_KEY_FILE: keyFile } : {}),
@@ -1145,6 +1181,16 @@ async function runApp(
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode} launcher ${JSON.stringify(r ?? {})}`);
       console.log(`${mode}: launcher ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
+    if (usage) {
+      const r = steps.get("usage") as { passed?: boolean } | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(r?.passed === true, `the usage hub check did not complete: ${failure}`);
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} usage ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode}: usage ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
 
@@ -1737,9 +1783,20 @@ async function main(): Promise<number> {
     tauri,
   );
   const trustBin = join(targetDir, "debug", "pluxy-app");
-  // The Codex session reader, from the app tools' workspace, when it is there.
+  // The Codex session reader, from the app tools' workspace, when it is there; and the usage hub
+  // and its fixture parser, each when its folder is there.
   if (existsSync(join(appTools, "Cargo.toml"))) {
     run("cargo", ["build", "--locked", "-p", "codex-sessions", "--target-dir", appToolsTarget], appTools);
+    const usageTools = ["agent-usage", "usage-fixture"].filter((t) =>
+      existsSync(join(appTools, t, "Cargo.toml")),
+    );
+    if (usageTools.length > 0) {
+      run(
+        "cargo",
+        ["build", "--locked", ...usageTools.flatMap((t) => ["-p", t]), "--target-dir", appToolsTarget],
+        appTools,
+      );
+    }
   }
   const appImageDir = tempDir("pluxy-app-native-appimage-");
   // The same test trust profile in every run; without a test package, a key no build carries.
@@ -1965,6 +2022,31 @@ async function main(): Promise<number> {
           true,
         )),
       );
+      // The usage hub check, on the same build.
+      p.push(
+        ...(await runApp(
+          "managed",
+          trusted,
+          updaterKey,
+          managed,
+          undefined,
+          false,
+          false,
+          undefined,
+          undefined,
+          {},
+          false,
+          false,
+          false,
+          false,
+          false,
+          undefined,
+          release,
+          false,
+          false,
+          true,
+        )),
+      );
       // The launcher check, on the same build.
       p.push(
         ...(await runApp(
@@ -1985,6 +2067,7 @@ async function main(): Promise<number> {
           false,
           undefined,
           release,
+          false,
           false,
           false,
           true,

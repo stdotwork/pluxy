@@ -1,0 +1,213 @@
+:root {
+  color-scheme: light dark;
+  --gap: calc(var(--px-space-unit, 4px) * 3);
+  --accent: var(--px-color-accent, #3b82f6);
+}
+body {
+  margin: 0;
+  padding: var(--gap);
+  background: var(--px-color-bg, Canvas);
+  color: var(--px-color-text, CanvasText);
+  font-family: var(--px-font-body, system-ui, sans-serif);
+  font-size: var(--px-font-size, 14px);
+  line-height: var(--px-font-line-height, 1.5);
+}
+h1 {
+  font-size: var(--px-font-size-title, 1.3em);
+  margin: 0;
+}
+h2 {
+  font-size: 1.05em;
+  margin: 0 0 4px;
+}
+h3 {
+  font-size: 1em;
+  margin: var(--gap) 0 0;
+}
+p {
+  margin: 0 0 8px;
+}
+button,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+  background: var(--px-color-surface-raised, ButtonFace);
+  border: 1px solid var(--px-color-border, ButtonBorder);
+  border-radius: 6px;
+  padding: 4px 10px;
+}
+button {
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+button:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--px-color-focus, Highlight);
+}
+textarea {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 4px 0;
+  font-family: var(--px-font-mono, ui-monospace, monospace);
+}
+.muted {
+  color: var(--px-color-text-muted, GrayText);
+}
+.error {
+  color: var(--px-color-danger, #dc2626);
+}
+.up {
+  color: var(--px-color-danger, #dc2626);
+}
+.down {
+  color: var(--px-color-success, #16a34a);
+}
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.spread {
+  justify-content: space-between;
+}
+#app > * {
+  margin-bottom: var(--gap);
+}
+.toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+}
+.segmented button {
+  border-radius: 0;
+  margin-left: -1px;
+}
+.segmented button:first-child {
+  border-radius: 6px 0 0 6px;
+  margin-left: 0;
+}
+.segmented button:last-child {
+  border-radius: 0 6px 6px 0;
+}
+[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--px-color-on-accent, #fff);
+}
+.chip {
+  border-radius: 999px;
+}
+.chip[data-status="archived"] {
+  border-style: dashed;
+}
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--gap);
+}
+.card,
+.panel {
+  background: var(--px-color-surface, transparent);
+  border: 1px solid var(--px-color-border, ButtonBorder);
+  border-radius: 8px;
+  padding: var(--gap);
+}
+.kpi {
+  font-size: 1.8em;
+  font-weight: 600;
+}
+.mixbar,
+.meter {
+  display: flex;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--px-color-border, #ddd);
+  margin: 8px 0;
+}
+.meter span {
+  background: #10b981;
+}
+.legend {
+  font-size: 0.9em;
+}
+.legend i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin-right: 4px;
+  vertical-align: -1px;
+}
+.chart {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.chart .grid {
+  stroke: var(--px-color-border, #ccc);
+  stroke-width: 1;
+}
+.axis {
+  fill: var(--px-color-text-muted, GrayText);
+  font-size: 11px;
+}
+.heat {
+  width: 100%;
+  max-width: 760px;
+  height: auto;
+  display: block;
+}
+.l0 {
+  fill: var(--px-color-border, #e5e7eb);
+  background: var(--px-color-border, #e5e7eb);
+}
+.l1 {
+  fill: color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.l2 {
+  fill: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.l3 {
+  fill: color-mix(in srgb, var(--accent) 78%, transparent);
+  background: color-mix(in srgb, var(--accent) 78%, transparent);
+}
+.l4 {
+  fill: var(--accent);
+  background: var(--accent);
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0;
+}
+th,
+td {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--px-color-border, #ddd);
+}
+td:not(:first-child),
+th:not(:first-child) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+tr.dimmed {
+  opacity: 0.5;
+}
+.folders {
+  margin: 8px 0;
+}
