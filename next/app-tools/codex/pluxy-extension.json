@@ -957,7 +957,7 @@
       },
       {
         "id": "recipe",
-        "description": "How the launcher starts Codex: codex in a terminal (cli), the Codex App program the person names (app), or codex app-server daemon restart (service)",
+        "description": "How the launcher starts Codex: codex in a terminal (cli), the Codex App program at the full path the person names (app), or codex app-server daemon restart (service)",
         "effect": "read",
         "input_schema": {
           "type": "object",
@@ -969,6 +969,11 @@
                 "app",
                 "service"
               ]
+            },
+            "program": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
             }
           },
           "required": [],

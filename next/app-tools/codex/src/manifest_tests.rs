@@ -69,7 +69,7 @@ fn the_backup_operations_are_the_librarys_standard_ones() {
 #[test]
 fn recipes_are_the_launchers_fields_only() {
     for t in ["cli", "app", "service"] {
-        let r = crate::recipe(t).unwrap();
+        let r = crate::recipe(t, Some("/opt/codex-app")).unwrap();
         for k in r.as_object().unwrap().keys() {
             assert!(
                 ["client", "kind", "program", "args", "cwd"].contains(&k.as_str()),
@@ -77,9 +77,16 @@ fn recipes_are_the_launchers_fields_only() {
             );
         }
     }
-    let s = crate::recipe("service").unwrap();
+    let s = crate::recipe("service", None).unwrap();
     assert_eq!(s["program"], "codex");
     assert_eq!(s["args"], json!(["app-server", "daemon", "restart"]));
-    assert_eq!(crate::recipe("cli").unwrap()["kind"], "terminal");
-    assert!(crate::recipe("other").is_err());
+    assert_eq!(crate::recipe("cli", None).unwrap()["kind"], "terminal");
+    assert_eq!(
+        crate::recipe("app", Some("/opt/codex-app")).unwrap()["program"],
+        "/opt/codex-app"
+    );
+    // The execution program takes no empty or relative program for a direct launch.
+    assert!(crate::recipe("app", None).is_err());
+    assert!(crate::recipe("app", Some("codex-app")).is_err());
+    assert!(crate::recipe("other", None).is_err());
 }

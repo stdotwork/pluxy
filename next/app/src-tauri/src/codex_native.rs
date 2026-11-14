@@ -65,6 +65,8 @@ const LABEL: &str = "fixture Codex key";
 const SAME_INSTANT: &str = "an edit made in the same instant by another program may be lost";
 /// Confirm stays disabled for a second in a dialog another package asked for.
 const ARMED: Duration = Duration::from_millis(1300);
+/// The host asks at most one confirmation a second for the same origin.
+const SPACED: Duration = Duration::from_millis(1100);
 
 /// The answers and confirmations the check saw, for the audit.
 #[derive(Default)]
@@ -117,6 +119,7 @@ fn answered(
     hidden: &[&str],
     cancel: bool,
 ) -> Result<Value, String> {
+    std::thread::sleep(SPACED);
     let slot = start(
         main,
         "program_call",
@@ -747,6 +750,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             for (k, v) in extra.as_object().into_iter().flatten() {
                 l[k] = v.clone();
             }
+            std::thread::sleep(SPACED);
             let slot = start(main, "launcher_launch", json!({ "launch": l }))?;
             let text = dialog_with(app, needles)?;
             seen.add(text);
@@ -825,14 +829,22 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     step(
         "app",
         (|| {
-            let recipe = read_op(main, &seen, "recipe", json!({"target": "app"}))?;
+            read_refused(main, &seen, "recipe", json!({"target": "app"}), "full path")?;
+            let recipe = read_op(
+                main,
+                &seen,
+                "recipe",
+                json!({"target": "app", "program": codex_app}),
+            )?;
             require(
-                recipe["kind"] == "direct" && recipe["args"] == json!([]),
+                recipe["kind"] == "direct"
+                    && recipe["program"] == json!(txt(&codex_app))
+                    && recipe["args"] == json!([]),
                 format!("the App recipe: {recipe}"),
             )?;
             let r = launch(
                 &recipe,
-                json!({"override": codex_app}),
+                json!({}),
                 &[EXECUTION, "launch", &txt(&codex_app), &txt(&work)],
                 false,
             )?;

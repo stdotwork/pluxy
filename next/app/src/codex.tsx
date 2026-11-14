@@ -343,9 +343,12 @@ function Launch(props: { available: boolean }) {
   );
   const action = useAction(state.reload);
   const recent = state.data?.history.Codex ?? [];
-  const go = (target: "cli" | "app" | "service", extra: Record<string, unknown>) =>
+  const go = (target: "cli" | "app" | "service", extra: Record<string, unknown>, program?: string) =>
     action.run(async () => {
-      const recipe = await tool<Record<string, unknown>>("recipe", { target });
+      const recipe = await tool<Record<string, unknown>>("recipe", {
+        target,
+        ...(program ? { program } : {}),
+      });
       if (!recipe.body) return recipe;
       return reply("launcher_launch", { launch: { ...recipe.body, ...extra } });
     });
@@ -392,7 +395,7 @@ function Launch(props: { available: boolean }) {
       <Card title={t("app")}>
         <Text label={t("appPath")} hint={t("appHint")} value={appPath} onInput={setAppPath} />
         <Button
-          onClick={() => go("app", { cwd: cwd.trim(), override: appPath.trim() })}
+          onClick={() => go("app", { cwd: cwd.trim() }, appPath.trim())}
           disabled={action.busy || !props.available || !cwd.trim() || !appPath.trim()}
         >
           {t("launchApp")}

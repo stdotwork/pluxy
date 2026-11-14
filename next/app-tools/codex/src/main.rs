@@ -227,15 +227,21 @@ fn settings(
     ))
 }
 
-/// The launch of target: Codex CLI in a terminal, Codex App (a program the person names: Codex
-/// has no Linux app), or the Codex CLI background service's restart.
-fn recipe(target: &str) -> Result<Value, Error> {
+/// The launch of target: Codex CLI in a terminal, Codex App (program, the full path the person
+/// names: Codex has no Linux app), or the Codex CLI background service's restart.
+fn recipe(target: &str, program: Option<&str>) -> Result<Value, Error> {
     let home = codex_home()?;
     let home = home.parent().unwrap_or(Path::new("/"));
     match target {
         "cli" => Ok(json!({"client": "Codex", "kind": "terminal", "program": "codex", "args": []})),
-        // No program of its own: the launch needs the person's program path (its override).
-        "app" => Ok(json!({"client": "Codex App", "kind": "direct", "program": "", "args": []})),
+        "app" => match program.filter(|p| p.starts_with('/')) {
+            Some(p) => {
+                Ok(json!({"client": "Codex App", "kind": "direct", "program": p, "args": []}))
+            }
+            None => Err(Error::invalid_request(
+                "Codex has no Linux app: program names the full path of the program to start",
+            )),
+        },
         "service" => Ok(
             json!({"client": "Codex CLI service", "kind": "direct", "program": "codex",
             "args": ["app-server", "daemon", "restart"], "cwd": home}),
@@ -311,7 +317,10 @@ impl Handler for Codex {
                 &mut |_| {},
             ),
             "status" => Transactions::new(call, data_dir()?).status(),
-            "recipe" => recipe(input["target"].as_str().unwrap_or("cli")),
+            "recipe" => recipe(
+                input["target"].as_str().unwrap_or("cli"),
+                input["program"].as_str(),
+            ),
             op => Err(Error::unsupported(format!("no operation {op}"))),
         }
     }

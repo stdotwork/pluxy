@@ -323,7 +323,7 @@ together; the original and applied images stay in the host's vault. It exports n
 | `restore` | `write` | Two pins | The library's outcome: both originals back (a file that did not exist is removed) |
 | `backup-*` | as the library's | as the library's, two pins | Manual backups of both files; config.toml is diffed by TOML setting path |
 | `status` | `read` | — | The library's status |
-| `recipe` | `read` | `target`: `cli` (default), `app` or `service` | `codex` in a terminal with no arguments; Codex App as a direct launch of the program the person names (Codex has no Linux app); `codex app-server daemon restart` as a direct launch in `HOME` |
+| `recipe` | `read` | `target`: `cli` (default), `app` or `service`; for `app`, `program`: the full path of the program | `codex` in a terminal with no arguments; Codex App as a direct launch of that program (Codex has no Linux app; refused without a full path); `codex app-server daemon restart` as a direct launch in `HOME` |
 
 What `apply` writes in config.toml, edited in place with `toml_edit` (comments, formatting and
 everything else stay), with Codex's own names (source `openai/codex` at `b1573f102`, read
