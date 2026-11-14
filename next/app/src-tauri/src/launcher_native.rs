@@ -622,7 +622,9 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                     format!("the relayed launch went ahead though cancelled: {v}"),
                 )?;
             }
-            // Confirmed, the relayed launch runs, once, with nothing remembered.
+            // Confirmed, the relayed launch runs, once, with nothing remembered (after the
+            // one-attempt-per-second limit on confirmations from another chain).
+            std::thread::sleep(Duration::from_millis(1100));
             let rec = at("chain-agent");
             let rx = clicked(
                 app,
