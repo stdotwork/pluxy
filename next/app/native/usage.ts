@@ -16,6 +16,14 @@
 // message ID; prompt, reply, thinking, tool result, summary and working folder canaries, and the raw
 // message and request IDs, must not reach a report, the store or the app's output.
 //
+// The OpenCode parser check (usage-opencode, packed the same way) reads an OpenCode home written here by
+// hand in the run's HOME: a database in WAL mode with OpenCode's old `message` table and today's
+// `session_message` table (a session OpenCode migrated from its JSON store, one of today's, and a fork that
+// copies its history under new message IDs), and that migrated session's JSON message files; one message
+// is in the JSON store and in both tables. Prompt, title, summary, reply and folder canaries, and the raw
+// session and message IDs, must not reach a report, the store or the app's output, and the database must
+// stay byte for byte as written, with no file added beside it.
+//
 // Each test archive adds one page to its package's manifest: routing.ts's relay page (`page`), which
 // sends the calls the check posts it on its channel. The hub's own page stays as it is; the parser has
 // no page of its own. The parser's test archive also imports the peer's `summary`, so its `relay` has
@@ -27,6 +35,7 @@
 // a fixed time (2026-11-10 13:30 UTC, 15:30 local, a Tuesday). When a tool has not been built (its
 // program is missing), the registry does not list it, and the check fails at its first step for it.
 
+import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
 import { generateKeyPairSync, type KeyObject } from "node:crypto";
 import {
@@ -55,7 +64,7 @@ export interface Usage {
   registries: { name: string; url: string }[];
   /** PLUXY_TEST_TRUST_NONCE for the app: the marker's nonce. */
   nonce: string;
-  /** Strings from the Codex and Claude Code homes' lines that must not reach any report, the store or
+  /** Strings from the Codex, Claude Code and OpenCode homes that must not reach any report, the store or
    * the app's output. */
   canaries: string[];
 }
@@ -864,6 +873,282 @@ function claudeExpected() {
   };
 }
 
+const OPENCODE_ID = "pluxy/usage-opencode";
+/** OpenCode's IDs, as it makes them: a session migrated from its JSON store (S1), one written by today's
+ * OpenCode (S2), and a fork of S2 that copies its settled history under new message IDs (S3). */
+const OS1 = "ses_7c1e0a2b4d6fOpenCodeOneA1";
+const OS2 = "ses_7c1e0a2b4d6fOpenCodeTwoB2";
+const OS3 = "ses_7c1e0a2b4d6fOpenCodeForkC3";
+const OJ1 = "msg_7c1e0a2b5e01JsonAndDbJ1";
+const OU1 = "msg_7c1e0a2b5e00UserOneU1";
+const OU2 = "msg_7c1e0a2b5e10UserTwoU2";
+const OA1 = "msg_7c1e0a2b5e11AssistantA1";
+const OC1 = "msg_7c1e0a2b5e12CompactionC1";
+const OF1 = "msg_7c1e0a2b5e20ForkOwnF1";
+const OA2 = "msg_7c1e0a2b5e13AppendedA2";
+/** The fork's copies: OpenCode names them after the fork event and the copied row's seq. */
+const fork = (seq: number) => `msg_7c1e0a2b5e1fForkEvent_${seq}`;
+const O_P1 = "opencode-canary-prompt-one-2b81";
+const O_P2 = "opencode-canary-prompt-two-91c4";
+const O_TITLE = "opencode-canary-title-5e0d";
+const O_SUMMARY = "opencode-canary-summary-a7f3";
+const O_CWD = "opencode-canary-folder-c06b";
+const O_REPLY = "opencode-canary-reply-text-3d2e";
+const OPENCODE_CANARIES = [
+  O_P1,
+  O_P2,
+  O_TITLE,
+  O_SUMMARY,
+  O_CWD,
+  O_REPLY,
+  OS1,
+  OS2,
+  OS3,
+  OJ1,
+  OA1,
+  OC1,
+  OF1,
+  OA2,
+];
+/** Unix milliseconds of a UTC time. */
+const ms = (iso: string) => Date.parse(iso);
+/** OpenCode's token counts: output is the visible output, reasoning apart (as OpenCode stores them). */
+const otokens = (input: number, output: number, reasoning: number, read: number, write: number) => ({
+  input,
+  output,
+  reasoning,
+  cache: { read, write },
+});
+
+/** J1, the message in the JSON store and in both DB tables: 23:40 local Monday 11-09. Counted once as
+ * input 100, output 40 + reasoning 10 = 50, reasoning 10, cache read 500, cache write 50, total 700. */
+const J1_AT = ms("2026-11-09T21:40:00.000Z");
+const J1_TOKENS = otokens(100, 40, 10, 500, 50);
+/** The v1 (JSON store and `message` table) shape of J1; its provider total is not used. */
+const j1v1 = {
+  role: "assistant",
+  parentID: OU1,
+  modelID: "claude-sonnet-4-5",
+  providerID: "anthropic",
+  mode: "build",
+  path: { cwd: O_CWD, root: O_CWD },
+  cost: 0.01,
+  tokens: { ...J1_TOKENS, total: 650 },
+  time: { created: J1_AT, completed: J1_AT + 4000 },
+};
+const u1v1 = {
+  role: "user",
+  time: { created: J1_AT - 60000 },
+  summary: { title: O_SUMMARY },
+  agent: "build",
+  model: { providerID: "anthropic", modelID: "claude-sonnet-4-5" },
+};
+/** A step-finish part of J1 in the JSON store: parts are never counted. */
+const p1v1 = {
+  type: "step-finish",
+  reason: "stop",
+  cost: 0.01,
+  tokens: otokens(9000, 9000, 0, 9000, 9000),
+};
+/** Today's (v2) assistant row data. */
+const v2assistant = (model: string, provider: string, at: number, tokens: object) => ({
+  agent: "build",
+  model: { id: model, providerID: provider, variant: "default" },
+  content: [],
+  finish: "stop",
+  cost: 0.02,
+  tokens,
+  time: { created: at, completed: at + 3000 },
+});
+const v2user = (at: number, text: string) => ({ text, agent: "build", time: { created: at } });
+/** A1, 10:15 local 11-10: input 200, output 30 + 20, reasoning 20, cache read 1,000, total 1,250. */
+const A1_AT = ms("2026-11-10T08:15:00.000Z");
+const A1_DATA = v2assistant("gpt-5.5", "openai", A1_AT, otokens(200, 30, 20, 1000, 0));
+/** C1, a completed compaction (its request's own usage), 11:05 local: input 300, output 60, total 360. */
+const C1_AT = ms("2026-11-10T09:05:00.000Z");
+/** F1, the fork's own step, 13:20 local: input 10, output 5, total 15. */
+const F1_AT = ms("2026-11-10T11:20:00.000Z");
+/** A2, added to S2 before the third sync, 14:10 local: input 7, output 3, total 10. */
+const A2_AT = ms("2026-11-10T12:10:00.000Z");
+
+type Row = [string, string, string, number, number, object];
+/** S1's and S2's rows of today's `session_message` table: id, session, type, seq, time, data. */
+const S2_ROWS: Row[] = [
+  [OU2, OS2, "user", 1, A1_AT - 60000, v2user(A1_AT - 60000, O_P2)],
+  [OA1, OS2, "assistant", 2, A1_AT, A1_DATA],
+  [
+    OC1,
+    OS2,
+    "compaction",
+    3,
+    C1_AT,
+    {
+      status: "completed",
+      reason: "auto",
+      model: { id: "gpt-5.5", providerID: "openai" },
+      summary: O_REPLY,
+      cost: 0.01,
+      tokens: otokens(300, 60, 0, 0, 0),
+      time: { created: C1_AT },
+    },
+  ],
+];
+const V2_ROWS: Row[] = [
+  // S1 as OpenCode's v1 → v2 migration copies it: the same IDs, the tokens without a total.
+  [OU1, OS1, "user", 1, J1_AT - 60000, v2user(J1_AT - 60000, O_P1)],
+  [OJ1, OS1, "assistant", 2, J1_AT, v2assistant("claude-sonnet-4-5", "anthropic", J1_AT, J1_TOKENS)],
+  ...S2_ROWS,
+  // The fork of S2 after A1: copies of U2 and A1 under new IDs (A1 counted once), then its own step.
+  [fork(1), OS3, "user", 1, A1_AT - 60000, v2user(A1_AT - 60000, O_P2)],
+  [fork(2), OS3, "assistant", 2, A1_AT, A1_DATA],
+  [OF1, OS3, "assistant", 3, F1_AT, v2assistant("gpt-5.5-mini", "openai", F1_AT, otokens(10, 5, 0, 0, 0))],
+];
+const A2_ROW: Row = [
+  OA2,
+  OS2,
+  "assistant",
+  4,
+  A2_AT,
+  v2assistant("gpt-5.5", "openai", A2_AT, otokens(7, 3, 0, 0, 0)),
+];
+
+/** Writes an OpenCode database at path in WAL mode, as OpenCode does, closed (so SQLite removed its -wal
+ * and -shm): the old `message` table with S1, today's `session_v2` and `session_message` with every row
+ * given. */
+function opencodeDb(path: string, rows: Row[]) {
+  const db = new Database(path, { create: true });
+  db.run("PRAGMA journal_mode = WAL");
+  db.run(`CREATE TABLE session_v2 (id text PRIMARY KEY, project_id text NOT NULL, parent_id text,
+    fork_session_id text, slug text NOT NULL, directory text NOT NULL, title text,
+    time_created integer NOT NULL, time_updated integer NOT NULL)`);
+  db.run(`CREATE TABLE message (id text PRIMARY KEY, session_id text NOT NULL, time_created integer NOT NULL,
+    time_updated integer NOT NULL, data text NOT NULL)`);
+  db.run(`CREATE TABLE session_message (id text PRIMARY KEY, session_id text NOT NULL, type text NOT NULL,
+    seq integer NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL)`);
+  db.run("CREATE UNIQUE INDEX session_message_session_seq_idx ON session_message (session_id, seq)");
+  const session = db.prepare("INSERT INTO session_v2 VALUES (?, 'global', NULL, ?, ?, ?, ?, ?, ?)");
+  session.run(OS1, null, "brave-otter", O_CWD, O_TITLE, J1_AT - 60000, J1_AT + 4000);
+  session.run(OS2, null, "quiet-heron", O_CWD, O_TITLE, A1_AT - 60000, C1_AT);
+  session.run(OS3, OS2, "swift-lynx", O_CWD, `${O_TITLE} (fork #1)`, F1_AT - 60000, F1_AT);
+  const v1 = db.prepare("INSERT INTO message VALUES (?, ?, ?, ?, ?)");
+  v1.run(OU1, OS1, J1_AT - 60000, J1_AT - 60000, JSON.stringify(u1v1));
+  v1.run(OJ1, OS1, J1_AT, J1_AT + 4000, JSON.stringify(j1v1));
+  const v2 = db.prepare("INSERT INTO session_message VALUES (?, ?, ?, ?, ?, ?, ?)");
+  for (const [id, s, type, seq, at, data] of rows)
+    v2.run(id, s, type, seq, at, at + 3000, JSON.stringify(data));
+  for (const st of [session, v1, v2]) st.finalize();
+  db.close(true);
+  for (const side of ["-wal", "-shm"]) {
+    if (existsSync(path + side)) throw new Error(`${path}${side} is left after closing the fixture database`);
+  }
+}
+
+/** Makes the OpenCode home in home/.local/share/opencode: the database and the JSON store's S1 (J1 with
+ * its user message and a step-finish part); keeps copies of the database before and after the write the
+ * check does later (A2 added to S2), outside the home, to compare its bytes with. */
+function opencodeHome(root: string, home: string) {
+  const data = join(home, ".local", "share", "opencode");
+  const messages = join(data, "storage", "message", OS1);
+  const parts = join(data, "storage", "part", OJ1);
+  mkdirSync(messages, { recursive: true });
+  mkdirSync(parts, { recursive: true });
+  writeFileSync(join(messages, `${OJ1}.json`), JSON.stringify({ id: OJ1, sessionID: OS1, ...j1v1 }, null, 2));
+  writeFileSync(join(messages, `${OU1}.json`), JSON.stringify({ id: OU1, sessionID: OS1, ...u1v1 }, null, 2));
+  writeFileSync(
+    join(parts, "prt_7c1e0a2b5e02StepFinish.json"),
+    JSON.stringify({ id: "prt_7c1e0a2b5e02StepFinish", sessionID: OS1, messageID: OJ1, ...p1v1 }),
+  );
+  const before = join(root, "opencode-before.db");
+  const after = join(root, "opencode-after.db");
+  opencodeDb(before, V2_ROWS);
+  opencodeDb(after, [...V2_ROWS, A2_ROW]);
+  const db = join(data, "opencode.db");
+  copyFileSync(before, db);
+  return {
+    db,
+    folder: data,
+    // What the database's folder holds before and after every read: nothing beside the database.
+    entries: ["opencode.db", "storage"],
+    before,
+    after,
+  };
+}
+
+/** What `report` must answer for the OpenCode source alone (the others in their last state), by hand,
+ * before and after A2 is added. */
+function opencodeExpected() {
+  const fixture = { id: PARSER_ID, label: "Fixture", status: "archived", total: 1547, active_days: 4 };
+  const codex = { id: CODEX_ID, label: "Codex", status: "active", total: 5930, active_days: 2 };
+  const claude = { id: CLAUDE_ID, label: "Claude Code", status: "active", total: 8555, active_days: 2 };
+  const opencode = (total: number) => ({
+    id: OPENCODE_ID,
+    label: "OpenCode",
+    status: "active",
+    total,
+    active_days: 2,
+  });
+  const zero = [0, 1, 2, 3, 4].map(() => t(Z));
+  const input = { range: "7d", granularity: "day", sources: [OPENCODE_ID], offsets: OFFSETS, now: NOW };
+  const out = (o: object) => ({
+    range: "7d",
+    granularity: "day",
+    buckets: DAYS,
+    previous: t(Z),
+    active_days: 2,
+    ...o,
+  });
+  return {
+    first: [
+      {
+        name: "OpenCode alone",
+        input,
+        output: out({
+          // 11-09: J1 (once, though in the JSON store and both tables). 11-10: A1 (once, though the fork
+          // copies it), C1, F1.
+          totals: t([610, 165, 1500, 50, 30, 2325, 4]),
+          series: [...zero, t([100, 50, 500, 50, 10, 700, 1]), t([510, 115, 1000, 0, 20, 1625, 3])],
+          by_source: { keys: [OPENCODE_ID], values: [[0], [0], [0], [0], [0], [700], [1625]] },
+          by_model: {
+            keys: ["gpt-5.5", "claude-sonnet-4-5", "gpt-5.5-mini"],
+            values: [...[0, 1, 2, 3, 4].map(() => [0, 0, 0]), [0, 700, 0], [1610, 0, 15]],
+          },
+          models: [
+            { model: "gpt-5.5", total: 1610 },
+            { model: "claude-sonnet-4-5", total: 700 },
+            { model: "gpt-5.5-mini", total: 15 },
+          ],
+          sources: [claude, codex, opencode(2325), fixture],
+          calendar: { start: "2025-11-10", days: 366, nonzero: { "2026-11-09": 700, "2026-11-10": 1625 } },
+          hours: { "0:23": 700, "1:10": 1250, "1:11": 360, "1:13": 15 },
+        }),
+      },
+    ],
+    after: [
+      {
+        name: "OpenCode alone, A2 added",
+        input,
+        output: out({
+          totals: t([617, 168, 1500, 50, 30, 2335, 5]),
+          series: [...zero, t([100, 50, 500, 50, 10, 700, 1]), t([517, 118, 1000, 0, 20, 1635, 4])],
+          by_source: { keys: [OPENCODE_ID], values: [[0], [0], [0], [0], [0], [700], [1635]] },
+          by_model: {
+            keys: ["gpt-5.5", "claude-sonnet-4-5", "gpt-5.5-mini"],
+            values: [...[0, 1, 2, 3, 4].map(() => [0, 0, 0]), [0, 700, 0], [1620, 0, 15]],
+          },
+          models: [
+            { model: "gpt-5.5", total: 1620 },
+            { model: "claude-sonnet-4-5", total: 700 },
+            { model: "gpt-5.5-mini", total: 15 },
+          ],
+          sources: [claude, codex, opencode(2335), fixture],
+          calendar: { start: "2025-11-10", days: 366, nonzero: { "2026-11-09": 700, "2026-11-10": 1635 } },
+          hours: { "0:23": 700, "1:10": 1250, "1:11": 360, "1:13": 15, "1:14": 10 },
+        }),
+      },
+    ],
+  };
+}
+
 /** Packs and signs tool name from tools (next/app-tools) with program, the relay page and any imports
  * added; undefined when the tool was not built. */
 function pack(
@@ -939,9 +1224,10 @@ export function buildUsageFixtures(
   const peer = packPeer(root, peerProgram, publicKey, privateKey);
   const codex = pack(root, tools, "usage-codex", join(target, "usage-codex"), publicKey, privateKey);
   const claude = pack(root, tools, "usage-claude", join(target, "usage-claude"), publicKey, privateKey);
+  const opencode = pack(root, tools, "usage-opencode", join(target, "usage-opencode"), publicKey, privateKey);
   const curated = join(root, "curated.json");
   const packages: Record<string, object> = {};
-  for (const p of [hub, parser, peer, codex, claude]) {
+  for (const p of [hub, parser, peer, codex, claude, opencode]) {
     if (p) packages[p.id] = { releases: [{ version: p.version, artifacts: { [platform()]: p.entry } }] };
   }
   writeFileSync(curated, JSON.stringify({ registry_version: 0, packages }));
@@ -951,6 +1237,7 @@ export function buildUsageFixtures(
   writeFileSync(join(usageRoot, "b.jsonl"), `${B.join("\n")}\n`);
   const codexWrites = codexHome(home);
   const claudeWrites = claudeHome(home);
+  const opencodeFiles = opencodeHome(root, home);
   writeFileSync(
     join(root, "expect.json"),
     JSON.stringify({
@@ -965,6 +1252,7 @@ export function buildUsageFixtures(
         [PEER_ID]: peer?.version ?? "1.0.0",
         [CODEX_ID]: codex?.version ?? "0.1.0",
         [CLAUDE_ID]: claude?.version ?? "0.1.0",
+        [OPENCODE_ID]: opencode?.version ?? "0.1.0",
       },
       sha256: {
         [HUB_ID]: hub?.sha256 ?? null,
@@ -972,6 +1260,7 @@ export function buildUsageFixtures(
         [PEER_ID]: peer?.sha256 ?? null,
         [CODEX_ID]: codex?.sha256 ?? null,
         [CLAUDE_ID]: claude?.sha256 ?? null,
+        [OPENCODE_ID]: opencode?.sha256 ?? null,
       },
       bin: {
         [HUB_ID]: hub?.bin ?? "bin/agent-usage",
@@ -979,6 +1268,7 @@ export function buildUsageFixtures(
         [PEER_ID]: peer?.bin ?? "bin/tool",
         [CODEX_ID]: codex?.bin ?? "bin/usage-codex",
         [CLAUDE_ID]: claude?.bin ?? "bin/usage-claude",
+        [OPENCODE_ID]: opencode?.bin ?? "bin/usage-opencode",
       },
       root: usageRoot,
       writes: {
@@ -1022,12 +1312,30 @@ export function buildUsageFixtures(
         },
         reports: claudeExpected(),
       },
+      // The OpenCode parser, enabled after the Claude Code one: its home is in the run's HOME, its roots
+      // default.
+      opencode: {
+        id: OPENCODE_ID,
+        files: opencodeFiles,
+        canaries: OPENCODE_CANARIES,
+        // Each sync's counts for the source (the database's three sessions and the JSON store's two
+        // message files; the part file is not one), and the Codex and Claude Code sources' in the same
+        // syncs.
+        syncs: {
+          first: { listed: 5, changed: 5, read: 5, failed: 0 },
+          repeat: { listed: 5, changed: 0, read: 0, failed: 0 },
+          after: { listed: 5, changed: 1, read: 1, failed: 0 },
+          codex: { listed: 4, changed: 0, read: 0, failed: 0 },
+          claude: { listed: 3, changed: 0, read: 0, failed: 0 },
+        },
+        reports: opencodeExpected(),
+      },
     }),
   );
   const nonce = writeTrustProfile(home, [curated], publicKey);
   return {
     registries: [{ name: "curated", url: curated }],
     nonce,
-    canaries: [...CODEX_CANARIES, ...CLAUDE_CANARIES],
+    canaries: [...CODEX_CANARIES, ...CLAUDE_CANARIES, ...OPENCODE_CANARIES],
   };
 }
