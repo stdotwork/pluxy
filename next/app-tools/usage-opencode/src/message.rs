@@ -26,7 +26,6 @@ use serde_json::{Map, Value};
 
 /// Where rows go: a usage sink, or a list in a test.
 pub trait Out {
-    fn row(&mut self, time: i64, model: &str, tokens: &Tokens) -> Result<(), Error>;
     fn event(&mut self, time: i64, model: &str, key: &str, tokens: &Tokens) -> Result<(), Error>;
     /// Sets the revision the rows are for (a session of a database), before any row is sent.
     fn revise(&mut self, size: u64, mtime_ns: i64) -> Result<(), Error>;
@@ -35,10 +34,6 @@ pub trait Out {
 }
 
 impl Out for Sink<'_> {
-    fn row(&mut self, time: i64, model: &str, tokens: &Tokens) -> Result<(), Error> {
-        Sink::row(self, time, model, tokens)
-    }
-
     fn event(&mut self, time: i64, model: &str, key: &str, tokens: &Tokens) -> Result<(), Error> {
         Sink::event(self, time, model, key, tokens)
     }
@@ -122,24 +117,14 @@ pub fn is_assistant(data: &Value) -> bool {
     data.get("role").and_then(Value::as_str) == Some("assistant")
 }
 
-/// A JSON message file: its message, if an assistant one with tokens, keyed by its own `id` and
-/// `sessionID` (OpenCode names the file and its folder after them); one without them counts in its
-/// file only.
-pub fn json_file(value: &Value, out: &mut dyn Out) -> Result<(), Error> {
+/// A JSON message file's message, if an assistant one with tokens, keyed by the message and session
+/// IDs its file and folder are named after (OpenCode's `json-migration.ts` took them from there).
+pub fn json_file(value: &Value, id: &str, session: &str, out: &mut dyn Out) -> Result<(), Error> {
     if !is_assistant(value) {
         return Ok(());
     }
     let Some(u) = usage(value, None) else {
         return Ok(());
     };
-    let field = |name: &str| {
-        value
-            .get(name)
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-    };
-    match (field("id"), field("sessionID")) {
-        (Some(id), Some(session)) => out.event(u.time, &u.model, &key(id, session), &u.tokens),
-        _ => out.row(u.time, &u.model, &u.tokens),
-    }
+    out.event(u.time, &u.model, &key(id, session), &u.tokens)
 }

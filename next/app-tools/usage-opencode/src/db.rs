@@ -19,15 +19,16 @@
 //! `codex-sessions` (`open_read_only`, copied here; a shared library can take both later): a WAL
 //! database whose `-shm` is missing would make SQLite create one, so it is opened immutable when
 //! its `-wal` is missing or empty, and else copied with its `-wal` into a private folder under the
-//! tool's data folder (`tmp`), read, and removed. A database whose `-wal` or `-shm` is a link is not
-//! read.
+//! tool's data folder (`tmp`), read, and removed; a copy left by a process no longer running is
+//! removed then too. A database that is a link, or whose `-wal` or `-shm` is one, is not read.
+//! Errors name no folder.
 
+use crate::hash;
 use crate::message::{self, Out};
-use crate::{hash, is_hash};
 use pluxy_program::Error;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde_json::Value;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -52,37 +53,71 @@ pub struct Session {
     pub mtime_ns: i64,
 }
 
-/// The database a call has open, kept for the call's other sessions.
+/// A database a call opened, and its sessions by the hash of their IDs once a read needs them.
+struct Open {
+    db: Db,
+    by_hash: Option<HashMap<String, String>>,
+}
+
+/// The databases a call has open, kept until its end for the call's other sessions.
 #[derive(Default)]
-pub struct Cache(Mutex<Option<(PathBuf, Db)>>);
+pub struct Cache(Mutex<HashMap<PathBuf, Open>>);
 
 impl Cache {
-    fn with<T>(&self, path: &Path, f: impl FnOnce(&Db) -> T) -> Result<T, String> {
+    fn with<T>(&self, path: &Path, f: impl FnOnce(&mut Open) -> T) -> Result<T, String> {
         let mut open = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        if open.as_ref().is_none_or(|(p, _)| p != path) {
-            *open = None;
-            *open = Some((path.to_path_buf(), open_read_only(path)?));
+        if !open.contains_key(path) {
+            let db = open_read_only(path)?;
+            open.insert(path.to_path_buf(), Open { db, by_hash: None });
         }
-        let (_, db) = open.as_ref().ok_or("no database")?;
-        Ok(f(db))
+        let o = open.get_mut(path).ok_or("no database")?;
+        Ok(f(o))
     }
 
     /// The database's sessions with their revisions.
     pub fn sessions(&self, path: &Path) -> Result<Vec<Session>, String> {
-        self.with(path, |db| sessions(db, None))?
+        self.with(path, |o| sessions(&o.db, None))?
     }
 
-    /// Gives out the messages of the session whose ID hashes to session, at its revision; false
-    /// when the database has no such session.
-    pub fn read_session(
-        &self,
-        path: &Path,
-        session: &str,
-        out: &mut dyn Out,
-    ) -> Result<bool, Error> {
-        self.with(path, |db| read_session(db, session, out))
+    /// The session whose ID hashes to wanted, with its revision, when the database has it.
+    pub fn find(&self, path: &Path, wanted: &str) -> Result<Option<Session>, String> {
+        self.with(path, |o| {
+            if o.by_hash.is_none() {
+                o.by_hash = Some(session_ids(&o.db)?);
+            }
+            let Some(id) = o.by_hash.as_ref().and_then(|m| m.get(wanted)) else {
+                return Ok(None);
+            };
+            Ok(sessions(&o.db, Some(id))?.into_iter().next())
+        })?
+    }
+
+    /// Gives out the messages of session, at its revision.
+    pub fn read_session(&self, path: &Path, session: &str, out: &mut dyn Out) -> Result<(), Error> {
+        self.with(path, |o| read_session(&o.db, session, out))
             .map_err(Error::internal)?
     }
+}
+
+/// The database's session IDs by their hashes.
+fn session_ids(c: &Connection) -> Result<HashMap<String, String>, String> {
+    let t = tables(c);
+    let mut by_hash = HashMap::new();
+    for (table, has) in [("session_message", t.current), ("message", t.old)] {
+        if has {
+            let mut st = c
+                .prepare(&format!("SELECT DISTINCT session_id FROM {table}"))
+                .map_err(|e| e.to_string())?;
+            let rows = st
+                .query_map([], |r| r.get::<_, String>(0))
+                .map_err(|e| e.to_string())?;
+            for id in rows {
+                let id = id.map_err(|e| e.to_string())?;
+                by_hash.insert(hash(&[&id]), id);
+            }
+        }
+    }
+    Ok(by_hash)
 }
 
 /// Which of OpenCode's tables a database has.
@@ -120,13 +155,13 @@ fn sessions(c: &Connection, only: Option<&str>) -> Result<Vec<Session>, String> 
     let mut queries = Vec::new();
     if t.current {
         queries.push(format!(
-            "SELECT session_id, count(*) + coalesce(sum(length(data)), 0), coalesce(max(time_updated), 0)
+            "SELECT session_id, count(*) + coalesce(sum(octet_length(data)), 0), coalesce(max(time_updated), 0)
              FROM session_message WHERE {TYPES} AND {filter} GROUP BY session_id"
         ));
     }
     if t.old {
         queries.push(format!(
-            "SELECT session_id, count(*) + coalesce(sum(length(data)), 0), coalesce(max(time_updated), 0)
+            "SELECT session_id, count(*) + coalesce(sum(octet_length(data)), 0), coalesce(max(time_updated), 0)
              FROM message WHERE {filter} GROUP BY session_id"
         ));
     }
@@ -196,30 +231,13 @@ fn fork_parent(c: &Connection, session: &str) -> Result<Option<String>, String> 
     .map_err(|e| e.to_string())
 }
 
-/// Gives out the messages of the session whose ID hashes to wanted, in one read transaction: its
-/// revision, then each message with tokens once.
-fn read_session(c: &Connection, wanted: &str, out: &mut dyn Out) -> Result<bool, Error> {
+/// Gives out the messages of session in one read transaction: its revision, then each message
+/// with tokens once.
+fn read_session(c: &Connection, session: &str, out: &mut dyn Out) -> Result<(), Error> {
     let internal = |e: rusqlite::Error| Error::internal(e.to_string());
-    if !is_hash(wanted) {
-        return Ok(false);
-    }
     let tx = c.unchecked_transaction().map_err(internal)?;
     let t = tables(&tx);
-    let mut ids: Vec<String> = Vec::new();
-    for table in [("session_message", t.current), ("message", t.old)] {
-        if table.1 {
-            let mut st = tx
-                .prepare(&format!("SELECT DISTINCT session_id FROM {}", table.0))
-                .map_err(internal)?;
-            let rows = st.query_map([], |r| r.get(0)).map_err(internal)?;
-            for id in rows {
-                ids.push(id.map_err(internal)?);
-            }
-        }
-    }
-    let Some(session) = ids.into_iter().find(|id| hash(&[id]) == wanted) else {
-        return Ok(false);
-    };
+    let session = session.to_string();
     let revision = sessions(&tx, Some(&session)).map_err(Error::internal)?;
     let (size, mtime_ns) = revision.first().map_or((0, 0), |s| (s.size, s.mtime_ns));
     out.revise(size, mtime_ns)?;
@@ -255,7 +273,7 @@ fn read_session(c: &Connection, wanted: &str, out: &mut dyn Out) -> Result<bool,
         let mut st = tx
             .prepare(&format!(
                 "SELECT id, seq, time_created, data FROM session_message
-                 WHERE session_id = ?1 AND {TYPES} AND length(data) <= {MAX_DATA} ORDER BY seq"
+                 WHERE session_id = ?1 AND {TYPES} AND octet_length(data) <= {MAX_DATA} ORDER BY seq"
             ))
             .map_err(internal)?;
         let mut rows = st.query([&session]).map_err(internal)?;
@@ -279,7 +297,7 @@ fn read_session(c: &Connection, wanted: &str, out: &mut dyn Out) -> Result<bool,
         let mut st = tx
             .prepare(&format!(
                 "SELECT id, time_created, data FROM message
-                 WHERE session_id = ?1 AND length(data) <= {MAX_DATA} ORDER BY time_created, id"
+                 WHERE session_id = ?1 AND octet_length(data) <= {MAX_DATA} ORDER BY time_created, id"
             ))
             .map_err(internal)?;
         let mut rows = st.query([&session]).map_err(internal)?;
@@ -293,7 +311,7 @@ fn read_session(c: &Connection, wanted: &str, out: &mut dyn Out) -> Result<bool,
         }
     }
     tx.commit().map_err(internal)?;
-    Ok(true)
+    Ok(())
 }
 
 /// An open database, and the private copy it reads (removed once it is closed).
@@ -320,11 +338,14 @@ impl Drop for Copy {
 
 /// Opens a database read-only, creating nothing beside it (see the module's notes).
 pub fn open_read_only(path: &Path) -> Result<Db, String> {
+    if !fs::symlink_metadata(path).is_ok_and(|m| m.is_file()) {
+        return Err("the database is not a regular file".into());
+    }
     let shm = sidecar(path, "-shm");
     let wal = sidecar(path, "-wal");
-    for side in [&shm, &wal] {
+    for (side, name) in [(&shm, "-shm"), (&wal, "-wal")] {
         if fs::symlink_metadata(side).is_ok_and(|m| !m.is_file()) {
-            return Err(format!("{} is not a regular file", side.display()));
+            return Err(format!("the database's {name} is not a regular file"));
         }
     }
     if !is_wal(path) || shm.exists() {
@@ -366,12 +387,7 @@ fn private_copy(db: &Path, wal: &Path) -> std::io::Result<Copy> {
         .mode(0o700)
         .create(&root)?;
     if own {
-        // Copies a run cut short left behind; a call opens one database at a time.
-        for e in fs::read_dir(&root)?.flatten() {
-            if e.file_name().to_string_lossy().starts_with("wal-") {
-                let _ = fs::remove_dir_all(e.path());
-            }
-        }
+        prune(&root);
     }
     let dir = root.join(format!(
         "wal-{}-{}",
@@ -383,6 +399,33 @@ fn private_copy(db: &Path, wal: &Path) -> std::io::Result<Copy> {
     fs::copy(db, copy.0.join("db"))?;
     fs::copy(wal, copy.0.join("db-wal"))?;
     Ok(copy)
+}
+
+/// Removes the copies in root that a process no longer running left behind (cut short); the copies
+/// of this process and of every process still running stay.
+pub fn prune(root: &Path) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let name = e.file_name();
+        let pid = name
+            .to_str()
+            .and_then(|n| n.strip_prefix("wal-"))
+            .and_then(|n| n.split('-').next())
+            .and_then(|p| p.parse::<u32>().ok());
+        if let Some(pid) = pid {
+            if pid != std::process::id() && !alive(pid) {
+                let _ = fs::remove_dir_all(e.path());
+            }
+        }
+    }
+}
+
+/// Whether process pid is running; true where that cannot be told (no `/proc`).
+fn alive(pid: u32) -> bool {
+    let proc = Path::new("/proc");
+    !proc.join("self").exists() || proc.join(pid.to_string()).exists()
 }
 
 /// A read-only connection to path (immutable when asked); errors name no path.

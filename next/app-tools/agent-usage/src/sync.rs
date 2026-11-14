@@ -488,7 +488,7 @@ fn listed(store: &mut Store, source: &mut SourceRun, output: &Value) -> Result<(
 }
 
 /// A `read` batch: a part of a file's rows, committed with the file's last part, or the file's
-/// error (its old rows stay). A file with a row before 2000 or more than a day after now, or with
+/// error (its old rows stay; the reason is the source's error). A file with a row before 2000 or more than a day after now, or with
 /// more than `MAX_STAGED_ROWS` rows, fails (its old rows stay) and the job goes on. A keyed row
 /// (from a producer at schema 2) is an event of the file; a key seen again in the file replaces
 /// the event. The file is stored as read at the producer's schema.
@@ -508,7 +508,9 @@ fn read_batch(
         .filter(|f| files.contains(*f) && !done.contains(*f))
         .ok_or_else(|| Error::invalid_request("a batch names a file the job does not read"))?
         .to_string();
-    if value.get("error").is_some() {
+    if let Some(e) = value.get("error") {
+        let why: String = e.as_str().unwrap_or_default().chars().take(512).collect();
+        source.error = Some(format!("{file}: {why}"));
         staged.remove(&file);
         done.insert(file);
         source.failed += 1;

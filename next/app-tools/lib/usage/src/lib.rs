@@ -227,13 +227,27 @@ pub struct Found {
     pub mtime_ns: i64,
 }
 
-/// What a source file lists as in a `files` job: an ID the hub keeps as one file, and its revision.
-/// A file is one entry by default; a parser may list the parts of one (`Parser::entries`).
+/// A part of a source file that a `files` job lists as a file of the hub's of its own
+/// (`Parser::entries`): its ID and revision.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
     pub id: String,
     pub size: u64,
     pub mtime_ns: i64,
+}
+
+/// What a source file lists as in a `files` job (`Parser::entries`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Listing {
+    /// The file itself: `file_id_under`, its size and modification time.
+    Itself,
+    /// Its parts, each a file of the hub's of its own. A part listed by more than one file (the
+    /// same ID under two roots) is listed once, at its newest revision (by time, then size); a
+    /// part whose ID is longer than `MAX_PATH` is left out and the listing counts as cut short.
+    Parts(Vec<Entry>),
+    /// Its parts cannot be listed now: the file is listed as itself, so a read of it reports why,
+    /// and the listing counts as cut short, so the hub marks none of the source's files gone.
+    Failed,
 }
 
 fn mtime_ns(m: &std::fs::Metadata) -> i64 {
@@ -434,20 +448,12 @@ pub trait Parser: Send + Sync {
     fn locate(&self, roots: &[PathBuf], id: &str) -> Option<PathBuf> {
         locate(roots, id, &|p| self.wanted(p))
     }
-    /// What a source file found under root lists as: by default the file itself (`file_id_under`,
-    /// its size and modification time). A parser of a file that holds many records (such as a
-    /// database of sessions) may list each part as an entry of its own, with its own ID and
-    /// revision, so the hub reads only the parts that changed and keeps each part's rows apart;
-    /// it reads them with `read_entry`.
-    fn entries(&self, root: &Path, found: &Found) -> Vec<Entry> {
-        self.file_id_under(root, &found.path)
-            .map(|id| Entry {
-                id,
-                size: found.size,
-                mtime_ns: found.mtime_ns,
-            })
-            .into_iter()
-            .collect()
+    /// What a source file found under root lists as: by default the file itself. A parser of a
+    /// file that holds many records (such as a database of sessions) may list each part as an
+    /// entry of its own, with its own ID and revision, so the hub reads only the parts that changed
+    /// and keeps each part's rows apart; it reads them with `read_entry`.
+    fn entries(&self, _root: &Path, _found: &Found) -> Listing {
+        Listing::Itself
     }
     /// Reads the entry id names when it is a part of a file that `entries` listed: sets the sink's
     /// revision to the part's as read (`Sink::revise`) before any row, then gives it the rows.
@@ -689,15 +695,45 @@ pub fn produce(call: &Call, parser: &dyn Parser) -> Result<Value, Error> {
             let wanted = |p: &Path| parser.wanted(p);
             let (found, mut truncated) = scan(&roots, &wanted, &|| call.cancelled())?;
             let mut entries = Vec::new();
+            // Parts by ID, each at its newest revision.
+            let mut parts: BTreeMap<String, Entry> = BTreeMap::new();
             for f in &found {
                 if call.cancelled() {
                     return Err(Error::cancelled());
                 }
                 // The root a scan found it under: the first that holds it.
-                if let Some(root) = roots.iter().find(|r| f.path.starts_with(r)) {
-                    entries.extend(parser.entries(root, f));
+                let Some(root) = roots.iter().find(|r| f.path.starts_with(r)) else {
+                    continue;
+                };
+                let listing = parser.entries(root, f);
+                if listing == Listing::Failed {
+                    truncated = true;
+                }
+                match listing {
+                    Listing::Itself | Listing::Failed => {
+                        entries.extend(parser.file_id_under(root, &f.path).map(|id| Entry {
+                            id,
+                            size: f.size,
+                            mtime_ns: f.mtime_ns,
+                        }))
+                    }
+                    Listing::Parts(list) => {
+                        for e in list {
+                            if e.id.is_empty() || e.id.len() > MAX_PATH {
+                                truncated = true;
+                                continue;
+                            }
+                            match parts.get(&e.id) {
+                                Some(o) if (o.mtime_ns, o.size) >= (e.mtime_ns, e.size) => {}
+                                _ => {
+                                    parts.insert(e.id.clone(), e);
+                                }
+                            }
+                        }
+                    }
                 }
             }
+            entries.extend(parts.into_values());
             // Newest first; the files' own order kept between equal times.
             entries.sort_by_key(|e| std::cmp::Reverse(e.mtime_ns));
             if entries.len() > MAX_FILES {

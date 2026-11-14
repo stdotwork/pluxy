@@ -43,11 +43,6 @@ struct Got {
 }
 
 impl Out for Got {
-    fn row(&mut self, time: i64, model: &str, tokens: &Tokens) -> Result<(), Error> {
-        self.out
-            .push((time.div_euclid(3600) * 3600, model.into(), None, *tokens));
-        Ok(())
-    }
     fn event(&mut self, time: i64, model: &str, key: &str, tokens: &Tokens) -> Result<(), Error> {
         self.out.push((
             time.div_euclid(3600) * 3600,
@@ -140,9 +135,9 @@ fn files(dir: &Path) -> Vec<(String, Vec<u8>)> {
 
 fn read(path: &Path, session: &str) -> Got {
     let mut got = Got::default();
-    assert!(Cache::default()
-        .read_session(path, &hash(&[session]), &mut got)
-        .unwrap());
+    let cache = Cache::default();
+    assert!(cache.find(path, &hash(&[session])).unwrap().is_some());
+    cache.read_session(path, session, &mut got).unwrap();
     got
 }
 
@@ -265,29 +260,18 @@ fn a_message_in_the_json_store_and_both_tables_is_one_event() {
             ),
         ]
     );
-    // The JSON store's file of msg_a has the same key and counts: the hub stores the event once.
+    // The JSON store's file of msg_a (named msg_a.json, in folder S1) has the same key and
+    // counts: the hub stores the event once. A user message counts not at all.
     let mut json_got = Got::default();
-    let file = json!({"id": "msg_a", "sessionID": S1})
-        .as_object()
-        .unwrap()
-        .clone()
-        .into_iter()
-        .chain(a.as_object().unwrap().clone())
-        .collect::<serde_json::Map<_, _>>();
-    message::json_file(&Value::Object(file), &mut json_got).unwrap();
-    assert_eq!(json_got.out, vec![got.out[0].clone()]);
-    // A file without its IDs counts in its file only; a user message not at all.
-    let mut plain = Got::default();
-    message::json_file(&a, &mut plain).unwrap();
+    message::json_file(&a, "msg_a", S1, &mut json_got).unwrap();
     message::json_file(
         &json!({"role": "user", "tokens": tokens(1, 1, 0, 0, 0), "time": {"created": NOON}}),
-        &mut plain,
+        "msg_u",
+        S1,
+        &mut json_got,
     )
     .unwrap();
-    assert_eq!(
-        plain.out,
-        vec![(OCT29, "m-a".into(), None, t([100, 50, 500, 50, 10, 700, 1]))]
-    );
+    assert_eq!(json_got.out, vec![got.out[0].clone()]);
     std::fs::remove_dir_all(d).unwrap();
 }
 
@@ -678,5 +662,203 @@ fn a_job_lists_each_session_and_message_file_and_reads_them_naming_no_raw_id() {
         before,
         "the store changed, or a file was made beside it"
     );
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+/// The files a files job over roots lists, and its output.
+fn listed(roots: Value) -> (Vec<Value>, Value) {
+    let (batches, end) = job(json!({"mode": "files", "roots": roots}));
+    let files = batches
+        .iter()
+        .flat_map(|b| b["files"].as_array().cloned().unwrap_or_default())
+        .collect();
+    (files, end["output"].clone())
+}
+
+#[test]
+fn a_database_that_cannot_be_opened_is_listed_as_itself_and_its_read_gives_the_reason() {
+    let d = folder("unlisted");
+    let root = d.join("opencode");
+    std::fs::create_dir_all(&root).unwrap();
+    let (_, c) = wal_db(&root);
+    drop(c);
+    let elsewhere = d.join("elsewhere");
+    std::fs::write(&elsewhere, b"").unwrap();
+    std::os::unix::fs::symlink(&elsewhere, root.join("opencode.db-wal")).unwrap();
+    // Listed as itself, and the listing cut short, so the hub marks none of its sessions gone.
+    let (files, out) = listed(json!([root]));
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0]["file"], "opencode.db");
+    assert_eq!(out["truncated"], true);
+    // Its read fails with the reason, which names no folder.
+    let (batches, end) = job(json!({"mode": "read", "roots": [root], "files": ["opencode.db"]}));
+    assert_eq!(end["output"], json!({"read": 0, "failed": 1}));
+    let why = batches[0]["error"].as_str().unwrap();
+    assert!(why.contains("-wal is not a regular file"), "{why}");
+    assert!(!why.contains(d.to_str().unwrap()), "{why}");
+    // The positive control: without the link its sessions are listed.
+    std::fs::remove_file(root.join("opencode.db-wal")).unwrap();
+    let (files, out) = listed(json!([root]));
+    assert_eq!(files[0]["file"], format!("opencode.db#{}", hash(&[S1])));
+    assert_eq!(out["truncated"], false);
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn a_session_in_databases_under_two_roots_is_listed_and_read_at_its_newest_revision() {
+    let d = folder("two-roots");
+    let (one, two) = (d.join("one"), d.join("two"));
+    for (root, rows) in [(&one, 1), (&two, 2)] {
+        std::fs::create_dir_all(root).unwrap();
+        let c = Connection::open(root.join("opencode.db")).unwrap();
+        schema(&c);
+        for n in 0..rows {
+            let at = NOON + n * 60_000;
+            let data = v2("m", at, tokens(1, 1, 0, 0, 0));
+            current(&c, &format!("msg_{n}"), S1, "assistant", n + 1, at, &data);
+        }
+    }
+    // The first root's copy is older: the second's revision is listed, once, and read.
+    let (files, _) = listed(json!([one, two]));
+    let id = format!("opencode.db#{}", hash(&[S1]));
+    let entries: Vec<&Value> = files.iter().filter(|f| f["file"] == id).collect();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["mtime_ns"], (NOON + 60_000) * 1_000_000);
+    let (batches, end) = job(json!({"mode": "read", "roots": [one, two], "files": [id]}));
+    assert_eq!(end["output"], json!({"read": 1, "failed": 0}));
+    let last = batches.iter().find(|b| b["last"] == true).unwrap();
+    assert_eq!(
+        (&last["size"], &last["mtime_ns"]),
+        (&entries[0]["size"], &entries[0]["mtime_ns"])
+    );
+    let rows: usize = batches
+        .iter()
+        .map(|b| b["rows"].as_array().map_or(0, Vec::len))
+        .sum();
+    assert_eq!(rows, 2);
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn listing_and_reading_a_large_database_stay_well_within_the_hubs_wait() {
+    let d = folder("large");
+    let root = d.join("opencode");
+    std::fs::create_dir_all(&root).unwrap();
+    let mut c = Connection::open(root.join("opencode.db")).unwrap();
+    schema(&c);
+    c.execute_batch(
+        "CREATE INDEX session_message_session_type_seq_idx ON session_message (session_id, type, seq);
+         CREATE INDEX message_session_idx ON message (session_id);",
+    )
+    .unwrap();
+    // 2,000 sessions of 50 assistant messages each.
+    let tx = c.transaction().unwrap();
+    {
+        let mut st = tx
+            .prepare("INSERT INTO session_message VALUES (?1, ?2, 'assistant', ?3, ?4, ?4, ?5)")
+            .unwrap();
+        for s in 0..2000i64 {
+            for m in 0..50i64 {
+                let at = NOON + s * 1000 + m;
+                let data = v2("model-x", at, tokens(100, 20, 5, 1000, 10)).to_string();
+                st.execute(rusqlite::params![
+                    format!("msg_{s}_{m}x"),
+                    format!("ses_{s}"),
+                    m,
+                    at,
+                    data
+                ])
+                .unwrap();
+            }
+        }
+    }
+    tx.commit().unwrap();
+    drop(c);
+    let t = std::time::Instant::now();
+    let (files, out) = listed(json!([root]));
+    let listing = t.elapsed();
+    assert_eq!(out["count"], 2000);
+    let ids: Vec<&Value> = files.iter().take(64).map(|f| &f["file"]).collect();
+    let t = std::time::Instant::now();
+    let (batches, end) = job(json!({"mode": "read", "roots": [root], "files": ids}));
+    let reading = t.elapsed();
+    assert_eq!(end["output"], json!({"read": 64, "failed": 0}));
+    let rows: usize = batches
+        .iter()
+        .map(|b| b["rows"].as_array().map_or(0, Vec::len))
+        .sum();
+    assert_eq!(rows, 64 * 50);
+    eprintln!(
+        "100,000 messages in 2,000 sessions: listing {listing:?}, a 64-session read {reading:?}"
+    );
+    // The hub gives up on a job it hears nothing from for 60 seconds; a generous bound.
+    assert!(
+        listing.as_secs() < 20 && reading.as_secs() < 20,
+        "{listing:?} {reading:?}"
+    );
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn only_copies_left_by_processes_no_longer_running_are_pruned() {
+    let d = folder("prune");
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let dead = child.id();
+    child.wait().unwrap();
+    let names = [
+        format!("wal-{}-9", std::process::id()),
+        format!("wal-{dead}-0"),
+        "wal-1-0".to_string(),
+        "other".to_string(),
+    ];
+    for n in &names {
+        std::fs::create_dir(d.join(n)).unwrap();
+    }
+    super::db::prune(&d);
+    let left: Vec<bool> = names.iter().map(|n| d.join(n).exists()).collect();
+    // This process's copy, a running process's (pid 1) and anything else stay.
+    assert_eq!(left, vec![true, false, true, true]);
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn a_linked_database_is_not_opened() {
+    let d = folder("linked-db");
+    let (db, c) = wal_db(&d);
+    drop(c);
+    std::os::unix::fs::symlink(&db, d.join("link.db")).unwrap();
+    let e = open_read_only(&d.join("link.db")).err().unwrap();
+    assert!(
+        e.contains("not a regular file") && !e.contains(d.to_str().unwrap()),
+        "{e}"
+    );
+    // The positive control.
+    assert!(open_read_only(&db).is_ok());
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn a_json_message_file_is_keyed_by_its_file_and_folder_names() {
+    let d = folder("json-names");
+    let root = d.join("opencode");
+    let dir = root.join("storage/message").join(S1);
+    std::fs::create_dir_all(&dir).unwrap();
+    // No id or sessionID in the message itself, as some older files have it.
+    std::fs::write(
+        dir.join("msg_x.json"),
+        v1("m", NOON, tokens(1, 2, 0, 0, 0)).to_string(),
+    )
+    .unwrap();
+    let id = format!("storage/message/{}/{}.json", hash(&[S1]), hash(&["msg_x"]));
+    let (files, _) = listed(json!([root]));
+    assert_eq!(files[0]["file"], id);
+    let (batches, end) = job(json!({"mode": "read", "roots": [root], "files": [id]}));
+    assert_eq!(end["output"], json!({"read": 1, "failed": 0}));
+    let rows: Vec<Value> = batches
+        .iter()
+        .flat_map(|b| b["rows"].as_array().cloned().unwrap_or_default())
+        .collect();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["key"], message::key("msg_x", S1));
     std::fs::remove_dir_all(d).unwrap();
 }

@@ -47,9 +47,13 @@ format read whole (`parse`) gets a file of at most 16 MiB; a parser of a line-ba
 a line over 16 MiB being skipped and counted: the reader holds one line, and what the parser keeps
 of a file meanwhile is its own (usage-claude keeps one small record per message). A parser at schema 2 sends a record that more than one
 file can hold as one keyed event (`Sink::event`). A file that holds many records, such as a
-database of sessions, can list as several entries (`Parser::entries`), each a file of the hub's with
-its own ID and revision, which the parser reads itself (`Parser::read_entry`, `Sink::revise`); the
-listing is sorted newest first and cut at 20,000 entries after that. `fields` reads the fields usage records share, by
+database of sessions, can list as several entries (`Parser::entries`, `Listing::Parts`), each a file
+of the hub's with its own ID and revision, which the parser reads itself (`Parser::read_entry`,
+`Sink::revise`). An entry listed by more than one file (the same ID under two roots) is listed once,
+at its newest revision; one with an ID over 4,096 bytes is left out; a file whose entries cannot be
+listed now (`Listing::Failed`) is listed as itself, so its read reports why. Either of the last two
+makes the listing count as cut short, so the hub marks no file gone. The listing is sorted newest
+first and cut at 20,000 entries after that. `fields` reads the fields usage records share, by
 the old desktop app's rules: token counters under the names agents use, a model name and a time.
 The schemas are in [`agent-usage/README.md`](agent-usage/README.md#schema-1).
 
@@ -141,13 +145,17 @@ writes an OpenCode file.
   root>#<hash of the session ID>`, so the hub reads again only the sessions that changed, and a
   database of many sessions never passes the 100,000 rows the hub keeps of one file. A session's
   revision is its message rows' count and data length and their latest update time, read through
-  SQLite, so a change still in the database's `-wal` counts. A JSON message file's ID is its path
-  below the root with the session folder and file name replaced by their hashes.
+  SQLite, so a change still in the database's `-wal` counts. The same session in databases under
+  two roots is read from the one where it is newest. A database that cannot be opened (a linked
+  `-wal`, say) is listed as itself, its read fails with the reason, and none of its sessions is
+  marked gone. A JSON message file's ID is its path below the root with the session folder and file
+  name replaced by their hashes.
 - The database's current table, `session_message`, is read (its `assistant` rows, and `compaction`
   rows that carry the compaction request's own tokens), and so is the `message` table of a database
   OpenCode made before it, which OpenCode's migration copies into `session_message` and leaves in
   place. A message is a keyed event, the key a hash of its message and session IDs, which OpenCode's
-  migrations (JSON store to database, `message` to `session_message`) keep: a message stored in more
+  migrations (JSON store to database, `message` to `session_message`) keep; a JSON message file's
+  IDs are its file's and folder's names, where OpenCode's migration took them: a message stored in more
   than one of these ways counts once. A fork copies its parent's history under new message IDs
   (`<fork event>_<seq>`); a copy takes its original's key, so it counts once too. Forks from before
   `session_message` cannot be told from new messages and count again.

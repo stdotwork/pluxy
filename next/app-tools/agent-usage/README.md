@@ -42,7 +42,7 @@ A sync, for each parser registered now:
 3. stores each file's rows when its last part arrives, replacing that file's rows and revision in
    one transaction. A file's parts that have arrived when its job ends early (cancelled, failed,
    the parser disabled) are dropped: the file keeps its old rows and is read again by the next
-   sync. A file a parser cannot read keeps its old rows, and so does a file with a row whose hour
+   sync. A file a parser cannot read keeps its old rows (the parser's reason is the source's error), and so does a file with a row whose hour
    is before 2000-01-01 or more than a day after the hub's time, or with more than 100,000 rows
    (distinct hours and models) before its last part: that file counts as failed, with the reason,
    and its job goes on.

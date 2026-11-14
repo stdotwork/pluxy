@@ -15,7 +15,7 @@ mod message;
 mod tests;
 
 use pluxy_program::{run, Call, Error, Handler};
-use pluxy_usage::{produce, Entry, Found, Parser, Sink};
+use pluxy_usage::{produce, Entry, Found, Listing, Parser, Sink};
 use serde_json::Value;
 use std::path::{Component, Path, PathBuf};
 
@@ -163,81 +163,109 @@ impl Parser for OpenCode {
         })
     }
 
-    /// A database lists each of its sessions; a JSON message file is itself.
-    fn entries(&self, root: &Path, found: &Found) -> Vec<Entry> {
-        let Some(id) = self.file_id_under(root, &found.path) else {
-            return Vec::new();
+    /// A database lists each of its sessions; one that cannot be opened now is listed as itself
+    /// (`Listing::Failed`), so a read of it gives the reason. A JSON message file is itself.
+    fn entries(&self, root: &Path, found: &Found) -> Listing {
+        let name = found.path.file_name().and_then(|n| n.to_str());
+        let Some(id) = name
+            .filter(|n| is_database(n))
+            .and_then(|_| self.file_id_under(root, &found.path))
+        else {
+            return Listing::Itself;
         };
-        let is_db = found
-            .path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(is_database);
-        if !is_db {
-            return vec![Entry {
-                id,
-                size: found.size,
-                mtime_ns: found.mtime_ns,
-            }];
+        match self.db.sessions(&found.path) {
+            Ok(sessions) => Listing::Parts(
+                sessions
+                    .into_iter()
+                    .map(|s| Entry {
+                        id: format!("{id}#{}", hash(&[&s.id])),
+                        size: s.size,
+                        mtime_ns: s.mtime_ns,
+                    })
+                    .collect(),
+            ),
+            Err(_) => Listing::Failed,
         }
-        self.db
-            .sessions(&found.path)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|s| Entry {
-                id: format!("{id}#{}", hash(&[&s.id])),
-                size: s.size,
-                mtime_ns: s.mtime_ns,
-            })
-            .collect()
     }
 
-    /// A session of a database: `<database ID>#<hash of the session ID>`, from the first root whose
-    /// database has it.
+    /// A session of a database (`<database ID>#<hash of the session ID>`), from the root whose
+    /// database has it at the newest revision, as the listing keeps it; a database listed as
+    /// itself, which fails with the reason; or a JSON message file.
     fn read_entry(
         &self,
         roots: &[PathBuf],
         id: &str,
         sink: &mut Sink,
     ) -> Option<Result<(), Error>> {
-        let (file, session) = id.rsplit_once('#')?;
+        if id.ends_with(".json") && !id.contains('#') {
+            return Some(self.read_message_file(roots, id, sink));
+        }
+        let (file, session) = id.rsplit_once('#').unwrap_or((id, ""));
         let parts: Vec<&str> = file.split('/').collect();
-        if !is_hash(session)
-            || parts
-                .iter()
-                .any(|p| p.is_empty() || *p == "." || *p == "..")
+        let not_ours = || Error::invalid_request("not one of this source's files");
+        if parts
+            .iter()
+            .any(|p| p.is_empty() || *p == "." || *p == "..")
             || !parts.last().is_some_and(|n| is_database(n))
         {
-            return Some(Err(Error::invalid_request(
-                "not one of this source's files",
-            )));
+            return Some(Err(not_ours()));
         }
         let wanted = |p: &Path| self.wanted(p);
-        for root in roots {
-            let Some(path) = root
-                .join(file)
-                .to_str()
-                .and_then(|p| pluxy_usage::locate(roots, p, &wanted))
-            else {
+        let databases = roots
+            .iter()
+            .filter_map(|root| pluxy_usage::locate(roots, root.join(file).to_str()?, &wanted));
+        // The newest revision of the session (the first root's on a tie), or the reason a
+        // database could not be read.
+        let mut newest: Option<(PathBuf, db::Session)> = None;
+        let mut failed = None;
+        for path in databases {
+            if !is_hash(session) {
+                failed = Some(match self.db.sessions(&path) {
+                    Ok(_) => "the database was listed by its sessions".to_string(),
+                    Err(e) => e,
+                });
                 continue;
-            };
-            match self.db.read_session(&path, session, sink) {
-                Ok(true) => return Some(Ok(())),
-                Ok(false) => continue,
-                Err(e) => return Some(Err(e)),
+            }
+            match self.db.find(&path, session) {
+                Ok(Some(s)) => {
+                    if newest
+                        .as_ref()
+                        .is_none_or(|(_, n)| (s.mtime_ns, s.size) > (n.mtime_ns, n.size))
+                    {
+                        newest = Some((path, s));
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => failed = Some(e),
             }
         }
-        Some(Err(Error::invalid_request(
-            "not one of this source's files",
-        )))
+        Some(match (newest, failed) {
+            (Some((path, s)), _) => self.db.read_session(&path, &s.id, sink),
+            (None, Some(why)) => Err(Error::internal(why)),
+            (None, None) => Err(not_ours()),
+        })
     }
+}
 
-    /// A JSON message file.
-    fn parse(&self, bytes: &[u8], sink: &mut Sink) -> Result<(), Error> {
-        let Ok(value) = serde_json::from_slice::<Value>(bytes) else {
-            return Err(Error::invalid_request("not a JSON message"));
+impl OpenCode {
+    /// A JSON message file, keyed by its file's name and its folder's, as OpenCode's migration to
+    /// its database took a message's and its session's IDs.
+    fn read_message_file(&self, roots: &[PathBuf], id: &str, sink: &mut Sink) -> Result<(), Error> {
+        let path = self
+            .locate(roots, id)
+            .ok_or_else(|| Error::invalid_request("not one of this source's files"))?;
+        let names = || {
+            let message = path.file_stem()?.to_str()?;
+            let session = path.parent()?.file_name()?.to_str()?;
+            Some((message, session))
         };
-        message::json_file(&value, sink)
+        let (message, session) =
+            names().ok_or_else(|| Error::invalid_request("not a message file"))?;
+        let (bytes, size, mtime) = pluxy_usage::read_file(&path).map_err(Error::invalid_request)?;
+        sink.revise(size, mtime)?;
+        let value = serde_json::from_slice::<Value>(&bytes)
+            .map_err(|_| Error::invalid_request("not a JSON message"))?;
+        message::json_file(&value, message, session, sink)
     }
 }
 
