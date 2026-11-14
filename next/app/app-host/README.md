@@ -581,6 +581,39 @@ output, whether it goes to the window, a page or a calling tool. Overlapping val
 as one, and a removed secret's value is still replaced until the app restarts. Only exact values
 are replaced: a tool that encodes a secret otherwise can still show it.
 
+### Client keys
+
+A client key, the key a client program sends core with its requests, is a secret of its own,
+apart from the management key, which stays in the app's connection. It enters the vault only
+natively, never through the window:
+
+- `client_key_capture` (label, client) asks a native confirmation naming the core, the tool and
+  the label; then the app itself asks core for a new key (`POST /v0/management/client-keys`) with
+  the management key and keeps core's reply. Core shows a new key once: the app keeps it and shows
+  it to no one. If the vault cannot keep it, the app deletes it on core again.
+- `client_key_enter` (label, client) reads an existing client key from native key entry and keeps
+  it once the core takes it.
+
+Either way the key is bound to the core the app is connected to (the connection's mode and
+origin), to core's ID of it then (core's IDs change when it restarts; the ID is left out when no
+single key of core's has the key's masked form), to its masked form and to the native tool it is
+for (`client`). The window gets the secret's ID, label and that binding, never the key; a masked
+form or ID cannot give the key back. A client key is then used like any vault secret, with three
+more checks at every use, made before the native confirmation and, for a value, again just before
+it is put in the call frame:
+
+- From the window it goes only to its tool, and its value is delivered only to its tool, also
+  when another tool passes a reference to it on. Another tool is refused.
+- The app must be connected to the core the key belongs to. This is checked before anything is
+  sent, so the key never goes to another core.
+- Before its value is delivered, that core must still take it: the app asks core's client API
+  (`GET /v1/models`) with the key, and a key core no longer has (deleted on core) is refused.
+
+```json
+{"id":"s-<hex>","label":"Claude Code","client_key":{"core":{"mode":"managed","origin":"http://127.0.0.1:8400"},
+ "key_id":"<24 hex digits>","masked":"sk******XY","client":"pluxy/claude-code"}}
+```
+
 ### Vault frames
 
 While a tool serves a host call, it may send `vault` frames on its stdout for it (`for`), answered
