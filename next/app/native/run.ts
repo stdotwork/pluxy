@@ -79,7 +79,7 @@
 // no hub or parser process is left when idle. The Codex parser (next/app-tools/usage-codex) then reads
 // a hand-written Codex home in the run's HOME the same way, with prompt canaries kept out of every
 // report, the hub's store and the app's output; so does the Oh My Pi parser (next/app-tools/usage-omp)
-// on an Oh My Pi home, and a disabled parser scans nothing.
+// on an Oh My Pi home and the Pi parser (next/app-tools/usage-pi) on a Pi home, and a disabled parser scans nothing.
 // The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
@@ -859,7 +859,7 @@ async function runApp(
           reader
             ? "the session reader check's canary appeared on stdout/stderr"
             : usage
-              ? "the usage check's Codex or Oh My Pi prompt canary appeared on stdout/stderr"
+              ? "the usage check's Codex, Oh My Pi or Pi prompt canary appeared on stdout/stderr"
               : "the vault check's key or backup canary appeared on stdout/stderr",
         );
         return;
@@ -1637,7 +1637,7 @@ async function main(): Promise<number> {
   // and its fixture parser, each when its folder is there.
   if (existsSync(join(appTools, "Cargo.toml"))) {
     run("cargo", ["build", "--locked", "-p", "codex-sessions", "--target-dir", appToolsTarget], appTools);
-    const usageTools = ["agent-usage", "usage-fixture", "usage-codex", "usage-omp"].filter((t) =>
+    const usageTools = ["agent-usage", "usage-fixture", "usage-codex", "usage-omp", "usage-pi"].filter((t) =>
       existsSync(join(appTools, t, "Cargo.toml")),
     );
     if (usageTools.length > 0) {
