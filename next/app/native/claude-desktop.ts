@@ -3,16 +3,17 @@
 //
 // - pluxy/claude-desktop (next/app-tools/claude-desktop, which run.ts builds) and pluxy/execution
 //   (the real execution program), packed with their own manifests into signed curated packages;
-// - in the run's HOME, Claude Desktop's third-party folder as a person keeps it:
-//   `~/.config/Claude-3p/claude_desktop_config.json` with their earlier sign-in choice (1p) and a
-//   preference this check knows nothing of, but no `configLibrary` folder yet; the files Claude
-//   Desktop saves there once that folder exists (`_meta.json` naming the person's own gateway
+// - in the run's HOME, no Claude Desktop third-party folder `~/.config/Claude-3p` yet; the files
+//   the check puts there once the tool has created it: `claude_desktop_config.json` with the
+//   person's earlier sign-in choice (1p) and a preference this check knows nothing of, and what
+//   Claude Desktop saves in its library (`_meta.json` naming the person's own gateway
 //   configuration, a hybrid pointer and a key this check knows nothing of, and that configuration
 //   itself); beside it the standard app's `~/.config/Claude/claude_desktop_config.json` (their MCP
 //   servers) and `~/.config/Claude/config.json` (holding a login canary), which no step may touch;
 // - a stow layout: `~/.config/claude-desktop-stow/claude_desktop_config.json` is a relative link to
-//   `~/dotfiles/claude-desktop/claude_desktop_config.json` (mode 0640), beside `keep.json` and an
-//   empty `configLibrary` folder;
+//   `~/dotfiles/claude-desktop/claude_desktop_config.json` (mode 0640), beside `keep.json` and a
+//   `configLibrary` folder holding a gateway profile of pluxy's ID left readable to all (mode 0644,
+//   as an older tool might have written it);
 // - a chezmoi-style root: `~/.claude-desktop-root` is an absolute link to the empty folder
 //   `~/.local/share/chezmoi/private_dot_config/private_Claude-3p`, which has no `configLibrary`;
 // - files Claude Desktop would not take: `~/unknown/Claude-3p` (its `_meta.json` entries are not a
@@ -155,16 +156,16 @@ function configs(home: string, login: string) {
     '{\n  "inferenceProvider": "gateway",\n  "inferenceGatewayBaseUrl": "https://gateway.example.invalid",\n' +
     '  "inferenceGatewayApiKey": "fixture-work-gateway-key"\n}\n';
   const stowOriginal = '{\n  "deploymentMode": "any"\n}\n';
+  const stowProfile = '{\n  "coworkEgressAllowedHosts": [\n    "*"\n  ]\n}\n';
   const keep = '{"keep": true}\n';
   const unknownMeta = '{\n  "appliedId": "x",\n  "entries": {\n    "id": "x"\n  }\n}\n';
   const brokenBytes = '{\n  // a comment Claude Desktop would refuse\n  "deploymentMode": "1p"\n}\n';
 
-  put(deployment, deploymentOriginal);
   put(standard, standardBytes);
   put(loginFile, loginBytes, 0o600);
   put(stowTarget, stowOriginal, 0o640);
   put(join(dotfiles, "keep.json"), keep);
-  mkdirSync(join(dotfiles, "configLibrary"), { recursive: true });
+  put(join(dotfiles, "configLibrary", `${ID}.json`), stowProfile);
   mkdirSync(dirname(stowLink), { recursive: true });
   symlinkSync(stowText, stowLink);
   mkdirSync(chezmoi, { recursive: true });
@@ -207,6 +208,7 @@ function configs(home: string, login: string) {
       other: otherBytes,
       keep,
       stow: stowOriginal,
+      stow_profile: stowProfile,
       unknown_meta: unknownMeta,
       broken: brokenBytes,
       // The earlier sign-in choice becomes 3p, the preference stays; the person's own
@@ -218,6 +220,8 @@ function configs(home: string, login: string) {
       meta_applied: metaApplied,
       // The person's edit of the applied deployment file: their preference.
       edited_preference: ['"menuBarEnabled": false', '"menuBarEnabled": true'],
+      // The applied index broken (a comment): Claude Desktop would not take it.
+      broken_meta: ['  "futureKey"', '  // broken\n  "futureKey"'],
       // Claude Desktop sealing the key in place at its next launch (its keystore).
       sealed: [
         '"inferenceGatewayApiKey": "@KEY@"',
@@ -239,6 +243,8 @@ function configs(home: string, login: string) {
         '  "futureKey": 12345678901234567890,\n' +
         '  "hybridPointer": {\n    "bootstrapUrl": "https://config.example.invalid"\n  }\n}\n',
       stow_applied: '{\n  "deploymentMode": "3p"\n}\n',
+      // The profile left readable to all, applied: its own key first, then pluxy's.
+      stow_profile_applied: `{\n  "coworkEgressAllowedHosts": [\n    "*"\n  ],\n${PROFILE.slice(2)}`,
       // Files the stow and root cases create, the library having none.
       meta_new: META_NEW,
       deployment_new: DEPLOYMENT_NEW,

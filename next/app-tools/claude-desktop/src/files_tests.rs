@@ -246,3 +246,68 @@ fn clear_takes_out_a_key_claude_desktop_sealed_and_pluxys_entry_but_keeps_the_pe
         .merge(None, Some(&applied_meta), Some(b"{\"entries\": {}}"))
         .is_err());
 }
+
+#[test]
+fn white_space_alone_is_an_empty_object_in_clear_as_in_apply() {
+    let s = settings();
+    // An original of white space: Clear leaves only the person's own edit.
+    let applied = apply(File::Deployment, Some(b"  \n"), &s).unwrap();
+    let now = String::from_utf8(applied.clone())
+        .unwrap()
+        .replace("\"3p\"", "\"3p\",\n  \"x\": 1");
+    let out = Checked
+        .merge(Some(b"  \n"), Some(&applied), Some(now.as_bytes()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(String::from_utf8(out).unwrap(), "{\n  \"x\": 1\n}\n");
+    // A file the person emptied: nothing of pluxy's comes back into it.
+    let original = b"{\"deploymentMode\": \"1p\"}";
+    let applied = apply(File::Deployment, Some(original), &s).unwrap();
+    let out = Checked
+        .merge(Some(original), Some(&applied), Some(b" \n"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(String::from_utf8(out).unwrap(), "{}\n");
+}
+
+#[test]
+fn a_session_host_still_set_is_not_configured() {
+    let s = settings();
+    let d = apply(File::Deployment, None, &s).unwrap();
+    let p = apply(File::Profile, None, &s).unwrap();
+    let m = apply(File::Meta, None, &s).unwrap();
+    let mut with: Value = serde_json::from_slice(&p).unwrap();
+    with["selfHostedUrl"] = json!("https://session.example.invalid");
+    let with = serde_json::to_vec(&with).unwrap();
+    let v = read_back(Some(&d), Some(&with), Some(&m), None).unwrap();
+    assert_eq!(v["state"], "needs-update");
+    with_empty_is_still_configured(&d, &p, &m);
+}
+
+fn with_empty_is_still_configured(d: &[u8], p: &[u8], m: &[u8]) {
+    let mut empty: Value = serde_json::from_slice(p).unwrap();
+    empty["selfHostedUrl"] = json!("");
+    let empty = serde_json::to_vec(&empty).unwrap();
+    let v = read_back(Some(d), Some(&empty), Some(m), None).unwrap();
+    assert_eq!(v["state"], "configured");
+}
+
+#[test]
+fn a_deployment_file_holding_a_key_of_the_persons_is_not_taken_for_the_profile() {
+    // The person's own copy of a key in claude_desktop_config.json: their later change to it is
+    // their edit, which Clear keeps (only the profile's key slot is pluxy's).
+    let s = settings();
+    let original = b"{\"deploymentMode\": \"1p\", \"inferenceGatewayApiKey\": \"theirs\"}";
+    let applied = apply(File::Deployment, Some(original), &s).unwrap();
+    let now = String::from_utf8(applied.clone())
+        .unwrap()
+        .replace("\"theirs\"", "\"theirs-2\"");
+    let out = Checked
+        .merge(Some(original), Some(&applied), Some(now.as_bytes()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "{\n  \"deploymentMode\": \"1p\",\n  \"inferenceGatewayApiKey\": \"theirs-2\"\n}\n"
+    );
+}

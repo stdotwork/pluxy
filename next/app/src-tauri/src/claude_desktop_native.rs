@@ -9,18 +9,20 @@
 //! - install: pluxy/claude-desktop and pluxy/execution install from the curated registry and are
 //!   enabled through their native confirmations, which say "full access to your user account";
 //! - key: the key is typed into native key entry; the window gets only its ID;
-//! - missing: with no `configLibrary` folder yet, a preview is refused unasked and writes nothing;
-//!   the confirmed `folders` operation creates it (mode 0700) and then the preview pins all three
-//!   files and reads them back, with no key;
+//! - missing: with no `~/.config/Claude-3p` at all, a preview is refused unasked, naming the missing
+//!   library, and writes nothing; the confirmed `folders` operation creates the folder and its
+//!   `configLibrary` (mode 0700), and then the preview pins all three files and reads them back,
+//!   with no key;
 //! - unknown: a library whose `_meta.json` entries are not a list, and a `claude_desktop_config.json`
-//!   that is not strict JSON, are refused unasked and change nothing;
+//!   that is not strict JSON, are pinned and read back as refused, unasked, and change nothing;
 //! - apply: asks a native confirmation naming the three files, the key's label and the
 //!   same-instant sentence, never the key; then each of the three files holds exactly the bytes
 //!   `expect.json` says (the deployment choice, the new gateway profile, the library index keeping
 //!   the person's own configuration), modes kept, and the preview reads them back as configured;
 //!   the standard app's files and the person's own configuration are untouched;
-//! - restore: after the person's edit, Restore Backup puts each original back (the profile, which
-//!   did not exist, is removed);
+//! - restore: after the person's edit and with the applied index broken, the preview reads the files
+//!   back as refused, a confirmed apply is refused and writes nothing, and Restore Backup still puts
+//!   each original back (the profile, which did not exist, is removed);
 //! - clear: applied again, Claude Desktop seals the key in place, the person edits a preference
 //!   and adds a configuration of their own; Clear takes out only pluxy's values: the sign-in
 //!   choice, appliedId and the hybrid pointer come back, the profile and pluxy's entry go, the
@@ -28,7 +30,8 @@
 //! - backups: a Manual Backup of the three files (one absent), a diff naming the setting the person
 //!   changed and never its value, restore over that edit, delete;
 //! - stow: an apply through the selected link changes only its target, the link keeps its inode
-//!   and text; once the target is replaced, a confirmed write fails as changed and writes nothing;
+//!   and text, and a gateway profile left readable to all (0644) is owner-only (0600) once the key
+//!   is in it; once the target is replaced, a confirmed write fails as changed and writes nothing;
 //!   a new preview's restore puts the original back through the link;
 //! - root: a selected root with no `configLibrary` is refused; with it, its pins taken and the
 //!   folder then gone, a confirmed apply writes none of the three files (a missing path aborts all
@@ -326,12 +329,17 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     step(
         "missing",
         (|| {
-            read_refused(main, &seen, "preview", json!({}), "configLibrary")?;
-            require(!library.exists(), "a refused preview created the library")?;
-            require(
-                read(&deployment) == Some(bytes("deployment")),
-                "a refused preview changed the deployment file",
+            let threep = p(&x["threep"]);
+            require(!threep.exists(), "the fixture made ~/.config/Claude-3p")?;
+            read_refused(
+                main,
+                &seen,
+                "preview",
+                json!({}),
+                "configuration library does not exist yet",
             )?;
+            read_refused(main, &seen, "preview", json!({}), "configLibrary")?;
+            require(!threep.exists(), "a refused preview created a folder")?;
             written(
                 app,
                 main,
@@ -342,10 +350,16 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 &hidden,
             )?;
             require(
-                library.is_dir() && mode(&library) == 0o700,
-                format!("the library folder: mode {:o}", mode(&library)),
+                library.is_dir() && mode(&library) == 0o700 && mode(&threep) == 0o700,
+                format!(
+                    "the folders: modes {:o} and {:o}",
+                    mode(&threep),
+                    mode(&library)
+                ),
             )?;
-            // What Claude Desktop saves there once the person sets up their own gateway.
+            // The person's earlier sign-in choice, and what Claude Desktop saves in the library
+            // once the person sets up their own gateway.
+            write(&deployment, &bytes("deployment"))?;
             write(&meta, &bytes("meta"))?;
             write(&other, &bytes("other"))?;
             // The positive control on the same route: the default preview pins all three.
@@ -371,8 +385,17 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     step(
         "unknown",
         (|| {
-            read_refused(main, &seen, "preview", in_root(&unknown), "entries")?;
-            read_refused(main, &seen, "preview", in_root(&broken), "JSON")?;
+            // Pinned all the same, so Restore Backup reaches them; refused in what is read back.
+            for (root, says) in [(&unknown, "entries"), (&broken, "JSON")] {
+                let v = read_op(main, &seen, "preview", in_root(root))?;
+                let st = &v["settings"];
+                require(
+                    v["targets"].as_array().map(Vec::len) == Some(3)
+                        && st["state"] == "refused"
+                        && st["reason"].as_str().is_some_and(|r| r.contains(says)),
+                    format!("the preview of {}: {v}", root.display()),
+                )?;
+            }
             require(
                 read(&unknown.join("configLibrary/_meta.json")) == Some(bytes("unknown_meta"))
                     && read(&broken.join("claude_desktop_config.json")) == Some(bytes("broken")),
@@ -410,8 +433,8 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 "the applied files",
             )?;
             require(
-                mode(&deployment) == 0o644 && mode(&profile) == 0o600 && mode(&meta) == 0o644,
-                "a file's mode is not as expected",
+                mode(&deployment) == 0o600 && mode(&profile) == 0o600 && mode(&meta) == 0o600,
+                "apply left a file it wrote the key beside readable to others",
             )?;
             let v = read_op(main, &seen, "preview", json!({}))?;
             let st = &v["settings"];
@@ -435,10 +458,39 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         (|| {
             let (from, to) = pair("edited_preference");
             edit(&deployment, &from, &to)?;
+            let (from, to) = pair("broken_meta");
+            edit(&meta, &from, &to)?;
             let v = read_op(main, &seen, "preview", json!({}))?;
             require(
-                v["edited"] == json!([true, false, false]),
-                format!("the edit is not seen: {v}"),
+                v["edited"] == json!([true, false, true])
+                    && v["settings"]["state"] == "refused"
+                    && v["settings"]["reason"]
+                        .as_str()
+                        .is_some_and(|r| r.contains("_meta.json")),
+                format!("the edits are not seen: {v}"),
+            )?;
+            // Apply refuses files Claude Desktop would not take, and writes nothing.
+            let before = snapshot(&library)?;
+            let deployment_now = read(&deployment);
+            let r = confirmed(
+                app,
+                main,
+                &seen,
+                "apply",
+                apply_input(&v, &secret),
+                &[&txt(&meta)],
+                &hidden,
+            )?;
+            require(
+                r["ok"] == false
+                    && r["error"]
+                        .as_str()
+                        .is_some_and(|e| e.contains("_meta.json")),
+                format!("an apply over a broken index went ahead: {r}"),
+            )?;
+            require(
+                snapshot(&library)? == before && read(&deployment) == deployment_now,
+                "a refused apply changed a file",
             )?;
             let o = written(
                 app,
@@ -603,13 +655,18 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 &hidden,
             )?;
             require(
-                read(&stow_target) == Some(bytes("stow_applied")) && mode(&stow_target) == 0o640,
+                read(&stow_target) == Some(bytes("stow_applied")) && mode(&stow_target) == 0o600,
                 format!("the stow target after apply: {:?}", read(&stow_target)),
             )?;
             require(
-                read(&stow_profile) == Some(bytes("profile_applied"))
+                read(&stow_profile) == Some(bytes("stow_profile_applied"))
+                    && mode(&stow_profile) == 0o600
                     && read(&stow_meta) == Some(bytes("meta_new")),
-                "the stow library's files after apply",
+                format!(
+                    "the stow library's files after apply: profile {:?} (mode {:o})",
+                    read(&stow_profile),
+                    mode(&stow_profile)
+                ),
             )?;
             require(
                 link(&stow_link)? == (inode, PathBuf::from(&stow_text)),
@@ -656,7 +713,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             require(
                 read(&stow_target) == Some(bytes("stow"))
-                    && !stow_profile.exists()
+                    && read(&stow_profile) == Some(bytes("stow_profile"))
                     && !stow_meta.exists(),
                 format!("the stow files after restore: {:?}", read(&stow_target)),
             )?;

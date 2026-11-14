@@ -21,6 +21,19 @@ import {
   useLoad,
 } from "../../ui/kit/ui";
 import { Backups, reply } from "./backups";
+import {
+  FILES,
+  fresh,
+  keysOf,
+  MODELS_MAX,
+  missingLibrary,
+  PACKAGE,
+  type ReadBack,
+  type Row,
+  ready,
+  rowsFrom,
+  type Secret,
+} from "./claudeDesktopForm";
 import { connectionGet } from "./host";
 
 const t = strings("claudeDesktop", {
@@ -80,6 +93,10 @@ const t = strings("claudeDesktop", {
   clearHint: "Remove pluxy integration settings and keep other settings. Restart the agent afterward.",
   restore: "Restore Backup",
   restoreHint: "Put the files back as they were before the first apply.",
+  refused: "Claude Desktop would not take these files",
+  refusedHint:
+    "Apply and Clear integration leave them alone until they are fixed; Restore Backup puts back the files as they were before the first apply.",
+  rows: "Each row needs an original model, and models and aliases are IDs with no spaces (1 to 16 rows).",
   noCore: "Connect to a core first: its address goes into the gateway profile.",
   start: "Run controls",
   override: "Agent program path",
@@ -87,9 +104,6 @@ const t = strings("claudeDesktop", {
   launch: "Start Claude Desktop",
 });
 
-const PACKAGE = "pluxy/claude-desktop";
-const PROFILE_ID = "00000000-0000-4000-8000-000000831700";
-const FILES = ["claude_desktop_config.json", `configLibrary/${PROFILE_ID}.json`, "configLibrary/_meta.json"];
 /** The old app's default rows: Claude Desktop's own model families, as aliases. */
 const SUGGESTED = [
   "claude-opus-5-5",
@@ -104,30 +118,11 @@ const SUGGESTED = [
 const tool = <T,>(op: string, input: Record<string, unknown>) =>
   reply<T>("program_call", { package: PACKAGE, op, input });
 
-interface Row {
-  model: string;
-  alias: string;
-  one_m: boolean;
-}
-
-interface ReadBack {
-  state: "configured" | "not-configured" | "needs-update";
-  base_url: string | null;
-  key_set: boolean;
-  models: Row[];
-}
-
 interface Preview {
   targets: { selected: string; target: string; link: string | null }[];
   applied: boolean;
   settings: ReadBack;
 }
-
-const fresh = (): Row[] => [
-  { model: "claude-opus-5-5", alias: "", one_m: false },
-  { model: "claude-sonnet-5-5", alias: "", one_m: false },
-  { model: "claude-haiku-5-5", alias: "", one_m: false },
-];
 
 function Text(props: {
   label: string;
@@ -185,7 +180,8 @@ export function ClaudeDesktopPage() {
   const [rows, setRows] = useState<Row[]>(fresh);
   const [secret, setSecret] = useState("");
   const [core, setCore] = useState<string>();
-  const secrets = useLoad(() => reply<{ id: string; label: string }[]>("vault_secrets"));
+  const secrets = useLoad(() => reply<{ secrets: Secret[] }>("vault_secrets"));
+  const keys = keysOf(secrets.data);
   const listId = useId();
   useEffect(() => {
     connectionGet().then(
@@ -203,42 +199,39 @@ export function ClaudeDesktopPage() {
   const load = () =>
     read.run(async () => {
       const r = await tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) });
-      setMissing(where === "default" && !!r.error?.message.includes("configLibrary"));
+      setMissing(missingLibrary(r.error?.message));
       if (r.body) {
         setPreview(r.body);
-        if (r.body.settings.models.length > 0) setRows(r.body.settings.models);
+        setRows(rowsFrom(r.body.settings));
       }
       return r;
     });
   const write = useAction(load);
-  // A write acts on the files the last preview pinned; a new preview first, so the pins are fresh.
-  const pins = async () => {
-    const r = await tool<Preview>("preview", selection());
-    return r.body?.targets;
-  };
-  const refused = { status: 400, error: { code: "refused", message: "the files could not be read" } };
+  // A write acts on the files the last preview pinned (the tool refuses it if one changed since);
+  // choosing other files drops that preview, so a write never pins files unread.
+  const reselect =
+    <T,>(f: (v: T) => void) =>
+    (v: T) => {
+      f(v);
+      setPreview(undefined);
+      setMissing(false);
+    };
   const apply = () =>
-    write.run(async () => {
-      const targets = await pins();
-      if (!targets) return refused;
-      return tool("apply", {
-        targets,
+    write.run(() =>
+      tool("apply", {
+        targets: preview?.targets,
         base_url: core,
         key: secret,
         models: rows.map((r) => ({ model: r.model.trim(), alias: r.alias.trim(), one_m: r.one_m })),
-      });
-    });
-  const undo = (op: "clear" | "restore") =>
-    write.run(async () => {
-      const targets = await pins();
-      if (!targets) return refused;
-      return tool(op, { targets });
-    });
+      }),
+    );
+  const undo = (op: "clear" | "restore") => write.run(() => tool(op, { targets: preview?.targets }));
   const folders = useAction(load);
   const addKey = useAction(secrets.reload);
   const setRow = (i: number, patch: Partial<Row>) =>
     setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   const st = preview?.settings;
+  const refused = st?.state === "refused";
   const applyLabel = !preview?.applied
     ? t("connect")
     : st?.state === "configured"
@@ -246,7 +239,7 @@ export function ClaudeDesktopPage() {
       : t("repair");
   const unavailable = read.error?.includes(PACKAGE) || read.error?.includes("not installed");
   const busy = read.busy || write.busy || folders.busy;
-  const rowsOk = rows.length > 0 && rows.every((r) => r.model.trim());
+  const rowsOk = ready(rows);
 
   return (
     <div class="stack">
@@ -268,9 +261,11 @@ export function ClaudeDesktopPage() {
             { value: "root", label: t("filesInRoot") },
             { value: "files", label: t("filesSelected") },
           ]}
-          onChange={setWhere}
+          onChange={reselect(setWhere)}
         />
-        {where === "root" && <Text label={t("root")} hint={t("rootHint")} value={root} onInput={setRoot} />}
+        {where === "root" && (
+          <Text label={t("root")} hint={t("rootHint")} value={root} onInput={reselect(setRoot)} />
+        )}
         {where === "files" &&
           [t("deployment"), t("profile"), t("meta")].map((label, i) => (
             <Text
@@ -278,7 +273,7 @@ export function ClaudeDesktopPage() {
               label={label}
               hint={t("fileHint")}
               value={files[i] ?? ""}
-              onInput={(v) => setFiles((fs) => fs.map((f, j) => (j === i ? v : f)))}
+              onInput={reselect((v: string) => setFiles((fs) => fs.map((f, j) => (j === i ? v : f))))}
             />
           ))}
         {read.error && <Notice tone="danger">{read.error}</Notice>}
@@ -299,19 +294,26 @@ export function ClaudeDesktopPage() {
             rows={[
               [
                 t("status"),
-                st.state === "configured"
-                  ? t("applied")
-                  : st.state === "needs-update"
-                    ? t("needsUpdate")
-                    : t("notConfigured"),
+                refused
+                  ? t("refused")
+                  : st.state === "configured"
+                    ? t("applied")
+                    : st.state === "needs-update"
+                      ? t("needsUpdate")
+                      : t("notConfigured"),
               ],
               ...preview.targets.map((x): [string, string] => [t("target"), x.target]),
-              [t("keySet"), st.key_set ? t("yes") : t("no")],
+              ...(refused ? [] : [[t("keySet"), st.key_set ? t("yes") : t("no")] as [string, string]]),
             ]}
           />
         )}
+        {refused && (
+          <Notice tone="warn">
+            {st?.reason} {t("refusedHint")}
+          </Notice>
+        )}
       </Card>
-      {preview && (
+      {preview && !refused && (
         <>
           <Card title={t("mapping")}>
             <p class="muted">{t("mappingHint")}</p>
@@ -344,7 +346,7 @@ export function ClaudeDesktopPage() {
               </div>
             ))}
             <Button
-              disabled={rows.length >= 16}
+              disabled={rows.length >= MODELS_MAX}
               onClick={() => setRows((rs) => [...rs, { model: "", alias: "", one_m: false }])}
             >
               {t("addModel")}
@@ -352,11 +354,12 @@ export function ClaudeDesktopPage() {
           </Card>
           <Card title={t("key")}>
             <p class="muted">{t("keyHint")}</p>
-            {secrets.data && secrets.data.length > 0 ? (
+            {secrets.error && <Notice tone="danger">{secrets.error}</Notice>}
+            {keys.length > 0 ? (
               <Choices
                 label={t("key")}
                 value={secret || undefined}
-                choices={secrets.data.map((s) => ({ value: s.id, label: s.label }))}
+                choices={keys.map((s) => ({ value: s.id, label: s.label }))}
                 onChange={setSecret}
               />
             ) : (
@@ -376,22 +379,27 @@ export function ClaudeDesktopPage() {
               {t("addKey")}
             </Button>
           </Card>
-          <Card>
-            {write.error && <Notice tone="danger">{write.error}</Notice>}
-            <Button variant="primary" onClick={apply} disabled={busy || !rowsOk || !secret || !core}>
-              {applyLabel}
-            </Button>
-            <ConfirmButton disabled={busy || !preview.applied} onConfirm={() => undo("clear")}>
-              {t("clear")}
-            </ConfirmButton>
-            <small class="hint">{t("clearHint")}</small>
-            <ConfirmButton disabled={busy} onConfirm={() => undo("restore")}>
-              {t("restore")}
-            </ConfirmButton>
-            <small class="hint">{t("restoreHint")}</small>
-          </Card>
-          <Backups pkg={PACKAGE} pins={pins} disabled={busy} onChange={load} />
         </>
+      )}
+      {preview && (
+        <Card>
+          {!refused && !rowsOk && <Notice tone="warn">{t("rows")}</Notice>}
+          {write.error && <Notice tone="danger">{write.error}</Notice>}
+          <Button variant="primary" onClick={apply} disabled={busy || refused || !rowsOk || !secret || !core}>
+            {applyLabel}
+          </Button>
+          <ConfirmButton disabled={busy || refused || !preview.applied} onConfirm={() => undo("clear")}>
+            {t("clear")}
+          </ConfirmButton>
+          <small class="hint">{t("clearHint")}</small>
+          <ConfirmButton disabled={busy} onConfirm={() => undo("restore")}>
+            {t("restore")}
+          </ConfirmButton>
+          <small class="hint">{t("restoreHint")}</small>
+        </Card>
+      )}
+      {preview && (
+        <Backups pkg={PACKAGE} pins={async () => preview.targets} disabled={busy} onChange={load} />
       )}
       <StartApp available={!unavailable} />
     </div>

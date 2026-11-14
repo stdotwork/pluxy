@@ -863,18 +863,23 @@ Desktop**, the execution program. Like the Claude Code page it is the window's o
 **Read configuration** previews Claude Desktop's three third-party files: in its folder
 `~/.config/Claude-3p` (`claude_desktop_config.json`, pluxy's gateway profile in `configLibrary` and
 `configLibrary/_meta.json`), in a selected folder (which may be a link) or as three selected files
-(links followed and kept). When Claude Desktop has not made its `configLibrary` folder yet, the
-page offers **Create configuration folder**, which asks in a native confirmation. The form keeps the
+(links followed and kept). When nothing is at `~/.config/Claude-3p/configLibrary` yet (Claude
+Desktop makes it only once a configuration is saved in its own window), the page offers **Create
+configuration folder**, which asks in a native confirmation. Files Claude Desktop would not take
+are shown as such: Apply and Clear integration stay disabled, Restore Backup and the backups stay
+reachable. The form keeps the
 old app's **Claude Desktop Models and Aliases** list: rows of **Original model**, **Alias (optional
 for Claude models)** and **1M**, **Add model** and **Remove model**, three Claude models to start
 with. Claude Desktop takes only Claude model names, so a non-Claude model needs an alias, which the
 core must serve the model under (the account's or extension's `model_alias`); the old app added it to
 the core's config itself, this page says so instead. The **Authentication Key** is one of the
-vault's secrets, or a new one through native key entry.
+vault's secrets (a client key only when it is bound to this tool), or a new one through native key
+entry.
 
 **Connect in One Click** (or **Update Configuration** / **Repair Connection**), **Clear
-integration** and **Restore Backup** each preview the files again and call the tool, whose native
-confirmation names the three files, the key's label for Apply and the same-instant warning.
+integration** and **Restore Backup** each write the files the last preview pinned (the tool refuses
+one that changed since; choosing other files drops the preview), in the tool's native confirmation,
+which names the three files, the key's label for Apply and the same-instant warning.
 **Start Claude Desktop** asks the tool for its recipe (`claude-desktop`, run directly with no
 arguments in the home folder) and starts it through the launcher, with an optional program path for
 other installs. Claude Desktop reads its configuration at launch: quit and reopen it after a

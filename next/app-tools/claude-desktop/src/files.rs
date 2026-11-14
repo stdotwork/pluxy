@@ -25,6 +25,19 @@ const MODEL_MAX: usize = 240;
 /// The key slot Claude Desktop seals in place (with the device's keystore) at its next launch.
 const KEY: &str = "inferenceGatewayApiKey";
 
+/// The keys apply sets in the gateway profile, in the order it writes them.
+const PROFILE_KEYS: [&str; 9] = [
+    "inferenceProvider",
+    "inferenceGatewayBaseUrl",
+    KEY,
+    "inferenceGatewayAuthScheme",
+    "inferenceCredentialKind",
+    "modelDiscoveryEnabled",
+    "bootstrapEnabled",
+    "disableDeploymentModeChooser",
+    "inferenceModels",
+];
+
 /// Model families Claude Desktop takes for an Anthropic model, and the other families whose
 /// names it refuses, as Claude Desktop 5.11492.5 (Linux) checks a gateway model's name: it drops
 /// an `inferenceModels` entry that fails, saying it "is not an Anthropic model".
@@ -429,6 +442,8 @@ pub fn read_back(
                 && text("inferenceCredentialKind").is_none_or(|k| k == "static")
                 && text("inferenceGatewayAuthScheme").is_none_or(|k| k == "bearer")
                 && d.get("deploymentMode").and_then(Value::as_str) == Some("3p")
+                && p.get("selfHostedUrl")
+                    .is_none_or(|u| u.is_null() || u == "")
                 && !rows.is_empty()
                 && base_url.is_none_or(|want| want == b) =>
         {
@@ -466,18 +481,9 @@ impl Merge for Checked {
         let Some(cur) = current else {
             return Ok(None);
         };
-        let parse = |b: Option<&[u8]>| b.map(Json::parse).transpose();
-        let (o, a) = (parse(original)?, parse(applied)?);
-        let mut c = Json::parse(cur)?;
-        // Which file this is, from what pluxy wrote into it.
-        let ours = |k: &str, v: &Value| a.as_ref().is_some_and(|a| a.get(k) == Some(v));
-        let file = if a.as_ref().is_some_and(|a| a.get(KEY).is_some()) {
-            File::Profile
-        } else if ours("appliedId", &json!(PROFILE_ID)) {
-            File::Meta
-        } else {
-            File::Deployment
-        };
+        let (o, a) = (value(original)?, value(applied)?);
+        let mut c = value(Some(cur))?.unwrap_or_else(|| json!({}));
+        let file = which(a.as_ref());
         parse_value(file, &c)?;
         if file == File::Profile {
             if let (Some(c), Some(k)) = (c.as_object_mut(), a.as_ref().and_then(|a| a.get(KEY))) {
@@ -500,6 +506,33 @@ impl Merge for Checked {
             }
         }
         merged.map(|v| Json::render(&v)).transpose()
+    }
+}
+
+/// The JSON value of a file's bytes (None: no file); only white space is an empty object, as
+/// [`parse`] reads it.
+fn value(bytes: Option<&[u8]>) -> Result<Option<Value>, Error> {
+    match bytes {
+        None => Ok(None),
+        Some(b) if b.iter().all(u8::is_ascii_whitespace) => Ok(Some(json!({}))),
+        Some(b) => Json::parse(b).map(Some),
+    }
+}
+
+/// Which of the three files pluxy applied, from the whole set of values apply writes into it:
+/// every profile key, pluxy's `appliedId` with its entry, or the third-party deployment mode.
+/// Anything else is merged as a plain JSON object, the deployment file's rule.
+fn which(applied: Option<&Value>) -> File {
+    let Some(a) = applied.and_then(Value::as_object) else {
+        return File::Deployment;
+    };
+    if PROFILE_KEYS.iter().all(|k| a.contains_key(*k)) && a["inferenceProvider"] == "gateway" {
+        File::Profile
+    } else if a.get("appliedId") == Some(&json!(PROFILE_ID)) && has_entry(&Value::Object(a.clone()))
+    {
+        File::Meta
+    } else {
+        File::Deployment
     }
 }
 

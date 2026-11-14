@@ -321,7 +321,7 @@ exports nothing.
 
 | Operation | Effect | Input | Output |
 | --- | --- | --- | --- |
-| `preview` | `read` | `targets`: three selections (`file`, or `root` and `path`), by default `claude_desktop_config.json`, `configLibrary/00000000-0000-4000-8000-000000831700.json` and `configLibrary/_meta.json` in `~/.config/Claude-3p` (the app's `HOME`); `base_url` (optional): the core the state is checked against | The library's preview and `settings`: `state` (`not-configured`, `configured`, `needs-update`), `base_url`, `key_set`, `deployment_mode`, `applied_id`, `hybrid_pointer` and the model rows (`model`, `alias`, `one_m`); never the key |
+| `preview` | `read` | `targets`: three selections (`file`, or `root` and `path`), by default `claude_desktop_config.json`, `configLibrary/00000000-0000-4000-8000-000000831700.json` and `configLibrary/_meta.json` in `~/.config/Claude-3p` (the app's `HOME`); `base_url` (optional): the core the state is checked against | The library's preview and `settings`: `state` (`not-configured`, `configured`, `needs-update`), `base_url`, `key_set`, `deployment_mode`, `applied_id`, `hybrid_pointer` and the model rows (`model`, `alias`, `one_m`); never the key. Files Claude Desktop would not take are pinned all the same, with `settings` `{"state": "refused", "reason"}`, so Restore Backup still reaches them. With no `targets` and nothing at `~/.config/Claude-3p/configLibrary`, refused with "Claude Desktop's configuration library does not exist yet" (what `folders` creates) |
 | `folders` | `write` | — | Creates `~/.config/Claude-3p/configLibrary` (mode 0700) when it does not exist: `created`, `folder` |
 | `apply` | `write`; secret `key` (value) | Three pins, `base_url`, `key`, `models`: 1 to 16 rows of `model` (what the core serves), `alias` (the name Claude Desktop uses; empty: the model's own) and `one_m` | The library's outcome |
 | `clear` | `write` | Three pins | The library's outcome: the values Apply wrote go, edits made since stay |
@@ -364,8 +364,11 @@ the device's keystore at its next launch, which is not the person's edit, so Cle
 the key; and pluxy's entry leaves `_meta.json` unless the original had it. Every operation but
 `restore` refuses, before writing, a file Claude Desktop would not take: not strict JSON, not an
 object, a profile whose `inferenceModels` is not a list, or an index whose `entries` is not a list
-of configurations or whose `appliedId` is not a string. A missing or empty file is an empty one; a
-missing folder refuses the whole operation, before any file is written. None of these files has a
+of configurations or whose `appliedId` is not a string. A missing file, or one of only white space,
+is an empty one, in Clear's merge too; a missing folder refuses the whole operation, before any
+file is written. The merge tells the three files apart by the whole set of values Apply wrote into
+each. A profile with `selfHostedUrl` set does not read back as configured. Apply writes each file
+owner-only (the library's rule: a key is in the profile, and the files sit beside it). None of these files has a
 version, and no minimum Claude Desktop version is assumed.
 
 ## `execution`
