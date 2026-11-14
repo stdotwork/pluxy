@@ -95,6 +95,14 @@ cd app/src-tauri && cargo fmt --check && cargo test --locked
 cd app && bun run test:native   # the real app on Xvfb, in each connection mode
 ```
 
+`app-tools/` holds the native programs the desktop app runs on demand (such as the Codex session
+reader) and the libraries they share: a cargo workspace of its own, never linked into the app.
+The native test builds the ones it packs.
+
+```bash
+cd app-tools && cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
+```
+
 `corpus/` is the differential test corpus (see `next/corpus/README.md`). By default it compares
 the new core with the old core's recorded replies. To run today's core live as well, or to
 re-record after changing a case:
@@ -144,7 +152,7 @@ Workflows live in `.github/workflows/`, one set per folder, each limited to its 
 | `core-release.yaml` | `core-v*` tags | Builds release archives and creates the GitHub release |
 | `app-ci.yml` | PRs and pushes to `main` touching `extensions/app/` | Front end: `bun run check`, `bun test`, `bun run build`; Rust: `cargo check --locked`, `cargo test --locked` |
 | `next-ci.yml` | PRs and pushes to `main` touching `next/` | UI type check, lint and unit tests; builds the panel; `gofmt -l .`, `go build ./...`, `go vet ./...`, `go test -race ./...`; the panel's browser test in headless Chromium, and the extension pages test in Chromium, Firefox and WebKit |
-| `next-app.yml` | PRs and pushes to `main` touching `next/` | The desktop app in `next/app`: type check, lint, unit tests and build of the window; `cargo fmt --check`, `cargo clippy`, `cargo test --locked` (unit tests and each connection mode against a real core); the native test on Xvfb, which also builds and runs the test AppImage and checks the release gate |
+| `next-app.yml` | PRs and pushes to `main` touching `next/` | The desktop app in `next/app`: type check, lint, unit tests and build of the window; `cargo fmt --check`, `cargo clippy`, `cargo test --locked` (unit tests and each connection mode against a real core); format, clippy and tests of `next/app-tools`; the native test on Xvfb, which also builds and runs the test AppImage and checks the release gate |
 | `next-corpus.yml` | PRs and pushes to `main` touching `next/` or `core/` | Builds `core/` and runs the corpus against both cores live; the report is in the job summary |
 | `next-release.yml` | `next-v*` tags; PRs touching `next/Dockerfile`, `next/.dockerignore`, `next/compose.example.yaml`, `next/cmd/pluxy-pack/` or the workflow | PRs: builds the container image (amd64, and arm64 without running it), starts it with a temporary config, polls `/healthz`, checks the panel and the bundled packages, and packs every extension for the release platforms. Tags: also uploads the archives and `registry.json` to the GitHub release and pushes the image to `ghcr.io` once the checks pass |
 

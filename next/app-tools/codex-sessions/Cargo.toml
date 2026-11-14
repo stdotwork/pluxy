@@ -1,0 +1,12 @@
+[package]
+name = "codex-sessions"
+version = "0.1.0"
+description = "Reads Codex's local sessions for pluxy's desktop app, read-only"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+pluxy-program = { path = "../lib/program" }
+rusqlite = { version = "=0.41.1", features = ["bundled"] }
+serde_json = "1"

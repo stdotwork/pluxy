@@ -8,7 +8,8 @@
 //!   is disabled is refused and starts none;
 //! - three calls from the window at once start it once: each answers the expected summary from
 //!   the same process, which leads its own process group with the child it started, has only the
-//!   contract's environment (not the app's canary) and only stdin, stdout and stderr open, and
+//!   contract's environment (not the app's canary; the app's HOME and its own 0700 data folder)
+//!   and only stdin, stdout and stderr open, and
 //!   runs in its package folder;
 //! - the command thread that started it has ended while it runs on, with its supervisor thread;
 //! - its stdin and stdout pipes are held by the app and the tool only, no web process;
@@ -33,11 +34,14 @@ use tauri::{AppHandle, Manager, Webview};
 pub(super) const ID: &str = "pluxy/summary";
 /// The program commands a page webview must be refused.
 const PROGRAM_COMMANDS: &[&str] = &["program_call", "program_cancel", "program_status"];
-/// The environment app program contract v0 gives a tool, and nothing else.
+/// The environment app program contract v0 gives a tool, and nothing else: its three values,
+/// the app's HOME and the tool's own data folder.
 const CONTRACT_ENV: &[&str] = &[
+    "HOME",
     "PLUXY_APP_ARTIFACT_SHA256",
     "PLUXY_APP_CONTRACT_VERSIONS",
     "PLUXY_EXTENSION_ID",
+    "PLUXY_TOOL_DATA_DIR",
 ];
 
 /// The processes running program, by /proc: the tool and the child it started.
@@ -216,6 +220,37 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         env == CONTRACT_ENV,
         format!("the tool's environment: {env:?}"),
     )?;
+    // HOME is the app's own; the data folder is the tool's, made 0700 beside the vault.
+    let home = app.path().home_dir().map_err(|e| e.to_string())?;
+    let data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("tools")
+        .join(ID);
+    require(
+        first["home"] == json!(home) && first["data_dir"] == json!(data),
+        format!(
+            "the tool's HOME and data folder: {} and {}, expected {} and {}",
+            first["home"],
+            first["data_dir"],
+            home.display(),
+            data.display()
+        ),
+    )?;
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let m = std::fs::symlink_metadata(&data).map_err(|e| format!("{}: {e}", data.display()))?;
+        require(
+            m.is_dir()
+                && m.permissions().mode() & 0o777 == 0o700
+                && m.uid() == unsafe { libc::geteuid() },
+            format!(
+                "the tool's data folder {} is not this user's 0700 folder",
+                data.display()
+            ),
+        )?;
+    }
     require(
         first["fds"] == json!([0, 1, 2]),
         format!("the tool's open descriptors: {}", first["fds"]),
