@@ -66,6 +66,8 @@
     "allow-vault-secret-add",
     "allow-vault-secrets",
     "allow-vault-secret-remove",
+    "allow-client-key-capture",
+    "allow-client-key-enter",
     "allow-window-get",
     "allow-window-set",
     "allow-window-close",

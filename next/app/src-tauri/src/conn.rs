@@ -471,6 +471,24 @@ impl Caller {
         }
     }
 
+    /// Whether the core this caller reaches takes client key key: the status of core's client API
+    /// with it (`Client::client_key_status`), refused as call refuses once the app's core stopped.
+    pub fn client_key_status(&self, key: &str) -> Result<u16, String> {
+        if self
+            .gone
+            .as_ref()
+            .is_some_and(|g| g.load(std::sync::atomic::Ordering::SeqCst))
+        {
+            return Err("the app's core has stopped".into());
+        }
+        let c = self
+            .client
+            .as_ref()
+            .ok_or("the app is not connected to a core")?;
+        c.client_key_status(key)
+            .map_err(|kind| format!("core could not be asked ({kind})"))
+    }
+
     /// Calls as call does. A call core refused because a rotation replaced the key while it was
     /// on its way goes once more with the current key, to the same core: core refuses a key
     /// before acting, so nothing runs twice.
@@ -1304,6 +1322,24 @@ impl Connection {
             }
         }
         Ok(())
+    }
+
+    /// Changes each time the connection does (another core, mode or key).
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn signed_in(&self) -> bool {
+        self.key.is_some()
+    }
+
+    /// The core the connection reaches, as client keys are bound to it: its mode and origin.
+    #[cfg(target_os = "linux")]
+    pub fn target(&self) -> Option<crate::vault::CoreTarget> {
+        Some(crate::vault::CoreTarget {
+            mode: self.settings.mode?,
+            origin: self.client.as_ref()?.base().to_string(),
+        })
     }
 
     pub fn caller(&self) -> Caller {
