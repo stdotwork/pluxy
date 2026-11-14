@@ -148,7 +148,7 @@ const scan = {
 };
 const ITEMS_KIND = "pluxy/jobs-hub/items";
 
-interface Package {
+export interface Package {
   id: string;
   version: string;
   tier: "native" | "web";
@@ -164,7 +164,7 @@ const targetImport = (operations: string[], contract = [1]) => ({
   required: true,
 });
 
-function native(id: string, version: string, app: Record<string, unknown>, page = false): Package {
+export function native(id: string, version: string, app: Record<string, unknown>, page = false): Package {
   return {
     id,
     version,
@@ -255,7 +255,7 @@ const PACKAGES: Package[] = [
 ];
 
 /** Packs p into root, with program as a native package's program; returns its archive's name. */
-function pack(root: string, p: Package, program: string): string {
+export function pack(root: string, p: Package, program: string): string {
   const file = `${p.id.replace("/", "-")}-${p.version}.tar.gz`;
   const dir = join(root, `pkg-${file}`);
   mkdirSync(dir, { recursive: true });
@@ -288,7 +288,7 @@ function pack(root: string, p: Package, program: string): string {
   return file;
 }
 
-function index(entries: [Package, Record<string, unknown>][]): object {
+export function index(entries: [Package, Record<string, unknown>][]): object {
   const packages: Record<string, { releases: object[] }> = {};
   for (const [p, entry] of entries) {
     const listed = packages[p.id] ?? { releases: [] };

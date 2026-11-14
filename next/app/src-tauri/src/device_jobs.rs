@@ -135,6 +135,15 @@ pub(super) fn validate(
     exports: Option<&imports::ExportSpec>,
 ) -> Result<(), String> {
     let declared = |id: &str| ops.iter().any(|o| o.id == id);
+    // A job is started by a tool and delivered by the host: neither fills secret fields.
+    let keyless = |what: &str, id: &str| {
+        match ops.iter().find(|o| o.id == id) {
+        Some(o) if o.secrets.as_ref().is_some_and(|s| !s.is_empty()) => Err(format!(
+            "{what}: operation {id} has secret fields, and a job's or a delivery's call takes no secrets"
+        )),
+        _ => Ok(()),
+    }
+    };
     let mut kinds = BTreeSet::new();
     let produces = produces.unwrap_or_default();
     if produces.len() > MAX_KINDS {
@@ -151,6 +160,7 @@ pub(super) fn validate(
         if !kinds.insert(p.kind.as_str()) {
             return Err(format!("app.produces names kind {} more than once", p.kind));
         }
+        keyless("app.produces", &p.operation)?;
     }
     let mut kinds = BTreeSet::new();
     let consumes = consumes.unwrap_or_default();
@@ -171,6 +181,7 @@ pub(super) fn validate(
         if !kinds.insert(c.kind.as_str()) {
             return Err(format!("app.consumes names kind {} more than once", c.kind));
         }
+        keyless("app.consumes", &c.deliver)?;
         if produces.iter().any(|p| p.operation == c.deliver) {
             return Err(format!(
                 "app.produces: operation {} is also a deliver operation, which takes only the host's deliveries",
@@ -379,7 +390,12 @@ impl Catalog {
             })?;
         Ok(JobGrant {
             registration: Registration::of(&a, &p),
-            producer: Grant { target: a, op },
+            // A job's start passes no secret references: its operation has no secret fields.
+            producer: Grant {
+                target: a,
+                op,
+                passes_secrets: false,
+            },
             consumer,
             deliver,
         })

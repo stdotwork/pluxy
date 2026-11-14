@@ -10,8 +10,20 @@ pub(crate) struct Input {
     pub remember: bool,
 }
 
-#[cfg(target_os = "linux")]
+/// The management key's entry, with its choice to keep the key on this device.
 pub(crate) fn request(app: &AppHandle, summary: String) -> Result<Option<Input>, &'static str> {
+    request_as(app, "pluxy management key", summary, true)
+}
+
+/// A hidden entry titled title, saying summary; with keep, a choice (off at first) to keep the
+/// key on this device.
+#[cfg(target_os = "linux")]
+pub(crate) fn request_as(
+    app: &AppHandle,
+    title: &'static str,
+    summary: String,
+    keep: bool,
+) -> Result<Option<Input>, &'static str> {
     use gtk::prelude::*;
     use std::{cell::RefCell, rc::Rc, sync::mpsc};
     use tauri::Manager;
@@ -26,7 +38,7 @@ pub(crate) fn request(app: &AppHandle, summary: String) -> Result<Option<Input>,
             return;
         };
         let dialog = gtk::Dialog::with_buttons(
-            Some("pluxy management key"),
+            Some(title),
             Some(&parent),
             gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
             &[
@@ -46,10 +58,12 @@ pub(crate) fn request(app: &AppHandle, summary: String) -> Result<Option<Input>,
         entry.set_input_purpose(gtk::InputPurpose::Password);
         entry.set_activates_default(true);
         content.add(&entry);
-        let keep = gtk::CheckButton::with_mnemonic("_Keep the key on this device");
+        let keep_choice = gtk::CheckButton::with_mnemonic("_Keep the key on this device");
         // Each entry starts session-only. Remembering requires an explicit native choice.
-        keep.set_active(false);
-        content.add(&keep);
+        keep_choice.set_active(false);
+        if keep {
+            content.add(&keep_choice);
+        }
         let sender = Rc::new(RefCell::new(Some(tx)));
         let response_sender = sender.clone();
         let secret = entry.clone();
@@ -59,7 +73,7 @@ pub(crate) fn request(app: &AppHandle, summary: String) -> Result<Option<Input>,
             };
             let input = (response == gtk::ResponseType::Accept).then(|| Input {
                 key: secret.text(),
-                remember: keep.is_active(),
+                remember: keep && keep_choice.is_active(),
             });
             secret.set_text("");
             d.hide();
@@ -151,6 +165,11 @@ pub(crate) fn reveal(app: &AppHandle, key: String, notice: String) {
 }
 
 #[cfg(not(target_os = "linux"))]
-pub(crate) fn request(_: &AppHandle, _: String) -> Result<Option<Input>, &'static str> {
+pub(crate) fn request_as(
+    _: &AppHandle,
+    _: &'static str,
+    _: String,
+    _: bool,
+) -> Result<Option<Input>, &'static str> {
     Err("native key entry is currently supported on Linux only")
 }

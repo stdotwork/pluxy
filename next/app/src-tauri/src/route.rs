@@ -25,11 +25,21 @@
 //! deliveries to the consumer's deliver operation then run on a thread of the job's own, each
 //! batch granted again first, and the consumer is leased until the job ends.
 //!
+//! An operation's secret fields (`secrets` in its manifest) carry secrets from the vault
+//! (`vault.rs`). The window fills one with a vault secret's ID; a tool, only with a reference it was
+//! given in the call it serves, to an operation its import allows secret references for; a page,
+//! never. A secret or reference anywhere else in an input is refused. A call that delivers a
+//! secret's value, or one the window gives a secret to, asks a native confirmation naming each
+//! secret, even for a read. The target then gets, in each secret field, a new reference bound to
+//! the secret, its release and this call; a `value` field's secret also travels in the call's frame,
+//! and nowhere else. The references end with the call.
+//!
 //! Linux only, as the program host.
 
 use crate::confirmation::{self, Gesture};
 use crate::device::{self, Grant, Refused};
 use crate::program::{self, CallError, Cancel, Context, Hop, Outbound};
+use crate::vault::{Holder, Vault};
 use crate::App;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -52,6 +62,25 @@ const MAX_INPUT: usize = 64 << 10;
 struct Origin {
     packages: Vec<confirmation::Package>,
     gesture: Arc<Mutex<Option<Gesture>>>,
+    /// The vault's token of the call: references given in it are bound to it.
+    token: u64,
+}
+
+/// Who fills a call's secret fields: the window, with vault secret IDs; a page, never; a tool,
+/// with references it was given in the call (token) it serves.
+enum Filler {
+    Window,
+    Page,
+    Tool { holder: Holder, call: u64 },
+}
+
+/// A secret field of a call, filled: its vault secret, the secret's label, and whether the target
+/// gets the secret's value (or a reference only).
+struct Filled {
+    field: String,
+    secret: String,
+    label: String,
+    value: bool,
 }
 
 fn fail(code: &str, message: impl Into<String>) -> CallError {
@@ -91,6 +120,7 @@ pub fn call_main(
     let origin = Origin {
         packages: vec![device::main_window()],
         gesture: Arc::new(Mutex::new(gesture)),
+        token: 0,
     };
     dispatch(
         app,
@@ -99,6 +129,7 @@ pub fn call_main(
         &grant,
         vec![Hop::Main],
         origin,
+        Filler::Window,
         input,
         Cancel::default(),
     )
@@ -146,11 +177,22 @@ fn outbound(app: &AppHandle, o: Outbound) -> Result<Value, CallError> {
         packages,
         // A call through a tool never uses a gesture: it is an import.
         gesture: Arc::new(Mutex::new(None)),
+        token: 0,
+    };
+    let filler = Filler::Tool {
+        holder: Holder {
+            id: id.clone(),
+            sha256: sha256.clone(),
+            generation: *generation,
+        },
+        call: parent.token,
     };
     // Registered like any call, so `cancel_all` reaches it too.
     let call = app.state::<App>().programs.begin_call(None)?;
     let regrant = || grant().map(|(g, _)| g);
-    dispatch(app, call, g, &regrant, chain, origin, o.input, o.cancel)
+    dispatch(
+        app, call, g, &regrant, chain, origin, filler, o.input, o.cancel,
+    )
 }
 
 /// A page's `native.call` with params `{package, op, input}`, call id of page label's document
@@ -231,6 +273,7 @@ fn page_call(app: &AppHandle, label: &str, params: &Value) -> Result<Value, Call
             let origin = Origin {
                 packages: vec![requester],
                 gesture: Arc::new(Mutex::new(None)),
+                token: 0,
             };
             let chain = vec![Hop::Page {
                 id: caller.clone(),
@@ -245,6 +288,7 @@ fn page_call(app: &AppHandle, label: &str, params: &Value) -> Result<Value, Call
                     &grant,
                     chain,
                     origin,
+                    Filler::Page,
                     params["input"].clone(),
                     cancel,
                 )
@@ -262,9 +306,82 @@ fn release_of(caller: &str, folder: &str) -> Option<String> {
     (device::asset_url(caller, digest, "") == folder).then(|| digest.to_string())
 }
 
-/// Checks input against grant's operation, has a write or launch confirmed, grants it again once
-/// confirmed (regrant must give the same release and operation), and calls it in a context with
-/// chain and origin, pinned to the granted release.
+/// The one refusal of an input that is not valid for grant's operation, whatever is wrong with it:
+/// it does not say whether a string was a secret's value or a reference.
+fn invalid_input(grant: &Grant) -> CallError {
+    fail(
+        "invalid_request",
+        format!(
+            "{}'s {} refuses this input: it does not match the operation's input schema, or it holds a secret or secret reference outside the operation's secret fields",
+            grant.target.id(),
+            grant.op.id
+        ),
+    )
+}
+
+/// The secret fields filler fills in input, for grant's operation; refused when a secret or a
+/// reference is anywhere else in it, or filler may not fill them so.
+fn secret_fields(
+    vault: &Vault,
+    grant: &Grant,
+    input: &Value,
+    filler: &Filler,
+) -> Result<Vec<Filled>, CallError> {
+    let (target, op) = (grant.target.id(), &grant.op.id);
+    let refuse = |m: String| fail("permission", m);
+    let secret_field = |k: &str| grant.op.secrets.contains_key(k);
+    if rules::stray_secret(input, &secret_field, &|s| vault.carries(s)) {
+        return Err(invalid_input(grant));
+    }
+    let mut filled = Vec::new();
+    let fields = input.as_object().into_iter().flatten();
+    for (field, v) in fields {
+        let Some(how) = grant.op.secrets.get(field) else {
+            continue;
+        };
+        // The input schema makes each secret field a string.
+        let s = v.as_str().ok_or_else(|| invalid_input(grant))?;
+        let secret = match filler {
+            Filler::Window => vault.secret(s).map(|x| x.id).ok_or_else(|| {
+                fail(
+                    "invalid_request",
+                    format!("{field} names no secret in the vault"),
+                )
+            })?,
+            Filler::Page => {
+                return Err(refuse(format!(
+                    "a page cannot pass secrets: {target}'s {op} {field}"
+                )))
+            }
+            Filler::Tool { holder, call } => {
+                if !grant.passes_secrets {
+                    return Err(refuse(format!(
+                        "{}'s import of {target} does not allow secret references for {op}",
+                        holder.id
+                    )));
+                }
+                vault.present(s, holder, *call).map_err(|e| {
+                    refuse(format!(
+                        "{target}'s {op} {field}: the secret reference is refused: {e}"
+                    ))
+                })?
+            }
+        };
+        let label = vault.secret(&secret).map(|x| x.label).unwrap_or_default();
+        filled.push(Filled {
+            field: field.clone(),
+            secret,
+            label,
+            value: how == "value",
+        });
+    }
+    Ok(filled)
+}
+
+/// Checks input against grant's operation and its secret fields, has a write, a launch or a
+/// secret's delivery confirmed, grants it again once confirmed (regrant must give the same release
+/// and operation), and calls it in a context with chain and origin, pinned to the granted release,
+/// with each secret field holding a new reference for the target.
 #[allow(clippy::too_many_arguments)]
 fn dispatch(
     app: &AppHandle,
@@ -272,48 +389,83 @@ fn dispatch(
     grant: Grant,
     regrant: &dyn Fn() -> Result<Grant, CallError>,
     chain: Vec<Hop>,
-    origin: Origin,
-    input: Value,
+    mut origin: Origin,
+    filler: Filler,
+    mut input: Value,
     cancel: Cancel,
 ) -> Result<Value, CallError> {
-    checked(
+    let filled = checked(
         app,
         &grant,
         regrant,
         &chain,
         &origin,
+        &filler,
         &input,
         &call.cancelled_by(&cancel),
     )?;
+    let vault = Arc::clone(&app.state::<App>().vault);
+    // Each secret field gets a reference for the target's release, in this call.
+    let token = vault.begin_call();
+    origin.token = token;
+    let holder = Holder {
+        id: grant.target.id().into(),
+        sha256: grant.target.sha256().into(),
+        generation: grant.target.installed_at(),
+    };
+    let mut secrets = Vec::new();
+    for f in &filled {
+        let minted = vault.mint(&f.secret, &holder, token).and_then(|r| {
+            if !f.value {
+                return Some(r);
+            }
+            let v = vault.value(&f.secret)?;
+            secrets.push((r.clone(), v));
+            Some(r)
+        });
+        let Some(r) = minted else {
+            vault.end_call(token);
+            return Err(fail(
+                "permission",
+                format!("the secret for {} was removed from the vault", f.field),
+            ));
+        };
+        input[f.field.as_str()] = Value::String(r);
+    }
     let context = Context {
         chain,
         expect: Some((grant.target.sha256().into(), grant.target.installed_at())),
         extra: Box::new(origin),
         feed: None,
         turn_bounded: false,
+        secrets,
     };
-    app.state::<App>().programs.run_call_with(
+    let r = app.state::<App>().programs.run_call_with(
         call,
         grant.target.id(),
         &grant.op.id,
         input,
         Arc::new(context),
         cancel,
-    )
+    );
+    vault.end_call(token);
+    r
 }
 
-/// Checks input against grant's operation, has a write or launch confirmed (a cancel withdraws
-/// the confirmation), and grants it again once confirmed: regrant must give the same release and
-/// operation.
+/// Checks input against grant's operation and the secret fields filler fills in it, has a write,
+/// a launch or a secret's delivery confirmed (a cancel withdraws the confirmation), and grants it
+/// again once confirmed: regrant must give the same release and operation. Gives the fields filled.
+#[allow(clippy::too_many_arguments)]
 fn checked(
     app: &AppHandle,
     grant: &Grant,
     regrant: &dyn Fn() -> Result<Grant, CallError>,
     chain: &[Hop],
     origin: &Origin,
+    filler: &Filler,
     input: &Value,
     cancel: &Cancel,
-) -> Result<(), CallError> {
+) -> Result<Vec<Filled>, CallError> {
     if serde_json::to_vec(input).map_or(usize::MAX, |b| b.len()) > MAX_INPUT {
         return Err(fail(
             "invalid_request",
@@ -321,9 +473,15 @@ fn checked(
         ));
     }
     program::schema::check(&grant.op.input_schema, input, "input")
-        .map_err(|e| fail("invalid_request", e))?;
+        .map_err(|_| invalid_input(grant))?;
+    let vault = Arc::clone(&app.state::<App>().vault);
+    let filled = secret_fields(&vault, grant, input, filler)?;
+    // A secret's value delivered, or any secret the window gives, is the person's decision.
+    let ask = filled
+        .iter()
+        .any(|f| f.value || matches!(filler, Filler::Window));
     let preparation = rules::preparation(chain);
-    if authorize(app, grant, origin, preparation, input, cancel)? {
+    if authorize(app, grant, origin, preparation, input, &filled, ask, cancel)? {
         // Asked: the catalog may have changed while the person answered.
         let now = regrant()?;
         if now.target != grant.target || now.op != grant.op {
@@ -337,7 +495,7 @@ fn checked(
             ));
         }
     }
-    Ok(())
+    Ok(filled)
 }
 
 /// Consumer caller's request to the host's job service, as o names it.
@@ -408,17 +566,32 @@ fn start_job(
                 packages,
                 // A job is started by a tool: it never uses a gesture.
                 gesture: Arc::new(Mutex::new(None)),
+                token: 0,
             };
             let input = i["input"].clone();
-            checked(
+            // A job's operation has no secret fields (`device::Catalog` refuses them at install),
+            // so a secret or reference anywhere in its input is refused here.
+            let filler = Filler::Tool {
+                holder: Holder {
+                    id: caller.0.into(),
+                    sha256: caller.1.into(),
+                    generation: caller.2,
+                },
+                call: parent.token,
+            };
+            let filled = checked(
                 app,
                 &g.producer,
                 &|| grant().map(|g| g.producer),
                 &chain,
                 &origin,
+                &filler,
                 &input,
                 &o.cancel,
             )?;
+            if !filled.is_empty() {
+                return Err(fail("permission", "a job's operation takes no secrets"));
+            }
             // The consumer stays up for the job's deliveries.
             let lease = st.programs.lease(caller.0)?;
             Ok((g, chain, origin, input, lease))
@@ -478,6 +651,7 @@ fn run_job(
         extra: Box::new(origin),
         feed: Some(Arc::clone(job) as Arc<dyn program::Feed>),
         turn_bounded: false,
+        secrets: Vec::new(),
     };
     let op = g.producer.op.id.clone();
     let producer = p.0.clone();
@@ -497,17 +671,38 @@ fn run_job(
             .consumer((&c.0, &c.1, c.2), kind, &roots())
             .is_ok()
     };
-    let deliver = |envelope: Value, end: bool| {
+    let vault = Arc::clone(&st.vault);
+    let deliver = |mut envelope: Value, end: bool| {
+        // A deliver operation has no secret fields: a secret or reference a producer put in a
+        // batch is refused like any input's, which ends the job; an end that holds one is
+        // delivered as failed, without it.
+        if rules::stray_secret(&envelope, &|_| false, &|s| vault.carries(s)) {
+            let e = fail(
+                "invalid_request",
+                format!(
+                    "{}'s {} refuses this delivery: it holds a secret or secret reference",
+                    c.0, g.deliver.id
+                ),
+            );
+            if !end {
+                return Err(e);
+            }
+            envelope = json!({"job": envelope["job"], "kind": envelope["kind"],
+                "event": "failed", "error": {"code": e.code, "message": e.message},
+                "batches": envelope["batches"], "source": envelope["source"]});
+        }
         let context = Context {
             chain: delivery_chain.clone(),
             expect: Some((c.1.clone(), c.2)),
             extra: Box::new(Origin {
                 packages: delivery_packages.clone(),
                 gesture: Arc::new(Mutex::new(None)),
+                token: 0,
             }),
             feed: None,
             // A consumer busy past the startup limit fails the job rather than hold it.
             turn_bounded: true,
+            secrets: Vec::new(),
         };
         // A batch's delivery ends with the job; its end is delivered after.
         let cancel = if end {
@@ -587,37 +782,85 @@ fn launch_of(
     })
 }
 
-/// A read goes ahead. A write or launch needs the person's native confirmation of the whole
-/// chain and the exact input, now; a launch the window made directly, with a native gesture, may
-/// use a remembered approval of exactly that instead. A call with a tool hop is prepared as an
-/// import: it always asks, and its dialog offers no Remember. A cancel while the confirmation is
-/// open withdraws it. Whether it asked.
+/// What a confirmation says of a call's secret fields.
+fn secret_text(target: &str, filled: &[Filled]) -> String {
+    if filled.is_empty() {
+        return String::new();
+    }
+    let each: Vec<String> = filled
+        .iter()
+        .map(|f| {
+            format!(
+                "{} ({}) to {target}'s {}, {}",
+                f.label,
+                f.secret,
+                f.field,
+                if f.value {
+                    "which receives the secret itself"
+                } else {
+                    "as a reference only"
+                }
+            )
+        })
+        .collect();
+    format!(" Secrets: {}.", each.join("; "))
+}
+
+/// A read goes ahead, unless secret (a secret's delivery) asks. A write or launch needs the
+/// person's native confirmation of the whole chain and the exact input, and of the secrets filled,
+/// now; a launch the window made directly, with a native gesture, may use a remembered approval
+/// of exactly that instead, the same secrets' IDs included (a launch's secrets are references,
+/// never values). A call with a tool hop is prepared as an import (a secret's delivery
+/// to a tool through another included): it always asks, and its dialog offers no Remember. A
+/// cancel while the confirmation is open withdraws it. Whether it asked.
+#[allow(clippy::too_many_arguments)]
 fn authorize(
     app: &AppHandle,
     grant: &Grant,
     origin: &Origin,
     preparation: rules::Preparation,
     input: &Value,
+    filled: &[Filled],
+    secret: bool,
     cancel: &Cancel,
 ) -> Result<bool, CallError> {
     let effect = grant.op.effect.as_str();
-    if effect == "read" {
+    if effect == "read" && !secret {
         return Ok(false);
     }
     let executor = grant.target.package();
     let launch = if effect == "launch" {
-        Some(launch_of(input, &executor)?)
+        // Manifests refuse it too: a launch hands over no value, so a remembered launch approval
+        // (bound to its secrets' IDs below) never stands for a value's delivery.
+        if filled.iter().any(|f| f.value) {
+            return Err(fail(
+                "permission",
+                "a launch's secret fields hold references only, never a secret's value",
+            ));
+        }
+        let mut l = launch_of(input, &executor)?;
+        // A remembered launch is bound to the secrets it uses too.
+        l.secret_uses = filled
+            .iter()
+            .map(|f| confirmation::SecretUse {
+                reference: f.secret.clone(),
+                recipient: grant.target.id().into(),
+                purpose: f.field.clone(),
+            })
+            .collect();
+        Some(l)
     } else {
         None
     };
     let action = confirmation::Action {
         what: format!(
-            "{} {}: {} ({}). Input: {}",
+            "{} {}: {} ({}). Input: {}{}",
             grant.target.id(),
             grant.op.id,
             grant.op.description,
             effect,
-            input
+            input,
+            secret_text(grant.target.id(), filled)
         ),
         chain: origin.packages.clone(),
         executor,

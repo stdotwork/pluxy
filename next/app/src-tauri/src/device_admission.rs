@@ -48,6 +48,10 @@ pub struct OperationDecl {
     /// `read`, `write` or `launch` (`imports::Effect`); absent in a manifest: `write`.
     #[serde(default = "imports::write_effect")]
     pub effect: String,
+    /// Input fields that carry a secret, and how: `value` (the host delivers the secret to the
+    /// tool) or `reference` (the tool gets only a reference to it).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub secrets: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -479,6 +483,7 @@ pub(super) fn native_release(
             input_schema: o.input_schema.clone(),
             output_schema: o.output_schema.clone(),
             effect: o.effect.clone().unwrap_or_else(imports::write_effect),
+            secrets: o.secrets.clone().unwrap_or_default(),
         })
         .collect();
     r.exports = app.exports.as_ref().map(|e| ExportDecl {
