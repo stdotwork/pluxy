@@ -366,7 +366,11 @@ in one of two ways:
   `{"version": 0, "registries": [{"name": "...", "url": "..."}]}`; each `url` is an index (the
   [protocol's format](../protocol/README.md#registry-index)) at an absolute local path or an
   `https://` address. The archive must have the size and SHA-256 the index lists for this
-  computer's platform, and hold the ID and version it lists. An index may also list the
+  computer's platform, and hold the ID and version it lists. An install that names no version, and
+the version the window offers, take the highest release the index lists for this platform, whatever
+order it lists them in: the highest stable version, or the highest prerelease when it lists no
+stable one. A version that is not a semantic version is never taken that way; it installs only when
+named. An index may also list the
 release's publisher signature (`key_id`, `public_key`, `descriptor` and `signature`, see
 [the app package contract](app-host/README.md#signed-descriptor-bytes)): all four or none. The
 signature is checked before the archive is unpacked and kept with the release, for Access.
