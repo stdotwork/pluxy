@@ -52,11 +52,11 @@ const CONSUMER: &str = "pluxy/consumer";
 const LABEL: &str = "fixture client key";
 const REDACTED: &str = "[redacted]";
 
-/// Types key into the native key entry the vault opens, and accepts it. The bytes go to xdotool
-/// on its stdin, never in argv.
-pub(super) fn type_key(key: &str) -> Result<(), String> {
+/// Types key into the native key entry titled title, and accepts it. The bytes go to xdotool on
+/// its stdin, never in argv.
+pub(super) fn type_key(title: &str, key: &str) -> Result<(), String> {
     let id = wait_for("the native secret entry", || {
-        x(&["search", "--onlyvisible", "--name", "^pluxy secret$"])
+        x(&["search", "--onlyvisible", "--name", &format!("^{title}$")])
             .ok()
             .and_then(|s| s.lines().last().map(String::from))
     })?;
@@ -101,7 +101,7 @@ pub(super) fn dialog_with(app: &AppHandle, needles: &[&str]) -> Result<String, S
 }
 
 /// Waits for the answer of the call in slot, failing if a native confirmation shows meanwhile.
-fn settle_unasked(main: &Webview, slot: &str) -> Result<Value, String> {
+pub(super) fn settle_unasked(main: &Webview, slot: &str) -> Result<Value, String> {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         if let Some(r) = super::eval(
@@ -237,7 +237,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 format!("the vault before: {before}"),
             )?;
             let slot = start(main, "vault_secret_add", json!({"label": LABEL}))?;
-            type_key(&key)?;
+            type_key("pluxy secret", &key)?;
             let r = settle(main, &slot)?;
             require(r["ok"] == true, format!("vault_secret_add: {r}"))?;
             secret = r["value"]["id"].as_str().unwrap_or_default().to_string();

@@ -9,7 +9,7 @@ reference: this folder implements it, it does not change it.
 
 ```bash
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
-cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex)
+cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-omp)
 cargo build --locked -p pluxy-transactions --example fixture-writer   # the native test's fixture
 cargo build --release --locked -p claude-code   # likewise execution
 ```
@@ -150,6 +150,38 @@ changes, by the old desktop app's rules:
   that day's start in UTC, where the old reader used local midnight.
 
 The rollout is read line by line, whatever its size; a line over 16 MiB is skipped, as the old reader did.
+
+## `lib/pi-sessions`
+
+What the Pi and Oh My Pi usage parsers share (`pluxy-pi-sessions`): the two tools write the same
+session format, so one library reads it and each parser is a small program of its own. Their session
+files are `*.jsonl` under `~/.<tool>/agent/sessions` and `~/.<tool>/sessions` (the hub's `roots` name
+others), read-only. A file's ID is its path below the root it is under, so a session present under
+both roots is one file and the newer copy is read. Rules, by the tools' own sources:
+
+- an entry of type `message` has its usage in `message.usage`; an entry of type `usage` (Pi),
+  `model_usage` (Oh My Pi), `compaction` or `branch_summary` (Pi) has it in its own `usage`. Nothing
+  else is read: an Oh My Pi `task` result keeps its child's usage in `details.usage`, and the child has
+  a file of its own;
+- `input` is already net of cache reads and writes (the tools' providers take them out), `output`
+  holds the reasoning tokens (`reasoning` in Pi, `reasoningTokens` in Oh My Pi), which are never added
+  again; the total is the entry's `totalTokens`, else input + output + cache read + cache write;
+- the model is the message's `responseModel` (the model that answered), else its `model`; another
+  entry's `model`; none is the empty name;
+- the hour is the entry's `timestamp` (an ISO time), else the message's timestamp (milliseconds); an
+  entry with neither readable is skipped (the old reader used the file's modification time, which a
+  parser is not given);
+- every entry with a usage that holds a count is one sample, also one that adds nothing.
+
+A session a tool forks is a new file that starts with copies of the parent's entries, so the entries
+they share are counted in each file, as the old desktop app counted them: schema 1 keeps rows per file.
+Only counters, a model name and a time are read: no prompt, message, title, folder or key leaves the
+parser.
+
+## `usage-omp`
+
+`pluxy/usage-omp`, the usage hub's parser of Oh My Pi's session files, from `~/.omp/agent/sessions` and
+`~/.omp/sessions` (the `HOME` the app gives). It is `lib/pi-sessions` with Oh My Pi's name and folder.
 
 ## `codex-sessions`
 

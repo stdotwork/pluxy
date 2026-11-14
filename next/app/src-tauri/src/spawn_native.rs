@@ -308,7 +308,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         "secret",
         (|| {
             let slot = start(main, "vault_secret_add", json!({"label": LABEL}))?;
-            type_key(&key)?;
+            type_key("pluxy secret", &key)?;
             let r = settle(main, &slot)?;
             require(r["ok"] == true, format!("vault_secret_add: {r}"))?;
             secret = r["value"]["id"].as_str().unwrap_or_default().to_string();
