@@ -11,7 +11,7 @@ reference: this folder implements it, it does not change it.
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
 cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex)
 cargo build --locked -p pluxy-transactions --example fixture-writer   # the native test's fixture
-cargo build --release --locked -p claude-code   # likewise execution
+cargo build --release --locked -p claude-code   # likewise codex-setup and execution
 ```
 
 ## `lib/program`
@@ -272,6 +272,58 @@ since. `CLAUDE_CODE_EFFORT_LEVEL` and per-model `modelSettings` are left alone. 
 JSON (a comment, a trailing comma), not an object, an `env` that is not an object of strings, or a
 `$schema` other than `https://json.schemastore.org/claude-code-settings.json`. A missing or empty
 file is an empty one. Restore Backup puts the original back whatever the file holds now.
+
+## `codex`
+
+`pluxy/codex-setup` (crate `codex-setup`; `pluxy/codex` is the core's Codex extension) sets up
+Codex to use pluxy's core and says how to start it, for the desktop app's Codex page
+(`../app/README.md`, "Codex"). It writes two files through `lib/transactions` (set `codex`, in this
+order): Codex's `config.toml` and the model catalog Codex reads from `model_catalog_json`,
+`pluxy-model-catalog.json` beside it by default. Both are link-preserving, journalled and backed up
+together; the original and applied images stay in the host's vault. It exports nothing.
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `preview` | `read` | `targets`: two selections (`file`, or `root` and `path`), config.toml then the catalog, by default `~/.codex/config.toml` and `~/.codex/pluxy-model-catalog.json` in the app's `HOME` (the tool sees no `CODEX_HOME`: select that folder as a root); `base_url` (optional) | The library's preview and `settings`: `state`, `base_url`, `key_set`, `provider` (the `model_provider` now), `model`, `profile`, `catalog`, `remote_compaction`, `agents`, `approval_model` and each catalog model's editable settings (`system_prompt_chars`, never a prompt); never the key |
+| `import` | `read` | `models`: the core's served models (`slug`, `upstream`, `display_name`, `non_codex`) | The editable settings of the entries they would get, and `missing`: those pluxy has no Codex template for. Nothing is written |
+| `apply` | `write`; secret `key` (value) | Two pins, `base_url`, `key`, `model` (one of the catalog's), `approval_model` (empty: Codex default), `remote_compaction`, `agents` (`enabled`, `max_threads`, `model`, `effort`, `interrupt`), `models` (1 to 64: `slug`, for a new entry `upstream` and `non_codex`, `display_name`, `description`, `context_window`, `max_context_window`, `effective_context_window_percent`, `auto_compact_token_limit`, `reasoning`, `default_reasoning`, `input_modalities`, `visible`, `tool_search`, optional `system_prompt`) | The library's outcome |
+| `clear` | `write` | Two pins | The library's outcome: the values Apply wrote go, edits made since stay |
+| `restore` | `write` | Two pins | The library's outcome: both originals back (a file that did not exist is removed) |
+| `backup-*` | as the library's | as the library's, two pins | Manual backups of both files; config.toml is diffed by TOML setting path |
+| `status` | `read` | — | The library's status |
+| `recipe` | `read` | `target`: `cli` (default), `app` or `service` | `codex` in a terminal with no arguments; Codex App as a direct launch of the program the person names (Codex has no Linux app); `codex app-server daemon restart` as a direct launch in `HOME` |
+
+What `apply` writes in config.toml, edited in place with `toml_edit` (comments, formatting and
+everything else stay), with Codex's own names (source `openai/codex` at `b1573f102`, read
+2026-11-14: `codex-rs/config/src/config_toml.rs`, `codex-rs/model-provider-info`,
+`codex-rs/core/config.schema.json`):
+
+- at the top level: `model_provider = "pluxy"`, `model`, and `model_catalog_json` (the catalog's
+  file name when it is in config.toml's selected folder, which Codex resolves relative paths
+  against; else its full path);
+- `[model_providers.pluxy]`: `name = "pluxy"`, `base_url` (the core's address with `/v1`),
+  `wire_api = "responses"` (the only one Codex speaks) and `experimental_bearer_token` (the client
+  key, as the old app wrote it); `env_key` and `requires_openai_auth` are removed from that table;
+- **Remote compaction (experimental)**: `capabilities.remote_compaction = "v2"` in that table, or
+  removed (Codex's default for a custom provider is local compaction);
+- `[agents]` (`enabled`, `interrupt_message`, `max_concurrent_threads_per_session`,
+  `default_subagent_model`, `default_subagent_reasoning_effort`; empty ones removed), only when the
+  file has the table or the settings differ from Codex's defaults.
+
+`auth.json` (the person's ChatGPT login) is never written. The catalog is Codex's `{"models": [...]}`.
+A new entry is made from pluxy's Codex client template for its upstream name
+(`../extensions/codex/client_models.json`, embedded at build time: the file the core serves Codex),
+keeping only the fields Codex requires and those that shape how it drives the model, with
+`model_messages.instructions_template` (Codex refuses a model without instructions); a full
+template is about 88 KB and a file at most 256 KiB, so about ten models fit. A model served by
+another provider gets the core's non-Codex values. Entries already in the file keep every field
+the form does not edit; each gets the form's settings, its place as `priority` and the approval
+model as `auto_review_model_override`. Clear's merge is TOML for config.toml (the current file
+edited in place; a key coming back from the original goes at its table's end) and JSON for the
+catalog. Every operation but `restore` refuses, before writing, a config.toml that is not TOML, or
+whose `model_providers`, `model_providers.pluxy`, its `capabilities` or `agents` is not a table, or
+whose pluxy provider asks for another wire API; and a catalog that is not a JSON object with a
+`models` list of entries with a `slug`. Codex's files carry no version, and none is assumed.
 
 ## `execution`
 
