@@ -34,13 +34,17 @@ pub fn merge_value(
     ) {
         (Some(a), Some(c)) => {
             let o = original.and_then(Value::as_object);
-            let mut keys: Vec<&String> = a
+            // The file's own order: current's keys, then those coming back from original.
+            let mut keys: Vec<&String> = Vec::new();
+            for k in c
                 .keys()
-                .chain(c.keys())
                 .chain(o.into_iter().flat_map(Map::keys))
-                .collect();
-            keys.sort();
-            keys.dedup();
+                .chain(a.keys())
+            {
+                if !keys.contains(&k) {
+                    keys.push(k);
+                }
+            }
             let mut merged = Map::new();
             for k in keys {
                 if let Some(v) = merge_value(o.and_then(|o| o.get(k)), a.get(k), c.get(k)) {
@@ -54,8 +58,9 @@ pub fn merge_value(
 }
 
 /// JSON files: parsed, merged with [`merge_value`] and written with two-space indentation and a
-/// final newline. Keys come out sorted (the parser keeps no order) and comments are not JSON, so
-/// a format that must keep them needs its own [`Merge`].
+/// final newline. Keys keep the file's order and numbers their exact digits (serde_json's
+/// `preserve_order` and `arbitrary_precision`); other formatting is not kept, and comments are
+/// not JSON, so a format that must keep them needs its own [`Merge`].
 pub struct Json;
 
 impl Json {

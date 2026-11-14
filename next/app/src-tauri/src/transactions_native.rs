@@ -7,9 +7,9 @@
 //! - install and enable: the writer installs from the curated registry and is enabled through its
 //!   native confirmation;
 //! - file link: a preview of the selected stow link (a read, asked nothing) names the link's text
-//!   and the file it resolves to; an apply asks a native confirmation naming both, then changes
-//!   only that file, to the bytes `expect.json` says, keeping its mode, and the link keeps its
-//!   identity and text;
+//!   and the file it resolves to; an apply asks a native confirmation naming both (and saying an
+//!   edit made in the same instant may be lost), then changes only that file, to the bytes
+//!   `expect.json` says, keeping its mode, and the link keeps its identity and text;
 //! - root link: the same for two files in the selected chezmoi root (one missing, so created),
 //!   the root link kept; a file inside the root that is a link, or a path leaving it, is refused,
 //!   and the link's target is untouched;
@@ -25,7 +25,10 @@
 //! - crash recovery: a writer that exits after writing one of two files has an unknown outcome;
 //!   its next start rolls the written file back (journal reconciled as rolled back), keeps a
 //!   competing edit made after the crash instead of rolling over it, and commits a write that
-//!   finished before the crash (which clear then undoes);
+//!   finished before the crash (which clear then undoes); it also removes a temporary file a
+//!   write cut short left beside a target;
+//! - restore after a conflict: the original a.json kept when recovery left the competing edit
+//!   survives the operations since, and restore (after a new preview) puts it back;
 //! - audit: no temporary file is left, the files no step names keep their bytes, and once
 //!   disabled no writer process is left.
 //!
@@ -349,7 +352,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 "apply",
                 json!({"set": "file", "targets": p["targets"],
                     "values": {"model": "fixture-model", "proxy": "http://127.0.0.1:9"}}),
-                &[sl.as_str(), st.as_str()],
+                &[sl.as_str(), st.as_str(), "may be lost"],
             )?;
             require(o["outcome"] == "applied", format!("the apply: {o}"))?;
             require(
@@ -697,8 +700,16 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 format!("open journals after the crash: {open:?}"),
             )?;
             let journal = open[0]["id"].clone();
+            // A temporary file as a write cut short between writing and renaming leaves one
+            // (the new bytes), which recovery must remove.
+            let temp = a.with_file_name(".a.json.pluxy-0123456789abcdef.tmp");
+            std::fs::write(&temp, bytes("aApplied")).map_err(|e| e.to_string())?;
             after_backoff(main, w)?;
             let st = read_op(main, w, "status", json!({}))?;
+            require(
+                !temp.exists(),
+                "recovery left the temporary file beside a.json",
+            )?;
             let report = st["recovered"]
                 .as_array()
                 .and_then(|a| a.last())
@@ -824,6 +835,41 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         })(),
     )?;
     passed("crash committed");
+
+    // ---- restore after a conflict: the original a.json kept when recovery left the competing
+    // edit survives the operations since, and restore puts it back
+    step(
+        "restore after conflict",
+        (|| {
+            let st = read_op(main, w, "status", json!({}))?;
+            require(
+                st["kept"] == json!([{"set": "crash2", "target": a, "why": "conflict"}]),
+                format!("the kept originals: {st}"),
+            )?;
+            let p = read_op(
+                main,
+                w,
+                "preview",
+                json!({"set": "crash2", "targets": [in_root("a.json")]}),
+            )?;
+            let o = written(
+                app,
+                main,
+                w,
+                "restore",
+                json!({"set": "crash2", "targets": p["targets"]}),
+                &[ap.as_str()],
+            )?;
+            require(o["outcome"] == "restored", format!("the restore: {o}"))?;
+            require(
+                read(&a) == Some(bytes("a")),
+                format!("a.json after restore: {:?}", read(&a)),
+            )?;
+            let st = read_op(main, w, "status", json!({}))?;
+            require(st["kept"] == json!([]), format!("kept after restore: {st}"))
+        })(),
+    )?;
+    passed("restore after conflict");
 
     // ---- audit
     step(

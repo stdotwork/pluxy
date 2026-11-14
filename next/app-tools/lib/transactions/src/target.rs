@@ -3,7 +3,7 @@
 //! and writing the file through a handle on its folder (cap-std), never by a path again.
 
 use cap_std::ambient_authority;
-use cap_std::fs::{Dir, MetadataExt, OpenOptions, PermissionsExt as _};
+use cap_std::fs::{Dir, MetadataExt, OpenOptions, OpenOptionsExt as _, PermissionsExt as _};
 use pluxy_program::Error;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -130,10 +130,36 @@ impl Pin {
         v
     }
 
-    /// A pin a write's input carries back.
+    /// A pin a write's input carries back: exactly the fields [`Pin::to_json`] writes, nothing
+    /// more, so an input cannot carry text the confirmation shows beside the pin.
     pub fn from_json(v: &Value) -> Result<Pin, Error> {
         let bad =
             |what: &str| Error::invalid_request(format!("a target's {what} is missing or wrong"));
+        let only = |o: &Value, keys: &[&str], what: &str| -> Result<(), Error> {
+            let o = o.as_object().ok_or_else(|| bad(what))?;
+            match o.keys().find(|k| !keys.contains(&k.as_str())) {
+                Some(k) => Err(Error::invalid_request(format!(
+                    "a target has an unknown field {k:?}"
+                ))),
+                None => Ok(()),
+            }
+        };
+        let rooted = v.get("path").is_some();
+        let (fields, ids): (&[&str], &[&str]) = if rooted {
+            (
+                &[
+                    "selected", "path", "root", "link", "target", "identity", "sha256",
+                ],
+                &["link", "root", "parent", "file"],
+            )
+        } else {
+            (
+                &["selected", "link", "target", "identity", "sha256"],
+                &["link", "parent", "file"],
+            )
+        };
+        only(v, fields, "pin")?;
+        only(&v["identity"], ids, "identity")?;
         let s = |k: &str| v.get(k).and_then(Value::as_str);
         let opt = |k: &str| -> Result<Option<String>, Error> {
             match v.get(k) {
@@ -179,6 +205,32 @@ impl Pin {
             && self.target == other.target
             && self.parent_id == other.parent_id
     }
+}
+
+/// The JSON Schema of a pin, in the host's schema subset, for a writer's operation inputs
+/// (`"items"` of its `targets`): exactly the fields [`Pin::to_json`] writes.
+pub fn pin_schema() -> Value {
+    let path = json!({"type": "string", "minLength": 1, "maxLength": 4096});
+    let id = json!({"type": ["string", "null"], "maxLength": 41});
+    json!({
+        "type": "object",
+        "properties": {
+            "selected": path,
+            "path": path,
+            "root": path,
+            "link": {"type": ["string", "null"], "maxLength": 4096},
+            "target": path,
+            "identity": {
+                "type": "object",
+                "properties": {"link": id, "root": id, "parent": id, "file": id},
+                "required": ["link", "parent", "file"],
+                "additionalProperties": false
+            },
+            "sha256": {"type": ["string", "null"], "minLength": 64, "maxLength": 64}
+        },
+        "required": ["selected", "link", "target", "identity", "sha256"],
+        "additionalProperties": false
+    })
 }
 
 /// The SHA-256 of bytes, in lower-case hexadecimal.
@@ -277,6 +329,8 @@ pub struct Target {
     pub pin: Pin,
     dir: Dir,
     name: PathBuf,
+    /// Opened at the pinned target itself ([`Target::pinned`]), not through the selection.
+    pinned: bool,
 }
 
 impl Target {
@@ -392,6 +446,7 @@ impl Target {
             },
             dir,
             name,
+            pinned: false,
         };
         let (id, bytes) = t.read_now()?;
         t.pin.file_id = id;
@@ -425,9 +480,39 @@ impl Target {
         Ok(t)
     }
 
+    /// The file pin names, opened at its pinned target path, whatever the selection resolves to
+    /// now: for reconciling what a journal wrote there. The target's folder must still be the
+    /// pinned one.
+    pub fn pinned(pin: &Pin) -> Result<Target, Error> {
+        let folder = pin.target.parent().unwrap_or(Path::new("/"));
+        let dir = open_dir(folder)?;
+        if dir_id(&dir, folder)? != pin.parent_id {
+            return Err(changed(&pin.target, "its folder was replaced"));
+        }
+        let name = PathBuf::from(pin.target.file_name().unwrap_or_default());
+        let mut t = Target {
+            pin: pin.clone(),
+            dir,
+            name,
+            pinned: true,
+        };
+        let (id, bytes) = t.read_now()?;
+        t.pin.file_id = id;
+        t.pin.sha256 = sha256_of(bytes.as_deref());
+        Ok(t)
+    }
+
     /// Whether the selection still resolves to this target's folder and name, as pinned (the
-    /// file itself is checked by the caller).
+    /// file itself is checked by the caller); for a [`Target::pinned`] one, whether the target's
+    /// folder path still opens the pinned folder.
     pub fn check_place(&self) -> Result<(), Error> {
+        if self.pinned {
+            let folder = self.pin.target.parent().unwrap_or(Path::new("/"));
+            if dir_id(&open_dir(folder)?, folder)? != self.pin.parent_id {
+                return Err(changed(&self.pin.target, "its folder was replaced"));
+            }
+            return Ok(());
+        }
         let now = Target::resolve(&self.pin.selection)?;
         if !now.pin.same_place(&self.pin) {
             return Err(changed(
@@ -483,6 +568,38 @@ impl Target {
         Ok((Some(Id::of(&m)), Some(bytes)))
     }
 
+    /// The file's permission bits now (setuid, setgid and sticky left out), None when missing.
+    pub fn mode_now(&self) -> Result<Option<u32>, Error> {
+        match self.dir.symlink_metadata(&self.name) {
+            Ok(m) => Ok(Some(m.permissions().mode() & 0o777)),
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(io(&format!("{}", self.pin.target.display()), e)),
+        }
+    }
+
+    /// Removes temporary files a write left beside the target (`.<name>.pluxy-<hex>.tmp`, as
+    /// [`Target::replace`] names them) when the program stopped between writing one and renaming
+    /// it; they may hold the new bytes. The names removed.
+    pub fn remove_temps(&self) -> Result<Vec<String>, Error> {
+        let prefix = format!(".{}.pluxy-", self.name.to_string_lossy());
+        let mut removed = Vec::new();
+        let entries = self
+            .dir
+            .entries()
+            .map_err(|e| io(&format!("{}", self.pin.target.display()), e))?;
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let hex = name
+                .strip_prefix(&prefix)
+                .and_then(|r| r.strip_suffix(".tmp"))
+                .is_some_and(|h| h.len() == 16 && h.bytes().all(|b| b.is_ascii_hexdigit()));
+            if hex && self.dir.remove_file(&name).is_ok() {
+                removed.push(name);
+            }
+        }
+        Ok(removed)
+    }
+
     /// Whether the file is now the one expected: its identity (when given) and its SHA-256.
     fn is(&self, id: Option<Option<Id>>, sha: &Option<String>) -> Result<bool, Error> {
         let (now_id, bytes) = self.read_now()?;
@@ -493,12 +610,16 @@ impl Target {
     /// `from`, with bytes (or removes it, for None): a new file in the same folder, renamed over
     /// it, so a link to it stays a link. The selection's resolution is checked again before the
     /// rename and after it, and the file after the write must be the one written. Returns the
-    /// new file's identity (None once removed).
+    /// new file's identity (None once removed). The new file keeps the old one's permission bits
+    /// (setuid, setgid and sticky left out), or gets `mode` (else 0600) when there was none; it is
+    /// written 0600 and given them just before the rename. It is a new file: hard links to the
+    /// old one keep the old bytes, and its owner, ACLs and extended attributes are not copied.
     pub fn replace(
         &self,
         from_id: Option<Option<Id>>,
         from: &Option<String>,
         bytes: Option<&[u8]>,
+        mode: Option<u32>,
     ) -> Result<Option<Id>, Failed> {
         let at = &self.pin.target;
         let modified = || {
@@ -537,37 +658,24 @@ impl Target {
                 MAX_FILE >> 10
             ))));
         }
-        let mode = match self.dir.symlink_metadata(&self.name) {
-            Ok(m) => m.permissions().mode() & 0o7777,
-            Err(_) => NEW_FILE_MODE,
+        let mode = match self.mode_now() {
+            Ok(Some(m)) => m,
+            _ => mode.unwrap_or(NEW_FILE_MODE) & 0o777,
         };
         let tmp = PathBuf::from(format!(
             ".{}.pluxy-{}.tmp",
             self.name.to_string_lossy(),
             random_hex().map_err(before)?
         ));
-        let written = (|| -> Result<Id, Error> {
-            let beside = |e| io(&format!("writing beside {}", at.display()), e);
-            let mut f = self
-                .dir
-                .open_with(&tmp, OpenOptions::new().write(true).create_new(true))
-                .map_err(beside)?
-                .into_std();
+        let beside = |e| io(&format!("writing beside {}", at.display()), e);
+        let written = self.write_temp(&tmp, bytes).and_then(|(id, f)| {
+            self.check_place()?;
+            if !self.is(from_id, from)? {
+                return Err(modified());
+            }
             f.set_permissions(std::fs::Permissions::from_mode(mode))
                 .map_err(beside)?;
-            f.write_all(bytes)
-                .and_then(|_| f.sync_all())
-                .map_err(beside)?;
-            let m = cap_std::fs::File::from_std(f).metadata().map_err(beside)?;
-            Ok(Id::of(&m))
-        })()
-        .and_then(|id| {
-            self.check_place()?;
-            if self.is(from_id, from)? {
-                Ok(id)
-            } else {
-                Err(modified())
-            }
+            Ok(id)
         });
         let new_id = match written {
             Ok(id) => id,
@@ -593,6 +701,35 @@ impl Target {
             return Err(after(modified()));
         }
         Ok(Some(new_id))
+    }
+
+    /// Writes bytes to a new file tmp beside the target, readable only by this user (0600) until
+    /// the caller gives it the target's mode just before renaming it: its identity and handle.
+    pub(crate) fn write_temp(
+        &self,
+        tmp: &Path,
+        bytes: &[u8],
+    ) -> Result<(Id, std::fs::File), Error> {
+        let beside = |e| io(&format!("writing beside {}", self.pin.target.display()), e);
+        let mut f = self
+            .dir
+            .open_with(
+                tmp,
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(NEW_FILE_MODE),
+            )
+            .map_err(beside)?
+            .into_std();
+        f.set_permissions(std::fs::Permissions::from_mode(NEW_FILE_MODE))
+            .map_err(beside)?;
+        f.write_all(bytes)
+            .and_then(|_| f.sync_all())
+            .map_err(beside)?;
+        let f = cap_std::fs::File::from_std(f);
+        let m = f.metadata().map_err(beside)?;
+        Ok((Id::of(&m), f.into_std()))
     }
 
     /// Flushes the folder, so a rename or removal in it lasts.

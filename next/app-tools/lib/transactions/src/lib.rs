@@ -32,7 +32,7 @@ mod target;
 mod tests;
 
 pub use merge::{merge_value, Json, Merge};
-pub use target::{sha256, sha256_of, Failed, Id, Pin, Selection, Target, MAX_FILE};
+pub use target::{pin_schema, sha256, sha256_of, Failed, Id, Pin, Selection, Target, MAX_FILE};
 
 use cap_std::ambient_authority;
 use cap_std::fs::{Dir, OpenOptions};
@@ -104,46 +104,87 @@ fn check_set(set: &str) -> Result<(), Error> {
     }
 }
 
-/// One file of an operation: its target, its bytes now and the bytes it gets.
+/// One file of an operation: its target, its bytes and permission bits now, the bytes it gets,
+/// and the permission bits a file it creates gets (else 0600).
 struct Change {
     target: Target,
     before: Option<Vec<u8>>,
+    mode: Option<u32>,
     after: Option<Vec<u8>>,
+    after_mode: Option<u32>,
 }
 
-/// What a set's record keeps for one target: where it is, and the backups of its original and
-/// applied images (null: no file).
-fn record(
-    pin: &Pin,
-    original: Option<String>,
-    applied: Option<String>,
-    applied_sha: Option<String>,
-) -> Value {
+/// Where a pin is, as records name it: the selection and the target.
+fn place(pin: &Pin) -> Value {
     let (selected, path) = match &pin.selection {
         Selection::File(f) => (f.clone(), None),
         Selection::Root { root, path } => (root.clone(), Some(path.clone())),
     };
-    json!({
-        "selected": selected,
-        "path": path,
-        "target": pin.target,
-        "original": original,
-        "applied": applied,
-        "applied_sha256": applied_sha,
-    })
+    json!({"selected": selected, "path": path, "target": pin.target})
 }
 
-/// Whether a set's record is for exactly these pins, in order.
+/// What a set's record keeps for one target: where it is, the backups of its original and
+/// applied images (null: no file) and the original's permission bits.
+fn record(
+    pin: &Pin,
+    original: Option<String>,
+    original_mode: Option<u32>,
+    applied: Option<String>,
+    applied_sha: Option<String>,
+) -> Value {
+    let mut r = place(pin);
+    r["original"] = json!(original);
+    r["original_mode"] = json!(original_mode);
+    r["applied"] = json!(applied);
+    r["applied_sha256"] = json!(applied_sha);
+    r
+}
+
+/// Whether a set's record is for exactly these pins' targets, in order. The selection may differ:
+/// a pin of the target file itself reaches a record made through a link that now points
+/// elsewhere.
 fn matches(rec: &Value, pins: &[Pin]) -> bool {
     let targets = rec["targets"]
         .as_array()
         .map(Vec::as_slice)
         .unwrap_or_default();
     targets.len() == pins.len()
-        && targets.iter().zip(pins).all(|(t, p)| {
-            let r = record(p, None, None, None);
-            t["selected"] == r["selected"] && t["path"] == r["path"] && t["target"] == r["target"]
-        })
+        && targets
+            .iter()
+            .zip(pins)
+            .all(|(t, p)| t["target"] == json!(p.target))
+}
+
+/// Whether none of a record's selections resolves to its recorded target any more (a link
+/// pointed elsewhere, a root or file gone).
+fn stale(rec: &Value) -> bool {
+    rec["targets"].as_array().into_iter().flatten().all(|t| {
+        let file = t["selected"].as_str().map(PathBuf::from);
+        let selection = match (file, t["path"].as_str()) {
+            (Some(root), Some(path)) => Selection::Root {
+                root,
+                path: path.into(),
+            },
+            (Some(f), None) => Selection::File(f),
+            _ => return true,
+        };
+        Target::resolve(&selection).map_or(true, |now| json!(now.pin.target) != t["target"])
+    })
+}
+
+/// A kept image: the original of a target an operation could not finish cleanly (another program
+/// changed it meanwhile: `conflict`) or whose record a new apply replaced (`retargeted`), kept so
+/// restore can still put it back.
+fn kept(
+    set: &str,
+    at: &Value,
+    original: &Value,
+    mode: &Value,
+    written: &Value,
+    why: &str,
+) -> Value {
+    json!({"set": set, "selected": at["selected"], "path": at["path"], "target": at["target"],
+        "original": original, "original_mode": mode, "written": written, "why": why})
 }
 
 /// The library's operations for one call, with the vault of that call and the tool's data folder.
@@ -227,6 +268,8 @@ impl<'a> Transactions<'a> {
         image.map(|b| self.put(label, b)).transpose()
     }
 
+    /// The bytes of a backup (null: no file). A vault answer without them is an error, never an
+    /// empty file.
     fn get(&self, backup: &Value) -> Result<Option<Vec<u8>>, Error> {
         let Some(id) = backup.as_str() else {
             return Ok(None);
@@ -234,18 +277,28 @@ impl<'a> Transactions<'a> {
         let v = self
             .vault
             .vault("backup.get", fields(json!({"backup": id})))?;
-        b64::decode(v["data"].as_str().unwrap_or_default())
+        let data = v["data"]
+            .as_str()
+            .ok_or_else(|| Error::internal("the vault gave a backup without its bytes"))?;
+        b64::decode(data)
             .map(Some)
             .ok_or_else(|| Error::internal("the vault gave a backup that is not base64"))
     }
 
-    /// Deletes this library's backups that no set's record names (after an operation ends).
+    /// Deletes this library's backups that nothing names any more: no set's record, no kept
+    /// image and no journal left open after a failed put-back.
     fn sweep(&self, state: &Value) {
         let mut keep = Vec::new();
         for rec in state["sets"].as_object().into_iter().flat_map(Map::values) {
             for t in rec["targets"].as_array().into_iter().flatten() {
                 keep.extend([t["original"].clone(), t["applied"].clone()]);
             }
+        }
+        for k in state["kept"].as_array().into_iter().flatten() {
+            keep.extend([k["original"].clone(), k["written"].clone()]);
+        }
+        for j in state["open"].as_array().into_iter().flatten() {
+            keep.extend(j["backups"].as_array().into_iter().flatten().cloned());
         }
         let Ok(list) = self.vault.vault("backup.list", Map::new()) else {
             return;
@@ -296,8 +349,9 @@ impl<'a> Transactions<'a> {
     /// Writes each pinned target of set with what image gives for it (from its bytes now), and
     /// records set as applied to them. Pins come from a preview; a target that resolves otherwise
     /// now, or changed since, is refused. Applying set again keeps its original, with the
-    /// person's edits since the last apply promoted into it (merge). written is told each file's
-    /// index once it is written.
+    /// person's edits since the last apply promoted into it (merge). A record none of whose
+    /// selections still resolves to its target (a link pointed elsewhere) is replaced, its
+    /// originals kept for restore. written is told each file's index once it is written.
     pub fn apply(
         &self,
         set: &str,
@@ -306,44 +360,67 @@ impl<'a> Transactions<'a> {
         merge: &dyn Merge,
         written: &mut dyn FnMut(usize),
     ) -> Result<Value, Error> {
-        let state = self.load()?;
-        let rec = state["sets"][set].clone();
+        let mut state = self.load()?;
+        let mut rec = state["sets"][set].clone();
         let changes = self.open(set, pins)?;
         if !rec.is_null() && !matches(&rec, pins) {
-            return Err(Error::invalid_request(format!(
-                "{set} is applied to other targets; clear or restore it first"
-            )));
+            if !stale(&rec) {
+                return Err(Error::invalid_request(format!(
+                    "{set} is applied to other targets; clear or restore it first"
+                )));
+            }
+            for t in rec["targets"].as_array().into_iter().flatten() {
+                let k = kept(
+                    set,
+                    t,
+                    &t["original"],
+                    &t["original_mode"],
+                    &t["applied"],
+                    "retargeted",
+                );
+                remember_all(&mut state, "kept", k);
+            }
+            set_record(&mut state, set, None);
+            self.save(&state)?;
+            rec = Value::Null;
         }
         let mut out = Vec::new();
         let mut targets = Vec::new();
         for (i, c) in changes.into_iter().enumerate() {
             let after = image(i, &c.target.pin, c.before.as_deref())?;
-            let original = if rec.is_null() {
-                c.before.clone()
+            let (original, original_mode) = if rec.is_null() {
+                (c.before.clone(), c.mode)
             } else {
                 let t = &rec["targets"][i];
-                merge.merge(
+                let o = merge.merge(
                     self.get(&t["original"])?.as_deref(),
                     self.get(&t["applied"])?.as_deref(),
                     c.before.as_deref(),
-                )?
+                )?;
+                (o, t["original_mode"].as_u64().map(|m| m as u32))
             };
-            out.push((original, Change { after, ..c }));
+            out.push((original, original_mode, Change { after, ..c }));
         }
-        if out.iter().all(|(_, c)| c.after == c.before) {
+        if out.iter().all(|(_, _, c)| c.after == c.before) {
             return Ok(json!({"outcome": "unchanged", "changed": []}));
         }
-        for (original, c) in &out {
+        for (original, mode, c) in &out {
             let o = self.put_image("original", original.as_deref())?;
             let a = self.put_image("applied", c.after.as_deref())?;
-            targets.push(record(&c.target.pin, o, a, sha256_of(c.after.as_deref())));
+            targets.push(record(
+                &c.target.pin,
+                o,
+                *mode,
+                a,
+                sha256_of(c.after.as_deref()),
+            ));
         }
-        let changes = out.into_iter().map(|(_, c)| c).collect();
+        let changes = out.into_iter().map(|(_, _, c)| c).collect();
         self.run(
             "apply",
             set,
             changes,
-            Some(json!({"targets": targets})),
+            Some(Some(json!({"targets": targets}))),
             written,
         )
         .map(|changed| json!({"outcome": "applied", "changed": changed}))
@@ -351,7 +428,8 @@ impl<'a> Transactions<'a> {
 
     /// Takes set's values out of its pinned targets: each file becomes what merge makes of its
     /// original, its applied image and its bytes now, so the person's edits stay; set is no
-    /// longer applied.
+    /// longer applied. A pin of the recorded target file itself reaches a record made through a
+    /// link that now points elsewhere.
     pub fn clear(
         &self,
         set: &str,
@@ -364,7 +442,8 @@ impl<'a> Transactions<'a> {
     }
 
     /// Puts set's original images back in its pinned targets (removing a file that did not
-    /// exist); set is no longer applied.
+    /// exist); set is no longer applied. Without a record for these targets, it puts back the
+    /// originals kept for them (after a conflict or a replaced record).
     pub fn restore(
         &self,
         set: &str,
@@ -386,23 +465,44 @@ impl<'a> Transactions<'a> {
         let state = self.load()?;
         let rec = state["sets"][set].clone();
         let mut changes = self.open(set, pins)?;
-        if rec.is_null() || !matches(&rec, pins) {
+        if !rec.is_null() && matches(&rec, pins) {
+            for (i, c) in changes.iter_mut().enumerate() {
+                let t = &rec["targets"][i];
+                let original = self.get(&t["original"])?;
+                c.after_mode = t["original_mode"].as_u64().map(|m| m as u32);
+                c.after = match merge {
+                    Some(m) => m.merge(
+                        original.as_deref(),
+                        self.get(&t["applied"])?.as_deref(),
+                        c.before.as_deref(),
+                    )?,
+                    None => original,
+                };
+            }
+            return self.run(op, set, changes, Some(None), written);
+        }
+        // Restore of kept originals: the oldest kept for each target in set.
+        let all = state["kept"].as_array().cloned().unwrap_or_default();
+        let found: Option<Vec<&Value>> = (merge.is_none())
+            .then(|| {
+                pins.iter()
+                    .map(|p| {
+                        all.iter()
+                            .find(|k| k["set"] == set && k["target"] == json!(p.target))
+                    })
+                    .collect()
+            })
+            .flatten();
+        let Some(found) = found else {
             return Err(Error::invalid_request(format!(
                 "{set} is not applied to these targets"
             )));
+        };
+        for (c, k) in changes.iter_mut().zip(found) {
+            c.after = self.get(&k["original"])?;
+            c.after_mode = k["original_mode"].as_u64().map(|m| m as u32);
         }
-        for (i, c) in changes.iter_mut().enumerate() {
-            let t = &rec["targets"][i];
-            let original = self.get(&t["original"])?;
-            c.after = match merge {
-                Some(m) => m.merge(
-                    original.as_deref(),
-                    self.get(&t["applied"])?.as_deref(),
-                    c.before.as_deref(),
-                )?,
-                None => original,
-            };
-        }
+        // The set's own record, for other targets, stays as it is.
         self.run(op, set, changes, None, written)
     }
 
@@ -419,30 +519,28 @@ impl<'a> Transactions<'a> {
             .map(|p| {
                 let target = Target::open(p)?;
                 let (_, before) = target.read_now()?;
-                if sha256_of(before.as_deref()) != p.sha256 {
-                    return Err(Error::invalid_request(format!(
-                        "{} was modified since the preview; preview it again",
-                        p.target.display()
-                    )));
-                }
+                let mode = target.mode_now()?;
                 Ok(Change {
                     target,
                     before: before.clone(),
+                    mode,
                     after: before,
+                    after_mode: None,
                 })
             })
             .collect()
     }
 
-    /// Writes changes under a journal, then records set as rec (None: removed): the targets
-    /// written. On a failure, puts back what it wrote, except what another program changed
-    /// meanwhile.
+    /// Writes changes under a journal, then records set as rec (Some(None): removed; None: its
+    /// record left as it is) and drops the images kept for the targets written: the targets
+    /// written. On a failure, puts back what it
+    /// wrote, except what another program changed meanwhile, whose original is kept.
     fn run(
         &self,
         op: &str,
         set: &str,
         changes: Vec<Change>,
-        rec: Option<Value>,
+        rec: Option<Option<Value>>,
         written: &mut dyn FnMut(usize),
     ) -> Result<Vec<Value>, Error> {
         let changes: Vec<Change> = changes
@@ -452,7 +550,9 @@ impl<'a> Transactions<'a> {
         let changed: Vec<Value> = changes.iter().map(|c| json!(c.target.pin.target)).collect();
         let mut state = self.load()?;
         if changes.is_empty() {
-            set_record(&mut state, set, rec);
+            if let Some(rec) = rec {
+                set_record(&mut state, set, rec);
+            }
             self.save(&state)?;
             self.sweep(&state);
             return Ok(changed);
@@ -463,10 +563,15 @@ impl<'a> Transactions<'a> {
                 "pin": c.target.pin.to_json(),
                 "before": sha256_of(c.before.as_deref()),
                 "after": sha256_of(c.after.as_deref()),
+                "mode": c.mode,
                 "backup": self.put_image("before", c.before.as_deref())?,
+                "intended": self.put_image("intended", c.after.as_deref())?,
             }));
         }
-        let intent = json!({"kind": KIND, "op": op, "set": set, "files": files, "record": rec});
+        let mut intent = json!({"kind": KIND, "op": op, "set": set, "files": files});
+        if let Some(rec) = rec {
+            intent["record"] = json!(rec);
+        }
         if intent.to_string().len() > 16 << 10 {
             self.sweep(&state);
             return Err(Error::invalid_request(
@@ -481,10 +586,12 @@ impl<'a> Transactions<'a> {
         let mut failure = None;
         for (i, c) in changes.iter().enumerate() {
             let from = sha256_of(c.before.as_deref());
-            match c
-                .target
-                .replace(Some(c.target.pin.file_id), &from, c.after.as_deref())
-            {
+            match c.target.replace(
+                Some(c.target.pin.file_id),
+                &from,
+                c.after.as_deref(),
+                c.after_mode,
+            ) {
                 Ok(id) => {
                     done.push((i, id));
                     written(i);
@@ -518,14 +625,13 @@ impl<'a> Transactions<'a> {
             }
         }
         if failure.is_none() {
-            set_record(&mut state, set, rec);
-            remember(&mut state, "committed", journal.clone());
+            finish(&mut state, &intent, &journal);
             if let Err(e) = self.save(&state) {
                 failure = Some((self.data.join(STATE), e));
             }
         }
         if let Some((at, e)) = failure {
-            return Err(self.roll_back(&journal, &changes, &done, &at, e));
+            return Err(self.roll_back(&journal, &intent, &changes, &done, &at, e));
         }
         // The write took effect even if the vault cannot record it now: the state file names
         // the journal, so the next start commits it.
@@ -536,34 +642,71 @@ impl<'a> Transactions<'a> {
         Ok(changed)
     }
 
-    /// Puts back the files done wrote, newest first, except those another program changed since;
-    /// ends the journal as rolled back unless a file could not be put back (the next start
-    /// reconciles it then). The error to end the call with.
+    /// Puts back the files done wrote, newest first, except those another program changed since,
+    /// whose originals are kept; ends the journal as rolled back unless a file could not be put
+    /// back (then the journal stays open, its backups kept, for the next start). The error to end
+    /// the call with.
     fn roll_back(
         &self,
         journal: &Value,
+        intent: &Value,
         changes: &[Change],
         done: &[(usize, Option<Id>)],
         at: &Path,
         e: Error,
     ) -> Error {
-        let (mut kept, mut failed) = (Vec::new(), Vec::new());
+        let (mut kept_at, mut failed) = (Vec::new(), Vec::new());
+        let set = intent["set"].as_str().unwrap_or_default();
+        let mut state = self.load().ok();
         for (i, id) in done.iter().rev() {
             let c = &changes[*i];
+            let f = &intent["files"][*i];
             let after = sha256_of(c.after.as_deref());
             let ours = c.target.check_place().is_ok()
                 && c.target
                     .read_now()
                     .is_ok_and(|(now, b)| now == *id && sha256_of(b.as_deref()) == after);
             if !ours {
-                kept.push(c.target.pin.target.display().to_string());
-            } else if let Err(f) = c.target.replace(Some(*id), &after, c.before.as_deref()) {
+                kept_at.push(c.target.pin.target.display().to_string());
+                if let Some(state) = state.as_mut() {
+                    let k = kept(
+                        set,
+                        &place(&c.target.pin),
+                        &f["backup"],
+                        &f["mode"],
+                        &f["intended"],
+                        "conflict",
+                    );
+                    remember_all(state, "kept", k);
+                }
+            } else if let Err(f) = c
+                .target
+                .replace(Some(*id), &after, c.before.as_deref(), c.mode)
+            {
                 failed.push(format!(
                     "{}: {}",
                     c.target.pin.target.display(),
                     f.error.message
                 ));
             }
+        }
+        if !failed.is_empty() {
+            if let Some(state) = state.as_mut() {
+                let backups: Vec<Value> = intent["files"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|f| [f["backup"].clone(), f["intended"].clone()])
+                    .collect();
+                remember_all(
+                    state,
+                    "open",
+                    json!({"journal": journal, "backups": backups}),
+                );
+            }
+        }
+        if let Some(state) = &state {
+            let _ = self.save(state);
         }
         let mut msg = format!("writing {} failed ({}); ", at.display(), e.message);
         if failed.is_empty() {
@@ -572,10 +715,10 @@ impl<'a> Transactions<'a> {
                 fields(json!({"journal": journal, "outcome": "rolled_back"})),
             );
             msg.push_str("this change was rolled back");
-            if !kept.is_empty() {
+            if !kept_at.is_empty() {
                 msg.push_str(&format!(
-                    ", except {}, which another program changed meanwhile and is left as it is",
-                    kept.join(", ")
+                    ", except {}, which another program changed meanwhile and is left as it is (restore still has its original)",
+                    kept_at.join(", ")
                 ));
             }
         } else {
@@ -584,13 +727,18 @@ impl<'a> Transactions<'a> {
                 failed.join("; ")
             ));
         }
+        if let Some(state) = &state {
+            self.sweep(state);
+        }
         Error::new(&e.code, msg)
     }
 
-    /// Reconciles the open journals the host named in describe, from what is on disk: a write
-    /// that finished is committed (its record saved); anything else is rolled back from its
-    /// backups, except files another program changed since, which are left as they are. Never
-    /// writes the intended bytes again. Idempotent: delivery may repeat. The reports, which
+    /// Reconciles the open journals the host named in describe, from what is on disk at each
+    /// journalled target (whatever its selection resolves to now): a write that finished is
+    /// committed (its record saved); anything else is rolled back from its backups, except files
+    /// another program changed since (or whose backup is gone), which are left as they are, their
+    /// originals kept for restore. Temporary files a write left beside a target are removed.
+    /// Never writes the intended bytes again. Idempotent: delivery may repeat. The reports, which
     /// `status` shows too.
     pub fn reconcile(&self, journals: &[Value]) -> Result<Vec<Value>, Error> {
         let mut reports = Vec::new();
@@ -602,6 +750,7 @@ impl<'a> Transactions<'a> {
                     "journal {id} is not one this tool began"
                 )));
             }
+            let set = intent["set"].as_str().unwrap_or_default();
             let mut state = self.load()?;
             let (mut restored, mut conflicts) = (Vec::new(), Vec::new());
             let committed = state["committed"]
@@ -611,55 +760,73 @@ impl<'a> Transactions<'a> {
                 .as_array()
                 .map(Vec::as_slice)
                 .unwrap_or_default();
-            let outcome = if committed {
-                "committed"
-            } else {
-                let mut now = Vec::new();
-                for f in files {
-                    let pin = Pin::from_json(&f["pin"])?;
-                    let t = Target::place(&pin).ok();
-                    now.push((pin, t));
+            let mut now = Vec::new();
+            for f in files {
+                let pin = Pin::from_json(&f["pin"])?;
+                let t = Target::pinned(&pin).ok();
+                if let Some(t) = &t {
+                    let _ = t.remove_temps();
                 }
-                let finished = now.iter().zip(files).all(|((_, t), f)| {
+                now.push((pin, t));
+            }
+            let finished = committed
+                || now.iter().zip(files).all(|((_, t), f)| {
                     t.as_ref()
                         .is_some_and(|t| json!(t.pin.sha256) == f["after"])
                 });
-                if finished {
-                    let rec = intent["record"].clone();
-                    set_record(
-                        &mut state,
-                        intent["set"].as_str().unwrap_or_default(),
-                        (!rec.is_null()).then_some(rec),
-                    );
-                    remember(&mut state, "committed", id.clone());
-                    "committed"
-                } else {
-                    for ((pin, t), f) in now.iter().zip(files) {
-                        let at = json!(pin.target);
-                        let Some(t) = t else {
-                            conflicts.push(at);
-                            continue;
-                        };
-                        let sha = json!(t.pin.sha256);
-                        if sha == f["before"] {
-                            continue;
-                        }
-                        if sha != f["after"] {
-                            conflicts.push(at);
-                            continue;
-                        }
-                        let before = self.get(&f["backup"])?;
-                        t.replace(None, &t.pin.sha256, before.as_deref())
-                            .map_err(|f| f.error)?;
-                        restored.push(at);
-                    }
-                    "rolled_back"
+            let outcome = if finished {
+                if !committed {
+                    finish(&mut state, intent, &id);
                 }
+                "committed"
+            } else {
+                for ((pin, t), f) in now.iter().zip(files) {
+                    let at = json!(pin.target);
+                    let mut keep = || {
+                        let k = kept(
+                            set,
+                            &place(pin),
+                            &f["backup"],
+                            &f["mode"],
+                            &f["intended"],
+                            "conflict",
+                        );
+                        remember_all(&mut state, "kept", k);
+                        conflicts.push(at.clone());
+                    };
+                    let Some(t) = t else {
+                        keep();
+                        continue;
+                    };
+                    let sha = json!(t.pin.sha256);
+                    if sha == f["before"] {
+                        continue;
+                    }
+                    if sha != f["after"] {
+                        keep();
+                        continue;
+                    }
+                    let before = match self.get(&f["backup"]) {
+                        Ok(b) => b,
+                        Err(e) if e.code == "not_found" => {
+                            keep();
+                            continue;
+                        }
+                        Err(e) => return Err(e),
+                    };
+                    let mode = f["mode"].as_u64().map(|m| m as u32);
+                    t.replace(None, &t.pin.sha256, before.as_deref(), mode)
+                        .map_err(|f| f.error)?;
+                    restored.push(at);
+                }
+                "rolled_back"
             };
-            let report = json!({"journal": id, "op": intent["op"], "set": intent["set"],
+            let report = json!({"journal": id, "op": intent["op"], "set": set,
                 "outcome": outcome, "restored": restored, "conflicts": conflicts});
-            if let Some(a) = state["recovered"].as_array_mut() {
-                a.retain(|r| r["journal"] != id);
+            for key in ["recovered", "open"] {
+                if let Some(a) = state[key].as_array_mut() {
+                    a.retain(|r| r["journal"] != id);
+                }
             }
             remember(&mut state, "recovered", report.clone());
             self.save(&state)?;
@@ -672,7 +839,8 @@ impl<'a> Transactions<'a> {
         Ok(reports)
     }
 
-    /// The sets applied now (each with its targets) and the latest recovery reports.
+    /// The sets applied now (each with its targets), the originals kept for restore and the
+    /// latest recovery reports.
     pub fn status(&self) -> Result<Value, Error> {
         let state = self.load()?;
         let mut sets = Map::new();
@@ -685,7 +853,13 @@ impl<'a> Transactions<'a> {
                 .collect();
             sets.insert(name.clone(), json!({"targets": targets}));
         }
-        Ok(json!({"sets": sets, "recovered": state["recovered"]}))
+        let kept: Vec<Value> = state["kept"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|k| json!({"set": k["set"], "target": k["target"], "why": k["why"]}))
+            .collect();
+        Ok(json!({"sets": sets, "kept": kept, "recovered": state["recovered"]}))
     }
 }
 
@@ -700,6 +874,26 @@ fn distinct(pins: &[Pin]) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+/// A finished operation in state: its set's record saved, removed (`record` null) or left as it
+/// is (no `record`), the images kept for the targets it wrote in that set dropped, and its
+/// journal remembered as committed.
+fn finish(state: &mut Value, intent: &Value, journal: &Value) {
+    let set = intent["set"].as_str().unwrap_or_default();
+    if let Some(rec) = intent.get("record") {
+        set_record(state, set, (!rec.is_null()).then(|| rec.clone()));
+    }
+    let written: Vec<Value> = intent["files"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|f| f["pin"]["target"].clone())
+        .collect();
+    if let Some(a) = state["kept"].as_array_mut() {
+        a.retain(|k| !(k["set"] == set && written.contains(&k["target"])));
+    }
+    remember(state, "committed", journal.clone());
 }
 
 fn set_record(state: &mut Value, set: &str, rec: Option<Value>) {
@@ -718,11 +912,16 @@ fn set_record(state: &mut Value, set: &str, rec: Option<Value>) {
 
 /// Appends v to the list key of state, keeping the last KEEP.
 fn remember(state: &mut Value, key: &str, v: Value) {
+    remember_all(state, key, v);
+    let a = state[key].as_array_mut().expect("an array");
+    let over = a.len().saturating_sub(KEEP);
+    a.drain(..over);
+}
+
+/// Appends v to the list key of state, keeping all (what restore or reconciliation needs).
+fn remember_all(state: &mut Value, key: &str, v: Value) {
     if !state[key].is_array() {
         state[key] = json!([]);
     }
-    let a = state[key].as_array_mut().expect("an array");
-    a.push(v);
-    let over = a.len().saturating_sub(KEEP);
-    a.drain(..over);
+    state[key].as_array_mut().expect("an array").push(v);
 }

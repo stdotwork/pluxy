@@ -12,6 +12,8 @@ struct Mem {
     backups: RefCell<BTreeMap<String, (String, String)>>,
     journals: RefCell<BTreeMap<String, (Value, Option<String>)>>,
     next: Cell<u64>,
+    /// Answers backup.get without the bytes (a broken vault).
+    no_data: Cell<bool>,
 }
 
 impl Mem {
@@ -51,6 +53,9 @@ impl Vault for Mem {
                 let (label, data) = b
                     .get(&s("backup"))
                     .ok_or_else(|| Error::not_found("no backup"))?;
+                if self.no_data.get() {
+                    return Ok(json!({"backup": s("backup"), "label": label}));
+                }
                 Ok(json!({"backup": s("backup"), "label": label, "data": data}))
             }
             "backup.list" => Ok(json!({"backups": self.backups.borrow().iter()
@@ -224,7 +229,7 @@ fn apply_writes_only_the_link_target_and_keeps_the_link() {
     assert_eq!(o, json!({"outcome": "applied", "changed": [target]}));
     assert_eq!(
         read(&target).unwrap(),
-        "{\n  \"model\": \"m\",\n  \"theme\": \"light\"\n}\n"
+        "{\n  \"theme\": \"light\",\n  \"model\": \"m\"\n}\n"
     );
     assert_eq!(std::fs::metadata(&target).unwrap().mode() & 0o7777, 0o640);
     assert_eq!(link_of(&link), before);
@@ -572,4 +577,387 @@ fn a_write_whose_record_was_saved_is_committed_even_if_the_files_changed_since()
         .unwrap();
     assert_eq!(r[0]["outcome"], "committed");
     assert_eq!(read(&a).unwrap(), "{\"later\": 1}\n");
+}
+
+/// A setup of two files in two folders, with a vault and data folder.
+fn two(t: &Tmp) -> (PathBuf, PathBuf, Mem, PathBuf) {
+    let a = t.put("one/a.json", "{}\n");
+    let b = t.put("two/b.json", "{}\n");
+    let data = t.at("data");
+    std::fs::create_dir(&data).unwrap();
+    (a, b, Mem::default(), data)
+}
+
+fn chmod(p: &Path, mode: u32) {
+    std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
+fn mode_of(p: &Path) -> u32 {
+    std::fs::metadata(p).unwrap().mode() & 0o7777
+}
+
+/// Finding 1: a conflict's original survives the next operation's sweep and restore puts it back.
+#[test]
+fn a_conflicts_original_survives_and_restore_returns_it() {
+    let t = Tmp::new();
+    let (a, b, mem, data) = two(&t);
+    let other = t.put("three/c.json", "{}\n");
+    let tx = Transactions::new(&mem, &data);
+    let sel = [Selection::File(a.clone()), Selection::File(b.clone())];
+    // In a call: the second file fails, the first was changed by another program meanwhile.
+    let p = pins(&tx, "s", &sel);
+    chmod(&t.at("two"), 0o555);
+    let e = tx
+        .apply("s", &p, &values(json!({"x": 1})), &Json, &mut |_| {
+            std::fs::write(&a, "{\"theirs\": 1}\n").unwrap()
+        })
+        .unwrap_err();
+    chmod(&t.at("two"), 0o755);
+    assert!(e.message.contains("restore still has its original"), "{e}");
+    // After a crash: reconcile leaves another program's edit and keeps the original too.
+    let j = crash(
+        &tx,
+        &mem,
+        "r",
+        &[Selection::File(b.clone())],
+        0,
+        json!({"y": 1}),
+    );
+    std::fs::write(&b, "{\"theirs\": 2}\n").unwrap();
+    assert_eq!(tx.reconcile(&[j]).unwrap()[0]["conflicts"], json!([b]));
+    assert_eq!(tx.status().unwrap()["kept"].as_array().unwrap().len(), 2);
+    // Another operation sweeps unreferenced backups.
+    let po = pins(&tx, "o", &[Selection::File(other.clone())]);
+    tx.apply("o", &po, &values(json!({"z": 1})), &Json, &mut none)
+        .unwrap();
+    // Restore reaches each kept original after a new preview, and then forgets it.
+    let p = pins(&tx, "s", &[Selection::File(a.clone())]);
+    assert_eq!(
+        tx.restore("s", &p, &mut none).unwrap()["outcome"],
+        "restored"
+    );
+    assert_eq!(read(&a).unwrap(), "{}\n");
+    let p = pins(&tx, "r", &[Selection::File(b.clone())]);
+    tx.restore("r", &p, &mut none).unwrap();
+    assert_eq!(read(&b).unwrap(), "{}\n");
+    assert_eq!(tx.status().unwrap()["kept"], json!([]));
+    // Only set o's images stay.
+    let labels: Vec<String> = mem
+        .backups
+        .borrow()
+        .values()
+        .map(|(l, _)| l.clone())
+        .collect();
+    assert_eq!(labels, ["tx original", "tx applied"]);
+}
+
+/// Finding 2: an operation after a failed put-back keeps the open journal's backups, and a
+/// missing backup makes reconcile report a conflict instead of failing the start.
+#[test]
+fn a_failed_put_back_keeps_its_backups_for_reconcile() {
+    let t = Tmp::new();
+    let (a, b, mem, data) = two(&t);
+    let tx = Transactions::new(&mem, &data);
+    // Set o, applied, whose restore then changes nothing: a run with no writes, which sweeps.
+    let c = t.put("three/c.json", "{}\n");
+    let po = pins(&tx, "o", &[Selection::File(c.clone())]);
+    tx.apply("o", &po, &values(json!({"z": 1})), &Json, &mut none)
+        .unwrap();
+    std::fs::write(&c, "{}\n").unwrap();
+    let sel = [Selection::File(a.clone()), Selection::File(b.clone())];
+    let p = pins(&tx, "s", &sel);
+    chmod(&t.at("two"), 0o555);
+    // Once a is written its folder becomes read-only too: putting it back fails.
+    let e = tx
+        .apply("s", &p, &values(json!({"x": 1})), &Json, &mut |_| {
+            chmod(&t.at("one"), 0o555)
+        })
+        .unwrap_err();
+    chmod(&t.at("one"), 0o755);
+    chmod(&t.at("two"), 0o755);
+    assert!(e.message.contains("next start reconciles it"), "{e}");
+    let open = mem.open();
+    assert_eq!(open.len(), 1);
+    let po = pins(&tx, "o", &[Selection::File(c.clone())]);
+    tx.restore("o", &po, &mut none).unwrap();
+    let r = tx.reconcile(&open).unwrap();
+    assert_eq!(
+        (r[0]["outcome"].clone(), r[0]["restored"].clone()),
+        (json!("rolled_back"), json!([a]))
+    );
+    assert_eq!(read(&a).unwrap(), "{}\n");
+    // A journal whose backup is gone: a conflict, the start goes on.
+    // Crashed after the first of two (a single file written would be a finished write).
+    let j = crash(
+        &tx,
+        &mem,
+        "s",
+        &[Selection::File(a.clone()), Selection::File(b.clone())],
+        0,
+        json!({"x": 2}),
+    );
+    let backup = j["intent"]["files"][0]["backup"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    mem.backups.borrow_mut().remove(&backup);
+    let r = tx.reconcile(&[j]).unwrap();
+    assert_eq!(r[0]["conflicts"], json!([a]));
+}
+
+/// Finding 3: after a crash, a link made again (a new link, same text) does not turn the
+/// writer's own bytes into a conflict: reconcile looks at the pinned target itself.
+#[test]
+fn reconcile_looks_at_the_pinned_target_when_the_link_was_made_again() {
+    let t = Tmp::new();
+    let (link, target) = stow(&t);
+    let (mem, data) = (Mem::default(), t.at("data"));
+    std::fs::create_dir(&data).unwrap();
+    let tx = Transactions::new(&mem, &data);
+    let remake = || {
+        std::fs::hard_link(
+            &link,
+            t.at(&format!("held-{}", target::random_hex().unwrap())),
+        )
+        .unwrap();
+        let tmp = link.with_extension("new");
+        std::os::unix::fs::symlink("../../dotfiles/x/settings.json", &tmp).unwrap();
+        std::fs::rename(&tmp, &link).unwrap();
+    };
+    let sel = [Selection::File(link.clone())];
+    let j = crash(&tx, &mem, "s", &sel, 0, json!({"m": 1}));
+    remake();
+    let r = tx.reconcile(&[j]).unwrap();
+    assert_eq!(
+        (r[0]["outcome"].clone(), r[0]["conflicts"].clone()),
+        (json!("committed"), json!([]))
+    );
+    assert!(tx.status().unwrap()["sets"]["s"].is_object());
+    // Rolled back the same way: the second file was never written.
+    let other = t.put("dotfiles/x/other.json", "{}\n");
+    let p = pins(&tx, "s", &sel);
+    tx.clear("s", &p, &Json, &mut none).unwrap();
+    let j = crash(
+        &tx,
+        &mem,
+        "s",
+        &[Selection::File(link.clone()), Selection::File(other)],
+        0,
+        json!({"m": 2}),
+    );
+    remake();
+    let r = tx.reconcile(&[j]).unwrap();
+    assert_eq!(
+        (r[0]["restored"].clone(), r[0]["conflicts"].clone()),
+        (json!([target]), json!([]))
+    );
+    assert_eq!(read(&target).unwrap(), "{\"theme\": \"light\"}\n");
+}
+
+/// Finding 4: a link pointed elsewhere does not wedge its set: clear or restore through the
+/// recorded target itself, or apply again through the link (the old originals kept).
+#[test]
+fn a_retargeted_link_leaves_a_way_back() {
+    let t = Tmp::new();
+    let (link, target) = stow(&t);
+    let alt = t.put("dotfiles/alt.json", "{\"alt\": true}\n");
+    let (mem, data) = (Mem::default(), t.at("data"));
+    std::fs::create_dir(&data).unwrap();
+    let tx = Transactions::new(&mem, &data);
+    let relink = |to: &Path| {
+        let tmp = link.with_extension("new");
+        std::os::unix::fs::symlink(to, &tmp).unwrap();
+        std::fs::rename(&tmp, &link).unwrap();
+    };
+    let p = pins(&tx, "s", &[Selection::File(link.clone())]);
+    tx.apply("s", &p, &values(json!({"m": 1})), &Json, &mut none)
+        .unwrap();
+    relink(&alt);
+    // Clear through the recorded target file, named itself.
+    let p = pins(&tx, "s", &[Selection::File(target.clone())]);
+    assert!(tx.preview("s", &[Selection::File(target.clone())]).unwrap()["applied"] == true);
+    tx.clear("s", &p, &Json, &mut none).unwrap();
+    assert_eq!(read(&target).unwrap(), "{\"theme\": \"light\"}\n");
+    // Apply through the link again, then retarget it: a new apply replaces the stale record and
+    // keeps its original, which restore of the old target then puts back.
+    relink(Path::new("../../dotfiles/x/settings.json"));
+    let p = pins(&tx, "s", &[Selection::File(link.clone())]);
+    tx.apply("s", &p, &values(json!({"m": 2})), &Json, &mut none)
+        .unwrap();
+    relink(&alt);
+    let p = pins(&tx, "s", &[Selection::File(link.clone())]);
+    tx.apply("s", &p, &values(json!({"m": 3})), &Json, &mut none)
+        .unwrap();
+    assert_eq!(read(&alt).unwrap(), "{\n  \"alt\": true,\n  \"m\": 3\n}\n");
+    let p = pins(&tx, "s", &[Selection::File(target.clone())]);
+    tx.restore("s", &p, &mut none).unwrap();
+    assert_eq!(read(&target).unwrap(), "{\"theme\": \"light\"}\n");
+    // A record whose link still resolves is not replaced.
+    let p = pins(&tx, "s", &[Selection::File(target.clone())]);
+    let e = tx
+        .apply("s", &p, &values(json!({"m": 4})), &Json, &mut none)
+        .unwrap_err();
+    assert!(e.message.contains("applied to other targets"), "{e}");
+}
+
+/// Finding 5: temporary files are written 0600, and reconcile removes those a crash left.
+#[test]
+fn temporary_files_are_private_and_reconcile_removes_them() {
+    let t = Tmp::new();
+    let (a, _, mem, data) = two(&t);
+    chmod(&a, 0o644);
+    let tx = Transactions::new(&mem, &data);
+    let target = Target::resolve(&Selection::File(a.clone())).unwrap();
+    let tmp = Path::new(".a.json.pluxy-0123456789abcdef.tmp");
+    target.write_temp(tmp, b"secret").unwrap();
+    assert_eq!(mode_of(&t.at("one").join(tmp)), 0o600);
+    let unrelated = t.put("one/.a.json.pluxy-notours.tmp", "x");
+    let j = crash(
+        &tx,
+        &mem,
+        "s",
+        &[
+            Selection::File(a.clone()),
+            Selection::File(t.at("two/b.json")),
+        ],
+        0,
+        json!({"x": 1}),
+    );
+    tx.reconcile(&[j]).unwrap();
+    assert!(
+        !t.at("one").join(tmp).exists(),
+        "the temporary file was left"
+    );
+    assert!(unrelated.exists());
+    // The written file keeps the target's mode.
+    let p = pins(&tx, "s", &[Selection::File(a.clone())]);
+    tx.apply("s", &p, &values(json!({"x": 1})), &Json, &mut none)
+        .unwrap();
+    assert_eq!(mode_of(&a), 0o644);
+}
+
+/// Finding 6: the person's key order and numbers' digits are kept.
+#[test]
+fn key_order_and_number_digits_are_kept() {
+    let t = Tmp::new();
+    let src = "{\"zeta\": 123456789012345678901234567890, \"alpha\": 0.10000000000000000555111512312578270211815834045, \"mid\": {\"b\": 1, \"a\": 2}}\n";
+    let a = t.put("a.json", src);
+    let (mem, data) = (Mem::default(), t.at("data"));
+    std::fs::create_dir(&data).unwrap();
+    let tx = Transactions::new(&mem, &data);
+    let p = pins(&tx, "s", &[Selection::File(a.clone())]);
+    tx.apply("s", &p, &values(json!({"new": 1})), &Json, &mut none)
+        .unwrap();
+    assert_eq!(
+        read(&a).unwrap(),
+        "{\n  \"zeta\": 123456789012345678901234567890,\n  \"alpha\": 0.10000000000000000555111512312578270211815834045,\n  \"mid\": {\n    \"b\": 1,\n    \"a\": 2\n  },\n  \"new\": 1\n}\n"
+    );
+    std::fs::write(
+        &a,
+        read(&a)
+            .unwrap()
+            .replace("\"mid\"", "\"edited\": true,\n  \"mid\""),
+    )
+    .unwrap();
+    let p = pins(&tx, "s", &[Selection::File(a.clone())]);
+    tx.clear("s", &p, &Json, &mut none).unwrap();
+    assert_eq!(
+        read(&a).unwrap(),
+        "{\n  \"zeta\": 123456789012345678901234567890,\n  \"alpha\": 0.10000000000000000555111512312578270211815834045,\n  \"edited\": true,\n  \"mid\": {\n    \"b\": 1,\n    \"a\": 2\n  }\n}\n"
+    );
+}
+
+/// Finding 7: setuid and setgid are not copied, and a removed file comes back with its own mode.
+#[test]
+fn modes_are_masked_and_kept_through_removal() {
+    let t = Tmp::new();
+    let (a, b, mem, data) = two(&t);
+    chmod(&a, 0o6755);
+    let tx = Transactions::new(&mem, &data);
+    let p = pins(&tx, "s", &[Selection::File(a.clone())]);
+    tx.apply("s", &p, &values(json!({"x": 1})), &Json, &mut none)
+        .unwrap();
+    assert_eq!(mode_of(&a), 0o755);
+    // x did not exist: apply creates it (0600), the person makes it 0644; a restore that removes
+    // it, then fails on b, puts it back 0644.
+    let x = t.at("one/x.json");
+    let p = pins(
+        &tx,
+        "n",
+        &[Selection::File(x.clone()), Selection::File(b.clone())],
+    );
+    tx.apply("n", &p, &values(json!({"x": 1})), &Json, &mut none)
+        .unwrap();
+    assert_eq!(mode_of(&x), 0o600);
+    chmod(&x, 0o644);
+    let p = pins(
+        &tx,
+        "n",
+        &[Selection::File(x.clone()), Selection::File(b.clone())],
+    );
+    chmod(&t.at("two"), 0o555);
+    let e = tx.restore("n", &p, &mut none).unwrap_err();
+    chmod(&t.at("two"), 0o755);
+    assert!(e.message.contains("rolled back"), "{e}");
+    assert_eq!(mode_of(&x), 0o644);
+    // Restore after the person removed an original file brings it back with its original mode.
+    chmod(&a, 0o640);
+    let p = pins(&tx, "m", &[Selection::File(a.clone())]);
+    tx.apply("m", &p, &values(json!({"y": 1})), &Json, &mut none)
+        .unwrap();
+    std::fs::remove_file(&a).unwrap();
+    let p = pins(&tx, "m", &[Selection::File(a.clone())]);
+    tx.restore("m", &p, &mut none).unwrap();
+    assert_eq!(mode_of(&a), 0o640);
+}
+
+/// Finding 9: a backup answer without its bytes fails the operation; nothing is written.
+#[test]
+fn a_backup_without_its_bytes_is_an_error() {
+    let t = Tmp::new();
+    let (a, _, mem, data) = two(&t);
+    let tx = Transactions::new(&mem, &data);
+    let p = pins(&tx, "s", &[Selection::File(a.clone())]);
+    tx.apply("s", &p, &values(json!({"x": 1})), &Json, &mut none)
+        .unwrap();
+    let applied = read(&a).unwrap();
+    mem.no_data.set(true);
+    let p = pins(&tx, "s", &[Selection::File(a.clone())]);
+    let e = tx.restore("s", &p, &mut none).unwrap_err();
+    assert!(e.message.contains("without its bytes"), "{e}");
+    assert_eq!(read(&a).unwrap(), applied);
+}
+
+/// Finding 10: a pin with any field it does not write is refused, and the fixture writer's
+/// manifest uses the library's strict pin schema.
+#[test]
+fn pins_are_strict() {
+    let t = Tmp::new();
+    let a = t.put("a.json", "{}\n");
+    let pin = Target::resolve(&Selection::File(a)).unwrap().pin.to_json();
+    assert!(Pin::from_json(&pin).is_ok());
+    let mut extra = pin.clone();
+    extra["note"] = json!("approve");
+    assert!(Pin::from_json(&extra)
+        .unwrap_err()
+        .message
+        .contains("unknown field"));
+    let mut deep = pin.clone();
+    deep["identity"]["note"] = json!("x");
+    assert!(Pin::from_json(&deep).is_err());
+    let manifest: Value = serde_json::from_str(include_str!(
+        "../examples/fixture-writer/pluxy-extension.json"
+    ))
+    .unwrap();
+    for op in manifest["app"]["operations"].as_array().unwrap() {
+        if ["apply", "clear", "restore"].contains(&op["id"].as_str().unwrap()) {
+            assert_eq!(
+                op["input_schema"]["properties"]["targets"]["items"],
+                pin_schema(),
+                "{}",
+                op["id"]
+            );
+            assert!(op["description"].as_str().unwrap().contains("may be lost"));
+        }
+    }
 }

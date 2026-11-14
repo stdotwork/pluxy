@@ -80,7 +80,7 @@ function configs(home: string) {
       b: join(chezmoi, "b.json"),
     },
     outside,
-    // Every file's bytes as the check expects them, step by step.
+    // Every file's bytes as the check expects them, step by step: keys keep the file's order.
     bytes: {
       settings,
       a,
@@ -89,20 +89,20 @@ function configs(home: string) {
       alt: '{"alt": true}\n',
       // apply {"model": "fixture-model", "proxy": "http://127.0.0.1:9"} to settings.json.
       settingsApplied:
-        '{\n  "keep": {\n    "a": 1\n  },\n  "model": "fixture-model",\n  "proxy": "http://127.0.0.1:9",\n  "theme": "light"\n}\n',
+        '{\n  "theme": "light",\n  "keep": {\n    "a": 1\n  },\n  "model": "fixture-model",\n  "proxy": "http://127.0.0.1:9"\n}\n',
       // apply {"managed": true} to a.json and the missing b.json.
-      aApplied: '{\n  "managed": true,\n  "name": "a"\n}\n',
+      aApplied: '{\n  "name": "a",\n  "managed": true\n}\n',
       bApplied: '{\n  "managed": true\n}\n',
       // The person's edit of settings.json between a preview and its apply: a key added.
       settingsEdited:
-        '{\n  "keep": {\n    "a": 1\n  },\n  "model": "fixture-model",\n  "proxy": "http://127.0.0.1:9",\n  "theme": "light",\n  "editor": "vim"\n}\n',
+        '{\n  "theme": "light",\n  "keep": {\n    "a": 1\n  },\n  "model": "fixture-model",\n  "proxy": "http://127.0.0.1:9",\n  "editor": "vim"\n}\n',
       // Then the person's own model; clear keeps both edits and drops the untouched proxy.
       settingsEditedAgain:
-        '{\n  "keep": {\n    "a": 1\n  },\n  "model": "user-model",\n  "proxy": "http://127.0.0.1:9",\n  "theme": "light",\n  "editor": "vim"\n}\n',
+        '{\n  "theme": "light",\n  "keep": {\n    "a": 1\n  },\n  "model": "user-model",\n  "proxy": "http://127.0.0.1:9",\n  "editor": "vim"\n}\n',
       settingsCleared:
-        '{\n  "editor": "vim",\n  "keep": {\n    "a": 1\n  },\n  "model": "user-model",\n  "theme": "light"\n}\n',
+        '{\n  "theme": "light",\n  "keep": {\n    "a": 1\n  },\n  "model": "user-model",\n  "editor": "vim"\n}\n',
       // The person's edit of the applied a.json, which restore replaces with the original.
-      aEdited: '{\n  "managed": true,\n  "name": "a",\n  "user": 1\n}\n',
+      aEdited: '{\n  "name": "a",\n  "managed": true,\n  "user": 1\n}\n',
       // A competing write to a.json after a crash, which recovery must keep.
       competing: '{"competing": true}\n',
       // apply {"crash": 3} to the missing b.json, recovered as committed.
