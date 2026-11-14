@@ -9,7 +9,8 @@
 //   settings; the credential store `agent.db` holds a login canary;
 // - a stow layout: `~/.omp-stow/models.yml` and `~/.omp-stow/config.yml` are relative links to
 //   `~/dotfiles/omp/.omp/agent/`, whose models.yml (mode 0640) already has a `pluxy` provider with
-//   the person's own model entry, beside `keep.yml`;
+//   the person's own model entry, beside `keep.yml` (an apply makes both targets 0600, as it makes
+//   the agent folder's 0644 files);
 // - a chezmoi-style root: `~/.omp-root` is an absolute link to the folder
 //   `~/.local/share/chezmoi/dot_omp/agent`, which has no files yet;
 // - files Oh My Pi would not take: `~/unknown/models.yml` whose `providers` is a list,
@@ -204,6 +205,9 @@ function configs(home: string, login: string) {
       edit_entry: [`${OWN}\n${modelsTail}`, `${OWN}\n${ownEntry}${modelsTail}`],
       edit_theme: ["dark: tokyo-night", "dark: dracula"],
       edit_smol: ["smol: anthropic/claude-haiku-5-5", "smol: anthropic/claude-opus-5-5"],
+      // The applied models file made into one Oh My Pi would not take: a key named twice, which
+      // Clear refuses and Restore Backup undoes (back to `cleared`, the files before that apply).
+      corrupt: ["futureSetting:", "futureSetting: 1\nfutureSetting:"],
       // Applying again with another model keeps their model entry, theme and smol role.
       applied_with_entry: appliedWithEntry,
       config_reapplied: configOriginal

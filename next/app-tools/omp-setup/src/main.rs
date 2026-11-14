@@ -11,7 +11,7 @@ mod yaml;
 
 use omp::Settings;
 use pluxy_program::{run, Call, Error, Handler};
-use pluxy_transactions::{backup_call, data_dir, Pin, Selection, Target, Transactions};
+use pluxy_transactions::{backup_call, data_dir, sha256_of, Pin, Selection, Target, Transactions};
 use serde_json::{json, Value};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -112,6 +112,40 @@ fn unmigrated(sels: &[Selection; 2]) -> Result<(), Error> {
     Ok(())
 }
 
+/// A preview and the two files' bytes, read after it.
+type Read = (Value, [Option<Vec<u8>>; 2]);
+
+/// Runs read again once when the bytes it read are not the ones it pinned (another program wrote
+/// a file between the two reads); refuses if they differ again, so the values shown are always
+/// those of the files pinned.
+fn pinned_read(mut read: impl FnMut() -> Result<Read, Error>) -> Result<Read, Error> {
+    for _ in 0..2 {
+        let (v, bytes) = read()?;
+        let same =
+            (0..2).all(|i| v["targets"][i]["sha256"] == json!(sha256_of(bytes[i].as_deref())));
+        if same {
+            return Ok((v, bytes));
+        }
+    }
+    Err(Error::unavailable(
+        "a configuration file changed while it was read: read it again",
+    ))
+}
+
+/// What a preview shows of the two files. Files Oh My Pi would not take (or would migrate first)
+/// are pinned all the same, so Restore Backup still reaches them: their `state` is `refused` and
+/// `reason` says why apply and clear refuse them.
+fn config_of(
+    sels: &[Selection; 2],
+    models: Option<&[u8]>,
+    config: Option<&[u8]>,
+    base_url: Option<&str>,
+) -> Value {
+    unmigrated(sels)
+        .and_then(|_| omp::read_back(models, config, base_url))
+        .unwrap_or_else(|e| json!({"state": "refused", "reason": e.message}))
+}
+
 /// What an apply's input asks for, checked, with the key.
 fn settings(input: &Value, key: &str) -> Result<Settings, Error> {
     let base = input["base_url"].as_str().unwrap_or_default();
@@ -184,17 +218,19 @@ impl Handler for Omp {
         match call.op.as_str() {
             "preview" => {
                 let sels = selections(input)?;
-                unmigrated(&sels)?;
-                // Files Oh My Pi would not take are refused before anything is pinned.
-                let (_, models) = Target::resolve(&sels[0])?.read_now()?;
-                let (_, config) = Target::resolve(&sels[1])?.read_now()?;
-                let read = omp::read_back(
+                let tx = Transactions::new(call, data_dir()?);
+                let (mut v, [models, config]) = pinned_read(|| {
+                    let v = tx.preview(SET, &sels)?;
+                    let (_, a) = Target::resolve(&sels[0])?.read_now()?;
+                    let (_, b) = Target::resolve(&sels[1])?.read_now()?;
+                    Ok((v, [a, b]))
+                })?;
+                v["config"] = config_of(
+                    &sels,
                     models.as_deref(),
                     config.as_deref(),
                     input["base_url"].as_str(),
-                )?;
-                let mut v = Transactions::new(call, data_dir()?).preview(SET, &sels)?;
-                v["config"] = read;
+                );
                 Ok(v)
             }
             "apply" => {
@@ -222,12 +258,16 @@ impl Handler for Omp {
                     &mut |_| {},
                 )
             }
-            "clear" => Transactions::new(call, data_dir()?).clear(
-                SET,
-                &two(input, Pin::from_json)?,
-                &Yamls,
-                &mut |_| {},
-            ),
+            "clear" => {
+                let pins = two(input, Pin::from_json)?;
+                // Files Oh My Pi would not take are refused before anything is written; a file
+                // that no longer resolves as pinned is the library's to refuse.
+                let now = |p: &Pin| Target::place(p).and_then(|t| t.read_now()).ok();
+                if let (Some((_, m)), Some((_, c))) = (now(&pins[0]), now(&pins[1])) {
+                    omp::check(m.as_deref(), c.as_deref())?;
+                }
+                Transactions::new(call, data_dir()?).clear(SET, &pins, &Yamls, &mut |_| {})
+            }
             // Restore Backup puts the originals back whatever the files hold now: the person's
             // way back always works.
             "restore" => Transactions::new(call, data_dir()?).restore(
@@ -251,6 +291,10 @@ impl Handler for Omp {
 #[cfg(test)]
 #[path = "omp_tests.rs"]
 mod omp_tests;
+
+#[cfg(test)]
+#[path = "main_tests.rs"]
+mod main_tests;
 
 #[cfg(test)]
 #[path = "manifest_tests.rs"]

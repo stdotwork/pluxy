@@ -39,10 +39,11 @@ pub fn base_url_of(core: &str) -> String {
     }
 }
 
-/// v[k] when it is a mapping or absent; anything else is a format Oh My Pi would not take.
+/// v[k] when it is a mapping, or absent (`null` too, as Oh My Pi reads it); anything else is a
+/// format Oh My Pi would not take.
 fn mapping<'a>(v: &'a Value, k: &str, what: &str) -> Result<Option<&'a Map<String, Value>>, Error> {
     match v.get(k) {
-        None => Ok(None),
+        None | Some(Value::Null) => Ok(None),
         Some(Value::Object(m)) => Ok(Some(m)),
         Some(_) => Err(Error::invalid_request(format!("{what} is not a mapping"))),
     }
@@ -53,7 +54,7 @@ fn provider(models: &Value) -> Result<Option<&Map<String, Value>>, Error> {
     let Some(providers) = mapping(models, "providers", "the models file's providers")? else {
         return Ok(None);
     };
-    let Some(p) = providers.get(PROVIDER) else {
+    let Some(p) = providers.get(PROVIDER).filter(|p| !p.is_null()) else {
         return Ok(None);
     };
     let p = p.as_object().ok_or_else(|| {
@@ -67,24 +68,42 @@ fn provider(models: &Value) -> Result<Option<&Map<String, Value>>, Error> {
     Ok(Some(p))
 }
 
-/// The settings file's `modelRoles.default`, refusing a shape Oh My Pi would not take.
-fn default_role(config: &Value) -> Result<Option<&str>, Error> {
+/// The settings file's `modelRoles.default`, refusing a shape Oh My Pi would not take: its text
+/// and whether it is one text. Oh My Pi also takes a list of selectors (fallbacks in order),
+/// whose entries are joined by commas here, as Oh My Pi's text form writes them: never pluxy's.
+fn default_role(config: &Value) -> Result<Option<(String, bool)>, Error> {
     let Some(roles) = mapping(config, "modelRoles", "the settings file's modelRoles")? else {
         return Ok(None);
     };
+    let not_text = || {
+        Error::invalid_request(
+            "the settings file's default model role is not text or a list of text",
+        )
+    };
     match roles.get("default") {
         None | Some(Value::Null) => Ok(None),
-        Some(Value::String(s)) => Ok(Some(s)),
-        Some(_) => Err(Error::invalid_request(
-            "the settings file's default model role is not text",
-        )),
+        Some(Value::String(s)) => Ok(Some((s.clone(), true))),
+        Some(Value::Array(list)) => {
+            let items = list
+                .iter()
+                .map(|v| v.as_str().ok_or_else(not_text))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Some((items.join(", "), false)))
+        }
+        Some(_) => Err(not_text()),
     }
 }
 
-/// `v[k]` as a mapping to edit, made when absent (the shape was checked before).
+/// `v[k]` as a mapping to edit: made when absent or `null` (the shape was checked before).
 fn child<'a>(v: &'a mut Value, k: &str) -> &'a mut Value {
-    let m = v.as_object_mut().expect("a checked mapping");
-    m.entry(k).or_insert_with(|| json!({}))
+    if v.is_null() {
+        *v = json!({});
+    }
+    let slot = &mut v[k];
+    if slot.is_null() {
+        *slot = json!({});
+    }
+    slot
 }
 
 /// The models file after an apply.
@@ -109,6 +128,13 @@ pub fn apply_config(before: Option<&[u8]>, s: &Settings) -> Result<Vec<u8>, Erro
     edit(before, &cur, &want)
 }
 
+/// Refuses either file when Oh My Pi would not take it.
+pub fn check(models: Option<&[u8]>, config: Option<&[u8]>) -> Result<(), Error> {
+    provider(&parse(models)?)?;
+    default_role(&parse(config)?)?;
+    Ok(())
+}
+
 /// What the files hold, never the key: `state` (configured, needs-update, not-configured), the
 /// provider's address, whether it has a key, the default role and the pluxy model it names, and
 /// whether the old app's provider is still there. base_url: the core's address, when known.
@@ -126,7 +152,9 @@ pub fn read_back(
     let base = s("baseUrl");
     let key_set = s("apiKey").is_some_and(|k| !k.is_empty());
     let model = role
-        .and_then(|r| r.strip_prefix(&format!("{PROVIDER}/")))
+        .as_ref()
+        .filter(|(_, one)| *one)
+        .and_then(|(r, _)| r.strip_prefix(&format!("{PROVIDER}/")))
         .filter(|m| !m.is_empty());
     let discovery = p
         .and_then(|p| p.get("discovery"))
@@ -154,7 +182,7 @@ pub fn read_back(
         "base_url": base,
         "key_set": key_set,
         "model": model,
-        "default_role": role,
+        "default_role": role.as_ref().map(|(r, _)| r),
         "legacy": legacy,
     }))
 }

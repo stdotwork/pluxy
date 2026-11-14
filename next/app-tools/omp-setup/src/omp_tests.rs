@@ -305,3 +305,87 @@ fn a_backup_diff_reads_settings_by_name() {
     );
     assert_eq!(leaves(b"a: [1\n"), None);
 }
+
+#[test]
+fn a_document_that_is_only_null_takes_a_mapping() {
+    let created = "providers:\n  pluxy:\n    baseUrl: http://127.0.0.1:41999/v1\n    apiKey: k-1\n    api: openai-responses\n    discovery:\n      type: openai-models-list\n";
+    for null in ["~\n", "null\n", "---\nnull\n"] {
+        let v = read_back(Some(null.as_bytes()), Some(null.as_bytes()), None).unwrap();
+        assert_eq!(v["state"], "not-configured", "{null:?}");
+        let out = text(apply_models(Some(null.as_bytes()), &s("m")).unwrap());
+        assert_eq!(out, created, "{null:?}");
+        let out = text(apply_config(Some(null.as_bytes()), &s("m")).unwrap());
+        assert_eq!(out, "modelRoles:\n  default: pluxy/m\n", "{null:?}");
+    }
+    // The comments of a null document stay.
+    let out = text(apply_config(Some(b"# mine\nnull\n"), &s("m")).unwrap());
+    assert_eq!(out, "# mine\nmodelRoles:\n  default: pluxy/m\n");
+    // A file of only comments keeps them.
+    let out = text(apply_config(Some(b"# only a comment\n"), &s("m")).unwrap());
+    assert_eq!(out, "# only a comment\nmodelRoles:\n  default: pluxy/m\n");
+}
+
+#[test]
+fn null_mappings_are_absent_as_oh_my_pi_reads_them() {
+    let cfg = "modelRoles: null\ntheme: x\n";
+    let v = read_back(None, Some(cfg.as_bytes()), None).unwrap();
+    assert_eq!(v["default_role"], json!(null));
+    let out = text(apply_config(Some(cfg.as_bytes()), &s("m")).unwrap());
+    assert_eq!(out, "modelRoles:\n  default: pluxy/m\ntheme: x\n");
+    for models in [
+        "providers: ~\n",
+        "providers:\n  pluxy: null\n",
+        "providers:\n  pluxy:\n    discovery: null\n",
+    ] {
+        read_back(Some(models.as_bytes()), None, None).unwrap();
+        let out = apply_models(Some(models.as_bytes()), &s("m")).unwrap();
+        let v = parse(Some(&out)).unwrap();
+        assert_eq!(
+            v["providers"]["pluxy"]["discovery"]["type"], "openai-models-list",
+            "{models:?}"
+        );
+        assert_eq!(v["providers"]["pluxy"]["apiKey"], "k-1", "{models:?}");
+    }
+}
+
+#[test]
+fn a_list_of_default_selectors_is_the_persons_model_and_clear_puts_it_back() {
+    let cfg = "modelRoles:\n  default:\n    - anthropic/claude-opus-5-5\n    - openai/gpt-6.1-sol\n  smol: a\n";
+    let v = read_back(None, Some(cfg.as_bytes()), None).unwrap();
+    assert_eq!(
+        (
+            v["default_role"].clone(),
+            v["model"].clone(),
+            v["state"].clone()
+        ),
+        (
+            json!("anthropic/claude-opus-5-5, openai/gpt-6.1-sol"),
+            json!(null),
+            json!("not-configured")
+        )
+    );
+    // Even a list naming pluxy's model first is not pluxy's single default.
+    let ours = "modelRoles:\n  default: [pluxy/m, openai/x]\n";
+    assert_eq!(
+        read_back(None, Some(ours.as_bytes()), None).unwrap()["model"],
+        json!(null)
+    );
+    let applied = text(apply_config(Some(cfg.as_bytes()), &s("m")).unwrap());
+    assert_eq!(applied, "modelRoles:\n  default: pluxy/m\n  smol: a\n");
+    // The person changes smol; Clear puts their list back and keeps their smol.
+    let current = applied.replace("smol: a", "smol: b");
+    let out = Yamls
+        .merge(
+            Some(cfg.as_bytes()),
+            Some(applied.as_bytes()),
+            Some(current.as_bytes()),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        parse(Some(&out)).unwrap(),
+        json!({"modelRoles": {"default": ["anthropic/claude-opus-5-5", "openai/gpt-6.1-sol"], "smol": "b"}})
+    );
+    // A list holding anything but text is refused.
+    assert!(read_back(None, Some(b"modelRoles:\n  default: [1]\n"), None).is_err());
+}

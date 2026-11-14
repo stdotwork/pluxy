@@ -322,7 +322,7 @@ backups (the backup browser). It exports nothing.
 
 | Operation | Effect | Input | Output |
 | --- | --- | --- | --- |
-| `preview` | `read` | `targets`: two selections (`file`, or `root` and `path`); or `folder`: an agent folder (it may be a link), whose two files are used; by default the two files in `~/.omp/agent` in the app's `HOME` (below); `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `config`: `state` (`not-configured`, `configured`, `needs-update`), `base_url` (the provider's), `key_set`, `model` (the default role's, when it is pluxy's), `default_role` (the settings file's `modelRoles.default`), `legacy` (the old desktop app's `easy-cliproxyapi` provider is there); never the key |
+| `preview` | `read` | `targets`: two selections (`file`, or `root` and `path`); or `folder`: an agent folder (it may be a link), whose two files are used; by default the two files in `~/.omp/agent` in the app's `HOME` (below); `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `config`: `state` (`not-configured`, `configured`, `needs-update`), `base_url` (the provider's), `key_set`, `model` (the default role's, when it is pluxy's), `default_role` (the settings file's `modelRoles.default`), `legacy` (the old desktop app's `easy-cliproxyapi` provider is there); or, for files Oh My Pi would not take, `state` `refused` and `reason`; never the key |
 | `apply` | `write`; secret `key` (value) | Two pins, `base_url`, `key`, `model` (one model ID) | The library's outcome |
 | `clear` | `write` | Two pins | The library's outcome: the values Apply wrote go, edits made since stay |
 | `restore` | `write` | Two pins | The library's outcome: the original bytes back (Restore Backup) |
@@ -352,14 +352,19 @@ quoting and indentation stay, and only keys whose values change are touched. Eac
 YAML 1.2 (saphyr), as Oh My Pi's parser reads it, and every edited file is read again and must hold
 exactly the intended value, else nothing is written. Clear's three-way merge brings back what Apply
 replaced unless the person changed it since, and edits only what differs; a file Apply created that
-holds nothing else is removed. An old desktop app's `easy-cliproxyapi` provider is left alone. `preview`
-and `apply` refuse, before writing, a file Oh My Pi would not take (Clear, which the page runs after
-a preview, refuses a file that is no longer YAML when it has to merge): not UTF-8, not
-YAML (a repeated key too), more than one document, a top level that is not a mapping, a tag, a key
-that is not text or a number that is not finite, `providers`, `providers.pluxy` or its `discovery`
-not a mapping, `modelRoles` not a mapping or `modelRoles.default` not text. A missing or empty file
-is an empty one. Neither file has a version field, so none is checked. With neither YAML name in
-the folder, a legacy `models.json` or `settings.json` there refuses them too: Oh My Pi moves it into a
+holds nothing else is removed. An old desktop app's `easy-cliproxyapi` provider is left alone. `apply`
+and `clear` refuse, before writing, files Oh My Pi would not take; `preview` pins them all the same
+and reports them `refused` with the reason, so Restore Backup and the backups still reach them: not
+UTF-8, not YAML (a repeated key too), more than one document, a top level that is not a mapping, a
+tag, a key that is not text or a number that is not finite, `providers`, `providers.pluxy` or its
+`discovery` not a mapping, `modelRoles` not a mapping, or `modelRoles.default` neither text nor a
+list of text. A missing or empty file, or one whose document is only `null`, is an empty one (apply
+gives it a mapping); a `null` mapping is an absent one, as Oh My Pi reads it. A list of default
+selectors (fallbacks in order) is the person's default, never pluxy's: apply replaces it with
+pluxy's model and Clear puts the list back. A preview reads the files once more if one changed
+between its pin and its read, and refuses if it changed again. Neither file has a version field, so
+none is checked. With neither YAML name in the folder, a legacy `models.json` or `settings.json`
+there refuses them too: Oh My Pi moves it into a
 new YAML file when it next starts, which a file made here would stop (settings Oh My Pi still holds
 in `agent.db` from an old version are not seen). The key may not start with `!` (Oh My Pi runs such
 a value as a command) or hold spaces; Oh My Pi first reads `apiKey` as an environment variable's

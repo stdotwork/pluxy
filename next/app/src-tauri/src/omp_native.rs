@@ -9,20 +9,26 @@
 //! - install: pluxy/omp-setup and pluxy/execution install from the curated registry and are enabled
 //!   through their native confirmations, which say "full access to your user account";
 //! - key: the key is typed into native key entry; the window gets only its ID;
-//! - unknown: a preview of a models file whose `providers` is a list, one that is not YAML, and of
-//!   an older `models.json`, are refused unasked and change nothing; a preview of the person's files
-//!   (a read, asked nothing) picks `models.yml` and `config.yml`, pins both and reads the values
-//!   back, with no key;
+//! - unknown: a preview of a models file whose `providers` is a list, of one that is not YAML, and
+//!   of a folder with an older `models.json`, pins the files unasked, reports them refused with the
+//!   reason and changes nothing; a preview of the person's files (a read, asked nothing) picks
+//!   `models.yml` and `config.yml`, pins both and reads the values back, with no key;
 //! - apply: asks a native confirmation naming both files, the key's label and the same-instant
 //!   sentence, never the key; then both files hold exactly the bytes `expect.json` says (comments,
-//!   the person's providers and settings in place), modes kept, and the preview reads the config
-//!   back as configured; `agent.db` is untouched;
-//! - restore: after the person's edit, Restore Backup puts both original files back;
-//! - clear: applied again and edited by the person, Clear takes out only pluxy's values; their own
-//!   model entry, theme and smol role stay, and an apply again keeps them too;
+//!   the person's providers and settings in place), owner only (0600, from 0644), and the preview
+//!   reads the config back as configured; `agent.db` is untouched;
+//! - restore: after the person's edit and a mode of their own (0640), Restore Backup puts both
+//!   original files back and keeps that mode;
+//! - clear: applied again (0600 again), edited by the person and applied again, then given 0644 by
+//!   the person, Clear takes out only pluxy's values; their own model entry, theme and smol role
+//!   stay, an apply again keeps them too, and so does their mode;
+//! - corrupt: applied again, then the models file made into one Oh My Pi would not take, the
+//!   preview reports it refused, a confirmed Clear is refused and changes nothing, and Restore
+//!   Backup puts back both files as they were before that apply;
 //! - backups: a Manual Backup, a diff naming the setting the person changed and never its value,
 //!   restore over that edit, delete;
-//! - stow: an apply through the selected links changes only their targets, the links keep their
+//! - stow: an apply through the selected links changes only their targets (0640 and 0644 become
+//!   0600), the links keep their
 //!   inodes and text; once a target is replaced, a confirmed write fails as changed and writes
 //!   nothing; a new preview's restore puts the originals back through the links;
 //! - root: an apply to the selected root creates both files, the root link kept; clear removes them;
@@ -47,6 +53,7 @@ use super::vault::{dialog_with, type_key};
 use super::{log, wait_for};
 use serde_json::{json, Value};
 use std::cell::RefCell;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tauri::{AppHandle, Manager, Webview};
@@ -76,24 +83,6 @@ fn read_op(main: &Webview, seen: &Seen, op: &str, input: Value) -> Result<Value,
     require(!asked, format!("{op} asked a native confirmation"))?;
     require(r["ok"] == true, format!("{op} {input}: {r}"))?;
     Ok(r["value"].clone())
-}
-
-/// A read operation that must be refused, unasked, saying says.
-fn read_refused(
-    main: &Webview,
-    seen: &Seen,
-    op: &str,
-    input: Value,
-    says: &str,
-) -> Result<(), String> {
-    let (r, asked) = unasked(|| call(main, PACKAGE, op, input.clone()));
-    let r = r?;
-    seen.add(r.to_string());
-    require(!asked, format!("{op} {input} asked a native confirmation"))?;
-    require(
-        r["ok"] == false && r["error"].as_str().is_some_and(|e| e.contains(says)),
-        format!("{op} {input} should be refused with {says:?}: {r}"),
-    )
 }
 
 /// A write operation of the package from the window, its confirmation (naming every one of
@@ -170,6 +159,11 @@ fn place(from: &Path, to: &Path) -> Result<(), String> {
     std::fs::copy(from, to)
         .map(|_| ())
         .map_err(|e| e.to_string())
+}
+
+/// Gives path mode, as the person might.
+fn set_mode(path: &Path, mode: u32) -> Result<(), String> {
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).map_err(|e| e.to_string())
 }
 
 pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<(), String> {
@@ -288,27 +282,21 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     step(
         "unknown",
         (|| {
-            read_refused(
-                main,
-                &seen,
-                "preview",
-                pins(&unknown.join("models.yml"), &unknown.join("config.yml")),
-                "providers",
-            )?;
-            read_refused(
-                main,
-                &seen,
-                "preview",
-                pins(&broken.join("models.yml"), &broken.join("config.yml")),
-                "YAML",
-            )?;
-            read_refused(
-                main,
-                &seen,
-                "preview",
-                pins(&legacy.join("models.yml"), &legacy.join("config.yml")),
-                "models.json",
-            )?;
+            for (q, says) in [
+                (&unknown, "providers"),
+                (&broken, "YAML"),
+                (&legacy, "models.json"),
+            ] {
+                let m = q.join("models.yml");
+                let v = read_op(main, &seen, "preview", pins(&m, &q.join("config.yml")))?;
+                let c = &v["config"];
+                require(
+                    v["targets"][0]["target"] == json!(txt(&m))
+                        && c["state"] == "refused"
+                        && c["reason"].as_str().is_some_and(|r| r.contains(says)),
+                    format!("the preview of {} should report it refused: {v}", txt(q)),
+                )?;
+            }
             require(
                 read(&unknown.join("models.yml")) == Some(bytes("unknown"))
                     && read(&broken.join("models.yml")) == Some(bytes("broken"))
@@ -367,8 +355,12 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 format!("the applied config: {:?}", read(&config)),
             )?;
             require(
-                mode(&models) == 0o644 && mode(&config) == 0o644,
-                "a file's mode changed",
+                mode(&models) == 0o600 && mode(&config) == 0o600,
+                format!(
+                    "the applied files' modes: {:o} {:o}",
+                    mode(&models),
+                    mode(&config)
+                ),
             )?;
             let v = read_op(
                 main,
@@ -397,6 +389,8 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         (|| {
             let (from, to) = pair("edit_theme");
             edit(&config, &from, &to)?;
+            set_mode(&models, 0o640)?;
+            set_mode(&config, 0o640)?;
             let v = read_op(main, &seen, "preview", json!({}))?;
             require(
                 v["edited"] == json!([false, true]),
@@ -415,8 +409,8 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             require(
                 read(&models) == Some(bytes("original"))
                     && read(&config) == Some(bytes("config_original"))
-                    && mode(&models) == 0o644
-                    && mode(&config) == 0o644,
+                    && mode(&models) == 0o640
+                    && mode(&config) == 0o640,
                 format!(
                     "the restored files: {:?} {:?}",
                     read(&models),
@@ -444,7 +438,9 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             require(
                 read(&models) == Some(bytes("applied"))
-                    && read(&config) == Some(bytes("config_applied")),
+                    && read(&config) == Some(bytes("config_applied"))
+                    && mode(&models) == 0o600
+                    && mode(&config) == 0o600,
                 "the second apply",
             )?;
             let (from, to) = pair("edit_entry");
@@ -474,6 +470,8 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                     read(&config)
                 ),
             )?;
+            set_mode(&models, 0o644)?;
+            set_mode(&config, 0o644)?;
             let v = read_op(main, &seen, "preview", json!({}))?;
             let o = written(
                 app,
@@ -487,8 +485,16 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             require(o["outcome"] == "cleared", format!("the clear: {o}"))?;
             require(
                 read(&models) == Some(bytes("cleared"))
-                    && read(&config) == Some(bytes("config_cleared")),
-                format!("the cleared files: {:?} {:?}", read(&models), read(&config)),
+                    && read(&config) == Some(bytes("config_cleared"))
+                    && mode(&models) == 0o644
+                    && mode(&config) == 0o644,
+                format!(
+                    "the cleared files ({:o} {:o}): {:?} {:?}",
+                    mode(&models),
+                    mode(&config),
+                    read(&models),
+                    read(&config)
+                ),
             )?;
             untouched()
         })(),
@@ -568,6 +574,73 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     )?;
     passed("backups");
 
+    // ---- corrupt: an applied models file Oh My Pi would not take; Clear is refused, Restore
+    // Backup still puts both files back
+    step(
+        "corrupt",
+        (|| {
+            let v = read_op(main, &seen, "preview", json!({}))?;
+            written(
+                app,
+                main,
+                &seen,
+                "apply",
+                apply_input(&v, &secret),
+                &[&txt(&models), &txt(&config), LABEL],
+                &hidden,
+            )?;
+            let (from, to) = pair("corrupt");
+            edit(&models, &from, &to)?;
+            let corrupt = (read(&models), read(&config));
+            let v = read_op(main, &seen, "preview", json!({}))?;
+            let c = &v["config"];
+            require(
+                v["applied"] == true
+                    && c["state"] == "refused"
+                    && c["reason"].as_str().is_some_and(|r| r.contains("YAML")),
+                format!("the corrupt file's preview: {v}"),
+            )?;
+            let r = confirmed(
+                app,
+                main,
+                &seen,
+                "clear",
+                json!({"targets": v["targets"]}),
+                &[&txt(&models), &txt(&config)],
+                &hidden,
+            )?;
+            require(
+                r["ok"] == false && r["error"].as_str().is_some_and(|e| e.contains("YAML")),
+                format!("a clear of the corrupt file should be refused: {r}"),
+            )?;
+            require(
+                (read(&models), read(&config)) == corrupt,
+                "the refused clear changed a file",
+            )?;
+            let o = written(
+                app,
+                main,
+                &seen,
+                "restore",
+                json!({"targets": v["targets"]}),
+                &[&txt(&models), &txt(&config)],
+                &hidden,
+            )?;
+            require(o["outcome"] == "restored", format!("the restore: {o}"))?;
+            require(
+                read(&models) == Some(bytes("cleared"))
+                    && read(&config) == Some(bytes("config_cleared")),
+                format!(
+                    "the files restored: {:?} {:?}",
+                    read(&models),
+                    read(&config)
+                ),
+            )?;
+            untouched()
+        })(),
+    )?;
+    passed("corrupt");
+
     // ---- stow: only the links' targets change; a replaced target refuses writes
     step(
         "stow",
@@ -593,8 +666,9 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             require(
                 read(&stow_target_models) == Some(bytes("stow_models_applied"))
-                    && mode(&stow_target_models) == 0o640
-                    && read(&stow_target_config) == Some(bytes("stow_config_applied")),
+                    && mode(&stow_target_models) == 0o600
+                    && read(&stow_target_config) == Some(bytes("stow_config_applied"))
+                    && mode(&stow_target_config) == 0o600,
                 format!(
                     "the stow targets after apply: {:?} {:?}",
                     read(&stow_target_models),

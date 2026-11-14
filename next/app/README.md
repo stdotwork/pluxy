@@ -867,12 +867,15 @@ shows whether pluxy's integration is applied, the files it writes to, whether a 
 file and the default model role, never the key, and warns when the old desktop app's
 `easy-cliproxyapi` provider is still there. **Default model** is the model Oh My Pi starts with
 through this core (the core's served models are suggested; **Refresh models** reloads them); Oh My
-Pi lists the core's other models itself. The **Authentication Key** is one of the vault's secrets,
-or a new one through native key entry (**Add key…**).
+Pi lists the core's other models itself. The **Authentication Key** is one of the vault's secrets (a captured
+client key only when it is this tool's), or a new one through native key entry (**Add key…**).
 
-**Connect in One Click** (or **Update Configuration** / **Repair Connection** once applied),
-**Clear integration** and **Restore Backup** each preview the files again and call the tool, whose
-native confirmation names both files it resolves to, the key's label for Apply, and that an edit
+Files Oh My Pi would not take show as refused, with the reason: **Apply** and **Clear integration**
+stay off, and **Restore Backup** and the backups stay available. Choosing other files drops the last
+preview. **Connect in One Click** (or **Update Configuration** / **Repair Connection** once applied),
+**Clear integration** and **Restore Backup** call the tool with the files the last preview pinned
+(the tool refuses them if a file changed since), and its native confirmation names both files they
+resolve to, the key's label for Apply, and that an edit
 made in the same instant by another program may be lost; comments and everything else in the files
 stay, including the person's own models under the pluxy provider. **Backup and restore** is the
 shared backup browser. **Start CLI** asks the tool for its recipe (`omp` in a terminal, no
