@@ -102,32 +102,48 @@ fn operations() -> Vec<Operation> {
 }
 
 /// The host-private services, as the unit tests see them: SECRET is redacted, journals are kept
-/// in memory, and each vault frame is recorded with the call's operation and whether the tool was
-/// describing.
+/// in memory, and each vault frame is recorded with the call's operation and, in describe, the
+/// journals the tool was told of.
 #[derive(Default)]
 struct Stub {
     journals: Mutex<Vec<Value>>,
-    frames: Mutex<Vec<(String, String, bool)>>,
+    frames: Mutex<Vec<Frame>>,
     /// journal.end is refused: the journal stays open.
     keep_open: bool,
+    /// The journals cannot be read.
+    unreadable: bool,
 }
 
+/// A vault frame a Stub was sent: its op, the call's operation, the journals describe was told of.
+type Frame = (String, String, Option<Vec<String>>);
+
 impl Private for Stub {
-    fn journals(&self, _: &str) -> Vec<Value> {
-        self.journals.lock().unwrap().clone()
+    fn journals(&self, _: &str) -> Result<Vec<Value>, String> {
+        if self.unreadable {
+            return Err("its records are damaged".into());
+        }
+        Ok(self.journals.lock().unwrap().clone())
     }
-    fn frame(&self, tool: &Hop, op: &str, describing: bool, r: &Value) -> Result<Value, CallError> {
+    fn frame(
+        &self,
+        tool: &Hop,
+        op: &str,
+        describing: Option<&[String]>,
+        r: &Value,
+    ) -> Result<Value, CallError> {
         assert_eq!(tool.package(), Some(ID));
         let kind = r["op"].as_str().unwrap_or_default().to_string();
-        self.frames
-            .lock()
-            .unwrap()
-            .push((kind.clone(), op.into(), describing));
+        self.frames.lock().unwrap().push((
+            kind.clone(),
+            op.into(),
+            describing.map(<[String]>::to_vec),
+        ));
         match kind.as_str() {
             "backup.put" => Ok(json!({"backup": "b-1"})),
             "journal.begin" => Ok(json!({"journal": "j-1"})),
             "journal.commit" => Ok(json!({"journal": r["journal"], "outcome": "committed"})),
             "journal.end" if self.keep_open => Err(fail("unavailable", "kept open")),
+            "backup.list" => Ok(json!({"backups": []})),
             "journal.end" => {
                 self.journals
                     .lock()
@@ -1687,9 +1703,9 @@ fn a_call_delivers_its_secrets_in_its_frame_and_the_tool_reaches_the_vault_only_
     assert_eq!(
         *stub.frames.lock().unwrap(),
         vec![
-            ("backup.put".to_string(), "apply".to_string(), false),
-            ("journal.begin".into(), "apply".into(), false),
-            ("journal.commit".into(), "apply".into(), false),
+            ("backup.put".to_string(), "apply".to_string(), None),
+            ("journal.begin".into(), "apply".into(), None),
+            ("journal.commit".into(), "apply".into(), None),
         ]
     );
     // A call with no secrets carries none: the tool says so.
@@ -1719,7 +1735,11 @@ fn open_journals_go_in_the_next_describe_and_must_be_ended_before_it_serves() {
     assert_eq!(out["reconciled"][0]["outcome"], "committed");
     assert_eq!(
         *stub.frames.lock().unwrap(),
-        vec![("journal.end".to_string(), String::new(), true)]
+        vec![(
+            "journal.end".to_string(),
+            String::new(),
+            Some(vec!["j-7".to_string()])
+        )]
     );
     assert!(stub.journals.lock().unwrap().is_empty());
     // The next start names none.
@@ -1742,4 +1762,57 @@ fn open_journals_go_in_the_next_describe_and_must_be_ended_before_it_serves() {
     assert!(e.message.contains("still open"), "{e}");
     h.stop_all();
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn describe_reaches_the_vault_only_on_its_packages_turn_for_the_journals_it_was_told_of() {
+    let mode = json!({"describe_vault": {"op": "backup.list"}});
+    // No journal open and no unknown outcome: it does not hold the turn, so it is refused.
+    let h = host(mode.clone());
+    let stub = private(&h, Stub::default());
+    let out = h.call(ID, "report", json!({}), None).unwrap();
+    let refused = &out["reconciled"][0]["describe_vault"]["error"];
+    assert_eq!(refused["code"], "permission", "{out}");
+    assert!(stub.frames.lock().unwrap().is_empty());
+    h.stop_all();
+    // A journal open: on the turn, told of it; its other frame names the same journals.
+    let h = host(mode);
+    let stub = private(&h, Stub::default());
+    stub.journals
+        .lock()
+        .unwrap()
+        .push(json!({"id": "j-7", "op": "apply",
+        "generation": 1, "began": 1, "intent": {"file": "/nonexistent"}}));
+    let out = h.call(ID, "report", json!({}), None).unwrap();
+    assert_eq!(out["reconciled"][0]["outcome"], "rolled_back");
+    assert_eq!(
+        out["reconciled"][1]["describe_vault"]["output"],
+        json!({"backups": []})
+    );
+    let told = Some(vec!["j-7".to_string()]);
+    assert_eq!(
+        *stub.frames.lock().unwrap(),
+        vec![
+            ("journal.end".to_string(), String::new(), told.clone()),
+            ("backup.list".to_string(), String::new(), told),
+        ]
+    );
+    h.stop_all();
+}
+
+#[test]
+fn a_start_whose_journals_cannot_be_read_fails() {
+    let h = host(Value::Null);
+    let stub = private(
+        &h,
+        Stub {
+            unreadable: true,
+            ..Default::default()
+        },
+    );
+    let e = h.call(ID, "report", json!({}), None).unwrap_err();
+    assert!(e.message.contains("journals"), "{e}");
+    assert!(e.message.contains("damaged"), "{e}");
+    assert!(stub.frames.lock().unwrap().is_empty());
+    h.stop_all();
 }

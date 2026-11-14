@@ -30,7 +30,15 @@ const apply = {
   secrets: { key: "value" },
   input_schema: {
     type: "object",
-    properties: { ...key, file: str, crash: { type: "boolean" }, leak: str, forward: object },
+    properties: {
+      ...key,
+      file: str,
+      crash: { type: "boolean" },
+      crash_before: { type: "boolean" },
+      leave_open: { type: "boolean" },
+      leak: str,
+      forward: object,
+    },
     required: ["key", "file"],
     additionalProperties: false,
   },

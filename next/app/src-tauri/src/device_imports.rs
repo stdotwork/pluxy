@@ -197,6 +197,14 @@ pub(super) fn validate_secrets(op: &Operation) -> Result<(), String> {
                 op.id
             ));
         }
+        // A launch's secrets are resolved by the host for the process it starts: its program
+        // gets references only, never a value (and a launch may be remembered).
+        if how == "value" && op.effect.as_deref() == Some("launch") {
+            return Err(format!(
+                "app.operations {}: a launch's secret field {field} is a reference, not a value",
+                op.id
+            ));
+        }
         if op.input_schema["type"] != "object"
             || op.input_schema["properties"][field.as_str()]["type"] != "string"
         {

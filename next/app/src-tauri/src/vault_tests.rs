@@ -25,6 +25,13 @@ fn holder(id: &str, generation: u64) -> Holder {
     }
 }
 
+/// Package id's folder in the vault of d.
+fn package_dir(d: &Dir, id: &str) -> PathBuf {
+    d.0.join("vault")
+        .join("packages")
+        .join(Vault::package_name(id))
+}
+
 fn mode(p: &Path) -> u32 {
     fs::metadata(p).unwrap().permissions().mode() & 0o777
 }
@@ -64,7 +71,7 @@ fn a_damaged_vault_keeps_no_secret_and_changes_nothing() {
     let r = broken.request(
         &holder("pluxy/w", 1),
         "apply",
-        false,
+        None,
         &json!({"op": "backup.list"}),
     );
     assert_eq!(r.unwrap_err().code, "unavailable");
@@ -120,8 +127,32 @@ fn values_and_references_are_redacted_and_found() {
     let text = format!("key {KEY} ref {r}");
     assert_eq!(v.redact(&text), "key [redacted] ref [redacted]");
     assert!(v.carries(&text) && v.carries(&r) && !v.carries("plain"));
-    let out = v.redact_value(&json!({"a": [KEY], r.clone(): 1}));
-    assert!(!out.to_string().contains(KEY) && !out.to_string().contains(&r));
+}
+
+#[test]
+fn overlapping_values_are_redacted_whole() {
+    let (_d, v) = vault();
+    // One value inside another, and two that overlap: none of either is left.
+    v.add_secret("short", "abcd1234").unwrap();
+    v.add_secret("long", "xxabcd1234yy").unwrap();
+    v.add_secret("tail", "1234yyzz99").unwrap();
+    let out = v.redact("<xxabcd1234yyzz99> <abcd1234>");
+    assert_eq!(out, "<[redacted]> <[redacted]>");
+    for part in ["abcd", "1234", "yy", "zz99"] {
+        assert!(!out.contains(part), "{out}");
+    }
+}
+
+#[test]
+fn a_removed_secret_stays_redacted_until_the_app_restarts() {
+    let (d, v) = vault();
+    let s = v.add_secret("client key", KEY).unwrap();
+    v.remove_secret(&s).unwrap();
+    assert_eq!(v.redact(&format!("late {KEY}")), "late [redacted]");
+    assert!(v.carries(KEY));
+    // The next app never had it.
+    let again = Vault::open(d.0.join("vault"));
+    assert!(!again.carries(KEY));
 }
 
 #[test]
@@ -132,30 +163,39 @@ fn journals_are_begun_ended_once_and_named_until_then() {
         v.request(
             &w,
             "apply",
-            false,
+            None,
             &json!({"op": "journal.begin", "intent": {"file": "/x"}}),
         )
     };
-    assert!(v
-        .request(&w, "", true, &json!({"op": "journal.begin", "intent": {}}))
-        .is_err());
+    assert_eq!(
+        v.request(
+            &w,
+            "",
+            Some(&[]),
+            &json!({"op": "journal.begin", "intent": {}})
+        )
+        .unwrap_err()
+        .code,
+        "permission"
+    );
     let j = begin(&v).unwrap()["journal"].as_str().unwrap().to_string();
     // Open: named for describe, and no second one begins.
-    assert_eq!(v.open_journals("pluxy/w")[0]["id"], j);
+    assert_eq!(v.open_journals("pluxy/w").unwrap()[0]["id"], j);
     assert_eq!(
-        v.open_journals("pluxy/w")[0]["intent"],
+        v.open_journals("pluxy/w").unwrap()[0]["intent"],
         json!({"file": "/x"})
     );
     assert_eq!(begin(&v).unwrap_err().code, "unavailable");
-    assert!(v.open_journals("pluxy/other").is_empty());
+    assert!(v.open_journals("pluxy/other").unwrap().is_empty());
     // Kept on disk, privately: the app's next run names it too.
     let v = Vault::open(d.0.join("vault"));
-    assert_eq!(v.open_journals("pluxy/w").len(), 1);
+    assert_eq!(v.open_journals("pluxy/w").unwrap().len(), 1);
+    let told = [j.clone()];
     let end = |outcome: &str| {
         v.request(
             &w,
             "",
-            true,
+            Some(&told),
             &json!({"op": "journal.end", "journal": j, "outcome": outcome}),
         )
     };
@@ -166,8 +206,8 @@ fn journals_are_begun_ended_once_and_named_until_then() {
     // Again with the same outcome: the same answer, marked; another outcome is refused.
     assert_eq!(end("committed").unwrap()["again"], true);
     assert_eq!(end("rolled_back").unwrap_err().code, "invalid_request");
-    assert!(v.open_journals("pluxy/w").is_empty());
-    let views = v.journals("pluxy/w");
+    assert!(v.open_journals("pluxy/w").unwrap().is_empty());
+    let views = v.journals("pluxy/w").unwrap();
     assert_eq!(views.len(), 1);
     assert!(views[0].reconciled && views[0].outcome.as_deref() == Some("committed"));
     assert!(!serde_json::to_string(&views).unwrap().contains("/x"));
@@ -176,12 +216,13 @@ fn journals_are_begun_ended_once_and_named_until_then() {
     v.request(
         &w,
         "apply",
-        false,
+        None,
         &json!({"op": "journal.commit", "journal": j2}),
     )
     .unwrap();
     assert!(
         !v.journals("pluxy/w")
+            .unwrap()
             .iter()
             .find(|x| x.id == j2)
             .unwrap()
@@ -198,7 +239,7 @@ fn backups_are_the_packages_own_private_files() {
         .request(
             &w,
             "apply",
-            false,
+            None,
             &json!({"op": "backup.put", "label": "original", "data": data}),
         )
         .unwrap()["backup"]
@@ -206,17 +247,12 @@ fn backups_are_the_packages_own_private_files() {
         .unwrap()
         .to_string();
     let got = v
-        .request(
-            &w,
-            "apply",
-            false,
-            &json!({"op": "backup.get", "backup": b}),
-        )
+        .request(&w, "apply", None, &json!({"op": "backup.get", "backup": b}))
         .unwrap();
     assert_eq!(got["data"], data);
     assert_eq!(got["size"], 14);
     let list = v
-        .request(&w, "apply", false, &json!({"op": "backup.list"}))
+        .request(&w, "apply", None, &json!({"op": "backup.list"}))
         .unwrap();
     assert_eq!(list["backups"][0]["backup"], b);
     // Another package has none of them, even another release of the same is the same package.
@@ -224,7 +260,7 @@ fn backups_are_the_packages_own_private_files() {
         .request(
             &holder("pluxy/other", 1),
             "apply",
-            false,
+            None,
             &json!({"op": "backup.get", "backup": b}),
         )
         .unwrap_err();
@@ -233,35 +269,207 @@ fn backups_are_the_packages_own_private_files() {
         .request(
             &holder("pluxy/w", 2),
             "apply",
-            false,
+            None,
             &json!({"op": "backup.get", "backup": b})
         )
         .is_ok());
-    let file = v.package_dir("pluxy/w").join(&b);
+    let dir = package_dir(&d, "pluxy/w");
+    let file = dir.join(&b);
     assert_eq!(mode(&file), 0o600);
-    assert_eq!(mode(&v.package_dir("pluxy/w")), 0o700);
+    assert_eq!(mode(&dir), 0o700);
     assert!(file.starts_with(&d.0));
     let big = base64::engine::general_purpose::STANDARD.encode(vec![0u8; MAX_IMAGE + 1]);
     assert!(v
-        .request(
-            &w,
-            "apply",
-            false,
-            &json!({"op": "backup.put", "data": big})
-        )
+        .request(&w, "apply", None, &json!({"op": "backup.put", "data": big}))
         .is_err());
     v.request(
         &w,
         "apply",
-        false,
+        None,
         &json!({"op": "backup.delete", "backup": b}),
     )
     .unwrap();
     assert!(!file.exists());
     assert_eq!(
-        v.request(&w, "apply", false, &json!({"op": "nope"}))
+        v.request(&w, "apply", None, &json!({"op": "nope"}))
             .unwrap_err()
             .code,
         "unsupported"
     );
+}
+
+#[test]
+fn a_journal_is_ended_in_a_call_only_by_the_release_that_began_it() {
+    let (_d, v) = vault();
+    let w1 = holder("pluxy/w", 1);
+    let j = v
+        .request(
+            &w1,
+            "apply",
+            None,
+            &json!({"op": "journal.begin", "intent": {}}),
+        )
+        .unwrap()["journal"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // Another release's call cannot end it, and is not told what is open.
+    let e = v
+        .request(
+            &holder("pluxy/w", 2),
+            "apply",
+            None,
+            &json!({"op": "journal.commit", "journal": j}),
+        )
+        .unwrap_err();
+    assert_eq!(e.code, "not_found");
+    let e2 = v
+        .request(
+            &holder("pluxy/w", 2),
+            "apply",
+            None,
+            &json!({"op": "journal.begin", "intent": {}}),
+        )
+        .unwrap_err();
+    for e in [&e, &e2] {
+        assert!(!e.message.contains(&j), "{}", e.message);
+    }
+    // Its next describe, told of it, may end it, whichever release it is.
+    let told = [j.clone()];
+    v.request(
+        &holder("pluxy/w", 2),
+        "",
+        Some(&told),
+        &json!({"op": "journal.end", "journal": j, "outcome": "rolled_back"}),
+    )
+    .unwrap();
+    let e = v
+        .request(
+            &w1,
+            "apply",
+            None,
+            &json!({"op": "journal.end", "journal": j, "outcome": "committed"}),
+        )
+        .unwrap_err();
+    assert!(!e.message.contains(&j), "{}", e.message);
+}
+
+#[test]
+fn describe_reads_backups_and_ends_only_the_journals_it_was_told_of() {
+    let (_d, v) = vault();
+    let w = holder("pluxy/w", 1);
+    let begin = || {
+        v.request(
+            &w,
+            "apply",
+            None,
+            &json!({"op": "journal.begin", "intent": {}}),
+        )
+        .unwrap()["journal"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let j = begin();
+    let data = base64::engine::general_purpose::STANDARD.encode(b"x");
+    for op in [
+        json!({"op": "backup.put", "data": data}),
+        json!({"op": "backup.delete", "backup": "b-0"}),
+        json!({"op": "journal.begin", "intent": {}}),
+    ] {
+        let e = v
+            .request(&w, "", Some(std::slice::from_ref(&j)), &op)
+            .unwrap_err();
+        assert_eq!(e.code, "permission", "{op}");
+    }
+    assert!(v
+        .request(
+            &w,
+            "",
+            Some(std::slice::from_ref(&j)),
+            &json!({"op": "backup.list"})
+        )
+        .is_ok());
+    // Not told of it: not ended.
+    let e = v
+        .request(
+            &w,
+            "",
+            Some(&[]),
+            &json!({"op": "journal.end", "journal": j, "outcome": "committed"}),
+        )
+        .unwrap_err();
+    assert_eq!(e.code, "not_found");
+    assert_eq!(v.open_journals("pluxy/w").unwrap().len(), 1);
+}
+
+#[test]
+fn files_the_records_do_not_name_are_removed_and_damaged_records_fail() {
+    let (d, v) = vault();
+    let w = holder("pluxy/w", 1);
+    v.request(&w, "apply", None, &json!({"op": "backup.list"}))
+        .unwrap();
+    v.request(
+        &w,
+        "apply",
+        None,
+        &json!({"op": "journal.begin", "intent": {}}),
+    )
+    .unwrap();
+    let dir = package_dir(&d, "pluxy/w");
+    for name in ["b-00000000000000000000000000000000", ".index.json.0123.tmp"] {
+        crate::managed::write_private(&dir.join(name), b"orphan").unwrap();
+    }
+    v.request(&w, "apply", None, &json!({"op": "backup.list"}))
+        .unwrap();
+    let mut left: Vec<String> = fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    left.sort();
+    assert_eq!(left, vec!["index.json".to_string()]);
+    // Records that cannot be read are an error, not "no journals".
+    crate::managed::write_private(&dir.join("index.json"), b"{not json").unwrap();
+    assert!(v.open_journals("pluxy/w").unwrap_err().contains("damaged"));
+    assert!(v.journals("pluxy/w").is_err());
+}
+
+#[test]
+fn a_vault_folder_replaced_by_a_link_is_refused_not_followed() {
+    let (d, v) = vault();
+    let w = holder("pluxy/w", 1);
+    v.request(
+        &w,
+        "apply",
+        None,
+        &json!({"op": "journal.begin", "intent": {}}),
+    )
+    .unwrap();
+    let dir = package_dir(&d, "pluxy/w");
+    let elsewhere = d.0.join("elsewhere");
+    fs::rename(&dir, &elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &dir).unwrap();
+    let data = base64::engine::general_purpose::STANDARD.encode(b"x");
+    let e = v
+        .request(
+            &w,
+            "apply",
+            None,
+            &json!({"op": "backup.put", "data": data}),
+        )
+        .unwrap_err();
+    assert_eq!(e.code, "unavailable");
+    assert!(v.open_journals("pluxy/w").is_err());
+    // Nothing was written through the link.
+    let mut there: Vec<String> = fs::read_dir(&elsewhere)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    there.sort();
+    assert_eq!(there, vec!["index.json".to_string()]);
+    // The vault folder itself as a link is refused too.
+    let root = d.0.join("vault");
+    fs::rename(&root, d.0.join("moved")).unwrap();
+    std::os::unix::fs::symlink(d.0.join("moved"), &root).unwrap();
+    assert!(Vault::open(root).broken().is_some());
 }

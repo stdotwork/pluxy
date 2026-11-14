@@ -148,6 +148,8 @@ struct State {
     secrets: Vec<Secret>,
     refs: HashMap<String, Reference>,
     ended: VecDeque<String>,
+    /// Values of secrets removed since the app started: still redacted, until it restarts.
+    removed: Vec<String>,
     calls: u64,
 }
 
@@ -180,48 +182,192 @@ fn printable(s: &str) -> bool {
     !s.chars().any(char::is_control)
 }
 
-fn private_dir(p: &Path) -> Result<(), String> {
-    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(p)
-        .map_err(|e| format!("{}: {e}", p.display()))?;
-    let m = fs::symlink_metadata(p).map_err(|e| format!("{}: {e}", p.display()))?;
-    if !m.is_dir() {
-        return Err(format!("{} is not a folder", p.display()));
-    }
-    fs::set_permissions(p, fs::Permissions::from_mode(0o700))
-        .map_err(|e| format!("{}: {e}", p.display()))
+/// A vault folder, opened without following a link and used only relative to its handle: a
+/// folder replaced by a link (to somewhere else) is refused, not followed.
+struct Folder(fs::File);
+
+fn os_err(what: &str) -> String {
+    format!("{what}: {}", std::io::Error::last_os_error())
 }
 
-/// The file at p, which must be a regular file of this user's that no one else may read.
-fn read_private(p: &Path) -> Result<Option<Vec<u8>>, String> {
-    use std::io::Read;
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-    let mut f = match fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY)
-        .open(p)
-    {
-        Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("{}: {e}", p.display())),
-    };
-    let m = f.metadata().map_err(|e| e.to_string())?;
-    if !m.is_file() || m.uid() != unsafe { libc::geteuid() } || m.mode() & 0o077 != 0 {
-        return Err(format!(
-            "{} must be a file of this user's that no one else may read",
-            p.display()
-        ));
+fn c_name(name: &str) -> Result<std::ffi::CString, String> {
+    if name.is_empty() || name.contains('/') || name == "." || name == ".." {
+        return Err(format!("{name:?} is not a vault file name"));
     }
-    let mut b = Vec::new();
-    f.read_to_end(&mut b).map_err(|e| e.to_string())?;
-    Ok(Some(b))
+    std::ffi::CString::new(name).map_err(|e| e.to_string())
 }
 
-fn write(p: &Path, b: &[u8]) -> Result<(), String> {
-    crate::managed::write_private(p, b).map_err(|e| format!("{}: {e}", p.display()))
+impl Folder {
+    /// A folder of this user's that no one else may use (made so), from its open handle.
+    fn checked(f: fs::File, what: &str) -> Result<Folder, String> {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let m = f.metadata().map_err(|e| format!("{what}: {e}"))?;
+        if !m.is_dir() || m.uid() != unsafe { libc::geteuid() } {
+            return Err(format!("{what} is not a folder of this user's"));
+        }
+        if m.mode() & 0o077 != 0 {
+            f.set_permissions(fs::Permissions::from_mode(0o700))
+                .map_err(|e| format!("{what}: {e}"))?;
+        }
+        Ok(Folder(f))
+    }
+
+    /// The vault's own folder at path, made (0700) when create is set; None when it is missing.
+    /// Its parent is the app's data folder; the folder itself is never a link.
+    fn root(path: &Path, create: bool) -> Result<Option<Folder>, String> {
+        use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+        let what = path.display().to_string();
+        if create {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+            }
+            match fs::DirBuilder::new().mode(0o700).create(path) {
+                Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => {
+                    return Err(format!("{what}: {e}"))
+                }
+                _ => {}
+            }
+        }
+        match fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(path)
+        {
+            Ok(f) => Folder::checked(f, &what).map(Some),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !create => Ok(None),
+            Err(e) => Err(format!("{what}: {e}")),
+        }
+    }
+
+    fn fd(&self) -> i32 {
+        use std::os::fd::AsRawFd;
+        self.0.as_raw_fd()
+    }
+
+    /// The folder name inside it, made (0700) when create is set; None when it is missing.
+    fn folder(&self, name: &str, create: bool) -> Result<Option<Folder>, String> {
+        use std::os::fd::FromRawFd;
+        let c = c_name(name)?;
+        if create && unsafe { libc::mkdirat(self.fd(), c.as_ptr(), 0o700) } != 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() != std::io::ErrorKind::AlreadyExists {
+                return Err(format!("{name}: {e}"));
+            }
+        }
+        let fd = unsafe {
+            libc::openat(
+                self.fd(),
+                c.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() == std::io::ErrorKind::NotFound && !create {
+                return Ok(None);
+            }
+            return Err(format!("{name}: {e}"));
+        }
+        Folder::checked(unsafe { fs::File::from_raw_fd(fd) }, name).map(Some)
+    }
+
+    /// The file name inside it, which must be a regular file of this user's that no one else
+    /// may read; None when it is missing.
+    fn read(&self, name: &str) -> Result<Option<Vec<u8>>, String> {
+        use std::io::Read;
+        use std::os::fd::FromRawFd;
+        use std::os::unix::fs::MetadataExt;
+        let c = c_name(name)?;
+        let fd = unsafe {
+            libc::openat(
+                self.fd(),
+                c.as_ptr(),
+                libc::O_RDONLY
+                    | libc::O_NOFOLLOW
+                    | libc::O_NONBLOCK
+                    | libc::O_NOCTTY
+                    | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() == std::io::ErrorKind::NotFound {
+                return Ok(None);
+            }
+            return Err(format!("{name}: {e}"));
+        }
+        let mut f = unsafe { fs::File::from_raw_fd(fd) };
+        let m = f.metadata().map_err(|e| e.to_string())?;
+        if !m.is_file() || m.uid() != unsafe { libc::geteuid() } || m.mode() & 0o077 != 0 {
+            return Err(format!(
+                "{name} must be a file of this user's that no one else may read"
+            ));
+        }
+        let mut b = Vec::new();
+        f.read_to_end(&mut b).map_err(|e| e.to_string())?;
+        Ok(Some(b))
+    }
+
+    /// Writes name (0600), replacing it in one step, and flushes it and the folder to disk.
+    fn write(&self, name: &str, b: &[u8]) -> Result<(), String> {
+        use std::io::Write;
+        use std::os::fd::FromRawFd;
+        let c = c_name(name)?;
+        let tmp = c_name(&format!(
+            ".{name}.{}.tmp",
+            &crate::managed::random_key()[..16]
+        ))?;
+        let fd = unsafe {
+            libc::openat(
+                self.fd(),
+                tmp.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                0o600 as libc::c_uint,
+            )
+        };
+        if fd < 0 {
+            return Err(os_err(name));
+        }
+        let mut f = unsafe { fs::File::from_raw_fd(fd) };
+        let done = f
+            .write_all(b)
+            .and_then(|_| f.sync_all())
+            .map_err(|e| format!("{name}: {e}"))
+            .and_then(|_| {
+                if unsafe { libc::renameat(self.fd(), tmp.as_ptr(), self.fd(), c.as_ptr()) } != 0 {
+                    return Err(os_err(name));
+                }
+                self.0.sync_all().map_err(|e| format!("{name}: {e}"))
+            });
+        if done.is_err() {
+            unsafe { libc::unlinkat(self.fd(), tmp.as_ptr(), 0) };
+        }
+        done
+    }
+
+    /// Removes the file name inside it; one already gone is not an error.
+    fn remove(&self, name: &str) -> Result<(), String> {
+        let c = c_name(name)?;
+        if unsafe { libc::unlinkat(self.fd(), c.as_ptr(), 0) } != 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() != std::io::ErrorKind::NotFound {
+                return Err(format!("{name}: {e}"));
+            }
+        }
+        Ok(())
+    }
+
+    /// The names inside it.
+    fn names(&self) -> Result<Vec<String>, String> {
+        let mut out = Vec::new();
+        for e in fs::read_dir(format!("/proc/self/fd/{}", self.fd())).map_err(|e| e.to_string())? {
+            let e = e.map_err(|e| e.to_string())?;
+            if let Some(n) = e.file_name().to_str() {
+                out.push(n.to_string());
+            }
+        }
+        Ok(out)
+    }
 }
 
 impl Vault {
@@ -230,7 +376,10 @@ impl Vault {
     /// stays as it is for the person to look at.
     pub fn open(dir: PathBuf) -> Vault {
         let read = || -> Result<Vec<Secret>, String> {
-            match read_private(&dir.join("secrets.json"))? {
+            let Some(root) = Folder::root(&dir, false)? else {
+                return Ok(Vec::new());
+            };
+            match root.read("secrets.json")? {
                 None => Ok(Vec::new()),
                 Some(b) => {
                     let f: SecretsFile = serde_json::from_slice(&b)
@@ -269,10 +418,10 @@ impl Vault {
         if let Some(why) = &self.broken {
             return Err(why.clone());
         }
-        private_dir(&self.dir)?;
+        let root = Folder::root(&self.dir, true)?.expect("a vault folder made");
         let b = serde_json::to_vec(&json!({"version": VERSION, "secrets": secrets}))
             .map_err(|e| e.to_string())?;
-        write(&self.dir.join("secrets.json"), &b)
+        root.write("secrets.json", &b)
     }
 
     /// Keeps a secret the person entered natively, as label; gives its ID.
@@ -312,6 +461,12 @@ impl Vault {
             return Err(format!("the vault has no secret {id}"));
         }
         self.save_secrets(&secrets)?;
+        let gone = st
+            .secrets
+            .iter()
+            .find(|s| s.id == id)
+            .map(|s| s.value.clone());
+        st.removed.extend(gone);
         st.secrets = secrets;
         Ok(())
     }
@@ -421,126 +576,157 @@ impl Vault {
         Ok(r.secret.clone())
     }
 
+    /// Every value the host must never show: secrets' values (those removed since the app
+    /// started too) and, when text may hold one, the references it gave.
+    fn needles<'a>(st: &'a State, text: &str) -> Vec<&'a str> {
+        let mut n: Vec<&str> = st
+            .secrets
+            .iter()
+            .map(|s| s.value.as_str())
+            .chain(st.removed.iter().map(String::as_str))
+            .collect();
+        if text.contains("r-") {
+            n.extend(st.refs.keys().map(String::as_str));
+        }
+        n
+    }
+
     /// Whether text holds a secret's value or a reference the host gave.
     pub fn carries(&self, text: &str) -> bool {
         let st = self.lock();
-        st.secrets.iter().any(|s| text.contains(&s.value))
-            || st.refs.keys().any(|r| text.contains(r.as_str()))
+        Vault::needles(&st, text).iter().any(|n| text.contains(n))
     }
 
-    /// Text with every secret's value and every reference replaced by `REDACTED`.
+    /// Text with every secret's value and every reference replaced by `REDACTED`. Every place
+    /// any of them occurs is found in the text as given, and overlapping or adjoining places are
+    /// replaced as one, so no part of an overlapping value is left.
     pub fn redact(&self, text: &str) -> String {
         let st = self.lock();
-        let mut out = text.to_string();
-        for s in &st.secrets {
-            if out.contains(&s.value) {
-                out = out.replace(&s.value, REDACTED);
-            }
+        let mut spans: Vec<(usize, usize)> = Vec::new();
+        for n in Vault::needles(&st, text) {
+            spans.extend(text.match_indices(n).map(|(at, m)| (at, at + m.len())));
         }
-        if out.contains("r-") {
-            for r in st.refs.keys() {
-                if out.contains(r.as_str()) {
-                    out = out.replace(r.as_str(), REDACTED);
-                }
-            }
+        if spans.is_empty() {
+            return text.to_string();
         }
+        spans.sort_unstable();
+        let mut out = String::with_capacity(text.len());
+        let mut at = 0;
+        let mut i = 0;
+        while i < spans.len() {
+            let (start, mut end) = spans[i];
+            while i + 1 < spans.len() && spans[i + 1].0 <= end {
+                i += 1;
+                end = end.max(spans[i].1);
+            }
+            out.push_str(&text[at..start]);
+            out.push_str(REDACTED);
+            at = end;
+            i += 1;
+        }
+        out.push_str(&text[at..]);
         out
     }
 
-    /// v with `redact` applied to every string in it, keys included.
-    pub fn redact_value(&self, v: &Value) -> Value {
-        match v {
-            Value::String(s) => Value::String(self.redact(s)),
-            Value::Array(a) => Value::Array(a.iter().map(|x| self.redact_value(x)).collect()),
-            Value::Object(m) => Value::Object(
-                m.iter()
-                    .map(|(k, x)| (self.redact(k), self.redact_value(x)))
-                    .collect(),
-            ),
-            other => other.clone(),
-        }
-    }
-
-    fn package_dir(&self, id: &str) -> PathBuf {
-        let h: String = Sha256::digest(id.as_bytes())
+    /// Package id's folder's name, under `packages`.
+    fn package_name(id: &str) -> String {
+        Sha256::digest(id.as_bytes())
             .iter()
             .map(|b| format!("{b:02x}"))
-            .collect();
-        self.dir.join("packages").join(h)
+            .collect()
     }
 
-    fn load(&self, id: &str) -> Result<PackageFile, String> {
-        match read_private(&self.package_dir(id).join("index.json"))? {
-            None => Ok(PackageFile {
-                version: VERSION,
-                id: id.into(),
-                ..Default::default()
-            }),
+    /// Package id's folder, made when create is set; None when it is missing.
+    fn package(&self, id: &str, create: bool) -> Result<Option<Folder>, String> {
+        let Some(root) = Folder::root(&self.dir, create)? else {
+            return Ok(None);
+        };
+        let Some(packages) = root.folder("packages", create)? else {
+            return Ok(None);
+        };
+        packages.folder(&Vault::package_name(id), create)
+    }
+
+    /// Package id's records and its folder, if it has one. Files there its records do not name
+    /// (a backup whose record was never saved or whose removal failed, a write cut short) are
+    /// removed: nothing in the vault is out of every API's reach.
+    fn load(&self, id: &str) -> Result<(Option<Folder>, PackageFile), String> {
+        let empty = || PackageFile {
+            version: VERSION,
+            id: id.into(),
+            ..Default::default()
+        };
+        let Some(dir) = self.package(id, false)? else {
+            return Ok((None, empty()));
+        };
+        let f = match dir.read("index.json")? {
+            None => empty(),
             Some(b) => {
                 let f: PackageFile = serde_json::from_slice(&b)
                     .map_err(|e| format!("{id}'s vault records are damaged: {e}"))?;
                 if f.version != VERSION || f.id != id {
                     return Err(format!("{id}'s vault records are not its own"));
                 }
-                Ok(f)
+                f
+            }
+        };
+        for name in dir.names()? {
+            if name != "index.json" && !f.backups.iter().any(|b| b.id == name) {
+                dir.remove(&name)?;
             }
         }
+        Ok((Some(dir), f))
     }
 
-    fn save(&self, f: &PackageFile) -> Result<(), String> {
-        let dir = self.package_dir(&f.id);
-        private_dir(&dir)?;
-        write(
-            &dir.join("index.json"),
+    fn save(&self, dir: &Folder, f: &PackageFile) -> Result<(), String> {
+        dir.write(
+            "index.json",
             &serde_json::to_vec(f).map_err(|e| e.to_string())?,
         )
     }
 
-    /// Package id's open journals, as describe names them.
-    pub fn open_journals(&self, id: &str) -> Vec<Value> {
+    /// Package id's open journals, as describe names them; an error when its records cannot be
+    /// read, so the start fails rather than miss one.
+    pub fn open_journals(&self, id: &str) -> Result<Vec<Value>, String> {
         let _st = self.lock();
-        self.load(id)
-            .map(|f| {
-                f.journals
-                    .iter()
-                    .filter(|j| j.outcome.is_none())
-                    .map(|j| {
-                        json!({"id": j.id, "op": j.op, "generation": j.generation,
-                            "began": j.began, "intent": j.intent})
-                    })
-                    .collect()
+        let (_, f) = self.load(id)?;
+        Ok(f.journals
+            .iter()
+            .filter(|j| j.outcome.is_none())
+            .map(|j| {
+                json!({"id": j.id, "op": j.op, "generation": j.generation,
+                    "began": j.began, "intent": j.intent})
             })
-            .unwrap_or_default()
+            .collect())
     }
 
     /// Package id's journals, open and recently ended, for its status.
-    pub fn journals(&self, id: &str) -> Vec<JournalView> {
+    pub fn journals(&self, id: &str) -> Result<Vec<JournalView>, String> {
         let _st = self.lock();
-        self.load(id)
-            .map(|f| {
-                f.journals
-                    .iter()
-                    .map(|j| JournalView {
-                        id: j.id.clone(),
-                        op: j.op.clone(),
-                        generation: j.generation,
-                        began: j.began,
-                        outcome: j.outcome.clone(),
-                        ended: j.ended,
-                        reconciled: j.reconciled,
-                    })
-                    .collect()
+        let (_, f) = self.load(id)?;
+        Ok(f.journals
+            .iter()
+            .map(|j| JournalView {
+                id: j.id.clone(),
+                op: j.op.clone(),
+                generation: j.generation,
+                began: j.began,
+                outcome: j.outcome.clone(),
+                ended: j.ended,
+                reconciled: j.reconciled,
             })
-            .unwrap_or_default()
+            .collect())
     }
 
-    /// A `vault` frame of tool (a release of its package), sent for a host call of op it serves
-    /// (describing: the describe it is answering, when op is empty). Gives the answer's output.
+    /// A `vault` frame of tool (a release of its package), sent for a host call of op it serves,
+    /// or, with describing, for the describe it is answering on its package's turn, naming the
+    /// open journals it was told of. In describe it may only read backups and end those journals;
+    /// in a call, it ends only journals its own release began. Gives the answer's output.
     pub fn request(
         &self,
         tool: &Holder,
         op: &str,
-        describing: bool,
+        describing: Option<&[String]>,
         req: &Value,
     ) -> Result<Value, Refused> {
         let bad = |m: &str| refused("invalid_request", m);
@@ -557,8 +743,27 @@ impl Vault {
         }
         // One vault operation at a time: each reads and writes the package's records whole.
         let _st = self.lock();
-        let mut f = self.load(&tool.id).map_err(unavailable)?;
-        let out = match req["op"].as_str().unwrap_or_default() {
+        let (dir, mut f) = self.load(&tool.id).map_err(unavailable)?;
+        let kind = req["op"].as_str().unwrap_or_default();
+        if describing.is_some()
+            && !matches!(
+                kind,
+                "backup.get" | "backup.list" | "journal.end" | "journal.commit"
+            )
+        {
+            return Err(refused(
+                "permission",
+                "in describe a tool reads its backups and ends the journals it was told of, nothing else",
+            ));
+        }
+        // Its folder, made for a write; a read of a package with none finds nothing.
+        let made = || -> Result<Folder, Refused> {
+            self.package(&tool.id, true)
+                .map_err(unavailable)?
+                .ok_or_else(|| unavailable(format!("{}'s vault folder", tool.id)))
+        };
+        let no_journal = || refused("not_found", format!("{} has no such open journal", tool.id));
+        let out = match kind {
             "backup.put" => {
                 let label = req["label"].as_str().unwrap_or_default();
                 if label.chars().count() > MAX_LABEL || !printable(label) {
@@ -584,12 +789,11 @@ impl Vault {
                     size: data.len() as u64,
                     created: now(),
                 };
-                let dir = self.package_dir(&tool.id);
-                private_dir(&dir).map_err(unavailable)?;
-                write(&dir.join(&b.id), &data).map_err(unavailable)?;
+                let dir = made()?;
+                dir.write(&b.id, &data).map_err(unavailable)?;
                 f.backups.push(b.clone());
-                if let Err(e) = self.save(&f) {
-                    let _ = fs::remove_file(dir.join(&b.id));
+                if let Err(e) = self.save(&dir, &f) {
+                    let _ = dir.remove(&b.id);
                     return Err(unavailable(e));
                 }
                 json!({"backup": b.id})
@@ -597,11 +801,15 @@ impl Vault {
             "backup.get" => {
                 let id = id_of("b", "backup")?;
                 let b = f.backups.iter().find(|b| b.id == id).ok_or_else(|| {
-                    refused("not_found", format!("{} has no backup {id}", tool.id))
+                    refused("not_found", format!("{} has no such backup", tool.id))
                 })?;
-                let data = read_private(&self.package_dir(&tool.id).join(&b.id))
+                let data = dir
+                    .as_ref()
+                    .map(|d| d.read(&b.id))
+                    .transpose()
                     .map_err(unavailable)?
-                    .ok_or_else(|| refused("not_found", format!("backup {id} is gone")))?;
+                    .flatten()
+                    .ok_or_else(|| refused("not_found", "that backup's data is gone"))?;
                 json!({"backup": b.id, "label": b.label, "size": b.size, "created": b.created,
                     "data": base64::engine::general_purpose::STANDARD.encode(data)})
             }
@@ -613,18 +821,17 @@ impl Vault {
                 if !f.backups.iter().any(|b| b.id == id) {
                     return Err(refused(
                         "not_found",
-                        format!("{} has no backup {id}", tool.id),
+                        format!("{} has no such backup", tool.id),
                     ));
                 }
                 f.backups.retain(|b| b.id != id);
-                self.save(&f).map_err(unavailable)?;
-                let _ = fs::remove_file(self.package_dir(&tool.id).join(&id));
+                let dir = made()?;
+                self.save(&dir, &f).map_err(unavailable)?;
+                // A failed removal is retried at the next load: its record is gone already.
+                let _ = dir.remove(&id);
                 json!({})
             }
             "journal.begin" => {
-                if describing {
-                    return Err(bad("a journal is begun in a call, not in describe"));
-                }
                 if !req["intent"].is_object()
                     || serde_json::to_vec(&req["intent"]).map_or(usize::MAX, |b| b.len())
                         > MAX_INTENT
@@ -633,10 +840,10 @@ impl Vault {
                         "intent is a JSON object of at most {MAX_INTENT} bytes"
                     )));
                 }
-                if let Some(j) = f.journals.iter().find(|j| j.outcome.is_none()) {
+                if f.journals.iter().any(|j| j.outcome.is_none()) {
                     return Err(refused(
                         "unavailable",
-                        format!("journal {} is still open: end it first", j.id),
+                        format!("{} has a journal still open: end it first", tool.id),
                     ));
                 }
                 let j = Journal {
@@ -651,7 +858,7 @@ impl Vault {
                 };
                 let id = j.id.clone();
                 f.journals.push(j);
-                self.save(&f).map_err(unavailable)?;
+                self.save(&made()?, &f).map_err(unavailable)?;
                 json!({"journal": id})
             }
             kind @ ("journal.commit" | "journal.end") => {
@@ -664,9 +871,19 @@ impl Vault {
                         _ => return Err(bad("outcome is committed or rolled_back")),
                     }
                 };
-                let j = f.journals.iter_mut().find(|j| j.id == id).ok_or_else(|| {
-                    refused("not_found", format!("{} has no journal {id}", tool.id))
-                })?;
+                // In describe, a journal it was told of, whichever release began it; in a call,
+                // one its own release began.
+                let j = f
+                    .journals
+                    .iter_mut()
+                    .find(|j| {
+                        j.id == id
+                            && match describing {
+                                Some(told) => told.contains(&id),
+                                None => j.generation == tool.generation,
+                            }
+                    })
+                    .ok_or_else(no_journal)?;
                 match j.outcome.as_deref() {
                     Some(o) if o == outcome => {
                         return Ok(json!({"journal": id, "outcome": outcome, "again": true}))
@@ -674,14 +891,14 @@ impl Vault {
                     Some(o) => {
                         return Err(refused(
                             "invalid_request",
-                            format!("journal {id} ended as {o} already"),
+                            format!("that journal ended as {o} already"),
                         ))
                     }
                     None => {}
                 }
                 j.outcome = Some(outcome.into());
                 j.ended = Some(now());
-                j.reconciled = describing;
+                j.reconciled = describing.is_some();
                 let ended: Vec<usize> = (0..f.journals.len())
                     .filter(|i| f.journals[*i].outcome.is_some())
                     .collect();
@@ -693,7 +910,7 @@ impl Vault {
                         .collect();
                     f.journals.retain(|j| !gone.contains(&j.id));
                 }
-                self.save(&f).map_err(unavailable)?;
+                self.save(&made()?, &f).map_err(unavailable)?;
                 json!({"journal": id, "outcome": outcome})
             }
             other => {
@@ -709,7 +926,7 @@ impl Vault {
 
 /// The vault as the program host reaches it.
 impl crate::program::Private for Vault {
-    fn journals(&self, id: &str) -> Vec<Value> {
+    fn journals(&self, id: &str) -> Result<Vec<Value>, String> {
         self.open_journals(id)
     }
 
@@ -717,7 +934,7 @@ impl crate::program::Private for Vault {
         &self,
         tool: &crate::program::Hop,
         op: &str,
-        describing: bool,
+        describing: Option<&[String]>,
         request: &Value,
     ) -> Result<Value, crate::program::CallError> {
         let crate::program::Hop::Package {

@@ -284,15 +284,16 @@ pub type Route = Arc<dyn Fn(Outbound) -> Result<Value, CallError> + Send + Sync>
 /// The host-private services a tool reaches through the host (`Host::set_private`): the app's
 /// vault.
 pub trait Private: Send + Sync {
-    /// Package id's open journals, as describe names them.
-    fn journals(&self, id: &str) -> Vec<Value>;
+    /// Package id's open journals, as describe names them; an error fails the start.
+    fn journals(&self, id: &str) -> Result<Vec<Value>, String>;
     /// The output of tool's `vault` frame request, sent for a host call of op it serves, or, with
-    /// describing, for the describe it is answering.
+    /// describing, for the describe it is answering on its package's turn, naming the IDs of the
+    /// open journals it was told of.
     fn frame(
         &self,
         tool: &Hop,
         op: &str,
-        describing: bool,
+        describing: Option<&[String]>,
         request: &Value,
     ) -> Result<Value, CallError>;
     /// text with every value the host must never show replaced.
@@ -510,7 +511,7 @@ struct Run {
     route: Option<Route>,
     private: Option<Arc<dyn Private>>,
     /// The describe call it is answering, while it does: its `vault` frames may name it.
-    describing: Mutex<Option<String>>,
+    describing: Mutex<Option<(String, Vec<String>)>>,
     /// Its last stderr line, as logged: why it stopped, if it says.
     last_line: Mutex<Option<String>>,
 }
@@ -1720,25 +1721,36 @@ fn handshake(
             .map(|s| s.unknown.clone())
             .unwrap_or_default()
     };
-    // The package's open journals, which only a start that may serve is told of.
+    // The package's open journals, which only a start that may serve is told of. Records that
+    // cannot be read fail the start: it must not take work with a journal it was not told of.
     let journals = || match (&run.private, unknown) {
-        (Some(p), true) => p.journals(id),
-        _ => Vec::new(),
+        (Some(p), true) => p
+            .journals(id)
+            .map_err(|e| fail("unavailable", format!("reading {id}'s vault journals: {e}"))),
+        _ => Ok(Vec::new()),
     };
     // The describe's own time, besides any wait for the turn.
     let describe = left();
-    let turn = (unknown && (!pending(inner).is_empty() || !journals().is_empty()))
+    let turn = (unknown && (!pending(inner).is_empty() || !journals()?.is_empty()))
         .then(|| take_turn(run, inner.limits.startup))
         .flatten();
     let (unknown, journals) = if turn.is_some() {
-        (pending(inner), journals())
+        (pending(inner), journals()?)
     } else {
         (Vec::new(), Vec::new())
     };
     let cid = call_id();
     let (tx, rx) = mpsc::channel();
     run.pending.lock().unwrap().insert(cid.clone(), tx);
-    *run.describing.lock().unwrap() = Some(cid.clone());
+    // Its vault frames in describe are taken only on its package's turn, for the journals it
+    // was told of.
+    if turn.is_some() {
+        let told = journals
+            .iter()
+            .filter_map(|j| j["id"].as_str().map(String::from))
+            .collect();
+        *run.describing.lock().unwrap() = Some((cid.clone(), told));
+    }
     let sent = run.send(&json!({"type": "call", "id": cid, "op": "describe", "contract_version": CONTRACT,
         "unknown": unknown.iter().map(|u| json!({"id": u.call, "op": u.op, "generation": u.generation})).collect::<Vec<_>>(),
         "journals": journals}));
@@ -1752,8 +1764,10 @@ fn handshake(
     };
     run.pending.lock().unwrap().remove(&cid);
     // Each open journal it was told of must be ended before it takes work.
-    if let Some(p) = &run.private {
-        let open = p.journals(id);
+    if let (Some(p), false) = (&run.private, journals.is_empty()) {
+        let open = p
+            .journals(id)
+            .map_err(|e| fail("unavailable", format!("reading {id}'s vault journals: {e}")))?;
         if let Some(j) = journals
             .iter()
             .find(|j| open.iter().any(|o| o["id"] == j["id"]))
@@ -2223,8 +2237,14 @@ fn vault(run: &Arc<Run>, id: &str, v: &Value) {
                 "a vault request names the host call it is for",
             )
         })?;
-        let describing = run.describing.lock().unwrap().as_deref() == Some(serves);
-        let op = if describing {
+        let told = run
+            .describing
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|(c, _)| c == serves)
+            .map(|(_, told)| told.clone());
+        let op = if told.is_some() {
             String::new()
         } else {
             run.serving
@@ -2244,7 +2264,7 @@ fn vault(run: &Arc<Run>, id: &str, v: &Value) {
             sha256: run.spec.sha256.clone(),
             generation: run.spec.generation,
         };
-        private.frame(&tool, &op, describing, v)
+        private.frame(&tool, &op, told.as_deref(), v)
     })();
     if run.ending() {
         return;

@@ -2,6 +2,7 @@
 //! for a native confirmation, and the order of a page's call against its consent's revocation.
 
 use crate::program::{CallError, Cancel, Hop};
+use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -172,9 +173,60 @@ pub fn page_call<G, R>(
     r
 }
 
+/// Whether input holds something carries finds (a secret's value or a reference) anywhere but
+/// in the values of its top-level secret fields: in any field's name or string or number at any
+/// depth, the whole input too when it is not an object. Each string is looked at as it is, not as
+/// JSON writes it.
+pub fn stray_secret(
+    input: &Value,
+    secret_fields: &dyn Fn(&str) -> bool,
+    carries: &dyn Fn(&str) -> bool,
+) -> bool {
+    fn walk(v: &Value, carries: &dyn Fn(&str) -> bool) -> bool {
+        match v {
+            Value::String(s) => carries(s),
+            Value::Number(n) => carries(&n.to_string()),
+            Value::Array(a) => a.iter().any(|x| walk(x, carries)),
+            Value::Object(o) => o.iter().any(|(k, x)| carries(k) || walk(x, carries)),
+            Value::Null | Value::Bool(_) => false,
+        }
+    }
+    match input.as_object() {
+        Some(o) => o
+            .iter()
+            .any(|(k, x)| carries(k) || (!secret_fields(k) && walk(x, carries))),
+        None => walk(input, carries),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_secret_anywhere_but_its_secret_fields_is_found() {
+        let secret = "sk-\"quoted\\-canary-42";
+        let carries = |s: &str| s.contains(secret) || s.contains("12345678");
+        let fields = |k: &str| k == "key";
+        let found = |v: Value| stray_secret(&v, &fields, &carries);
+        // Its secret field may hold it; nothing else may, at any depth, in any form.
+        assert!(!found(json!({"key": secret, "note": "plain"})));
+        assert!(found(json!({"note": secret})));
+        assert!(found(
+            json!({"a": {"b": [1, {"c": format!("x{secret}y")}]}})
+        ));
+        assert!(found(json!({"a": {secret: 1}})));
+        assert!(found(json!({secret: "plain"})));
+        assert!(found(json!([secret])));
+        assert!(found(json!(secret)));
+        assert!(found(json!({"n": 12345678})));
+        // A nested field named like a secret field is not one.
+        assert!(found(json!({"a": {"key": secret}})));
+        assert!(!found(
+            json!({"a": {"key": "plain"}, "b": [true, null, 1.5]})
+        ));
+    }
 
     fn tool(id: &str) -> Hop {
         Hop::Package {

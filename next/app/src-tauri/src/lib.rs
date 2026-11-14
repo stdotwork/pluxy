@@ -2186,9 +2186,12 @@ fn program_status(webview: Webview, package: String) -> Result<Value, String> {
         let st = webview.state::<App>();
         let mut status =
             serde_json::to_value(st.programs.status(&package)).map_err(|e| e.to_string())?;
-        // Its journals: open ones, and how recent ones ended.
-        status["journals"] =
-            serde_json::to_value(st.vault.journals(&package)).map_err(|e| e.to_string())?;
+        // Its journals: open ones, and how recent ones ended; or why its records cannot be read
+        // (its start fails then too).
+        match st.vault.journals(&package) {
+            Ok(j) => status["journals"] = serde_json::to_value(j).map_err(|e| e.to_string())?,
+            Err(e) => status["journals_error"] = Value::from(e),
+        }
         Ok(status)
     }
     #[cfg(not(target_os = "linux"))]

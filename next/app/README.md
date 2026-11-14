@@ -207,7 +207,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `access_grant` | Opens the native file chooser for a package's declared resource, then a native confirmation, and keeps the grant |
 | `access_revoke` | Revokes a grant, answering once the reads under it have finished |
 | `program_call`, `program_cancel` | Calls an operation of an admitted native tool, starting it if it is not running; cancels a call by the ticket it was given (Linux) |
-| `program_status` | Whether a native tool runs, its leases, how it last stopped, its crashes in a row and backoff, calls of unknown outcome, replaced releases still draining, and its vault journals, open and recently ended (Linux) |
+| `program_status` | Whether a native tool runs, its leases, how it last stopped, its crashes in a row and backoff, calls of unknown outcome, replaced releases still draining, and its vault journals, open and recently ended, or why they cannot be read (Linux) |
 | `vault_secret_add` | Opens native key entry and keeps the secret typed there in the vault under a label; returns only its ID (Linux) |
 | `vault_secrets`, `vault_secret_remove` | The vault's secrets, by ID and label, never their values; removes one (Linux) |
 | `window_get`, `window_set` | Reads or saves the Close behavior, and whether there is a usable tray |

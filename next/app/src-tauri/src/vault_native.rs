@@ -13,19 +13,25 @@
 //!   naming the key; the writer gets the key on its pipe and writes it, keeps the file's old bytes
 //!   as a vault backup and forwards a reference to exec, which passes it on to the consumer; that
 //!   call asks again (naming the whole chain and the key), and the consumer gets the key. Exec's
-//!   own record of what it received holds a reference and neither the key nor the backup canary;
-//!   the window's answer and the writer's log lines have the key redacted;
+//!   own record of what it received, and of the answer it got back, holds a reference and neither
+//!   the key nor the backup canary; the window's answer and the writer's log lines have the key
+//!   redacted;
 //! - recipient: exec passing on a reference given to the writer is refused, before any
 //!   confirmation, and the consumer gets nothing;
 //! - call: the writer passing on a reference from one of its earlier calls is refused;
 //! - undeclared: the writer passing its reference to an operation its import does not allow
 //!   secret references for, or passing the key's value itself, is refused;
-//! - page: the writer's own page reads its report with the key redacted, and cannot pass a secret;
+//! - page: the writer's own page reads its report with the key redacted, and its passing a secret
+//!   is refused as such, before any confirmation;
 //! - generation: after the writer's update (a swap), its new release passing on a reference its
 //!   old release was given is refused;
 //! - recovery: a write that crashes before it commits its journal has an unknown outcome; the next
 //!   start's describe names the open journal, the writer reconciles it as committed without
 //!   writing again (its file was written once), and the window's status reports it;
+//! - rolled back: a write that crashes before it writes its file is reconciled as rolled back,
+//!   and the file keeps its old bytes;
+//! - left open: a writer that does not end a journal it is told of is refused its start, and the
+//!   journal stays open;
 //! - audit: neither canary reached the window's or the page's webview (DOM, storage, callbacks,
 //!   messages); the runner checks the app's stdout and stderr for them too.
 //!
@@ -133,6 +139,56 @@ fn apply(app: &AppHandle, main: &Webview, input: Value) -> Result<Value, String>
     settle_unasked(main, &slot)
 }
 
+/// f's result, and whether a native confirmation showed while it ran (each one is cancelled).
+fn unasked<T>(f: impl FnOnce() -> T) -> (T, bool) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    let (stop, seen) = (
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicBool::new(false)),
+    );
+    let watcher = {
+        let (stop, seen) = (Arc::clone(&stop), Arc::clone(&seen));
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::SeqCst) {
+                if showing() {
+                    seen.store(true, Ordering::SeqCst);
+                    let _ = press("alt+c");
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        })
+    };
+    let r = f();
+    stop.store(true, Ordering::SeqCst);
+    let _ = watcher.join();
+    (r, seen.load(Ordering::SeqCst))
+}
+
+/// Waits out the writer's crash backoff, once its status says it crashed.
+fn after_backoff(main: &Webview) -> Result<(), String> {
+    let wait = wait_for("the writer's crash in its status", || {
+        let status = ok(main, "program_status", json!({"package": WRITER})).ok()?;
+        (status["state"] == "crashed").then(|| status["retry_in_ms"].as_u64().unwrap_or(0))
+    })?;
+    std::thread::sleep(Duration::from_millis(wait + 300));
+    Ok(())
+}
+
+/// The writer's open journals in the window's status.
+fn open_journals(main: &Webview) -> Result<Vec<Value>, String> {
+    let status = ok(main, "program_status", json!({"package": WRITER}))?;
+    Ok(status["journals"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter(|j| j["outcome"].is_null())
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
 /// What the writer's forwarded call answered, inside the window's answer r.
 fn forwarded(r: &Value) -> &Value {
     &r["value"]["answer"]
@@ -229,6 +285,8 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             let first = dialog_with(app, &["pluxy/writer apply", LABEL])?;
             press("alt+o")?;
             let second = dialog_with(app, &["pluxy/consumer deliver", EXEC, LABEL])?;
+            // An import chain's dialog takes its Confirm only a second after it shows.
+            std::thread::sleep(Duration::from_millis(1300));
             press("alt+o")?;
             let r = settle(main, &slot)?;
             let v = &r["value"];
@@ -248,15 +306,27 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 "the consumer did not get the key",
             )?;
             let record = read(&at("exec-record"));
-            let frame: Value = serde_json::from_str(record.lines().next().unwrap_or_default())
+            let lines: Vec<Value> = record
+                .lines()
+                .map(serde_json::from_str)
+                .collect::<Result<_, _>>()
                 .map_err(|e| format!("exec's record: {e}"))?;
+            let (frame, answer) = match lines.as_slice() {
+                [frame, answer] => (frame, answer),
+                _ => {
+                    return Err(format!(
+                        "exec's record is not its frame and answer: {record}"
+                    ))
+                }
+            };
             require(
                 frame["input"]["key"]
                     .as_str()
                     .is_some_and(|r| r.starts_with("r-"))
                     && frame.get("secrets").is_none()
+                    && answer["output"]["received"] == true
                     && !canaries.iter().any(|c| record.contains(c)),
-                format!("exec received more than a reference: {frame}"),
+                format!("exec received more than a reference: {record}"),
             )?;
             let status = ok(main, "program_status", json!({"package": WRITER}))?;
             let log = status["log"].to_string();
@@ -330,7 +400,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             refused(
                 &r,
-                "secret",
+                "does not allow secret references",
                 "a reference to peek, which the import does not allow",
             )?;
             let r = apply(
@@ -341,7 +411,11 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                         "record": at("exec-record-5"), "out": at("consumer-out-5"),
                         "consumer": consumer}}}),
             )?;
-            refused(&r, "secret", "passing the key's value")?;
+            refused(
+                &r,
+                "not a reference the host gave",
+                "passing the key's value",
+            )?;
             require(
                 !at("exec-record-5").exists(),
                 "exec was called with the key's value",
@@ -360,13 +434,21 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 r["result"]["echo"] == REDACTED && r["result"]["calls"].is_u64(),
                 format!("the writer's page reading its report: {r}"),
             )?;
-            let r = page.call(
-                WRITER,
-                "apply",
-                json!({"key": secret, "file": at("config-page")}),
-            )?;
+            let (r, asked) = unasked(|| {
+                page.call(
+                    WRITER,
+                    "apply",
+                    json!({"key": secret, "file": at("config-page")}),
+                )
+            });
+            let r = r?;
+            require(!asked, "the page's secret asked a native confirmation")?;
             require(
-                r["error"]["code"] == "forbidden" && !at("config-page").exists(),
+                r["error"]["code"] == "forbidden"
+                    && r["error"]["message"]
+                        .as_str()
+                        .is_some_and(|m| m.contains("a page cannot pass secrets"))
+                    && !at("config-page").exists(),
                 format!("the page passing a secret: {r}"),
             )?;
             clean_webview(page.webview(), &canaries)?;
@@ -464,6 +546,68 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             out["journal"] = j;
             Ok(())
+        })(),
+    )?;
+
+    // ---- rolled back: a crash before the write
+    step(
+        "rolled back",
+        (|| {
+            let file = at("config-rollback");
+            std::fs::write(&file, "before\n").map_err(|e| e.to_string())?;
+            let r = apply(
+                app,
+                main,
+                json!({"key": secret, "file": file, "crash_before": true}),
+            )?;
+            require(r["ok"] == false, format!("the crashed write: {r}"))?;
+            let open = open_journals(main)?;
+            require(open.len() == 1, format!("the open journal: {open:?}"))?;
+            let journal = open[0]["id"].clone();
+            after_backoff(main)?;
+            let r = call(main, WRITER, "report", json!({}))?;
+            require(
+                r["ok"] == true
+                    && r["value"]["reconciled"]
+                        == json!([{"journal": journal, "outcome": "rolled_back",
+                            "reply": {"output": {"journal": journal, "outcome": "rolled_back"}}}]),
+                format!("the writer's reconciliation: {r}"),
+            )?;
+            require(
+                read(&file) == "before\n" && !file.with_extension("writes").exists(),
+                "the rolled-back write was made",
+            )?;
+            require(
+                open_journals(main)?.is_empty(),
+                "the rolled-back journal is still open",
+            )
+        })(),
+    )?;
+
+    // ---- left open: a start whose describe leaves its journal open is refused
+    step(
+        "left open",
+        (|| {
+            let r = apply(
+                app,
+                main,
+                json!({"key": secret, "file": at("config-open"), "crash": true,
+                    "leave_open": true}),
+            )?;
+            require(r["ok"] == false, format!("the crashed write: {r}"))?;
+            after_backoff(main)?;
+            let r = call(main, WRITER, "report", json!({}))?;
+            require(
+                r["ok"] == false
+                    && r["error"]
+                        .as_str()
+                        .is_some_and(|e| e.contains("still open")),
+                format!("the start with its journal left open: {r}"),
+            )?;
+            require(
+                open_journals(main)?.len() == 1,
+                "the journal left open is not open",
+            )
         })(),
     )?;
 

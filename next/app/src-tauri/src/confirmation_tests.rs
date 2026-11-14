@@ -609,3 +609,24 @@ fn an_app_action_is_reviewed_by_its_description_alone() {
     assert!(review.contains("\"digest\"") && review.contains("\"argv\""));
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn the_remember_text_names_the_secrets_a_launch_uses() {
+    let (dir, mut c, mut a) = fixture();
+    let p = c.prepare(a.clone(), Origin::NativeUi).unwrap();
+    assert_eq!(
+        p.remember_text(),
+        "_Remember this exact executable, argv and cwd"
+    );
+    a.launch.as_mut().unwrap().secret_uses.push(SecretUse {
+        reference: "s-0123".into(),
+        recipient: "fixture/tool".into(),
+        purpose: "api_key".into(),
+    });
+    let p = c.prepare(a, Origin::NativeUi).unwrap();
+    assert_eq!(
+        p.remember_text(),
+        "_Remember this exact executable, argv, cwd and secrets: s-0123 for fixture/tool's api__key"
+    );
+    let _ = fs::remove_dir_all(dir);
+}

@@ -37,7 +37,7 @@ pub(crate) fn notice(app: &tauri::AppHandle, text: String) {
 }
 
 pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> {
-    let (review, launch, summary, page, own) = {
+    let (review, launch, summary, page, own, remember_text) = {
         let st = app.state::<crate::App>();
         let mut c = st.confirmations.lock().unwrap();
         let review = c.review(&id)?;
@@ -47,7 +47,8 @@ pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> 
         let pending = c.pending.get(&id).unwrap();
         let summary = pending.prepared.notice();
         let (page, own) = (pending.page, pending.prepared.own);
-        (review.0, review.1, summary, page, own)
+        let remember_text = pending.prepared.remember_text();
+        (review.0, review.1, summary, page, own, remember_text)
     };
     let handle = app.clone();
     app.run_on_main_thread(move || {
@@ -88,8 +89,7 @@ pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> 
         dialog
             .content_area()
             .pack_start(&text_view(&review), true, true, 8);
-        let remember =
-            gtk::CheckButton::with_mnemonic("_Remember this exact executable, argv and cwd");
+        let remember = gtk::CheckButton::with_mnemonic(&remember_text);
         // Only a launch from the window, the tray or native UI may offer it: a page or import
         // chain never uses a remembered approval, so it would save one nothing can use.
         if launch && !page {

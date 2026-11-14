@@ -1886,6 +1886,15 @@ fn imports_exports_and_effects_are_validated() {
     )
     .unwrap();
     assert!(ok.is_empty());
+    // A launch's references are allowed (the control for its value's refusal below).
+    assert!(check(
+        "native",
+        serde_json::json!({"operations": [{"id": "op", "description": "d", "effect": "launch",
+            "secrets": {"key": "reference"}, "output_schema": {"type": "object"},
+            "input_schema": {"type": "object", "required": ["executable", "argv", "cwd"],
+                "properties": {"key": {"type": "string"}}}}]}),
+    )
+    .is_ok());
     let mut passing = import("pluxy/b", &[1], &["op"], true);
     passing["secrets"] = serde_json::json!(["op"]);
     assert_eq!(
@@ -1917,6 +1926,14 @@ fn imports_exports_and_effects_are_validated() {
             "string property",
         ),
         ("native", serde_json::json!({"imports": [stray]}), "secrets"),
+        (
+            "native",
+            serde_json::json!({"operations": [{"id": "op", "description": "d", "effect": "launch",
+                "secrets": {"key": "value"}, "output_schema": {"type": "object"},
+                "input_schema": {"type": "object", "required": ["executable", "argv", "cwd"],
+                    "properties": {"key": {"type": "string"}}}}]}),
+            "a launch's secret field key is a reference",
+        ),
         (
             "web",
             serde_json::json!({"imports": [passing]}),

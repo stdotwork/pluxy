@@ -20,17 +20,22 @@
 //! - `apply`, the vault check's writer (`src/vault_native.rs`): takes the secret the host delivered
 //!   for its `key` reference, keeps the file's old bytes as a vault backup, begins a vault journal
 //!   naming the new bytes' SHA-256, writes the file (and counts its writes in `<file>.writes`),
-//!   logs the key on stderr and, unless `crash` is set, commits the journal; it then writes its
+//!   logs the key on stderr and, unless `crash` is set, commits the journal (`crash_before` exits
+//!   before it writes the file; `leave_open` marks the journal's intent so that describe leaves it
+//!   open, as a tool that never reconciles would); it then writes its
 //!   reference to `leak` and forwards a reference (its own, or `forward.key_from`'s, or the raw
 //!   value with `forward.raw`) to `forward.package`'s `forward.op`, and answers with the key in
 //!   `echo`, as a leaky tool would;
 //! - `report` with the journals it reconciled at its last describe and the last key it took;
 //! - `run`, the vault check's execution program: appends the frame it got to `record`, then calls
-//!   `consumer` with its own reference (or `steal`'s) and `out`;
+//!   `consumer` with its own reference (or `steal`'s) and `out`, and appends the answer it got
+//!   back to `record` too;
 //! - `deliver`, the vault check's final consumer: writes the secret delivered for `key` to `out`.
 //!
 //! In describe, it reconciles each open vault journal the host names, never redoing it: it ends it
-//! as `committed` when the file holds the bytes the journal names, `rolled_back` otherwise.
+//! as `committed` when the file holds the bytes the journal names, `rolled_back` otherwise, and
+//! leaves open one whose intent says `leave_open`. With `describe_vault` in `fixture.json`, it also
+//! sends that vault request in describe; `report` gives the host's answer with the journals.
 //!
 //! Each answer of summary, store, launch and relay also carries the `chain` the host's call named.
 //!
@@ -89,6 +94,8 @@ struct Mode {
     stderr_burst: usize,
     /// Exits with status 3 right after it has described itself.
     exit_after_describe: bool,
+    /// A vault request it sends in describe, for the describe.
+    describe_vault: Option<Value>,
 }
 
 impl Mode {
@@ -125,6 +132,7 @@ impl Mode {
             error_message: s("error_message"),
             stderr_burst: v["stderr_burst"].as_u64().unwrap_or_default() as usize,
             exit_after_describe: v["exit_after_describe"] == true,
+            describe_vault: v.get("describe_vault").cloned(),
         }
     }
 }
@@ -272,11 +280,15 @@ fn apply(
         input,
         output,
         json!({"type": "vault", "id": next(), "for": f["id"], "op": "journal.begin",
-            "intent": {"file": file, "sha256": sha256_hex(content.as_bytes())}}),
+            "intent": {"file": file, "sha256": sha256_hex(content.as_bytes()),
+                "leave_open": i["leave_open"] == true}}),
     );
     let Some(j) = journal["output"]["journal"].as_str().map(String::from) else {
         return error(&f["id"], "internal", &format!("journal.begin: {journal}"));
     };
+    if i["crash_before"] == true {
+        std::process::exit(3);
+    }
     let tmp = file.with_extension("tmp");
     let writes = file.with_extension("writes");
     let count: u64 = std::fs::read_to_string(&writes)
@@ -331,6 +343,9 @@ fn apply(
 fn reconcile(input: &mut impl Read, output: &mut impl Write, d: &Value, n: &mut u64) -> Value {
     let mut done = Vec::new();
     for j in d["journals"].as_array().into_iter().flatten() {
+        if j["intent"]["leave_open"] == true {
+            continue;
+        }
         let file = j["intent"]["file"].as_str().unwrap_or_default();
         let now = std::fs::read(file).unwrap_or_default();
         let outcome = if sha256_hex(&now) == j["intent"]["sha256"].as_str().unwrap_or_default() {
@@ -484,6 +499,16 @@ pub fn main() -> ! {
             (Some("call"), Some("describe")) => {
                 reported = f["unknown"].clone();
                 reconciled = reconcile(&mut input, &mut output, &f, &mut asked);
+                if let Some(mut req) = mode.describe_vault.clone() {
+                    asked += 1;
+                    req["type"] = json!("vault");
+                    req["id"] = json!(format!("v-{asked}"));
+                    req["for"] = id.clone();
+                    let reply = ask(&mut input, &mut output, req);
+                    if let Some(list) = reconciled.as_array_mut() {
+                        list.push(json!({"describe_vault": reply}));
+                    }
+                }
                 let mut ops = manifest["app"]["operations"].clone();
                 if let (Some(extra), Some(list)) = (&mode.extra_operation, ops.as_array_mut()) {
                     list.push(json!({"id": extra, "description": "Not in the manifest",
@@ -628,6 +653,13 @@ pub fn main() -> ! {
                                 "package": i["consumer"]["package"], "op": i["consumer"]["op"],
                                 "input": {"key": reference, "out": i["out"]}}),
                         );
+                        if let Some(record) = i["record"].as_str() {
+                            if let Ok(mut file) =
+                                std::fs::OpenOptions::new().append(true).open(record)
+                            {
+                                let _ = writeln!(file, "{answer}");
+                            }
+                        }
                         write_frame(
                             &mut output,
                             &json!({"type": "result", "id": id, "output":

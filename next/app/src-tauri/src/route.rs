@@ -293,6 +293,19 @@ fn release_of(caller: &str, folder: &str) -> Option<String> {
     (device::asset_url(caller, digest, "") == folder).then(|| digest.to_string())
 }
 
+/// The one refusal of an input that is not valid for grant's operation, whatever is wrong with it:
+/// it does not say whether a string was a secret's value or a reference.
+fn invalid_input(grant: &Grant) -> CallError {
+    fail(
+        "invalid_request",
+        format!(
+            "{}'s {} refuses this input: it does not match the operation's input schema, or it holds a secret or secret reference outside the operation's secret fields",
+            grant.target.id(),
+            grant.op.id
+        ),
+    )
+}
+
 /// The secret fields filler fills in input, for grant's operation; refused when a secret or a
 /// reference is anywhere else in it, or filler may not fill them so.
 fn secret_fields(
@@ -303,23 +316,18 @@ fn secret_fields(
 ) -> Result<Vec<Filled>, CallError> {
     let (target, op) = (grant.target.id(), &grant.op.id);
     let refuse = |m: String| fail("permission", m);
+    let secret_field = |k: &str| grant.op.secrets.contains_key(k);
+    if rules::stray_secret(input, &secret_field, &|s| vault.carries(s)) {
+        return Err(invalid_input(grant));
+    }
     let mut filled = Vec::new();
     let fields = input.as_object().into_iter().flatten();
     for (field, v) in fields {
         let Some(how) = grant.op.secrets.get(field) else {
-            if vault.carries(&v.to_string()) {
-                return Err(refuse(format!(
-                    "{target}'s {op}: a secret or secret reference may be passed only in its secret fields, not in {field}"
-                )));
-            }
             continue;
         };
-        let s = v.as_str().ok_or_else(|| {
-            fail(
-                "invalid_request",
-                format!("{field} is a secret field: a string"),
-            )
-        })?;
+        // The input schema makes each secret field a string.
+        let s = v.as_str().ok_or_else(|| invalid_input(grant))?;
         let secret = match filler {
             Filler::Window => vault.secret(s).map(|x| x.id).ok_or_else(|| {
                 fail(
@@ -380,7 +388,7 @@ fn dispatch(
         ));
     }
     program::schema::check(&grant.op.input_schema, &input, "input")
-        .map_err(|e| fail("invalid_request", e))?;
+        .map_err(|_| invalid_input(&grant))?;
     let vault = Arc::clone(&app.state::<App>().vault);
     let filled = secret_fields(&vault, &grant, &input, &filler)?;
     // A secret's value delivered, or any secret the window gives, is the person's decision.
@@ -515,7 +523,8 @@ fn secret_text(target: &str, filled: &[Filled]) -> String {
 /// A read goes ahead, unless secret (a secret's delivery) asks. A write or launch needs the
 /// person's native confirmation of the whole chain and the exact input, and of the secrets filled,
 /// now; a launch the window made directly, with a native gesture, may use a remembered approval
-/// of exactly that instead. A call with a tool hop is prepared as an import (a secret's delivery
+/// of exactly that instead, the same secrets' IDs included (a launch's secrets are references,
+/// never values). A call with a tool hop is prepared as an import (a secret's delivery
 /// to a tool through another included): it always asks, and its dialog offers no Remember. A
 /// cancel while the confirmation is open withdraws it. Whether it asked.
 #[allow(clippy::too_many_arguments)]
@@ -535,6 +544,14 @@ fn authorize(
     }
     let executor = grant.target.package();
     let launch = if effect == "launch" {
+        // Manifests refuse it too: a launch hands over no value, so a remembered launch approval
+        // (bound to its secrets' IDs below) never stands for a value's delivery.
+        if filled.iter().any(|f| f.value) {
+            return Err(fail(
+                "permission",
+                "a launch's secret fields hold references only, never a secret's value",
+            ));
+        }
         let mut l = launch_of(input, &executor)?;
         // A remembered launch is bound to the secrets it uses too.
         l.secret_uses = filled
