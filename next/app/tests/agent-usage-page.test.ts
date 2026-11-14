@@ -145,14 +145,20 @@ describe("charts", () => {
     ]);
   });
 
-  test("the trend by source names sources by their label, and Other", () => {
+  test("the trend by source names sources by their label with the package ID, and Other", () => {
     const m = v.trend(report(), "source");
-    expect(m.keys.map((k: { label: string }) => k.label)).toEqual(["Fixture"]);
+    expect(m.keys.map((k: { label: string; title: string | null }) => [k.label, k.title])).toEqual([
+      ["Fixture", "Fixture · pluxy/usage-fixture"],
+    ]);
+    expect(v.trend(report(), "model").keys[0].title).toBe(null);
     const other = v.trend(
       report({ by_source: { keys: ["a", "__other__"], values: DAYS.map(() => [1, 2]) } }),
       "source",
     );
-    expect(other.keys.map((k: { label: string }) => k.label)).toEqual(["a", "Other"]);
+    expect(other.keys.map((k: { label: string; title: string | null }) => [k.label, k.title])).toEqual([
+      ["a", "a · a"],
+      ["Other", null],
+    ]);
   });
 
   test("the token mix stacks cache read, cache write, input and output", () => {
@@ -233,9 +239,19 @@ describe("tables", () => {
     expect([few.rows.length, few.more]).toEqual([8, "Show all 9 models"]);
     const all = v.modelsTable(report({ models: nine }), true);
     expect([all.rows.length, all.more, all.rows[8].cells[0]]).toEqual([9, "Show fewer", "Unknown model"]);
+    const capped = v.modelsTable(
+      report({
+        models: [
+          { model: "m", total: 9 },
+          { model: "__other__", total: 1 },
+        ],
+      }),
+      false,
+    );
+    expect(capped.rows.map((r: { cells: string[] }) => r.cells[0])).toEqual(["m", "Other"]);
   });
 
-  test("sources: share, total and active days; archived and dimmed", () => {
+  test("sources: share, total and active days; the package ID, archived and dimmed", () => {
     const s = v.sourcesTable(report(), []);
     expect(s.header).toEqual(["Agent sources", "Share", "Total tokens", "Active days"]);
     expect(
@@ -244,7 +260,7 @@ describe("tables", () => {
         r.note,
         r.dimmed,
       ]),
-    ).toEqual([["Fixture", "100.0%", "1.5K", "3", null, false]]);
+    ).toEqual([["Fixture", "100.0%", "1.5K", "3", "pluxy/usage-fixture", false]]);
     const archived = report({
       sources: [
         { id: "pluxy/usage-fixture", label: "Fixture", status: "archived", total: 1535, active_days: 3 },
@@ -261,8 +277,8 @@ describe("tables", () => {
           r.dimmed,
         ]),
     ).toEqual([
-      ["51.2%", "Uninstalled · history kept", true],
-      ["48.8%", null, false],
+      ["51.2%", "pluxy/usage-fixture · Uninstalled · history kept", true],
+      ["48.8%", "pluxy/other", false],
     ]);
   });
 
@@ -286,14 +302,19 @@ describe("tables", () => {
 });
 
 describe("controls and status", () => {
-  test("source chips: All, then each source with tokens", () => {
+  test("source chips: All, then each source with tokens, titled with its package ID", () => {
     expect(
       v
         .chips(report(), [])
-        .map((c: { label: string; total?: string; active: boolean }) => [c.label, c.total, c.active]),
+        .map((c: { label: string; total?: string; active: boolean; title?: string }) => [
+          c.label,
+          c.total,
+          c.active,
+          c.title,
+        ]),
     ).toEqual([
-      ["All", undefined, true],
-      ["Fixture", "1.5K", false],
+      ["All", undefined, true, undefined],
+      ["Fixture", "1.5K", false, "Fixture · pluxy/usage-fixture"],
     ]);
   });
 

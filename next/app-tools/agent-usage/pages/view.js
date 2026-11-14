@@ -191,6 +191,7 @@ export function trend(report, groupBy) {
   const keys = stack.keys.map((key, i) => ({
     key,
     label: keyLabel(key, groupBy, report.sources),
+    title: groupBy === "source" && key !== OTHER ? `${keyLabel(key, groupBy, report.sources)} · ${key}` : null,
     color: key === OTHER ? OTHER_COLOR : SERIES[i % SERIES.length],
   }));
   const bars = report.buckets.map((bucket, b) => {
@@ -286,7 +287,7 @@ export function hours(report) {
 export function modelsTable(report, all) {
   const sum = report.models.reduce((a, m) => a + m.total, 0);
   const rows = report.models.map((m) => ({
-    cells: [m.model === "" ? t.unknownModel : m.model, percent(sum > 0 ? m.total / sum : 0, 1), compact(m.total)],
+    cells: [m.model === OTHER ? t.other : m.model === "" ? t.unknownModel : m.model, percent(sum > 0 ? m.total / sum : 0, 1), compact(m.total)],
     title: full(m.total),
   }));
   return {
@@ -296,7 +297,7 @@ export function modelsTable(report, all) {
   };
 }
 
-/** The Sources table: label (and archived note), share, total and active days. */
+/** The Sources table: label (with its package ID and any archived note), share, total and active days. */
 export function sourcesTable(report, selected) {
   const sum = report.sources.reduce((a, s) => a + s.total, 0);
   return {
@@ -304,7 +305,7 @@ export function sourcesTable(report, selected) {
     rows: report.sources.map((s) => ({
       id: s.id,
       cells: [s.label, percent(sum > 0 ? s.total / sum : 0, 1), compact(s.total), String(s.active_days)],
-      note: s.status === "archived" ? t.archived : null,
+      note: s.status === "archived" ? `${s.id} · ${t.archived}` : s.id,
       dimmed: selected.length > 0 && !selected.includes(s.id),
     })),
   };
@@ -349,7 +350,7 @@ export function chips(report, selected) {
         label: s.label,
         total: compact(s.total),
         active: selected.includes(s.id),
-        title: s.status === "archived" ? `${s.label} · ${t.archived}` : s.label,
+        title: s.status === "archived" ? `${s.label} · ${s.id} · ${t.archived}` : `${s.label} · ${s.id}`,
         archived: s.status === "archived",
       })),
   ];

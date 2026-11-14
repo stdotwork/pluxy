@@ -231,7 +231,7 @@ function barChart(model) {
   const legend = el(
     "div",
     { class: "row legend" },
-    model.keys.map((k) => el("span", {}, el("i", { style: `background:${k.color}` }), k.label)),
+    model.keys.map((k) => el("span", { title: k.title ?? null }, el("i", { style: `background:${k.color}` }), k.label)),
   );
   return el("div", {}, g, legend);
 }
