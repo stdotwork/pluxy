@@ -15,6 +15,8 @@
 // that copies its history, and a session of another project; one response's content blocks repeat its
 // message ID; prompt, reply, thinking, tool result, summary and working folder canaries, and the raw
 // message and request IDs, must not reach a report, the store or the app's output.
+// The Oh My Pi parser check (usage-omp, usage-omp.ts) is the same kind of check on an Oh My Pi home, run
+// after the Codex one.
 //
 // Each test archive adds one page to its package's manifest: routing.ts's relay page (`page`), which
 // sends the calls the check posts it on its channel. The hub's own page stays as it is; the parser has
@@ -42,6 +44,7 @@ import {
 import { join } from "node:path";
 import { artifact, type Fixture, platform, writeTrustProfile } from "./admission";
 import { native, PAGE_SCRIPT, pack as packPackage, summary } from "./routing";
+import { OMP_CANARIES, OMP_ID, ompExpected, ompHome } from "./usage-omp";
 
 export const HUB_ID = "pluxy/agent-usage";
 export const PARSER_ID = "pluxy/usage-fixture";
@@ -941,7 +944,8 @@ export function buildUsageFixtures(
   const claude = pack(root, tools, "usage-claude", join(target, "usage-claude"), publicKey, privateKey);
   const curated = join(root, "curated.json");
   const packages: Record<string, object> = {};
-  for (const p of [hub, parser, peer, codex, claude]) {
+  const omp = pack(root, tools, "usage-omp", join(target, "usage-omp"), publicKey, privateKey);
+  for (const p of [hub, parser, peer, codex, claude, omp]) {
     if (p) packages[p.id] = { releases: [{ version: p.version, artifacts: { [platform()]: p.entry } }] };
   }
   writeFileSync(curated, JSON.stringify({ registry_version: 0, packages }));
@@ -951,6 +955,7 @@ export function buildUsageFixtures(
   writeFileSync(join(usageRoot, "b.jsonl"), `${B.join("\n")}\n`);
   const codexWrites = codexHome(home);
   const claudeWrites = claudeHome(home);
+  const ompWrites = ompHome(home);
   writeFileSync(
     join(root, "expect.json"),
     JSON.stringify({
@@ -965,6 +970,7 @@ export function buildUsageFixtures(
         [PEER_ID]: peer?.version ?? "1.0.0",
         [CODEX_ID]: codex?.version ?? "0.1.0",
         [CLAUDE_ID]: claude?.version ?? "0.1.0",
+        [OMP_ID]: omp?.version ?? "0.1.0",
       },
       sha256: {
         [HUB_ID]: hub?.sha256 ?? null,
@@ -972,6 +978,7 @@ export function buildUsageFixtures(
         [PEER_ID]: peer?.sha256 ?? null,
         [CODEX_ID]: codex?.sha256 ?? null,
         [CLAUDE_ID]: claude?.sha256 ?? null,
+        [OMP_ID]: omp?.sha256 ?? null,
       },
       bin: {
         [HUB_ID]: hub?.bin ?? "bin/agent-usage",
@@ -979,6 +986,7 @@ export function buildUsageFixtures(
         [PEER_ID]: peer?.bin ?? "bin/tool",
         [CODEX_ID]: codex?.bin ?? "bin/usage-codex",
         [CLAUDE_ID]: claude?.bin ?? "bin/usage-claude",
+        [OMP_ID]: omp?.bin ?? "bin/usage-omp",
       },
       root: usageRoot,
       writes: {
@@ -1022,12 +1030,38 @@ export function buildUsageFixtures(
         },
         reports: claudeExpected(),
       },
+      // The Oh My Pi parser, enabled after the Codex one; the other sources its reports list are
+      // the Claude Code and Codex sources (active) and the fixture parser (archived), as the steps before leave them.
+      omp: {
+        id: OMP_ID,
+        writes: ompWrites,
+        canaries: OMP_CANARIES,
+        // A model name both the store and the reports must hold (the positive control of the canary search).
+        model: "gpt-5.5-mini",
+        // Each sync's counts for the source: listed (one session in both roots, so twice), changed (to
+        // read), read, failed.
+        syncs: {
+          first: { listed: 4, changed: 3, read: 3, failed: 0 },
+          repeat: { listed: 4, changed: 0, read: 0, failed: 0 },
+          after: { listed: 4, changed: 1, read: 1, failed: 0 },
+        },
+        reports: ompExpected({
+          now: NOW,
+          offsets: OFFSETS,
+          days: DAYS,
+          others: [
+            { id: CLAUDE_ID, label: "Claude Code", status: "active", total: 8555, active_days: 2 },
+            { id: CODEX_ID, label: "Codex", status: "active", total: 5930, active_days: 2 },
+            { id: PARSER_ID, label: "Fixture", status: "archived", total: 1547, active_days: 4 },
+          ],
+        }),
+      },
     }),
   );
   const nonce = writeTrustProfile(home, [curated], publicKey);
   return {
     registries: [{ name: "curated", url: curated }],
     nonce,
-    canaries: [...CODEX_CANARIES, ...CLAUDE_CANARIES],
+    canaries: [...CODEX_CANARIES, ...CLAUDE_CANARIES, ...OMP_CANARIES],
   };
 }
