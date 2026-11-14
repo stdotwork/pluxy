@@ -11,7 +11,8 @@ import (
 )
 
 // The models a Muse Code login and a Meta API key serve are the models of today's core's Meta list
-// (core/internal/registry/models/models.json). Checked against today's core with /v1/models.
+// (core/internal/registry/models/models.json, the old core's copy of models.json in
+// https://github.com/router-for-me/models). Checked against today's core with /v1/models.
 func TestModelsForEachAccountKind(t *testing.T) {
 	want := []string{
 		"muse-spark-1.1", "muse-spark-1.2", "muse-spark-1.2-contributor", "muse-spark-1.3",

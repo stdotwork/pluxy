@@ -10,8 +10,9 @@ import (
 )
 
 // modelsJSON is the list an API key or a Grok login serves, in protocol.ModelList form: the text
-// models of today's core's catalog (core/internal/registry/models/models.json, "xai"), with their
-// metadata. It leaves out the image and video models of that catalog and the speech models today's
+// models of today's core's catalog (core/internal/registry/models/models.json, "xai"; to refresh
+// it by hand, take the xai section of models.json in https://github.com/router-for-me/models, the file the old core
+// copied), with their metadata. It leaves out the image and video models of that catalog and the speech models today's
 // core adds (grok-imagine-*, grok-tts, grok-voice-tts-1.0): they answer on xAI's image, video and
 // speech endpoints (core/internal/runtime/executor/xai_executor_media.go, xai_executor_speech.go),
 // and this extension sends only Responses requests.

@@ -11,7 +11,8 @@ import (
 )
 
 // The models an API key and a Grok login serve are the text models of today's core's xAI list
-// (core/internal/registry/models/models.json, with the xAI builtins of core/internal/registry), less
+// (core/internal/registry/models/models.json, the old core's copy of models.json in
+// https://github.com/router-for-me/models, with the xAI builtins of core/internal/registry), less
 // its image, video and speech models. Checked against today's core with /v1/models.
 func TestModelsForEachAccountKind(t *testing.T) {
 	want := []string{
