@@ -1,7 +1,9 @@
 //! The program side of pluxy's app program contract v0 (`next/app/app-host/README.md`, "App
 //! program contract v0"): framing, hello, describe (with the calls of unknown outcome and the open
 //! journals it names), calls with progress and cancellation, a program's own calls of other
-//! packages' operations, and its vault frames. Jobs come with the host's jobs contract.
+//! packages' operations, its vault frames, and jobs (`next/app/app-host/README.md`, "Jobs"): a
+//! consumer's `jobs` frames ([`Call::jobs`]) and a producer's batches within the job's window
+//! ([`Call::batch`]), counted off by the host's `ack` frames.
 //!
 //! A program implements [`Handler`] and hands it to [`run`], which checks the host's environment,
 //! says hello, answers describe from the package's own manifest and serves calls until its stdin
@@ -29,7 +31,7 @@
 //! [`run`] reads frames on the thread that calls it. Each call, describe included, runs on a
 //! thread of its own that ends with the call, so no thread of the program is left once its calls
 //! end. The reading thread routes cancels, and the answers to a call's own calls and vault frames,
-//! to the call they belong to. When stdin ends it cancels every call, fails what they wait for,
+//! to the call they belong to, and a job's acks to its producer's call. When stdin ends it cancels every call, fails what they wait for,
 //! waits for them and returns: the program then exits.
 
 use serde_json::{json, Map, Value};
@@ -37,7 +39,7 @@ use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -47,6 +49,8 @@ pub const CONTRACT: i64 = 0;
 pub const MAX_FRAME: usize = 1 << 20;
 /// The largest frame the framing allows, which the host's frames stay under.
 pub const MAX_INBOUND: usize = 64 << 20;
+/// The largest batch value a producer may send, as JSON; the host fails a job sent a larger one.
+pub const MAX_BATCH: usize = 48 << 10;
 
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
@@ -225,6 +229,8 @@ impl Description {
 pub trait Handler: Send + Sync + 'static {
     /// Answers one call of a declared operation: its output, or the error it ends with. A long
     /// call looks at [`Call::cancelled`] now and then and ends with [`Error::cancelled`] once set.
+    /// What it returns is the call's outcome, even after a cancel: a call that finished its work
+    /// (a write that took effect) answers with its result, never `cancelled`.
     fn call(&self, call: &Call) -> Result<Value, Error>;
 
     /// Before describe is answered at a start: reconciles the calls of unknown outcome the host
@@ -253,6 +259,44 @@ impl Shared {
     }
 }
 
+/// The job a producer's call runs, as the host names it in the call frame.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Job {
+    /// The host's ID for the job, `j-<n>`.
+    pub id: String,
+    /// The kind of data it produces, `<consumer ID>/<stream>`.
+    pub kind: String,
+    /// How many batches may wait unacknowledged.
+    pub window: u64,
+}
+
+impl Job {
+    fn from_frame(v: &Value) -> Option<Job> {
+        Some(Job {
+            id: v["id"].as_str()?.to_string(),
+            kind: v["kind"].as_str()?.to_string(),
+            window: v["window"].as_u64()?,
+        })
+    }
+}
+
+/// The batches of a job's call the host has acknowledged, the highest number so far.
+#[derive(Default)]
+struct Acks {
+    acked: Mutex<u64>,
+    changed: Condvar,
+}
+
+impl Acks {
+    fn ack(&self, seq: u64) {
+        let mut a = self.acked.lock().unwrap();
+        if seq > *a {
+            *a = seq;
+        }
+        self.changed.notify_all();
+    }
+}
+
 /// One call the host made: its operation, input, chain and secrets, and what it may do while it
 /// runs.
 pub struct Call {
@@ -265,8 +309,12 @@ pub struct Call {
     pub chain: Vec<Value>,
     /// The secrets the host gave this call, by the reference its secret fields hold.
     pub secrets: Map<String, Value>,
+    /// The job, when the host called a producer's operation to run one.
+    pub job: Option<Job>,
     cancelled: Arc<AtomicBool>,
     shared: Arc<Shared>,
+    acks: Arc<Acks>,
+    sent: AtomicU64,
 }
 
 impl Call {
@@ -298,6 +346,59 @@ impl Call {
         let id = format!("o-{}", self.shared.next.fetch_add(1, Ordering::SeqCst));
         let frame = json!({"type": "call", "id": id, "for": self.id, "package": package, "op": op, "input": input});
         self.ask(id, frame, true)
+    }
+
+    /// Asks the host's job service for this call (`registrations`, `start` or `cancel`, with its
+    /// input): the answer's output, or its error. `start` is answered at once with the job's ID;
+    /// its batches arrive later as host calls of the consumer's deliver operation, which wait
+    /// for this call to end, so a call never waits for its own job.
+    pub fn jobs(&self, op: &str, input: Value) -> Result<Value, Error> {
+        self.check()?;
+        let id = format!("q-{}", self.shared.next.fetch_add(1, Ordering::SeqCst));
+        let frame = json!({"type": "jobs", "id": id, "for": self.id, "op": op, "input": input});
+        self.ask(id, frame, false)
+    }
+
+    /// Sends value as the next batch of this call's job, once fewer than the job's window of
+    /// batches wait unacknowledged: its number (from 1). Fails with `invalid_request` when the
+    /// call runs no job or the value is larger than [`MAX_BATCH`] (nothing is sent), with
+    /// `cancelled` once the call is cancelled while it waits, and with `unavailable` when the
+    /// host cannot be written to.
+    pub fn batch(&self, value: Value) -> Result<u64, Error> {
+        let job = self
+            .job
+            .as_ref()
+            .ok_or_else(|| Error::invalid_request("this call runs no job"))?;
+        let size = serde_json::to_vec(&value).map_or(usize::MAX, |b| b.len());
+        if size > MAX_BATCH {
+            return Err(Error::invalid_request(format!(
+                "a batch of {size} bytes is larger than {MAX_BATCH}"
+            )));
+        }
+        let seq = self.sent.load(Ordering::SeqCst) + 1;
+        let mut acked = self.acks.acked.lock().unwrap();
+        // The batches sent and not acknowledged must leave room for this one.
+        while (seq - 1).saturating_sub(*acked) >= job.window {
+            self.check()?;
+            acked = self
+                .acks
+                .changed
+                .wait_timeout(acked, Duration::from_millis(100))
+                .unwrap()
+                .0;
+        }
+        drop(acked);
+        self.check()?;
+        self.shared
+            .send(&json!({"type": "progress", "id": self.id, "value": value}))
+            .map_err(|e| Error::unavailable(format!("could not send a batch: {e}")))?;
+        self.sent.store(seq, Ordering::SeqCst);
+        Ok(seq)
+    }
+
+    /// How many batches of this call's job the host has acknowledged.
+    pub fn acked(&self) -> u64 {
+        *self.acks.acked.lock().unwrap()
     }
 
     /// Sends a vault frame (`backup.put`, `journal.begin`, ...) with fields for this call: its
@@ -371,15 +472,17 @@ pub fn serve(
         "id": identity.id, "sha256": identity.sha256,
     }))?;
     let description = Arc::new(description);
-    let mut calls: HashMap<String, (Arc<AtomicBool>, JoinHandle<()>)> = HashMap::new();
+    // Each call running: its cancel flag, its job's acks and its thread.
+    type Running = (Arc<AtomicBool>, Arc<Acks>, JoinHandle<()>);
+    let mut calls: HashMap<String, Running> = HashMap::new();
     let result = loop {
         let done: Vec<String> = calls
             .iter()
-            .filter(|(_, (_, h))| h.is_finished())
+            .filter(|(_, (_, _, h))| h.is_finished())
             .map(|(id, _)| id.clone())
             .collect();
         for id in done {
-            if let Some((_, h)) = calls.remove(&id) {
+            if let Some((_, _, h)) = calls.remove(&id) {
                 let _ = h.join();
             }
         }
@@ -392,27 +495,38 @@ pub fn serve(
         match frame["type"].as_str() {
             Some("call") if !id.is_empty() && !calls.contains_key(&id) => {
                 let flag = Arc::new(AtomicBool::new(false));
+                let acks = Arc::new(Acks::default());
                 let call = Call {
                     id: id.clone(),
                     op: frame["op"].as_str().unwrap_or_default().to_string(),
                     input: frame["input"].clone(),
                     chain: frame["chain"].as_array().cloned().unwrap_or_default(),
                     secrets: frame["secrets"].as_object().cloned().unwrap_or_default(),
+                    job: Job::from_frame(&frame["job"]),
                     cancelled: Arc::clone(&flag),
                     shared: Arc::clone(&shared),
+                    acks: Arc::clone(&acks),
+                    sent: AtomicU64::new(0),
                 };
                 let (handler, description) = (Arc::clone(&handler), Arc::clone(&description));
                 let spawned = std::thread::Builder::new()
                     .name(format!("call {id}"))
                     .spawn(move || answer(&*handler, &description, call, &frame));
                 match spawned {
-                    Ok(h) => calls.insert(id, (flag, h)),
+                    Ok(h) => calls.insert(id, (flag, acks, h)),
                     Err(e) => break Err(e),
                 };
             }
             Some("cancel") => {
-                if let Some((flag, _)) = calls.get(&id) {
+                if let Some((flag, acks, _)) = calls.get(&id) {
                     flag.store(true, Ordering::SeqCst);
+                    acks.changed.notify_all();
+                }
+            }
+            // A job's batches the host acknowledged, up to seq.
+            Some("ack") => {
+                if let (Some((_, acks, _)), Some(seq)) = (calls.get(&id), frame["seq"].as_u64()) {
+                    acks.ack(seq);
                 }
             }
             Some("result") | Some("error") => {
@@ -429,11 +543,12 @@ pub fn serve(
         }
     };
     // The end of the input cancels every call and fails what they wait for.
-    for (flag, _) in calls.values() {
+    for (flag, acks, _) in calls.values() {
         flag.store(true, Ordering::SeqCst);
+        acks.changed.notify_all();
     }
     shared.waiting.lock().unwrap().clear();
-    for (_, (_, h)) in calls {
+    for (_, (_, _, h)) in calls {
         let _ = h.join();
     }
     result
@@ -453,11 +568,10 @@ fn answer(handler: &dyn Handler, description: &Description, call: Call, frame: &
             .call(&call)
             .map(|output| json!({"type": "result", "id": call.id, "output": output}))
     };
-    let reply = match reply {
-        Ok(_) if call.cancelled() && call.op != "describe" => Err(Error::cancelled()),
-        r => r,
-    }
-    .unwrap_or_else(|e| json!({"type": "error", "id": call.id, "error": e.to_json()}));
+    // The handler's own outcome stands, even after a cancel: one that honours the cancel returns
+    // `cancelled` itself, and one that finished did its work (a write may have taken effect).
+    let reply =
+        reply.unwrap_or_else(|e| json!({"type": "error", "id": call.id, "error": e.to_json()}));
     if let Err(e) = call.shared.send(&reply) {
         if e.kind() == io::ErrorKind::InvalidInput {
             let e = Error::internal("the answer is larger than a frame may be (1 MiB)");

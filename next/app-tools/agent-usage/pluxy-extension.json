@@ -1,0 +1,115 @@
+{
+  "manifest_version": 1,
+  "id": "pluxy/agent-usage",
+  "version": "0.1.0",
+  "app": {
+    "version": 0,
+    "tier": "native",
+    "host_versions": [0],
+    "programs": {
+      "linux/amd64": "bin/agent-usage",
+      "linux/arm64": "bin/agent-usage"
+    },
+    "operations": [
+      {
+        "id": "sources",
+        "description": "List the usage sources: each parser enabled now, and each one with history kept",
+        "effect": "read",
+        "input_schema": { "type": "object", "additionalProperties": false },
+        "output_schema": { "type": "object", "required": ["sources", "interval_minutes", "last_sync"] }
+      },
+      {
+        "id": "sync",
+        "description": "Sync usage from the enabled parsers when asked or due, and say how far it is",
+        "effect": "read",
+        "input_schema": {
+          "type": "object",
+          "properties": { "now": { "type": "boolean" } },
+          "additionalProperties": false
+        },
+        "output_schema": { "type": "object", "required": ["running", "last_sync", "interval_minutes", "sources"] }
+      },
+      {
+        "id": "report",
+        "description": "Report token usage over a time range, in the viewer's time zone",
+        "effect": "read",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "range": { "type": "string", "enum": ["today", "24h", "7d", "30d", "all"] },
+            "granularity": { "type": "string", "enum": ["hour", "day", "week", "month"] },
+            "sources": { "type": "array", "maxItems": 64, "items": { "type": "string", "maxLength": 129 } },
+            "offsets": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1024,
+              "items": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "integer" } }
+            },
+            "now": { "type": "integer", "minimum": 0 }
+          },
+          "required": ["range", "offsets", "now"],
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "required": ["range", "granularity", "buckets", "totals", "previous", "active_days", "series", "by_source", "by_model", "models", "sources", "calendar", "hours", "sync"]
+        }
+      },
+      {
+        "id": "storage",
+        "description": "Say how much the usage store holds",
+        "effect": "read",
+        "input_schema": { "type": "object", "additionalProperties": false },
+        "output_schema": { "type": "object", "required": ["bytes", "rows", "files", "last_sync"] }
+      },
+      {
+        "id": "settings",
+        "description": "Set how often the Agent usage page syncs while it is open",
+        "effect": "read",
+        "input_schema": {
+          "type": "object",
+          "properties": { "interval_minutes": { "type": "integer", "enum": [0, 5, 15, 30, 60] } },
+          "required": ["interval_minutes"],
+          "additionalProperties": false
+        },
+        "output_schema": { "type": "object", "required": ["interval_minutes"] }
+      },
+      {
+        "id": "roots",
+        "description": "Set the folders a usage parser reads (none: its own defaults)",
+        "effect": "write",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "source": { "type": "string", "minLength": 1, "maxLength": 129 },
+            "roots": { "type": "array", "maxItems": 16, "items": { "type": "string", "minLength": 1, "maxLength": 4096 } }
+          },
+          "required": ["source", "roots"],
+          "additionalProperties": false
+        },
+        "output_schema": { "type": "object", "required": ["source", "roots"] }
+      },
+      {
+        "id": "clear",
+        "description": "Delete all stored Agent usage history",
+        "effect": "write",
+        "input_schema": { "type": "object", "additionalProperties": false },
+        "output_schema": { "type": "object", "required": ["cleared"] }
+      },
+      {
+        "id": "ingest",
+        "description": "Take a usage parser's batch, as the host delivers it",
+        "effect": "read",
+        "input_schema": { "type": "object" },
+        "output_schema": { "type": "object" }
+      }
+    ],
+    "consumes": [{ "kind": "pluxy/agent-usage/usage", "schema": [1], "deliver": "ingest" }],
+    "state": { "version": 0, "readable_versions": [0] },
+    "ui": {
+      "version": 0,
+      "dir": "pages",
+      "pages": [{ "id": "usage", "title": "Agent usage", "short": "Usage", "path": "index.html" }]
+    }
+  }
+}
