@@ -10,21 +10,25 @@
 //!   enabled through their native confirmations, which say "full access to your user account";
 //! - key: the key is typed into native key entry; the window gets only its ID;
 //! - unknown: a preview of a config that is not TOML, of one asking pluxy's provider for the
-//!   removed "chat" wire API and of a catalog with no models list is refused unasked and changes
-//!   nothing; a preview of the person's files (a read, asked nothing) pins both and reads their
-//!   values back, with no key;
+//!   removed "chat" wire API and of a catalog with no models list pins both files and reports them
+//!   refused, unasked, and changes nothing; a preview of the person's files (a read, asked nothing)
+//!   pins both and reads their values back, with no key;
 //! - import: the core's served models become catalog entries from pluxy's Codex templates; a
 //!   model without a template is named, not listed; nothing is written;
 //! - apply: asks a native confirmation naming both files, the key's label and the same-instant
 //!   sentence, never the key; then config.toml and the catalog hold exactly the bytes
-//!   `expect.json` says (comments and unknown tables kept), the preview reads them back as
+//!   `expect.json` says (comments and unknown tables kept), both owner-only (0600), the preview
+//!   reads them back as
 //!   configured, with the provider the person used before; the login file is untouched;
-//! - restore: after the person's edit, Restore Backup puts the original config back and removes
-//!   the catalog Apply made;
+//! - restore: after the person's edit, Restore Backup puts the original config back (keeping the
+//!   mode Apply left) and removes the catalog Apply made;
 //! - clear: applied again and edited twice by the person, Clear takes out only the untouched
 //!   values: their provider comes back, their model and their own setting stay, the catalog goes;
+//! - corrupt: applied again, then config.toml made into a file Codex would not take, the preview
+//!   still pins both and reports it refused; a confirmed Clear is refused and changes nothing;
+//!   Restore Backup puts back config.toml as it was before that apply and removes the catalog;
 //! - stow: an apply through the selected link changes only its target, the link keeps its inode
-//!   and text; once the target is replaced, a confirmed write fails as changed and writes
+//!   and text, the target owner-only; once the target is replaced, a confirmed write fails as changed and writes
 //!   nothing; a new preview's restore puts the original back through the link;
 //! - root: an apply to files inside the selected root creates both, the root link kept; clear
 //!   removes them again;
@@ -299,31 +303,23 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     step(
         "unknown",
         (|| {
-            let cat_of = |dir: &Path| dir.parent().unwrap().join("pluxy-model-catalog.json");
-            read_refused(
-                main,
-                &seen,
-                "preview",
-                files(&broken, &cat_of(&broken)),
-                "not TOML",
-            )?;
-            read_refused(
-                main,
-                &seen,
-                "preview",
-                files(&unknown, &cat_of(&unknown)),
-                "wire_api",
-            )?;
-            read_refused(
-                main,
-                &seen,
-                "preview",
-                files(
-                    &badcat.join("config.toml"),
-                    &badcat.join("pluxy-model-catalog.json"),
-                ),
-                "no models list",
-            )?;
+            let cat_of = |q: &Path| q.parent().unwrap().join("pluxy-model-catalog.json");
+            let bad_config = badcat.join("config.toml");
+            for (q, says) in [
+                (&broken, "not TOML"),
+                (&unknown, "wire_api"),
+                (&bad_config, "no models list"),
+            ] {
+                let v = read_op(main, &seen, "preview", files(q, &cat_of(q)))?;
+                let st = &v["settings"];
+                require(
+                    v["targets"][0]["target"] == json!(txt(q))
+                        && v["targets"][1]["target"] == json!(txt(&cat_of(q)))
+                        && st["state"] == "refused"
+                        && st["reason"].as_str().is_some_and(|r| r.contains(says)),
+                    format!("the preview of {} should report it refused: {v}", txt(q)),
+                )?;
+            }
             require(
                 read(&broken) == Some(bytes("broken"))
                     && read(&unknown) == Some(bytes("unknown"))
@@ -419,8 +415,12 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 "the applied catalog differs",
             )?;
             require(
-                mode(&config) == 0o644 && mode(&catalog) == 0o600,
-                "a file's mode is not as expected",
+                mode(&config) == 0o600 && mode(&catalog) == 0o600,
+                format!(
+                    "the applied files' modes: {:o} {:o}",
+                    mode(&config),
+                    mode(&catalog)
+                ),
             )?;
             let v = read_op(main, &seen, "preview", files(&config, &catalog))?;
             let st = &v["settings"];
@@ -465,7 +465,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             require(o["outcome"] == "restored", format!("the restore: {o}"))?;
             require(
-                read(&config) == Some(bytes("original")) && mode(&config) == 0o644,
+                read(&config) == Some(bytes("original")) && mode(&config) == 0o600,
                 format!("the restored config: {:?}", read(&config)),
             )?;
             require(!catalog.exists(), "restore left the catalog Apply made")?;
@@ -514,6 +514,72 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     )?;
     passed("clear");
 
+    // ---- corrupt: an applied config Codex would not take; Clear is refused, Restore Backup
+    // still puts both files back
+    step(
+        "corrupt",
+        (|| {
+            let v = read_op(main, &seen, "preview", files(&config, &catalog))?;
+            written(
+                app,
+                main,
+                &seen,
+                "apply",
+                apply_input(&v),
+                &[&txt(&config), LABEL],
+                &hidden,
+            )?;
+            let (from, to) = pair("corrupt");
+            edit(&config, &from, &to)?;
+            let corrupt = read(&config);
+            let v = read_op(main, &seen, "preview", files(&config, &catalog))?;
+            let st = &v["settings"];
+            require(
+                v["applied"] == true
+                    && st["state"] == "refused"
+                    && st["reason"]
+                        .as_str()
+                        .is_some_and(|r| r.contains("not TOML")),
+                format!("the corrupt config's preview: {v}"),
+            )?;
+            let r = answered(
+                app,
+                main,
+                &seen,
+                "clear",
+                pins(&v),
+                &[&txt(&config)],
+                &hidden,
+                false,
+            )?;
+            require(
+                r["ok"] == false && r["error"].as_str().is_some_and(|e| e.contains("not TOML")),
+                format!("a clear of the corrupt config should be refused: {r}"),
+            )?;
+            require(
+                read(&config) == corrupt && read(&catalog) == Some(bytes("catalog")),
+                "the refused clear changed a file",
+            )?;
+            let o = written(
+                app,
+                main,
+                &seen,
+                "restore",
+                pins(&v),
+                &[&txt(&config), &txt(&catalog)],
+                &hidden,
+            )?;
+            require(o["outcome"] == "restored", format!("the restore: {o}"))?;
+            require(
+                read(&config) == Some(bytes("cleared")),
+                format!("the config restored: {:?}", read(&config)),
+            )?;
+            require(!catalog.exists(), "restore left the catalog Apply made")?;
+            untouched()
+        })(),
+    )?;
+    passed("corrupt");
+
     // ---- stow: only the link's target changes; a replaced target refuses writes
     step(
         "stow",
@@ -536,7 +602,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 &hidden,
             )?;
             require(
-                read(&stow_target) == Some(bytes("stow_applied")) && mode(&stow_target) == 0o640,
+                read(&stow_target) == Some(bytes("stow_applied")) && mode(&stow_target) == 0o600,
                 format!("the stow target after apply: {:?}", read(&stow_target)),
             )?;
             require(

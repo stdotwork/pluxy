@@ -864,7 +864,10 @@ Code page it is the window's own page, because **Apply** gives the tool the clie
 `CODEX_HOME`); it shows the status, the files it writes to, whether a key is in config.toml and the
 provider Codex uses now. When that provider is not pluxy's, it says that Codex hides conversations
 of another provider from resume until their history is synced, which session management offers;
-nothing is rewritten. The form keeps the old app's controls: **Model**, **Approval model** (Codex
+nothing is rewritten. Files Codex would not take (config.toml not TOML, for example, or a catalog
+with no models list) show why instead of the form: Apply and Close configuration stay off, and
+Restore Backup and the backups stay reachable. Choosing other files drops the last preview, so read
+them again before a write. The form keeps the old app's controls: **Model**, **Approval model** (Codex
 default or a catalog model), **Remote compaction (experimental)**, **Codex subagent settings**
 (**Enable subagents**, **Maximum concurrent threads per session**, **Default subagent model**,
 **Default reasoning effort**, **Include interruption messages**) and the **Codex model catalog**:
@@ -872,14 +875,17 @@ default or a catalog model), **Remote compaction (experimental)**, **Codex subag
 silent fetch) and adds those pluxy has a Codex template for; each model's display name,
 description, context windows, effective context, auto-compaction threshold, reasoning levels, input
 types, visibility, Tool Search and system prompt can be edited, or the model removed. The old app's
-OAuth sign-in method and openai-provider-identity switch are not carried.
+OAuth sign-in method and openai-provider-identity switch are not carried. The **Authentication
+Key** is one of the vault's plain secrets or client keys captured for this tool
+(`src/codexForm.ts`), or a new one through native key entry (**Add key…**).
 
 **Apply Configuration** (or **Update Configuration** / **Repair Connection** once applied),
-**Close configuration** (Clear) and **Restore Backup** each preview both files again and call the
-tool, whose native confirmation names both files, the key's label for Apply, and that an edit made
-in the same instant by another program may be lost; **Backup and restore** keeps both files in each
-manual backup. **Start Codex CLI** starts `codex` in a terminal through the launcher, **Start Codex
-App** starts the program the person names (Codex has no Linux app), and **Restart CLI Service**,
+**Close configuration** (Clear) and **Restore Backup** each call the tool with the files the last
+preview pinned (refused if a file changed since); its native confirmation names both files, the key's label for Apply, and that an edit made
+in the same instant by another program may be lost; **Backup and restore** shows once the files
+have been read and keeps both files in each manual backup. **Start Codex CLI** starts `codex` in a terminal through the launcher, **Start Codex
+App** starts the program the person names (Codex has no Linux app) in the working directory
+entered under Start CLI, which its card asks for while it is empty, and **Restart CLI Service**,
 after its own confirmation that active CLI sessions are interrupted, runs `codex app-server daemon
 restart` detached; the launcher's confirmation shows each in full. The key is not part of any
 launch: Codex reads it from config.toml.

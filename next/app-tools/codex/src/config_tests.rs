@@ -116,6 +116,23 @@ fn agents_are_written_only_when_they_differ_from_codex_defaults_or_the_file_has_
 }
 
 #[test]
+fn codexs_max_threads_alias_is_read_and_replaced_by_the_one_setting_written() {
+    let file = "[agents]\nmax_threads = 6\n";
+    let read = read_back(Some(file.as_bytes()), None).unwrap();
+    assert_eq!(read["agents"]["max_threads"], 6);
+    let mut s = settings();
+    s.agents.max_threads = Some(6);
+    let out = String::from_utf8(apply(Some(file.as_bytes()), &s).unwrap()).unwrap();
+    assert!(
+        out.starts_with(
+            "model_provider = \"pluxy\"\nmodel = \"gpt-6.1-terra\"\nmodel_catalog_json = \"pluxy-model-catalog.json\"\n[agents]\nenabled = true\ninterrupt_message = true\nmax_concurrent_threads_per_session = 6\n\n"
+        ),
+        "{out}"
+    );
+    assert!(!out.contains("max_threads ="), "{out}");
+}
+
+#[test]
 fn clear_keeps_the_persons_edits_and_comments() {
     let applied = apply(Some(ORIGINAL.as_bytes()), &settings()).unwrap();
     // The person changes the model and the retries of the provider, and adds a comment.

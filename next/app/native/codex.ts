@@ -215,6 +215,8 @@ function configs(home: string, next: string, login: string) {
       unknown: unknownBytes,
       badcat_config: badcatConfig,
       badcat_catalog: badcatCatalog,
+      // An applied config.toml made into one Codex would not take (an unclosed table header).
+      corrupt: ["[future_table]\n", "[future_table\n"],
       stow: stowOriginal,
       catalog: catalog(next),
       // The model and provider change in place, the comment on the model stays, the catalog

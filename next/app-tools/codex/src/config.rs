@@ -156,6 +156,8 @@ pub fn apply(before: Option<&[u8]>, s: &Settings) -> Result<Vec<u8>, Error> {
         let g = &s.agents;
         set(a, "enabled", g.enabled);
         set(a, "interrupt_message", g.interrupt);
+        // Codex also reads `max_threads` as this setting; one is written, so the other goes.
+        a.remove("max_threads");
         match g.max_threads {
             Some(n) => set(a, "max_concurrent_threads_per_session", n as i64),
             None => {
@@ -263,7 +265,10 @@ pub fn read_back(bytes: Option<&[u8]>, base_url: Option<&str>) -> Result<Json, E
         "agents": {
             "enabled": ab("enabled", d.enabled),
             "max_threads": agents
-                .and_then(|a| a.get("max_concurrent_threads_per_session"))
+                .and_then(|a| {
+                    a.get("max_concurrent_threads_per_session")
+                        .or_else(|| a.get("max_threads"))
+                })
                 .and_then(Item::as_integer),
             "model": a_s("default_subagent_model"),
             "effort": a_s("default_subagent_reasoning_effort"),

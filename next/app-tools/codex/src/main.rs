@@ -13,7 +13,8 @@ mod config;
 
 use pluxy_program::{run, Call, Error, Handler};
 use pluxy_transactions::{
-    backup_call, data_dir, json_leaves, Json, Merge, Pin, Selection, Target, Transactions,
+    backup_call, data_dir, json_leaves, sha256_of, Json, Merge, Pin, Selection, Target,
+    Transactions,
 };
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -81,9 +82,15 @@ fn is_json(bytes: &[u8]) -> bool {
     bytes.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'{')
 }
 
-/// The merge for Clear: the catalog's as JSON, config.toml's as TOML, each refusing a file Codex
-/// would not take as its own first.
-struct Checked;
+/// An image holding nothing but white space is no file: Codex reads it as none.
+fn present(image: Option<&[u8]>) -> Option<&[u8]> {
+    image.filter(|b| !b.iter().all(u8::is_ascii_whitespace))
+}
+
+/// The merge for Clear: the catalog's as JSON, config.toml's as TOML (told apart by the image
+/// Apply wrote, which is always the tool's own), each refusing a file Codex would not take as its
+/// own first. An empty original or current image is no file.
+pub(crate) struct Checked;
 
 impl Merge for Checked {
     fn merge(
@@ -95,16 +102,52 @@ impl Merge for Checked {
         if current == applied {
             return Ok(original.map(<[u8]>::to_vec));
         }
+        let catalog = applied.or(current).or(original).is_some_and(is_json);
+        let (original, current) = (present(original), present(current));
         let Some(cur) = current else {
             return Ok(None);
         };
-        if is_json(cur) {
+        if catalog {
             catalog::parse(current)?;
             Json.merge(original, applied, current)
         } else {
             config::merge(original, applied, cur)
         }
     }
+}
+
+/// What a preview shows of the two files' bytes. Files Codex would not take are pinned all the
+/// same, so Restore Backup and the backups still reach them: `state` is `refused` and `reason`
+/// says why apply and clear refuse them.
+fn settings_of(config: Option<&[u8]>, catalog: Option<&[u8]>, base_url: Option<&str>) -> Value {
+    let read = || -> Result<Value, Error> {
+        let mut read = config::read_back(config, base_url)?;
+        let cat = catalog::read_back(catalog)?;
+        read["models"] = cat["models"].clone();
+        read["approval_model"] = cat["approval_model"].clone();
+        Ok(read)
+    };
+    read().unwrap_or_else(|e| json!({"state": "refused", "reason": e.message}))
+}
+
+/// A preview and the bytes of both files it names.
+type Read = (Value, [Option<Vec<u8>>; 2]);
+
+/// Runs read (a preview and both files' bytes) again once when the bytes it read are not the ones
+/// it pinned (another program wrote a file between the two reads); refuses if they differ again,
+/// so the values shown are always those of the files pinned.
+fn pinned_read(mut read: impl FnMut() -> Result<Read, Error>) -> Result<Read, Error> {
+    for _ in 0..2 {
+        let (v, bytes) = read()?;
+        let same =
+            (0..2).all(|i| v["targets"][i]["sha256"] == json!(sha256_of(bytes[i].as_deref())));
+        if same {
+            return Ok((v, bytes));
+        }
+    }
+    Err(Error::unavailable(
+        "a configuration file changed while it was read: read it again",
+    ))
 }
 
 /// A file's settings for a backup's diff, whichever of the two it is.
@@ -265,16 +308,18 @@ impl Handler for Codex {
         match call.op.as_str() {
             "preview" => {
                 let sels = selections(input)?;
-                // Files Codex would not take are refused before anything is pinned.
-                let (_, config_bytes) = Target::resolve(&sels[0])?.read_now()?;
-                let (_, catalog_bytes) = Target::resolve(&sels[1])?.read_now()?;
-                let mut read =
-                    config::read_back(config_bytes.as_deref(), input["base_url"].as_str())?;
-                let cat = catalog::read_back(catalog_bytes.as_deref())?;
-                read["models"] = cat["models"].clone();
-                read["approval_model"] = cat["approval_model"].clone();
-                let mut v = Transactions::new(call, data_dir()?).preview(SET, &sels)?;
-                v["settings"] = read;
+                let tx = Transactions::new(call, data_dir()?);
+                let (mut v, [config, catalog]) = pinned_read(|| {
+                    let v = tx.preview(SET, &sels)?;
+                    let (_, a) = Target::resolve(&sels[0])?.read_now()?;
+                    let (_, b) = Target::resolve(&sels[1])?.read_now()?;
+                    Ok((v, [a, b]))
+                })?;
+                v["settings"] = settings_of(
+                    config.as_deref(),
+                    catalog.as_deref(),
+                    input["base_url"].as_str(),
+                );
                 Ok(v)
             }
             "import" => catalog::import(&input["models"]),
@@ -339,6 +384,10 @@ mod config_tests;
 #[cfg(test)]
 #[path = "catalog_tests.rs"]
 mod catalog_tests;
+
+#[cfg(test)]
+#[path = "main_tests.rs"]
+mod main_tests;
 
 #[cfg(test)]
 #[path = "manifest_tests.rs"]

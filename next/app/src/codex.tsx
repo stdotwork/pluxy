@@ -23,6 +23,16 @@ import {
   useLoad,
 } from "../../ui/kit/ui";
 import { Backups, reply } from "./backups";
+import {
+  type Agents,
+  fresh,
+  fromFile,
+  keysOf,
+  type Model,
+  PACKAGE,
+  type ReadBack,
+  type Secret,
+} from "./codexForm";
 import { connectionGet } from "./host";
 
 const t = strings("codex", {
@@ -117,6 +127,9 @@ const t = strings("codex", {
   clearHint: "Remove pluxy's integration settings and keep other settings. Restart the agent afterward.",
   restore: "Restore Backup",
   restoreHint: "Put both files back as they were before the first apply.",
+  refused: "Codex would not take these files",
+  refusedHint:
+    "Apply and Close configuration leave them alone until they are fixed; Restore Backup puts back both files as they were before the first apply.",
   noCore: "Connect to a core first: its address goes into the configuration.",
   modelMissing: "Choose a model from the catalog.",
   start: "Start CLI",
@@ -130,58 +143,19 @@ const t = strings("codex", {
   appPath: "Codex App program",
   appHint: "Codex has no Linux app of its own: the full path of the program to start",
   launchApp: "Start Codex App",
+  appCwd: "Enter a working directory under Start CLI first: the app starts there.",
   restartCli: "Restart CLI Service",
   restartCliMessage:
     "Restarting loads the latest configuration and model list. All active CLI sessions, including those in other terminals, will be interrupted. Wait for tasks to finish before restarting.",
 });
 
-const PACKAGE = "pluxy/codex-setup";
 const EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
 
 const tool = <T,>(op: string, input: Record<string, unknown>) =>
   reply<T>("program_call", { package: PACKAGE, op, input });
 
-interface Model {
-  slug: string;
-  upstream?: string;
-  non_codex?: boolean;
-  display_name: string;
-  description: string;
-  context_window: number | null;
-  max_context_window: number | null;
-  effective_context_window_percent: number | null;
-  auto_compact_token_limit: number | null;
-  reasoning: string[];
-  default_reasoning: string;
-  input_modalities: string[];
-  visible: boolean;
-  tool_search: boolean;
-  system_prompt_chars?: number;
-  system_prompt?: string;
-}
-
-interface Agents {
-  enabled: boolean;
-  max_threads: number | null;
-  model: string;
-  effort: string;
-  interrupt: boolean;
-}
-
-interface ReadBack {
-  state: "configured" | "not-configured" | "needs-update";
-  key_set: boolean;
-  provider: string | null;
-  model: string | null;
-  profile: string | null;
-  remote_compaction: boolean;
-  agents: Agents;
-  models: Model[];
-  approval_model: string;
-}
-
 interface Preview {
-  targets: { selected: string; target: string; link: string | null }[];
+  targets: { selected: string; target: string; link: string | null; [k: string]: unknown }[];
   applied: boolean;
   settings: ReadBack;
 }
@@ -400,19 +374,12 @@ function Launch(props: { available: boolean }) {
         >
           {t("launchApp")}
         </Button>
+        {!cwd.trim() && <small class="hint">{t("appCwd")}</small>}
       </Card>
       {action.error && <Notice tone="danger">{action.error}</Notice>}
     </>
   );
 }
-
-const freshAgents = (): Agents => ({
-  enabled: true,
-  max_threads: null,
-  model: "",
-  effort: "",
-  interrupt: true,
-});
 
 export function CodexPage() {
   const { api } = useKit();
@@ -424,12 +391,13 @@ export function CodexPage() {
   const [model, setModel] = useState("");
   const [approval, setApproval] = useState("");
   const [compaction, setCompaction] = useState(false);
-  const [agents, setAgents] = useState<Agents>(freshAgents);
+  const [agents, setAgents] = useState<Agents>(fresh().agents);
   const [models, setModels] = useState<Model[]>([]);
   const [missing, setMissing] = useState<string[]>([]);
   const [secret, setSecret] = useState("");
   const [core, setCore] = useState<string>();
-  const secrets = useLoad(() => reply<{ id: string; label: string }[]>("vault_secrets"));
+  const secrets = useLoad(() => reply<{ secrets?: Secret[] }>("vault_secrets"));
+  const keys = keysOf(secrets.data);
   const listId = useId();
   useEffect(() => {
     connectionGet().then(
@@ -453,19 +421,25 @@ export function CodexPage() {
     read.run(async () => {
       const r = await tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) });
       if (r.body) {
-        const st = r.body.settings;
+        const f = fromFile(r.body.settings);
         setPreview(r.body);
-        setModel(st.model ?? "");
-        setApproval(st.approval_model);
-        setCompaction(st.remote_compaction);
-        setAgents(st.agents);
-        setModels(st.models);
+        setModel(f.model);
+        setApproval(f.approval);
+        setCompaction(f.compaction);
+        setAgents(f.agents);
+        setModels(f.models);
       }
       return r;
     });
   const write = useAction(load);
-  // A write acts on the files the last preview pinned; a new preview first, so the pins are fresh.
-  const pins = async () => (await tool<Preview>("preview", selection())).body?.targets;
+  // A write acts on the files the last preview pinned (the tool refuses it if a file changed
+  // since); choosing other files drops that preview, so a write never pins files unread.
+  const reselect =
+    <T,>(f: (v: T) => void) =>
+    (v: T) => {
+      f(v);
+      setPreview(undefined);
+    };
   const importModels = useAction(() => {});
   const doImport = () =>
     importModels.run(async () => {
@@ -487,15 +461,9 @@ export function CodexPage() {
       return r;
     });
   const apply = () =>
-    write.run(async () => {
-      const targets = await pins();
-      if (!targets)
-        return {
-          status: 400,
-          error: { code: "refused", message: "the configuration files could not be read" },
-        };
-      return tool("apply", {
-        targets,
+    write.run(() =>
+      tool("apply", {
+        targets: preview?.targets,
         base_url: core,
         key: secret,
         model: model.trim(),
@@ -506,20 +474,13 @@ export function CodexPage() {
           ...m,
           ...(system_prompt?.trim() ? { system_prompt: system_prompt.trim() } : {}),
         })),
-      });
-    });
-  const undo = (op: "clear" | "restore") =>
-    write.run(async () => {
-      const targets = await pins();
-      if (!targets)
-        return {
-          status: 400,
-          error: { code: "refused", message: "the configuration files could not be read" },
-        };
-      return tool(op, { targets });
-    });
+      }),
+    );
+  const undo = (op: "clear" | "restore") => write.run(() => tool(op, { targets: preview?.targets }));
   const addKey = useAction(secrets.reload);
   const st = preview?.settings;
+  // The files read back, or undefined when Codex would not take them.
+  const files = st?.state === "refused" ? undefined : st;
   const applyLabel = !preview?.applied ? t("apply") : st?.state === "configured" ? t("update") : t("repair");
   const unavailable = read.error?.includes(PACKAGE) || read.error?.includes("not installed");
   const busy = read.busy || write.busy || importModels.busy;
@@ -546,20 +507,27 @@ export function CodexPage() {
             { value: "files", label: t("filesSelected") },
             { value: "root", label: t("filesInRoot") },
           ]}
-          onChange={setWhere}
+          onChange={reselect(setWhere)}
         />
         {where === "files" && (
           <>
-            <Text label={t("configPath")} hint={t("pathHint")} value={configPath} onInput={setConfigPath} />
+            <Text
+              label={t("configPath")}
+              hint={t("pathHint")}
+              value={configPath}
+              onInput={reselect(setConfigPath)}
+            />
             <Text
               label={t("catalogPath")}
               hint={t("pathHint")}
               value={catalogPath}
-              onInput={setCatalogPath}
+              onInput={reselect(setCatalogPath)}
             />
           </>
         )}
-        {where === "root" && <Text label={t("root")} hint={t("rootHint")} value={root} onInput={setRoot} />}
+        {where === "root" && (
+          <Text label={t("root")} hint={t("rootHint")} value={root} onInput={reselect(setRoot)} />
+        )}
         {read.error && <Notice tone="danger">{read.error}</Notice>}
         <Button onClick={load} disabled={busy}>
           {t("read")}
@@ -569,26 +537,37 @@ export function CodexPage() {
             rows={[
               [
                 t("status"),
-                preview.applied
-                  ? t("applied")
-                  : st.state === "configured"
-                    ? t("configured")
-                    : st.state === "needs-update"
-                      ? t("needsUpdate")
-                      : t("notConfigured"),
+                !files
+                  ? t("refused")
+                  : preview.applied
+                    ? t("applied")
+                    : files.state === "configured"
+                      ? t("configured")
+                      : files.state === "needs-update"
+                        ? t("needsUpdate")
+                        : t("notConfigured"),
               ],
               [t("target"), preview.targets.map((x) => x.target).join(", ")],
-              [t("keySet"), st.key_set ? t("yes") : t("no")],
-              [t("provider"), st.provider ?? "openai"],
+              ...(files
+                ? [
+                    [t("keySet"), files.key_set ? t("yes") : t("no")] as [string, string],
+                    [t("provider"), files.provider ?? "openai"] as [string, string],
+                  ]
+                : []),
             ]}
           />
         )}
-        {st && st.provider !== "pluxy" && (
-          <Notice tone="warn">{t("providerChange", { provider: st.provider ?? "openai" })}</Notice>
+        {st?.state === "refused" && (
+          <Notice tone="warn">
+            {st.reason} {t("refusedHint")}
+          </Notice>
         )}
-        {st?.profile && <Notice tone="warn">{t("profile", { profile: st.profile })}</Notice>}
+        {files && files.provider !== "pluxy" && (
+          <Notice tone="warn">{t("providerChange", { provider: files.provider ?? "openai" })}</Notice>
+        )}
+        {files?.profile && <Notice tone="warn">{t("profile", { profile: files.profile })}</Notice>}
       </Card>
-      {preview && (
+      {preview && files && (
         <>
           <Card title={t("model")}>
             <Text label={t("model")} hint={t("modelHint")} value={model} list={listId} onInput={setModel} />
@@ -672,16 +651,17 @@ export function CodexPage() {
           </Card>
           <Card title={t("key")}>
             <p class="muted">{t("keyHint")}</p>
-            {secrets.data && secrets.data.length > 0 ? (
+            {keys.length > 0 ? (
               <Choices
                 label={t("key")}
                 value={secret || undefined}
-                choices={secrets.data.map((s) => ({ value: s.id, label: s.label }))}
+                choices={keys.map((s) => ({ value: s.id, label: s.label }))}
                 onChange={setSecret}
               />
             ) : (
               <p class="muted">{t("noKeys")}</p>
             )}
+            {secrets.error && <Notice tone="danger">{secrets.error}</Notice>}
             {addKey.error && <Notice tone="danger">{addKey.error}</Notice>}
             <Button
               disabled={addKey.busy}
@@ -696,23 +676,27 @@ export function CodexPage() {
               {t("addKey")}
             </Button>
           </Card>
-          <Card>
-            {!modelOk && <Notice tone="warn">{t("modelMissing")}</Notice>}
-            {write.error && <Notice tone="danger">{write.error}</Notice>}
-            <Button variant="primary" onClick={apply} disabled={busy || !secret || !core || !modelOk}>
-              {applyLabel}
-            </Button>
-            <ConfirmButton disabled={busy || !preview.applied} onConfirm={() => undo("clear")}>
-              {t("clear")}
-            </ConfirmButton>
-            <small class="hint">{t("clearHint")}</small>
-            <ConfirmButton disabled={busy} onConfirm={() => undo("restore")}>
-              {t("restore")}
-            </ConfirmButton>
-            <small class="hint">{t("restoreHint")}</small>
-          </Card>
-          <Backups pkg={PACKAGE} pins={pins} disabled={busy} onChange={load} />
         </>
+      )}
+      {preview && (
+        <Card>
+          {files && !modelOk && <Notice tone="warn">{t("modelMissing")}</Notice>}
+          {write.error && <Notice tone="danger">{write.error}</Notice>}
+          <Button variant="primary" onClick={apply} disabled={busy || !files || !secret || !core || !modelOk}>
+            {applyLabel}
+          </Button>
+          <ConfirmButton disabled={busy || !files || !preview.applied} onConfirm={() => undo("clear")}>
+            {t("clear")}
+          </ConfirmButton>
+          <small class="hint">{t("clearHint")}</small>
+          <ConfirmButton disabled={busy} onConfirm={() => undo("restore")}>
+            {t("restore")}
+          </ConfirmButton>
+          <small class="hint">{t("restoreHint")}</small>
+        </Card>
+      )}
+      {preview && (
+        <Backups pkg={PACKAGE} pins={async () => preview.targets} disabled={busy} onChange={load} />
       )}
       <Launch available={!unavailable} />
     </div>
