@@ -1507,7 +1507,8 @@ go build -o extensions/codex/codex ./extensions/codex
 Review the file and its changes before keeping it, run the tests in `extensions/codex`
 (`TestClientModelTemplates` in `client_models_test.go` expects 12 templates, so a changed count
 needs the test updated too), run the Codex catalog corpus and e2e tests, and reload core after
-replacing the extension program. The routing list in
+replacing the extension program. The desktop app's Codex setup tool (`app-tools/codex`) embeds the same file:
+rebuild it too. The routing list in
 `extensions/codex/models.json` remains separate from this client metadata.
 
 ### Account model names

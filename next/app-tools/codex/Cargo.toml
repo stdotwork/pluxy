@@ -1,0 +1,15 @@
+[package]
+name = "codex-setup"
+version = "0.1.0"
+description = "Sets up and starts Codex for pluxy's desktop app"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+pluxy-program = { path = "../lib/program" }
+pluxy-transactions = { path = "../lib/transactions" }
+# Keys keep their order and numbers their digits in the catalog it rewrites.
+serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
+# Edits config.toml in place: comments, formatting and tables it does not know stay.
+toml_edit = "=0.25.19"

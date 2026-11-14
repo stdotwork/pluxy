@@ -845,6 +845,38 @@ version** puts it back over whatever the file holds now (a file absent in the ba
 no automatic backup is made) and **Delete this version** deletes only that backup, each in the
 tool's native confirmation.
 
+## Codex
+
+The Codex page sets up and starts Codex with this core (`src/codex.tsx`). It needs the curated
+native tool `pluxy/codex-setup` ([app tools](../app-tools/README.md#codex)) and, for the launches,
+the execution program, both installed and enabled on the Device extensions page. Like the Claude
+Code page it is the window's own page, because **Apply** gives the tool the client key.
+
+**Read configuration** previews Codex's `config.toml` and model catalog: in Codex's folder
+(`~/.codex`), selected files (links followed and kept), or a selected folder (such as a
+`CODEX_HOME`); it shows the status, the files it writes to, whether a key is in config.toml and the
+provider Codex uses now. When that provider is not pluxy's, it says that Codex hides conversations
+of another provider from resume until their history is synced, which session management offers;
+nothing is rewritten. The form keeps the old app's controls: **Model**, **Approval model** (Codex
+default or a catalog model), **Remote compaction (experimental)**, **Codex subagent settings**
+(**Enable subagents**, **Maximum concurrent threads per session**, **Default subagent model**,
+**Default reasoning effort**, **Include interruption messages**) and the **Codex model catalog**:
+**Import models from core** reads the core's served models only when pressed (no background or
+silent fetch) and adds those pluxy has a Codex template for; each model's display name,
+description, context windows, effective context, auto-compaction threshold, reasoning levels, input
+types, visibility, Tool Search and system prompt can be edited, or the model removed. The old app's
+OAuth sign-in method and openai-provider-identity switch are not carried.
+
+**Apply Configuration** (or **Update Configuration** / **Repair Connection** once applied),
+**Close configuration** (Clear) and **Restore Backup** each preview both files again and call the
+tool, whose native confirmation names both files, the key's label for Apply, and that an edit made
+in the same instant by another program may be lost; **Backup and restore** keeps both files in each
+manual backup. **Start Codex CLI** starts `codex` in a terminal through the launcher, **Start Codex
+App** starts the program the person names (Codex has no Linux app), and **Restart CLI Service**,
+after its own confirmation that active CLI sessions are interrupted, runs `codex app-server daemon
+restart` detached; the launcher's confirmation shows each in full. The key is not part of any
+launch: Codex reads it from config.toml.
+
 ## Build and check
 
 Bun `1.4.3`, a stable Rust toolchain (CI uses 1.97.0), and on Linux the WebKitGTK 4.1 and
