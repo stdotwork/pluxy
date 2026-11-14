@@ -8,7 +8,8 @@
 //   setting this check knows nothing of; beside it the login files `~/.claude/.credentials.json`
 //   and `~/.claude.json`, holding a login canary, which no step may touch;
 // - a stow layout: `~/.config/claude-stow/settings.json` is a relative link to
-//   `~/dotfiles/claude/.claude/settings.json` (mode 0640), beside `keep.json`;
+//   `~/dotfiles/claude/.claude/settings.json` (mode 0640, which an apply makes 0600, as it
+//   makes the user settings' 0644), beside `keep.json`;
 // - a chezmoi-style root: `~/.claude-root` is an absolute link to the folder
 //   `~/.local/share/chezmoi/dot_claude`, which has no settings.json yet;
 // - for the backup browser's step, the person's edits after a Manual Backup and the diff a restore
@@ -200,6 +201,9 @@ function configs(home: string, login: string) {
         '  "env": {\n    "API_TIMEOUT_MS": "600000",\n    "ANTHROPIC_API_KEY": "fixture-own-api-key"\n  },\n' +
         '  "model": "fable",\n' +
         '  "futureSetting": {\n    "nested": [\n      1,\n      2.50,\n      12345678901234567890\n    ]\n  }\n}\n',
+      // The applied file made into one Claude Code would not take: a comment, which Clear refuses
+      // and Restore Backup undoes (back to `cleared`, the file before that apply).
+      corrupt: ["{\n", "{\n  // a comment Claude Code would refuse\n"],
       stow_applied: `{\n${env(['"API_TIMEOUT_MS": "1"'])},\n  "model": "opus",\n${tail}`,
       // A file the root did not have, created.
       root_applied: `{\n${env([])},\n  "model": "opus",\n${tail}`,
