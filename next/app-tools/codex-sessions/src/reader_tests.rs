@@ -626,3 +626,140 @@ fn linked_databases_and_index_are_skipped() {
     assert_eq!(page.sessions.len(), 1);
     assert_eq!(page.sessions[0].title, "");
 }
+
+/// A database with one thread, `x`, at path (its folder made).
+fn one_thread_db(path: &Path) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    sql(
+        path,
+        "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT); INSERT INTO threads VALUES ('x', 'Seen');",
+    );
+}
+
+#[test]
+fn a_linked_sqlite_folder_is_skipped_with_a_warning_and_a_real_one_is_read() {
+    let outside = Root::new("linked-sqlite-outside");
+    one_thread_db(&outside.join("other.db"));
+    let root = Root::new("linked-sqlite");
+    std::os::unix::fs::symlink(&*outside, root.join("sqlite")).unwrap();
+    let page = list(&root, 0, 50);
+    assert!(page.databases.is_empty(), "{:?}", page.databases);
+    assert!(page.sessions.is_empty());
+    assert_eq!(page.warnings.len(), 1, "{:?}", page.warnings);
+    assert!(page.warnings[0].contains("sqlite"), "{:?}", page.warnings);
+    // The same database in a real folder is read.
+    let real = Root::new("real-sqlite");
+    one_thread_db(&real.join("sqlite/other.db"));
+    let page = list(&real, 0, 50);
+    assert!(page.warnings.is_empty(), "{:?}", page.warnings);
+    assert_eq!(page.sessions.len(), 1);
+    assert_eq!(page.sessions[0].title, "Seen");
+}
+
+#[test]
+fn linked_session_folders_are_skipped_with_a_warning_each_and_real_ones_are_read() {
+    let outside = Root::new("linked-sessions-outside");
+    let live = "019f1234-abcd-7000-8000-0000000000c1";
+    let old = "019f1234-abcd-7000-8000-0000000000c2";
+    write(&outside.join(format!("a/rollout-{live}.jsonl")), "");
+    write(&outside.join(format!("b/rollout-{old}.jsonl")), "");
+    let root = Root::new("linked-sessions");
+    std::os::unix::fs::symlink(outside.join("a"), root.join("sessions")).unwrap();
+    std::os::unix::fs::symlink(outside.join("b"), root.join("archived_sessions")).unwrap();
+    let page = list(&root, 0, 50);
+    assert!(page.sessions.is_empty(), "{:?}", page.sessions);
+    assert_eq!(page.warnings.len(), 2, "{:?}", page.warnings);
+    assert!(page
+        .warnings
+        .iter()
+        .any(|w| w.contains("archived_sessions")));
+    assert!(page
+        .warnings
+        .iter()
+        .any(|w| w.contains("sessions") && !w.contains("archived_sessions")));
+    assert!(find_rollout(&root, live).is_none());
+    // The same files in real folders are listed, and found.
+    let real = Root::new("real-sessions");
+    write(&real.join(format!("sessions/rollout-{live}.jsonl")), "");
+    write(
+        &real.join(format!("archived_sessions/rollout-{old}.jsonl")),
+        "",
+    );
+    let page = list(&real, 0, 50);
+    assert!(page.warnings.is_empty(), "{:?}", page.warnings);
+    assert_eq!(page.sessions.len(), 2);
+    assert!(find_rollout(&real, live).is_some());
+}
+
+#[test]
+fn a_database_with_a_linked_wal_or_shm_is_skipped_with_a_warning() {
+    let outside = Root::new("linked-wal-outside");
+    // A real -wal beside the database is read (the control).
+    let real = Root::new("real-wal");
+    wal_with_uncheckpointed_rows(&real.join("sqlite/live.db"));
+    let page = list(&real, 0, 50);
+    assert!(page.warnings.is_empty(), "{:?}", page.warnings);
+    assert_eq!(page.sessions.len(), 2);
+    // The same database whose -wal is a link to a copy elsewhere.
+    let root = Root::new("linked-wal");
+    let db = root.join("sqlite/live.db");
+    wal_with_uncheckpointed_rows(&db);
+    let moved = outside.join("live.db-wal");
+    fs::rename(sidecar(&db, "-wal"), &moved).unwrap();
+    std::os::unix::fs::symlink(&moved, sidecar(&db, "-wal")).unwrap();
+    let page = list(&root, 0, 50);
+    assert!(page.sessions.is_empty(), "{:?}", page.sessions);
+    assert_eq!(page.warnings.len(), 1, "{:?}", page.warnings);
+    assert!(page.warnings[0].contains("live.db") && page.warnings[0].contains("-wal"));
+    // A linked -shm, with a real -wal.
+    let root = Root::new("linked-shm");
+    let db = root.join("sqlite/live.db");
+    wal_with_uncheckpointed_rows(&db);
+    let shm = outside.join("live.db-shm");
+    fs::write(&shm, b"").unwrap();
+    std::os::unix::fs::symlink(&shm, sidecar(&db, "-shm")).unwrap();
+    let page = list(&root, 0, 50);
+    assert!(page.sessions.is_empty(), "{:?}", page.sessions);
+    assert_eq!(page.warnings.len(), 1, "{:?}", page.warnings);
+    assert!(page.warnings[0].contains("-shm"), "{:?}", page.warnings);
+    // detail reads nothing through them either.
+    assert!(matches!(
+        detail(&root, "b", 0, 50, &never),
+        Err(DetailError::NotFound(_))
+    ));
+}
+
+#[test]
+fn a_thread_stored_as_local_uuid_is_found_by_either_form_of_its_id() {
+    let root = Root::new("detail-local");
+    let id = "019f1234-abcd-7000-8000-0000000000d1";
+    // The rollout's name does not carry the ID: only the row leads to its metadata.
+    sql(
+        &root.join("state_5.sqlite"),
+        &format!(
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, cwd TEXT);
+             INSERT INTO threads VALUES ('local:{id}', 'Local row', '/work');"
+        ),
+    );
+    for asked in [format!("local:{id}"), id.to_string()] {
+        let d = detail(&root, &asked, 0, 50, &never).unwrap();
+        assert_eq!(d["title"], "Local row", "{asked}");
+        assert_eq!(d["cwd"], "/work", "{asked}");
+        assert!(d["database"].as_str().unwrap().ends_with("state_5.sqlite"));
+    }
+    // A row stored without the prefix is still found by both.
+    let plain = Root::new("detail-plain");
+    sql(
+        &plain.join("state_5.sqlite"),
+        &format!(
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, cwd TEXT);
+             INSERT INTO threads VALUES ('{id}', 'Plain row', '/work');"
+        ),
+    );
+    for asked in [format!("local:{id}"), id.to_string()] {
+        assert_eq!(
+            detail(&plain, &asked, 0, 50, &never).unwrap()["title"],
+            "Plain row"
+        );
+    }
+}
