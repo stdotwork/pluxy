@@ -30,8 +30,8 @@ export interface Shared {
   offsets: number[][];
   /** The seven days of the 7-day report, oldest first. */
   days: string[];
-  /** The sources listed before this one in a report (ordered by ID), each as the hub gives it. */
-  others: object[];
+  /** The other sources a report lists, each as the hub gives it. */
+  others: { id: string; label: string; status: string; total: number; active_days: number }[];
 }
 
 type T = [number, number, number, number, number, number, number];
@@ -233,10 +233,11 @@ export function ompHome(home: string) {
  * parser is disabled (its rows kept, the new session unread). The calendar and hours are their nonzero
  * cells ("weekday:hour", Monday 0). */
 export function ompExpected(s: Shared) {
-  const sources = (total: number, status: string) => [
-    ...s.others,
-    { id: OMP_ID, label: "Oh My Pi", status, total, active_days: 3 },
-  ];
+  // The hub lists sources by their total in the range, most first, then by ID.
+  const sources = (total: number, status: string) =>
+    [...s.others, { id: OMP_ID, label: "Oh My Pi", status, total, active_days: 3 }].sort(
+      (a, b) => b.total - a.total || a.id.localeCompare(b.id),
+    );
   const report = (
     day10: T,
     totals: T,
