@@ -9,8 +9,8 @@
 //!   ID, file, presence and size only;
 //! - diff: unchanged, then after the person's edits, the changed settings by name, never a value;
 //! - restore: a cancelled restore writes nothing; a confirmed one, naming the backup and saying no
-//!   automatic backup is made, puts the backed-up bytes and permission bits back over the
-//!   person's edits, and over a file Claude Code would not take (its preview still pins it);
+//!   automatic backup is made, puts the backed-up bytes back over the person's edits, keeping
+//!   the permission bits the person gave the file since (as clear and restore do), and over a file Claude Code would not take (its preview still pins it);
 //! - foreign: an ID that is no manual backup of this tool is refused by diff, restore and delete,
 //!   among them a backup the transaction library keeps for an applied set (read from the vault's
 //!   records on disk), which stays in the vault; a backup restored onto another file is refused;
@@ -205,7 +205,6 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
         list(&mut note)?.is_empty(),
         "a cancelled Manual Backup kept one",
     )?;
-    // The restore puts back the permission bits the file had when it was backed up.
     let backed_up_mode = mode(&settings);
     let first = s(&create(&file(&settings), &settings, &mut note)?["backup"]);
     let l = list(&mut note)?;
@@ -228,8 +227,15 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
     for e in b["edits"].as_array().into_iter().flatten() {
         edit(&settings, &s(&e[0]), &s(&e[1]))?;
     }
-    // Its permission bits changed too: a restore puts back the backed-up ones.
-    std::fs::set_permissions(&settings, std::fs::Permissions::from_mode(0o644))
+    // Its permission bits changed too, to bits other than the backed-up ones: a restore keeps
+    // the file's bits, as clear and restore do (it uses the backed-up ones only to make a file
+    // again).
+    let chosen_mode = if backed_up_mode == 0o640 {
+        0o604
+    } else {
+        0o640
+    };
+    std::fs::set_permissions(&settings, std::fs::Permissions::from_mode(chosen_mode))
         .map_err(|e| e.to_string())?;
     let edited = read(&settings).unwrap_or_default();
     let d = diff(&first, &mut note)?;
@@ -268,8 +274,12 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
     )?;
     note(&o);
     require(
-        read(&settings) == Some(bytes("cleared")) && mode(&settings) == backed_up_mode,
-        format!("the settings after the restore: {:?}", read(&settings)),
+        read(&settings) == Some(bytes("cleared")) && mode(&settings) == chosen_mode,
+        format!(
+            "the settings after the restore: {:?}, mode {:o}",
+            read(&settings),
+            mode(&settings)
+        ),
     )?;
     require(
         diff(&first, &mut note)?["same"] == true,
@@ -299,8 +309,12 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
     )?;
     note(&o);
     require(
-        read(&settings) == Some(bytes("cleared")) && mode(&settings) == backed_up_mode,
-        format!("the broken file after the restore: {:?}", read(&settings)),
+        read(&settings) == Some(bytes("cleared")) && mode(&settings) == chosen_mode,
+        format!(
+            "the broken file after the restore: {:?}, mode {:o}",
+            read(&settings),
+            mode(&settings)
+        ),
     )?;
 
     // ---- foreign: an ID that is no manual backup, a restore onto another file

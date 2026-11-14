@@ -286,7 +286,8 @@ impl Transactions<'_> {
     }
 
     /// Puts set's backup id back in its files, pinned by pins (one for each of its files, in its
-    /// order): each gets the bytes it had then, and one that did not exist is removed. Journalled
+    /// order): each gets the bytes it had then, keeping its permission bits (a file made again
+    /// gets the bits it had then), and one that did not exist is removed. Journalled
     /// like every write; no automatic backup is made; set's record and the originals kept for
     /// restore stay as they are.
     pub fn backup_restore(
@@ -320,6 +321,7 @@ impl Transactions<'_> {
             } else {
                 None
             };
+            // Used only for a file that must be made again: a file there keeps its own bits.
             c.after_mode = f["mode"].as_u64().map(|m| m as u32);
         }
         self.run(crate::RESTORE_BACKUP, set, changes, None, written)

@@ -1347,3 +1347,34 @@ fn a_backup_whose_record_cannot_be_saved_leaves_nothing_in_the_vault() {
     assert!(r.is_err(), "{r:?}");
     assert!(mem.backups.borrow().is_empty());
 }
+
+/// A restore of a manual backup keeps the file's permission bits, as clear and restore do; a file
+/// made again gets the bits it had when it was backed up.
+#[test]
+fn restoring_a_manual_backup_keeps_the_files_mode_and_remakes_a_file_with_its_own() {
+    let t = Tmp::new();
+    let f = t.put("x/settings.json", "{\"a\": 1}\n");
+    chmod(&f, 0o640);
+    let mem = Mem::default();
+    let tx = Transactions::new(&mem, tx_in(&t, &mem));
+    let sel = [Selection::File(f.clone())];
+    let id = tx.backup_create("s", &pins(&tx, "s", &sel)).unwrap()["backup"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    std::fs::write(&f, "{\"a\": 2}\n").unwrap();
+    chmod(&f, 0o604);
+    tx.backup_restore("s", &pins(&tx, "s", &sel), &id, &mut none)
+        .unwrap();
+    assert_eq!(
+        (read(&f).unwrap(), mode_of(&f)),
+        ("{\"a\": 1}\n".into(), 0o604)
+    );
+    std::fs::remove_file(&f).unwrap();
+    tx.backup_restore("s", &pins(&tx, "s", &sel), &id, &mut none)
+        .unwrap();
+    assert_eq!(
+        (read(&f).unwrap(), mode_of(&f)),
+        ("{\"a\": 1}\n".into(), 0o640)
+    );
+}
