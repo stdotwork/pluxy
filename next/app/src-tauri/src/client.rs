@@ -193,21 +193,6 @@ impl Client {
         self.send(key, method, path, body, None)
     }
 
-    /// Whether core takes client key key: the status of its client API's `GET /v1/models` with it
-    /// as bearer token (200 when it does, 401 once it is no longer one of core's client keys), or
-    /// the transport's failure. Nothing of the reply is read but its status.
-    pub fn client_key_status(&self, key: &str) -> Result<u16, &'static str> {
-        self.agent
-            .get(&format!("{}/v1/models", self.base))
-            .config()
-            .timeout_global(Some(Duration::from_secs(30)))
-            .build()
-            .header("Authorization", &format!("Bearer {key}"))
-            .call()
-            .map(|r| r.status().as_u16())
-            .map_err(|e| transport_kind(&e))
-    }
-
     /// Calls as call does, giving up after limit instead of the client's 300 seconds.
     pub fn call_within(
         &self,

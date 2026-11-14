@@ -48,8 +48,6 @@ pub const COMMANDS: &[&str] = &[
     "vault_secret_add",
     "vault_secrets",
     "vault_secret_remove",
-    "client_key_capture",
-    "client_key_enter",
     "window_get",
     "window_set",
     "window_close",
