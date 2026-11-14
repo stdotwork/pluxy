@@ -50,14 +50,33 @@ page showing session text cannot point the reader elsewhere.
 What it reads, as the old desktop app's session manager did:
 
 - SQLite databases `sqlite/*.db`, `*.sqlite` and `*.sqlite3` and the legacy `state_5.sqlite`, each
-  kept only with a `threads`, `automation_runs` or `inbox_items` table, opened read-only (a WAL
-  database with no `-shm` beside it, so no Codex process has it open, is opened as immutable, so
-  reading it creates no file). A database that cannot be read becomes one warning; the rest loads.
+  kept only with a `threads`, `automation_runs` or `inbox_items` table, opened read-only. A
+  database that cannot be read becomes one warning; the rest loads.
 - `threads` (title or name, folder, provider, archived, update time, whichever columns exist) and
   `automation_runs` (an `archived` status is archived).
 - Rollout files `sessions/**` and `archived_sessions/**` named `rollout-…<UUID>.jsonl`: for the
   list only their names (links are skipped); a rollout whose session a database has is dropped.
 - `session_index.jsonl`: a rollout's title and update time, else the file's modification time.
+  An index larger than 16 MiB becomes a warning and is not read.
+
+Links to databases, rollouts and the index are skipped (the Codex home itself may be a link).
+
+The reader adds no file beside a database that no Codex process has open.
+In WAL mode a reader needs SQLite's shared-memory file (`-shm`), which SQLite would create, so
+when it is missing: a database with no `-wal`, or an empty one, is opened as immutable; one whose
+`-wal` still holds committed changes (Codex stopped before copying them back) is copied with its
+`-wal` into a private folder in the tool's data folder (`tmp`), and the copy is read and then
+removed. If the copy fails, that database is a warning, named, and skipped. A Codex process that
+starts at the same moment, between the check for `-shm` and the open, can make one read see a
+torn state; Refresh reads again. While Codex has a database open, the reader uses its `-shm` as
+any SQLite reader does: it writes to that shared-memory file and takes SQLite's shared read locks,
+and never changes the database or its `-wal`.
+
+Every string a reply takes from a database or a rollout is capped: titles, folders, providers,
+models and paths at 4 KiB, IDs at 128 bytes, roles, timestamps and call IDs at 256 bytes, each
+ending with "…" when cut. A `list` page holds at most 512 KiB of sessions: when longer ones would
+not fit it holds fewer and says there are more, and the next page starts after the last one given.
+A `detail` page's metadata counts toward its 512 KiB too.
 
 Sessions with the same ID (without a `local:` prefix) are one: the newer wins and the other fills
 its empty fields. The list is newest first, then by ID. A session's detail reads its rollout (the

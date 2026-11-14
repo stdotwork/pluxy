@@ -21,8 +21,36 @@ const MAX_ID: usize = 128;
 pub const MAX_MESSAGE: usize = 8 << 10;
 /// The most a detail page's messages take as JSON, well under the host's 1 MiB frame.
 pub const MAX_DETAIL: usize = 512 << 10;
-/// Rollout lines longer than this are counted, not parsed.
+/// Rollout lines longer than this are counted, not parsed; a larger session_index.jsonl is not
+/// read.
 const MAX_LINE: usize = 16 << 20;
+/// The most of a title, folder, provider, model or path a reply holds, in bytes; longer ones end
+/// with "…".
+pub const MAX_TEXT: usize = 4 << 10;
+/// The most of a role, timestamp or call ID a reply holds, in bytes.
+pub const MAX_SHORT: usize = 256;
+/// The most a list page's sessions take as JSON: a page that would hold more holds fewer
+/// sessions, and says there are more.
+pub const MAX_LIST: usize = 512 << 10;
+/// The warnings and databases a list page names at most.
+const MAX_WARNINGS: usize = 20;
+const MAX_DATABASES: usize = 50;
+
+/// s cut to at most max bytes at a character boundary, ending with "…" when it was cut.
+pub fn cap(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        return s.to_string();
+    }
+    let mut end = max;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &s[..end])
+}
+
+fn cap_path(p: &Path) -> String {
+    cap(&p.to_string_lossy(), MAX_TEXT)
+}
 
 /// One session in the list.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,8 +68,10 @@ pub struct Summary {
 impl Summary {
     fn to_json(&self) -> Value {
         json!({
-            "id": self.id, "title": self.title, "cwd": self.cwd, "provider": self.provider,
-            "archived": self.archived, "updated_ms": self.updated_ms, "database": self.database,
+            "id": cap(&self.id, MAX_ID), "title": cap(&self.title, MAX_TEXT),
+            "cwd": cap(&self.cwd, MAX_TEXT), "provider": cap(&self.provider, MAX_TEXT),
+            "archived": self.archived, "updated_ms": self.updated_ms,
+            "database": cap(&self.database, MAX_TEXT),
         })
     }
 }
@@ -60,27 +90,146 @@ pub struct Page {
 }
 
 impl Page {
+    /// The page as the `list` operation answers it. Sessions that would take the page past
+    /// MAX_LIST are left out, and `has_more` says there are more from `offset` plus the sessions
+    /// given.
     pub fn to_json(&self) -> Value {
-        let active = self.sessions.iter().filter(|s| !s.archived).count();
+        let mut sessions = Vec::new();
+        let mut used = 0;
+        let mut active = 0;
+        let mut cut = false;
+        for s in &self.sessions {
+            let v = s.to_json();
+            let size = v.to_string().len();
+            if !sessions.is_empty() && used + size > MAX_LIST {
+                cut = true;
+                break;
+            }
+            used += size;
+            active += usize::from(!s.archived);
+            sessions.push(v);
+        }
+        let mut warnings: Vec<String> = self
+            .warnings
+            .iter()
+            .take(MAX_WARNINGS)
+            .map(|w| cap(w, 1 << 10))
+            .collect();
+        if self.warnings.len() > MAX_WARNINGS {
+            warnings.push(format!(
+                "{} more warnings",
+                self.warnings.len() - MAX_WARNINGS
+            ));
+        }
         json!({
-            "codex_home": self.codex_home,
-            "databases": self.databases,
-            "sessions": self.sessions.iter().map(Summary::to_json).collect::<Vec<_>>(),
+            "codex_home": cap_path(&self.codex_home),
+            "databases": self.databases.iter().take(MAX_DATABASES).map(|d| cap_path(d)).collect::<Vec<_>>(),
             "total": self.total,
             "offset": self.offset,
             "limit": self.limit,
-            "has_more": self.has_more,
+            "has_more": self.has_more || cut,
             "active": active,
-            "archived": self.sessions.len() - active,
-            "warnings": self.warnings,
+            "archived": sessions.len() - active,
+            "sessions": sessions,
+            "warnings": warnings,
         })
     }
 }
 
-/// Opens a database read-only. A WAL database whose shared-memory file is missing (no Codex
-/// process has it open) is opened as immutable, so that reading it creates no `-wal` or `-shm`
-/// file beside it.
-fn open_read_only(path: &Path) -> Result<Connection, String> {
+/// An open database, and the private copy it reads (removed once it is closed).
+pub struct Db {
+    connection: Connection,
+    _copy: Option<Copy>,
+}
+
+impl std::ops::Deref for Db {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        &self.connection
+    }
+}
+
+/// A private copy's folder, removed when dropped.
+struct Copy(PathBuf);
+
+impl Drop for Copy {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Opens a database read-only, creating nothing beside it. A WAL database whose shared-memory
+/// file is missing (no Codex process has it open) cannot be opened in place without SQLite making
+/// that file: with no `-wal`, or an empty one, it is opened as immutable; with a `-wal` that holds
+/// committed changes not yet copied into it, the database and its `-wal` are copied into a private
+/// folder (`copy_root`) and the copy is read, then removed.
+fn open_read_only(path: &Path) -> Result<Db, String> {
+    let shm = sidecar(path, "-shm");
+    let wal = sidecar(path, "-wal");
+    if !is_wal(path) || shm.exists() {
+        return Ok(Db {
+            connection: connect(path, false, path)?,
+            _copy: None,
+        });
+    }
+    if fs::metadata(&wal).map_or(0, |m| m.len()) == 0 {
+        return Ok(Db {
+            connection: connect(path, true, path)?,
+            _copy: None,
+        });
+    }
+    let copy = private_copy(path, &wal).map_err(|e| {
+        format!(
+            "Failed to copy database {} to read its changes still in its -wal file: {e}",
+            path.display()
+        )
+    })?;
+    Ok(Db {
+        connection: connect(&copy.0.join("db"), false, path)?,
+        _copy: Some(copy),
+    })
+}
+
+/// Where private copies go: `tmp` in the tool's data folder, else the system's temporary folder.
+fn copy_root() -> (PathBuf, bool) {
+    match std::env::var_os("PLUXY_TOOL_DATA_DIR").filter(|d| !d.is_empty()) {
+        Some(d) => (PathBuf::from(d).join("tmp"), true),
+        None => (std::env::temp_dir(), false),
+    }
+}
+
+/// Copies db and its -wal into a new folder of this user's that no one else may use.
+fn private_copy(db: &Path, wal: &Path) -> std::io::Result<Copy> {
+    use std::os::unix::fs::DirBuilderExt;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
+    let (root, own) = copy_root();
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&root)?;
+    if own {
+        // Copies a run cut short left behind; calls run one at a time, so none is in use.
+        for e in fs::read_dir(&root)?.flatten() {
+            if e.file_name().to_string_lossy().starts_with("wal-") {
+                let _ = fs::remove_dir_all(e.path());
+            }
+        }
+    }
+    let dir = root.join(format!(
+        "wal-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::SeqCst)
+    ));
+    fs::DirBuilder::new().mode(0o700).create(&dir)?;
+    let copy = Copy(dir);
+    fs::copy(db, copy.0.join("db"))?;
+    fs::copy(wal, copy.0.join("db-wal"))?;
+    Ok(copy)
+}
+
+/// A read-only connection to path (immutable when asked); errors name shown.
+fn connect(path: &Path, immutable: bool, shown: &Path) -> Result<Connection, String> {
     let mut uri = String::from("file:");
     for b in path.as_os_str().as_encoded_bytes() {
         match b {
@@ -91,7 +240,7 @@ fn open_read_only(path: &Path) -> Result<Connection, String> {
         }
     }
     uri.push_str("?mode=ro");
-    if is_wal(path) && !sidecar(path, "-shm").exists() {
+    if immutable {
         uri.push_str("&immutable=1");
     }
     let connection = Connection::open_with_flags(
@@ -100,11 +249,16 @@ fn open_read_only(path: &Path) -> Result<Connection, String> {
             | OpenFlags::SQLITE_OPEN_NO_MUTEX
             | OpenFlags::SQLITE_OPEN_URI,
     )
-    .map_err(|e| format!("Failed to open database {}: {e}", path.display()))?;
+    .map_err(|e| format!("Failed to open database {}: {e}", shown.display()))?;
     connection
         .busy_timeout(SQLITE_BUSY_TIMEOUT)
-        .map_err(|e| format!("Failed to set database timeout {}: {e}", path.display()))?;
+        .map_err(|e| format!("Failed to set database timeout {}: {e}", shown.display()))?;
     Ok(connection)
+}
+
+/// Whether path is a regular file, not through a link.
+fn is_regular(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|m| m.is_file())
 }
 
 fn sidecar(path: &Path, suffix: &str) -> PathBuf {
@@ -137,13 +291,14 @@ pub fn discover_databases(codex_home: &Path) -> (Vec<PathBuf>, Vec<String>) {
     if let Ok(entries) = fs::read_dir(codex_home.join("sqlite")) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_file() && sqlite_candidate(&path) {
+            // Links are skipped, as for rollouts.
+            if entry.file_type().is_ok_and(|t| t.is_file()) && sqlite_candidate(&path) {
                 candidates.push(path);
             }
         }
     }
     let legacy = codex_home.join("state_5.sqlite");
-    if legacy.is_file() && !candidates.contains(&legacy) {
+    if is_regular(&legacy) && !candidates.contains(&legacy) {
         candidates.push(legacy.clone());
     }
     candidates.sort_by_key(|path| {
@@ -375,11 +530,19 @@ fn rollout_sessions(codex_home: &Path, known: &HashSet<String>) -> (Vec<Summary>
 /// `session_index.jsonl`: each ID's thread name and update time.
 fn index_metadata(codex_home: &Path) -> Result<HashMap<String, (String, Option<i64>)>, String> {
     let path = codex_home.join("session_index.jsonl");
-    if !path.is_file() {
+    // A link is skipped, as for rollouts and databases.
+    if !is_regular(&path) {
         return Ok(HashMap::new());
     }
-    let content =
-        fs::read(&path).map_err(|e| format!("Failed to read session_index.jsonl: {e}"))?;
+    let mut content = Vec::new();
+    fs::File::open(&path)
+        .and_then(|f| f.take(MAX_LINE as u64 + 1).read_to_end(&mut content))
+        .map_err(|e| format!("Failed to read session_index.jsonl: {e}"))?;
+    if content.len() > MAX_LINE {
+        return Err(
+            "session_index.jsonl is larger than 16 MiB: its titles and times are not used".into(),
+        );
+    }
     let content = String::from_utf8_lossy(&content);
     let mut metadata = HashMap::new();
     for line in content.lines() {
@@ -1030,10 +1193,10 @@ pub fn detail(
                     let m = Message {
                         line: index,
                         call_id: (role == "tool")
-                            .then(|| payload["call_id"].as_str().map(str::to_string))
+                            .then(|| payload["call_id"].as_str().map(|c| cap(c, MAX_SHORT)))
                             .flatten(),
-                        timestamp: record["timestamp"].as_str().map(str::to_string),
-                        role,
+                        timestamp: record["timestamp"].as_str().map(|t| cap(t, MAX_SHORT)),
+                        role: cap(&role, MAX_SHORT),
                         content,
                         truncated,
                     };
@@ -1056,17 +1219,18 @@ pub fn detail(
     if model.is_none() {
         model = rollout_model;
     }
-    let next = offset + messages.len();
-    Ok(json!({
+    // The metadata, capped, counts toward the page's budget too: messages from the end of the
+    // page are left for the next one until the whole reply fits.
+    let mut reply = json!({
         "id": id,
-        "title": title,
-        "cwd": cwd,
-        "provider": provider,
-        "model": model,
+        "title": cap(&title, MAX_TEXT),
+        "cwd": cap(&cwd, MAX_TEXT),
+        "provider": cap(&provider, MAX_TEXT),
+        "model": model.map(|m| cap(&m, MAX_TEXT)),
         "archived": archived,
         "updated_ms": updated_ms,
-        "rollout": rollout,
-        "database": database,
+        "rollout": rollout.as_deref().map(cap_path),
+        "database": database.map(|d| cap(&d, MAX_TEXT)),
         "stats": {
             "lines": counts.lines,
             "messages": counts.user + counts.assistant + counts.reasoning,
@@ -1076,11 +1240,21 @@ pub fn detail(
             "reasoning": counts.reasoning,
             "size": counts.size,
         },
-        "messages": messages.iter().map(Message::to_json).collect::<Vec<_>>(),
+        "messages": [],
         "offset": offset,
         "total": total,
-        "next_offset": (next < total && !messages.is_empty()).then_some(next),
-    }))
+        "next_offset": null,
+    });
+    let mut size = reply.to_string().len() + used;
+    while messages.len() > 1 && size > MAX_DETAIL {
+        if let Some(m) = messages.pop() {
+            size -= m.to_json().to_string().len();
+        }
+    }
+    let next = offset + messages.len();
+    reply["messages"] = messages.iter().map(Message::to_json).collect();
+    reply["next_offset"] = json!((next < total && !messages.is_empty()).then_some(next));
+    Ok(reply)
 }
 
 /// Why detail failed.
