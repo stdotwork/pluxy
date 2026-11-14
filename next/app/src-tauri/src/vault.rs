@@ -681,8 +681,25 @@ impl Vault {
 
     /// Whether text holds a secret's value or a reference the host gave.
     pub fn carries(&self, text: &str) -> bool {
-        let st = self.lock();
-        Vault::needles(&st, text).iter().any(|n| text.contains(n))
+        Vault::carries_in(&self.lock(), text)
+    }
+
+    fn carries_in(st: &State, text: &str) -> bool {
+        Vault::needles(st, text).iter().any(|n| text.contains(n))
+    }
+
+    /// Whether any key, string or number at any depth of v holds a secret's value or a reference,
+    /// each looked at as it is, as a call's input is checked.
+    fn holds_secret(st: &State, v: &Value) -> bool {
+        match v {
+            Value::String(s) => Vault::carries_in(st, s),
+            Value::Number(n) => Vault::carries_in(st, &n.to_string()),
+            Value::Array(a) => a.iter().any(|x| Vault::holds_secret(st, x)),
+            Value::Object(o) => o
+                .iter()
+                .any(|(k, x)| Vault::carries_in(st, k) || Vault::holds_secret(st, x)),
+            Value::Null | Value::Bool(_) => false,
+        }
     }
 
     /// Text with every secret's value and every reference replaced by `REDACTED`. Every place
@@ -830,7 +847,10 @@ impl Vault {
             return Err(unavailable(why.clone()));
         }
         // One vault operation at a time: each reads and writes the package's records whole.
-        let _st = self.lock();
+        let st = self.lock();
+        // Text a tool keeps in the vault never holds a secret or a reference: a later release,
+        // never given it, would be told of the text in describe.
+        let holds_secret = |v: &Value| Vault::holds_secret(&st, v);
         let (dir, mut f) = self.load(&tool.id).map_err(unavailable)?;
         let kind = req["op"].as_str().unwrap_or_default();
         if describing.is_some()
@@ -858,6 +878,9 @@ impl Vault {
                     return Err(bad(&format!(
                         "a backup's label is at most {MAX_LABEL} printable characters"
                     )));
+                }
+                if holds_secret(&req["label"]) {
+                    return Err(bad("a backup's label must not hold a secret or reference"));
                 }
                 let data = base64::engine::general_purpose::STANDARD
                     .decode(req["data"].as_str().unwrap_or_default())
@@ -927,6 +950,9 @@ impl Vault {
                     return Err(bad(&format!(
                         "intent is a JSON object of at most {MAX_INTENT} bytes"
                     )));
+                }
+                if holds_secret(&req["intent"]) {
+                    return Err(bad("intent must not hold a secret or reference"));
                 }
                 if f.journals.iter().any(|j| j.outcome.is_none()) {
                     return Err(refused(
