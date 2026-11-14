@@ -73,7 +73,7 @@ journal store of its own. Linux.
 | `preview(set, selections)` | Resolves and pins each selection: `{"set", "targets": [<pin>], "applied", "edited"}`. A pin names the selected path, its link's text, the file it resolves to, the identities (device and inode) of the link, the root, the file's folder and the file, and the file's SHA-256. A link inside a selected root, a part that leaves it (`..`, `.`, empty) and anything but a regular file are refused. A read: it asks nothing, and it reports a file's existence and SHA-256 for any path, so a writer must not export it to other packages. |
 | `apply(set, pins, image, merge, written)` | Writes each pinned target with what `image` makes of its bytes now, and records `set` as applied: its original images (with the person's edits since the last apply promoted into them by `merge`) and its applied images, as vault backups. A record none of whose selections still resolves to its target (a link pointed elsewhere) is replaced, its originals kept for restore. |
 | `clear(set, pins, merge, written)` | Each target becomes what `merge` makes of its original, its applied image and its bytes now: the writer's untouched values go, the person's edits stay. A pin of the recorded target file itself (named directly) reaches a record made through a link that now points elsewhere. |
-| `restore(set, pins, written)` | Puts the original bytes back with the original's mode (removing a file that did not exist). With no record for these targets, it puts back the originals kept for them: after a conflict, or after a new apply replaced a retargeted record. |
+| `restore(set, pins, written)` | Puts the original bytes back (removing a file that did not exist), keeping the mode the file has; a file that is gone comes back with the original's mode. With no record for these targets, it puts back the originals kept for them: after a conflict, or after a new apply replaced a retargeted record. |
 | `reconcile(journals)` | For `Handler::reconcile`: each open journal the host names, reconciled from what is on disk (below). |
 | `status()` | The applied sets, the originals kept for restore and the latest recovery reports. |
 | `Merge`, `Json`, `merge_value` | The three-way merge, and the one for JSON files (written with two-space indentation, keys in the file's order and numbers with their exact digits, through serde_json's `preserve_order` and `arbitrary_precision`; other formatting and comments are not kept, so a format that must keep them brings its own `Merge`). |
@@ -99,8 +99,11 @@ How a write goes:
 - Each file is written through a handle on its folder (cap-std), never by its path again: a new
   file beside it, written 0600, checked once more, given the old file's permission bits (setuid,
   setgid and sticky left out; 0600, or the original's, for a file that did not exist) and renamed
-  over it, the folder flushed, and the file checked to be the one written. The whole operation is
-  checked again at its end. At most 8 files of at most 256 KiB each.
+  over it, the folder flushed, and the file checked to be the one written. An apply writes a
+  writer's values, a key among them, so the file it writes is owner-only: the group's and others'
+  bits are taken away (an existing 0644 file becomes 0600); clear, restore and recovery keep the
+  mode the file has. The whole operation is checked again at its end. At most 8 files of at most
+  256 KiB each.
 - The written file is a new file: hard links to the old one keep the old bytes, and its owner,
   ACLs, extended attributes and security label are not copied.
 - Before the first write, the old bytes go into vault backups and the operation into a vault
@@ -270,7 +273,7 @@ nothing.
 
 | Operation | Effect | Input | Output |
 | --- | --- | --- | --- |
-| `preview` | `read` | `targets`: one selection (`file`, or `root` and `path`), by default `~/.claude/settings.json` in the app's `HOME`; `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `settings`: `state` (`not-configured`, `configured`, `needs-update`), `base_url`, `key_set`, each role's model and 1M switch, `startup_model`, `subagent_model`, `max_context_tokens`, `auto_compact_pct`, `disable_auto_compact`; never the key |
+| `preview` | `read` | `targets`: one selection (`file`, or `root` and `path`), by default `~/.claude/settings.json` in the app's `HOME` (refused, with no folder made, while `~/.claude` does not exist: Claude Code makes it when it first runs); `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `settings`: `state` (`not-configured`, `configured`, `needs-update`, or `refused` with a `reason` for a file Claude Code would not take), `base_url`, `key_set`, each role's model and 1M switch, `startup_model`, `subagent_model`, `max_context_tokens`, `auto_compact_pct`, `disable_auto_compact`; never the key |
 | `apply` | `write`; secret `key` (value) | One pin, `base_url`, `key`, `opus`, `sonnet`, `haiku`, `fable` (empty: follows Sonnet) with `<role>_1m`, `startup_model`, `subagent_model` (empty: removed), `max_context_tokens` (100000 to 1000000), `auto_compact_pct` (1 to 100), `disable_auto_compact` | The library's outcome |
 | `clear` | `write` | One pin | The library's outcome: the values Apply wrote go, edits made since stay |
 | `restore` | `write` | One pin | The library's outcome: the original bytes back (Restore Backup) |
@@ -299,11 +302,14 @@ digits), with Claude Code's own names
   empty), `autoCompactWindow` and `autoCompactEnabled`.
 
 Clear's three-way merge brings back what Apply removed or replaced, unless the person changed it
-since. `CLAUDE_CODE_EFFORT_LEVEL` and per-model `modelSettings` are left alone. Every operation but
-`restore` refuses, before writing, a file Claude Code would not take as its own settings: not strict
-JSON (a comment, a trailing comma), not an object, an `env` that is not an object of strings, or a
-`$schema` other than `https://json.schemastore.org/claude-code-settings.json`. A missing or empty
-file is an empty one. Restore Backup puts the original back whatever the file holds now.
+since. `CLAUDE_CODE_EFFORT_LEVEL` and per-model `modelSettings` are left alone. `apply` and `clear`
+refuse, before writing, a file Claude Code would not take as its own settings: not strict JSON (a
+comment, a trailing comma), not an object, an `env` that is not an object of strings, or a
+`$schema` other than `https://json.schemastore.org/claude-code-settings.json`. `preview` pins such
+a file all the same and reports it as `refused`, so Restore Backup can be reached: it puts the
+original back whatever the file holds now. A missing or empty file is an empty one. `preview`
+reads the file twice (the pins, then the values); when another program wrote it in between, it
+reads again once, then refuses, so the values shown are always those of the file pinned.
 
 ## `opencode`
 
