@@ -99,25 +99,57 @@ pub fn edit(bytes: Option<&[u8]>, current: &Value, want: &Value) -> Result<Vec<u
     let file = YamlFile::from_str(text)
         .map_err(|e| Error::invalid_request(format!("the file cannot be edited: {e}")))?;
     let doc = file.ensure_document();
-    match doc.as_mapping() {
-        Some(root) => sync(&root, cur, want_map)?,
-        // An empty document: each top-level key is set on it.
+    let out = match doc.as_mapping() {
+        Some(root) => {
+            sync(&root, cur, want_map)?;
+            finished(file.to_string())
+        }
+        // No mapping yet: an empty document (or only comments) takes each key; a document that
+        // is only `null` (or `~`) has its value replaced by a new mapping, its comments kept.
         None => {
             for (k, v) in want_map {
                 set_doc(&doc, k, v)?;
             }
+            let out = finished(file.to_string());
+            if parse(Some(out.as_bytes())).ok().as_ref() == Some(want) {
+                out
+            } else {
+                fresh(text, want_map)?
+            }
         }
-    }
-    let mut out = file.to_string();
-    if !out.is_empty() && !out.ends_with('\n') {
-        out.push('\n');
-    }
+    };
     if &parse(Some(out.as_bytes()))? != want {
         return Err(Error::invalid_request(
             "the file cannot be changed here without changing other settings in it; nothing was written",
         ));
     }
     Ok(out.into_bytes())
+}
+
+/// text ending with one newline (an empty text stays empty).
+fn finished(mut text: String) -> String {
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text
+}
+
+/// A new file holding want, after the full-line comments of text (whose document held no
+/// mapping).
+fn fresh(text: &str, want: &Map<String, Value>) -> Result<String, Error> {
+    let file = YamlFile::from_str("")
+        .map_err(|e| Error::internal(format!("cannot start a YAML file: {e}")))?;
+    let doc = file.ensure_document();
+    for (k, v) in want {
+        set_doc(&doc, k, v)?;
+    }
+    let mut out: String = text
+        .lines()
+        .filter(|l| l.trim_start().starts_with('#'))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    out.push_str(&finished(file.to_string()));
+    Ok(out)
 }
 
 /// Edits mapping m (holding cur) to hold want.

@@ -868,12 +868,15 @@ whether pluxy's integration is applied, the file it writes to, the provider's ad
 key is in the file, the selected provider and the default model, never the key, and warns when the
 old desktop app's `cpa-gui` provider is still there. **Default model** is the model Hermes Agent
 starts with through this core (the core's served models are suggested; **Refresh models** reloads
-them). The **Authentication Key** is one of the vault's secrets, or a new one through native key
-entry (**Add key…**).
+them). The **Authentication Key** is one of the vault's secrets (a captured client key only when it
+is this tool's), or a new one through native key entry (**Add key…**).
 
-**Connect in One Click** (or **Update Configuration** / **Repair Connection** once applied),
-**Clear integration** and **Restore Backup** each preview the file again and call the tool, whose
-native confirmation names the file it resolves to, the key's label for Apply, and that an edit made
+A file Hermes would not take shows as refused, with the reason: **Apply** and **Clear integration**
+stay off, and **Restore Backup** and the backups stay available. Choosing another file or folder
+drops the last preview. **Connect in One Click** (or **Update Configuration** / **Repair
+Connection** once applied), **Clear integration** and **Restore Backup** call the tool with the file
+the last preview pinned (the tool refuses it if the file changed since), and its native
+confirmation names the file it resolves to, the key's label for Apply, and that an edit made
 in the same instant by another program may be lost; comments and everything else in the file stay,
 including the person's own settings under the pluxy provider. **Backup and restore** is the shared
 backup browser. **Start CLI** asks the tool for its recipe (`hermes` in a terminal, no arguments,

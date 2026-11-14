@@ -81,11 +81,11 @@ fn apply_adds_pluxys_provider_and_selects_it_keeping_comments_order_and_the_rest
 
 #[test]
 fn apply_takes_out_what_would_win_over_pluxys_values_and_keeps_the_persons_own_keys() {
-    let before = "providers:\n  pluxy:\n    base_url: http://old/v1\n    api_mode: codex_responses\n    key_cmd: pass show x\n    enabled: false\n    models:\n      my-model:\n        context_length: 32768\nmodel:\n  provider: custom\n  base_url: http://old/v1\n  api_key: old\n  api_key_env: OLD\n";
+    let before = "providers:\n  pluxy:\n    base_url: http://old/v1\n    url: http://older/v1\n    model: old-model\n    baseUrl: http://camel/v1\n    apiKey: camel\n    apiMode: codex_responses\n    keyEnv: CAMEL\n    apiKeyEnv: CAMEL\n    defaultModel: camel-model\n    api_mode: codex_responses\n    key_cmd: pass show x\n    enabled: false\n    models:\n      my-model:\n        context_length: 32768\nmodel:\n  provider: custom\n  base_url: http://old/v1\n  api_key: old\n  api_key_env: OLD\n";
     let out = text(apply(Some(before.as_bytes()), &s("m")).unwrap());
     assert_eq!(
         out,
-        "providers:\n  pluxy:\n    base_url: http://old/v1\n    models:\n      my-model:\n        context_length: 32768\n    api: http://127.0.0.1:41999/v1\n    api_key: k-1\n    transport: chat_completions\n    default_model: m\nmodel:\n  provider: custom:pluxy\n  default: m\n  api_mode: chat_completions\n"
+        "providers:\n  pluxy:\n    models:\n      my-model:\n        context_length: 32768\n    api: http://127.0.0.1:41999/v1\n    api_key: k-1\n    transport: chat_completions\n    default_model: m\nmodel:\n  provider: custom:pluxy\n  default: m\n  api_mode: chat_completions\n"
     );
 }
 
@@ -197,6 +197,28 @@ fn read_back_says_what_the_file_holds_never_the_key() {
         read_back(Some(cmd.as_bytes()), None).unwrap()["state"],
         "needs-update"
     );
+    // An address, model or camelCase key that Hermes reads before (or for) pluxy's: an update.
+    for extra in [
+        "base_url: http://x/v1",
+        "url: http://x/v1",
+        "model: other",
+        "baseUrl: http://x/v1",
+        "apiKey: other",
+        "apiMode: codex_responses",
+        "keyEnv: K",
+        "apiKeyEnv: K",
+        "defaultModel: other",
+    ] {
+        let over = APPLIED.replace(
+            "    api_key: k-1\n",
+            &format!("    api_key: k-1\n    {extra}\n"),
+        );
+        assert_eq!(
+            read_back(Some(over.as_bytes()), None).unwrap()["state"],
+            "needs-update",
+            "{extra}"
+        );
+    }
     // Hermes's other spelling for the key is pluxy's too.
     let bare = APPLIED.replace("provider: custom:pluxy", "provider: Pluxy");
     assert_eq!(
@@ -319,4 +341,75 @@ fn apply_after_clear_keeps_the_persons_edits() {
             "  pluxy:\n    models:\n      gpt-6.1-sol:\n        context_length: 400000\n    api:"
         )
     );
+}
+
+#[test]
+fn the_yaml_1_1_check_refuses_only_what_yaml_1_1_reads_as_something_else() {
+    // Text in YAML 1.1: hex keys, UUIDs, model IDs with digits.
+    for text in [
+        "0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+        "deadbeef0123",
+        "123e4567-e89b-12d3-a456-426614174000",
+        "4o",
+        "0o",
+        "1.5-pro",
+        "2026-11-14-preview",
+        "yEs",
+        "12e",
+        "0x",
+        "-",
+        ".5x",
+    ] {
+        assert!(!yaml11_not_text(text), "{text:?} is text");
+    }
+    // Not text in YAML 1.1.
+    for other in [
+        "",
+        "y",
+        "N",
+        "Yes",
+        "OFF",
+        "~",
+        "Null",
+        "=",
+        "0",
+        "-12",
+        "+7",
+        "1_000",
+        "0b101",
+        "0x1F",
+        "0o17",
+        "017",
+        "1:30",
+        "190:20:30",
+        "1.5",
+        "-1.",
+        "1e5",
+        "6.8523015e+5",
+        ".5",
+        ".5e+3",
+        "1:30.5",
+        ".inf",
+        "-.Inf",
+        ".NaN",
+        "2026-11-14",
+        "2001-12-14t21:59:43.10-05:00",
+        "2001-12-14T21:59:43Z",
+        "2001-1-4T1:59:43",
+    ] {
+        assert!(yaml11_not_text(other), "{other:?} is not text");
+    }
+}
+
+#[test]
+fn apply_replaces_a_document_that_is_only_null_with_a_mapping() {
+    for doc in ["~\n", "null\n", "# my settings\n---\n~\n"] {
+        let out = text(apply(Some(doc.as_bytes()), &s("m")).unwrap());
+        let v = crate::yaml::parse(Some(out.as_bytes())).unwrap();
+        assert_eq!(v["model"]["provider"], "custom:pluxy", "{doc:?}: {out}");
+        assert_eq!(v["providers"]["pluxy"]["api_key"], "k-1", "{doc:?}: {out}");
+    }
+    // A null pluxy entry is an absent one.
+    let out = text(apply(Some(b"providers:\n  pluxy: ~\n"), &s("m")).unwrap());
+    assert!(out.contains("    api_key: k-1\n"), "{out}");
 }

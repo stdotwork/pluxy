@@ -22,6 +22,7 @@ import {
   useLoad,
 } from "../../ui/kit/ui";
 import { Backups, reply } from "./backups";
+import { CLIENT, keysOf, modelOf, PACKAGE, type ReadBack, type Secret, validModel } from "./hermesForm";
 import { connectionGet } from "./host";
 
 const t = strings("hermes", {
@@ -60,7 +61,10 @@ const t = strings("hermes", {
   modelHint: "The default model Hermes Agent starts with, through this core.",
   modelLabel: "Default model",
   refresh: "Refresh models",
-  invalidModel: "Enter one model ID, without spaces or commas.",
+  invalidModel: "Enter one model ID, without spaces or ${.",
+  refused: "Hermes Agent would not take this file",
+  refusedHint:
+    "Apply and Clear integration leave it alone until it is fixed; Restore Backup puts back the file as it was before the first apply.",
   key: "Authentication Key",
   keyHint: "The client API key Hermes Agent uses to connect to this core, kept by native key entry.",
   addKey: "Add key…",
@@ -83,29 +87,15 @@ const t = strings("hermes", {
   launch: "Start Hermes Agent",
 });
 
-const PACKAGE = "pluxy/hermes-setup";
-
 const tool = <T,>(op: string, input: Record<string, unknown>) =>
   reply<T>("program_call", { package: PACKAGE, op, input });
 
-interface HermesConfig {
-  state: "configured" | "not-configured" | "needs-update";
-  base_url: string | null;
-  key_set: boolean;
-  provider: string | null;
-  model: string | null;
-  legacy: boolean;
-  [k: string]: unknown;
-}
-
 interface Preview {
-  targets: { selected: string; target: string; link: string | null }[];
+  /** The pinned file: passed as it is to apply, clear and restore. */
+  targets: { selected: string; target: string; link: string | null; [k: string]: unknown }[];
   applied: boolean;
-  config: HermesConfig;
+  config: ReadBack;
 }
-
-/** A model ID the provider can take: one word, not starting with @ or *. */
-const validModel = (m: string) => m.length > 0 && !/[\s,]/.test(m) && !/^[@*]/.test(m);
 
 function Text(props: {
   label: string;
@@ -141,7 +131,7 @@ function StartCli(props: { available: boolean }) {
     reply<{ terminals: { id: string; label: string }[] }>("launcher_terminals"),
   );
   const action = useAction(state.reload);
-  const recent = state.data?.history[t("title")] ?? [];
+  const recent = state.data?.history[CLIENT] ?? [];
   const start = () =>
     action.run(async () => {
       const recipe = await tool<Record<string, unknown>>("recipe", {});
@@ -194,7 +184,8 @@ export function HermesPage() {
   const [served, setServed] = useState<string[]>([]);
   const [secret, setSecret] = useState("");
   const [core, setCore] = useState<string>();
-  const secrets = useLoad(() => reply<{ id: string; label: string }[]>("vault_secrets"));
+  const secrets = useLoad(() => reply<{ secrets: Secret[] }>("vault_secrets"));
+  const keys = keysOf(secrets.data);
   const listId = useId();
   useEffect(() => {
     connectionGet().then(
@@ -214,16 +205,19 @@ export function HermesPage() {
       const r = await tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) });
       if (r.body) {
         setPreview(r.body);
-        setModel(r.body.config.model ?? "");
+        setModel(modelOf(r.body.config));
       }
       return r;
     });
   const write = useAction(load);
-  // A write acts on the file the last preview pinned; a new preview first, so the pin is fresh.
-  const pins = async () => {
-    const r = await tool<Preview>("preview", selection());
-    return r.body?.targets;
-  };
+  // A write acts on the file the last preview pinned (the tool refuses it if the file changed
+  // since); choosing another file drops that preview, so a write never pins a file unread.
+  const reselect =
+    <T,>(f: (v: T) => void) =>
+    (v: T) => {
+      f(v);
+      setPreview(undefined);
+    };
   const fetchModels = useAction(() => {});
   const refresh = () =>
     fetchModels.run(async () => {
@@ -232,27 +226,13 @@ export function HermesPage() {
       return r;
     });
   const apply = () =>
-    write.run(async () => {
-      const targets = await pins();
-      if (!targets)
-        return {
-          status: 400,
-          error: { code: "refused", message: "the configuration file could not be read" },
-        };
-      return tool("apply", { targets, base_url: core, key: secret, model: model.trim() });
-    });
-  const undo = (op: "clear" | "restore") =>
-    write.run(async () => {
-      const targets = await pins();
-      if (!targets)
-        return {
-          status: 400,
-          error: { code: "refused", message: "the configuration file could not be read" },
-        };
-      return tool(op, { targets });
-    });
+    write.run(() =>
+      tool("apply", { targets: preview?.targets, base_url: core, key: secret, model: model.trim() }),
+    );
+  const undo = (op: "clear" | "restore") => write.run(() => tool(op, { targets: preview?.targets }));
   const addKey = useAction(secrets.reload);
   const cfg = preview?.config;
+  const refused = cfg?.state === "refused";
   const applyLabel = !preview?.applied
     ? t("connect")
     : cfg?.state === "configured"
@@ -276,13 +256,18 @@ export function HermesPage() {
             { value: "folder", label: t("fileFolder") },
             { value: "file", label: t("fileSelected") },
           ]}
-          onChange={setWhere}
+          onChange={reselect(setWhere)}
         />
         {where === "folder" && (
-          <Text label={t("folder")} hint={t("folderHint")} value={folder} onInput={setFolder} />
+          <Text label={t("folder")} hint={t("folderHint")} value={folder} onInput={reselect(setFolder)} />
         )}
         {where === "file" && (
-          <Text label={t("configFile")} hint={t("filesHint")} value={configFile} onInput={setConfigFile} />
+          <Text
+            label={t("configFile")}
+            hint={t("filesHint")}
+            value={configFile}
+            onInput={reselect(setConfigFile)}
+          />
         )}
         {read.error && <Notice tone="danger">{read.error}</Notice>}
         <Button onClick={load} disabled={busy}>
@@ -293,24 +278,35 @@ export function HermesPage() {
             rows={[
               [
                 t("status"),
-                preview.applied
-                  ? t("applied")
-                  : cfg.state === "configured"
-                    ? t("configured")
-                    : cfg.state === "needs-update"
-                      ? t("needsUpdate")
-                      : t("notConfigured"),
+                refused
+                  ? t("refused")
+                  : preview.applied
+                    ? t("applied")
+                    : cfg.state === "configured"
+                      ? t("configured")
+                      : cfg.state === "needs-update"
+                        ? t("needsUpdate")
+                        : t("notConfigured"),
               ],
               [t("configFile"), preview.targets[0]?.target ?? ""],
-              [t("address"), cfg.base_url ?? t("none")],
-              [t("keySet"), cfg.key_set ? t("yes") : t("no")],
-              [t("provider"), cfg.provider ?? t("none")],
+              ...(refused
+                ? []
+                : ([
+                    [t("address"), cfg.base_url ?? t("none")],
+                    [t("keySet"), cfg.key_set ? t("yes") : t("no")],
+                    [t("provider"), cfg.provider ?? t("none")],
+                  ] as [string, string][])),
             ]}
           />
         )}
+        {refused && (
+          <Notice tone="warn">
+            {cfg?.reason} {t("refusedHint")}
+          </Notice>
+        )}
         {cfg?.legacy && <Notice tone="warn">{t("legacy")}</Notice>}
       </Card>
-      {preview && (
+      {preview && !refused && (
         <>
           <Card title={t("model")}>
             <p class="muted">{t("modelHint")}</p>
@@ -328,11 +324,12 @@ export function HermesPage() {
           </Card>
           <Card title={t("key")}>
             <p class="muted">{t("keyHint")}</p>
-            {secrets.data && secrets.data.length > 0 ? (
+            {secrets.error && <Notice tone="danger">{secrets.error}</Notice>}
+            {keys.length > 0 ? (
               <Choices
                 label={t("key")}
                 value={secret || undefined}
-                choices={secrets.data.map((s) => ({ value: s.id, label: s.label }))}
+                choices={keys.map((s) => ({ value: s.id, label: s.label }))}
                 onChange={setSecret}
               />
             ) : (
@@ -352,26 +349,30 @@ export function HermesPage() {
               {t("addKey")}
             </Button>
           </Card>
-          <Card>
-            {write.error && <Notice tone="danger">{write.error}</Notice>}
-            <Button
-              variant="primary"
-              onClick={apply}
-              disabled={busy || !validModel(model.trim()) || !secret || !core}
-            >
-              {applyLabel}
-            </Button>
-            <ConfirmButton disabled={busy || !preview.applied} onConfirm={() => undo("clear")}>
-              {t("clear")}
-            </ConfirmButton>
-            <small class="hint">{t("clearHint")}</small>
-            <ConfirmButton disabled={busy} onConfirm={() => undo("restore")}>
-              {t("restore")}
-            </ConfirmButton>
-            <small class="hint">{t("restoreHint")}</small>
-          </Card>
-          <Backups pkg={PACKAGE} pins={pins} disabled={busy} onChange={load} />
         </>
+      )}
+      {preview && (
+        <Card>
+          {write.error && <Notice tone="danger">{write.error}</Notice>}
+          <Button
+            variant="primary"
+            onClick={apply}
+            disabled={busy || refused || !validModel(model.trim()) || !secret || !core}
+          >
+            {applyLabel}
+          </Button>
+          <ConfirmButton disabled={busy || refused || !preview.applied} onConfirm={() => undo("clear")}>
+            {t("clear")}
+          </ConfirmButton>
+          <small class="hint">{t("clearHint")}</small>
+          <ConfirmButton disabled={busy} onConfirm={() => undo("restore")}>
+            {t("restore")}
+          </ConfirmButton>
+          <small class="hint">{t("restoreHint")}</small>
+        </Card>
+      )}
+      {preview && (
+        <Backups pkg={PACKAGE} pins={async () => preview.targets} disabled={busy} onChange={load} />
       )}
       <StartCli available={!unavailable} />
     </div>

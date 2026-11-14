@@ -11,7 +11,7 @@ mod yaml;
 
 use hermes::{yaml11_not_text, Settings};
 use pluxy_program::{run, Call, Error, Handler};
-use pluxy_transactions::{backup_call, data_dir, Pin, Selection, Target, Transactions};
+use pluxy_transactions::{backup_call, data_dir, sha256_of, Pin, Selection, Target, Transactions};
 use serde_json::{json, Value};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -96,6 +96,32 @@ fn selection(input: &Value) -> Result<[Selection; 1], Error> {
     Ok([Selection::File(default_home()?.join(CONFIG))])
 }
 
+/// A preview and the file's bytes, read after it.
+type Read = (Value, Option<Vec<u8>>);
+
+/// Runs read again once when the bytes it read are not the ones it pinned (another program wrote
+/// the file between the two reads); refuses if they differ again, so the values shown are always
+/// those of the file pinned.
+fn pinned_read(mut read: impl FnMut() -> Result<Read, Error>) -> Result<Read, Error> {
+    for _ in 0..2 {
+        let (v, bytes) = read()?;
+        if v["targets"][0]["sha256"] == json!(sha256_of(bytes.as_deref())) {
+            return Ok((v, bytes));
+        }
+    }
+    Err(Error::unavailable(
+        "the configuration file changed while it was read: read it again",
+    ))
+}
+
+/// What a preview shows of the file. A file Hermes would not take is pinned all the same, so
+/// Restore Backup still reaches it: its `state` is `refused` and `reason` says why apply and clear
+/// refuse it.
+fn config_of(bytes: Option<&[u8]>, base_url: Option<&str>) -> Value {
+    hermes::read_back(bytes, base_url)
+        .unwrap_or_else(|e| json!({"state": "refused", "reason": e.message}))
+}
+
 /// A value pluxy writes as plain YAML text: refused when Hermes would read it as something else,
 /// expand it (`${`), or it holds whitespace or control characters.
 fn plain(s: &str) -> bool {
@@ -166,11 +192,13 @@ impl Handler for Hermes {
         match call.op.as_str() {
             "preview" => {
                 let sel = selection(input)?;
-                // A file Hermes would not take is refused before anything is pinned.
-                let (_, bytes) = Target::resolve(&sel[0])?.read_now()?;
-                let read = hermes::read_back(bytes.as_deref(), input["base_url"].as_str())?;
-                let mut v = Transactions::new(call, data_dir()?).preview(SET, &sel)?;
-                v["config"] = read;
+                let tx = Transactions::new(call, data_dir()?);
+                let (mut v, bytes) = pinned_read(|| {
+                    let v = tx.preview(SET, &sel)?;
+                    let (_, b) = Target::resolve(&sel[0])?.read_now()?;
+                    Ok((v, b))
+                })?;
+                v["config"] = config_of(bytes.as_deref(), input["base_url"].as_str());
                 Ok(v)
             }
             "apply" => {
@@ -191,12 +219,15 @@ impl Handler for Hermes {
                     &mut |_| {},
                 )
             }
-            "clear" => Transactions::new(call, data_dir()?).clear(
-                SET,
-                &one(input, Pin::from_json)?,
-                &Yamls,
-                &mut |_| {},
-            ),
+            "clear" => {
+                let pins = one(input, Pin::from_json)?;
+                // A file Hermes would not take is refused before anything is written; a file that
+                // no longer resolves as pinned is the library's to refuse.
+                if let Ok((_, b)) = Target::place(&pins[0]).and_then(|t| t.read_now()) {
+                    hermes::check(&yaml::parse(b.as_deref())?)?;
+                }
+                Transactions::new(call, data_dir()?).clear(SET, &pins, &Yamls, &mut |_| {})
+            }
             // Restore Backup puts the original back whatever the file holds now: the person's
             // way back always works.
             "restore" => Transactions::new(call, data_dir()?).restore(
@@ -220,6 +251,10 @@ impl Handler for Hermes {
 #[cfg(test)]
 #[path = "hermes_tests.rs"]
 mod hermes_tests;
+
+#[cfg(test)]
+#[path = "main_tests.rs"]
+mod main_tests;
 
 #[cfg(test)]
 #[path = "manifest_tests.rs"]

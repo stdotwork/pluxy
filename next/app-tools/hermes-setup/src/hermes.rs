@@ -3,8 +3,9 @@
 //! The file gets a keyed provider, `providers.pluxy`, in the form Hermes documents: the core's
 //! OpenAI-compatible address (`api`), the client key (`api_key`), the chat completions transport
 //! and the chosen model (`default_model`). Keys in that entry that would win over these at run time
-//! (`api_mode`, `key_env`, `api_key_env`, `key_cmd`, and `enabled` when it is not true) are taken
-//! out; the person's other keys there (`models`, `extra_headers`, ...) and every other provider
+//! (`api_mode`, `key_env`, `api_key_env`, `key_cmd`, the address as `base_url` or `url`, `model`,
+//! the camelCase spellings `baseUrl`, `apiKey`, `apiMode`, `keyEnv`, `apiKeyEnv`, `defaultModel`,
+//! and `enabled` when it is not true) are taken out; the person's other keys there (`models`, `extra_headers`, ...) and every other provider
 //! stay. The `model` section then selects it as `hermes model` does for a keyed provider:
 //! `provider: custom:pluxy`, `default: <model>`, `api_mode: chat_completions`, without the
 //! `base_url`, `api_key`, `key_env` and `api_key_env` of an earlier endpoint (`key_env` would win
@@ -23,8 +24,23 @@ pub const LEGACY_PROVIDER: &str = "cpa-gui";
 /// The transport the provider speaks.
 pub const TRANSPORT: &str = "chat_completions";
 
-/// Keys of `providers.pluxy` that Hermes reads before pluxy's own: removed by an apply.
-const OVERRIDES: [&str; 4] = ["api_mode", "key_env", "api_key_env", "key_cmd"];
+/// Keys of `providers.pluxy` that Hermes reads before pluxy's own, or in their place (its
+/// camelCase spellings, and the address and model under their other names): removed by an apply.
+const OVERRIDES: [&str; 13] = [
+    "api_mode",
+    "key_env",
+    "api_key_env",
+    "key_cmd",
+    "base_url",
+    "url",
+    "model",
+    "baseUrl",
+    "apiKey",
+    "apiMode",
+    "keyEnv",
+    "apiKeyEnv",
+    "defaultModel",
+];
 /// Keys of `model` that belong to an earlier endpoint: removed by an apply.
 const STALE: [&str; 4] = ["base_url", "api_key", "key_env", "api_key_env"];
 
@@ -46,26 +62,177 @@ pub fn base_url_of(core: &str) -> String {
     }
 }
 
-/// Whether a YAML 1.1 reader (Hermes reads config.yaml with ruamel's YAML 1.1 rules) could take
-/// the plain text s for something other than text: a boolean or null word in any case, or text
-/// starting with a digit, sign or dot made only of characters numbers, dates and times use.
+/// Whether a YAML 1.1 reader (Hermes reads config.yaml with ruamel's YAML 1.1 rules) takes the
+/// plain text s for something other than text: a boolean (`y`, `yes`, `on`, ... in YAML 1.1's
+/// spellings), a null, the value key `=`, an integer (decimal, `0b`, `0x`, octal, sexagesimal), a
+/// float (also `.inf` and `.nan`) or a timestamp. Anything else, such as a hex key or a UUID, is
+/// text.
 pub fn yaml11_not_text(s: &str) -> bool {
-    const WORDS: [&str; 11] = [
-        "y", "yes", "n", "no", "true", "false", "on", "off", "null", "~", "=",
+    const WORDS: [&str; 33] = [
+        "y", "Y", "yes", "Yes", "YES", "n", "N", "no", "No", "NO", "true", "True", "TRUE", "false",
+        "False", "FALSE", "on", "On", "ON", "off", "Off", "OFF", "~", "null", "Null", "NULL", "=",
+        ".nan", ".NaN", ".NAN", ".inf", ".Inf", ".INF",
     ];
-    if s.is_empty() || WORDS.iter().any(|w| s.eq_ignore_ascii_case(w)) {
+    if s.is_empty() || WORDS.contains(&s) {
         return true;
     }
-    s.starts_with(|c: char| c.is_ascii_digit() || matches!(c, '+' | '-' | '.'))
-        && s.chars().all(|c| {
-            c.is_ascii_hexdigit()
-                || matches!(
-                    c,
-                    '+' | '-' | '.' | '_' | ':' | 'x' | 'X' | 'o' | 'O' | 't' | 'T' | 'z' | 'Z'
-                )
-                || c.eq_ignore_ascii_case(&'i')
-                || c.eq_ignore_ascii_case(&'n')
-        })
+    let unsigned = s.strip_prefix(['-', '+']).unwrap_or(s);
+    matches!(unsigned, ".inf" | ".Inf" | ".INF")
+        || int11(unsigned)
+        || float11(s, unsigned)
+        || timestamp11(s)
+}
+
+/// `[0-9][0-9_]*` at the start of s: its length (0 when s does not start with a digit).
+fn digits(s: &str) -> usize {
+    match s.chars().next() {
+        Some(c) if c.is_ascii_digit() => s
+            .find(|c: char| !(c.is_ascii_digit() || c == '_'))
+            .unwrap_or(s.len()),
+        _ => 0,
+    }
+}
+
+/// `(:[0-5]?[0-9])+` at the start of s: its length (0 when there is none).
+fn sexagesimal(s: &str) -> usize {
+    let b = s.as_bytes();
+    let mut i = 0;
+    loop {
+        if b.get(i) != Some(&b':') {
+            return i;
+        }
+        let d = |j: usize| b.get(j).is_some_and(u8::is_ascii_digit);
+        let n = if d(i + 1) && d(i + 2) && b[i + 1] <= b'5' {
+            2
+        } else if d(i + 1) {
+            1
+        } else {
+            return i;
+        };
+        i += 1 + n;
+    }
+}
+
+/// YAML 1.1's integers, without their sign.
+fn int11(s: &str) -> bool {
+    let all = |r: &str, f: fn(char) -> bool| !r.is_empty() && r.chars().all(|c| f(c) || c == '_');
+    if let Some(r) = s.strip_prefix("0b") {
+        return all(r, |c| c == '0' || c == '1');
+    }
+    if let Some(r) = s.strip_prefix("0x") {
+        return all(r, |c| c.is_ascii_hexdigit());
+    }
+    if let Some(r) = s.strip_prefix('0') {
+        let octal = |r: &str| r.chars().all(|c| matches!(c, '0'..='7' | '_'));
+        return match r.strip_prefix('o') {
+            Some(o) => !o.is_empty() && octal(o),
+            None => octal(r),
+        };
+    }
+    if !s.starts_with(|c: char| matches!(c, '1'..='9')) {
+        return false;
+    }
+    let n = digits(s);
+    n == s.len() || (sexagesimal(&s[n..]) == s.len() - n)
+}
+
+/// YAML 1.1's floats (ruamel's spellings): s as written, and without its sign.
+fn float11(s: &str, unsigned: &str) -> bool {
+    // `.5`, `.5e+3`: no sign.
+    if let Some(r) = s.strip_prefix('.') {
+        let n = digits(r);
+        return n > 0 && (n == r.len() || exponent(&r[n..], true));
+    }
+    let n = digits(unsigned);
+    if n == 0 {
+        return false;
+    }
+    let r = &unsigned[n..];
+    if let Some(f) = r.strip_prefix('.') {
+        let m = f
+            .find(|c: char| !(c.is_ascii_digit() || c == '_'))
+            .unwrap_or(f.len());
+        return m == f.len() || exponent(&f[m..], false);
+    }
+    if exponent(r, false) {
+        return true;
+    }
+    // Sexagesimal with a fraction: `1:30.5`.
+    let m = sexagesimal(r);
+    m > 0
+        && r[m..]
+            .strip_prefix('.')
+            .is_some_and(|f| f.chars().all(|c| c.is_ascii_digit() || c == '_'))
+}
+
+/// `[eE][-+]?[0-9]+` is all of s (with a required sign when signed).
+fn exponent(s: &str, signed: bool) -> bool {
+    let Some(r) = s.strip_prefix(['e', 'E']) else {
+        return false;
+    };
+    let r = match r.strip_prefix(['-', '+']) {
+        Some(r) => r,
+        None if signed => return false,
+        None => r,
+    };
+    !r.is_empty() && r.chars().all(|c| c.is_ascii_digit())
+}
+
+/// YAML 1.1's timestamps: `2001-12-14`, or with a time (`T` or `t`, no spaces here as pluxy's
+/// values hold none), seconds' fraction and zone.
+fn timestamp11(s: &str) -> bool {
+    let b = s.as_bytes();
+    let d = |i: usize| b.get(i).is_some_and(u8::is_ascii_digit);
+    // `n` digits (1 or 2 when one_or_two) from i: the index after them.
+    let num = |i: usize, one_or_two: bool| -> Option<usize> {
+        if !d(i) {
+            return None;
+        }
+        if d(i + 1) {
+            Some(i + 2)
+        } else if one_or_two {
+            Some(i + 1)
+        } else {
+            None
+        }
+    };
+    if !(d(0) && d(1) && d(2) && d(3)) || b.get(4) != Some(&b'-') {
+        return false;
+    }
+    // The date alone takes exactly two-digit month and day.
+    if b.len() == 10 && d(5) && d(6) && b[7] == b'-' && d(8) && d(9) {
+        return true;
+    }
+    let step = || -> Option<()> {
+        let i = num(5, true)?;
+        (b.get(i) == Some(&b'-')).then_some(())?;
+        let i = num(i + 1, true)?;
+        matches!(b.get(i), Some(b'T' | b't')).then_some(())?;
+        let i = num(i + 1, true)?;
+        (b.get(i) == Some(&b':')).then_some(())?;
+        let i = num(i + 1, false)?;
+        (b.get(i) == Some(&b':')).then_some(())?;
+        let mut i = num(i + 1, false)?;
+        if b.get(i) == Some(&b'.') {
+            i += 1;
+            while d(i) {
+                i += 1;
+            }
+        }
+        match b.get(i) {
+            None => Some(()),
+            Some(b'Z') if i + 1 == b.len() => Some(()),
+            Some(b'-' | b'+') => {
+                let mut j = num(i + 1, true)?;
+                if b.get(j) == Some(&b':') {
+                    j = num(j + 1, false)?;
+                }
+                (j == b.len()).then_some(())
+            }
+            _ => None,
+        }
+    };
+    step().is_some()
 }
 
 /// v[k] when it is a mapping or absent; anything else is a format Hermes would not take here.
@@ -83,7 +250,7 @@ fn provider(cfg: &Value) -> Result<Option<&Map<String, Value>>, Error> {
         return Ok(None);
     };
     match providers.get(PROVIDER) {
-        None => Ok(None),
+        None | Some(Value::Null) => Ok(None),
         Some(Value::Object(p)) => Ok(Some(p)),
         Some(_) => Err(Error::invalid_request(
             "the file's pluxy provider is not a mapping",

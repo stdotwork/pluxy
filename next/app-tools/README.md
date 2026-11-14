@@ -322,7 +322,7 @@ It exports nothing.
 
 | Operation | Effect | Input | Output |
 | --- | --- | --- | --- |
-| `preview` | `read` | `targets`: one selection (`file`, or `root` and `path`); or `folder`: a Hermes home folder (what `HERMES_HOME` names; it may be a link), whose `config.yaml` is used; by default `config.yaml` in the home Hermes uses (below); `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `config`: `state` (`not-configured`, `configured`, `needs-update`), `base_url` (the provider's `api`), `key_set`, `provider` (`model.provider`), `model` (`model.default`, when the provider is pluxy's), `legacy` (the old desktop app's `cpa-gui` provider is there); never the key |
+| `preview` | `read` | `targets`: one selection (`file`, or `root` and `path`); or `folder`: a Hermes home folder (what `HERMES_HOME` names; it may be a link), whose `config.yaml` is used; by default `config.yaml` in the home Hermes uses (below); `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `config`: `state` (`not-configured`, `configured`, `needs-update`), `base_url` (the provider's `api`), `key_set`, `provider` (`model.provider`), `model` (`model.default`, when the provider is pluxy's), `legacy` (the old desktop app's `cpa-gui` provider is there); or, for a file Hermes would not take, `state` `refused` and `reason`; never the key |
 | `apply` | `write`; secret `key` (value) | One pin, `base_url`, `key`, `model` (one model ID) | The library's outcome |
 | `clear` | `write` | One pin | The library's outcome: the values Apply wrote go, edits made since stay |
 | `restore` | `write` | One pin | The library's outcome: the original bytes back (Restore Backup) |
@@ -346,8 +346,10 @@ What `apply` writes, as `hermes model` does for a provider of the `providers:` m
 
 - `providers.pluxy`: `api` (the core's address with `/v1`), `api_key` (the client key),
   `transport` `chat_completions` and `default_model` (the model). Keys there that Hermes would read
-  before these are removed: `api_mode`, `key_env`, `api_key_env`, `key_cmd`, and `enabled` when it
-  is not `true`. Its other members, such as the person's per-model `models` metadata or
+  before these, or in their place, are removed: `api_mode`, `key_env`, `api_key_env`, `key_cmd`,
+  the address as `base_url` or `url`, `model`, the camelCase spellings `baseUrl`, `apiKey`,
+  `apiMode`, `keyEnv`, `apiKeyEnv` and `defaultModel`, and `enabled` when it is not `true`; a
+  preview shows such a file as needing an update. Its other members, such as the person's per-model `models` metadata or
   `extra_headers`, and every other provider stay. Hermes lists the core's models from its
   `/v1/models` itself, so no `models` map is written.
 - `model`: `provider` `custom:pluxy` (Hermes's name for that entry), `default` (the model) and
@@ -360,17 +362,20 @@ The file is edited in place through a lossless YAML tree (yaml-edit; the same co
 are touched. It is read as YAML 1.2 (saphyr) and every edited file is read again and must hold
 exactly the intended value, else nothing is written. Hermes reads it with YAML 1.1 rules (ruamel),
 which take some plain words and numbers differently, so the key and the model pluxy writes are
-refused when a YAML 1.1 reader could take them for anything but text (`yes`, `no`, `on`, `off`,
-`y`, `n`, `true`, `false`, `null` or `~` in any case, or text starting with a digit, sign or dot
-made only of characters numbers, dates and times use), when they hold `${` (Hermes expands it from
-the environment) or spaces. Clear's three-way merge brings back what Apply replaced unless the
+refused when a YAML 1.1 reader takes them for anything but text (a boolean such as `yes`, `on` or
+`n` in YAML 1.1's spellings, a null, `=`, an integer in decimal, binary, octal, hex or sexagesimal
+form, a float, `.inf`, `.nan` or a timestamp; a hex key or a UUID is text), when they hold `${`
+(Hermes expands it from the environment) or spaces. Clear's three-way merge brings back what Apply replaced unless the
 person changed it since, and edits only what differs; a file Apply created that holds nothing else
 is removed. An old desktop app's `custom_providers` entry named `cpa-gui` (or a `providers.cpa-gui`)
-is left alone. `preview` and `apply` refuse, before writing, a file Hermes would not take, or would
-not take pluxy's values in: not UTF-8, not YAML (a repeated key too), more than one document, a
+is left alone. `apply` and `clear` refuse, before writing, a file Hermes would not take, or would
+not take pluxy's values in; `preview` pins it all the same and reports it `refused` with the reason,
+so Restore Backup and the backups still reach it: not UTF-8, not YAML (a repeated key too), more than one document, a
 top level that is not a mapping, a tag, `providers` or `providers.pluxy` not a mapping, `model` not
-a mapping or text, `model.provider` or `model.default` not text. A missing or empty file is an
-empty one. `_config_version` is not checked: Hermes reads every version's `providers:` and treats a
+a mapping or text, `model.provider` or `model.default` not text. A missing or empty file, or one
+whose document is only `null`, is an empty one (apply gives it a mapping); a `null`
+`providers.pluxy` is an absent one. A preview reads the file once more if it changed between its pin
+and its read, and refuses if it changed again. `_config_version` is not checked: Hermes reads every version's `providers:` and treats a
 file without one as current. Restore Backup puts the original back whatever the file holds now.
 
 ## `execution`

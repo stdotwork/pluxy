@@ -8,7 +8,8 @@
 //   setting this check does not know; `.env` and `auth.json` hold a login canary;
 // - a stow layout: `~/.hermes-stow/config.yaml` is a relative link to
 //   `~/dotfiles/hermes/.hermes/config.yaml` (mode 0640), which already has a `pluxy` provider with
-//   the person's own model entry, beside `keep.yml`;
+//   the person's own model entry, beside `keep.yml` (an apply makes the target 0600, as it makes
+//   the folder's 0644 config.yaml);
 // - a chezmoi-style root: `~/.hermes-root` is an absolute link to the folder
 //   `~/.local/share/chezmoi/dot_hermes`, which has no files yet;
 // - files Hermes Agent would not take: `~/unknown/config.yaml` whose `providers` is a list, and
@@ -244,7 +245,7 @@ function configs(home: string, login: string) {
     "",
   ].join("\n");
 
-  put(config, CONFIG, 0o600);
+  put(config, CONFIG, 0o644);
   put(env, `OPENROUTER_API_KEY=${login}\n`, 0o600);
   put(auth, `{"token":"${login}"}\n`, 0o600);
   put(join(dotfiles, "config.yaml"), stowConfig, 0o640);
@@ -300,6 +301,10 @@ function configs(home: string, login: string) {
       ],
       // The backup browser's edit, after a Manual Backup.
       backup: ["backend: docker", "backend: pluxy-backend-canary"],
+      // The applied file made into one Hermes Agent would not take (its providers a list), whole:
+      // Clear is refused, and Restore Backup undoes it (back to `cleared`, the file before that
+      // apply).
+      corrupt: [APPLIED_WITH_EDITS, "providers: [x]\n"],
     },
     // The backup browser's step: the diff a restore of it shows (setting names, never a value),
     // and the values no answer may hold.
