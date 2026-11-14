@@ -841,9 +841,11 @@ settings.
 
 **Backup and restore** (`src/backups.tsx`, the backup browser every writer's page shows) keeps
 manual backups of the previewed file in the app's vault through the tool's standard backup
-operations ([app tools](../app-tools/README.md#libtransactions)). **Manual Backup** saves the file
-as it is on disk (or that it does not exist); the newest 10 are kept, and saving another deletes
-the oldest, which its confirmation says. **Backup versions** lists each by date; selecting one
+operations ([app tools](../app-tools/README.md#libtransactions)). It shows once the file has been
+read, a file Claude Code would not take included, and acts on the file that read pinned.
+**Manual Backup** saves the file as it is on disk (or that it does not exist) and selects the new
+backup, leaving the form as it is; the newest 10 are kept, and saving another deletes the oldest,
+which its confirmation says. **Backup versions** lists each by date; selecting one
 shows its ID, whether the file was present and its size, and the settings restoring it would add,
 change or remove, by name only: this page never gets a value or the backup's bytes. **Restore this
 version** puts it back over whatever the file holds now (a file absent in the backup is removed;

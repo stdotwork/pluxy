@@ -1257,3 +1257,66 @@ fn json_settings_are_leaves_by_path() {
         ]
     );
 }
+
+/// Review #298 row 4: an empty root object has no settings, so no change with an empty path.
+#[test]
+fn an_empty_root_object_has_no_settings() {
+    assert_eq!(json_leaves(b"{}").unwrap(), vec![]);
+    let t = Tmp::new();
+    let f = t.put("x/settings.json", "{}\n");
+    let mem = Mem::default();
+    let tx = Transactions::new(&mem, tx_in(&t, &mem));
+    let sel = [Selection::File(f.clone())];
+    let id = tx.backup_create("s", &pins(&tx, "s", &sel)).unwrap()["backup"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    std::fs::write(&f, "{\"a\": 1}\n").unwrap();
+    let d = tx.backup_diff("s", &id, &json_leaves).unwrap();
+    assert_eq!(
+        d["files"][0]["changes"],
+        json!([{"path": ["a"], "restore": "removes"}])
+    );
+}
+
+/// Review #298 row 6: a version whose record names no vault backup for a file that existed is an
+/// internal error, never an empty file written.
+#[test]
+fn a_backup_record_naming_no_vault_backup_restores_nothing() {
+    let t = Tmp::new();
+    let f = t.put("x/settings.json", "{\"a\": 1}\n");
+    let mem = Mem::default();
+    let data = tx_in(&t, &mem);
+    let tx = Transactions::new(&mem, &data);
+    let sel = [Selection::File(f.clone())];
+    let id = tx.backup_create("s", &pins(&tx, "s", &sel)).unwrap()["backup"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut state: Value = serde_json::from_str(&read(&data.join(STATE)).unwrap()).unwrap();
+    state["backups"][0]["files"][0]["backup"] = Value::Null;
+    tx.save(&state).unwrap();
+    std::fs::write(&f, "{\"a\": 2}\n").unwrap();
+    let e = tx
+        .backup_restore("s", &pins(&tx, "s", &sel), &id, &mut none)
+        .unwrap_err();
+    assert_eq!(e.code, "internal", "{e:?}");
+    assert_eq!(read(&f).unwrap(), "{\"a\": 2}\n");
+    assert!(mem.open().is_empty());
+}
+
+/// Review #298 row 6: when the state file cannot be saved, the vault backups just put are deleted.
+#[test]
+fn a_backup_whose_record_cannot_be_saved_leaves_nothing_in_the_vault() {
+    let t = Tmp::new();
+    let f = t.put("x/settings.json", "{\"a\": 1}\n");
+    let mem = Mem::default();
+    let data = tx_in(&t, &mem);
+    let tx = Transactions::new(&mem, &data);
+    let p = pins(&tx, "s", &[Selection::File(f.clone())]);
+    std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let r = tx.backup_create("s", &p);
+    std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(r.is_err(), "{r:?}");
+    assert!(mem.backups.borrow().is_empty());
+}

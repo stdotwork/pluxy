@@ -37,14 +37,23 @@ const DIFF_MAX: usize = 200;
 pub type Leaves<'a> = dyn Fn(&[u8]) -> Option<Vec<(Vec<String>, Value)>> + 'a;
 
 /// A JSON file's settings: each object's members by key, down to values that are not objects (an
-/// array is one setting), and an empty object as one setting. An empty file has none.
+/// array is one setting), and an empty object inside as one setting. An empty file and an empty
+/// root object have none.
 pub fn json_leaves(bytes: &[u8]) -> Option<Vec<(Vec<String>, Value)>> {
     if bytes.iter().all(u8::is_ascii_whitespace) {
         return Some(Vec::new());
     }
     let v: Value = serde_json::from_slice(bytes).ok()?;
     let mut out = Vec::new();
-    walk(&mut Vec::new(), &v, &mut out);
+    match &v {
+        // The root object is always walked: an empty one is no setting with an empty path.
+        Value::Object(m) => {
+            for (k, x) in m {
+                walk(&mut vec![k.clone()], x, &mut out);
+            }
+        }
+        _ => walk(&mut Vec::new(), &v, &mut out),
+    }
     Some(out)
 }
 
@@ -182,7 +191,15 @@ impl Transactions<'_> {
         if let Some(a) = state["backups"].as_array_mut() {
             a.retain(|b| !over.iter().any(|o| o["id"] == b["id"] && b["set"] == set));
         }
-        self.save(&state)?;
+        if let Err(e) = self.save(&state) {
+            // Nothing names the backups just put: they go again.
+            for id in put {
+                let _ = self
+                    .vault
+                    .vault("backup.delete", fields(json!({"backup": id})));
+            }
+            return Err(e);
+        }
         // A vault backup whose removal fails here is unnamed now: the next sweep removes it.
         for o in &over {
             for f in o["files"].as_array().into_iter().flatten() {
@@ -295,7 +312,11 @@ impl Transactions<'_> {
         let mut changes: Vec<Change> = self.open(set, pins)?;
         for (c, f) in changes.iter_mut().zip(&files) {
             c.after = if f["exists"] == true {
-                Some(self.get(&f["backup"])?.unwrap_or_default())
+                // A file that existed has its bytes in the vault: a record naming none is
+                // broken, never an empty file to write.
+                Some(self.get(&f["backup"])?.ok_or_else(|| {
+                    Error::internal(format!("{id}'s record names no backup of a file"))
+                })?)
             } else {
                 None
             };
