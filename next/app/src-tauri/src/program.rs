@@ -50,6 +50,13 @@
 //! sending a `call` frame on its stdout for the host call it serves (`for`); the host hands it to
 //! the router (`Host::set_route`) and writes the answer to the tool's stdin. A frame naming its own
 //! caller or chain is refused: the host sets them.
+//!
+//! The host-private services (`Host::set_private`, the app's vault) answer a tool's `vault` frames
+//! for a host call it serves or the describe it is answering, name the package's open journals in
+//! the describe of its next start (on the package's turn, with the calls of unknown outcome; a start
+//! whose describe leaves one open fails), and say what must never be shown: every secret value and
+//! reference is redacted from its log lines, the errors and status it causes and the outputs of its
+//! calls. A call the router gives secrets to (`Context::secrets`) carries them in its frame only.
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -150,8 +157,6 @@ pub struct Spec {
     operations: Vec<Operation>,
     /// The state version the release writes, which describe must report.
     state_version: i64,
-    /// Values the tool's log lines must never show. None yet: the host gives tools no secret.
-    secrets: Vec<String>,
 }
 
 impl From<&crate::device::Admitted> for Spec {
@@ -173,7 +178,6 @@ impl From<&crate::device::Admitted> for Spec {
                 })
                 .collect(),
             state_version: a.state().version,
-            secrets: Vec::new(),
         }
     }
 }
@@ -226,6 +230,9 @@ pub struct Context {
     pub expect: Option<(String, u64)>,
     /// The router's own record of the call, opaque to the host.
     pub extra: Box<dyn std::any::Any + Send + Sync>,
+    /// Secret values the call delivers to the tool, by the reference its input names them with:
+    /// its frame's `secrets`, and nowhere else.
+    pub secrets: Vec<(String, String)>,
 }
 
 impl Context {
@@ -236,6 +243,7 @@ impl Context {
             chain: vec![Hop::Main],
             expect: None,
             extra: Box::new(()),
+            secrets: Vec::new(),
         }
     }
 }
@@ -272,6 +280,39 @@ pub struct Outbound {
 
 /// Decides and makes a tool's call (`Host::set_route`).
 pub type Route = Arc<dyn Fn(Outbound) -> Result<Value, CallError> + Send + Sync>;
+
+/// The host-private services a tool reaches through the host (`Host::set_private`): the app's
+/// vault.
+pub trait Private: Send + Sync {
+    /// Package id's open journals, as describe names them; an error fails the start.
+    fn journals(&self, id: &str) -> Result<Vec<Value>, String>;
+    /// The output of tool's `vault` frame request, sent for a host call of op it serves, or, with
+    /// describing, for the describe it is answering on its package's turn, naming the IDs of the
+    /// open journals it was told of.
+    fn frame(
+        &self,
+        tool: &Hop,
+        op: &str,
+        describing: Option<&[String]>,
+        request: &Value,
+    ) -> Result<Value, CallError>;
+    /// text with every value the host must never show replaced.
+    fn redact(&self, text: &str) -> String;
+}
+
+/// v with p's redaction applied to each of its strings, keys included.
+fn redact_value(p: &dyn Private, v: Value) -> Value {
+    match v {
+        Value::String(s) => Value::String(p.redact(&s)),
+        Value::Array(a) => Value::Array(a.into_iter().map(|x| redact_value(p, x)).collect()),
+        Value::Object(m) => Value::Object(
+            m.into_iter()
+                .map(|(k, x)| (p.redact(&k), redact_value(p, x)))
+                .collect(),
+        ),
+        other => other,
+    }
+}
 
 /// A call's failure: a protocol error code (`../../protocol/README.md#errors`) and a message.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -322,12 +363,11 @@ fn escape(text: &str) -> String {
     crate::confirmation::escape_format_characters(text)
 }
 
-/// e as it leaves the host: what a tool put in it escaped.
-fn escaped(e: CallError) -> CallError {
-    CallError {
-        code: escape(&e.code),
-        message: escape(&e.message),
-        unknown: e.unknown,
+/// text as it leaves the host: redacted, then escaped.
+fn clean(private: Option<&Arc<dyn Private>>, text: &str) -> String {
+    match private {
+        Some(p) => escape(&p.redact(text)),
+        None => escape(text),
     }
 }
 
@@ -439,6 +479,10 @@ enum Reply {
     Error(CallError),
 }
 
+/// A host call a tool is serving: its context, its cancel flags (with an ended flag) and its
+/// operation.
+type Serving = (Arc<Context>, Cancel, String);
+
 /// One run of a tool: from spawn to reap.
 struct Run {
     spec: Spec,
@@ -461,10 +505,13 @@ struct Run {
     reaped: AtomicBool,
     tail: Mutex<VecDeque<String>>,
     /// The host calls it is serving: their context and cancel flags (with an ended flag).
-    serving: Mutex<HashMap<String, (Arc<Context>, Cancel)>>,
+    serving: Mutex<HashMap<String, Serving>>,
     /// Its own calls through the host, by its ID, with their cancel flags.
     outbound: Mutex<HashMap<String, Arc<AtomicBool>>>,
     route: Option<Route>,
+    private: Option<Arc<dyn Private>>,
+    /// The describe call it is answering, while it does: its `vault` frames may name it.
+    describing: Mutex<Option<(String, Vec<String>)>>,
     /// Its last stderr line, as logged: why it stopped, if it says.
     last_line: Mutex<Option<String>>,
 }
@@ -514,7 +561,11 @@ impl Run {
 
     /// Breaks the pipe: a frame against the contract.
     fn violation(&self, why: String) {
-        eprintln!("program {}: {}", self.spec.id, escape(&why));
+        eprintln!(
+            "program {}: {}",
+            self.spec.id,
+            clean(self.private.as_ref(), &why)
+        );
         self.finish(End::Failed(why), true);
         self.pending.lock().unwrap().clear();
         self.hello.lock().unwrap().take();
@@ -522,11 +573,7 @@ impl Run {
 
     /// Keeps line in the tail and, if shown, logs it; gives it as kept.
     fn log(&self, line: &str, shown: bool) -> String {
-        let mut line = line.to_string();
-        for s in self.spec.secrets.iter().filter(|s| !s.is_empty()) {
-            line = line.replace(s.as_str(), "[redacted]");
-        }
-        let line = escape(&line);
+        let line = clean(self.private.as_ref(), line);
         if shown {
             eprintln!("program {}: {line}", self.spec.id);
         }
@@ -550,6 +597,7 @@ struct Inner {
     changed: Condvar,
     tickets: Mutex<HashMap<String, Arc<AtomicBool>>>,
     route: OnceLock<Route>,
+    private: OnceLock<Arc<dyn Private>>,
     /// Every call under way, by number, to cancel them all.
     calls: Mutex<HashMap<u64, Arc<AtomicBool>>>,
     /// The app is quitting: no tool starts and no lease is given.
@@ -559,6 +607,16 @@ struct Inner {
 impl Inner {
     fn slots(&self) -> MutexGuard<'_, HashMap<String, Slot>> {
         self.slots.lock().unwrap()
+    }
+
+    /// e as it leaves the host: what a tool put in it redacted and escaped.
+    fn escaped(&self, e: CallError) -> CallError {
+        let p = self.private.get();
+        CallError {
+            code: clean(p, &e.code),
+            message: clean(p, &e.message),
+            unknown: e.unknown,
+        }
     }
 }
 
@@ -660,6 +718,7 @@ impl Host {
             changed: Condvar::new(),
             tickets: Mutex::new(HashMap::new()),
             route: OnceLock::new(),
+            private: OnceLock::new(),
             calls: Mutex::new(HashMap::new()),
             closing: AtomicBool::new(false),
         }))
@@ -670,10 +729,16 @@ impl Host {
         let _ = self.0.route.set(route);
     }
 
+    /// Sets the host-private services tools' `vault` frames, describe's journals and redaction
+    /// come from. Without them, `vault` frames are refused and describe names no journal.
+    pub fn set_private(&self, private: Arc<dyn Private>) {
+        let _ = self.0.private.set(private);
+    }
+
     /// A lease on tool id, starting it if it is not running (once, however many ask at once).
     pub fn lease(&self, id: &str) -> Result<Lease, CallError> {
         self.lease_for(id, &|_| Ok(()), &Cancel::default())
-            .map_err(escaped)
+            .map_err(|e| self.0.escaped(e))
     }
 
     /// `lease`, for a call check allows: check sees the record the lease would be on before any
@@ -875,7 +940,7 @@ impl Host {
         also: Cancel,
     ) -> Result<Value, CallError> {
         self.call_inner(id, op, input, &also.with(&call.cancel), context)
-            .map_err(escaped)
+            .map_err(|e| self.0.escaped(e))
     }
 
     /// Cancels every call under way: the window that made them closed.
@@ -968,10 +1033,10 @@ impl Host {
         run.pending.lock().unwrap().insert(cid.clone(), tx);
         // The calls the tool makes for this one are cancelled with it, and once it has ended.
         let ended = Arc::new(AtomicBool::new(false));
-        run.serving
-            .lock()
-            .unwrap()
-            .insert(cid.clone(), (Arc::clone(&context), cancel.with(&ended)));
+        run.serving.lock().unwrap().insert(
+            cid.clone(),
+            (Arc::clone(&context), cancel.with(&ended), op.to_string()),
+        );
         // Once sent, a call that ends without the tool's answer has an unknown outcome.
         let unknown = |why: String, code: &str| CallError {
             code: code.into(),
@@ -979,15 +1044,28 @@ impl Host {
             unknown: true,
         };
         let result = (|| {
-            run.send(&json!({"type": "call", "id": cid, "op": op, "input": input,
-                "chain": context.chain}))?;
+            let mut frame = json!({"type": "call", "id": cid, "op": op, "input": input,
+                "chain": context.chain});
+            if !context.secrets.is_empty() {
+                frame["secrets"] = context
+                    .secrets
+                    .iter()
+                    .map(|(r, v)| (r.clone(), Value::String(v.clone())))
+                    .collect::<serde_json::Map<_, _>>()
+                    .into();
+            }
+            run.send(&frame)?;
             let mut cancelled: Option<Instant> = None;
             loop {
                 match rx.recv_timeout(TICK) {
                     Ok(Reply::Result(frame)) => {
                         let out = frame["output"].clone();
+                        // Checked as the tool sent it, then redacted: no secret goes back.
                         return schema::check(&decl.output_schema, &out, "output")
-                            .map(|_| out)
+                            .map(|_| match self.0.private.get() {
+                                Some(p) => redact_value(p.as_ref(), out),
+                                None => out,
+                            })
                             .map_err(|e| {
                                 fail("extension_protocol", format!("{id} answered {op}: {e}"))
                             });
@@ -1114,7 +1192,7 @@ impl Host {
             pid: run.and_then(|r| r.pid()),
             leases,
             generation: run.map(|r| r.spec.generation),
-            last: slot.and_then(|s| s.last.as_deref().map(escape)),
+            last: slot.and_then(|s| s.last.as_deref().map(|l| clean(self.0.private.get(), l))),
             log: run.map_or_else(
                 || slot.map(|s| s.log.clone()).unwrap_or_default(),
                 |r| r.tail(),
@@ -1130,8 +1208,8 @@ impl Host {
                     s.unknown
                         .iter()
                         .map(|u| Unknown {
-                            op: escape(&u.op),
-                            why: escape(&u.why),
+                            op: clean(self.0.private.get(), &u.op),
+                            why: clean(self.0.private.get(), &u.why),
                             ..u.clone()
                         })
                         .collect()
@@ -1166,7 +1244,8 @@ impl Host {
 
     /// `prepare`, from a record: the unit tests' own, or an admitted one.
     fn prepare_spec(&self, spec: Spec, stops: u64) -> Result<Prepared, CallError> {
-        self.prepare_inner(spec, stops).map_err(escaped)
+        self.prepare_inner(spec, stops)
+            .map_err(|e| self.0.escaped(e))
     }
 
     /// How many times tool id has been stopped (`stop`): a swap staged at one count is refused
@@ -1440,6 +1519,8 @@ fn new_run(
         serving: Mutex::new(HashMap::new()),
         outbound: Mutex::new(HashMap::new()),
         route: inner.route.get().cloned(),
+        private: inner.private.get().cloned(),
+        describing: Mutex::new(None),
         last_line: Mutex::new(None),
     });
     let cmd = command(&run.spec, program);
@@ -1644,28 +1725,66 @@ fn handshake(
             .map(|s| s.unknown.clone())
             .unwrap_or_default()
     };
+    // The package's open journals, which only a start that may serve is told of. Records that
+    // cannot be read fail the start: it must not take work with a journal it was not told of.
+    let journals = || match (&run.private, unknown) {
+        (Some(p), true) => p
+            .journals(id)
+            .map_err(|e| fail("unavailable", format!("reading {id}'s vault journals: {e}"))),
+        _ => Ok(Vec::new()),
+    };
     // The describe's own time, besides any wait for the turn.
     let describe = left();
-    let turn = (unknown && !pending(inner).is_empty())
+    let turn = (unknown && (!pending(inner).is_empty() || !journals()?.is_empty()))
         .then(|| take_turn(run, inner.limits.startup))
         .flatten();
-    let unknown = if turn.is_some() {
-        pending(inner)
+    let (unknown, journals) = if turn.is_some() {
+        (pending(inner), journals()?)
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
     let cid = call_id();
     let (tx, rx) = mpsc::channel();
     run.pending.lock().unwrap().insert(cid.clone(), tx);
-    run.send(&json!({"type": "call", "id": cid, "op": "describe", "contract_version": CONTRACT,
-        "unknown": unknown.iter().map(|u| json!({"id": u.call, "op": u.op, "generation": u.generation})).collect::<Vec<_>>()}))?;
-    let d = match rx.recv_timeout(describe) {
+    // Its vault frames in describe are taken only on its package's turn, for the journals it
+    // was told of.
+    if turn.is_some() {
+        let told = journals
+            .iter()
+            .filter_map(|j| j["id"].as_str().map(String::from))
+            .collect();
+        *run.describing.lock().unwrap() = Some((cid.clone(), told));
+    }
+    let sent = run.send(&json!({"type": "call", "id": cid, "op": "describe", "contract_version": CONTRACT,
+        "unknown": unknown.iter().map(|u| json!({"id": u.call, "op": u.op, "generation": u.generation})).collect::<Vec<_>>(),
+        "journals": journals}));
+    let reply = sent.map(|_| rx.recv_timeout(describe));
+    run.describing.lock().unwrap().take();
+    let d = match reply? {
         Ok(Reply::Result(d)) => d,
         Ok(Reply::Error(e)) => return Err(incompatible(format!("describe failed: {e}"))),
         Err(RecvTimeoutError::Timeout) => return Err(timeout()),
         Err(RecvTimeoutError::Disconnected) => return Err(exited()),
     };
     run.pending.lock().unwrap().remove(&cid);
+    // Each open journal it was told of must be ended before it takes work.
+    if let (Some(p), false) = (&run.private, journals.is_empty()) {
+        let open = p
+            .journals(id)
+            .map_err(|e| fail("unavailable", format!("reading {id}'s vault journals: {e}")))?;
+        if let Some(j) = journals
+            .iter()
+            .find(|j| open.iter().any(|o| o["id"] == j["id"]))
+        {
+            return Err(fail(
+                "extension_protocol",
+                format!(
+                    "{id} answered describe with journal {} still open: it must reconcile it first",
+                    j["id"].as_str().unwrap_or_default()
+                ),
+            ));
+        }
+    }
     let mut described: Vec<&str> = d["operations"]
         .as_array()
         .map(|a| a.iter().filter_map(|o| o["id"].as_str()).collect())
@@ -1987,6 +2106,10 @@ fn deliver(run: &Arc<Run>, frame: &[u8], said_hello: &mut bool) -> Result<(), St
             outbound(run, id, &v);
             return Ok(());
         }
+        "vault" => {
+            vault(run, id, &v);
+            return Ok(());
+        }
         "cancel" => {
             if let Some(f) = run.outbound.lock().unwrap().get(id) {
                 f.store(true, Ordering::SeqCst);
@@ -2044,7 +2167,7 @@ fn outbound(run: &Arc<Run>, id: &str, v: &Value) {
             "a call names the package, op and the host call it is for".into(),
         );
     };
-    let Some((context, cancel)) = run.serving.lock().unwrap().get(serves).cloned() else {
+    let Some((context, cancel, _)) = run.serving.lock().unwrap().get(serves).cloned() else {
         return refuse(
             "permission",
             format!("{serves} is not a call {} is serving", run.spec.id),
@@ -2096,6 +2219,72 @@ fn outbound(run: &Arc<Run>, id: &str, v: &Value) {
         run.outbound.lock().unwrap().remove(id);
         refuse("unavailable", format!("starting the call: {e}"));
     }
+}
+
+/// A tool's `vault` frame v with ID id, answered on its stdin from the host-private services: for
+/// a host call it serves (`for`), or the describe it is answering; refused otherwise.
+fn vault(run: &Arc<Run>, id: &str, v: &Value) {
+    let answer = (|| {
+        if !valid_ticket(id) {
+            return Err(fail(
+                "invalid_request",
+                "a request ID is 1 to 64 letters, digits, '-', '_' or '.'",
+            ));
+        }
+        let private = run
+            .private
+            .as_ref()
+            .ok_or_else(|| fail("unsupported", "this host keeps no vault"))?;
+        let serves = v["for"].as_str().ok_or_else(|| {
+            fail(
+                "invalid_request",
+                "a vault request names the host call it is for",
+            )
+        })?;
+        let told = run
+            .describing
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|(c, _)| c == serves)
+            .map(|(_, told)| told.clone());
+        let op = if told.is_some() {
+            String::new()
+        } else {
+            run.serving
+                .lock()
+                .unwrap()
+                .get(serves)
+                .map(|(_, _, op)| op.clone())
+                .ok_or_else(|| {
+                    fail(
+                        "permission",
+                        format!("{serves} is not a call {} is serving", run.spec.id),
+                    )
+                })?
+        };
+        let tool = Hop::Package {
+            id: run.spec.id.clone(),
+            sha256: run.spec.sha256.clone(),
+            generation: run.spec.generation,
+        };
+        private.frame(&tool, &op, told.as_deref(), v)
+    })();
+    if run.ending() {
+        return;
+    }
+    // Answered on the reader's thread: a tool that sends requests and reads no answer would
+    // queue them without end.
+    if run.queued.load(Ordering::SeqCst) >= MAX_QUEUED {
+        return run.violation(format!(
+            "sent vault requests faster than it read the answers ({MAX_QUEUED} frames waited for its stdin)"
+        ));
+    }
+    let _ = run.send(&match answer {
+        Ok(output) => json!({"type": "result", "id": id, "output": output}),
+        Err(e) => json!({"type": "error", "id": id,
+            "error": {"code": e.code, "message": e.message}}),
+    });
 }
 
 /// Keeps a tool's lines in its tail and logs them, at most `LOG_RATE` a second; the rest are
