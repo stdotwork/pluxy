@@ -249,6 +249,24 @@ impl Prepared {
     pub fn argv(&self) -> Option<&[String]> {
         self.exact.launch.as_ref().map(|l| l.argv.as_slice())
     }
+    /// The Remember checkbox's text (with its mnemonic): what a remembered approval is bound to,
+    /// naming the secrets the launch uses, which a later launch must use the same.
+    pub(crate) fn remember_text(&self) -> String {
+        let secrets: Vec<String> = self
+            .exact
+            .launch
+            .iter()
+            .flat_map(|l| &l.secret_uses)
+            .map(|s| format!("{} for {}'s {}", s.reference, s.recipient, s.purpose))
+            .collect();
+        if secrets.is_empty() {
+            return "_Remember this exact executable, argv and cwd".into();
+        }
+        format!(
+            "_Remember this exact executable, argv, cwd and secrets: {}",
+            secrets.join("; ").replace('_', "__")
+        )
+    }
     pub fn environment_revision(&self) -> Option<&str> {
         self.exact
             .launch

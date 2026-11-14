@@ -53,6 +53,11 @@
 // that build: signed tools calling each other's declared exports through the host, a curated web
 // package's page calling native imports after their native consent, and the refusals of
 // undeclared, forged, cyclic, stale, revoked and Unverified routes, each with a positive control.
+// The vault check (vault.ts, vault_native.rs) runs in one more session with that build: a key
+// typed into native key entry reaches a writer tool and a final consumer only on their pipes after
+// native confirmation, an execution tool gets only references, references refused to another
+// recipient, call or release, open journals reconciled after a crash without a second write, and
+// the key and a backup canary absent from webviews, logs and the app's output.
 // The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
@@ -92,6 +97,7 @@ import { buildProgramFixtures } from "./program";
 import { buildRoutingFixtures } from "./routing";
 import { missingPrerequisites } from "./services";
 import { runUpdate } from "./update";
+import { buildVaultFixtures } from "./vault";
 
 const app = join(import.meta.dir, "..");
 const next = join(app, "..");
@@ -281,7 +287,7 @@ interface Rotation {
  * stages. earlyExit: the app's setup waits for its core's exit callback before the app state
  * exists (PLUXY_APP_TEST_EARLY_EXIT), and only the recovery of that core is checked. admission:
  * the session checks only signed native-tier admission; program: only the program host and swap
- * checks; routing: only the cross-package routing check. */
+ * checks; routing: only the cross-package routing check; vault: only the vault check. */
 async function runApp(
   mode: Mode,
   artifact: Artifact,
@@ -297,6 +303,7 @@ async function runApp(
   program = false,
   earlyExit = false,
   routing = false,
+  vault = false,
 ): Promise<string[]> {
   const { label, bin } = artifact;
   const root = rotation.root ?? mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
@@ -343,7 +350,7 @@ async function runApp(
     }, 100);
     // This device's extension catalog is the same in every mode: check it once, in managed mode.
     const device =
-      mode === "managed" && !admission && !program && !routing && suite !== "access"
+      mode === "managed" && !admission && !program && !routing && !vault && suite !== "access"
         ? join(root, "device")
         : undefined;
     const access = suite === "access" ? join(root, "access") : undefined;
@@ -396,6 +403,20 @@ async function runApp(
         JSON.stringify({ version: 0, registries: f.registries }),
       );
     }
+    // The vault check's signed tools, their registry and trust profile, and its canaries.
+    const vaultDir = vault ? join(root, "vault") : undefined;
+    let canaries: string[] = [];
+    if (vaultDir) {
+      mkdirSync(vaultDir);
+      const f = buildVaultFixtures(vaultDir, dirs.home, programFixture);
+      nonce = f.nonce;
+      canaries = f.canaries;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
     if (curated) {
       mkdirSync(curated);
       if (device) mkdirSync(device);
@@ -416,7 +437,7 @@ async function runApp(
       // The app starts again on the first run's HOME: its marker and profile stay, and so does
       // the nonce the marker holds.
       nonce = JSON.parse(readFileSync(join(dirs.home, MARKER_FILE), "utf8")).nonce;
-    } else if (!programDir && !routingDir) {
+    } else if (!programDir && !routingDir && !vaultDir) {
       try {
         nonce = /^nonce=([0-9a-f]{64})$/m.exec(run(probe, ["trust-marker", dirs.home], app))?.[1] ?? "";
         if (!nonce) throw new Error("it printed no nonce");
@@ -469,6 +490,7 @@ async function runApp(
       // In the app's environment, never in the tool's (program_native.rs checks its names).
       ...(programDir ? { PLUXY_APP_TEST_PROGRAM: programDir, PLUXY_TEST_PROGRAM_CANARY: randomUUID() } : {}),
       ...(routingDir ? { PLUXY_APP_TEST_ROUTING: routingDir } : {}),
+      ...(vaultDir ? { PLUXY_APP_TEST_VAULT: vaultDir } : {}),
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: artifact.identifier } : {}),
       ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
       ...(key ? { PLUXY_APP_TEST_KEY_FILE: keyFile } : {}),
@@ -525,6 +547,10 @@ async function runApp(
       output.push(line);
       if (key && [key, wrongKey].some((canary) => line.includes(canary))) {
         problems.push("management key appeared on stdout/stderr");
+        return;
+      }
+      if (canaries.some((canary) => line.includes(canary))) {
+        problems.push("the vault check's key or backup canary appeared on stdout/stderr");
         return;
       }
       // window.ts's, privacy.ts's and access-suite.ts's checks, each shown.
@@ -691,6 +717,16 @@ async function runApp(
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode} routing ${JSON.stringify(r ?? {})}`);
       console.log(`${mode}: routing ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
+    if (vault) {
+      const r = steps.get("vault") as { passed?: boolean } | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(r?.passed === true, `the vault check did not complete: ${failure}`);
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} vault ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode}: vault ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
 
@@ -1260,6 +1296,26 @@ async function main(): Promise<number> {
           undefined,
           undefined,
           {},
+          false,
+          false,
+          false,
+          true,
+        )),
+      );
+      // The vault check, on the same build.
+      p.push(
+        ...(await runApp(
+          "managed",
+          trusted,
+          updaterKey,
+          managed,
+          undefined,
+          false,
+          false,
+          undefined,
+          undefined,
+          {},
+          false,
           false,
           false,
           false,
