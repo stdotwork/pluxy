@@ -122,6 +122,18 @@
 // and claude through the launcher with no key in argv or environment; the key and a login canary
 // stay out of every window answer, confirmation and the app's output, and removing the package
 // leaves no process.
+// The Claude Desktop check (claude-desktop.ts, claude_desktop_native.rs) runs in one more session
+// with that build: pluxy/claude-desktop (next/app-tools/claude-desktop, built here) with the
+// execution program creates Claude Desktop's missing configuration library after a native
+// confirmation, then applies, clears and restores its three third-party files in the run's HOME
+// (the deployment choice, the gateway profile, the library index) to hand-written bytes, after a
+// native confirmation naming the files and the key's label, keeping the person's later edits, their
+// own gateway configuration and the standard app's files; a key Claude Desktop sealed in place is
+// still taken out by Clear; through a stow link and a chezmoi-style root it changes only the
+// target, a replaced target refuses, a missing path writes none of the three, files of another
+// shape refuse; its recipe starts a stand-in claude-desktop through the launcher with no key in argv
+// or environment; the key and a login canary stay out of every window answer, confirmation and
+// the app's output, and removing the package leaves no process.
 // The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
@@ -156,6 +168,7 @@ import { buildAccessFixtures } from "./access";
 import { buildAdmissionFixtures, MARKER_FILE, PROFILE_FILE } from "./admission";
 import { appImageHeader, buildSmokeAppImage, packAppImage } from "./appimage";
 import { buildClaudeCodeFixtures } from "./claude-code";
+import { buildClaudeDesktopFixtures } from "./claude-desktop";
 import { buildDeviceFixtures } from "./device";
 import { type Feed, standInBrowser, startFeed } from "./feed";
 import { runInstances } from "./instances";
@@ -601,7 +614,8 @@ interface Rotation {
  * the session runs only the core steps, against that core source. release: the app starts with
  * that release installed and selected. spawnCheck: only the spawn check. reader: only the session
  * reader check. launcherCheck: only the launcher check. transactions: only the transaction
- * library check. claudeCode: only the Claude Code setup and launcher check. */
+ * library check. claudeCode: only the Claude Code setup and launcher check. claudeDesktop: only
+ * the Claude Desktop setup and launcher check. */
 async function runApp(
   mode: Mode,
   artifact: Artifact,
@@ -626,6 +640,7 @@ async function runApp(
   launcherCheck = false,
   transactions = false,
   claudeCode = false,
+  claudeDesktop = false,
 ): Promise<string[]> {
   const { label, bin } = artifact;
   const root = rotation.root ?? mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
@@ -709,6 +724,7 @@ async function runApp(
       !reader &&
       !transactions &&
       !claudeCode &&
+      !claudeDesktop &&
       !usage &&
       suite !== "access"
         ? join(root, "device")
@@ -881,6 +897,28 @@ async function runApp(
         JSON.stringify({ version: 0, registries: f.registries }),
       );
     }
+    // The Claude Desktop check's signed packages, Claude Desktop's files in HOME, its stand-in
+    // claude-desktop, its registry and trust profile, and its key and login canary.
+    const claudeDesktopDir = claudeDesktop ? join(root, "claude-desktop") : undefined;
+    if (claudeDesktopDir) {
+      mkdirSync(claudeDesktopDir);
+      const f = buildClaudeDesktopFixtures(
+        claudeDesktopDir,
+        dirs.home,
+        claudeDesktopProgram,
+        claudeDesktopManifest,
+        executionProgram,
+        executionManifest,
+      );
+      nonce = f.nonce;
+      canaries = f.canaries;
+      launcherBin = f.bin;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
     if (curated) {
       mkdirSync(curated);
       if (device) mkdirSync(device);
@@ -910,7 +948,8 @@ async function runApp(
       !launcherDir &&
       !usageDir &&
       !transactionsDir &&
-      !claudeCodeDir
+      !claudeCodeDir &&
+      !claudeDesktopDir
     ) {
       try {
         nonce = /^nonce=([0-9a-f]{64})$/m.exec(run(probe, ["trust-marker", dirs.home], app))?.[1] ?? "";
@@ -973,6 +1012,7 @@ async function runApp(
       ...(sessionsDir ? { PLUXY_APP_TEST_SESSIONS: sessionsDir } : {}),
       ...(transactionsDir ? { PLUXY_APP_TEST_TRANSACTIONS: transactionsDir } : {}),
       ...(claudeCodeDir ? { PLUXY_APP_TEST_CLAUDE_CODE: claudeCodeDir } : {}),
+      ...(claudeDesktopDir ? { PLUXY_APP_TEST_CLAUDE_DESKTOP: claudeDesktopDir } : {}),
       ...(usageDir ? { PLUXY_APP_TEST_USAGE: usageDir } : {}),
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: artifact.identifier } : {}),
       ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
@@ -1287,6 +1327,16 @@ async function runApp(
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode} claude-code ${JSON.stringify(r ?? {})}`);
       console.log(`${mode}: claude-code ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
+    if (claudeDesktop) {
+      const r = steps.get("claude_desktop") as { passed?: boolean } | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(r?.passed === true, `the Claude Desktop check did not complete: ${failure}`);
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} claude-desktop ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode}: claude-desktop ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
 
@@ -1816,6 +1866,9 @@ const executionProgram = join(appToolsTarget, "debug", "execution");
 /** pluxy/claude-code (next/app-tools/claude-code) and its manifest, for the Claude Code check. */
 const claudeCodeManifest = join(appTools, "claude-code", "pluxy-extension.json");
 const claudeCodeProgram = join(appToolsTarget, "debug", "claude-code");
+/** pluxy/claude-desktop (next/app-tools/claude-desktop) and its manifest, for the Claude Desktop check. */
+const claudeDesktopManifest = join(appTools, "claude-desktop", "pluxy-extension.json");
+const claudeDesktopProgram = join(appToolsTarget, "debug", "claude-desktop");
 /** The transaction library's fixture writer the transaction library check packs. */
 const fixtureWriter = join(appToolsTarget, "debug", "examples", "fixture-writer");
 let appImage = ""; // the smoke AppImage the sessions run
@@ -1900,6 +1953,9 @@ async function main(): Promise<number> {
   // pluxy/claude-code, which the Claude Code check installs.
   if (existsSync(claudeCodeManifest))
     run("cargo", ["build", "--locked", "-p", "claude-code", "--target-dir", appToolsTarget], appTools);
+  // pluxy/claude-desktop, which the Claude Desktop check installs.
+  if (existsSync(claudeDesktopManifest))
+    run("cargo", ["build", "--locked", "-p", "claude-desktop", "--target-dir", appToolsTarget], appTools);
   // The build without artifact-test-trust, kept aside before the build with it replaces it. The
   // device check needs the one (a normal build refuses the curated native tool), the admission
   // session and the updater gate's identifier check the other (its features are the test
@@ -2277,6 +2333,35 @@ async function main(): Promise<number> {
           false,
           undefined,
           release,
+          false,
+          false,
+          false,
+          false,
+          false,
+          true,
+        )),
+      );
+      // The Claude Desktop setup and launcher check, on the same build.
+      p.push(
+        ...(await runApp(
+          "managed",
+          trusted,
+          updaterKey,
+          managed,
+          undefined,
+          false,
+          false,
+          undefined,
+          undefined,
+          {},
+          false,
+          false,
+          false,
+          false,
+          false,
+          undefined,
+          release,
+          false,
           false,
           false,
           false,

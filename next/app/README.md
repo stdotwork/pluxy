@@ -845,6 +845,35 @@ version** puts it back over whatever the file holds now (a file absent in the ba
 no automatic backup is made) and **Delete this version** deletes only that backup, each in the
 tool's native confirmation.
 
+## Claude Desktop
+
+The Claude Desktop page sets up and starts Claude Desktop (its Linux beta) with this core as its
+third-party inference gateway (`src/claudeDesktop.tsx`). It needs the curated native tool
+`pluxy/claude-desktop` ([app tools](../app-tools/README.md#claude-desktop)) and, for **Start Claude
+Desktop**, the execution program. Like the Claude Code page it is the window's own page, because
+**Apply** gives the tool the client key.
+
+**Read configuration** previews Claude Desktop's three third-party files: in its folder
+`~/.config/Claude-3p` (`claude_desktop_config.json`, pluxy's gateway profile in `configLibrary` and
+`configLibrary/_meta.json`), in a selected folder (which may be a link) or as three selected files
+(links followed and kept). When Claude Desktop has not made its `configLibrary` folder yet, the
+page offers **Create configuration folder**, which asks in a native confirmation. The form keeps the
+old app's **Claude Desktop Models and Aliases** list: rows of **Original model**, **Alias (optional
+for Claude models)** and **1M**, **Add model** and **Remove model**, three Claude models to start
+with. Claude Desktop takes only Claude model names, so a non-Claude model needs an alias, which the
+core must serve the model under (the account's or extension's `model_alias`); the old app added it to
+the core's config itself, this page says so instead. The **Authentication Key** is one of the
+vault's secrets, or a new one through native key entry.
+
+**Connect in One Click** (or **Update Configuration** / **Repair Connection**), **Clear
+integration** and **Restore Backup** each preview the files again and call the tool, whose native
+confirmation names the three files, the key's label for Apply and the same-instant warning.
+**Start Claude Desktop** asks the tool for its recipe (`claude-desktop`, run directly with no
+arguments in the home folder) and starts it through the launcher, with an optional program path for
+other installs. Claude Desktop reads its configuration at launch: quit and reopen it after a
+change (the page does not stop a running Claude Desktop). **Backup and restore** keeps manual
+backups of the three files, as on the Claude Code page.
+
 ## Build and check
 
 Bun `1.4.3`, a stable Rust toolchain (CI uses 1.97.0), and on Linux the WebKitGTK 4.1 and
