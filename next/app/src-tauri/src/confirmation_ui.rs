@@ -268,6 +268,8 @@ pub(crate) fn settings(app: &tauri::AppHandle) -> Result<(), String> {
                     Ok(()) => {
                         b.set_label("Revoked");
                         b.set_sensitive(false);
+                        // The tray's Start… menu lists only launches still remembered.
+                        crate::launcher::refresh_tray(&app);
                     }
                     Err(e) => b.set_label(&format!("Could not revoke: {e}")),
                 }

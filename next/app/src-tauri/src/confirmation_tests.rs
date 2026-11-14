@@ -28,6 +28,7 @@ fn fixture_in(root: &Path) -> (PathBuf, Confirmations, Action) {
             executable: exe,
             argv: vec!["tool".into(), "--flag".into()],
             cwd: dir.clone(),
+            program: None,
             terminal_adapter: package,
             environment_revision: "1".into(),
             environment_review: vec![],
@@ -89,6 +90,7 @@ fn remembered_identity_binds_every_field_and_caches_only_unchanged_metadata() {
             p,
             Gesture {
                 created: Instant::now(),
+                origin: Origin::NativeUi,
             },
         )
         .ok()
@@ -140,7 +142,8 @@ fn remembered_identity_binds_every_field_and_caches_only_unchanged_metadata() {
             .remembered(
                 p,
                 Gesture {
-                    created: Instant::now()
+                    created: Instant::now(),
+                    origin: Origin::NativeUi,
                 }
             )
             .is_err());
@@ -153,7 +156,8 @@ fn remembered_identity_binds_every_field_and_caches_only_unchanged_metadata() {
         .remembered(
             p,
             Gesture {
-                created: Instant::now()
+                created: Instant::now(),
+                origin: Origin::NativeUi,
             }
         )
         .is_err());
@@ -166,7 +170,8 @@ fn remembered_identity_binds_every_field_and_caches_only_unchanged_metadata() {
         .remembered(
             p,
             Gesture {
-                created: Instant::now()
+                created: Instant::now(),
+                origin: Origin::NativeUi,
             }
         )
         .is_err());
@@ -180,7 +185,8 @@ fn remembered_identity_binds_every_field_and_caches_only_unchanged_metadata() {
         .remembered(
             p,
             Gesture {
-                created: Instant::now()
+                created: Instant::now(),
+                origin: Origin::NativeUi,
             }
         )
         .is_ok());
@@ -371,7 +377,8 @@ fn page_import_origins_and_expired_gestures_cannot_use_remembered_approval() {
             .remembered(
                 p,
                 Gesture {
-                    created: Instant::now()
+                    created: Instant::now(),
+                    origin: Origin::NativeUi,
                 }
             )
             .is_err());
@@ -382,7 +389,8 @@ fn page_import_origins_and_expired_gestures_cannot_use_remembered_approval() {
         .remembered(
             p,
             Gesture {
-                created: Instant::now() - Duration::from_secs(5)
+                created: Instant::now() - Duration::from_secs(5),
+                origin: Origin::NativeUi,
             }
         )
         .is_err());
@@ -393,6 +401,7 @@ fn page_import_origins_and_expired_gestures_cannot_use_remembered_approval() {
                 p,
                 Gesture {
                     created: Instant::now(),
+                    origin: Origin::NativeUi,
                 },
             )
             .ok()

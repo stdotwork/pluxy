@@ -331,6 +331,28 @@ pub trait Private: Send + Sync {
     ) -> Result<Value, CallError>;
     /// text with every value the host must never show replaced.
     fn redact(&self, text: &str) -> String;
+    /// Whether text holds a reference the host gave, and whether it holds a secret's value
+    /// (the native test counts the frames each tool got, `test_frames`).
+    #[cfg(feature = "native-test")]
+    fn test_carries(&self, text: &str) -> (bool, bool);
+}
+
+/// Per package, the frames written to its tools that held a reference, and those that held a
+/// secret's value (native-test builds only): counts, never the frames.
+#[cfg(feature = "native-test")]
+static TEST_FRAMES: Mutex<std::collections::BTreeMap<String, (u64, u64)>> =
+    Mutex::new(std::collections::BTreeMap::new());
+
+/// `{"references", "values"}`: package's counts of `TEST_FRAMES`.
+#[cfg(feature = "native-test")]
+pub fn test_frames(package: &str) -> Value {
+    let (references, values) = TEST_FRAMES
+        .lock()
+        .unwrap()
+        .get(package)
+        .copied()
+        .unwrap_or_default();
+    serde_json::json!({"references": references, "values": values})
 }
 
 /// v with p's redaction applied to each of its strings, keys included.
@@ -560,6 +582,14 @@ impl Run {
 
     fn send(&self, v: &Value) -> Result<(), CallError> {
         let body = serde_json::to_vec(v).expect("a JSON value");
+        #[cfg(feature = "native-test")]
+        if let Some(p) = &self.private {
+            let (reference, value) = p.test_carries(&String::from_utf8_lossy(&body));
+            let mut counts = TEST_FRAMES.lock().unwrap();
+            let c = counts.entry(self.spec.id.clone()).or_default();
+            c.0 += u64::from(reference);
+            c.1 += u64::from(value);
+        }
         let mut frame = (body.len() as u32).to_be_bytes().to_vec();
         frame.extend(body);
         // Counted before the writer can take it: counted after, the writer could write it and

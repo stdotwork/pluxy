@@ -113,6 +113,7 @@ fn trusted_start(app: &tauri::AppHandle, a: &Action) -> Result<(bool, String), S
                     p,
                     Gesture {
                         created: Instant::now(),
+                        origin: Origin::NativeUi,
                     },
                 ) {
                     Ok(token) => Ok((true, token)),
@@ -157,6 +158,7 @@ pub(crate) fn click(
             if let Some(f) = f.lock().unwrap().take() {
                 f(Gesture {
                     created: Instant::now(),
+                    origin: Origin::NativeUi,
                 });
             }
             if let Some(w) = weak.upgrade() {
@@ -199,6 +201,7 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
                 executable: executable.clone(),
                 argv: vec!["fixture-script".into(), "--exact".into()],
                 cwd: dir.clone(),
+                program: None,
                 terminal_adapter: pkg,
                 environment_revision: "1".into(),
                 environment_review: vec![],

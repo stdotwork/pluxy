@@ -930,6 +930,15 @@ impl crate::program::Private for Vault {
         self.open_journals(id)
     }
 
+    #[cfg(feature = "native-test")]
+    fn test_carries(&self, text: &str) -> (bool, bool) {
+        let st = self.lock();
+        (
+            st.refs.keys().any(|r| text.contains(r.as_str())),
+            st.secrets.iter().any(|s| text.contains(s.value.as_str())),
+        )
+    }
+
     fn frame(
         &self,
         tool: &crate::program::Hop,
