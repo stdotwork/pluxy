@@ -22,7 +22,7 @@ The program side of the contract, for any tool (`pluxy-program`):
 | `serve(input, output, identity, description, handler)` | `run` on any streams, for tests. |
 | `Handler::call(&Call)` | One call of a declared operation: its output or an `Error`. |
 | `Handler::reconcile(&Call, unknown, journals)` | Before `describe` is answered: the calls of unknown outcome and the open journals the host names. By default nothing. |
-| `Call` | `id`, `op`, `input`, `chain`, `secrets`, `job`; `cancelled()` and `check()`; `progress(value)`; `call(package, op, input)` (an import, through the host; cancelled with its call); `vault(op, fields)` (backups and journals); `jobs(op, input)` (a consumer's `registrations`, `start` or `cancel`); `batch(value)` (a producer's next batch, once the job's window has room) and `acked()`. |
+| `Call` | `id`, `op`, `input`, `chain`, `secrets`, `job`; `cancelled()` and `check()`; `progress(value)`; `call(package, op, input)` (an import, through the host; cancelled with its call); `vault(op, fields)` (backups and journals); `jobs(op, input)` (a consumer's `registrations`, `start` or `cancel`); `batch(value)` (a producer's next batch, once the job's window has room) and `acked()`; `spawn()` (asks the host to spawn the launch this call confirmed, naming nothing of it; cancelled with its call); `runtime(op, runtime)` (status, list, stop or restart of its package's managed runtimes). |
 | `Job` | The job a producer's call runs: `id`, `kind`, `window`. |
 | `Error` | The contract's error object: `invalid_request`, `unsupported`, `not_found`, `unavailable`, `internal`, `cancelled`, or any code. |
 | `read_frame`, `write_frame` | The framing: a four-byte big-endian length and UTF-8 JSON; a program's frames are at most `MAX_FRAME` (1 MiB). |
@@ -171,3 +171,28 @@ for it there): its `response_item` records become messages (user and assistant t
 the database's, else the last `turn_context`'s.
 
 The page renders every session's text as text, never as HTML.
+
+## `execution`
+
+`pluxy/execution` prepares the launches of pluxy's desktop app: an agent in a terminal, or a
+program run directly. The app's Launcher page and its tray's Start… menu use it, and so will client
+recipes. It never starts a process itself and never holds a secret's value: the host confirms each
+launch natively, spawns exactly what was confirmed when the program asks, and resolves secrets from
+its vault at the spawn (`../app/app-host/README.md`, "Launches and managed runtimes").
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `terminals` | `read` | `search_path`: the launch environment's PATH entries | `terminals`: Automatic first, then each terminal found, with its label and path |
+| `prepare` | `read` | `kind` (`terminal` or `direct`), `program` (a name looked up on `search_path`, or a full path), `override` (a full path used instead), `args`, `cwd`, `terminal` (default Automatic), `search_path` | A launch's `executable`, `argv` and `cwd`, and for a terminal the `program` it runs |
+| `launch` | `launch` | What `prepare` gave, with `lifetime`, `environment`, `stdin` and the secret field `key` (a reference only) | The host's answer to its spawn request: `lifetime`, and a managed runtime's `runtime` and `pid` |
+| `runtime` | `read` | `op` (`status`, `list`), `runtime` | The host's answer |
+| `control` | `write` | `op` (`stop`, `restart`), `runtime` | The host's answer |
+
+It exports only `launch`, under export contract 1: another package never looks at, stops or restarts
+its runtimes, and the app asks before each `control` call. Terminals, in Automatic's order (the old
+desktop app's list): `x-terminal-emulator` (System terminal), `gnome-terminal` (`--`), `konsole`,
+`xfce4-terminal` (`-x`), `mate-terminal` (`-x`), `kitty`, `alacritty`, `ghostty` and `xterm`, each
+running the program after `-e` unless noted. A terminal launch runs `<terminal> <flag> <program>
+<args>`; a direct one `<program> <args>`. The program must be an executable file, the working folder
+an existing absolute folder.
+

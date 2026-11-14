@@ -423,8 +423,9 @@ A call goes ahead only if all of these hold, checked again for each call:
 - A `write` or `disclose` call has a fresh native confirmation naming the whole chain and the
   exact input (its effect in parentheses: `(write)`, `(shows content)`). A
   `launch` call has a fresh native confirmation of the exact executable, `argv` and `cwd`. Only
-  the window's own direct call, made from a native gesture (a native button press), may use a
-  remembered approval, and only of exactly that launch. A call with a tool hop in its chain is
+  the window's own direct call, made from a native gesture, may use a remembered approval, and
+  only of exactly that launch: a Start in the app's launcher (a launch of the host's own list) or
+  in the tray's Start… menu ([the app's README](../README.md#the-launcher)). A call with a tool hop in its chain is
   prepared as an import, whoever started it, and never uses or saves a remembered approval; a
   chain a page started always asks too. Neither dialog offers "remember". The host
   confirms the launch, with its lifetime and launch environment; the operation receives it as its
@@ -537,6 +538,13 @@ and closing the window cancels every call, jobs' included. A job's operation can
 The host spawns what a person confirmed; a tool never starts an agent itself through the host by
 naming a program. A `launch` operation's input names `executable`, `argv` (the arguments after the
 program's name) and `cwd`, and may name:
+
+- `program`: the program a terminal runs, which must be one of `argv`. The confirmation opens and
+  hashes it as it does the executable, so a remembered approval does not stand for a replaced
+  program (a self-update) either, and the spawn refuses one changed since it was confirmed;
+- `stdin`: one of the launch's secret fields, whose secret the host writes to the launch's
+  standard input and then closes: the private channel to a credential bridge, never argv, its
+  environment or a file. The confirmation names it; it is part of the environment revision;
 
 - `lifetime`: `detached` (the default: an agent or a terminal that is no longer the app's) or
   `managed` (a runtime the app keeps and stops);
@@ -654,9 +662,16 @@ runtime.
 ### What a detached launch does not leave
 
 `setsid` gives a detached launch a session and process group of its own, but not a cgroup of its
-own: it stays in the app's. Stopping a systemd unit that runs the app with the default cgroup kill
-mode (or `systemd-oomd` acting on that cgroup) still ends it. Running detached launches in a
-transient systemd scope of their own is left to the launcher (P8h). And a process of the same user,
+own. So when the session bus has a systemd user manager, the host asks it
+(`org.freedesktop.systemd1.Manager.StartTransientUnit`, without starting one, waiting at most two
+seconds) for a transient scope `app-pluxy-launch-<hex>.scope` holding the launch's short-lived
+wrapper, which waits before it starts the launch until its cgroup is that scope (at most two
+seconds more): the launch and everything it starts are then outside the app's cgroup, and stopping
+a systemd unit that runs the app (its default cgroup kill mode, `ExitType=cgroup`) or
+`systemd-oomd` acting on the app's cgroup does not end them. The scope goes once its last process
+has exited. With no user manager (or no session bus), or when it refuses (the app runs in a cgroup
+it does not own, such as a login session's scope), the launch runs in the app's cgroup and the app
+logs why: once for a missing user manager, each time for a refusal. And a process of the same user,
 a native tool among them, can read a launch's environment, its secrets included, in
 `/proc/<pid>/environ`; the runtimes' process IDs are reported to their package. Same-user isolation
 is not claimed (see [Secrets, references and the vault](#secrets-references-and-the-vault)).

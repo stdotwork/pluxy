@@ -86,14 +86,14 @@ fn alive(pid: u64) -> bool {
 }
 
 /// Whether pid runs as the process whose command line holds marker.
-fn owned(pid: u64, marker: &str) -> bool {
+pub(super) fn owned(pid: u64, marker: &str) -> bool {
     alive(pid)
         && std::fs::read(format!("/proc/{pid}/cmdline"))
             .is_ok_and(|c| String::from_utf8_lossy(&c).contains(marker))
 }
 
 /// Waits until pid no longer runs as marker's process, at most within.
-fn ended(pid: u64, marker: &str, within: Duration) -> bool {
+pub(super) fn ended(pid: u64, marker: &str, within: Duration) -> bool {
     let deadline = Instant::now() + within;
     while Instant::now() < deadline {
         if !owned(pid, marker) {
@@ -105,7 +105,7 @@ fn ended(pid: u64, marker: &str, within: Duration) -> bool {
 }
 
 /// The record the agent writes at path, once it is there and names a process other than not.
-fn record(path: &Path, not: u64) -> Result<Value, String> {
+pub(super) fn record(path: &Path, not: u64) -> Result<Value, String> {
     wait_for(&format!("the agent's record {}", path.display()), || {
         std::fs::read(path)
             .ok()
@@ -190,7 +190,7 @@ fn names(env: &Value) -> Vec<String> {
 
 /// The agent's environment holds exactly the selected session values the app has (but removed),
 /// with the app's values, and asked: no other variable of the app's.
-fn check_environment(
+pub(super) fn check_environment(
     env: &Value,
     asked: &[(&str, &str)],
     removed: &[&str],

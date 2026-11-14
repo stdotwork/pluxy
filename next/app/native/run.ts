@@ -82,6 +82,14 @@
 // and the app; the runtimes stay controlled across the tool's restart, and Stop and Restart reach
 // only the registered group. After the app quits, the runner checks the detached agent still runs
 // and the runtimes do not, then ends every process the check named.
+// The launcher check (launcher.ts, launcher_native.rs) runs in one more session with that build:
+// the execution program prepares a terminal launch (Automatic, a program found on PATH) and
+// direct ones, the host spawns them after native confirmation; a remembered launch starts again in
+// one click from the window's launcher and from the tray's Start… menu, while a page's Start,
+// another chain and a changed executable or agent ask again; the three key consumers (an agent
+// given its key in its environment, a final process given key, base URL and model, a credential
+// bridge given its key on stdin) get the key and the execution program only references. After
+// the app quits, the runner checks the launched agents still run, then ends them.
 // The Codex session reader check (sessions.ts, sessions_native.rs) runs in one more session with
 // that build: the reader (next/app-tools/codex-sessions, built here) lists a copied Codex home
 // exactly as a hand-written expect file says, shows a session only after a native confirmation of
@@ -133,6 +141,7 @@ import { appImageHeader, buildSmokeAppImage, packAppImage } from "./appimage";
 import { buildDeviceFixtures } from "./device";
 import { type Feed, standInBrowser, startFeed } from "./feed";
 import { runInstances } from "./instances";
+import { buildLauncherFixtures } from "./launcher";
 import { descendants, webProcesses } from "./processes";
 import { buildProgramFixtures } from "./program";
 import { buildRoutingFixtures } from "./routing";
@@ -572,7 +581,7 @@ interface Rotation {
  * checks; routing: only the cross-package routing check; vault: only the vault check. core:
  * the session runs only the core steps, against that core source. release: the app starts with
  * that release installed and selected. spawnCheck: only the spawn check. reader: only the session
- * reader check. */
+ * reader check. launcherCheck: only the launcher check. */
 async function runApp(
   mode: Mode,
   artifact: Artifact,
@@ -594,6 +603,7 @@ async function runApp(
   spawnCheck = false,
   reader = false,
   usage = false,
+  launcherCheck = false,
 ): Promise<string[]> {
   const { label, bin } = artifact;
   const root = rotation.root ?? mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
@@ -673,6 +683,7 @@ async function runApp(
       !vault &&
       !core &&
       !spawnCheck &&
+      !launcherCheck &&
       !reader &&
       !usage &&
       suite !== "access"
@@ -757,6 +768,27 @@ async function runApp(
         JSON.stringify({ version: 0, registries: f.registries }),
       );
     }
+    // The launcher check's signed packages, terminal, agent, registry and trust profile, and its key.
+    const launcherDir = launcherCheck ? join(root, "launcher") : undefined;
+    let launcherBin: string | undefined;
+    if (launcherDir) {
+      mkdirSync(launcherDir);
+      const f = buildLauncherFixtures(
+        launcherDir,
+        dirs.home,
+        programFixture,
+        executionProgram,
+        executionManifest,
+      );
+      nonce = f.nonce;
+      canaries = f.canaries;
+      launcherBin = f.bin;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
     // The session reader check's signed reader, its registry and trust profile, the Codex home
     // and its canaries.
     const sessionsDir = reader ? join(root, "sessions") : undefined;
@@ -810,7 +842,15 @@ async function runApp(
       // The app starts again on the first run's HOME: its marker and profile stay, and so does
       // the nonce the marker holds.
       nonce = JSON.parse(readFileSync(join(dirs.home, MARKER_FILE), "utf8")).nonce;
-    } else if (!programDir && !routingDir && !vaultDir && !spawnDir && !sessionsDir && !usageDir) {
+    } else if (
+      !programDir &&
+      !routingDir &&
+      !vaultDir &&
+      !spawnDir &&
+      !sessionsDir &&
+      !launcherDir &&
+      !usageDir
+    ) {
       try {
         nonce = /^nonce=([0-9a-f]{64})$/m.exec(run(probe, ["trust-marker", dirs.home], app))?.[1] ?? "";
         if (!nonce) throw new Error("it printed no nonce");
@@ -831,7 +871,8 @@ async function runApp(
     if (key) writeFileSync(keyFile, JSON.stringify({ key, wrong: wrongKey }), { mode: 0o600 });
     // Only what the app needs: no display or session bus but the run's own.
     const env: Record<string, string> = {
-      PATH: process.env.PATH ?? "/usr/bin:/bin",
+      // The launcher check's stand-in terminal and agent come first.
+      PATH: `${launcherBin ? `${launcherBin}:` : ""}${process.env.PATH ?? "/usr/bin:/bin"}`,
       LANG: "C.UTF-8",
       HOME: dirs.home,
       XDG_CONFIG_HOME: dirs.config,
@@ -866,6 +907,8 @@ async function runApp(
       ...(vaultDir ? { PLUXY_APP_TEST_VAULT: vaultDir } : {}),
       // The canaries no spawned process may inherit, and the variable a launch inherits by name.
       ...(spawnDir ? { PLUXY_APP_TEST_SPAWN: spawnDir, ...spawnEnv } : {}),
+      // The probe clicks the tray's Start… items through the real watcher's dbusmenu.
+      ...(launcherDir ? { PLUXY_APP_TEST_LAUNCHER: launcherDir, PLUXY_APP_TEST_PROBE: probe } : {}),
       ...(sessionsDir ? { PLUXY_APP_TEST_SESSIONS: sessionsDir } : {}),
       ...(usageDir ? { PLUXY_APP_TEST_USAGE: usageDir } : {}),
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: artifact.identifier } : {}),
@@ -1153,6 +1196,24 @@ async function runApp(
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode} spawn ${JSON.stringify(r ?? {})}`);
       console.log(`${mode}: spawn ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
+    if (launcherDir) {
+      const r = steps.get("launcher") as { passed?: boolean } | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(r?.passed === true, `the launcher check did not complete: ${failure}`);
+      // After the app quit: the agents it launched run on.
+      await Bun.sleep(1000);
+      const known = readKnown(launcherDir);
+      if (r?.passed === true) {
+        check(known.detached.length > 0, "the launcher check named no launched agent to watch");
+        for (const k of known.detached)
+          check(owned(k), `the launched agent ${k.pid} did not outlive the app`);
+      }
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} launcher ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode}: launcher ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
 
@@ -1486,6 +1547,7 @@ async function runApp(
     feed?.stop();
     // Every process the spawn check named, still running as itself: nothing else would end them.
     if (spawnCheck) cleanKnown(join(root, "spawn"));
+    if (launcherCheck) cleanKnown(join(root, "launcher"));
     // A folder left behind is a problem of its own; it must not hide this run's report.
     if (!rotation.root)
       await removeRun(root).catch((e) => problems.push(`the run folder ${root} was not removed: ${e}`));
@@ -1665,6 +1727,9 @@ const programFixture = join(targetDir, "debug", "examples", "program_fixture");
 const appTools = join(next, "app-tools");
 const appToolsTarget = join(targetDir, "app-tools");
 const sessionsReader = join(appToolsTarget, "debug", "codex-sessions");
+/** The execution program (next/app-tools/execution) and its manifest, for the launcher check. */
+const executionManifest = join(appTools, "execution", "pluxy-extension.json");
+const executionProgram = join(appToolsTarget, "debug", "execution");
 let appImage = ""; // the smoke AppImage the sessions run
 const problems: string[] = [];
 
@@ -1741,6 +1806,9 @@ async function main(): Promise<number> {
     ],
     tauri,
   );
+  // The execution program the launcher check installs, from its own workspace.
+  if (existsSync(executionManifest))
+    run("cargo", ["build", "--locked", "-p", "execution", "--target-dir", appToolsTarget], appTools);
   // The build without artifact-test-trust, kept aside before the build with it replaces it. The
   // device check needs the one (a normal build refuses the curated native tool), the admission
   // session and the updater gate's identifier check the other (its features are the test
@@ -2023,6 +2091,32 @@ async function main(): Promise<number> {
           false,
           undefined,
           release,
+          false,
+          false,
+          true,
+        )),
+      );
+      // The launcher check, on the same build.
+      p.push(
+        ...(await runApp(
+          "managed",
+          trusted,
+          updaterKey,
+          managed,
+          undefined,
+          false,
+          false,
+          undefined,
+          undefined,
+          {},
+          false,
+          false,
+          false,
+          false,
+          false,
+          undefined,
+          release,
+          false,
           false,
           false,
           true,

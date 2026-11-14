@@ -34,6 +34,9 @@ pub struct Launch {
     pub executable: PathBuf,
     pub argv: Vec<String>,
     pub cwd: PathBuf,
+    /// The program a terminal runs (one of argv): opened, hashed and bound as the executable is,
+    /// so its replacement (a self-update) asks again too.
+    pub program: Option<PathBuf>,
     pub terminal_adapter: Package,
     pub environment_revision: String,
     /// Names and non-secret changed values only; no secret bytes.
@@ -166,6 +169,13 @@ impl OpenTarget {
         Ok(())
     }
 }
+/// A launch's program other than its executable (the agent a terminal runs), as confirmed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct ExactProgram {
+    file: Target,
+    metadata: Metadata,
+    sha256: String,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct ExactLaunch {
     executable: Target,
@@ -173,6 +183,8 @@ struct ExactLaunch {
     sha256: String,
     argv: Vec<String>,
     cwd: Target,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    program: Option<ExactProgram>,
     terminal_adapter: Package,
     environment_revision: String,
     environment_review: Vec<(String, Option<String>)>,
@@ -205,7 +217,7 @@ fn same_launch_recipe(a: &ExactAction, b: &ExactAction) -> bool {
 /// Set only by native entry points, never deserialized from page data. Page and Import never use
 /// a remembered approval.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // Tray and native UI launcher handlers are added by the launcher slice.
+#[allow(dead_code)] // NativeUi: native-test fixtures only so far.
 enum Origin {
     Main,
     Tray,
@@ -229,6 +241,7 @@ pub struct Prepared {
     files: Vec<OpenTarget>,
     executable: Option<OpenTarget>,
     cwd: Option<OpenTarget>,
+    program: Option<OpenTarget>,
 }
 impl Prepared {
     fn check(&self) -> Result<(), String> {
@@ -239,6 +252,15 @@ impl Prepared {
             e.check()?;
             if Metadata::read(&e.file)? != l.metadata {
                 return Err("executable metadata changed; review again".into());
+            }
+        }
+        if let (Some(p), Some(x)) = (
+            &self.program,
+            self.exact.launch.as_ref().and_then(|l| l.program.as_ref()),
+        ) {
+            p.check()?;
+            if Metadata::read(&p.file)? != x.metadata {
+                return Err("program metadata changed; review again".into());
             }
         }
         if let Some(c) = &self.cwd {
@@ -333,6 +355,8 @@ fn review_text(exact: &ExactAction) -> Result<String, String> {
 /// cwd. Wrapper scripts check the script only, not the interpreter or transitively loaded code.
 pub struct Authorized {
     pub prepared: Prepared,
+    /// The remembered approval that authorized it, or that its confirmation saved.
+    pub approval: Option<String>,
 }
 impl Authorized {
     /// Opened with O_CLOEXEC. In the child, clear FD_CLOEXEC before fexecve for #! scripts
@@ -371,6 +395,25 @@ struct Approval {
 // create this only in their native event callbacks. DOM and IPC paths cannot create one.
 pub struct Gesture {
     created: Instant,
+    origin: Origin,
+}
+impl Gesture {
+    /// A click on one of the tray's Start… items, made in its menu event handler.
+    pub(crate) fn tray() -> Gesture {
+        Gesture {
+            created: Instant::now(),
+            origin: Origin::Tray,
+        }
+    }
+    /// The launcher's Start in the app's own window (`launcher_start`, after its caller check),
+    /// naming a remembered launch of the host's own list: it can only start exactly that launch
+    /// again, and anything changed asks.
+    pub(crate) fn main_window() -> Gesture {
+        Gesture {
+            created: Instant::now(),
+            origin: Origin::Main,
+        }
+    }
 }
 #[derive(Serialize, Deserialize)]
 struct SettingsFile {
@@ -607,6 +650,15 @@ impl Confirmations {
     pub(crate) fn prepare_main(&mut self, action: Action) -> Result<Prepared, String> {
         self.prepare(action, Origin::Main)
     }
+    /// `prepare_main` for a call a native gesture started: prepared with the gesture's origin
+    /// (the window's launcher or the tray), which `remembered` may then use.
+    pub(crate) fn prepare_gestured(
+        &mut self,
+        action: Action,
+        gesture: &Gesture,
+    ) -> Result<Prepared, String> {
+        self.prepare(action, gesture.origin)
+    }
     // Trusted preparations are created only by native main/tray/UI handlers in this module.
     fn prepare(&mut self, action: Action, origin: Origin) -> Result<Prepared, String> {
         if action.chain.is_empty() {
@@ -619,6 +671,7 @@ impl Confirmations {
             .collect::<Result<Vec<_>, _>>()?;
         let mut executable = None;
         let mut cwd = None;
+        let mut program = None;
         let launch = if let Some(l) = action.launch {
             let mut e = OpenTarget::open(&l.executable)?;
             if !e.file.metadata().map_err(|e| e.to_string())?.is_file() {
@@ -650,12 +703,21 @@ impl Confirmations {
             if !c.file.metadata().map_err(|e| e.to_string())?.is_dir() {
                 return Err("cwd is not a directory".into());
             }
+            let exact_program = match &l.program {
+                Some(path) => {
+                    let (p, x) = self.open_executable(path)?;
+                    program = Some(p);
+                    Some(x)
+                }
+                None => None,
+            };
             let exact = ExactLaunch {
                 executable: e.identity.clone(),
                 metadata: m,
                 sha256: hash,
                 argv: l.argv,
                 cwd: c.identity.clone(),
+                program: exact_program,
                 terminal_adapter: l.terminal_adapter,
                 environment_revision: l.environment_revision,
                 environment_review: l.environment_review,
@@ -681,9 +743,40 @@ impl Confirmations {
             files,
             executable,
             cwd,
+            program,
         };
         p.check()?;
         Ok(p)
+    }
+    /// Opens and hashes (or reuses the cached hash of) an executable file, a launch's program.
+    fn open_executable(&mut self, path: &Path) -> Result<(OpenTarget, ExactProgram), String> {
+        let mut e = OpenTarget::open(path)?;
+        if !e.file.metadata().map_err(|e| e.to_string())?.is_file() {
+            return Err("program is not a regular file".into());
+        }
+        let m = Metadata::read(&e.file)?;
+        if m.mode & 0o111 == 0 {
+            return Err("program is not executable".into());
+        }
+        let hash = match self
+            .cache
+            .get(&e.identity.canonical)
+            .filter(|(cached, _)| *cached == m)
+        {
+            Some((_, h)) => h.clone(),
+            None => {
+                let h = hash_file(&mut e.file, &m)?;
+                self.cache
+                    .insert(e.identity.canonical.clone(), (m.clone(), h.clone()));
+                h
+            }
+        };
+        let x = ExactProgram {
+            file: e.identity.clone(),
+            metadata: m,
+            sha256: hash,
+        };
+        Ok((e, x))
     }
     fn prune(&mut self) {
         let now = Instant::now();
@@ -913,6 +1006,7 @@ impl Confirmations {
         p.prepared.check()?;
         Ok(Authorized {
             prepared: p.prepared,
+            approval: t.approval,
         })
     }
     /// Completion is available to native callers only and is removed when read.
@@ -921,6 +1015,10 @@ impl Confirmations {
     }
     pub fn token_action(&self, token: &str) -> Option<&str> {
         self.issued.get(token).map(|t| t.action.as_str())
+    }
+    /// Whether remembered approval id still stands.
+    pub(crate) fn has_approval(&self, id: &str) -> bool {
+        self.approvals.iter().any(|a| a.id == id)
     }
     pub fn revoke(&mut self, approval: &str) -> Result<(), String> {
         let approvals: Vec<_> = self

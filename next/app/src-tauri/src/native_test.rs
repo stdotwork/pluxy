@@ -25,6 +25,8 @@
 //!    environment (`spawn_native.rs`); with
 //!    `PLUXY_APP_TEST_SESSIONS`, only the read-only Codex session reader (`sessions_native.rs`);
 //!    with `PLUXY_APP_TEST_USAGE`, only the usage hub and its fixture parser (`usage_native.rs`);
+//!    with `PLUXY_APP_TEST_LAUNCHER`, only the execution program and the launcher
+//!    (`launcher_native.rs`);
 //! 5. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!
@@ -66,6 +68,9 @@ mod ingress;
 #[cfg(target_os = "linux")]
 #[path = "jobs_native.rs"]
 mod jobs;
+#[cfg(target_os = "linux")]
+#[path = "launcher_native.rs"]
+mod launcher;
 #[cfg(target_os = "linux")]
 #[path = "program_native.rs"]
 mod program;
@@ -465,6 +470,14 @@ fn run(app: &AppHandle) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_SPAWN") {
         spawn::run(app, &main, dir.into())?;
+        log("quit", json!({}));
+        crate::quit(app);
+        return Ok(());
+    }
+    // The execution program and the launcher (launcher_native.rs), in a session of its own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_LAUNCHER") {
+        launcher::run(app, &main, dir.into())?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());
