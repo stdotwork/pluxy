@@ -36,7 +36,7 @@ const object = { type: "object" };
 /** The page: says hello; on its parent's {routeCall} sends that call on the channel, and passes
  * every channel reply back to its parent as {routeReply}. It tells its parent once it has the
  * channel ({routeReady}). */
-const PAGE_SCRIPT = `let port;
+export const PAGE_SCRIPT = `let port;
 addEventListener("message", (e) => {
   if (e.source !== parent) return;
   const d = e.data;

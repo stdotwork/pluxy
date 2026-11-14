@@ -780,6 +780,10 @@ pub fn main() -> ! {
                                 "child": child,
                                 "calls": calls,
                                 "env": names,
+                                "home": std::env::var_os("HOME")
+                                    .map(|v| v.to_string_lossy().into_owned()),
+                                "data_dir": std::env::var_os("PLUXY_TOOL_DATA_DIR")
+                                    .map(|v| v.to_string_lossy().into_owned()),
                                 "fds": fds(),
                                 "cwd": std::env::current_dir().ok(),
                                 "chain": chain,

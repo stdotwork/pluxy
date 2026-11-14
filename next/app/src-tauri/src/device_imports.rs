@@ -15,8 +15,29 @@ use super::*;
 
 /// Imports a package may declare.
 const MAX_IMPORTS: usize = 16;
-/// An operation's effect classes: read needs no confirmation per call; write and launch do.
-const EFFECTS: &[&str] = &["read", "write", "launch"];
+/// An operation's effect classes: read needs no confirmation per call; write, launch and
+/// disclose (it shows content, such as a session's messages) do.
+const EFFECTS: &[&str] = &["read", "write", "launch", "disclose"];
+
+/// What an effect is called in native confirmations and on the Device page: `disclose` shows
+/// content; the others by their names.
+pub fn effect_label(effect: &str) -> &str {
+    match effect {
+        "disclose" => "shows content",
+        e => e,
+    }
+}
+
+/// Whether each call of an operation with this effect asks a native confirmation: every effect
+/// but an exact `read`, an unknown one too.
+pub fn asks_each_call(effect: &str) -> bool {
+    effect != "read"
+}
+
+/// Whether a native confirmation of a call with this effect may be remembered: only a launch's.
+pub fn may_remember(effect: &str) -> bool {
+    effect == "launch"
+}
 /// The input fields a launch-class operation names its launch with.
 pub const LAUNCH_FIELDS: &[&str] = &["executable", "argv", "cwd"];
 /// Secret fields an operation may declare.
@@ -221,7 +242,7 @@ pub(super) fn validate_effect(op: &Operation) -> Result<(), String> {
     let effect = op.effect.as_deref().unwrap_or("write");
     if !EFFECTS.contains(&effect) {
         return Err(format!(
-            "app.operations {}: effect must be read, write or launch",
+            "app.operations {}: effect must be read, write, launch or disclose",
             op.id
         ));
     }
@@ -461,13 +482,13 @@ impl Catalog {
                     t.id,
                     a.version,
                     d.map_or("", |d| d.description.as_str()),
-                    d.map_or("write", |d| d.effect.as_str())
+                    effect_label(d.map_or("write", |d| d.effect.as_str()))
                 ));
             }
         }
         Ok(crate::confirmation::Action {
             what: format!(
-                "Allow web package {id} {} to call these operations of native tools, which have full access to your user account. Each read is answered without asking again; each write and launch asks. Operations: {}",
+                "Allow web package {id} {} to call these operations of native tools, which have full access to your user account. Each read is answered without asking again; each write, launch and call that shows content asks. Operations: {}",
                 p.active.version,
                 lines.join("; ")
             ),

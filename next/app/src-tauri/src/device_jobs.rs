@@ -182,6 +182,19 @@ pub(super) fn validate(
             return Err(format!("app.consumes names kind {} more than once", c.kind));
         }
         keyless("app.consumes", &c.deliver)?;
+        // A delivery is the host's call, made with no native confirmation: a deliver operation
+        // that declares it shows content or launches would promise a confirmation the host never
+        // asks. Read and write (the default) stay allowed.
+        if let Some(e @ ("disclose" | "launch")) = ops
+            .iter()
+            .find(|o| o.id == c.deliver)
+            .and_then(|o| o.effect.as_deref())
+        {
+            return Err(format!(
+                "app.consumes: deliver operation {} declares effect {e}, but deliveries are the host's calls and ask no confirmation; declare it read or write",
+                c.deliver
+            ));
+        }
         if produces.iter().any(|p| p.operation == c.deliver) {
             return Err(format!(
                 "app.produces: operation {} is also a deliver operation, which takes only the host's deliveries",

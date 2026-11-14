@@ -50,8 +50,9 @@ export interface DeviceRelease {
   /** Whether it declares settings; they are not served on this device yet. */
   settings: boolean;
   tier: "web" | "native";
-  /** A native tool's declared operations, as [id, description]. */
-  operations: [string, string][];
+  /** A native tool's declared operations, as [id, description, effect]: read, write, launch or
+   * "shows content" (disclose). */
+  operations: [string, string, string][];
   imports: DeviceImport[];
   /** A native tool's operations other packages may import. */
   exports: DeviceExports | null;

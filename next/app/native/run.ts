@@ -72,6 +72,12 @@
 // and the app; the runtimes stay controlled across the tool's restart, and Stop and Restart reach
 // only the registered group. After the app quits, the runner checks the detached agent still runs
 // and the runtimes do not, then ends every process the check named.
+// The Codex session reader check (sessions.ts, sessions_native.rs) runs in one more session with
+// that build: the reader (next/app-tools/codex-sessions, built here) lists a copied Codex home
+// exactly as a hand-written expect file says, shows a session only after a native confirmation of
+// each detail call, leaves the Codex home's bytes and modification times as they were, keeps the
+// config.toml and auth.json canaries out of pages, webviews and the app's output, and leaves no
+// reader process when idle or disabled.
 // The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
@@ -112,6 +118,7 @@ import { descendants, webProcesses } from "./processes";
 import { buildProgramFixtures } from "./program";
 import { buildRoutingFixtures } from "./routing";
 import { missingPrerequisites } from "./services";
+import { buildSessionsFixtures } from "./sessions";
 import { buildSpawnFixtures } from "./spawn";
 import { buildVaultFixtures } from "./vault";
 
@@ -539,7 +546,8 @@ interface Rotation {
  * the session checks only signed native-tier admission; program: only the program host and swap
  * checks; routing: only the cross-package routing check; vault: only the vault check. core:
  * the session runs only the core steps, against that core source. release: the app starts with
- * that release installed and selected. spawnCheck: only the spawn check. */
+ * that release installed and selected. spawnCheck: only the spawn check. reader: only the session
+ * reader check. */
 async function runApp(
   mode: Mode,
   artifact: Artifact,
@@ -559,6 +567,7 @@ async function runApp(
   core?: CoreSource,
   release?: Release,
   spawnCheck = false,
+  reader = false,
 ): Promise<string[]> {
   const { label, bin } = artifact;
   const root = rotation.root ?? mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
@@ -638,6 +647,7 @@ async function runApp(
       !vault &&
       !core &&
       !spawnCheck &&
+      !reader &&
       suite !== "access"
         ? join(root, "device")
         : undefined;
@@ -720,6 +730,20 @@ async function runApp(
         JSON.stringify({ version: 0, registries: f.registries }),
       );
     }
+    // The session reader check's signed reader, its registry and trust profile, the Codex home
+    // and its canaries.
+    const sessionsDir = reader ? join(root, "sessions") : undefined;
+    if (sessionsDir) {
+      mkdirSync(sessionsDir);
+      const f = buildSessionsFixtures(sessionsDir, dirs.home, appTools, sessionsReader);
+      nonce = f.nonce;
+      canaries = f.canaries;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
     if (curated) {
       mkdirSync(curated);
       if (device) mkdirSync(device);
@@ -740,7 +764,7 @@ async function runApp(
       // The app starts again on the first run's HOME: its marker and profile stay, and so does
       // the nonce the marker holds.
       nonce = JSON.parse(readFileSync(join(dirs.home, MARKER_FILE), "utf8")).nonce;
-    } else if (!programDir && !routingDir && !vaultDir && !spawnDir) {
+    } else if (!programDir && !routingDir && !vaultDir && !spawnDir && !sessionsDir) {
       try {
         nonce = /^nonce=([0-9a-f]{64})$/m.exec(run(probe, ["trust-marker", dirs.home], app))?.[1] ?? "";
         if (!nonce) throw new Error("it printed no nonce");
@@ -796,6 +820,7 @@ async function runApp(
       ...(vaultDir ? { PLUXY_APP_TEST_VAULT: vaultDir } : {}),
       // The canaries no spawned process may inherit, and the variable a launch inherits by name.
       ...(spawnDir ? { PLUXY_APP_TEST_SPAWN: spawnDir, ...spawnEnv } : {}),
+      ...(sessionsDir ? { PLUXY_APP_TEST_SESSIONS: sessionsDir } : {}),
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: artifact.identifier } : {}),
       ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
       ...(key ? { PLUXY_APP_TEST_KEY_FILE: keyFile } : {}),
@@ -863,7 +888,11 @@ async function runApp(
         return;
       }
       if (canaries.some((canary) => line.includes(canary))) {
-        problems.push("the vault or spawn check's key or a canary appeared on stdout/stderr");
+        problems.push(
+          reader
+            ? "the session reader check's canary appeared on stdout/stderr"
+            : "the vault or spawn check's key or a canary appeared on stdout/stderr",
+        );
         return;
       }
       // window.ts's, privacy.ts's and access-suite.ts's checks, each shown.
@@ -1063,6 +1092,16 @@ async function runApp(
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode} spawn ${JSON.stringify(r ?? {})}`);
       console.log(`${mode}: spawn ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
+    if (reader) {
+      const r = steps.get("sessions") as { passed?: boolean } | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(r?.passed === true, `the session reader check did not complete: ${failure}`);
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} sessions ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode}: sessions ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
 
@@ -1535,6 +1574,10 @@ const targetDir = resolvePath(tauri, process.env.CARGO_TARGET_DIR ?? "target");
 const probe = join(targetDir, "debug", "examples", "session_probe");
 /** The disposable summary tool the program host check packs into a signed package. */
 const programFixture = join(targetDir, "debug", "examples", "program_fixture");
+/** The app tools' workspace, and the Codex session reader the session reader check packs. */
+const appTools = join(next, "app-tools");
+const appToolsTarget = join(targetDir, "app-tools");
+const sessionsReader = join(appToolsTarget, "debug", "codex-sessions");
 let appImage = ""; // the smoke AppImage the sessions run
 const problems: string[] = [];
 
@@ -1634,6 +1677,10 @@ async function main(): Promise<number> {
     tauri,
   );
   const trustBin = join(targetDir, "debug", "pluxy-app");
+  // The Codex session reader, from the app tools' workspace, when it is there.
+  if (existsSync(join(appTools, "Cargo.toml"))) {
+    run("cargo", ["build", "--locked", "-p", "codex-sessions", "--target-dir", appToolsTarget], appTools);
+  }
   const appImageDir = tempDir("pluxy-app-native-appimage-");
   // The same test trust profile in every run; without a test package, a key no build carries.
   const updaterKey = testPackage?.updater_pubkey ?? "no-test-package";
@@ -1831,6 +1878,30 @@ async function main(): Promise<number> {
           false,
           undefined,
           release,
+          true,
+        )),
+      );
+      // The Codex session reader check, on the same build.
+      p.push(
+        ...(await runApp(
+          "managed",
+          trusted,
+          updaterKey,
+          managed,
+          undefined,
+          false,
+          false,
+          undefined,
+          undefined,
+          {},
+          false,
+          false,
+          false,
+          false,
+          false,
+          undefined,
+          release,
+          false,
           true,
         )),
       );
