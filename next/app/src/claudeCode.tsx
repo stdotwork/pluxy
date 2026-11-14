@@ -22,6 +22,22 @@ import {
   useAction,
   useLoad,
 } from "../../ui/kit/ui";
+import {
+  CLIENT,
+  type Form,
+  fresh,
+  fromFile,
+  keysOf,
+  MODELS,
+  PACKAGE,
+  type ReadBack,
+  ROLES,
+  type Role,
+  ready,
+  type Secret,
+  WINDOW_1M,
+  WINDOW_DEFAULT,
+} from "./claudeCodeForm";
 import { connectionGet } from "./host";
 
 const t = strings("claudeCode", {
@@ -78,7 +94,11 @@ const t = strings("claudeCode", {
   clearHint: "Remove pluxy's integration settings and keep other settings. Restart the agent afterward.",
   restore: "Restore Backup",
   restoreHint: "Put the file back as it was before the first apply.",
-  ranges: "Maximum context must be 100000–1000000 and the auto-compact percentage must be 1–100.",
+  ranges:
+    "Opus, Sonnet and Haiku each need a model (not only [1m]); the auto-compact window must be a whole number from 100000 to 1000000 and the percentage a whole number from 1 to 100.",
+  refused: "Claude Code would not take this file",
+  refusedHint:
+    "Apply and Close configuration leave it alone until it is fixed; Restore Backup puts back the file as it was before the first apply.",
   noCore: "Connect to a core first: its address goes into the settings.",
   start: "Start CLI",
   cwd: "Working directory",
@@ -89,15 +109,7 @@ const t = strings("claudeCode", {
   launch: "Start Claude Code",
 });
 
-/** Claude Code's own models (its documentation's alias table), suggested until the model picker
- * lists the core's. */
-const MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-2"] as const;
-const ROLES = ["opus", "sonnet", "haiku", "fable"] as const;
-type Role = (typeof ROLES)[number];
 const LABELS: Record<Role, string> = { opus: "Opus", sonnet: "Sonnet", haiku: "Haiku", fable: "Fable" };
-const PACKAGE = "pluxy/claude-code";
-const SET_DEFAULT = 200000;
-const SET_1M = 1000000;
 
 type Reply<T> = { status: number; body?: T; error?: { code: string; message: string } };
 
@@ -112,58 +124,11 @@ async function reply<T>(cmd: string, args?: Record<string, unknown>): Promise<Re
 const tool = <T,>(op: string, input: Record<string, unknown>) =>
   reply<T>("program_call", { package: PACKAGE, op, input });
 
-interface ReadBack {
-  state: "configured" | "not-configured" | "needs-update";
-  base_url: string | null;
-  key_set: boolean;
-  startup_model: string | null;
-  subagent_model: string;
-  max_context_tokens: number | null;
-  auto_compact_pct: number | null;
-  disable_auto_compact: boolean;
-  [k: string]: unknown;
-}
-
 interface Preview {
-  targets: { selected: string; target: string; link: string | null }[];
+  /** The pinned file: passed as is to apply, clear and restore. */
+  targets: { selected: string; target: string; link: string | null; [k: string]: unknown }[];
   applied: boolean;
   settings: ReadBack;
-}
-
-interface Form {
-  models: Record<Role, string>;
-  oneM: Record<Role, boolean>;
-  startup: string;
-  subagent: string;
-  window: number;
-  pct: number;
-  disable: boolean;
-}
-
-const fresh = (): Form => ({
-  models: { opus: MODELS[0], sonnet: MODELS[1], haiku: MODELS[2], fable: "" },
-  oneM: { opus: false, sonnet: false, haiku: false, fable: false },
-  startup: "opus",
-  subagent: "",
-  window: SET_DEFAULT,
-  pct: 90,
-  disable: false,
-});
-
-/** The form from what the file holds, where it holds anything. */
-function fromFile(r: ReadBack): Form {
-  const f = fresh();
-  for (const role of ROLES) {
-    const m = r[role];
-    if (typeof m === "string" && m) f.models[role] = m;
-    f.oneM[role] = r[`${role}_1m`] === true;
-  }
-  if (r.startup_model) f.startup = r.startup_model;
-  f.subagent = r.subagent_model;
-  if (r.max_context_tokens) f.window = r.max_context_tokens;
-  if (r.auto_compact_pct) f.pct = r.auto_compact_pct;
-  f.disable = r.disable_auto_compact;
-  return f;
 }
 
 function Text(props: {
@@ -229,7 +194,7 @@ function StartCli(props: { available: boolean }) {
     reply<{ terminals: { id: string; label: string }[] }>("launcher_terminals"),
   );
   const action = useAction(state.reload);
-  const recent = state.data?.history[t("title")] ?? [];
+  const recent = state.data?.history[CLIENT] ?? [];
   const start = () =>
     action.run(async () => {
       const recipe = await tool<Record<string, unknown>>("recipe", {});
@@ -281,7 +246,8 @@ export function ClaudeCodePage() {
   const [form, setForm] = useState<Form>(fresh);
   const [secret, setSecret] = useState("");
   const [core, setCore] = useState<string>();
-  const secrets = useLoad(() => reply<{ id: string; label: string }[]>("vault_secrets"));
+  const secrets = useLoad(() => reply<{ secrets: Secret[] }>("vault_secrets"));
+  const keys = keysOf(secrets.data);
   const listId = useId();
   useEffect(() => {
     connectionGet().then(
@@ -306,11 +272,14 @@ export function ClaudeCodePage() {
       return r;
     });
   const write = useAction(load);
-  // A write acts on the file the last preview pinned; a new preview first, so the pins are fresh.
-  const pins = async () => {
-    const r = await tool<Preview>("preview", selection());
-    return r.body?.targets;
-  };
+  // A write acts on the file the last preview pinned (the tool refuses it if the file changed
+  // since); choosing another file drops that preview, so a write never pins a file unread.
+  const reselect =
+    <T,>(f: (v: T) => void) =>
+    (v: T) => {
+      f(v);
+      setPreview(undefined);
+    };
   const set = (patch: Partial<Form>) => setForm((f) => ({ ...f, ...patch }));
   const setOneM = (role: Role, on: boolean) =>
     setForm((f) => {
@@ -318,17 +287,18 @@ export function ClaudeCodePage() {
       const any = Object.values(oneM).some(Boolean);
       // The window follows the 1M switches while it holds one of their defaults.
       const window =
-        f.window === SET_DEFAULT && any ? SET_1M : f.window === SET_1M && !any ? SET_DEFAULT : f.window;
+        f.window === WINDOW_DEFAULT && any
+          ? WINDOW_1M
+          : f.window === WINDOW_1M && !any
+            ? WINDOW_DEFAULT
+            : f.window;
       return { ...f, oneM, window };
     });
-  const ranges = form.window >= 100000 && form.window <= 1000000 && form.pct >= 1 && form.pct <= 100;
+  const valid = ready(form);
   const apply = () =>
-    write.run(async () => {
-      const targets = await pins();
-      if (!targets)
-        return { status: 400, error: { code: "refused", message: "the settings file could not be read" } };
-      return tool("apply", {
-        targets,
+    write.run(() =>
+      tool("apply", {
+        targets: preview?.targets,
         base_url: core,
         key: secret,
         ...Object.fromEntries(
@@ -342,17 +312,12 @@ export function ClaudeCodePage() {
         max_context_tokens: form.window,
         auto_compact_pct: form.pct,
         disable_auto_compact: form.disable,
-      });
-    });
-  const undo = (op: "clear" | "restore") =>
-    write.run(async () => {
-      const targets = await pins();
-      if (!targets)
-        return { status: 400, error: { code: "refused", message: "the settings file could not be read" } };
-      return tool(op, { targets });
-    });
+      }),
+    );
+  const undo = (op: "clear" | "restore") => write.run(() => tool(op, { targets: preview?.targets }));
   const addKey = useAction(secrets.reload);
   const st = preview?.settings;
+  const refused = st?.state === "refused";
   const applyLabel = !preview?.applied
     ? t("connect")
     : st?.state === "configured"
@@ -381,15 +346,15 @@ export function ClaudeCodePage() {
             { value: "file", label: t("fileSelected") },
             { value: "root", label: t("fileInRoot") },
           ]}
-          onChange={setWhere}
+          onChange={reselect(setWhere)}
         />
         {where === "file" && (
-          <Text label={t("filePath")} hint={t("filePathHint")} value={file} onInput={setFile} />
+          <Text label={t("filePath")} hint={t("filePathHint")} value={file} onInput={reselect(setFile)} />
         )}
         {where === "root" && (
           <>
-            <Text label={t("root")} hint={t("rootHint")} value={root} onInput={setRoot} />
-            <Text label={t("inRoot")} value={inRoot} onInput={setInRoot} />
+            <Text label={t("root")} hint={t("rootHint")} value={root} onInput={reselect(setRoot)} />
+            <Text label={t("inRoot")} value={inRoot} onInput={reselect(setInRoot)} />
           </>
         )}
         {read.error && <Notice tone="danger">{read.error}</Notice>}
@@ -401,21 +366,28 @@ export function ClaudeCodePage() {
             rows={[
               [
                 t("status"),
-                preview.applied
-                  ? t("applied")
-                  : st.state === "configured"
-                    ? t("configured")
-                    : st.state === "needs-update"
-                      ? t("needsUpdate")
-                      : t("notConfigured"),
+                refused
+                  ? t("refused")
+                  : preview.applied
+                    ? t("applied")
+                    : st.state === "configured"
+                      ? t("configured")
+                      : st.state === "needs-update"
+                        ? t("needsUpdate")
+                        : t("notConfigured"),
               ],
               [t("target"), preview.targets[0]?.target ?? ""],
-              [t("keySet"), st.key_set ? t("yes") : t("no")],
+              ...(refused ? [] : [[t("keySet"), st.key_set ? t("yes") : t("no")] as [string, string]]),
             ]}
           />
         )}
+        {refused && (
+          <Notice tone="warn">
+            {st?.reason} {t("refusedHint")}
+          </Notice>
+        )}
       </Card>
-      {preview && (
+      {preview && !refused && (
         <>
           <Card title={t("mapping")}>
             <p class="muted">{t("mappingHint")}</p>
@@ -479,11 +451,12 @@ export function ClaudeCodePage() {
           </Card>
           <Card title={t("key")}>
             <p class="muted">{t("keyHint")}</p>
-            {secrets.data && secrets.data.length > 0 ? (
+            {secrets.error && <Notice tone="danger">{secrets.error}</Notice>}
+            {keys.length > 0 ? (
               <Choices
                 label={t("key")}
                 value={secret || undefined}
-                choices={secrets.data.map((s) => ({ value: s.id, label: s.label }))}
+                choices={keys.map((s) => ({ value: s.id, label: s.label }))}
                 onChange={setSecret}
               />
             ) : (
@@ -503,26 +476,24 @@ export function ClaudeCodePage() {
               {t("addKey")}
             </Button>
           </Card>
-          <Card>
-            {!ranges && <Notice tone="warn">{t("ranges")}</Notice>}
-            {write.error && <Notice tone="danger">{write.error}</Notice>}
-            <Button
-              variant="primary"
-              onClick={apply}
-              disabled={busy || !ranges || !secret || !core || !form.models.opus.trim()}
-            >
-              {applyLabel}
-            </Button>
-            <ConfirmButton disabled={busy || !preview.applied} onConfirm={() => undo("clear")}>
-              {t("clear")}
-            </ConfirmButton>
-            <small class="hint">{t("clearHint")}</small>
-            <ConfirmButton disabled={busy} onConfirm={() => undo("restore")}>
-              {t("restore")}
-            </ConfirmButton>
-            <small class="hint">{t("restoreHint")}</small>
-          </Card>
         </>
+      )}
+      {preview && (
+        <Card>
+          {!refused && !valid && <Notice tone="warn">{t("ranges")}</Notice>}
+          {write.error && <Notice tone="danger">{write.error}</Notice>}
+          <Button variant="primary" onClick={apply} disabled={busy || refused || !valid || !secret || !core}>
+            {applyLabel}
+          </Button>
+          <ConfirmButton disabled={busy || refused || !preview.applied} onConfirm={() => undo("clear")}>
+            {t("clear")}
+          </ConfirmButton>
+          <small class="hint">{t("clearHint")}</small>
+          <ConfirmButton disabled={busy} onConfirm={() => undo("restore")}>
+            {t("restore")}
+          </ConfirmButton>
+          <small class="hint">{t("restoreHint")}</small>
+        </Card>
       )}
       <StartCli available={!unavailable} />
     </div>
