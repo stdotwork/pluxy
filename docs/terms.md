@@ -1,6 +1,6 @@
 # UI terms
 
-The desktop app (`extensions/app`) and the web panel (`extensions/panel`) show the same things:
+The desktop app (`extensions/app`) and the web panel (`next/ui`) show the same things:
 quota cards, limits, resets, auth files, cooldowns and usage. This page lists the words both use for
 them, so every provider and every locale says the same thing the same way. When you add or change a
 UI string, use these terms. If a term here is wrong, change it here first, then in both UIs.
@@ -59,7 +59,7 @@ whichever provider reports it and however the provider words it.
 | Clear that block | `Clear cooldown` | |
 | Sign-in action | `Sign in` (owner to confirm; not yet applied) | `Log in`, `Login` |
 
-The panel's health labels (`Healthy`, `Warning`, `Disabled`) are a separate scale and stay as they are.
+The old panel's health labels (`Healthy`, `Warning`, `Disabled`) were a separate scale from these terms.
 
 ### Provider names
 
@@ -78,11 +78,11 @@ string is touched for another reason; there is no repo-wide casing pass.
 
 The app has en, zh-CN, zh-TW and ja; its zh-TW text is converted from zh-CN by
 `extensions/app/src/i18n/traditional.ts`, so a zh-CN change reaches zh-TW only if the converter maps
-it. The panel has en, zh-CN, zh-TW, ko, ru, tr and vi.
+it. The old panel (removed) had en, zh-CN, zh-TW, ko, ru, tr and vi; the panel in `next/ui` ships English only.
 
 | Concept | zh-CN | zh-TW | ja | ko | ru | tr | vi |
 |---|---|---|---|---|---|---|---|
-| Quota | 额度 | 額度 (owner to confirm; panel zh-TW uses 配額 today) | クォータ | 할당량 | квота | kota | quota |
+| Quota | 额度 | 額度 (owner to confirm; the old panel's zh-TW used 配額) | クォータ | 할당량 | квота | kota | quota |
 | Limit | 限额 | 限額 | 制限 | 한도 | лимит | sınır | giới hạn |
 | Weekly limit | 周限额 | 週限額 | 週間制限 | 주간 한도 | Недельный лимит | Haftalık Sınır | Giới hạn tuần |
 | Monthly limit | 月限额 | 月限額 | 月間制限 | 월간 한도 | Месячный лимит | Aylık Sınır | Giới hạn tháng |
