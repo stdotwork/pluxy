@@ -11,6 +11,10 @@
 //! running that release, may pass it on, and only in a call it makes for that call
 //! (`Vault::present`); the reference ends with the call. References live in memory only.
 //!
+//! A client key (`client_keys.rs`) is a secret bound to the core it was made on or entered for
+//! (the connection's mode and origin), to core's ID of it then, and to the one native tool (its
+//! client) that may get it; the router checks that binding at every use (`ClientKey`).
+//!
 //! Backups (`b-…`) and journals (`j-…`) belong to a package, whatever its release: a tool reaches
 //! its own through `vault` frames on its pipe (`Vault::frame`), only while it serves a host call
 //! or answers describe. A journal is begun before a write and committed after it; one still open
@@ -71,12 +75,33 @@ pub struct Holder {
     pub generation: u64,
 }
 
+/// The core a client key belongs to: the connection's mode and origin, as `conn.rs` pins them.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CoreTarget {
+    pub mode: crate::conn::Mode,
+    pub origin: String,
+}
+
+/// What binds a client key: the core it belongs to, core's ID of it when it was kept (core's IDs
+/// change when core restarts; none when no single key of core's matched), its masked form, as
+/// core lists it, and the native tool it is for.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClientKey {
+    pub core: CoreTarget,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_id: Option<String>,
+    pub masked: String,
+    pub client: String,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct Secret {
     id: String,
     label: String,
     created: u64,
     value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    client_key: Option<ClientKey>,
 }
 
 /// A secret as the window sees it: never its value.
@@ -85,6 +110,8 @@ pub struct SecretView {
     pub id: String,
     pub label: String,
     pub created: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_key: Option<ClientKey>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -424,13 +451,38 @@ impl Vault {
         root.write("secrets.json", &b)
     }
 
-    /// Keeps a secret the person entered natively, as label; gives its ID.
-    pub fn add_secret(&self, label: &str, value: &str) -> Result<String, String> {
+    /// Whether label may name a secret.
+    pub fn check_label(label: &str) -> Result<(), String> {
         if label.trim().is_empty() || label.chars().count() > MAX_LABEL || !printable(label) {
             return Err(format!(
                 "a secret's label is 1 to {MAX_LABEL} printable characters"
             ));
         }
+        Ok(())
+    }
+
+    /// Keeps a secret the person entered natively, as label; gives its ID.
+    pub fn add_secret(&self, label: &str, value: &str) -> Result<String, String> {
+        self.add(label, value, None)
+    }
+
+    /// Keeps client key value, bound as client_key says, as label; gives its ID.
+    pub fn add_client_key(
+        &self,
+        label: &str,
+        value: &str,
+        client_key: ClientKey,
+    ) -> Result<String, String> {
+        self.add(label, value, Some(client_key))
+    }
+
+    fn add(
+        &self,
+        label: &str,
+        value: &str,
+        client_key: Option<ClientKey>,
+    ) -> Result<String, String> {
+        Vault::check_label(label)?;
         if value.len() < MIN_VALUE || value.len() > MAX_VALUE || !printable(value) {
             return Err(format!(
                 "a secret is {MIN_VALUE} to {MAX_VALUE} bytes of printable characters"
@@ -447,6 +499,7 @@ impl Vault {
             label: label.into(),
             created: now(),
             value: value.into(),
+            client_key,
         });
         self.save_secrets(&secrets)?;
         st.secrets = secrets;
@@ -479,6 +532,7 @@ impl Vault {
                 id: s.id.clone(),
                 label: s.label.clone(),
                 created: s.created,
+                client_key: s.client_key.clone(),
             })
             .collect()
     }

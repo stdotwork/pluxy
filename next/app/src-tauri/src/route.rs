@@ -32,7 +32,9 @@
 //! secret's value, or one the window gives a secret to, asks a native confirmation naming each
 //! secret, even for a read. The target then gets, in each secret field, a new reference bound to
 //! the secret, its release and this call; a `value` field's secret also travels in the call's frame,
-//! and nowhere else. The references end with the call.
+//! and nowhere else. The references end with the call. A client key's binding (`client_keys.rs`:
+//! its tool, its core, and that core still taking it) is checked before the confirmation, and
+//! again before its value goes into the frame.
 //!
 //! Linux only, as the program host.
 
@@ -405,6 +407,10 @@ fn dispatch(
         &call.cancelled_by(&cancel),
     )?;
     let vault = Arc::clone(&app.state::<App>().vault);
+    // A client key's value, again now: the connection or core may have changed meanwhile.
+    for f in filled.iter().filter(|f| f.value) {
+        crate::client_keys::admit(app, &f.secret, &f.label, grant.target.id(), false, true)?;
+    }
     // Each secret field gets a reference for the target's release, in this call.
     let token = vault.begin_call();
     origin.token = token;
@@ -476,6 +482,16 @@ fn checked(
         .map_err(|_| invalid_input(grant))?;
     let vault = Arc::clone(&app.state::<App>().vault);
     let filled = secret_fields(&vault, grant, input, filler)?;
+    for f in &filled {
+        crate::client_keys::admit(
+            app,
+            &f.secret,
+            &f.label,
+            grant.target.id(),
+            matches!(filler, Filler::Window),
+            f.value,
+        )?;
+    }
     // A secret's value delivered, or any secret the window gives, is the person's decision.
     let ask = filled
         .iter()
