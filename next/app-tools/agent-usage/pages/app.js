@@ -141,6 +141,7 @@ function toolbar(r) {
           refresh();
         },
       },
+      c.color ? el("i", { class: "dot", style: `background:${c.color}` }) : null,
       el("span", { text: c.label }),
       c.total ? el("span", { class: "muted", text: ` ${c.total}` }) : null,
     ),
@@ -215,7 +216,7 @@ function barChart(model) {
   const every = Math.max(1, Math.ceil(n / 10));
   model.bars.forEach((b, i) => {
     const x = left + i * slot + (slot - barW) / 2;
-    const group = svg("g", {}, svg("title", { text: `${b.label.full}: ${v.full(b.total)}` }));
+    const group = svg("g", {}, svg("title", { text: b.tip }));
     b.segments.forEach((s, k) => {
       if (s.value <= 0) return;
       group.append(svg("rect", { x, y: y(s.y1), width: barW, height: Math.max(0.5, y(s.y0) - y(s.y1)), fill: model.keys[k].color }));
@@ -328,7 +329,20 @@ function table(model, extra) {
           "tr",
           { class: row.dimmed ? "dimmed" : null, title: row.title ?? null },
           cells.map((c, i) =>
-            el("td", {}, el("span", { text: c }), i === 0 && row.note ? el("small", { class: "muted", text: ` ${row.note}` }) : null),
+            el(
+              "td",
+              {},
+              i === 0 && row.color ? el("i", { class: "dot", style: `background:${row.color}` }) : null,
+              i === 1 && row.share != null
+                ? el(
+                    "span",
+                    { class: "share" },
+                    el("i", { style: `width:${Math.max(row.share > 0 ? 2 : 0, row.share * 100)}%;background:${row.color}` }),
+                  )
+                : null,
+              el("span", { text: c }),
+              i === 0 && row.note ? el("small", { class: "muted", text: ` ${row.note}` }) : null,
+            ),
           ),
         );
       }),
