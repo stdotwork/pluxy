@@ -51,6 +51,13 @@
 // native confirmation, an execution tool gets only references, references refused to another
 // recipient, call or release, open journals reconciled after a crash without a second write, and
 // the key and a backup canary absent from webviews, logs and the app's output.
+// The spawn check (spawn.ts, spawn_native.rs) runs in one more session with that build: a launch
+// tool asks the host to spawn the launches the person confirmed, a detached agent and managed
+// runtimes, each with exactly the confirmed argv and cwd and the filtered launch environment, the
+// key only in the final process's environment; the agent outlives the tool's crash and idle stop
+// and the app; the runtimes stay controlled across the tool's restart, and Stop and Restart reach
+// only the registered group. After the app quits, the runner checks the detached agent still runs
+// and the runtimes do not, then ends every process the check named.
 // The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
@@ -89,6 +96,7 @@ import { descendants, webProcesses } from "./processes";
 import { buildProgramFixtures } from "./program";
 import { buildRoutingFixtures } from "./routing";
 import { missingPrerequisites } from "./services";
+import { buildSpawnFixtures } from "./spawn";
 import { buildVaultFixtures } from "./vault";
 
 const app = join(import.meta.dir, "..");
@@ -234,6 +242,43 @@ function alive(pid: number): boolean {
   }
 }
 
+/** A process the spawn check started (spawn_native.rs writes them to known.json): its ID and a
+ * string only its command line holds. */
+interface Known {
+  pid: number;
+  marker: string;
+}
+
+function readKnown(dir: string): { detached: Known[]; managed: Known[] } {
+  try {
+    const k = JSON.parse(readFileSync(join(dir, "known.json"), "utf8"));
+    return { detached: k.detached ?? [], managed: k.managed ?? [] };
+  } catch {
+    return { detached: [], managed: [] };
+  }
+}
+
+/** Whether k's process runs, as that process: its command line still holds k's marker. */
+function owned(k: Known): boolean {
+  try {
+    return alive(k.pid) && readFileSync(`/proc/${k.pid}/cmdline`, "utf8").includes(k.marker);
+  } catch {
+    return false;
+  }
+}
+
+/** Kills each process the spawn check named that still runs as itself. */
+function cleanKnown(dir: string) {
+  const { detached, managed } = readKnown(dir);
+  for (const k of [...detached, ...managed])
+    if (owned(k))
+      try {
+        process.kill(k.pid, "SIGKILL");
+      } catch {
+        // gone already
+      }
+}
+
 /** Whether pid runs the program at path (and is not some later process with its number). */
 function runs(pid: number, path: string): boolean {
   try {
@@ -275,7 +320,8 @@ interface Rotation {
  * stages. earlyExit: the app's setup waits for its core's exit callback before the app state
  * exists (PLUXY_APP_TEST_EARLY_EXIT), and only the recovery of that core is checked. admission:
  * the session checks only signed native-tier admission; program: only the program host and swap
- * checks; routing: only the cross-package routing check; vault: only the vault check. */
+ * checks; routing: only the cross-package routing check; vault: only the vault check; spawn: only
+ * the spawn check (spawnCheck). */
 async function runApp(
   mode: Mode,
   artifact: Artifact,
@@ -292,6 +338,7 @@ async function runApp(
   earlyExit = false,
   routing = false,
   vault = false,
+  spawnCheck = false,
 ): Promise<string[]> {
   const { label, bin } = artifact;
   const root = rotation.root ?? mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
@@ -338,7 +385,7 @@ async function runApp(
     }, 100);
     // This device's extension catalog is the same in every mode: check it once, in managed mode.
     const device =
-      mode === "managed" && !admission && !program && !routing && !vault && suite !== "access"
+      mode === "managed" && !admission && !program && !routing && !vault && !spawnCheck && suite !== "access"
         ? join(root, "device")
         : undefined;
     const access = suite === "access" ? join(root, "access") : undefined;
@@ -405,6 +452,21 @@ async function runApp(
         JSON.stringify({ version: 0, registries: f.registries }),
       );
     }
+    // The spawn check's signed tools, agent, registry and trust profile, and its canaries.
+    const spawnDir = spawnCheck ? join(root, "spawn") : undefined;
+    let spawnEnv: Record<string, string> = {};
+    if (spawnDir) {
+      mkdirSync(spawnDir);
+      const f = buildSpawnFixtures(spawnDir, dirs.home, programFixture);
+      nonce = f.nonce;
+      canaries = f.canaries;
+      spawnEnv = f.env;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
     if (curated) {
       mkdirSync(curated);
       if (device) mkdirSync(device);
@@ -425,7 +487,7 @@ async function runApp(
       // The app starts again on the first run's HOME: its marker and profile stay, and so does
       // the nonce the marker holds.
       nonce = JSON.parse(readFileSync(join(dirs.home, MARKER_FILE), "utf8")).nonce;
-    } else if (!programDir && !routingDir && !vaultDir) {
+    } else if (!programDir && !routingDir && !vaultDir && !spawnDir) {
       try {
         nonce = /^nonce=([0-9a-f]{64})$/m.exec(run(probe, ["trust-marker", dirs.home], app))?.[1] ?? "";
         if (!nonce) throw new Error("it printed no nonce");
@@ -479,6 +541,8 @@ async function runApp(
       ...(programDir ? { PLUXY_APP_TEST_PROGRAM: programDir, PLUXY_TEST_PROGRAM_CANARY: randomUUID() } : {}),
       ...(routingDir ? { PLUXY_APP_TEST_ROUTING: routingDir } : {}),
       ...(vaultDir ? { PLUXY_APP_TEST_VAULT: vaultDir } : {}),
+      // The canaries no spawned process may inherit, and the variable a launch inherits by name.
+      ...(spawnDir ? { PLUXY_APP_TEST_SPAWN: spawnDir, ...spawnEnv } : {}),
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: artifact.identifier } : {}),
       ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
       ...(key ? { PLUXY_APP_TEST_KEY_FILE: keyFile } : {}),
@@ -538,7 +602,7 @@ async function runApp(
         return;
       }
       if (canaries.some((canary) => line.includes(canary))) {
-        problems.push("the vault check's key or backup canary appeared on stdout/stderr");
+        problems.push("the vault or spawn check's key or a canary appeared on stdout/stderr");
         return;
       }
       // window.ts's, privacy.ts's and access-suite.ts's checks, each shown.
@@ -705,6 +769,27 @@ async function runApp(
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode} routing ${JSON.stringify(r ?? {})}`);
       console.log(`${mode}: routing ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
+    if (spawnDir) {
+      const r = steps.get("spawn") as { passed?: boolean } | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(r?.passed === true, `the spawn check did not complete: ${failure}`);
+      // After the app quit: its detached agent runs on, its managed runtimes do not.
+      await Bun.sleep(1000);
+      const known = readKnown(spawnDir);
+      if (r?.passed === true) {
+        check(known.detached.length > 0, "the spawn check named no detached agent to watch");
+        check(known.managed.length > 0, "the spawn check named no managed runtime to watch");
+        for (const k of known.detached)
+          check(owned(k), `the detached agent ${k.pid} did not outlive the app`);
+        for (const k of known.managed)
+          check(!owned(k), `the managed runtime's process ${k.pid} still runs after the app quit`);
+      }
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} spawn ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode}: spawn ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
 
@@ -961,6 +1046,8 @@ async function runApp(
   } finally {
     clearInterval(offlineWatch);
     feed?.stop();
+    // Every process the spawn check named, still running as itself: nothing else would end them.
+    if (spawnCheck) cleanKnown(join(root, "spawn"));
     // A folder left behind is a problem of its own; it must not hide this run's report.
     if (!rotation.root)
       await removeRun(root).catch((e) => problems.push(`the run folder ${root} was not removed: ${e}`));
@@ -1303,6 +1390,27 @@ async function main(): Promise<number> {
           undefined,
           undefined,
           {},
+          false,
+          false,
+          false,
+          false,
+          true,
+        )),
+      );
+      // The spawn check, on the same build.
+      p.push(
+        ...(await runApp(
+          "managed",
+          trusted,
+          updaterKey,
+          managed,
+          undefined,
+          false,
+          false,
+          undefined,
+          undefined,
+          {},
+          false,
           false,
           false,
           false,

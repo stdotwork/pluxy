@@ -30,7 +30,14 @@
 //! - `run`, the vault check's execution program: appends the frame it got to `record`, then calls
 //!   `consumer` with its own reference (or `steal`'s) and `out`, and appends the answer it got
 //!   back to `record` too;
-//! - `deliver`, the vault check's final consumer: writes the secret delivered for `key` to `out`.
+//! - `deliver`, the vault check's final consumer: writes the secret delivered for `key` to `out`;
+//! - `start`, the spawn check's launcher (`src/spawn_native.rs`): appends the frame it got to
+//!   `record`, then asks the host to spawn the launch the call confirmed (a `spawn` frame naming
+//!   nothing but the call) and answers with the host's answer;
+//! - `runtime` by sending a `runtime` frame with the input's `op` and `runtime` for the call, and
+//!   answering with the host's answer.
+//!
+//! Started with `AGENT` as its first argument it is the spawn check's agent instead (`agent`).
 //!
 //! In describe, it reconciles each open vault journal the host names, never redoing it: it ends it
 //! as `committed` when the file holds the bytes the journal names, `rolled_back` otherwise, and
@@ -55,6 +62,9 @@ use std::time::Duration;
 
 /// The variable the fixture's child is started with, and nothing else.
 pub const CHILD: &str = "PLUXY_FIXTURE_CHILD";
+/// The first argument that makes it the spawn check's agent (`agent`); its group member and its
+/// orphan get this with `-child` and `-orphan` added.
+pub const AGENT: &str = "pluxy-fixture-agent";
 
 /// How the unit tests make it misbehave, from `fixture.json`. Absent: it behaves.
 #[derive(Default)]
@@ -404,10 +414,109 @@ fn pdeathsig() -> i64 {
     }
 }
 
-/// Runs the fixture: as its child when started with `CHILD`, else as the tool.
+/// The spawn check's agent, started as `<program> AGENT <record> [orphan]`: it starts its group
+/// member (itself again, with the record's path, which sleeps in its process group) and, with `orphan`, a descendant that
+/// starts a session of its own and ignores SIGTERM (as an agent's helper may), which writes its
+/// process ID to `<record>.orphan`. Then it writes what it sees of itself to record (written
+/// whole, then renamed into place): its process, parent, group and session IDs, its arguments,
+/// working folder, environment, open descriptors and where each leads, its core file size limits
+/// and its group member's process ID. Then it sleeps until it is killed. SIGTERM ends it, as the
+/// default action, leaving its group member to whoever kills its group.
+#[cfg(target_os = "linux")]
+fn agent(args: &[String]) -> ! {
+    let exe = std::env::current_exe().unwrap_or_default();
+    let quiet = |c: &mut std::process::Command| {
+        c.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+    };
+    match args.get(1).map(String::as_str) {
+        Some(a) if a == format!("{AGENT}-child") => sleep_forever(),
+        Some(a) if a == format!("{AGENT}-orphan") => {
+            unsafe {
+                libc::setsid();
+                libc::signal(libc::SIGTERM, libc::SIG_IGN);
+            }
+            if let Some(p) = args.get(2) {
+                let _ = std::fs::write(p, std::process::id().to_string());
+            }
+            sleep_forever();
+        }
+        _ => {}
+    }
+    let record = args.get(2).cloned().unwrap_or_default();
+    let mut c = std::process::Command::new(&exe);
+    // The record's path makes its command line its own, for the harness that ends it.
+    c.arg(format!("{AGENT}-child")).arg(&record);
+    quiet(&mut c);
+    let child = c.spawn().ok().map(|c| c.id());
+    if args.get(3).map(String::as_str) == Some("orphan") {
+        let mut o = std::process::Command::new(&exe);
+        o.arg(format!("{AGENT}-orphan"))
+            .arg(format!("{record}.orphan"));
+        quiet(&mut o);
+        let _ = o.spawn();
+    }
+    let fds: Vec<Value> = fds()
+        .into_iter()
+        .map(|fd| {
+            let target = std::fs::read_link(format!("/proc/self/fd/{fd}"))
+                .map(|t| t.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            json!({"fd": fd, "target": target})
+        })
+        .collect();
+    let env: serde_json::Map<String, Value> = std::env::vars_os()
+        .map(|(k, v)| {
+            (
+                k.to_string_lossy().into_owned(),
+                json!(v.to_string_lossy().into_owned()),
+            )
+        })
+        .collect();
+    let mut core = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    unsafe { libc::getrlimit(libc::RLIMIT_CORE, &mut core) };
+    let limit = |v: libc::rlim_t| {
+        if v == libc::RLIM_INFINITY {
+            json!("unlimited")
+        } else {
+            json!(v)
+        }
+    };
+    let seen = json!({
+        "pid": std::process::id(),
+        "ppid": unsafe { libc::getppid() },
+        "pgid": unsafe { libc::getpgrp() },
+        "sid": unsafe { libc::getsid(0) },
+        "argv": std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>(),
+        "cwd": std::env::current_dir().ok(),
+        "env": env,
+        "fds": fds,
+        "core": [limit(core.rlim_cur), limit(core.rlim_max)],
+        "child": child,
+    });
+    let tmp = format!("{record}.tmp");
+    if std::fs::write(&tmp, seen.to_string()).is_ok() {
+        let _ = std::fs::rename(&tmp, &record);
+    }
+    sleep_forever();
+}
+
+/// Runs the fixture: as its child when started with `CHILD`, as the spawn check's agent when
+/// started with `AGENT`, else as the tool.
 pub fn main() -> ! {
     if std::env::var_os(CHILD).is_some() {
         sleep_forever();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if args.get(1).is_some_and(|a| a.starts_with(AGENT)) {
+            agent(&args);
+        }
     }
     let mode = Mode::read();
     let manifest: Value = std::fs::read("pluxy-extension.json")
@@ -683,6 +792,42 @@ pub fn main() -> ! {
                             &error(&id, "invalid_request", "no secret was delivered for key"),
                         ),
                     },
+                    "start" => {
+                        if let Some(record) = f["input"]["record"].as_str() {
+                            if let Ok(mut file) = std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(record)
+                            {
+                                let _ = writeln!(file, "{f}");
+                            }
+                        }
+                        asked += 1;
+                        let answer = ask(
+                            &mut input,
+                            &mut output,
+                            json!({"type": "spawn", "id": format!("v-{asked}"), "for": id}),
+                        );
+                        write_frame(
+                            &mut output,
+                            &json!({"type": "result", "id": id, "output":
+                                {"answer": answer, "pid": std::process::id(), "chain": chain}}),
+                        );
+                    }
+                    "runtime" => {
+                        asked += 1;
+                        let answer = ask(
+                            &mut input,
+                            &mut output,
+                            json!({"type": "runtime", "id": format!("v-{asked}"), "for": id,
+                                "op": f["input"]["op"], "runtime": f["input"]["runtime"]}),
+                        );
+                        write_frame(
+                            &mut output,
+                            &json!({"type": "result", "id": id, "output":
+                                {"answer": answer, "pid": std::process::id()}}),
+                        );
+                    }
                     "crash" => std::process::exit(3),
                     "flood" => {
                         for i in 0..2000 {

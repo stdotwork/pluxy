@@ -54,7 +54,7 @@ const REDACTED: &str = "[redacted]";
 
 /// Types key into the native key entry the vault opens, and accepts it. The bytes go to xdotool
 /// on its stdin, never in argv.
-fn type_key(key: &str) -> Result<(), String> {
+pub(super) fn type_key(key: &str) -> Result<(), String> {
     let id = wait_for("the native secret entry", || {
         x(&["search", "--onlyvisible", "--name", "^pluxy secret$"])
             .ok()
@@ -83,7 +83,7 @@ fn type_key(key: &str) -> Result<(), String> {
 }
 
 /// The text of the native confirmation showing now that contains every one of needles.
-fn dialog_with(app: &AppHandle, needles: &[&str]) -> Result<String, String> {
+pub(super) fn dialog_with(app: &AppHandle, needles: &[&str]) -> Result<String, String> {
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut last = String::new();
     while Instant::now() < deadline {
