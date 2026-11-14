@@ -15,8 +15,13 @@ const MASK = "***";
 // run without a match is read once, not again from each of its positions.
 const EMAIL_PATTERN =
   /(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
-// Login credentials in a proxy or upstream URL.
-const URL_USERINFO_PATTERN = /(?<![A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^\s/@]+@/g;
+// Login credentials in a proxy or upstream URL: everything after the scheme up to the last `@`
+// before a `?`, a `#` or white space, so a password holding `@` or `/` (not valid unencoded, but
+// typed that way) is hidden whole.
+// shortcut: a `/` counts as part of the credentials, so a path with an `@` in it
+// ("https://host/a@b") is masked up to that `@`, upgrade when a real case needs the path shown.
+// The 512 limit keeps a long run of "x://x://" from being read again from every scheme in it.
+const URL_USERINFO_PATTERN = /(?<![A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^\s?#]{0,512}@/g;
 
 const keepPrefix = (value: string, visible: number) => value.slice(0, Math.min(visible, value.length));
 

@@ -581,6 +581,39 @@ output, whether it goes to the window, a page or a calling tool. Overlapping val
 as one, and a removed secret's value is still replaced until the app restarts. Only exact values
 are replaced: a tool that encodes a secret otherwise can still show it.
 
+### Client keys
+
+A client key, the key a client program sends core with its requests, is a secret of its own,
+apart from the management key, which stays in the app's connection. It enters the vault only
+natively, never through the window:
+
+- `client_key_capture` (label, client) asks a native confirmation naming the core, the tool and
+  the label; then the app itself asks core for a new key (`POST /v0/management/client-keys`) with
+  the management key and keeps core's reply. Core shows a new key once: the app keeps it and shows
+  it to no one. If the vault cannot keep it, the app deletes it on core again.
+- `client_key_enter` (label, client) reads an existing client key from native key entry and keeps
+  it once the core takes it.
+
+Either way the key is bound to the core the app is connected to (the connection's mode and
+origin), to core's ID of it then (core's IDs change when it restarts; the ID is left out when no
+single key of core's has the key's masked form), to its masked form and to the native tool it is
+for (`client`). The window gets the secret's ID, label and that binding, never the key; a masked
+form or ID cannot give the key back. A client key is then used like any vault secret, with three
+more checks at every use, made before the native confirmation and, for a value, again just before
+it is put in the call frame:
+
+- From the window it goes only to its tool, and its value is delivered only to its tool, also
+  when another tool passes a reference to it on. Another tool is refused.
+- The app must be connected to the core the key belongs to. This is checked before anything is
+  sent, so the key never goes to another core.
+- Before its value is delivered, that core must still take it: the app asks core's client API
+  (`GET /v1/models`) with the key, and a key core no longer has (deleted on core) is refused.
+
+```json
+{"id":"s-<hex>","label":"Claude Code","client_key":{"core":{"mode":"managed","origin":"http://127.0.0.1:8400"},
+ "key_id":"<24 hex digits>","masked":"sk******XY","client":"pluxy/claude-code"}}
+```
+
 ### Vault frames
 
 While a tool serves a host call, it may send `vault` frames on its stdout for it (`for`), answered
@@ -595,11 +628,11 @@ too, only to read backups (`backup.get`, `backup.list`) and to end the journals 
 
 | `op` | Fields | `output` |
 | --- | --- | --- |
-| `backup.put` | `label` (at most 64 characters), `data` (base64, at most 512 KiB) | `{"backup": "b-<hex>"}` |
+| `backup.put` | `label` (at most 64 characters, holding no secret or reference), `data` (base64, at most 512 KiB) | `{"backup": "b-<hex>"}` |
 | `backup.get` | `backup` | `{"backup", "label", "size", "created", "data"}` |
 | `backup.list` | none | `{"backups": [{"backup", "label", "size", "created"}]}` |
 | `backup.delete` | `backup` | `{}` |
-| `journal.begin` | `intent` (a JSON object of at most 16 KiB) | `{"journal": "j-<hex>"}` |
+| `journal.begin` | `intent` (a JSON object of at most 16 KiB, holding no secret or reference) | `{"journal": "j-<hex>"}` |
 | `journal.commit` | `journal` | `{"journal", "outcome": "committed"}` |
 | `journal.end` | `journal`, `outcome` (`committed` or `rolled_back`) | `{"journal", "outcome"}` |
 
@@ -608,7 +641,8 @@ package keeps at most 256 backups. In a call, a tool commits or ends only a jour
 began; in describe, any journal that describe named. The vault's folders are opened without
 following links, and files in a package's folder that its records do not name (a write cut
 short, a removal that failed) are removed the next time they are read. Errors, which never name
-another journal: `invalid_request` for bad fields or a journal ended already with another outcome,
+another journal: `invalid_request` for bad fields (an `intent` or a `label` that holds a secret's
+value or a reference, which the error names neither of) or a journal ended already with another outcome,
 `not_found` for another package's or an unknown ID (or a journal the tool may not end),
 `unavailable` when the vault cannot be read or written, a second journal is begun while one is
 open, or the package keeps 256 backups, `permission` for a `for` the tool is not serving or an
@@ -630,7 +664,10 @@ on the package's turn:
 The tool must reconcile each before it answers: look at what is on disk and end the journal as
 `committed` (the write took effect) or `rolled_back` (it did not, or the tool put the old bytes
 back), never by writing again. A start whose describe leaves one open fails, and so does one whose
-journals cannot be read (the status says why, in `journals_error`). Ending a journal
+journals cannot be read (the status says why, in `journals_error`) and one that cannot take its
+package's turn within the startup limit while the package has a journal open (`extension_unavailable`;
+it is never described with no journals, and is retried by the backoff). Calls of unknown outcome
+alone wait for a later start's turn. Ending a journal
 again with the same outcome is answered the same, with `"again": true`, because delivery may
 repeat; another outcome is refused. While one is open, no other journal begins. A swap's
 candidate is told of none, as of unknown outcomes. The window's `program_status` lists the
