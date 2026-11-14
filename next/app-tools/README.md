@@ -9,7 +9,7 @@ reference: this folder implements it, it does not change it.
 
 ```bash
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
-cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-claude)
+cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-claude, usage-opencode)
 ```
 
 ## `lib/program`
@@ -46,7 +46,10 @@ format read whole (`parse`) gets a file of at most 16 MiB; a parser of a line-ba
 `streamed` and gets the file's lines one at a time (`parse_lines`, `LineReader`) whatever its size,
 a line over 16 MiB being skipped and counted: the reader holds one line, and what the parser keeps
 of a file meanwhile is its own (usage-claude keeps one small record per message). A parser at schema 2 sends a record that more than one
-file can hold as one keyed event (`Sink::event`). `fields` reads the fields usage records share, by
+file can hold as one keyed event (`Sink::event`). A file that holds many records, such as a
+database of sessions, can list as several entries (`Parser::entries`), each a file of the hub's with
+its own ID and revision, which the parser reads itself (`Parser::read_entry`, `Sink::revise`); the
+listing is sorted newest first and cut at 20,000 entries after that. `fields` reads the fields usage records share, by
 the old desktop app's rules: token counters under the names agents use, a model name and a time.
 The schemas are in [`agent-usage/README.md`](agent-usage/README.md#schema-1).
 
@@ -123,6 +126,40 @@ read whole, line by line, when it changes, by the old desktop app's rules:
 
 Two responses that share a message ID and have no request ID (a gateway that reuses one ID) are
 one message within a file, as they were in the old app.
+
+## `usage-opencode`
+
+`pluxy/usage-opencode`, the usage hub's parser of OpenCode's local store, at schema 2. It reads
+OpenCode's database (`opencode.db`, or `opencode-<channel>.db` from a build of another channel) and
+its older JSON message files (`storage/message/<session>/<message>.json`) under
+`~/.local/share/opencode` and `~/.opencode` (from the `HOME` the app gives; the hub's `roots` name
+others, such as `$XDG_DATA_HOME/opencode`), and sends the hub token counts per message, and nothing
+else: no prompt, reply, title, folder name or raw session or message ID leaves the parser. It never
+writes an OpenCode file.
+
+- Each session in a database is a file of the hub's of its own, `<database path below the
+  root>#<hash of the session ID>`, so the hub reads again only the sessions that changed, and a
+  database of many sessions never passes the 100,000 rows the hub keeps of one file. A session's
+  revision is its message rows' count and data length and their latest update time, read through
+  SQLite, so a change still in the database's `-wal` counts. A JSON message file's ID is its path
+  below the root with the session folder and file name replaced by their hashes.
+- The database's current table, `session_message`, is read (its `assistant` rows, and `compaction`
+  rows that carry the compaction request's own tokens), and so is the `message` table of a database
+  OpenCode made before it, which OpenCode's migration copies into `session_message` and leaves in
+  place. A message is a keyed event, the key a hash of its message and session IDs, which OpenCode's
+  migrations (JSON store to database, `message` to `session_message`) keep: a message stored in more
+  than one of these ways counts once. A fork copies its parent's history under new message IDs
+  (`<fork event>_<seq>`); a copy takes its original's key, so it counts once too. Forks from before
+  `session_message` cannot be told from new messages and count again.
+- OpenCode's output is the visible output, reasoning apart: the hub's output is output + reasoning,
+  and the total is input + output + reasoning + cache read + cache write (OpenCode's own total; a
+  provider total some older messages carry is not used, so every copy of a message counts the same).
+  A message's time is its `time.created`. Title and other side requests OpenCode records only as
+  session totals are not counted.
+- The database is opened read-only and nothing is made beside it, by `codex-sessions`' rules: when
+  its `-shm` is missing, it is opened immutable if its `-wal` is missing or empty, and otherwise copied
+  with its `-wal` into a private folder in the tool's data folder (`tmp`), read, and removed. A
+  database whose `-wal` or `-shm` is a link is not read.
 
 ## `codex-sessions`
 
