@@ -126,14 +126,14 @@ jobs:
           # playwright test runs on the image's own Node (26 in 1.65.0), not on the Node 24 this job sets up.
           # The checkout is mounted read-only, with .git read-only again explicitly: the checkout's
           # post-step runs git there with the job token in its environment, so the image must not be
-          # able to change git's config. Only the folders the browser tests write are writable: the
-          # panel build (next/internal/panel/dist) and Playwright's output (next/ui/test-results).
-          # They are made here so Docker doesn't create them owned by root.
+          # able to change git's config. The one folder in it that the browser tests write is the panel
+          # build (next/internal/panel/dist), made here so Docker doesn't create it owned by root.
+          # Playwright's output goes to the container's /tmp: it removes and recreates its output
+          # folder, which fails on a mount point.
           # Submodules aren't supported: fail rather than mount their .git files unreviewed.
           if [ -e "$GITHUB_WORKSPACE/.gitmodules" ] || [ -L "$GITHUB_WORKSPACE/.gitmodules" ]; then echo "::error::a submodule's .git file would need its own read-only mount" >&2; exit 1; fi
           dist="$GITHUB_WORKSPACE/next/internal/panel/dist"
-          results="$GITHUB_WORKSPACE/next/ui/test-results"
-          mkdir -p "$dist" "$results"
+          mkdir -p "$dist"
           docker run --rm --init --ipc=host --entrypoint "" \
             --user "$(id -u):$(id -g)" \
             -e CI -e HOME=/tmp -e CGO_ENABLED=0 \
@@ -141,8 +141,8 @@ jobs:
             -e GOMODCACHE="$gomodcache" -e GOCACHE=/tmp/go-build \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro" \
             -v "$GITHUB_WORKSPACE/.git:$GITHUB_WORKSPACE/.git:ro" \
-            -v "$dist:$dist" -v "$results:$results" \
+            -v "$dist:$dist" \
             -v "$goroot:$goroot:ro" -v "$bun_dir:$bun_dir:ro" \
             -v "$gomodcache:$gomodcache:ro" \
             -w "$PWD" \
-            "$PLAYWRIGHT_IMAGE" bun run test:browser
+            "$PLAYWRIGHT_IMAGE" bun run test:browser --output /tmp/test-results
