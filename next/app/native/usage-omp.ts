@@ -11,7 +11,10 @@
 //     is its child's (counted in the child's own file, never here) and, appended before the third
 //     sync, one more record;
 //   -work-gamma, in `sessions` only: an earlier date, a model name in other letters, a line that is not
-//     JSON.
+//     JSON;
+//   -work-alpha-fork, in `agent/sessions` only: a fork of the -work-alpha session, Oh My Pi's `forkFrom`,
+//     which copies the parent's entries unchanged (same `id` and `timestamp`) into a new file, and one
+//     entry of its own: the copied entries count once, not in each file.
 //
 // The token-details cases are in -work-alpha and -work-beta: reasoning is part of output (never added),
 // cache read and write are their own fields (input is already net of them), and a total of the
@@ -56,6 +59,7 @@ export const OMP_CANARIES = [C_TITLE, C_CWD, C_ONE, C_REPLY, C_TWO, C_TOOL, C_TH
 const ONE = "-work-alpha/2026-11-09T21-00-00-000Z_019c0000-0000-7000-8000-000000000001.jsonl";
 const TWO = "-work-beta/2026-11-10T09-00-00-000Z_019c0000-0000-7000-8000-000000000002.jsonl";
 const THREE = "-work-gamma/2026-11-04T10-00-00-000Z_019c0000-0000-7000-8000-000000000003.jsonl";
+const FORK = "-work-alpha-fork/2026-11-10T13-00-00-000Z_019c0000-0000-7000-8000-000000000005.jsonl";
 const FOUR = "-work-delta/2026-11-10T11-00-00-000Z_019c0000-0000-7000-8000-000000000004.jsonl";
 
 /** Oh My Pi's first line: a fixed-width 256-byte slot (its newline included) holding the title. */
@@ -190,6 +194,20 @@ const THREE_LINES = [
     totalTokens: 1200,
   }),
 ];
+/** The fork of the alpha session: its parent's entries as they are, then its own: 2026-11-10 13:05 UTC,
+ * 15:05 local: 200 + 50 + 100 = 350. */
+const FORK_LINES = [
+  titleSlot,
+  header("2026-11-10T13:00:00.000Z", "019c0000-0000-7000-8000-000000000005"),
+  ...ONE_NEW.slice(2),
+  assistant("2026-11-10T13:05:00.000Z", "gpt-5.5-mini", {
+    input: 200,
+    output: 50,
+    cacheRead: 100,
+    cacheWrite: 0,
+    totalTokens: 350,
+  }),
+];
 /** A new session written while the parser is disabled: nothing must read it. */
 const FOUR_LINES = [
   titleSlot,
@@ -223,6 +241,7 @@ export function ompHome(home: string) {
   put(plain, ONE, ONE_NEW);
   put(agent, TWO, TWO_LINES);
   put(plain, THREE, THREE_LINES);
+  put(agent, FORK, FORK_LINES);
   return {
     append: { path: join(agent, TWO), lines: TWO_APPEND },
     add: { path: join(plain, FOUR), lines: [...FOUR_LINES] },
@@ -283,27 +302,27 @@ export function ompExpected(s: Shared) {
   };
   // Each model's total on each of the seven days, models most tokens first.
   const first = report(
-    [750, 135, 390, 0, 25, 1295, 3],
-    [1850, 385, 420, 20, 25, 2695, 5],
+    [950, 185, 490, 0, 25, 1645, 4],
+    [2050, 435, 520, 20, 25, 3045, 6],
     [
       ["claude-sonnet-4-5", [1200, 0, 0, 0, 0, 200, 75]],
-      ["gpt-5.5-mini", [0, 0, 0, 0, 0, 0, 1100]],
+      ["gpt-5.5-mini", [0, 0, 0, 0, 0, 0, 1450]],
       ["gpt-5.5", [0, 0, 0, 0, 0, 0, 120]],
     ],
     "active",
-    { "2:12": 1200, "0:23": 200, "1:0": 75, "1:10": 120, "1:11": 1100 },
+    { "2:12": 1200, "0:23": 200, "1:0": 75, "1:10": 120, "1:11": 1100, "1:15": 350 },
   );
   const after = (status: string) =>
     report(
-      [1150, 235, 490, 0, 55, 1895, 4],
-      [2250, 485, 520, 20, 55, 3295, 6],
+      [1350, 285, 590, 0, 55, 2245, 5],
+      [2450, 535, 620, 20, 55, 3645, 7],
       [
-        ["gpt-5.5-mini", [0, 0, 0, 0, 0, 0, 1700]],
+        ["gpt-5.5-mini", [0, 0, 0, 0, 0, 0, 2050]],
         ["claude-sonnet-4-5", [1200, 0, 0, 0, 0, 200, 75]],
         ["gpt-5.5", [0, 0, 0, 0, 0, 0, 120]],
       ],
       status,
-      { "2:12": 1200, "0:23": 200, "1:0": 75, "1:10": 120, "1:11": 1100, "1:14": 600 },
+      { "2:12": 1200, "0:23": 200, "1:0": 75, "1:10": 120, "1:11": 1100, "1:14": 600, "1:15": 350 },
     );
   return { first: [first], after: [after("active")], disabled: [after("archived")] };
 }

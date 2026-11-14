@@ -1038,12 +1038,12 @@ export function buildUsageFixtures(
         canaries: OMP_CANARIES,
         // A model name both the store and the reports must hold (the positive control of the canary search).
         model: "gpt-5.5-mini",
-        // Each sync's counts for the source: listed (one session in both roots, so twice), changed (to
-        // read), read, failed.
+        // Each sync's counts for the source: listed (one session in both roots, so twice, and a fork of it),
+        // changed (to read), read, failed.
         syncs: {
-          first: { listed: 4, changed: 3, read: 3, failed: 0 },
-          repeat: { listed: 4, changed: 0, read: 0, failed: 0 },
-          after: { listed: 4, changed: 1, read: 1, failed: 0 },
+          first: { listed: 5, changed: 4, read: 4, failed: 0 },
+          repeat: { listed: 5, changed: 0, read: 0, failed: 0 },
+          after: { listed: 5, changed: 1, read: 1, failed: 0 },
         },
         reports: ompExpected({
           now: NOW,
