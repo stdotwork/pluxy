@@ -2032,6 +2032,31 @@ fn imports_exports_and_effects_are_validated() {
 }
 
 #[test]
+fn a_disclose_operation_is_accepted_asks_each_call_and_is_never_remembered() {
+    // Accepted in a manifest, as its own effect.
+    let manifest = serde_json::json!({"manifest_version": 1, "id": "pluxy/reader", "version": "1.0.0",
+        "app": {"version": 0, "tier": "native", "host_versions": [0],
+            "programs": {"linux/amd64": "bin/r"},
+            "operations": [{"id": "detail", "description": "Show a session", "effect": "disclose",
+                "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}],
+            "state": {"version": 0, "readable_versions": [0]}}});
+    let m: Manifest = serde_json::from_value(manifest).unwrap();
+    assert!(validate(&m).unwrap().is_some());
+    // Every effect but an exact read asks each call; only a launch may be remembered.
+    for effect in ["disclose", "write", "launch", "Read", "read ", "", "delete"] {
+        assert!(asks_each_call(effect), "{effect:?}");
+    }
+    assert!(!asks_each_call("read"));
+    for effect in ["disclose", "write", "read", "Launch"] {
+        assert!(!may_remember(effect), "{effect:?}");
+    }
+    assert!(may_remember("launch"));
+    // Its dialogs and the Device page call it what it does.
+    assert_eq!(effect_label("disclose"), "shows content");
+    assert_eq!(effect_label("write"), "write");
+}
+
+#[test]
 fn produced_and_consumed_kinds_are_validated() {
     let check = |tier: &str, extra: Value| {
         let mut m = serde_json::json!({"manifest_version": 1, "id": "pluxy/a", "version": "1",
@@ -2090,6 +2115,27 @@ fn produced_and_consumed_kinds_are_validated() {
     )
     .is_ok());
     assert!(check("native", serde_json::json!({"produces": [produce]})).is_ok());
+    // A deliver operation may be read or write (the default), never disclose or launch: a
+    // delivery asks no confirmation. A produce operation keeps its effect: a job start asks.
+    let effect_ops = |deliver: &str, scan: &str| {
+        serde_json::json!({"operations": [
+            {"id": "op", "description": "d", "effect": deliver,
+                "input_schema": {"type": "object", "required": ["executable", "argv", "cwd"]},
+                "output_schema": {"type": "object"}},
+            {"id": "scan", "description": "d", "effect": scan,
+                "input_schema": {"type": "object", "required": ["executable", "argv", "cwd"]},
+                "output_schema": {"type": "object"}}],
+            "produces": [{"kind": "pluxy/hub/items", "schema": 1, "operation": "scan"}],
+            "consumes": [consume]})
+    };
+    for ok in ["read", "write"] {
+        assert!(check("native", effect_ops(ok, "disclose")).is_ok(), "{ok}");
+    }
+    assert!(check("native", effect_ops("read", "launch")).is_ok());
+    for bad in ["disclose", "launch"] {
+        let e = check("native", effect_ops(bad, "read")).unwrap_err();
+        assert!(e.contains("deliveries are the host's calls"), "{bad}: {e}");
+    }
     for (tier, bad, says) in [
         ("web", serde_json::json!({"produces": [produce]}), "jobs"),
         ("web", serde_json::json!({"consumes": [consume]}), "jobs"),

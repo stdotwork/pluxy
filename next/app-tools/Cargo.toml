@@ -1,0 +1,18 @@
+# pluxy's app tools: the native programs the desktop app runs on demand (app program contract v0,
+# ../app/app-host/README.md), and the libraries they share. A workspace of its own, never linked
+# into the desktop app.
+[workspace]
+resolver = "2"
+members = ["lib/program", "lib/usage", "agent-usage", "codex-sessions", "usage-fixture"]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.89"
+publish = false
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

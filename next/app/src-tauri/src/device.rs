@@ -246,8 +246,9 @@ pub struct ReleaseView {
     pub declared: Vec<crate::access::Declared>,
     pub settings: bool,
     pub tier: String,
-    /// Native: the declared operations, by ID and description.
-    pub operations: Vec<(String, String)>,
+    /// Native: the declared operations, by ID, description and effect (as the Device page names
+    /// it: `imports::effect_label`).
+    pub operations: Vec<(String, String, String)>,
     /// The other packages' operations it may call through the host.
     pub imports: Vec<ImportDecl>,
     /// Native: the operations other packages may import.
@@ -402,7 +403,13 @@ fn release_view(
         operations: r
             .operations
             .iter()
-            .map(|o| (o.id.clone(), o.description.clone()))
+            .map(|o| {
+                (
+                    o.id.clone(),
+                    o.description.clone(),
+                    imports::effect_label(&o.effect).to_string(),
+                )
+            })
             .collect(),
         signer: r.signed.as_ref().map(|s| SignerView {
             publisher: s.publisher.clone(),
@@ -2290,6 +2297,7 @@ pub fn stage_from_registry(
 mod admission;
 #[path = "device_imports.rs"]
 mod imports;
+pub use imports::{asks_each_call, effect_label, may_remember};
 #[path = "device_jobs.rs"]
 mod jobs;
 #[path = "device_swap.rs"]
