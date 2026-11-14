@@ -993,7 +993,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             // Taken for another model, or a model core does not serve: refused unasked.
             for (model, says) in [
-                ("rate-limited", "already serves"),
+                ("rate-limited", "choose another alias"),
                 ("no-such-model", "serves no model"),
             ] {
                 let i = json!({"model": model, "alias": ALIAS});

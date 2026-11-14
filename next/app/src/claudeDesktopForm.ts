@@ -76,3 +76,15 @@ export function ready(rows: Row[]): boolean {
 /** Whether a preview's error is the default location's missing library folder, the one case the
  * page offers to create. */
 export const missingLibrary = (error: string | undefined) => !!error?.includes(MISSING_LIBRARY);
+
+/** What a row's alias needs from core, which serves the names Claude Desktop sends: nothing
+ * (no alias, or the model's own name), nothing more (core lists it), creating it in core (core
+ * does not list it), or unknown (core's list was not read). */
+export type AliasState = "none" | "served" | "missing" | "unknown";
+
+export function aliasState(row: Row, served: ReadonlySet<string> | undefined): AliasState {
+  const alias = row.alias.trim();
+  if (alias === "" || alias === row.model.trim()) return "none";
+  if (!served) return "unknown";
+  return served.has(alias) ? "served" : "missing";
+}

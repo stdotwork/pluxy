@@ -5,6 +5,7 @@
 // secret's ID and the native confirmation of the apply names its label. The key's value never
 // reaches this webview. Labels follow the old app's Agents page.
 
+import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useId, useState } from "preact/hooks";
 import type { PageDef } from "../../ui/kit/shell";
 import { strings } from "../../ui/kit/strings";
@@ -20,8 +21,9 @@ import {
   useAction,
   useLoad,
 } from "../../ui/kit/ui";
-import { Backups, reply } from "./backups";
+import { Backups, type Reply, reply } from "./backups";
 import {
+  aliasState,
   FILES,
   fresh,
   keysOf,
@@ -71,7 +73,12 @@ const t = strings("claudeDesktop", {
   mappingHint:
     "Claude Desktop only allows Claude models, so non-Claude models need aliases that follow Claude model naming. If the original model name already belongs to the Claude family, no alias mapping is needed; leave the alias blank. The first model is Claude Desktop's default.",
   aliasCore:
-    "Claude Desktop sends the alias to this core: add it to the account or extension serving the original model (its model_alias) so the core serves the model under that name.",
+    "Claude Desktop sends the alias to this core, so the core must serve the original model under that name too. Create alias in core adds it, after a native confirmation, to the accounts added by login that serve the original model; an account set in core's config gets it only in core's config. Clear integration and Restore Backup leave an alias made in core.",
+  createAlias: "Create alias in core",
+  aliasServed: "Core serves this alias.",
+  aliasMade: "Core now serves {alias} on {accounts}.",
+  aliasAlready: "Core already serves {alias} on {accounts}.",
+  aliasConfig: "Accounts set in core's config ({accounts}) do not have it: add it there.",
   aliasRule:
     "Aliases can follow patterns such as claude-opus-*, claude-sonnet-*, or claude-haiku-*, but must not contain names of other model families such as gpt, grok, gemini, or deepseek.",
   addModel: "Add model",
@@ -183,6 +190,46 @@ export function ClaudeDesktopPage() {
   const secrets = useLoad(() => reply<{ secrets: Secret[] }>("vault_secrets"));
   const keys = keysOf(secrets.data);
   const listId = useId();
+  // The names core serves, which Claude Desktop's aliases must be among.
+  const coreModels = useLoad(() =>
+    invoke<Reply<{ models?: { id: string }[] }>>("core_call", {
+      method: "GET",
+      path: "/models",
+      body: null,
+    }).catch(
+      (e): Reply<{ models?: { id: string }[] }> => ({
+        status: 0,
+        error: { code: "unavailable", message: String(e) },
+      }),
+    ),
+  );
+  const served = coreModels.data?.models ? new Set(coreModels.data.models.map((m) => m.id)) : undefined;
+  const aliasAct = useAction(coreModels.reload);
+  const [made, setMade] = useState<string>();
+  const createAlias = (r: Row) =>
+    aliasAct.run(async () => {
+      setMade(undefined);
+      const res = await reply<{
+        alias: string;
+        accounts: string[];
+        config_accounts: string[];
+        already: boolean;
+      }>("core_alias_create", { model: r.model.trim(), alias: r.alias.trim() });
+      if (res.error?.message.includes("cancelled")) return { status: 200 };
+      const b = res.body;
+      if (b) {
+        const said = t(b.already ? "aliasAlready" : "aliasMade", {
+          alias: b.alias,
+          accounts: b.accounts.join(", "),
+        });
+        setMade(
+          b.config_accounts.length > 0
+            ? `${said} ${t("aliasConfig", { accounts: b.config_accounts.join(", ") })}`
+            : said,
+        );
+      }
+      return res;
+    });
   useEffect(() => {
     connectionGet().then(
       (c) => setCore(c.signed_in ? c.target : undefined),
@@ -319,6 +366,8 @@ export function ClaudeDesktopPage() {
             <p class="muted">{t("mappingHint")}</p>
             <p class="muted">{t("aliasRule")}</p>
             <p class="muted">{t("aliasCore")}</p>
+            {aliasAct.error && <Notice tone="danger">{aliasAct.error}</Notice>}
+            {made && <Notice tone="ok">{made}</Notice>}
             {rows.length === 0 && <p class="muted">{t("empty")}</p>}
             {rows.map((r, i) => (
               <div key={i} class="row">
@@ -340,6 +389,12 @@ export function ClaudeDesktopPage() {
                   checked={r.one_m}
                   onChange={(on) => setRow(i, { one_m: on })}
                 />
+                {aliasState(r, served) === "missing" && core && (
+                  <Button disabled={aliasAct.busy} onClick={() => createAlias(r)}>
+                    {t("createAlias")}
+                  </Button>
+                )}
+                {aliasState(r, served) === "served" && <span class="muted">{t("aliasServed")}</span>}
                 <Button onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))}>
                   {t("removeModel")}
                 </Button>
