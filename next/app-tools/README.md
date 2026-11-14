@@ -11,7 +11,7 @@ reference: this folder implements it, it does not change it.
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
 cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-omp)
 cargo build --locked -p pluxy-transactions --example fixture-writer   # the native test's fixture
-cargo build --release --locked -p claude-code   # likewise execution
+cargo build --release --locked -p claude-code   # likewise execution and omp-setup
 ```
 
 ## `lib/program`
@@ -304,6 +304,61 @@ since. `CLAUDE_CODE_EFFORT_LEVEL` and per-model `modelSettings` are left alone. 
 JSON (a comment, a trailing comma), not an object, an `env` that is not an object of strings, or a
 `$schema` other than `https://json.schemastore.org/claude-code-settings.json`. A missing or empty
 file is an empty one. Restore Backup puts the original back whatever the file holds now.
+
+## `omp-setup`
+
+`pluxy/omp-setup` sets up Oh My Pi to use pluxy's core and says how to start it, for the desktop
+app's Oh My Pi page (`../app/README.md`, "Oh My Pi"). It writes Oh My Pi's two files through
+`lib/transactions` (set `omp`, targets in this order: the models file, then the settings file):
+link-preserving, journalled, the original and applied images in the host's vault, and its manual
+backups (the backup browser). It exports nothing.
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `preview` | `read` | `targets`: two selections (`file`, or `root` and `path`); or `folder`: an agent folder (it may be a link), whose two files are used; by default the two files in `~/.omp/agent` in the app's `HOME` (below); `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `config`: `state` (`not-configured`, `configured`, `needs-update`), `base_url` (the provider's), `key_set`, `model` (the default role's, when it is pluxy's), `default_role` (the settings file's `modelRoles.default`), `legacy` (the old desktop app's `easy-cliproxyapi` provider is there); never the key |
+| `apply` | `write`; secret `key` (value) | Two pins, `base_url`, `key`, `model` (one model ID) | The library's outcome |
+| `clear` | `write` | Two pins | The library's outcome: the values Apply wrote go, edits made since stay |
+| `restore` | `write` | Two pins | The library's outcome: the original bytes back (Restore Backup) |
+| `status` | `read` | — | The library's status |
+| `recipe` | `read` | — | `{"client": "Oh My Pi", "kind": "terminal", "program": <~/.bun/bin/omp, else ~/.local/bin/omp, when an executable file is there, else "omp">, "args": []}`, for the launcher |
+| `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations (`lib/transactions`), both files per version, diffed by setting name (each file's YAML read as its value) | The library's answers: IDs, paths, presence, sizes and setting names, never a value |
+
+Oh My Pi keeps its files in its agent folder, `~/.omp/agent` (`PI_CODING_AGENT_DIR` moves it;
+`PI_CONFIG_DIR` renames `.omp`; a profile, `OMP_PROFILE` or `--profile`, uses
+`~/.omp/profiles/<name>/agent`): `models.yml` (or an existing `models.yaml`) holds custom
+providers and models, `config.yml` (or an existing `config.yaml`) the settings, both YAML. The
+tool's environment holds none of those variables, so a person who uses them selects that folder or
+those files. Read at source (can1357/oh-my-pi at af8e4c142b2b, release v18.20.0, 2026-11-14):
+`packages/utils/src/dirs.ts`, `packages/coding-agent/src/config/config-file.ts`,
+`models-config-schema-bundle.ts`, `settings.ts` and `docs/models.md`, `docs/settings.md`.
+
+What `apply` writes:
+
+- in the models file, `providers.pluxy`: `baseUrl` (the core's address with `/v1`), `apiKey` (the
+  client key), `api` `openai-responses` and `discovery.type` `openai-models-list` (Oh My Pi lists
+  the core's models from its `/v1/models`); its other members, such as the person's own `models`,
+  `modelOverrides` or `headers`, and every other provider stay;
+- in the settings file, `modelRoles.default`: `pluxy/<model>`; the other roles and settings stay.
+
+Both files are edited in place through a lossless YAML tree (yaml-edit): comments, key order,
+quoting and indentation stay, and only keys whose values change are touched. Each file is read as
+YAML 1.2 (saphyr), as Oh My Pi's parser reads it, and every edited file is read again and must hold
+exactly the intended value, else nothing is written. Clear's three-way merge brings back what Apply
+replaced unless the person changed it since, and edits only what differs; a file Apply created that
+holds nothing else is removed. An old desktop app's `easy-cliproxyapi` provider is left alone. `preview`
+and `apply` refuse, before writing, a file Oh My Pi would not take (Clear, which the page runs after
+a preview, refuses a file that is no longer YAML when it has to merge): not UTF-8, not
+YAML (a repeated key too), more than one document, a top level that is not a mapping, a tag, a key
+that is not text or a number that is not finite, `providers`, `providers.pluxy` or its `discovery`
+not a mapping, `modelRoles` not a mapping or `modelRoles.default` not text. A missing or empty file
+is an empty one. Neither file has a version field, so none is checked. With neither YAML name in
+the folder, a legacy `models.json` or `settings.json` there refuses them too: Oh My Pi moves it into a
+new YAML file when it next starts, which a file made here would stop (settings Oh My Pi still holds
+in `agent.db` from an old version are not seen). The key may not start with `!` (Oh My Pi runs such
+a value as a command) or hold spaces; Oh My Pi first reads `apiKey` as an environment variable's
+name, so a key equal to a set variable's name would be replaced. The model is one ID: no spaces or
+commas (a role's fallbacks), not starting with `@` (a role) or `*`. Restore Backup puts the
+originals back whatever the files hold now.
 
 ## `execution`
 
