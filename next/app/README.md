@@ -806,6 +806,34 @@ page lists the managed runtimes the execution program started, with **Stop** and
 confirmed natively, never remembered); disabling or removing a package with managed runtimes running
 asks first, and cancelling leaves both as they are.
 
+## Claude Code
+
+The Claude Code page sets up and starts Claude Code with this core (`src/claudeCode.tsx`). It needs
+the curated native tool `pluxy/claude-code` ([app tools](../app-tools/README.md#claude-code)) and,
+for **Start CLI**, the execution program, both installed and enabled on the Device extensions page.
+It is the window's own page, not an extension page: **Apply** gives the tool the client key, and
+only the window can name a vault secret for an operation (an extension page cannot pass secrets).
+
+**Read settings** previews the settings file: Claude Code's user settings
+(`~/.claude/settings.json`), a selected file (a link, as stow makes, is followed and kept) or a file
+in a selected folder; it shows whether pluxy's integration is applied, the file it writes to and
+whether a key is in it, never the key, and fills the form from the file. The form keeps the old
+app's controls: **Claude Code Model → Upstream Model** (Sonnet, Opus, Fable, Haiku, each with a
+**1M** switch; Fable follows Sonnet when empty), **Default model**, **Subagent model**, and under
+**Context and auto-compaction (advanced)** the **Auto-compact window**, **Auto-compact trigger**
+and **Disable auto-compaction**. Model fields suggest Claude Code's own models and aliases until the
+model picker lists the core's; any model text is taken. The **Authentication Key** is one of the
+vault's secrets, or a new one through native key entry (**Add key…**).
+
+**Connect in One Click** (or **Update Configuration** / **Repair Connection** once applied),
+**Close configuration** (Clear) and **Restore Backup** each preview the file again and call the
+tool, whose native confirmation names the file it resolves to, the key's label for Apply, and that
+an edit made in the same instant by another program may be lost. **Start CLI** asks the tool for its
+recipe (`claude` in a terminal, no arguments) and starts it through the launcher in the chosen
+working directory (recently used ones offered), terminal and optional program path; the launcher's
+confirmation shows it in full. The key is not part of the launch: Claude Code reads it from its
+settings.
+
 ## Build and check
 
 Bun `1.4.3`, a stable Rust toolchain (CI uses 1.97.0), and on Linux the WebKitGTK 4.1 and
