@@ -160,6 +160,10 @@ function configs(home: string, login: string) {
   symlinkSync(chezmoi, rootLink);
   put(unknown, unknownBytes);
   put(broken, brokenBytes);
+  // Beginner Mode's file: the person's own setting, which the guide's apply keeps.
+  const easy = join(home, "easy", "settings.json");
+  const easyBytes = '{\n  "env": {\n    "API_TIMEOUT_MS": "1"\n  }\n}\n';
+  put(easy, easyBytes);
 
   const tail = '  "autoCompactWindow": 1000000,\n  "autoCompactEnabled": true\n}\n';
   return {
@@ -171,6 +175,13 @@ function configs(home: string, login: string) {
     root: { link: rootLink, text: chezmoi, file: join(chezmoi, "settings.json") },
     unknown,
     broken,
+    // Beginner Mode's check: its file, and the account its guided sign-in adds with test/alpha's
+    // API-key method.
+    easy: {
+      settings: easy,
+      account: "guided-account",
+      api_key: `pluxy-guided-login-${randomBytes(8).toString("hex")}`,
+    },
     settings_input: SETTINGS,
     bytes: {
       original,
@@ -179,6 +190,7 @@ function configs(home: string, login: string) {
       keep,
       unknown: unknownBytes,
       broken: brokenBytes,
+      easy: easyBytes,
       stow: stowOriginal,
       // The person's API key goes (it would win over the bearer token), their timeout stays, the
       // startup model replaces theirs, the setting the check does not know keeps its digits.

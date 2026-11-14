@@ -121,7 +121,9 @@
 // replaced target refuses, settings of another schema refuse; its recipe starts a stand-in terminal
 // and claude through the launcher with no key in argv or environment; the key and a login canary
 // stay out of every window answer, confirmation and the app's output, and removing the package
-// leaves no process.
+// leaves no process. Then Beginner Mode (easy_mode_native.rs) signs in with test/alpha's API-key
+// method in its Add Account and installs, enables, applies and starts Claude Code through the
+// guide; a cancelled apply keeps the file and the guide cannot answer the enable confirmation.
 // The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its

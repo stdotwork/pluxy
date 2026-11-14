@@ -29,7 +29,7 @@
 //!    fixture parser (`usage_native.rs`); with `PLUXY_APP_TEST_LAUNCHER`, only the execution
 //!    program and the launcher (`launcher_native.rs`); with `PLUXY_APP_TEST_CLAUDE_CODE`, only
 //!    the Claude Code setup and launcher (`claude_code_native.rs`), with its backup browser
-//!    (`backups_native.rs`);
+//!    (`backups_native.rs`) and Beginner Mode's guided setup (`easy_mode_native.rs`);
 //! 5. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!
@@ -71,6 +71,9 @@ mod client_key;
 mod core_updates;
 #[path = "device_native.rs"]
 mod device;
+#[cfg(target_os = "linux")]
+#[path = "easy_mode_native.rs"]
+mod easy_mode;
 #[path = "native_ingress.rs"]
 mod ingress;
 #[cfg(target_os = "linux")]
