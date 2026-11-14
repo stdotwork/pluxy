@@ -11,7 +11,7 @@ reference: this folder implements it, it does not change it.
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
 cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-omp)
 cargo build --locked -p pluxy-transactions --example fixture-writer   # the native test's fixture
-cargo build --release --locked -p claude-code   # likewise execution
+cargo build --release --locked -p claude-code   # likewise execution and pi-setup
 ```
 
 ## `lib/program`
@@ -304,6 +304,83 @@ since. `CLAUDE_CODE_EFFORT_LEVEL` and per-model `modelSettings` are left alone. 
 JSON (a comment, a trailing comma), not an object, an `env` that is not an object of strings, or a
 `$schema` other than `https://json.schemastore.org/claude-code-settings.json`. A missing or empty
 file is an empty one. Restore Backup puts the original back whatever the file holds now.
+
+## `pi-setup`
+
+`pluxy/pi-setup` sets up Pi to use pluxy's core, installs, updates and uninstalls the CLIProxyAPI
+provider plugin Pi needs for it, and says how to start Pi, for the desktop app's Pi page
+(`../app/README.md`, "Pi"). It writes Pi's files through `lib/transactions` (set `pi`, targets in
+this order, all in one agent folder: `cliproxyapi.json`, `settings.json`,
+`cliproxyapi-models.json`): link-preserving, journalled, the original and applied images in the
+host's vault, and its manual backups (the backup browser). It exports nothing.
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `preview` | `read` | `folder` (optional): an agent folder (it may be a link); by default `~/.pi/agent` in the app's `HOME` (below); `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `pi`: `state` (`not-configured`: the plugin is not listed; `configured`; `needs-update`), `base_url` (cliproxyapi.json's), `key_set`, `provider` (the plugin's provider ID), `default_provider`, `model` (Pi's default model), `registered` (settings.json lists pluxy's plugin), `legacy` (it lists an older app's npm copy), `adapter`: `installed`, `version`, `bundled`, `update`, `foreign` (a folder of that name pluxy did not install); never the key |
+| `apply` | `write`; secret `key` (value) | Three pins, `base_url`, `key`, `model` (one model ID) | The library's outcome and `adapter`: `installed` or `kept` |
+| `update` | `write` | `folder`: the agent folder | `{"outcome": "updated", "version"}` |
+| `uninstall` | `write` | Three pins | The library's outcome and `adapter_removed` |
+| `clear` | `write` | Three pins | The library's outcome (the values Apply wrote go, edits made since stay) and `adapter_removed` |
+| `restore` | `write` | Three pins | The library's outcome (the original bytes back: Restore Backup) and `adapter_removed` |
+| `status` | `read` | — | The library's status |
+| `recipe` | `read` | — | `{"client": "Pi", "kind": "terminal", "program": <~/.pi/agent/bin/pi, else ~/.local/bin/pi, when an executable file is there, else "pi">, "args": []}`, for the launcher |
+| `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations (`lib/transactions`), the three files per version, diffed by setting name | The library's answers: IDs, paths, presence, sizes and setting names, never a value |
+
+Pi keeps its user settings in its agent folder, `~/.pi/agent` (`PI_CODING_AGENT_DIR` moves it; the
+tool's environment does not have it, so a person who uses it selects that folder): `settings.json`
+holds Pi's settings, among them `packages` (npm, git or local Pi packages), `defaultProvider` and
+`defaultModel`; Pi reads it as strict JSON. Pi talks to pluxy's core through the CLIProxyAPI
+provider plugin, which reads `cliproxyapi.json` in the same folder (`baseUrl`, `apiKey`, and
+optional `providerId`, `providerName`, `fast` and `pause`; `CLIPROXYAPI_*` variables in Pi's
+environment win over it), registers the provider `cliproxyapi`, lists the core's Codex catalog
+(`/v1/models?client_version=pi`), sends requests to `/backend-api/codex/responses` and caches the
+list in `cliproxyapi-models.json`. Read at source: earendil-works/pi at 17d6ca759a07 (Pi 1.5.2,
+2026-11-14): `packages/coding-agent/src/config.ts`, `core/settings-manager.ts`,
+`core/package-manager.ts`, `core/extensions/loader.ts` and `docs/settings.md`, `docs/packages.md`,
+`docs/quickstart.md`; the plugin, npm `@router-for-me/pi-cliproxyapi-provider` 1.4.25.
+
+**The plugin.** The old desktop app ran `pi install npm:@router-for-me/pi-cliproxyapi-provider`,
+which fetches whatever the npm registry serves. This tool never runs Pi or npm and fetches
+nothing: it carries a reviewed copy of that plugin (`pi-setup/adapter/`, MIT, its `LICENSE` kept)
+in its signed program, and writes it into the agent folder as a local Pi package,
+`pluxy-cliproxyapi-provider/`, with a marker file `.pluxy-adapter.json` (this package and the
+copy's version, `1.4.25-pluxy.1`). Pi loads a local package from its folder and never installs or
+updates it. **Update** replaces pluxy's copy with the one the installed tool carries (a newer
+plugin comes with a new pluxy/pi-setup); the page offers it when the installed copy's version
+differs. A folder of that name without pluxy's marker is someone else's: Apply and Update refuse,
+and nothing removes it. The review read the plugin's network, process, file and code-loading calls
+(it starts no processes; it fetches the core's model list and `https://models.dev/api.json` for
+prices) and found one hole, patched in the copy: the plugin wrote a patched copy of a Pi module to
+a fixed name in the shared temporary folder and imported it, so another user of the machine who
+made that folder first could run code as the Pi user; the copy keeps it in its own folder's
+`.cache` (mode 0700) instead. The plugin declares Pi `>=0.82.0` (`@earendil-works/pi-coding-agent`);
+the tool cannot run `pi --version`, so it does not check.
+
+What `apply` writes:
+
+- the plugin, when pluxy's copy is not in the agent folder;
+- in `cliproxyapi.json`, `baseUrl` (the core's address, without a final `/` or `/v1`) and `apiKey`
+  (the client key, which the plugin sends as a bearer token); the other keys stay;
+- in `settings.json`, the local package `./pluxy-cliproxyapi-provider` in `packages` (the relative
+  form Pi itself writes; an entry the person narrowed stays as it is), without an older app's
+  `npm:@router-for-me/pi-cliproxyapi-provider` entry (both would register the same provider and
+  commands; its npm files stay), `defaultProvider` (cliproxyapi.json's `providerId`, else
+  `cliproxyapi`) and `defaultModel`; the other packages and settings stay;
+- `cliproxyapi-models.json` is removed, so the plugin lists the core's models afresh.
+
+Files are written back as JSON with two-space indentation; key order and numbers' digits stay.
+Clear's three-way merge brings back what Apply replaced unless the person changed it since; on top,
+pluxy's plugin never stays listed, an entry Apply took out of `packages` comes back, and a model
+cache Apply removed is removed again when there was none before Apply (else the plugin's newer one
+stays). **Uninstall** takes only the plugin's entry out of `settings.json` (through `apply`, so
+Clear and Restore Backup still work afterward) and removes its folder; the connection settings stay,
+as in the old app. Clear, Restore Backup and Uninstall remove pluxy's plugin folder once
+`settings.json` no longer lists it. `preview` and `apply` refuse, before writing, a file Pi or the
+plugin would not take: `settings.json` or `cliproxyapi.json` not strict JSON (a byte order mark
+too) or not an object, `packages` not a list of package sources (a string, or an object with a
+string `source`), `defaultProvider`, `defaultModel`, `baseUrl`, `apiKey` or `providerId` not text.
+A missing file is an empty one; the cache is not checked (Apply removes it). Neither file has a
+version field, so none is checked. The key may not hold spaces; the model is one ID without spaces.
 
 ## `execution`
 

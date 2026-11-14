@@ -845,6 +845,42 @@ version** puts it back over whatever the file holds now (a file absent in the ba
 no automatic backup is made) and **Delete this version** deletes only that backup, each in the
 tool's native confirmation.
 
+## Pi
+
+The Pi page sets up and starts Pi with this core (`src/pi.tsx`). It needs the curated native tool
+`pluxy/pi-setup` ([app tools](../app-tools/README.md#pi-setup)) and, for **Start CLI**, the
+execution program, both installed and enabled on the Device extensions page. Like the Claude Code
+page it is the window's own page, because **Apply** gives the tool the client key.
+
+Pi reaches the core through the CLIProxyAPI provider plugin. The tool carries a reviewed copy of
+it and installs it as a local Pi package in Pi's agent folder; it never runs `pi install` or npm.
+**Read settings** previews Pi's files, `cliproxyapi.json`, `settings.json` and the plugin's model
+cache `cliproxyapi-models.json`, in its agent folder (`~/.pi/agent`) or in a selected agent folder
+(the one `PI_CODING_AGENT_DIR` names; the folder may be a link, as chezmoi can make; a file in it
+may be a link, as stow makes, which is followed and kept). It shows whether the plugin is
+installed and its version (with **Update available** when the tool carries another), whether
+pluxy's integration is applied, the files it writes to, whether a key is in `cliproxyapi.json` and
+Pi's default provider and model, never the key; it warns when `settings.json` still lists the npm
+copy an older app installed, or when a folder of the plugin's name is not pluxy's. **Model** is the
+model Pi starts with through this core (the core's served models are suggested; **Refresh models**
+reloads them; the plugin itself lists the core's Codex catalog in Pi). The **Authentication Key**
+is one of the vault's secrets, or a new one through native key entry (**Add key…**).
+
+**Install Pi Plugin** (or **Connect in One Click**, **Update Configuration** / **Repair
+Connection** once installed) installs the plugin when it is not there and writes the core's
+address, the key and Pi's defaults. **Plugin management** has **Update Pi Plugin** (the tool's copy
+replaces the installed one) and **Uninstall Pi Plugin** (its entry and folder go; the connection
+settings stay). **Clear integration** and **Restore Backup** also remove the plugin's folder once
+`settings.json` no longer lists it. Each of these previews the files again and calls the tool,
+whose native confirmation names the files it resolves to (or the agent folder, for Update), the
+key's label for Apply, and that an edit made in the same instant by another program may be lost;
+everything else in the files stays. **Backup and restore** is the shared backup browser. **Start
+CLI** asks the tool for its recipe (`pi` in a terminal, no arguments; `~/.pi/agent/bin/pi` or
+`~/.local/bin/pi`, where Pi's installer puts it, when one exists) and starts it through the
+launcher in the chosen working directory (recently used ones offered), terminal and optional
+program path. The key is not part of a launch: the plugin reads it from `cliproxyapi.json`. Pi has
+no desktop app.
+
 ## Build and check
 
 Bun `1.4.3`, a stable Rust toolchain (CI uses 1.97.0), and on Linux the WebKitGTK 4.1 and
