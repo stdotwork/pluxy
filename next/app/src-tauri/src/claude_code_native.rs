@@ -17,10 +17,11 @@
 //!   sentence, never the key; then the settings hold exactly the bytes `expect.json` says, owner
 //!   only (0600, from 0644), and the preview reads them back as configured; the login files are
 //!   untouched;
-//! - restore: after the person's edit, Restore Backup puts the original bytes back, the mode left
-//!   0600;
-//! - clear: applied again and edited twice by the person, Clear takes out only the untouched
-//!   values: their API key comes back, their timeout and model stay;
+//! - restore: after the person's edit and a mode of their own (0640), Restore Backup puts the
+//!   original bytes back and keeps that mode;
+//! - clear: applied again (0600 again) and edited twice by the person, who sets 0644, Clear takes
+//!   out only the untouched values: their API key comes back, their timeout and model stay, and
+//!   so does their mode;
 //! - corrupt: applied again, then made into a file Claude Code would not take, the preview reports
 //!   it refused, a confirmed Clear is refused and changes nothing, and Restore Backup puts back
 //!   the file as it was before that apply;
@@ -382,6 +383,8 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         (|| {
             let (from, to) = pair("edited_timeout");
             edit(&settings, &from, &to)?;
+            std::fs::set_permissions(&settings, std::fs::Permissions::from_mode(0o640))
+                .map_err(|e| e.to_string())?;
             let v = read_op(main, &seen, "preview", file(&settings))?;
             require(
                 v["edited"] == json!([true]),
@@ -398,7 +401,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             require(o["outcome"] == "restored", format!("the restore: {o}"))?;
             require(
-                read(&settings) == Some(bytes("original")) && mode(&settings) == 0o600,
+                read(&settings) == Some(bytes("original")) && mode(&settings) == 0o640,
                 format!("the restored settings: {:?}", read(&settings)),
             )?;
             untouched()
@@ -424,10 +427,16 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 read(&settings) == Some(bytes("applied")),
                 "the second apply",
             )?;
+            require(
+                mode(&settings) == 0o600,
+                format!("the second apply's mode: {:o}", mode(&settings)),
+            )?;
             for k in ["edited_timeout", "edited_model"] {
                 let (from, to) = pair(k);
                 edit(&settings, &from, &to)?;
             }
+            std::fs::set_permissions(&settings, std::fs::Permissions::from_mode(0o644))
+                .map_err(|e| e.to_string())?;
             let v = read_op(main, &seen, "preview", file(&settings))?;
             let o = written(
                 app,
@@ -440,8 +449,12 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             require(o["outcome"] == "cleared", format!("the clear: {o}"))?;
             require(
-                read(&settings) == Some(bytes("cleared")),
-                format!("the cleared settings: {:?}", read(&settings)),
+                read(&settings) == Some(bytes("cleared")) && mode(&settings) == 0o644,
+                format!(
+                    "the cleared settings ({:o}): {:?}",
+                    mode(&settings),
+                    read(&settings)
+                ),
             )?;
             untouched()
         })(),
