@@ -122,6 +122,16 @@
 // and claude through the launcher with no key in argv or environment; the key and a login canary
 // stay out of every window answer, confirmation and the app's output, and removing the package
 // leaves no process.
+// The Pi check (pi.ts, pi_native.rs) runs in one more session with that build: pluxy/pi-setup
+// (next/app-tools/pi-setup, built here) with the execution program applies, clears and restores Pi's
+// settings and cliproxyapi files in the run's HOME to hand-written bytes, after a native confirmation
+// naming the three files and the key's label, keeping the person's later edits; the adapter folder
+// is installed, updated and removed with them, and a folder whose adapter is not pluxy's refuses an
+// apply; through a stow link and a chezmoi-style root it changes only the target, a replaced target
+// refuses, folders Pi would not take refuse; its recipe starts a stand-in pi (from the PATH, then
+// from ~/.local/bin, then from Pi's own bin folder, which comes first) in a terminal through the
+// launcher with no key in argv or environment; the key and a login canary stay out of every window
+// answer, confirmation and the app's output, and removing the package leaves no process.
 // The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
@@ -160,6 +170,7 @@ import { buildDeviceFixtures } from "./device";
 import { type Feed, standInBrowser, startFeed } from "./feed";
 import { runInstances } from "./instances";
 import { buildLauncherFixtures } from "./launcher";
+import { buildPiFixtures } from "./pi";
 import { descendants, webProcesses } from "./processes";
 import { buildProgramFixtures } from "./program";
 import { buildRoutingFixtures } from "./routing";
@@ -601,7 +612,8 @@ interface Rotation {
  * the session runs only the core steps, against that core source. release: the app starts with
  * that release installed and selected. spawnCheck: only the spawn check. reader: only the session
  * reader check. launcherCheck: only the launcher check. transactions: only the transaction
- * library check. claudeCode: only the Claude Code setup and launcher check. */
+ * library check. claudeCode: only the Claude Code setup and launcher check. pi: only the Pi setup
+ * and launcher check. */
 async function runApp(
   mode: Mode,
   artifact: Artifact,
@@ -626,6 +638,7 @@ async function runApp(
   launcherCheck = false,
   transactions = false,
   claudeCode = false,
+  pi = false,
 ): Promise<string[]> {
   const { label, bin } = artifact;
   const root = rotation.root ?? mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
@@ -709,6 +722,7 @@ async function runApp(
       !reader &&
       !transactions &&
       !claudeCode &&
+      !pi &&
       !usage &&
       suite !== "access"
         ? join(root, "device")
@@ -881,6 +895,21 @@ async function runApp(
         JSON.stringify({ version: 0, registries: f.registries }),
       );
     }
+    // The Pi check's signed packages, Pi's files in HOME, its stand-in terminal and pi, its
+    // registry and trust profile, and its key and login canary.
+    const piDir = pi ? join(root, "pi") : undefined;
+    if (piDir) {
+      mkdirSync(piDir);
+      const f = buildPiFixtures(piDir, dirs.home, piProgram, piManifest, executionProgram, executionManifest);
+      nonce = f.nonce;
+      canaries = f.canaries;
+      launcherBin = f.bin;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
     if (curated) {
       mkdirSync(curated);
       if (device) mkdirSync(device);
@@ -910,7 +939,8 @@ async function runApp(
       !launcherDir &&
       !usageDir &&
       !transactionsDir &&
-      !claudeCodeDir
+      !claudeCodeDir &&
+      !piDir
     ) {
       try {
         nonce = /^nonce=([0-9a-f]{64})$/m.exec(run(probe, ["trust-marker", dirs.home], app))?.[1] ?? "";
@@ -973,6 +1003,7 @@ async function runApp(
       ...(sessionsDir ? { PLUXY_APP_TEST_SESSIONS: sessionsDir } : {}),
       ...(transactionsDir ? { PLUXY_APP_TEST_TRANSACTIONS: transactionsDir } : {}),
       ...(claudeCodeDir ? { PLUXY_APP_TEST_CLAUDE_CODE: claudeCodeDir } : {}),
+      ...(piDir ? { PLUXY_APP_TEST_PI: piDir } : {}),
       ...(usageDir ? { PLUXY_APP_TEST_USAGE: usageDir } : {}),
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: artifact.identifier } : {}),
       ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
@@ -1287,6 +1318,16 @@ async function runApp(
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode} claude-code ${JSON.stringify(r ?? {})}`);
       console.log(`${mode}: claude-code ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
+    if (pi) {
+      const r = steps.get("pi") as { passed?: boolean } | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(r?.passed === true, `the Pi check did not complete: ${failure}`);
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} pi ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode}: pi ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
 
@@ -1816,6 +1857,9 @@ const executionProgram = join(appToolsTarget, "debug", "execution");
 /** pluxy/claude-code (next/app-tools/claude-code) and its manifest, for the Claude Code check. */
 const claudeCodeManifest = join(appTools, "claude-code", "pluxy-extension.json");
 const claudeCodeProgram = join(appToolsTarget, "debug", "claude-code");
+/** pluxy/pi-setup (next/app-tools/pi-setup) and its manifest, for the Pi check. */
+const piManifest = join(appTools, "pi-setup", "pluxy-extension.json");
+const piProgram = join(appToolsTarget, "debug", "pi-setup");
 /** The transaction library's fixture writer the transaction library check packs. */
 const fixtureWriter = join(appToolsTarget, "debug", "examples", "fixture-writer");
 let appImage = ""; // the smoke AppImage the sessions run
@@ -1900,6 +1944,9 @@ async function main(): Promise<number> {
   // pluxy/claude-code, which the Claude Code check installs.
   if (existsSync(claudeCodeManifest))
     run("cargo", ["build", "--locked", "-p", "claude-code", "--target-dir", appToolsTarget], appTools);
+  // pluxy/pi-setup, which the Pi check installs.
+  if (existsSync(piManifest))
+    run("cargo", ["build", "--locked", "-p", "pi-setup", "--target-dir", appToolsTarget], appTools);
   // The build without artifact-test-trust, kept aside before the build with it replaces it. The
   // device check needs the one (a normal build refuses the curated native tool), the admission
   // session and the updater gate's identifier check the other (its features are the test
@@ -2277,6 +2324,35 @@ async function main(): Promise<number> {
           false,
           undefined,
           release,
+          false,
+          false,
+          false,
+          false,
+          false,
+          true,
+        )),
+      );
+      // The Pi setup and launcher check, on the same build.
+      p.push(
+        ...(await runApp(
+          "managed",
+          trusted,
+          updaterKey,
+          managed,
+          undefined,
+          false,
+          false,
+          undefined,
+          undefined,
+          {},
+          false,
+          false,
+          false,
+          false,
+          false,
+          undefined,
+          release,
+          false,
           false,
           false,
           false,
