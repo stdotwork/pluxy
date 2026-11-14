@@ -231,7 +231,8 @@ fn apply_writes_only_the_link_target_and_keeps_the_link() {
         read(&target).unwrap(),
         "{\n  \"theme\": \"light\",\n  \"model\": \"m\"\n}\n"
     );
-    assert_eq!(std::fs::metadata(&target).unwrap().mode() & 0o7777, 0o640);
+    // An apply's file is owner-only: the group's read bit goes.
+    assert_eq!(std::fs::metadata(&target).unwrap().mode() & 0o7777, 0o600);
     assert_eq!(link_of(&link), before);
     assert_eq!(read(&other).unwrap(), "{}\n");
     let names: Vec<_> = std::fs::read_dir(target.parent().unwrap())
@@ -829,11 +830,11 @@ fn temporary_files_are_private_and_reconcile_removes_them() {
         "the temporary file was left"
     );
     assert!(unrelated.exists());
-    // The written file keeps the target's mode.
+    // The written file keeps the target's mode for the owner only.
     let p = pins(&tx, "s", &[Selection::File(a.clone())]);
     tx.apply("s", &p, &values(json!({"x": 1})), &Json, &mut none)
         .unwrap();
-    assert_eq!(mode_of(&a), 0o644);
+    assert_eq!(mode_of(&a), 0o600);
 }
 
 /// Finding 6: the person's key order and numbers' digits are kept.
@@ -877,7 +878,7 @@ fn modes_are_masked_and_kept_through_removal() {
     let p = pins(&tx, "s", &[Selection::File(a.clone())]);
     tx.apply("s", &p, &values(json!({"x": 1})), &Json, &mut none)
         .unwrap();
-    assert_eq!(mode_of(&a), 0o755);
+    assert_eq!(mode_of(&a), 0o700);
     // x did not exist: apply creates it (0600), the person makes it 0644; a restore that removes
     // it, then fails on b, puts it back 0644.
     let x = t.at("one/x.json");
@@ -908,6 +909,40 @@ fn modes_are_masked_and_kept_through_removal() {
     std::fs::remove_file(&a).unwrap();
     let p = pins(&tx, "m", &[Selection::File(a.clone())]);
     tx.restore("m", &p, &mut none).unwrap();
+    assert_eq!(mode_of(&a), 0o640);
+}
+
+/// An apply writes a writer's values, a key among them: the file it writes is owner-only, an
+/// existing file's group and other bits taken away; clear and restore keep the mode it has then.
+#[test]
+fn apply_makes_the_file_owner_only_and_clear_keeps_that() {
+    let t = Tmp::new();
+    let (a, _, mem, data) = two(&t);
+    chmod(&a, 0o644);
+    let tx = Transactions::new(&mem, &data);
+    let p = pins(&tx, "s", &[Selection::File(a.clone())]);
+    tx.apply("s", &p, &values(json!({"key": "k"})), &Json, &mut none)
+        .unwrap();
+    assert_eq!(mode_of(&a), 0o600);
+    // The person's edit, so clear writes the file again.
+    let now = read(&a).unwrap();
+    std::fs::write(
+        &a,
+        now.replace("\"key\": \"k\"", "\"key\": \"k\", \"mine\": 1"),
+    )
+    .unwrap();
+    let p = pins(&tx, "s", &[Selection::File(a.clone())]);
+    let o = tx.clear("s", &p, &Json, &mut none).unwrap();
+    assert_eq!(o["outcome"], "cleared");
+    assert!(!read(&a).unwrap().contains("\"key\""));
+    assert_eq!(mode_of(&a), 0o600);
+    // Restore puts the bytes back and keeps the mode the file has.
+    let p = pins(&tx, "s", &[Selection::File(a.clone())]);
+    tx.apply("s", &p, &values(json!({"key": "k"})), &Json, &mut none)
+        .unwrap();
+    chmod(&a, 0o640);
+    let p = pins(&tx, "s", &[Selection::File(a.clone())]);
+    tx.restore("s", &p, &mut none).unwrap();
     assert_eq!(mode_of(&a), 0o640);
 }
 
