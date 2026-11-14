@@ -163,7 +163,10 @@ function releaseFacts(r: DeviceRelease): [string, ComponentChildren][] {
       t("signer"),
       r.signer ? t("signerValue", { publisher: r.signer.publisher, key: r.signer.key_id }) : undefined,
     ],
-    [t("operations"), r.operations.map(([id, what, effect]) => `${id}: ${what} (${effect})`).join("; ") || undefined],
+    [
+      t("operations"),
+      r.operations.map(([id, what, effect]) => `${id}: ${what} (${effect})`).join("; ") || undefined,
+    ],
     [
       t("imports"),
       r.imports
