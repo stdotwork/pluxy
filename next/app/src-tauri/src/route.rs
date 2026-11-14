@@ -574,45 +574,48 @@ fn start_job(
     // Counted, and reachable by a revocation, before it is granted and confirmed: the bounds hold
     // for the confirmations too, and a change while it starts refuses it.
     let (job, (g, chain, origin, input, lease)) =
-        st.routes.jobs.start(caller.0, producer, &kind, || {
-            let g = grant()?;
-            let chain = rules::extend(&o.context.chain, &o.caller, producer)?;
-            let mut packages = parent.packages.clone();
-            packages.push(g.consumer.package());
-            let origin = Origin {
-                packages,
-                // A job is started by a tool: it never uses a gesture.
-                gesture: Arc::new(Mutex::new(None)),
-                token: 0,
-            };
-            let input = i["input"].clone();
-            // A job's operation has no secret fields (`device::Catalog` refuses them at install),
-            // so a secret or reference anywhere in its input is refused here.
-            let filler = Filler::Tool {
-                holder: Holder {
-                    id: caller.0.into(),
-                    sha256: caller.1.into(),
-                    generation: caller.2,
-                },
-                call: parent.token,
-            };
-            let filled = checked(
-                app,
-                &g.producer,
-                &|| grant().map(|g| g.producer),
-                &chain,
-                &origin,
-                &filler,
-                &input,
-                &o.cancel,
-            )?;
-            if !filled.is_empty() {
-                return Err(fail("permission", "a job's operation takes no secrets"));
-            }
-            // The consumer stays up for the job's deliveries.
-            let lease = st.programs.lease(caller.0)?;
-            Ok((g, chain, origin, input, lease))
-        })?;
+        st.routes
+            .jobs
+            .start(caller.0, producer, &kind, |job_cancel| {
+                let g = grant()?;
+                let chain = rules::extend(&o.context.chain, &o.caller, producer)?;
+                let mut packages = parent.packages.clone();
+                packages.push(g.consumer.package());
+                let origin = Origin {
+                    packages,
+                    // A job is started by a tool: it never uses a gesture.
+                    gesture: Arc::new(Mutex::new(None)),
+                    token: 0,
+                };
+                let input = i["input"].clone();
+                // A job's operation has no secret fields (`device::Catalog` refuses them at install),
+                // so a secret or reference anywhere in its input is refused here.
+                let filler = Filler::Tool {
+                    holder: Holder {
+                        id: caller.0.into(),
+                        sha256: caller.1.into(),
+                        generation: caller.2,
+                    },
+                    call: parent.token,
+                };
+                let filled = checked(
+                    app,
+                    &g.producer,
+                    &|| grant().map(|g| g.producer),
+                    &chain,
+                    &origin,
+                    &filler,
+                    &input,
+                    // The parent call's cancel, and the job's: a revocation closes the confirmation.
+                    &o.cancel.with(job_cancel),
+                )?;
+                if !filled.is_empty() {
+                    return Err(fail("permission", "a job's operation takes no secrets"));
+                }
+                // The consumer stays up for the job's deliveries.
+                let lease = st.programs.lease(caller.0)?;
+                Ok((g, chain, origin, input, lease))
+            })?;
     let id = job.id.clone();
     let (a, j) = (app.clone(), Arc::clone(&job));
     let spawned = std::thread::Builder::new()
