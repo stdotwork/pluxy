@@ -19,6 +19,7 @@ import { claudeCodePage } from "./claudeCode";
 import { ConnectionPage } from "./connection";
 import { type DeviceCatalog, device, newest } from "./device";
 import { DevicePage, devicePage } from "./devicePage";
+import { hermesPage } from "./hermes";
 import { appHost, type Connection, connectionGet, privacyGet, privacySet } from "./host";
 import { launcherPage } from "./launcherPage";
 import { NativeExtensionPage } from "./nativePage";
@@ -123,6 +124,7 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
       devicePage(loadDevice),
       launcherPage(),
       claudeCodePage(),
+      hermesPage(),
       ...devicePages(catalog),
     ],
     [shown, catalog, loadDevice],

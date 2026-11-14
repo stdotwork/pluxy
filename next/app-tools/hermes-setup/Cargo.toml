@@ -1,0 +1,16 @@
+[package]
+name = "hermes-setup"
+version = "0.1.0"
+description = "Sets up and starts Hermes Agent for pluxy's desktop app"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+pluxy-program = { path = "../lib/program" }
+pluxy-transactions = { path = "../lib/transactions" }
+# Hermes Agent's config.yaml is read as YAML and edited in place, keeping comments and formatting.
+saphyr = "0.3.4"
+yaml-edit = { version = "0.3.6", default-features = false }
+# Keys keep their order in the values it compares and writes.
+serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
