@@ -321,11 +321,18 @@ fn retargeted_replaced_or_modified_targets_are_refused() {
     };
     // Pointed elsewhere.
     let p = pins(&tx, "s", &[Selection::File(link.clone())]);
+    std::fs::hard_link(&link, t.at("held-original")).unwrap();
     relink(&alt);
     let e = tx.apply("s", &p, &v, &Json, &mut none).unwrap_err();
     assert!(e.message.contains("changed"), "{e}");
-    // Back to the same text, but another link: still refused (its identity is pinned).
+    // Back to the same text, but another link: still refused (its identity is pinned). The earlier
+    // links' inodes are kept in use (hard links to them), so the new link cannot get their numbers:
+    // a filesystem that reuses a freed inode number (ext4 does) could otherwise give the new link
+    // the old identity, and then nothing tells the two apart (same text, same target, same bytes).
+    std::fs::hard_link(&link, t.at("held-alt")).unwrap();
     relink(Path::new("../../dotfiles/x/settings.json"));
+    let ino = |p: &str| std::fs::symlink_metadata(t.at(p)).unwrap().ino();
+    assert!(![ino("held-original"), ino("held-alt")].contains(&link_of(&link).0));
     let e = tx.apply("s", &p, &v, &Json, &mut none).unwrap_err();
     assert!(e.message.contains("changed"), "{e}");
     // Replaced by rename with the same bytes.
@@ -335,6 +342,13 @@ fn retargeted_replaced_or_modified_targets_are_refused() {
     std::fs::rename(&tmp, &target).unwrap();
     let e = tx.apply("s", &p, &v, &Json, &mut none).unwrap_err();
     assert!(e.message.contains("changed"), "{e}");
+    // Modified in place at once, with the same size: detected by the bytes' SHA-256, whatever the
+    // file's times say.
+    let p = pins(&tx, "s", &[Selection::File(link.clone())]);
+    std::fs::write(&target, "{\"theme\": \"LIGHT\"}\n").unwrap();
+    let e = tx.apply("s", &p, &v, &Json, &mut none).unwrap_err();
+    assert!(e.message.contains("modified"), "{e}");
+    assert_eq!(read(&target).unwrap(), "{\"theme\": \"LIGHT\"}\n");
     // Modified in place.
     let p = pins(&tx, "s", &[Selection::File(link.clone())]);
     std::fs::write(&target, "{\"theme\": \"dark\"}\n").unwrap();

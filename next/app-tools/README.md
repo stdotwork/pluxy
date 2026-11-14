@@ -56,7 +56,8 @@ How a write goes:
 - The pins come back in the write's input, so the operation's native confirmation (which shows
   the exact input) names the selected path and the file it resolves to. The write resolves the
   selection again and refuses, asking for a new preview, if the link points elsewhere (or is
-  another link, even with the same text), the file was replaced (as editors save, by rename) or
+  another link, even with the same text, unless the filesystem gave it the old link's inode
+  number, as ext4 may once the old one is gone), the file was replaced (as editors save, by rename) or
   modified since the preview. Only the target changes: a link stays the same link with the same
   text.
 - Each file is written through a handle on its folder (cap-std), never by its path again: a new
