@@ -9,7 +9,8 @@
 //!   ID, file, presence and size only;
 //! - diff: unchanged, then after the person's edits, the changed settings by name, never a value;
 //! - restore: a cancelled restore writes nothing; a confirmed one, naming the backup and saying no
-//!   automatic backup is made, puts the backed-up bytes back over the person's edits;
+//!   automatic backup is made, puts the backed-up bytes and permission bits back over the
+//!   person's edits, and over a file Claude Code would not take (its preview still pins it);
 //! - foreign: an ID that is no manual backup of this tool is refused by diff, restore and delete,
 //!   among them a backup the transaction library keeps for an applied set (read from the vault's
 //!   records on disk), which stays in the vault; a backup restored onto another file is refused;
@@ -28,6 +29,7 @@ use super::transactions::{link, read};
 use super::vault::dialog_with;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Webview};
 
@@ -203,6 +205,8 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
         list(&mut note)?.is_empty(),
         "a cancelled Manual Backup kept one",
     )?;
+    // The restore puts back the permission bits the file had when it was backed up.
+    let backed_up_mode = mode(&settings);
     let first = s(&create(&file(&settings), &settings, &mut note)?["backup"]);
     let l = list(&mut note)?;
     require(
@@ -224,6 +228,9 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
     for e in b["edits"].as_array().into_iter().flatten() {
         edit(&settings, &s(&e[0]), &s(&e[1]))?;
     }
+    // Its permission bits changed too: a restore puts back the backed-up ones.
+    std::fs::set_permissions(&settings, std::fs::Permissions::from_mode(0o644))
+        .map_err(|e| e.to_string())?;
     let edited = read(&settings).unwrap_or_default();
     let d = diff(&first, &mut note)?;
     require(
@@ -261,12 +268,39 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
     )?;
     note(&o);
     require(
-        read(&settings) == Some(bytes("cleared")) && mode(&settings) == 0o644,
+        read(&settings) == Some(bytes("cleared")) && mode(&settings) == backed_up_mode,
         format!("the settings after the restore: {:?}", read(&settings)),
     )?;
     require(
         diff(&first, &mut note)?["same"] == true,
         "the restored file differs from its backup",
+    )?;
+
+    // ---- a file Claude Code would not take: the preview still pins it, and a backup restores it
+    std::fs::write(&settings, b"{\n  // broken by hand\n}\n").map_err(|e| e.to_string())?;
+    let v = preview(&file(&settings))?;
+    require(
+        v["settings"]["state"] == "refused",
+        format!("the preview of a broken file: {v}"),
+    )?;
+    let d = diff(&first, &mut note)?;
+    require(
+        d["same"] == false && d["files"][0]["readable"] == false,
+        format!("the diff against a broken file: {d}"),
+    )?;
+    let o = written(
+        app,
+        main,
+        seen,
+        "backup-restore",
+        json!({"backup": first, "targets": v["targets"]}),
+        &[&txt(&settings), &first],
+        c.hidden,
+    )?;
+    note(&o);
+    require(
+        read(&settings) == Some(bytes("cleared")) && mode(&settings) == backed_up_mode,
+        format!("the broken file after the restore: {:?}", read(&settings)),
     )?;
 
     // ---- foreign: an ID that is no manual backup, a restore onto another file
