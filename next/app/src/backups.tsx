@@ -7,7 +7,7 @@
 // in the tool's native confirmation. Labels follow the old app's backup dialog.
 
 import { invoke } from "@tauri-apps/api/core";
-import { useState } from "preact/hooks";
+import { useRef, useState } from "preact/hooks";
 import { strings } from "../../ui/kit/strings";
 import {
   Button,
@@ -80,8 +80,8 @@ interface Diff {
 const fill = (s: string, v: Record<string, string | number>) =>
   s.replace(/\{(\w+)\}/g, (_, k) => String(v[k] ?? ""));
 
-/** The backup browser of the writer tool pkg. pins previews the files a backup or restore is of
- * (fresh pins, from the page's own selection), or gives nothing when they cannot be read. */
+/** The backup browser of the writer tool pkg. pins gives the files a backup or restore is of: the
+ * pins of the page's last preview (the tool refuses them if a file changed since), or nothing. */
 export function Backups(props: {
   pkg: string;
   pins: () => Promise<unknown[] | undefined>;
@@ -94,44 +94,64 @@ export function Backups(props: {
   const [selected, setSelected] = useState<string>();
   const [diff, setDiff] = useState<Diff>();
   const inspect = useAction(() => {});
+  // The backup whose diff is wanted: a reply for any other (selected before it) is dropped.
+  const wanted = useRef<string | undefined>(undefined);
   const show = (id: string) => {
+    wanted.current = id;
     setSelected(id);
     setDiff(undefined);
     inspect.run(async () => {
       const r = await tool<Diff>("backup-diff", { backup: id });
+      if (wanted.current !== id) return { status: 200 };
       if (r.body) setDiff(r.body);
       return r;
     });
   };
-  const done = () => {
+  // Manual Backup changes no file: only the list reloads, the new backup selected.
+  const made = useRef<string | undefined>(undefined);
+  const create = useAction(() => {
+    list.reload();
+    if (made.current) show(made.current);
+  });
+  // A restore changed the files: the diff and the page's own preview are read again.
+  const write = useAction(() => {
     list.reload();
     if (selected) show(selected);
     props.onChange?.();
-  };
-  const write = useAction(done);
+  });
   const remove = useAction(() => {
     setSelected(undefined);
     setDiff(undefined);
     list.reload();
   });
-  const pinned = async (op: string, extra: Record<string, unknown>) => {
+  const pinned = async <T,>(op: string, extra: Record<string, unknown>): Promise<Reply<T>> => {
     const targets = await props.pins();
     if (!targets)
       return { status: 400, error: { code: "refused", message: "the settings file could not be read" } };
-    return tool(op, { ...extra, targets });
+    return tool<T>(op, { ...extra, targets });
   };
   const versions = list.data?.backups ?? [];
   const version = versions.find((v) => v.id === selected);
-  const busy = write.busy || remove.busy || props.disabled;
+  const busy = create.busy || write.busy || remove.busy || props.disabled;
   const when = (v: Version) => new Date(v.created).toLocaleString();
 
   return (
     <Card title={t("title")}>
       <p class="muted">{fill(t("intro"), { keep: list.data?.keep ?? 10 })}</p>
       {list.error && <Notice tone="danger">{list.error}</Notice>}
+      {create.error && <Notice tone="danger">{create.error}</Notice>}
       {write.error && <Notice tone="danger">{write.error}</Notice>}
       {remove.error && <Notice tone="danger">{remove.error}</Notice>}
-      <Button onClick={() => write.run(() => pinned("backup-create", {}))} disabled={busy}>
+      <Button
+        onClick={() =>
+          create.run(async () => {
+            const r = await pinned<{ backup: string }>("backup-create", {});
+            made.current = r.body?.backup;
+            return r;
+          })
+        }
+        disabled={busy}
+      >
         {t("create")}
       </Button>
       {versions.length === 0 ? (
@@ -152,7 +172,8 @@ export function Backups(props: {
       )}
       {versions.length > 0 && !version && <p class="muted">{t("select")}</p>}
       {version && (
-        <>
+        // Keyed by the version: an armed confirmation never carries over to another one.
+        <div key={version.id} class="stack">
           <Facts rows={[[t("id"), version.id]]} />
           {inspect.error && <Notice tone="danger">{inspect.error}</Notice>}
           {version.files.map((f, i) => {
@@ -165,7 +186,7 @@ export function Backups(props: {
                 {d && d.changes.length > 0 && (
                   <ul>
                     {d.changes.map((c) => (
-                      <li key={`${c.restore} ${c.path.join(".")}`}>
+                      <li key={JSON.stringify([c.restore, c.path])}>
                         {t(c.restore)} <code>{c.path.join(".")}</code>
                       </li>
                     ))}
@@ -190,7 +211,7 @@ export function Backups(props: {
             {t("delete")}
           </ConfirmButton>
           <small class="hint">{t("deleteHint")}</small>
-        </>
+        </div>
       )}
     </Card>
   );
