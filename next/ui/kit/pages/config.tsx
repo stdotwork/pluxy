@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { problem } from "../api";
 import type { ConfigDocument } from "../api/config";
 import type { CoreSettings } from "../api/settings";
+import { usePrivacy } from "../privacy";
 import { guardLeave, type PageDef } from "../shell";
 import { Tabs } from "../tabs";
 import { Button, Notice, PageHead, useKit } from "../ui";
@@ -16,6 +17,7 @@ const configTabs = () => configTabIds.map((id) => ({ id, label: t(id) }));
 
 export function ConfigPage() {
   const { api, unauthorized } = useKit();
+  const p = usePrivacy();
   // The tab, and the account Source opens at, are in the page's address: #/config/<tab>.
   const [opened] = useState(() => parseConfigAddress(location.hash));
   const [tab, setTab] = useState<string>(opened?.tab ?? configTabIds[0]);
@@ -179,7 +181,7 @@ export function ConfigPage() {
   return (
     <>
       <PageHead title={t("title")} />
-      {error && <Notice tone="danger">{error}</Notice>}
+      {error && <Notice tone="danger">{p.text(error)}</Notice>}
       {saved && <Notice tone="ok">{t("saved")}</Notice>}
       {!settings ? (
         <Notice tone="muted">{t("loading")}</Notice>
@@ -195,7 +197,7 @@ export function ConfigPage() {
           {tab === "source" ? (
             !doc ? (
               <div class="stack">
-                {sourceError && <Notice tone="danger">{sourceError}</Notice>}
+                {sourceError && <Notice tone="danger">{p.text(sourceError)}</Notice>}
                 <Notice tone="muted">{busy ? t("loading") : t("sourceUnavailable")}</Notice>
                 <Button disabled={busy} onClick={load}>
                   {t("reload")}
