@@ -48,7 +48,7 @@ use tauri::{AppHandle, Manager, Webview};
 
 /// Every entry under root, by its path: a file's mode and SHA-256, a link's inode and text, or a
 /// folder (folder times change as files are written in them, so they are not compared).
-fn snapshot(root: &Path) -> Result<BTreeMap<String, String>, String> {
+pub(super) fn snapshot(root: &Path) -> Result<BTreeMap<String, String>, String> {
     fn walk(dir: &Path, out: &mut BTreeMap<String, String>) -> Result<(), String> {
         for e in std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))? {
             let path = e.map_err(|e| e.to_string())?.path();
@@ -87,12 +87,12 @@ fn changed(a: &BTreeMap<String, String>, b: &BTreeMap<String, String>) -> Vec<St
         .collect()
 }
 
-fn read(p: &Path) -> Option<String> {
+pub(super) fn read(p: &Path) -> Option<String> {
     std::fs::read_to_string(p).ok()
 }
 
 /// A link's inode and text.
-fn link(p: &Path) -> Result<(u64, PathBuf), String> {
+pub(super) fn link(p: &Path) -> Result<(u64, PathBuf), String> {
     let m = std::fs::symlink_metadata(p).map_err(|e| format!("{}: {e}", p.display()))?;
     require(
         m.file_type().is_symlink(),
@@ -109,7 +109,7 @@ fn relink(at: &Path, to: &Path) -> Result<(), String> {
 }
 
 /// The writer's read operation op, failing on an error or on a native confirmation.
-fn read_op(main: &Webview, w: &str, op: &str, input: Value) -> Result<Value, String> {
+pub(super) fn read_op(main: &Webview, w: &str, op: &str, input: Value) -> Result<Value, String> {
     let (r, asked) = unasked(|| call(main, w, op, input.clone()));
     let r = r?;
     require(!asked, format!("{op} {input} asked a native confirmation"))?;
@@ -118,7 +118,13 @@ fn read_op(main: &Webview, w: &str, op: &str, input: Value) -> Result<Value, Str
 }
 
 /// A read operation that must fail saying says.
-fn read_refused(main: &Webview, w: &str, op: &str, input: Value, says: &str) -> Result<(), String> {
+pub(super) fn read_refused(
+    main: &Webview,
+    w: &str,
+    op: &str,
+    input: Value,
+    says: &str,
+) -> Result<(), String> {
     let (r, asked) = unasked(|| call(main, w, op, input.clone()));
     let r = r?;
     require(!asked, format!("{op} {input} asked a native confirmation"))?;
@@ -129,7 +135,7 @@ fn read_refused(main: &Webview, w: &str, op: &str, input: Value, says: &str) -> 
 }
 
 /// f's result, and whether a native confirmation showed while it ran (each one is cancelled).
-fn unasked<T>(f: impl FnOnce() -> T) -> (T, bool) {
+pub(super) fn unasked<T>(f: impl FnOnce() -> T) -> (T, bool) {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     let (stop, seen) = (
@@ -247,7 +253,7 @@ fn after_backoff(main: &Webview, w: &str) -> Result<(), String> {
 }
 
 /// Temporary files left anywhere under root.
-fn leftovers(root: &Path) -> Result<Vec<String>, String> {
+pub(super) fn leftovers(root: &Path) -> Result<Vec<String>, String> {
     Ok(snapshot(root)?
         .into_keys()
         .filter(|k| {
