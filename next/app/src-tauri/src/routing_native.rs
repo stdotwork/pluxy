@@ -222,7 +222,7 @@ impl Page {
     }
 
     /// Sends a native.call of op of package with input from the page, through its channel.
-    fn send(&mut self, package: &str, op: &str, input: Value) -> Result<String, String> {
+    pub(super) fn send(&mut self, package: &str, op: &str, input: Value) -> Result<String, String> {
         self.next += 1;
         let id = format!("r{}", self.next);
         self.wv
@@ -235,7 +235,7 @@ impl Page {
         Ok(id)
     }
 
-    fn reply(&self, id: &str) -> Result<Value, String> {
+    pub(super) fn reply(&self, id: &str) -> Result<Value, String> {
         wait_for(&format!("the page's reply {id}"), || {
             eval(
                 &self.wv,
@@ -267,7 +267,7 @@ impl Page {
 
 /// Starts the window's call of op of package with input from a native button's click, which
 /// makes a native gesture; the answer comes on the receiver.
-fn clicked(
+pub(super) fn clicked(
     app: &AppHandle,
     package: &str,
     op: &str,
@@ -290,7 +290,7 @@ fn clicked(
     Ok(rx)
 }
 
-fn answer(
+pub(super) fn answer(
     rx: &mpsc::Receiver<Result<Value, crate::program::CallError>>,
 ) -> Result<Result<Value, crate::program::CallError>, String> {
     rx.recv_timeout(Duration::from_secs(90))
