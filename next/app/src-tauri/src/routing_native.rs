@@ -222,7 +222,7 @@ impl Page {
     }
 
     /// Sends a native.call of op of package with input from the page, through its channel.
-    fn send(&mut self, package: &str, op: &str, input: Value) -> Result<String, String> {
+    pub(super) fn send(&mut self, package: &str, op: &str, input: Value) -> Result<String, String> {
         self.next += 1;
         let id = format!("r{}", self.next);
         self.wv
@@ -235,7 +235,7 @@ impl Page {
         Ok(id)
     }
 
-    fn reply(&self, id: &str) -> Result<Value, String> {
+    pub(super) fn reply(&self, id: &str) -> Result<Value, String> {
         wait_for(&format!("the page's reply {id}"), || {
             eval(
                 &self.wv,
