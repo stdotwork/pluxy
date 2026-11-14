@@ -7,7 +7,8 @@ build the panel, add a page and use the kit is in [`next/ui/README.md`](../next/
 
 ## What parity with the old panel means
 
-The new panel replaces the old one (`extensions/panel`). Parity means that it looks and feels
+The new panel replaced the old one (the React/Vite panel formerly in `extensions/panel`, now
+removed). Parity means that it looks and feels
 like the old panel: where a feature is kept, it keeps the old page, section, setting and button
 names, in a similar place, so someone who knows the old panel finds each thing where they expect
 it. A label changes only where it named something this core does differently, such as a file, a
