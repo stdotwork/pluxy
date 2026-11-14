@@ -344,6 +344,11 @@ impl Authorized {
     pub fn cwd(&self) -> Option<&File> {
         self.prepared.cwd.as_ref().map(|e| &e.file)
     }
+    /// Refused once a reviewed target changed since it was confirmed: the executable replaced or
+    /// written in place (its metadata), or the cwd replaced.
+    pub(crate) fn recheck(&self) -> Result<(), String> {
+        self.prepared.check()
+    }
 }
 struct Pending {
     prepared: Prepared,
