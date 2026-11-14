@@ -444,6 +444,14 @@ back into the chain or a chain of more than five, and asks a native confirmation
 chain for each `write` or `launch` call. [Calls between packages](app-host/README.md#calls-between-packages)
 has the manifest fields, frames and rules.
 
+A native tool may also produce and consume declared kinds of data as jobs (`produces`,
+`consumes`). A consumer lists the registrations of a kind it consumes, which the catalog gives as
+the producers it admitted (package, release digest, generation, source, signer), and starts a job
+of one through the router, as a call; the host then delivers the producer's batches to the
+consumer's deliver operation with their source, at most four unacknowledged, and cancels the job
+when either package changes (`src-tauri/src/jobs.rs`). [Jobs](app-host/README.md#jobs) has the
+rules.
+
 Secrets the person types into native key entry (`vault_secret_add`) are kept in the app's
 private vault. An operation's declared secret fields carry them: the window names a secret by its
 ID, a confirmation names each secret and the tool that gets it, and the tool receives the secret
