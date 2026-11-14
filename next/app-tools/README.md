@@ -11,7 +11,7 @@ reference: this folder implements it, it does not change it.
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
 cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-omp)
 cargo build --locked -p pluxy-transactions --example fixture-writer   # the native test's fixture
-cargo build --release --locked -p claude-code   # likewise execution
+cargo build --release --locked -p claude-code   # likewise execution and opencode
 ```
 
 ## `lib/program`
@@ -304,6 +304,57 @@ since. `CLAUDE_CODE_EFFORT_LEVEL` and per-model `modelSettings` are left alone. 
 JSON (a comment, a trailing comma), not an object, an `env` that is not an object of strings, or a
 `$schema` other than `https://json.schemastore.org/claude-code-settings.json`. A missing or empty
 file is an empty one. Restore Backup puts the original back whatever the file holds now.
+
+## `opencode`
+
+`pluxy/opencode` sets up OpenCode to use pluxy's core and says how to start its CLI or desktop
+app, for the desktop app's OpenCode page (`../app/README.md`, "OpenCode"). It writes one config
+file through `lib/transactions` (set `opencode`): link-preserving, journalled, the original and
+applied images in the host's vault, and its manual backups (the backup browser). It exports
+nothing.
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `preview` | `read` | `targets`: one selection (`file`, or `root` and `path`), by default OpenCode's global config in the app's `HOME` (below); `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `config`: `state` (`not-configured`, `configured`, `needs-update`), `base_url` (the provider's), `key_set`, `model` (the default, when it is one of pluxy's), `default_model` (the file's `model`), `models` (`id`, `name`, `attachment`), `old_provider` (the old desktop app's `cpa-gui` provider is there); never the key |
+| `apply` | `write`; secret `key` (value) | One pin, `base_url`, `key`, `models` (1 to 256: `id`, `name` (empty: the ID), `attachment`), `model` (one of them) | The library's outcome |
+| `clear` | `write` | One pin | The library's outcome: the values Apply wrote go, edits made since stay |
+| `restore` | `write` | One pin | The library's outcome: the original bytes back (Restore Backup) |
+| `status` | `read` | — | The library's status |
+| `recipe` | `read` | `target`: `cli` (the default) or `app` | `{"client": "OpenCode", "kind": "terminal", "program": <~/.opencode/bin/opencode when it is an executable file there, else "opencode">, "args": []}`, or `{"client": "OpenCode Desktop", "kind": "direct", "program": "/opt/OpenCode/ai.opencode", "args": [], "cwd": <HOME>}`, for the launcher |
+| `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations (`lib/transactions`), one file per version, diffed by setting name as `json_leaves` reads JSON | The library's answers: IDs, paths, presence, sizes and setting names, never a value |
+
+OpenCode reads its global config from `~/.config/opencode/` (`$XDG_CONFIG_HOME/opencode`, or
+`$OPENCODE_CONFIG_DIR`): `opencode.json` and then `opencode.jsonc`, so the latter's values win
+(OpenCode 1.x also reads an older `config.json` first). The default file is the one OpenCode itself
+writes: `opencode.jsonc` if it exists, else `opencode.json` if it exists, else a new
+`opencode.jsonc`. The tool's environment holds no `XDG_CONFIG_HOME` or `OPENCODE_CONFIG*`, so a
+person who uses them selects that file or folder; project configs and `OPENCODE_CONFIG_CONTENT`
+still win over the global file, as in OpenCode. Read at source (anomalyco/opencode, tags v1.19.5
+and v2.3.0, 2026-11-14): `packages/opencode/src/config/config.ts` (1.x) and
+`packages/core/src/config.ts`, `config/discovery.ts`, `config/normalize.ts` (2.x).
+
+What `apply` writes, in the form both OpenCode 1.x reads and 2.x migrates when it loads it (2.x's
+own form, `providers`, is unknown to 1.x):
+
+- `provider.pluxy`: `npm` `@ai-sdk/openai-compatible`, `name` `pluxy`, `options.baseURL` (the
+  core's address with `/v1`) and `options.apiKey` (the client key), its other members kept;
+  `models` holds exactly the listed models, each with `name` and, with attachments,
+  `"attachment": true` and `modalities` input text, image and pdf, else input text only (output
+  text), an existing entry's other members kept;
+- `model`: `pluxy/<model>`;
+- `$schema`: `https://opencode.ai/config.json`, first, only when the file names none.
+
+The file is edited in place through a JSONC syntax tree (jsonc-parser): comments, formatting,
+trailing commas and every other setting stay where they are, and new members follow the file's
+own style. Clear's three-way merge brings back what Apply replaced unless the person changed it
+since, and edits only what differs. An old desktop app's `cpa-gui` provider is left alone. Every
+operation but `restore` refuses, before writing, a file OpenCode would not take as its own config:
+not JSON or JSONC by OpenCode's parser rules (comments and trailing commas are fine; single quotes,
+bare keys, hexadecimal numbers or missing commas are not), a key named twice, not an object, a
+`$schema` other than `https://opencode.ai/config.json`, or a `provider`, `provider.pluxy`, its
+`options` or `models` (or a model entry) that is not an object, or a `model` that is not a string.
+A missing or empty file is an empty one. Restore Backup puts the original back whatever the file
+holds now.
 
 ## `execution`
 
