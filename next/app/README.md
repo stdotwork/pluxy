@@ -32,11 +32,14 @@ The native side holds the management key. On Linux, "Enter management key" on th
 page opens a GTK dialog with a hidden entry, "Keep the key on this device", and OK/Cancel.
 Before opening it, native code validates the mode, origin and certificate authority file. The
 dialog identifies the target origin, any custom certificate authority, and an origin switch.
-Reopening after Cancel waits one second.
+The origin switch names the connection you last confirmed and the app saved (not the client
+in memory, which may be down). Reopening after Cancel waits one second.
 The key goes directly from that dialog to native connection state; no webview receives it.
 Cancel, a refused key or a failed settings write preserves the old connection. Settings use a
 unique exclusive temporary file at mode 0600, followed by file sync, rename and directory sync
-on Unix. Validation and transport failures report specific reasons without request or key text.
+on Unix; at startup the app removes a leftover temporary file of that name (a crash mid-save),
+and nothing else. The app checks the key against core without holding its connection state, so
+other commands go on meanwhile, and refuses the key if the connection changed during the check. Validation and transport failures report specific reasons without request or key text.
 The window calls core through the
 `core_call` command, and the native side adds the key and sends the call to
 `<core>/v0/management/...` only, following no redirects and, for a core on this computer, no
