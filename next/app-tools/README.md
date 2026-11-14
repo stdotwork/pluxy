@@ -9,7 +9,7 @@ reference: this folder implements it, it does not change it.
 
 ```bash
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
-cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage)
+cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex)
 ```
 
 ## `lib/program`
@@ -41,8 +41,10 @@ Schema 1 of the usage hub's ingest API and what a usage parser shares (`pluxy-us
 implements `Parser` (its label, default roots, which files are its, how a file's bytes become
 rows) and answers its produces operation with `produce`, which lists files (`scan`: no links, at
 most 8 folders deep, newest first, at most 20,000), finds a named file again only under the roots
-(`locate`), reads it (`read_file`, at most 16 MiB) and sends its rows in parts within the batch
-limit (`Sink`). The schema is in [`agent-usage/README.md`](agent-usage/README.md#schema-1).
+(`locate`), reads it and sends its rows in parts within the batch limit (`Sink`). A parser of a
+format read whole (`parse`) gets a file of at most 16 MiB; a parser of a line-based format sets
+`streamed` and gets the file's lines one at a time (`parse_lines`, `LineReader`) whatever its size,
+a line over 16 MiB being skipped and counted. The schema is in [`agent-usage/README.md`](agent-usage/README.md#schema-1).
 
 ## `agent-usage`
 
@@ -55,6 +57,32 @@ page. See [its README](agent-usage/README.md).
 test packs it); never released. It reads `*.jsonl` files of records `{"id"?, "ts", "model",
 "input", "output", ...}` under its roots, and lines that end a part or pause a read, so a check can
 cancel a job between two parts of one file.
+
+## `usage-codex`
+
+`pluxy/usage-codex`, the usage hub's parser of Codex's session files. It reads the rollout files
+(`*.jsonl`) under `~/.codex/sessions` and `~/.codex/archived_sessions` (from the `HOME` the app
+gives; the hub's `roots` name others) and sends the hub token counts per UTC hour and model, and
+nothing else: no prompt, message, folder or key leaves the parser. It never writes a Codex file.
+
+A rollout's file ID is its file name, so a session Codex moves to the archive is the same file,
+and one copied there is one session (the newer file is read). Each file is read whole when it
+changes, by the old desktop app's rules:
+
+- a `turn_context` line sets the model for the lines after it, and a model in an event's own
+  usage object wins;
+- an event's `info.total_token_usage` is a cumulative counter: the event counts what each field
+  grew by since the last event in the file, never below zero (a counter that falls starts again from
+  the lower value); an event with only `info.last_token_usage` or `payload.usage` counts as it is;
+- input is net of cached input; the total is the event's `total_tokens`, else input + output +
+  cached input; reasoning is part of output;
+- every event is one sample, also one that adds nothing; an event with no counter yet (`info` null)
+  is none;
+- an event's hour is its line's `timestamp` (a line with no readable time is skipped; the old
+  reader used the file's modification time, which a parser is not given). A date with no time is
+  that day's start in UTC, where the old reader used local midnight.
+
+The rollout is read line by line, whatever its size; a line over 16 MiB is skipped, as the old reader did.
 
 ## `codex-sessions`
 

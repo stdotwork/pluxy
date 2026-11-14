@@ -114,9 +114,11 @@ a changed adopted copy is copied in again by adopting the same program again.
 
 **Switching** to a version (an install, **Roll back to** an installed version, or an adoption)
 stops the running core, keeps a copy of `core/config.json` (or a mark that there was none) and
-records the new version as the candidate, then starts it. It counts as started once it says
-where it listens, on this computer, every socket listening on that port belongs to the process
-the app started (read from `/proc` on Linux, before the app sends anything there), it answers
+records the new version as the candidate, then starts it. The app binds the `listen` address in
+`core/config.json` itself (an IP address and port, or `localhost` and a port) and hands the
+listening socket to the core (`-listen-fd`). It counts as started once it says it listens on that
+socket, on this computer, every socket listening on that port belongs to the process the app
+started (read from `/proc` on Linux, before the app sends anything there), it answers
 `GET /v0/management/status` with the app's management key and, for a release, reports the
 version it was signed as, and the app has saved the new selection. If not, the app puts the
 config back as it was, removes a version it installed for this switch, and runs the version that
@@ -129,7 +131,16 @@ does not put it back again over your edits, unless the app could save neither th
 mark: then the next start puts the same config back once more. If the app stops while a version
 starts, it does the same at its next start, also when that was a reinstall or rollback of the
 selected version; a copy it cannot read is an error, and the config is left as it is. From the
-moment the app begins to stop its core, or sees it exit, it sends nothing more to that address. The
+moment the app begins to stop its core, or sees it exit, it sends nothing more to that address.
+The app keeps its own copy of the core's listening socket for as long as anything in the app could
+still send there, so no other program can listen on that address in between: not while a crashed
+core's exit is being noticed, and not while the core drains after a stop, the app's or a SIGTERM
+from elsewhere (the core closes its listener as it starts draining). A call made in that time
+reaches the core or waits in the app's socket, and fails once the core has exited. This holds
+for other programs calling the core too: a new connection in that time is no longer refused at
+once, but waits (up to the core's drain, 10 seconds or more) and is then closed, possibly after
+its request was sent. The core takes the socket before it starts any extension, so no program it
+starts holds it. The
 app keeps the running version and the one before it, and removes older ones after a switch. Rolling
 back reaches only an installed version.
 
@@ -812,8 +823,8 @@ app's handler, which the test confirms from the handler's own refusal; in local 
 every lifecycle click must be refused that way. It ends with a core running and checks that
 the core does not outlive the app once it quits, whichever of the app's ways of stopping it
 does so. Every tray operation asserts zero renderer processes and webviews.
-A second managed run starts a stand-in core that says where it listens, answers the app's
-readiness check and then exits, and holds the app's setup until that core's exit callback has run, before the app state exists. It
+A second managed run starts a stand-in core that serves on the socket the app hands it, says
+where it listens, answers the app's readiness check and then exits, and holds the app's setup until that core's exit callback has run, before the app state exists. It
 checks that the app still starts the real core again, with one recovery attempt, and that the
 core does not outlive the app.
 In separate runs, the startup sequence enables login registration through the main webview command,
