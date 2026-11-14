@@ -24,6 +24,17 @@ import {
 } from "../../ui/kit/ui";
 import { Backups, reply } from "./backups";
 import { connectionGet } from "./host";
+import {
+  attachmentDefault,
+  CLIENT,
+  keysOf,
+  type Model,
+  PACKAGE,
+  type ReadBack,
+  ready,
+  type Secret,
+  withModels,
+} from "./opencodeForm";
 
 const t = strings("opencode", {
   title: "OpenCode",
@@ -94,62 +105,27 @@ const t = strings("opencode", {
   app: "Start App",
   appPath: "Desktop program path",
   appHint:
-    "A full path used instead of /opt/OpenCode/ai.opencode (where OpenCode's .deb and .rpm install it), for example an AppImage (optional)",
+    "A full path used instead of /opt/OpenCode/ai.opencode (or ai.opencode.desktop, from OpenCode 1), where OpenCode's .deb and .rpm install it; for example an AppImage (optional)",
   launchApp: "Start OpenCode Desktop",
   restartNote: "To apply a new configuration to a running OpenCode, quit it and start it again.",
+  refused: "OpenCode would not take this file",
+  refusedHint:
+    "Apply and Close configuration leave it alone until it is fixed; Restore Backup puts back the file as it was before the first apply.",
+  v2Provider:
+    "This file has providers.pluxy, OpenCode 2's own form of the provider, and OpenCode uses it instead of what Apply writes. Remove it from the file to apply here.",
+  invalid:
+    "List at least one model (IDs without # or control characters, at most 240 characters) and pick the default.",
 });
-
-const PACKAGE = "pluxy/opencode";
 
 const tool = <T,>(op: string, input: Record<string, unknown>) =>
   reply<T>("program_call", { package: PACKAGE, op, input });
 
-interface Model {
-  id: string;
-  name: string;
-  attachment: boolean;
-}
-
-interface ReadBack {
-  state: "configured" | "not-configured" | "needs-update";
-  base_url: string | null;
-  key_set: boolean;
-  model: string | null;
-  default_model: string | null;
-  models: Model[];
-  old_provider: boolean;
-}
-
 interface Preview {
-  targets: { selected: string; target: string; link: string | null }[];
+  /** The pinned file: passed as is to apply, clear and restore. */
+  targets: { selected: string; target: string; link: string | null; [k: string]: unknown }[];
   applied: boolean;
   config: ReadBack;
 }
-
-/** The Attachments switch's first setting for a model new to the list: the old app's rule of
- * model names that take images. A default only; the person sets the switch. */
-const ATTACHMENT_NAMES = [
-  "claude",
-  "gemini",
-  "gpt-4o",
-  "gpt-4.1",
-  "gpt-5",
-  "o3",
-  "o4",
-  "qwen-vl",
-  "qwen2.5-vl",
-  "qwen3-vl",
-  "glm-4v",
-  "glm-4.5v",
-  "pixtral",
-  "llama-4",
-  "kimi-vl",
-  "doubao-vision",
-  "step-1v",
-  "internvl",
-  "phi-4-multimodal",
-];
-const attachmentDefault = (id: string) => ATTACHMENT_NAMES.some((n) => id.toLowerCase().includes(n));
 
 function Text(props: { label: string; hint?: string; value: string; onInput: (v: string) => void }) {
   const id = useId();
@@ -180,7 +156,7 @@ function Launch(props: { available: boolean }) {
     reply<{ terminals: { id: string; label: string }[] }>("launcher_terminals"),
   );
   const action = useAction(state.reload);
-  const recent = state.data?.history[t("title")] ?? [];
+  const recent = state.data?.history[CLIENT] ?? [];
   const go = (target: "cli" | "app", extra: Record<string, unknown>) =>
     action.run(async () => {
       const recipe = await tool<Record<string, unknown>>("recipe", { target });
@@ -250,7 +226,8 @@ export function OpenCodePage() {
   const [newModel, setNewModel] = useState("");
   const [secret, setSecret] = useState("");
   const [core, setCore] = useState<string>();
-  const secrets = useLoad(() => reply<{ id: string; label: string }[]>("vault_secrets"));
+  const secrets = useLoad(() => reply<{ secrets: Secret[] }>("vault_secrets"));
+  const keys = keysOf(secrets.data);
   useEffect(() => {
     connectionGet().then(
       (c) => setCore(c.signed_in ? c.target : undefined),
@@ -269,16 +246,22 @@ export function OpenCodePage() {
       const r = await tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) });
       if (r.body) {
         setPreview(r.body);
-        setModels(r.body.config.models);
-        setModel(r.body.config.model ?? r.body.config.models[0]?.id ?? "");
+        const listed = r.body.config.models ?? [];
+        setModels(listed);
+        setModel(r.body.config.model ?? listed[0]?.id ?? "");
       }
       return r;
     });
   const write = useAction(load);
-  // A write acts on the file the last preview pinned; a new preview first, so the pins are fresh.
-  const pins = async () => (await tool<Preview>("preview", selection())).body?.targets;
-  const addModels = (found: Model[]) =>
-    setModels((have) => [...have, ...found.filter((f) => !have.some((h) => h.id === f.id))]);
+  // A write acts on the file the last preview pinned (the tool refuses it if the file changed
+  // since); choosing another file drops that preview, so a write never pins a file unread.
+  const reselect =
+    <T,>(f: (v: T) => void) =>
+    (v: T) => {
+      f(v);
+      setPreview(undefined);
+    };
+  const addModels = (found: Model[]) => setModels((have) => withModels(have, found));
   const importModels = useAction(() => {});
   const doImport = () =>
     importModels.run(async () => {
@@ -294,33 +277,20 @@ export function OpenCodePage() {
       return served;
     });
   const apply = () =>
-    write.run(async () => {
-      const targets = await pins();
-      if (!targets)
-        return {
-          status: 400,
-          error: { code: "refused", message: "the configuration file could not be read" },
-        };
-      return tool("apply", {
-        targets,
+    write.run(() =>
+      tool("apply", {
+        targets: preview?.targets,
         base_url: core,
         key: secret,
         model,
-        models: models.map((m) => ({ id: m.id, name: m.name.trim(), attachment: m.attachment })),
-      });
-    });
-  const undo = (op: "clear" | "restore") =>
-    write.run(async () => {
-      const targets = await pins();
-      if (!targets)
-        return {
-          status: 400,
-          error: { code: "refused", message: "the configuration file could not be read" },
-        };
-      return tool(op, { targets });
-    });
+        models: models.map((m) => ({ id: m.id.trim(), name: m.name.trim(), attachment: m.attachment })),
+      }),
+    );
+  const undo = (op: "clear" | "restore") => write.run(() => tool(op, { targets: preview?.targets }));
   const addKey = useAction(secrets.reload);
   const st = preview?.config;
+  const refused = st?.state === "refused";
+  const valid = ready(models, model);
   const applyLabel = !preview?.applied
     ? t("connect")
     : st?.state === "configured"
@@ -346,15 +316,15 @@ export function OpenCodePage() {
             { value: "file", label: t("fileSelected") },
             { value: "root", label: t("fileInRoot") },
           ]}
-          onChange={setWhere}
+          onChange={reselect(setWhere)}
         />
         {where === "file" && (
-          <Text label={t("filePath")} hint={t("filePathHint")} value={file} onInput={setFile} />
+          <Text label={t("filePath")} hint={t("filePathHint")} value={file} onInput={reselect(setFile)} />
         )}
         {where === "root" && (
           <>
-            <Text label={t("root")} hint={t("rootHint")} value={root} onInput={setRoot} />
-            <Text label={t("inRoot")} value={inRoot} onInput={setInRoot} />
+            <Text label={t("root")} hint={t("rootHint")} value={root} onInput={reselect(setRoot)} />
+            <Text label={t("inRoot")} value={inRoot} onInput={reselect(setInRoot)} />
           </>
         )}
         {read.error && <Notice tone="danger">{read.error}</Notice>}
@@ -366,23 +336,35 @@ export function OpenCodePage() {
             rows={[
               [
                 t("status"),
-                preview.applied
-                  ? t("applied")
-                  : st.state === "configured"
-                    ? t("configured")
-                    : st.state === "needs-update"
-                      ? t("needsUpdate")
-                      : t("notConfigured"),
+                refused
+                  ? t("refused")
+                  : preview.applied
+                    ? t("applied")
+                    : st.state === "configured"
+                      ? t("configured")
+                      : st.state === "needs-update"
+                        ? t("needsUpdate")
+                        : t("notConfigured"),
               ],
               [t("target"), preview.targets[0]?.target ?? ""],
-              [t("keySet"), st.key_set ? t("yes") : t("no")],
-              [t("currentModel"), st.default_model ?? ""],
+              ...(refused
+                ? []
+                : ([
+                    [t("keySet"), st.key_set ? t("yes") : t("no")],
+                    [t("currentModel"), st.default_model ?? ""],
+                  ] as [string, string][])),
             ]}
           />
         )}
+        {refused && (
+          <Notice tone="warn">
+            {st?.reason} {t("refusedHint")}
+          </Notice>
+        )}
         {st?.old_provider && <Notice tone="warn">{t("oldProvider")}</Notice>}
+        {st?.v2_provider && <Notice tone="warn">{t("v2Provider")}</Notice>}
       </Card>
-      {preview && (
+      {preview && !refused && (
         <>
           <Card title={t("models")}>
             <p class="muted">{t("modelsHint")}</p>
@@ -428,11 +410,12 @@ export function OpenCodePage() {
           </Card>
           <Card title={t("key")}>
             <p class="muted">{t("keyHint")}</p>
-            {secrets.data && secrets.data.length > 0 ? (
+            {secrets.error && <Notice tone="danger">{secrets.error}</Notice>}
+            {keys.length > 0 ? (
               <Choices
                 label={t("key")}
                 value={secret || undefined}
-                choices={secrets.data.map((s) => ({ value: s.id, label: s.label }))}
+                choices={keys.map((s) => ({ value: s.id, label: s.label }))}
                 onChange={setSecret}
               />
             ) : (
@@ -452,26 +435,31 @@ export function OpenCodePage() {
               {t("addKey")}
             </Button>
           </Card>
-          <Card>
-            {write.error && <Notice tone="danger">{write.error}</Notice>}
-            <Button
-              variant="primary"
-              onClick={apply}
-              disabled={busy || !secret || !core || !models.some((m) => m.id === model)}
-            >
-              {applyLabel}
-            </Button>
-            <ConfirmButton disabled={busy || !preview.applied} onConfirm={() => undo("clear")}>
-              {t("clear")}
-            </ConfirmButton>
-            <small class="hint">{t("clearHint")}</small>
-            <ConfirmButton disabled={busy} onConfirm={() => undo("restore")}>
-              {t("restore")}
-            </ConfirmButton>
-            <small class="hint">{t("restoreHint")}</small>
-          </Card>
-          <Backups pkg={PACKAGE} pins={pins} disabled={busy} onChange={load} />
         </>
+      )}
+      {preview && (
+        <Card>
+          {!refused && !valid && <Notice tone="warn">{t("invalid")}</Notice>}
+          {write.error && <Notice tone="danger">{write.error}</Notice>}
+          <Button
+            variant="primary"
+            onClick={apply}
+            disabled={busy || refused || st?.v2_provider || !valid || !secret || !core}
+          >
+            {applyLabel}
+          </Button>
+          <ConfirmButton disabled={busy || refused || !preview.applied} onConfirm={() => undo("clear")}>
+            {t("clear")}
+          </ConfirmButton>
+          <small class="hint">{t("clearHint")}</small>
+          <ConfirmButton disabled={busy} onConfirm={() => undo("restore")}>
+            {t("restore")}
+          </ConfirmButton>
+          <small class="hint">{t("restoreHint")}</small>
+        </Card>
+      )}
+      {preview && (
+        <Backups pkg={PACKAGE} pins={async () => preview.targets} disabled={busy} onChange={load} />
       )}
       <Launch available={!unavailable} />
     </div>

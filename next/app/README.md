@@ -866,11 +866,15 @@ the file it writes), a selected file (for example the one `OPENCODE_CONFIG` name
 makes, is followed and kept) or a file in a selected folder (for example `OPENCODE_CONFIG_DIR`). It
 shows whether pluxy's integration is applied, the file it writes to, whether a key is in it and the
 default model, never the key, and warns when the old desktop app's `cpa-gui` provider is still
-there. **Models** lists the models OpenCode shows under the pluxy provider: **Import models from
+there, or when OpenCode 2's own `providers.pluxy` is (OpenCode uses that one, so Apply stays off
+until it is removed). A file OpenCode would not take is shown with the reason: Apply and Close
+configuration stay off, Restore Backup and the backups still work on it. Choosing another file
+drops the last preview: every write uses the pins of the preview on screen. **Models** lists the models OpenCode shows under the pluxy provider: **Import models from
 core** adds the core's served models, **Add model** one by ID; each has a display name, an
 **Attachments** switch (images and PDFs; new models start from the old app's list of model names
 that take images) and **Remove**; **Default model** is one of them. The **Authentication Key** is
-one of the vault's secrets, or a new one through native key entry (**Add key…**).
+one of the vault's secrets (plain ones, or client keys bound to this tool), or a new one through
+native key entry (**Add key…**).
 
 **Connect in One Click** (or **Update Configuration** / **Repair Connection** once applied),
 **Close configuration** (Clear) and **Restore Backup** each preview the file again and call the
@@ -880,8 +884,8 @@ the file stay. **Backup and restore** is the shared backup browser. **Start CLI*
 its CLI recipe (`opencode` in a terminal, no arguments; `~/.opencode/bin/opencode`, where OpenCode's
 install script puts it, when that exists) and starts it through the launcher in the chosen working
 directory (recently used ones offered), terminal and optional program path. **Start App** starts
-OpenCode Desktop (`/opt/OpenCode/ai.opencode`, where its .deb and .rpm install it, or a given path
-such as an AppImage) in the home folder. Each launch's confirmation shows it in full; the key is not
+OpenCode Desktop (`/opt/OpenCode/ai.opencode`, or OpenCode 1's `ai.opencode.desktop` there, where its
+.deb and .rpm install it, or a given path such as an AppImage) in the home folder. Each launch's confirmation shows it in full; the key is not
 part of a launch: OpenCode reads it from its config. There is no Restart App: the app never stops a
 program it did not start, so quit OpenCode and start it again to load a new configuration.
 

@@ -10,21 +10,24 @@
 //! - install: pluxy/opencode and pluxy/execution install from the curated registry and are enabled
 //!   through their native confirmations, which say "full access to your user account";
 //! - key: the key is typed into native key entry; the window gets only its ID;
-//! - unknown: a preview of a config naming another schema, and of one using single quotes, is
-//!   refused unasked and changes nothing; a preview of the person's config (a read, asked nothing)
+//! - unknown: a preview of a config naming another schema, and of one using single quotes, pins
+//!   it and reports it refused, unasked, and changes nothing; a preview of the person's config (a read, asked nothing)
 //!   picks `opencode.jsonc` over `opencode.json`, as OpenCode does, pins it and reads its values
 //!   back, with no key;
 //! - apply: asks a native confirmation naming the file, the key's label and the same-instant
 //!   sentence, never the key; then the config holds exactly the bytes `expect.json` says (comments,
-//!   trailing commas and the person's settings in place), mode kept, and the preview reads it back
+//!   trailing commas and the person's settings in place), owner-only (0600), and the preview reads it back
 //!   as configured; `opencode.json` and the login file are untouched;
 //! - restore: after the person's edit, Restore Backup puts the original bytes back;
 //! - clear: applied again and edited twice by the person, Clear takes out only pluxy's provider and
 //!   default model: their theme and their own model stay, comments too;
+//! - corrupt: applied again, then made into a file OpenCode would not take, the preview still pins
+//!   it and reports it refused; a confirmed Clear is refused and changes nothing; Restore Backup
+//!   puts back the config as it was before that apply;
 //! - backups: a Manual Backup, a diff naming the setting the person changed and never its value,
 //!   restore over that edit, delete;
 //! - stow: an apply through the selected link changes only its target (strict JSON stays without
-//!   trailing commas), the link keeps its inode and text; once the target is replaced, a confirmed
+//!   trailing commas) and makes it owner-only, the link keeps its inode and text; once the target is replaced, a confirmed
 //!   write fails as changed and writes nothing; a new preview's restore puts the original back
 //!   through the link;
 //! - root: an apply to a file inside the selected root creates it, the root link kept; clear
@@ -81,24 +84,6 @@ fn read_op(main: &Webview, seen: &Seen, op: &str, input: Value) -> Result<Value,
     require(!asked, format!("{op} asked a native confirmation"))?;
     require(r["ok"] == true, format!("{op} {input}: {r}"))?;
     Ok(r["value"].clone())
-}
-
-/// A read operation that must be refused, unasked, saying says.
-fn read_refused(
-    main: &Webview,
-    seen: &Seen,
-    op: &str,
-    input: Value,
-    says: &str,
-) -> Result<(), String> {
-    let (r, asked) = unasked(|| call(main, PACKAGE, op, input.clone()));
-    let r = r?;
-    seen.add(r.to_string());
-    require(!asked, format!("{op} {input} asked a native confirmation"))?;
-    require(
-        r["ok"] == false && r["error"].as_str().is_some_and(|e| e.contains(says)),
-        format!("{op} {input} should be refused with {says:?}: {r}"),
-    )
 }
 
 /// A write operation of the package from the window, its confirmation (naming every one of
@@ -285,8 +270,17 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     step(
         "unknown",
         (|| {
-            read_refused(main, &seen, "preview", file(&unknown), "schema")?;
-            read_refused(main, &seen, "preview", file(&broken), "JSONC")?;
+            // Pinned all the same (Restore Backup must reach them), reported refused, unasked.
+            for (q, says) in [(&unknown, "schema"), (&broken, "JSONC")] {
+                let v = read_op(main, &seen, "preview", file(q))?;
+                let c = &v["config"];
+                require(
+                    v["targets"][0]["target"] == json!(txt(q))
+                        && c["state"] == "refused"
+                        && c["reason"].as_str().is_some_and(|r| r.contains(says)),
+                    format!("the preview of {} should report it refused: {v}", txt(q)),
+                )?;
+            }
             require(
                 read(&unknown) == Some(bytes("unknown")) && read(&broken) == Some(bytes("broken")),
                 "a refused file changed",
@@ -333,7 +327,10 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 read(&jsonc) == Some(bytes("applied")),
                 format!("the applied config: {:?}", read(&jsonc)),
             )?;
-            require(mode(&jsonc) == 0o644, "the config's mode changed")?;
+            require(
+                mode(&jsonc) == 0o600,
+                "the applied config is not owner-only",
+            )?;
             let v = read_op(
                 main,
                 &seen,
@@ -381,7 +378,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             require(o["outcome"] == "restored", format!("the restore: {o}"))?;
             require(
-                read(&jsonc) == Some(bytes("original")) && mode(&jsonc) == 0o644,
+                read(&jsonc) == Some(bytes("original")) && mode(&jsonc) == 0o600,
                 format!("the restored config: {:?}", read(&jsonc)),
             )?;
             untouched()
@@ -427,6 +424,72 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         })(),
     )?;
     passed("clear");
+
+    // ---- corrupt: an applied config OpenCode would not take; Clear is refused, Restore Backup
+    // still puts the file back
+    step(
+        "corrupt",
+        (|| {
+            let v = read_op(main, &seen, "preview", file(&jsonc))?;
+            written(
+                app,
+                main,
+                &seen,
+                "apply",
+                apply_input(&v, &secret),
+                &[&txt(&jsonc), LABEL],
+                &hidden,
+            )?;
+            require(
+                read(&jsonc) == Some(bytes("applied_nord")),
+                format!("the apply over the cleared config: {:?}", read(&jsonc)),
+            )?;
+            let (from, to) = pair("corrupt");
+            edit(&jsonc, &from, &to)?;
+            let corrupt = read(&jsonc);
+            let v = read_op(main, &seen, "preview", file(&jsonc))?;
+            let c = &v["config"];
+            require(
+                v["applied"] == true
+                    && c["state"] == "refused"
+                    && c["reason"].as_str().is_some_and(|r| r.contains("JSONC")),
+                format!("the corrupt config's preview: {v}"),
+            )?;
+            let r = confirmed(
+                app,
+                main,
+                &seen,
+                "clear",
+                json!({"targets": v["targets"]}),
+                &[&txt(&jsonc)],
+                &hidden,
+            )?;
+            require(
+                r["ok"] == false && r["error"].as_str().is_some_and(|e| e.contains("JSONC")),
+                format!("a clear of the corrupt config should be refused: {r}"),
+            )?;
+            require(
+                read(&jsonc) == corrupt,
+                "the refused clear changed the file",
+            )?;
+            let o = written(
+                app,
+                main,
+                &seen,
+                "restore",
+                json!({"targets": v["targets"]}),
+                &[&txt(&jsonc)],
+                &hidden,
+            )?;
+            require(o["outcome"] == "restored", format!("the restore: {o}"))?;
+            require(
+                read(&jsonc) == Some(bytes("cleared")),
+                format!("the config restored: {:?}", read(&jsonc)),
+            )?;
+            untouched()
+        })(),
+    )?;
+    passed("corrupt");
 
     // ---- backups: a manual backup, diff by name, restore, delete
     step(
@@ -516,7 +579,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 &hidden,
             )?;
             require(
-                read(&stow_target) == Some(bytes("stow_applied")) && mode(&stow_target) == 0o640,
+                read(&stow_target) == Some(bytes("stow_applied")) && mode(&stow_target) == 0o600,
                 format!("the stow target after apply: {:?}", read(&stow_target)),
             )?;
             require(

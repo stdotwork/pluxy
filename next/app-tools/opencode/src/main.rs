@@ -13,7 +13,7 @@ mod config;
 
 use config::{Checked, Settings};
 use pluxy_program::{run, Call, Error, Handler};
-use pluxy_transactions::{backup_call, data_dir, Pin, Selection, Target, Transactions};
+use pluxy_transactions::{backup_call, data_dir, sha256_of, Pin, Selection, Target, Transactions};
 use serde_json::{json, Value};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -21,8 +21,8 @@ use std::path::{Path, PathBuf};
 /// The one set this tool applies: OpenCode's config file.
 const SET: &str = "opencode";
 
-/// The desktop app's executable, as OpenCode's Linux packages install it.
-const DESKTOP: &str = "/opt/OpenCode/ai.opencode";
+/// Where OpenCode's Linux packages install the desktop app.
+const DESKTOP_DIR: &str = "/opt/OpenCode";
 
 struct OpenCode;
 
@@ -49,6 +49,45 @@ pub fn config_in(folder: &Path) -> PathBuf {
 /// OpenCode's global config in the app's home folder.
 fn default_file() -> Result<PathBuf, Error> {
     Ok(config_in(&home()?.join(".config").join("opencode")))
+}
+
+/// The desktop app's executable in folder: `ai.opencode` (2.x), else `ai.opencode.desktop` (1.x)
+/// when only that exists, else `ai.opencode` (the launcher then says it is missing).
+pub fn desktop_in(folder: &Path) -> PathBuf {
+    let (now, older) = (
+        folder.join("ai.opencode"),
+        folder.join("ai.opencode.desktop"),
+    );
+    if !now.exists() && older.exists() {
+        older
+    } else {
+        now
+    }
+}
+
+/// What a preview shows of the config in bytes. A config OpenCode would not take is pinned all
+/// the same, so Restore Backup still reaches it: its `state` is `refused` and `reason` says why
+/// apply and clear refuse it.
+fn config_of(bytes: Option<&[u8]>, base_url: Option<&str>) -> Value {
+    config::read_back(bytes, base_url)
+        .unwrap_or_else(|e| json!({"state": "refused", "reason": e.message}))
+}
+
+/// Runs read (a preview and the config file's bytes) again once when the bytes it read are not
+/// the ones it pinned (another program wrote the file between the two reads); refuses if they
+/// differ again, so the values shown are always those of the file pinned.
+fn pinned_read(
+    mut read: impl FnMut() -> Result<(Value, Option<Vec<u8>>), Error>,
+) -> Result<(Value, Option<Vec<u8>>), Error> {
+    for _ in 0..2 {
+        let (v, bytes) = read()?;
+        if v["targets"][0]["sha256"] == json!(sha256_of(bytes.as_deref())) {
+            return Ok((v, bytes));
+        }
+    }
+    Err(Error::unavailable(
+        "the config file changed while it was read: read it again",
+    ))
 }
 
 /// The input's one target, read with f: a config file is written alone.
@@ -94,11 +133,13 @@ impl Handler for OpenCode {
         match call.op.as_str() {
             "preview" => {
                 let sel = selection(input)?;
-                // A config OpenCode would not take is refused before anything is pinned.
-                let (_, bytes) = Target::resolve(&sel)?.read_now()?;
-                let read = config::read_back(bytes.as_deref(), input["base_url"].as_str())?;
-                let mut v = Transactions::new(call, data_dir()?).preview(SET, &[sel])?;
-                v["config"] = read;
+                let tx = Transactions::new(call, data_dir()?);
+                let (mut v, bytes) = pinned_read(|| {
+                    let v = tx.preview(SET, std::slice::from_ref(&sel))?;
+                    let (_, bytes) = Target::resolve(&sel)?.read_now()?;
+                    Ok((v, bytes))
+                })?;
+                v["config"] = config_of(bytes.as_deref(), input["base_url"].as_str());
                 Ok(v)
             }
             "apply" => {
@@ -145,7 +186,7 @@ impl Handler for OpenCode {
                 "app" => Ok(json!({
                     "client": "OpenCode Desktop",
                     "kind": "direct",
-                    "program": DESKTOP,
+                    "program": desktop_in(Path::new(DESKTOP_DIR)),
                     "args": [],
                     "cwd": home()?,
                 })),
@@ -167,6 +208,10 @@ impl Handler for OpenCode {
 #[cfg(test)]
 #[path = "config_tests.rs"]
 mod config_tests;
+
+#[cfg(test)]
+#[path = "main_tests.rs"]
+mod main_tests;
 
 #[cfg(test)]
 #[path = "manifest_tests.rs"]

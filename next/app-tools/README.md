@@ -321,12 +321,12 @@ nothing.
 
 | Operation | Effect | Input | Output |
 | --- | --- | --- | --- |
-| `preview` | `read` | `targets`: one selection (`file`, or `root` and `path`), by default OpenCode's global config in the app's `HOME` (below); `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `config`: `state` (`not-configured`, `configured`, `needs-update`), `base_url` (the provider's), `key_set`, `model` (the default, when it is one of pluxy's), `default_model` (the file's `model`), `models` (`id`, `name`, `attachment`), `old_provider` (the old desktop app's `cpa-gui` provider is there); never the key |
+| `preview` | `read` | `targets`: one selection (`file`, or `root` and `path`), by default OpenCode's global config in the app's `HOME` (below); `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `config`: `state` (`not-configured`, `configured`, `needs-update`, or `refused` with `reason` for a file OpenCode would not take, which is pinned all the same), `base_url` (the provider's), `key_set`, `model` (the default, when it is one of pluxy's), `default_model` (the file's `model` as `provider/model`), `models` (`id`, `name`, `attachment`), `old_provider` (the old desktop app's `cpa-gui` provider is there), `v2_provider` (OpenCode 2's `providers.pluxy` is there); never the key. The file is read again once if it changed between the pin and the read, then refused |
 | `apply` | `write`; secret `key` (value) | One pin, `base_url`, `key`, `models` (1 to 256: `id`, `name` (empty: the ID), `attachment`), `model` (one of them) | The library's outcome |
 | `clear` | `write` | One pin | The library's outcome: the values Apply wrote go, edits made since stay |
 | `restore` | `write` | One pin | The library's outcome: the original bytes back (Restore Backup) |
 | `status` | `read` | — | The library's status |
-| `recipe` | `read` | `target`: `cli` (the default) or `app` | `{"client": "OpenCode", "kind": "terminal", "program": <~/.opencode/bin/opencode when it is an executable file there, else "opencode">, "args": []}`, or `{"client": "OpenCode Desktop", "kind": "direct", "program": "/opt/OpenCode/ai.opencode", "args": [], "cwd": <HOME>}`, for the launcher |
+| `recipe` | `read` | `target`: `cli` (the default) or `app` | `{"client": "OpenCode", "kind": "terminal", "program": <~/.opencode/bin/opencode when it is an executable file there, else "opencode">, "args": []}`, or `{"client": "OpenCode Desktop", "kind": "direct", "program": "/opt/OpenCode/ai.opencode" (or `/opt/OpenCode/ai.opencode.desktop`, OpenCode 1's, when only that exists), "args": [], "cwd": <HOME>}`, for the launcher |
 | `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations (`lib/transactions`), one file per version, diffed by setting name as `json_leaves` reads JSON | The library's answers: IDs, paths, presence, sizes and setting names, never a value |
 
 OpenCode reads its global config from `~/.config/opencode/` (`$XDG_CONFIG_HOME/opencode`, or
@@ -347,18 +347,23 @@ own form, `providers`, is unknown to 1.x):
   `models` holds exactly the listed models, each with `name` and, with attachments,
   `"attachment": true` and `modalities` input text, image and pdf, else input text only (output
   text), an existing entry's other members kept;
-- `model`: `pluxy/<model>`;
+- `model`: `pluxy/<model>` (replacing a `{providerID, model}` default, which Clear brings back);
 - `$schema`: `https://opencode.ai/config.json`, first, only when the file names none.
 
 The file is edited in place through a JSONC syntax tree (jsonc-parser): comments, formatting,
 trailing commas and every other setting stay where they are, and new members follow the file's
 own style. Clear's three-way merge brings back what Apply replaced unless the person changed it
-since, and edits only what differs. An old desktop app's `cpa-gui` provider is left alone. Every
-operation but `restore` refuses, before writing, a file OpenCode would not take as its own config:
-not JSON or JSONC by OpenCode's parser rules (comments and trailing commas are fine; single quotes,
-bare keys, hexadecimal numbers or missing commas are not), a key named twice, not an object, a
-`$schema` other than `https://opencode.ai/config.json`, or a `provider`, `provider.pluxy`, its
-`options` or `models` (or a model entry) that is not an object, or a `model` that is not a string.
+since, and edits only what differs. An old desktop app's `cpa-gui` provider is left alone. A file
+with OpenCode 2's own `providers.pluxy` is never reported configured and `apply` refuses it, since
+OpenCode would use that entry instead; the person removes it. `configured` also needs `npm`
+`@ai-sdk/openai-compatible`, the base URL, the key and the default among pluxy's models. Every
+operation but `restore` refuses, before writing, a file OpenCode would not take as its own config
+(the preview reports it `refused`): not JSON or JSONC by OpenCode's parser rules (comments and
+trailing commas are fine; single quotes, bare keys, hexadecimal numbers or missing commas are not),
+a leading byte order mark, a key named twice in any object (arrays included), not an object, a
+`$schema` other than `https://opencode.ai/config.json`, a `provider`, `provider.pluxy`, its
+`options` or `models` (or a model entry) that is not an object, or a `model` that is neither
+`provider/model` text nor `{providerID, model}`.
 A missing or empty file is an empty one. Restore Backup puts the original back whatever the file
 holds now.
 

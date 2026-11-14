@@ -14,7 +14,7 @@
 // - a chezmoi-style root: `~/.opencode-root` is an absolute link to the folder
 //   `~/.local/share/chezmoi/dot_config/opencode`, which has no config yet;
 // - configs OpenCode would not take: `~/unknown/opencode.json` names another schema,
-//   `~/broken/opencode.json` uses single quotes;
+//   `~/broken/opencode.json` uses single quotes; their previews pin them and report them refused;
 // - bin/ goes first on the app's PATH: `x-terminal-emulator` (the first terminal Automatic picks)
 //   and `opencode`, shell scripts that record their arguments, folder and environment in records/;
 //   installed/opencode is the copy the check later puts at `~/.opencode/bin/opencode` (where
@@ -181,6 +181,10 @@ function configs(home: string, login: string) {
       edited_model: ['"model": "pluxy/gpt-6.1-sol"', '"model": "anthropic/claude-opus-5-5"'],
       // Clear after both edits: pluxy's provider goes, their theme and model stay.
       cleared: `${head}  "theme": "nord", /* their theme */\n${anthropic}  },\n  "model": "anthropic/claude-opus-5-5",\n${tail}`,
+      // Applied again over the cleared config, then made into a file OpenCode would not take (single
+      // quotes): Clear refuses it, Restore Backup puts back the cleared config.
+      applied_nord: applied("nord", "pluxy/gpt-6.1-sol"),
+      corrupt: ['"theme": "nord", /* their theme */', "'theme': 'nord', /* their theme */"],
       // A strict JSON file gets `$schema` first and no trailing commas.
       stow_applied: `{\n  "$schema": "https://opencode.ai/config.json",\n  "theme": "stow",\n  "provider": {\n${pluxy(false)}\n  },\n  "model": "pluxy/gpt-6.1-sol"\n}\n`,
       // A file the root did not have, created.

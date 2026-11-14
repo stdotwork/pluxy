@@ -196,3 +196,76 @@ fn models_no_longer_listed_go_and_kept_entries_keep_their_own_settings() {
     assert_eq!(models["deepseek-v4"]["limit"]["context"], 128000);
     assert_eq!(v["provider"]["pluxy"]["options"]["timeout"], 5);
 }
+
+#[test]
+fn a_key_named_twice_inside_nested_arrays_is_refused() {
+    let e = parse(Some(br#"{"a": [[{"x": 1, "x": 2}]]}"#))
+        .err()
+        .unwrap();
+    assert!(e.message.contains("twice"), "{e}");
+    let e = parse(Some(br#"{"a": [1, {"b": [{"y": 1, "y": 1}]}]}"#))
+        .err()
+        .unwrap();
+    assert!(e.message.contains("twice"), "{e}");
+    assert!(parse(Some(br#"{"a": [[{"x": 1}], [{"x": 2}]]}"#)).is_ok());
+}
+
+#[test]
+fn an_object_form_default_model_is_taken_and_left_alone_unless_pluxys() {
+    let theirs = br#"{"model": {"providerID": "anthropic", "model": "claude-opus-5-5"}}"#;
+    let r = read_back(Some(theirs), None).unwrap();
+    assert_eq!(r["default_model"], "anthropic/claude-opus-5-5");
+    assert_eq!(r["model"], serde_json::Value::Null);
+    let ours = APPLIED.replace(
+        r#""model": "pluxy/gpt-6.1-sol","#,
+        r#""model": {"providerID": "pluxy", "model": "gpt-6.1-sol"},"#,
+    );
+    let r = read_back(Some(ours.as_bytes()), None).unwrap();
+    assert_eq!(
+        (r["state"].clone(), r["model"].clone()),
+        (json!("configured"), json!("gpt-6.1-sol"))
+    );
+    // Apply sets its default as text; Clear brings the person's object back.
+    let applied = apply(Some(theirs), &settings()).unwrap();
+    let out = Checked
+        .merge(Some(theirs), Some(&applied), Some(&applied))
+        .unwrap()
+        .unwrap();
+    assert_eq!(out, theirs.to_vec());
+    assert!(parse(Some(br#"{"model": {"providerID": "x"}}"#)).is_err());
+}
+
+#[test]
+fn configured_needs_the_openai_compatible_package() {
+    for npm in [r#""npm": "@ai-sdk/anthropic","#, ""] {
+        let f = APPLIED.replace(r#""npm": "@ai-sdk/openai-compatible","#, npm);
+        let r = read_back(Some(f.as_bytes()), None).unwrap();
+        assert_eq!(r["state"], "needs-update", "{npm}");
+    }
+}
+
+#[test]
+fn an_opencode_2_provider_entry_is_reported_and_apply_refuses_while_it_is_there() {
+    let f = APPLIED.replacen(
+        "{\n",
+        "{\n  \"providers\": {\"pluxy\": {\"name\": \"theirs\"}},\n",
+        1,
+    );
+    let r = read_back(Some(f.as_bytes()), None).unwrap();
+    assert_eq!(
+        (r["state"].clone(), r["v2_provider"].clone()),
+        (json!("needs-update"), json!(true))
+    );
+    let e = apply(Some(f.as_bytes()), &settings()).err().unwrap();
+    assert!(e.message.contains("providers.pluxy"), "{e}");
+    assert_eq!(
+        read_back(Some(APPLIED.as_bytes()), None).unwrap()["v2_provider"],
+        false
+    );
+}
+
+#[test]
+fn a_byte_order_mark_is_refused_with_a_plain_reason() {
+    let e = parse(Some(b"\xEF\xBB\xBF{}")).err().unwrap();
+    assert!(e.message.contains("byte order mark"), "{e}");
+}

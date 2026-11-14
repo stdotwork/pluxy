@@ -3,11 +3,12 @@
 //! own (README.md). Every write edits the file's syntax tree in place, so comments, formatting and
 //! keys pluxy does not write stay where the person left them.
 
-use jsonc_parser::cst::{CstInputValue, CstObject, CstRootNode};
+use jsonc_parser::cst::{CstInputValue, CstNode, CstObject, CstRootNode};
 use jsonc_parser::ParseOptions;
 use pluxy_program::Error;
 use pluxy_transactions::{json_leaves, merge_value, Merge};
 use serde_json::{json, Map, Value};
+use std::collections::HashSet;
 
 /// The schema OpenCode's config may name in `$schema`, and the one Apply adds when it names none.
 pub const SCHEMA: &str = "https://opencode.ai/config.json";
@@ -161,25 +162,55 @@ pub struct Doc {
     pub value: Map<String, Value>,
 }
 
-/// Refuses an object that names a key twice, at any depth.
-fn no_duplicates(o: &CstObject) -> Result<(), Error> {
-    let mut seen: Vec<String> = Vec::new();
-    for p in o.properties() {
-        let name = p.decoded_name().unwrap_or_default();
-        if seen.contains(&name) {
-            return Err(not_opencode(format!("it names {name:?} twice")));
-        }
-        if let Some(inner) = p.object_value() {
-            no_duplicates(&inner)?;
-        }
-        for a in p.array_value().iter().flat_map(|a| a.elements()) {
-            if let Some(inner) = a.as_object() {
-                no_duplicates(&inner)?;
+/// Refuses an object that names a key twice, at any depth, in objects and arrays alike.
+fn no_duplicates(node: &CstNode) -> Result<(), Error> {
+    if let Some(o) = node.as_object() {
+        let mut seen = HashSet::new();
+        for p in o.properties() {
+            let name = p.decoded_name().unwrap_or_default();
+            if !seen.insert(name.clone()) {
+                return Err(not_opencode(format!("it names {name:?} twice")));
+            }
+            if let Some(v) = p.value() {
+                no_duplicates(&v)?;
             }
         }
-        seen.push(name);
+    } else if let Some(a) = node.as_array() {
+        for e in a.elements() {
+            no_duplicates(&e)?;
+        }
     }
     Ok(())
+}
+
+/// Whether value holds `providers.pluxy`, OpenCode 2's own form of the provider, which OpenCode
+/// would use instead of the `provider.pluxy` Apply writes.
+pub fn has_v2_provider(value: &Map<String, Value>) -> bool {
+    value
+        .get("providers")
+        .and_then(Value::as_object)
+        .is_some_and(|p| p.contains_key(PROVIDER))
+}
+
+/// The default model a config's `model` names, as `provider/model` text, and the model when it
+/// is one of pluxy's: `model` is `provider/model` (optionally `#variant`) or
+/// `{providerID, model, variant?}`.
+fn default_model(m: Option<&Value>) -> (Option<String>, Option<String>) {
+    match m {
+        Some(Value::String(s)) => (
+            Some(s.clone()),
+            s.strip_prefix(&format!("{PROVIDER}/")).map(String::from),
+        ),
+        Some(Value::Object(o)) => {
+            let text = |k: &str| o.get(k).and_then(Value::as_str);
+            let (p, m) = (text("providerID"), text("model"));
+            (
+                p.zip(m).map(|(p, m)| format!("{p}/{m}")),
+                m.filter(|_| p == Some(PROVIDER)).map(String::from),
+            )
+        }
+        _ => (None, None),
+    }
 }
 
 /// The members at path in root, refused unless an object (absent: None).
@@ -208,6 +239,11 @@ fn object_at<'a>(
 /// `$schema`, if any, OpenCode's, and the parts Apply writes of the shapes OpenCode reads.
 pub fn parse(bytes: Option<&[u8]>) -> Result<Doc, Error> {
     let blank = bytes.is_none_or(|b| b.iter().all(u8::is_ascii_whitespace));
+    if bytes.is_some_and(|b| b.starts_with(b"\xEF\xBB\xBF")) {
+        return Err(not_opencode(
+            "the file starts with a byte order mark (BOM): save it without one",
+        ));
+    }
     let text = if blank {
         "{}"
     } else {
@@ -216,10 +252,10 @@ pub fn parse(bytes: Option<&[u8]>) -> Result<Doc, Error> {
     };
     let root = CstRootNode::parse(text, &rules())
         .map_err(|e| not_opencode(format!("the file is not JSON or JSONC OpenCode reads: {e}")))?;
-    let Some(obj) = root.object_value() else {
+    let Some(node) = root.value().filter(|v| v.as_object().is_some()) else {
         return Err(not_opencode("the file is not a JSON object"));
     };
-    no_duplicates(&obj)?;
+    no_duplicates(&node)?;
     let Some(Value::Object(value)) = root.to_serde_value() else {
         return Err(not_opencode("the file is not a JSON object"));
     };
@@ -233,7 +269,6 @@ pub fn parse(bytes: Option<&[u8]>) -> Result<Doc, Error> {
         }
     }
     object_at(&value, &["provider", PROVIDER, "options"])?;
-    object_at(&value, &["provider", PROVIDER, "models"])?;
     if let Some(models) = object_at(&value, &["provider", PROVIDER, "models"])? {
         for (id, m) in models {
             if !m.is_object() {
@@ -243,8 +278,17 @@ pub fn parse(bytes: Option<&[u8]>) -> Result<Doc, Error> {
             }
         }
     }
-    if value.get("model").is_some_and(|m| !m.is_string()) {
-        return Err(not_opencode("model is not a string"));
+    match value.get("model") {
+        None | Some(Value::String(_)) => {}
+        Some(Value::Object(m))
+            if ["providerID", "model"]
+                .iter()
+                .all(|k| m.get(*k).is_some_and(Value::is_string)) => {}
+        Some(_) => {
+            return Err(not_opencode(
+                "model is neither provider/model text nor {providerID, model}",
+            ))
+        }
     }
     Ok(Doc {
         root,
@@ -379,12 +423,18 @@ pub fn applied(now: &Map<String, Value>, s: &Settings) -> Map<String, Value> {
 /// OpenCode pointed at the core through s.
 pub fn apply(before: Option<&[u8]>, s: &Settings) -> Result<Vec<u8>, Error> {
     let doc = parse(before)?;
+    if has_v2_provider(&doc.value) {
+        return Err(Error::invalid_request(format!(
+            "providers.{PROVIDER} (OpenCode 2's own form of the provider) is in this file, and OpenCode would use it instead of what Apply writes: remove it from the file first"
+        )));
+    }
     let want = applied(&doc.value, s);
     Ok(doc.edit(&want))
 }
 
 /// What a preview shows of the config in bytes, never the key: whether it points OpenCode at a
-/// core (at base_url, when given), the models it lists and the default one.
+/// core (at base_url, when given), the models it lists and the default one. A file with OpenCode
+/// 2's `providers.pluxy` is never `configured`: OpenCode uses that entry, not pluxy's.
 pub fn read_back(bytes: Option<&[u8]>, base_url: Option<&str>) -> Result<Value, Error> {
     let root = parse(bytes)?.value;
     let p = object_at(&root, &["provider", PROVIDER])?;
@@ -406,13 +456,17 @@ pub fn read_back(bytes: Option<&[u8]>, base_url: Option<&str>) -> Result<Value, 
             })
         })
         .collect();
-    let default = root.get("model").and_then(Value::as_str);
-    let ours = default.and_then(|m| m.strip_prefix(&format!("{PROVIDER}/")));
+    let (default, ours) = default_model(root.get("model"));
+    let v2 = has_v2_provider(&root);
     let state = match p {
         None => "not-configured",
-        Some(_)
+        Some(p)
             if key_set
-                && ours.is_some_and(|m| models.iter().any(|x| x["id"] == m))
+                && !v2
+                && p.get("npm") == Some(&json!(NPM))
+                && ours
+                    .as_deref()
+                    .is_some_and(|m| models.iter().any(|x| x["id"] == m))
                 && url.is_some()
                 && base_url.is_none_or(|b| url == Some(provider_url(b).as_str())) =>
         {
@@ -426,6 +480,7 @@ pub fn read_back(bytes: Option<&[u8]>, base_url: Option<&str>) -> Result<Value, 
         "key_set": key_set,
         "model": ours,
         "default_model": default,
+        "v2_provider": v2,
         "models": models,
         "old_provider": object_at(&root, &["provider", OLD_PROVIDER])?.is_some(),
     }))
