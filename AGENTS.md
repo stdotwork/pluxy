@@ -10,10 +10,9 @@ core with provider extensions is being built from scratch in `next/`, beside tod
 | --- | --- | --- |
 | `core/` | Go proxy server | router-for-me/CLIProxyAPI |
 | `extensions/app/` | Tauri 2 desktop app (React front end, Rust back end) | router-for-me/EasyCLIProxyAPI |
-| `extensions/panel/` | React/Vite web management panel, built to one HTML file | router-for-me/Cli-Proxy-API-Management-Center |
 | `next/` | New Go core, its extension protocol and provider extensions | written for pluxy |
 
-`core/`, `extensions/app/` and `extensions/panel/` still receive pulls from their upstream
+`core/` and `extensions/app/` still receive pulls from their upstream
 projects. Keep changes inside a folder contained: no sweeping renames, reformatting or file
 moves, so later upstream merges stay easy. `core/`'s Go module path stays
 `github.com/router-for-me/CLIProxyAPI/v8`. `next/` has no upstream; its module path is
@@ -21,7 +20,7 @@ moves, so later upstream merges stay easy. `core/`'s Go module path stays
 
 ## Which rules apply
 
-A folder's own `AGENTS.md` (`core/AGENTS.md`, `extensions/panel/AGENTS.md`) holds that folder's
+A folder's own `AGENTS.md` (`core/AGENTS.md`) holds that folder's
 coding rules and applies to work inside it. The app has no `AGENTS.md`; follow nearby code.
 `next/` has no `AGENTS.md` either: follow nearby code, prefer the standard library (its only
 other dependencies are `github.com/coder/websocket` and `gopkg.in/yaml.v3`), and change the
@@ -34,8 +33,6 @@ The upstream process rules in those files and in upstream tooling do not apply i
 - `core/AGENTS.md`: skip the `internal/translator/` permission check and the "file an issue and
   stop" step. Translator-only changes are ordinary PRs here.
 - `core/AGENTS.md`: skip the note about updating the CLIProxyAPIHome repository.
-- `extensions/panel/AGENTS.md`: the backend it calls `../CLIProxyAPI` is `core/` in this repo,
-  and panel releases use `panel-v*` tags, not `vX.Y.Z`.
 
 If `.private/AGENTS.md` exists, read it too: it holds the owner's private instructions and notes.
 Confirmed plans, decisions and major tradeoffs are written up in `docs/`.
@@ -107,19 +104,6 @@ PLUXY_CORPUS_OLD_CORE=1 go test -count=1 -v -run TestCorpus ./corpus   # builds 
 PLUXY_CORPUS_RECORD=1 go test -count=1 -run TestCorpus ./corpus        # rewrites recorded_old_core
 ```
 
-### `extensions/panel/`
-
-Bun `1.4.3` (`packageManager` in `package.json`); CI also sets up Node.js 24.
-
-```bash
-bun install --frozen-lockfile
-bun run test          # bun test
-bun run lint          # ESLint; warnings do not fail it
-bun run type-check    # tsc --noEmit
-bun run build         # tsc + Vite; writes dist/index.html
-bun run verify        # test + lint + build, what CI runs
-```
-
 ### `extensions/app/`
 
 Bun `1.3.14` (`packageManager` in `package.json`) and a stable Rust toolchain (none is pinned in
@@ -158,8 +142,6 @@ Workflows live in `.github/workflows/`, one set per folder, each limited to its 
 | --- | --- | --- |
 | `core-pr-test-build.yml` | PRs and pushes to `main` touching `core/` | Refreshes the model catalog, then `go build ./cmd/server`, `go vet ./...` and `go test ./...` |
 | `core-release.yaml` | `core-v*` tags | Builds release archives and creates the GitHub release |
-| `panel-ci.yml` | PRs and pushes to `main` touching `extensions/panel/` | `bun install --frozen-lockfile`, then `bun run verify` |
-| `panel-release.yml` | `panel-v*` tags | `bun run build`, publishes `management.html` |
 | `app-ci.yml` | PRs and pushes to `main` touching `extensions/app/` | Front end: `bun run check`, `bun test`, `bun run build`; Rust: `cargo check --locked`, `cargo test --locked` |
 | `next-ci.yml` | PRs and pushes to `main` touching `next/` | UI type check, lint and unit tests; builds the panel; `gofmt -l .`, `go build ./...`, `go vet ./...`, `go test -race ./...`; the panel's browser test in headless Chromium, and the extension pages test in Chromium, Firefox and WebKit |
 | `next-app.yml` | PRs and pushes to `main` touching `next/` | The desktop app in `next/app`: type check, lint, unit tests and build of the window; `cargo fmt --check`, `cargo clippy`, `cargo test --locked` (unit tests and each connection mode against a real core); the native test on Xvfb, which also builds and runs the test AppImage and checks the release gate |
@@ -173,8 +155,8 @@ When you add a workflow, add a row here.
 - `main` is the only long-lived branch. Work on a task branch and open a PR against `main`.
 - One concern per PR. A change in behaviour goes in its own PR, and the PR title says so.
 - Commit messages and PR titles use Conventional Commits, scoped by folder: `core`, `app`,
-  `panel`, `next`, or `ci` for workflows, for example `fix(core): ...` or `ci: ...`. Repo-wide docs use
+  `next`, or `ci` for workflows, for example `fix(core): ...` or `ci: ...`. Repo-wide docs use
   `docs: ...`.
 - Open PRs ready for review, not as drafts. The owner reviews and merges.
-- Licensing: each folder keeps its upstream MIT `LICENSE`. The root license is not decided yet;
-  do not add one.
+- Licensing: each folder keeps its upstream MIT `LICENSE`. The notice of the removed old web
+  panel is in `THIRD_PARTY_NOTICES.md`. The root license is not decided yet; do not add one.
