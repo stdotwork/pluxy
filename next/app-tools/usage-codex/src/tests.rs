@@ -4,7 +4,7 @@
 use super::rollout::{self, Out};
 use super::Codex;
 use pluxy_program::Error;
-use pluxy_usage::{Parser, Tokens};
+use pluxy_usage::{LineReader, Parser, Tokens};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -37,7 +37,7 @@ impl Out for Rows {
 fn parse(lines: &[Value]) -> Rows {
     let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
     let mut rows = Rows::default();
-    rollout::parse(text.as_bytes(), &mut rows).unwrap();
+    rollout::parse(&mut LineReader::new(text.as_bytes()), &mut rows).unwrap();
     rows
 }
 
@@ -190,7 +190,7 @@ fn skips_what_is_not_a_usage_event() {
         text.push_str("not json\n\n");
     }
     let mut rows = Rows::default();
-    rollout::parse(text.as_bytes(), &mut rows).unwrap();
+    rollout::parse(&mut LineReader::new(text.as_bytes()), &mut rows).unwrap();
     assert_eq!(
         rows.rows,
         BTreeMap::from([((OCT29, String::new()), t([5, 0, 0, 0, 0, 5, 1]))])
@@ -228,7 +228,7 @@ fn stops_when_the_job_is_cancelled() {
         cancel: true,
         ..Rows::default()
     };
-    let err = rollout::parse(b"{}\n", &mut rows).unwrap_err();
+    let err = rollout::parse(&mut LineReader::new(&b"{}\n"[..]), &mut rows).unwrap_err();
     assert_eq!(err.code, "cancelled");
 }
 

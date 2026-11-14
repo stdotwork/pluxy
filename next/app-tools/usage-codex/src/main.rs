@@ -11,7 +11,7 @@ mod rollout;
 mod tests;
 
 use pluxy_program::{run, Call, Error, Handler};
-use pluxy_usage::{produce, scan, Parser, Sink};
+use pluxy_usage::{produce, scan, LineReader, Parser, Sink};
 use serde_json::Value;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
@@ -82,8 +82,12 @@ impl Parser for Codex {
         found.into_iter().next().map(|f| f.1)
     }
 
-    fn parse(&self, bytes: &[u8], sink: &mut Sink) -> Result<(), Error> {
-        rollout::parse(bytes, sink)
+    fn streamed(&self) -> bool {
+        true
+    }
+
+    fn parse_lines(&self, lines: &mut LineReader, sink: &mut Sink) -> Result<(), Error> {
+        rollout::parse(lines, sink)
     }
 }
 

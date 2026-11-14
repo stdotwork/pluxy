@@ -82,7 +82,7 @@ changes, by the old desktop app's rules:
   reader used the file's modification time, which a parser is not given). A date with no time is
   that day's start in UTC, where the old reader used local midnight.
 
-A file over 16 MiB is not read (schema 1's limit): it counts as failed and the hub keeps its old rows.
+The rollout is read line by line, whatever its size; a line over 16 MiB is skipped, as the old reader did.
 
 ## `codex-sessions`
 

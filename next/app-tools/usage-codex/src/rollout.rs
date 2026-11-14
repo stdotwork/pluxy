@@ -15,7 +15,7 @@
 //! looked at beyond finding those fields, and none is kept.
 
 use pluxy_program::Error;
-use pluxy_usage::{Sink, Tokens};
+use pluxy_usage::{LineReader, Sink, Tokens};
 use serde_json::{Map, Value};
 
 /// The longest model name kept, in characters.
@@ -40,13 +40,15 @@ impl Out for Sink<'_> {
     }
 }
 
-/// Gives out the time (unix seconds), model and tokens of each token_count event of bytes, in
-/// order; looks now and then at whether the job was cancelled.
-pub fn parse(bytes: &[u8], out: &mut dyn Out) -> Result<(), Error> {
+/// Gives out the time (unix seconds), model and tokens of each token_count event of a file's
+/// lines, in order; looks now and then at whether the job was cancelled.
+pub fn parse(lines: &mut LineReader, out: &mut dyn Out) -> Result<(), Error> {
     let mut total = Counter::default();
     let mut model: Option<String> = None;
-    for (n, line) in bytes.split(|b| *b == b'\n').enumerate() {
-        if n % CANCEL_EVERY == 0 && out.cancelled() {
+    let mut n = 0usize;
+    while let Some(line) = lines.next_line()? {
+        n += 1;
+        if n % CANCEL_EVERY == 1 && out.cancelled() {
             return Err(Error::cancelled());
         }
         let Ok(value) = serde_json::from_slice::<Value>(line) else {
