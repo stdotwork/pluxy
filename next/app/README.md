@@ -817,17 +817,22 @@ only the window can name a vault secret for an operation (an extension page cann
 **Read settings** previews the settings file: Claude Code's user settings
 (`~/.claude/settings.json`), a selected file (a link, as stow makes, is followed and kept) or a file
 in a selected folder; it shows whether pluxy's integration is applied, the file it writes to and
-whether a key is in it, never the key, and fills the form from the file. The form keeps the old
+whether a key is in it, never the key, and fills the form from the file. A file Claude Code would
+not take (not strict JSON, or another `$schema`) shows why instead of the form: Apply and Close
+configuration stay off, and Restore Backup stays reachable. Choosing another file drops the last
+preview, so read it again before a write. The form keeps the old
 app's controls: **Claude Code Model → Upstream Model** (Sonnet, Opus, Fable, Haiku, each with a
 **1M** switch; Fable follows Sonnet when empty), **Default model**, **Subagent model**, and under
 **Context and auto-compaction (advanced)** the **Auto-compact window**, **Auto-compact trigger**
 and **Disable auto-compaction**. Model fields suggest Claude Code's own models and aliases until the
-model picker lists the core's; any model text is taken. The **Authentication Key** is one of the
-vault's secrets, or a new one through native key entry (**Add key…**).
+model picker lists the core's; Opus, Sonnet and Haiku each need one (not only `[1m]`), and the
+window and percentage are whole numbers. The **Authentication Key** is one of the vault's plain
+secrets or client keys captured for this tool (`src/claudeCodeForm.ts`), or a new one through native
+key entry (**Add key…**).
 
 **Connect in One Click** (or **Update Configuration** / **Repair Connection** once applied),
-**Close configuration** (Clear) and **Restore Backup** each preview the file again and call the
-tool, whose native confirmation names the file it resolves to, the key's label for Apply, and that
+**Close configuration** (Clear) and **Restore Backup** each call the tool with the file the last
+preview pinned (refused if the file changed since); the tool's native confirmation names the file it resolves to, the key's label for Apply, and that
 an edit made in the same instant by another program may be lost. **Start CLI** asks the tool for its
 recipe (`claude` in a terminal, no arguments) and starts it through the launcher in the chosen
 working directory (recently used ones offered), terminal and optional program path; the launcher's
@@ -836,9 +841,11 @@ settings.
 
 **Backup and restore** (`src/backups.tsx`, the backup browser every writer's page shows) keeps
 manual backups of the previewed file in the app's vault through the tool's standard backup
-operations ([app tools](../app-tools/README.md#libtransactions)). **Manual Backup** saves the file
-as it is on disk (or that it does not exist); the newest 10 are kept, and saving another deletes
-the oldest, which its confirmation says. **Backup versions** lists each by date; selecting one
+operations ([app tools](../app-tools/README.md#libtransactions)). It shows once the file has been
+read, a file Claude Code would not take included, and acts on the file that read pinned.
+**Manual Backup** saves the file as it is on disk (or that it does not exist) and selects the new
+backup, leaving the form as it is; the newest 10 are kept, and saving another deletes the oldest,
+which its confirmation says. **Backup versions** lists each by date; selecting one
 shows its ID, whether the file was present and its size, and the settings restoring it would add,
 change or remove, by name only: this page never gets a value or the backup's bytes. **Restore this
 version** puts it back over whatever the file holds now (a file absent in the backup is removed;

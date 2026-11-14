@@ -10,16 +10,23 @@
 //!   enabled through their native confirmations, which say "full access to your user account";
 //! - key: the key is typed into native key entry; the window gets only its ID;
 //! - unknown: a preview of settings naming another schema, and of settings that are not strict
-//!   JSON, is refused unasked and changes nothing; a preview of the person's settings (a read,
-//!   asked nothing) pins them and reads their values back, with no key;
+//!   JSON, pins them unasked, reports them refused with the reason and changes nothing; a preview
+//!   of the person's settings (a read, asked nothing) pins them and reads their values back, with
+//!   no key;
 //! - apply: asks a native confirmation naming the file, the key's label and the same-instant
-//!   sentence, never the key; then the settings hold exactly the bytes `expect.json` says, mode
-//!   kept, and the preview reads them back as configured; the login files are untouched;
-//! - restore: after the person's edit, Restore Backup puts the original bytes back;
-//! - clear: applied again and edited twice by the person, Clear takes out only the untouched
-//!   values: their API key comes back, their timeout and model stay;
-//! - stow: an apply through the selected link changes only its target, the link keeps its inode
-//!   and text; once the target is replaced, a confirmed apply fails as changed and writes
+//!   sentence, never the key; then the settings hold exactly the bytes `expect.json` says, owner
+//!   only (0600, from 0644), and the preview reads them back as configured; the login files are
+//!   untouched;
+//! - restore: after the person's edit and a mode of their own (0640), Restore Backup puts the
+//!   original bytes back and keeps that mode;
+//! - clear: applied again (0600 again) and edited twice by the person, who sets 0644, Clear takes
+//!   out only the untouched values: their API key comes back, their timeout and model stay, and
+//!   so does their mode;
+//! - corrupt: applied again, then made into a file Claude Code would not take, the preview reports
+//!   it refused, a confirmed Clear is refused and changes nothing, and Restore Backup puts back
+//!   the file as it was before that apply;
+//! - stow: an apply through the selected link changes only its target (0640 becomes 0600), the
+//!   link keeps its inode and text; once the target is replaced, a confirmed apply fails as changed and writes
 //!   nothing; a new preview's restore puts the original back through the link;
 //! - root: an apply to a file inside the selected root creates it, the root link kept; clear
 //!   removes it again;
@@ -283,12 +290,21 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     )?;
     passed("key");
 
-    // ---- unknown: settings Claude Code would not take are refused, the person's are read
+    // ---- unknown: settings Claude Code would not take are pinned and reported refused, the
+    // person's are read
     step(
         "unknown",
         (|| {
-            read_refused(main, &seen, "preview", file(&unknown), "schema")?;
-            read_refused(main, &seen, "preview", file(&broken), "JSON")?;
+            for (q, says) in [(&unknown, "schema"), (&broken, "JSON")] {
+                let v = read_op(main, &seen, "preview", file(q))?;
+                let st = &v["settings"];
+                require(
+                    v["targets"][0]["target"] == json!(txt(q))
+                        && st["state"] == "refused"
+                        && st["reason"].as_str().is_some_and(|r| r.contains(says)),
+                    format!("the preview of {} should report it refused: {v}", txt(q)),
+                )?;
+            }
             require(
                 read(&unknown) == Some(bytes("unknown")) && read(&broken) == Some(bytes("broken")),
                 "a refused file changed",
@@ -333,7 +349,10 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 read(&settings) == Some(bytes("applied")),
                 format!("the applied settings: {:?}", read(&settings)),
             )?;
-            require(mode(&settings) == 0o644, "the settings' mode changed")?;
+            require(
+                mode(&settings) == 0o600,
+                format!("the applied settings' mode: {:o}", mode(&settings)),
+            )?;
             let v = read_op(main, &seen, "preview", file(&settings))?;
             let st = &v["settings"];
             let want = &x["settings_input"];
@@ -364,6 +383,8 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         (|| {
             let (from, to) = pair("edited_timeout");
             edit(&settings, &from, &to)?;
+            std::fs::set_permissions(&settings, std::fs::Permissions::from_mode(0o640))
+                .map_err(|e| e.to_string())?;
             let v = read_op(main, &seen, "preview", file(&settings))?;
             require(
                 v["edited"] == json!([true]),
@@ -380,7 +401,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             require(o["outcome"] == "restored", format!("the restore: {o}"))?;
             require(
-                read(&settings) == Some(bytes("original")) && mode(&settings) == 0o644,
+                read(&settings) == Some(bytes("original")) && mode(&settings) == 0o640,
                 format!("the restored settings: {:?}", read(&settings)),
             )?;
             untouched()
@@ -406,10 +427,16 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 read(&settings) == Some(bytes("applied")),
                 "the second apply",
             )?;
+            require(
+                mode(&settings) == 0o600,
+                format!("the second apply's mode: {:o}", mode(&settings)),
+            )?;
             for k in ["edited_timeout", "edited_model"] {
                 let (from, to) = pair(k);
                 edit(&settings, &from, &to)?;
             }
+            std::fs::set_permissions(&settings, std::fs::Permissions::from_mode(0o644))
+                .map_err(|e| e.to_string())?;
             let v = read_op(main, &seen, "preview", file(&settings))?;
             let o = written(
                 app,
@@ -422,13 +449,79 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             require(o["outcome"] == "cleared", format!("the clear: {o}"))?;
             require(
-                read(&settings) == Some(bytes("cleared")),
-                format!("the cleared settings: {:?}", read(&settings)),
+                read(&settings) == Some(bytes("cleared")) && mode(&settings) == 0o644,
+                format!(
+                    "the cleared settings ({:o}): {:?}",
+                    mode(&settings),
+                    read(&settings)
+                ),
             )?;
             untouched()
         })(),
     )?;
     passed("clear");
+
+    // ---- corrupt: an applied file Claude Code would not take; Clear is refused, Restore Backup
+    // still puts it back
+    step(
+        "corrupt",
+        (|| {
+            let v = read_op(main, &seen, "preview", file(&settings))?;
+            written(
+                app,
+                main,
+                &seen,
+                "apply",
+                apply_input(&v, &secret),
+                &[&txt(&settings), LABEL],
+                &hidden,
+            )?;
+            let (from, to) = pair("corrupt");
+            edit(&settings, &from, &to)?;
+            let corrupt = read(&settings);
+            let v = read_op(main, &seen, "preview", file(&settings))?;
+            let st = &v["settings"];
+            require(
+                v["applied"] == true
+                    && st["state"] == "refused"
+                    && st["reason"].as_str().is_some_and(|r| r.contains("JSON")),
+                format!("the corrupt file's preview: {v}"),
+            )?;
+            let r = confirmed(
+                app,
+                main,
+                &seen,
+                "clear",
+                json!({"targets": v["targets"]}),
+                &[&txt(&settings)],
+                &hidden,
+            )?;
+            require(
+                r["ok"] == false && r["error"].as_str().is_some_and(|e| e.contains("JSON")),
+                format!("a clear of the corrupt file should be refused: {r}"),
+            )?;
+            require(
+                read(&settings) == corrupt,
+                "the refused clear changed the file",
+            )?;
+            let o = written(
+                app,
+                main,
+                &seen,
+                "restore",
+                json!({"targets": v["targets"]}),
+                &[&txt(&settings)],
+                &hidden,
+            )?;
+            require(o["outcome"] == "restored", format!("the restore: {o}"))?;
+            require(
+                read(&settings) == Some(bytes("cleared")),
+                format!("the settings restored: {:?}", read(&settings)),
+            )?;
+            untouched()
+        })(),
+    )?;
+    passed("corrupt");
 
     // ---- stow: only the link's target changes; a replaced target refuses writes
     step(
@@ -451,7 +544,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 &hidden,
             )?;
             require(
-                read(&stow_target) == Some(bytes("stow_applied")) && mode(&stow_target) == 0o640,
+                read(&stow_target) == Some(bytes("stow_applied")) && mode(&stow_target) == 0o600,
                 format!("the stow target after apply: {:?}", read(&stow_target)),
             )?;
             require(

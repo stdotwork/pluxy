@@ -82,6 +82,11 @@ fn model(input: &Value, field: &str, may_be_empty: bool) -> Result<String, Error
             "{field} is at most {MODEL_MAX} characters, with no control characters"
         )));
     }
+    if !m.is_empty() && split_one_m(m).0.is_empty() {
+        return Err(Error::invalid_request(format!(
+            "{field} names a model, not only {ONE_M}"
+        )));
+    }
     Ok(m.to_string())
 }
 
