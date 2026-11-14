@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { problem } from "../api";
 import type { ConfigDocument } from "../api/config";
 import { lineDiff } from "../diff";
+import { usePrivacy } from "../privacy";
 import { Button, Card, Notice, useKit } from "../ui";
 import { ConfigDialog } from "./configDialog";
 import { findAccount } from "./configSource.helpers";
@@ -36,6 +37,7 @@ function showRange(editor: HTMLTextAreaElement, start: number, end: number) {
 }
 export function ConfigSource(props: ConfigSourceProps) {
   const { api, unauthorized } = useKit();
+  const p = usePrivacy();
   const busy = props.loading;
   const setBusy = props.setBusy;
   const [error, setError] = useState<string>();
@@ -114,7 +116,7 @@ export function ConfigSource(props: ConfigSourceProps) {
     <div class="stack">
       <Card>
         <p class="muted">{t("sourceHint")}</p>
-        {missing && <Notice tone="muted">{t("accountNotFound", { id: missing })}</Notice>}
+        {missing && <Notice tone="muted">{t("accountNotFound", { id: p.text(missing) })}</Notice>}
         <div class="config-source-search actions">
           <input
             type="search"
@@ -161,8 +163,8 @@ export function ConfigSource(props: ConfigSourceProps) {
           }}
         />
       </Card>
-      {error && <Notice tone="danger">{error}</Notice>}
-      {message && <Notice tone="ok">{message}</Notice>}
+      {error && <Notice tone="danger">{p.text(error)}</Notice>}
+      {message && <Notice tone="ok">{p.text(message)}</Notice>}
       <div class="actions">
         <Button disabled={busy} onClick={validate}>
           {t("validate")}
