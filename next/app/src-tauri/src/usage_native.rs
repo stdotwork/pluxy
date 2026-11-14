@@ -26,6 +26,10 @@
 //!   counts once), a repeated sync reads nothing, and after a session grows and another is rewound
 //!   (truncated) each is read and counted once; no prompt canary of the Codex home reaches a
 //!   report, the hub's store or (by run.ts) the app's output;
+//! - the Oh My Pi parser (pluxy/usage-omp, a real package), the same way on a home written by hand in
+//!   the run's HOME with both of its default roots (one session in both counts once, from the newer
+//!   copy); then disabled, a session written meanwhile is never scanned: the report is unchanged,
+//!   shows the source archived, and no parser process was started;
 //! - the hub's own page: opened, it starts the hub;
 //! - idle: once nothing uses them, no hub, parser or peer process is left.
 //!
@@ -259,6 +263,105 @@ fn folder_text(dir: &Path) -> Result<String, String> {
     }
     require(files > 0, format!("{} holds no file", dir.display()))?;
     Ok(text)
+}
+
+/// The check of a session parser that is a real package, installed from the curated registry, its
+/// default roots in the run's HOME, as `expect.json` section `spec` gives it (its ID, the writes to
+/// make, the canaries, each sync's counts and the reports, all by hand): the first sync and a repeated
+/// one, an append, a sync after it and one more that changes nothing; no canary in a report or in the
+/// hub's store; no process left when idle; then the parser disabled, a session added, and a sync that
+/// schedules nothing, leaves the report as it was with the source archived and starts no process.
+fn session_source(
+    app: &AppHandle,
+    main: &Webview,
+    expect: &Value,
+    spec: &Value,
+    hub: &str,
+    program: &dyn Fn(&str) -> PathBuf,
+) -> Result<(), String> {
+    let id = spec["id"].as_str().unwrap_or_default().to_string();
+    let canaries: Vec<String> = spec["canaries"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|c| c.as_str().map(String::from))
+        .collect();
+    let mut page = Page::open(app, main, hub)?;
+    install(
+        main,
+        "curated",
+        &id,
+        expect["versions"][&id].as_str().unwrap_or_default(),
+    )?;
+    require(
+        program(&id).is_file(),
+        format!("{} is not installed", program(&id).display()),
+    )?;
+    enable(app, main, &id)?;
+    let mut seen = String::new();
+    let mut check =
+        |page: &mut Page, sync: &str, cases: &Value, what: &str| -> Result<(), String> {
+            let s = synced(page, hub, true)?;
+            require(
+                counts(&s, &id) == spec["syncs"][sync],
+                format!("the {what} sync of {id}: {s}"),
+            )?;
+            for case in cases.as_array().into_iter().flatten() {
+                let got = unasked(page, hub, "report", case["input"].clone())?;
+                seen.push_str(&got.to_string());
+                matches(&got, &case["output"], &format!("{id} {what}"))?;
+            }
+            Ok(())
+        };
+    check(&mut page, "first", &spec["reports"]["first"], "first")?;
+    check(&mut page, "repeat", &spec["reports"]["first"], "repeated")?;
+    write_lines(&spec["writes"]["append"])?;
+    check(&mut page, "after", &spec["reports"]["after"], "appended")?;
+    check(&mut page, "repeat", &spec["reports"]["after"], "last")?;
+    // No prompt, reply, title, folder or key text in any report or in the hub's store.
+    no_canary(&canaries, &seen, "a report")?;
+    let data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("tools")
+        .join(hub);
+    // The same search finds what the store does hold (a positive control).
+    let stored = folder_text(&data)?;
+    let model = spec["model"].as_str().unwrap_or_default();
+    require(
+        stored.contains(model) && seen.contains(model),
+        format!("the store and the reports should hold the model {model}: the canary search reads nothing"),
+    )?;
+    no_canary(&canaries, &stored, "the hub's store")?;
+    wait_for(&format!("{id} to stop when idle"), || {
+        processes(&program(&id)).is_empty().then_some(())
+    })?;
+    // Disabled: a session written now is not scanned, and the parser is not started.
+    ok(main, "device_enable", json!({"id": id, "enabled": false}))?;
+    write_lines(&spec["writes"]["add"])?;
+    let s = synced(&mut page, hub, true)?;
+    require(
+        counts(&s, &id).is_null(),
+        format!("a sync with {id} disabled should schedule nothing for it: {s}"),
+    )?;
+    let mut later = String::new();
+    for case in spec["reports"]["disabled"].as_array().into_iter().flatten() {
+        let got = unasked(&mut page, hub, "report", case["input"].clone())?;
+        later.push_str(&got.to_string());
+        matches(&got, &case["output"], &format!("{id} disabled"))?;
+    }
+    no_canary(&canaries, &later, "a report of the disabled source")?;
+    no_canary(
+        &canaries,
+        &folder_text(&data)?,
+        "the hub's store after the disable",
+    )?;
+    require(
+        processes(&program(&id)).is_empty(),
+        format!("the disabled {id} was started"),
+    )?;
+    page.close(main)
 }
 
 pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<(), String> {
@@ -581,6 +684,12 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         })(),
     )?;
     page.close(main)?;
+
+    // ---- the Oh My Pi parser: a real package, its default roots in the run's HOME.
+    step(
+        "omp",
+        session_source(app, main, &expect, &expect["omp"], &hub, &program),
+    )?;
 
     // ---- the hub's own page starts it.
     step(

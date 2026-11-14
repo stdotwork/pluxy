@@ -37,7 +37,10 @@
 //!   nothing but the call) and answers with the host's answer (with `again`, it asks a second
 //!   time for the same call, and answers that answer as `again` too);
 //! - `runtime` by sending a `runtime` frame with the input's `op` and `runtime` for the call (or,
-//!   for op `spawn`, a spawn request for that call), and answering with the host's answer.
+//!   for op `spawn`, a spawn request for that call), and answering with the host's answer;
+//! - `serve`, the client-key check's agent (`src/client_key_native.rs`): sends `GET /v1/models` to
+//!   the core at `base` (plain HTTP) with the secret delivered for `key` as its bearer token, writes
+//!   the status core answered to `out` and answers with it and its process ID.
 //!
 //! Started with `AGENT` as its first argument it is the spawn check's agent instead (`agent`).
 //!
@@ -360,6 +363,33 @@ fn sha256_hex(b: &[u8]) -> String {
 fn delivered(f: &Value, field: &str) -> Option<String> {
     let reference = f["input"][field].as_str()?;
     f["secrets"][reference].as_str().map(String::from)
+}
+
+/// The client-key check's agent: the status of `GET <base>/v1/models` with key as its bearer
+/// token, over plain HTTP to a loopback core; 0 when core could not be asked.
+fn serve(base: &str, key: &str) -> u16 {
+    use std::io::BufRead;
+    let Some(addr) = base.strip_prefix("http://") else {
+        return 0;
+    };
+    let Ok(mut s) = std::net::TcpStream::connect(addr) else {
+        return 0;
+    };
+    let _ = s.set_read_timeout(Some(Duration::from_secs(10)));
+    let req = format!(
+        "GET /v1/models HTTP/1.1\r\nHost: {addr}\r\nAuthorization: Bearer {key}\r\nConnection: close\r\n\r\n"
+    );
+    if s.write_all(req.as_bytes()).is_err() {
+        return 0;
+    }
+    let mut line = String::new();
+    if io::BufReader::new(s).read_line(&mut line).is_err() {
+        return 0;
+    }
+    line.split(' ')
+        .nth(1)
+        .and_then(|c| c.parse().ok())
+        .unwrap_or(0)
 }
 
 /// The vault check's writer: see the module's `apply`.
@@ -976,6 +1006,23 @@ pub fn main() -> ! {
                                 {"answer": answer, "pid": std::process::id()}}),
                         );
                     }
+                    "serve" => match delivered(&f, "key") {
+                        Some(key) => {
+                            let status = serve(f["input"]["base"].as_str().unwrap_or(""), &key);
+                            if let Some(out) = f["input"]["out"].as_str() {
+                                let _ = std::fs::write(out, status.to_string());
+                            }
+                            write_frame(
+                                &mut output,
+                                &json!({"type": "result", "id": id, "output":
+                                    {"status": status, "pid": std::process::id(), "chain": chain}}),
+                            )
+                        }
+                        None => write_frame(
+                            &mut output,
+                            &error(&id, "invalid_request", "no secret was delivered for key"),
+                        ),
+                    },
                     "crash" => std::process::exit(3),
                     "flood" => {
                         for i in 0..2000 {

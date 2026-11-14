@@ -17,6 +17,8 @@ pub static PLUXY_TEST_BUILD: [u8; 31] = *b"PLUXY_TEST_BUILD_DO_NOT_RELEASE";
 pub mod access;
 pub mod artifact;
 pub mod client;
+#[cfg(target_os = "linux")]
+mod client_keys;
 mod command_names;
 #[cfg(target_os = "linux")]
 pub mod confirmation;
@@ -2313,6 +2315,54 @@ fn vault_secret_remove(webview: Webview, id: String) -> Result<(), String> {
     }
 }
 
+/// Asks core for a new client key for native tool client, after a native confirmation, and keeps
+/// it in the vault as label; gives its secret's ID, label and binding. The key itself never
+/// passes through the window.
+#[tauri::command]
+async fn client_key_capture(
+    webview: Webview,
+    label: String,
+    client: String,
+) -> Result<Value, String> {
+    trusted(&webview)?;
+    #[cfg(target_os = "linux")]
+    {
+        let app = webview.app_handle().clone();
+        tauri::async_runtime::spawn_blocking(move || client_keys::capture(&app, &label, &client))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (label, client);
+        Err("the vault is on Linux only for now".into())
+    }
+}
+
+/// Reads an existing client key of the connected core for native tool client from native key
+/// entry and keeps it in the vault as label once core takes it; gives what client_key_capture
+/// gives.
+#[tauri::command]
+async fn client_key_enter(
+    webview: Webview,
+    label: String,
+    client: String,
+) -> Result<Value, String> {
+    trusted(&webview)?;
+    #[cfg(target_os = "linux")]
+    {
+        let app = webview.app_handle().clone();
+        tauri::async_runtime::spawn_blocking(move || client_keys::enter(&app, &label, &client))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (label, client);
+        Err("the vault is on Linux only for now".into())
+    }
+}
+
 /// The `pluxy-app:` scheme: a device page's files, served only to the page webview bound to
 /// that page's release folder, while the release is active and each file is unchanged.
 fn asset_scheme(
@@ -2597,6 +2647,8 @@ pub fn run() {
             vault_secret_add,
             vault_secrets,
             vault_secret_remove,
+            client_key_capture,
+            client_key_enter,
             window_get,
             window_set,
             window_close,
