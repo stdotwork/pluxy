@@ -38,6 +38,13 @@
 // binary is refused. Then the release command (package.ts release) must pass a clean release
 // build and a clean AppImage, and refuse the test package (renamed or not) and an AppImage holding
 // a test-feature binary.
+// In a session of its own (update.ts, update-session.ts, update_native.rs), the signed
+// application update: the test package refuses to update without its trust profile and when its
+// program says it came from a .deb, an .rpm or no package; refuses a lower feed, a bad signature
+// and a signed version other than the announced one; cancels a download; undoes an update whose
+// new version does not accept itself; updates v1 to v2, stopping and starting its own core; and
+// rolls back to v1 only through the native confirmation, refusing a version never installed and a
+// changed kept copy.
 // In managed mode it then runs the window checks (window.ts, native_window.rs) in two more
 // sessions, one with a tray watcher and one without, and the Access checks (access-suite.ts,
 // access_native.rs) in another, with the desktop portal's file chooser (GTK_USE_PORTAL=1).
@@ -94,6 +101,14 @@
 // no hub or parser process is left when idle. The Codex parser (next/app-tools/usage-codex) then reads
 // a hand-written Codex home in the run's HOME the same way, with prompt canaries kept out of every
 // report, the hub's store and the app's output.
+// The transaction library check (transactions.ts, transactions_native.rs) runs in one more
+// session with that build: the library's fixture writer (next/app-tools/lib/transactions, example
+// fixture-writer, built here) writes selected stow and chezmoi link targets after a native
+// confirmation naming the link and its target, changing only those targets and keeping each link's
+// identity and text; a retargeted link or a replaced target refuses, an edit made between preview
+// and apply is kept, clear keeps the person's later edits, restore puts the original bytes back, a
+// failed second write rolls the first back, and after a crash the next start rolls back or commits
+// from disk, never over a competing edit.
 // The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
@@ -137,6 +152,8 @@ import { buildRoutingFixtures } from "./routing";
 import { missingPrerequisites } from "./services";
 import { buildSessionsFixtures } from "./sessions";
 import { buildSpawnFixtures } from "./spawn";
+import { buildTransactionsFixtures } from "./transactions";
+import { runUpdate } from "./update";
 import { buildUsageFixtures } from "./usage";
 import { buildVaultFixtures } from "./vault";
 
@@ -164,6 +181,10 @@ interface TestPackage {
   appimage: string;
   /** The temporary updater public key compiled into it (no private key is kept). */
   updater_pubkey: string;
+  /** Its program as built, before the bundler patched its bundle type. */
+  binary: string;
+  /** The same package at a newer version, and its signature by the updater key. */
+  update: { appimage: string; version: string; signature: string };
 }
 /** Which app a run starts, and what its updater gate must say. */
 interface Artifact {
@@ -565,7 +586,8 @@ interface Rotation {
  * checks; routing: only the cross-package routing check; vault: only the vault check. core:
  * the session runs only the core steps, against that core source. release: the app starts with
  * that release installed and selected. spawnCheck: only the spawn check. reader: only the session
- * reader check. launcherCheck: only the launcher check. */
+ * reader check. launcherCheck: only the launcher check. transactions: only the transaction
+ * library check. */
 async function runApp(
   mode: Mode,
   artifact: Artifact,
@@ -588,6 +610,7 @@ async function runApp(
   reader = false,
   usage = false,
   launcherCheck = false,
+  transactions = false,
 ): Promise<string[]> {
   const { label, bin } = artifact;
   const root = rotation.root ?? mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
@@ -669,6 +692,7 @@ async function runApp(
       !spawnCheck &&
       !launcherCheck &&
       !reader &&
+      !transactions &&
       !usage &&
       suite !== "access"
         ? join(root, "device")
@@ -806,6 +830,19 @@ async function runApp(
         JSON.stringify({ version: 0, registries: f.registries }),
       );
     }
+    // The transaction library check's signed fixture writer, its registry and trust profile, and
+    // the stow and chezmoi config files.
+    const transactionsDir = transactions ? join(root, "transactions") : undefined;
+    if (transactionsDir) {
+      mkdirSync(transactionsDir);
+      const f = buildTransactionsFixtures(transactionsDir, dirs.home, appTools, fixtureWriter);
+      nonce = f.nonce;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
     if (curated) {
       mkdirSync(curated);
       if (device) mkdirSync(device);
@@ -833,7 +870,8 @@ async function runApp(
       !spawnDir &&
       !sessionsDir &&
       !launcherDir &&
-      !usageDir
+      !usageDir &&
+      !transactionsDir
     ) {
       try {
         nonce = /^nonce=([0-9a-f]{64})$/m.exec(run(probe, ["trust-marker", dirs.home], app))?.[1] ?? "";
@@ -894,6 +932,7 @@ async function runApp(
       // The probe clicks the tray's Start… items through the real watcher's dbusmenu.
       ...(launcherDir ? { PLUXY_APP_TEST_LAUNCHER: launcherDir, PLUXY_APP_TEST_PROBE: probe } : {}),
       ...(sessionsDir ? { PLUXY_APP_TEST_SESSIONS: sessionsDir } : {}),
+      ...(transactionsDir ? { PLUXY_APP_TEST_TRANSACTIONS: transactionsDir } : {}),
       ...(usageDir ? { PLUXY_APP_TEST_USAGE: usageDir } : {}),
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: artifact.identifier } : {}),
       ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
@@ -1189,6 +1228,16 @@ async function runApp(
       return problems;
     }
 
+    if (transactions) {
+      const r = steps.get("transactions") as { passed?: boolean } | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(r?.passed === true, `the transaction library check did not complete: ${failure}`);
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} transactions ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode}: transactions ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
     if (usage) {
       const r = steps.get("usage") as { passed?: boolean } | undefined;
       const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
@@ -1425,7 +1474,7 @@ async function runApp(
 
     check(steps.get("confirmations")?.passed === true, "native confirmation checks did not complete");
 
-    checkRelease(steps.get("release"), feed, browserLog, check);
+    checkRelease(steps.get("release"), feed, browserLog, artifact.gate, check);
     console.log(`${mode} release ${JSON.stringify(steps.get("release"))}`);
     const rotationStep = steps.get("rotation");
     const managed = mode === "managed";
@@ -1530,6 +1579,7 @@ function checkRelease(
   release: Record<string, any> | undefined,
   feed: Feed,
   browserLog: string,
+  gate: Artifact["gate"],
   check: (ok: unknown, what: string) => void,
 ) {
   check(release, "the release feed check did not finish");
@@ -1540,6 +1590,17 @@ function checkRelease(
   const escaped = `${feed.base}/escaped/a%5B1%5D?q=x%7Cy`;
   const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   check(release.no_default === true, "release settings existed before any feed was confirmed");
+  // With 0.2.0 on the feed, Update Now is refused, on the page and by its command: a build without
+  // updater trust is not configured for it, and the fixture has no signed update for the test package.
+  const u = release.updater ?? {};
+  const why = gate === "passes" ? /no update for this system/ : /not configured/;
+  check(
+    why.test(String(u.reason)) &&
+      u.offered === false &&
+      u.call?.ok === false &&
+      why.test(String(u.call?.error)),
+    `Update Now was offered or started without ${why}: ${JSON.stringify(u)}`,
+  );
   check(release.confirmed === true, "the confirmed feed was not kept in release.json");
   check(
     same(release.stable, { app: "0.2.0", core: "1.4.0", installed_app: appVersion }),
@@ -1686,6 +1747,8 @@ const sessionsReader = join(appToolsTarget, "debug", "codex-sessions");
 /** The execution program (next/app-tools/execution) and its manifest, for the launcher check. */
 const executionManifest = join(appTools, "execution", "pluxy-extension.json");
 const executionProgram = join(appToolsTarget, "debug", "execution");
+/** The transaction library's fixture writer the transaction library check packs. */
+const fixtureWriter = join(appToolsTarget, "debug", "examples", "fixture-writer");
 let appImage = ""; // the smoke AppImage the sessions run
 const problems: string[] = [];
 
@@ -1802,6 +1865,23 @@ async function main(): Promise<number> {
         appTools,
       );
     }
+  }
+  // The transaction library's fixture writer, when the library is there.
+  if (existsSync(join(appTools, "lib", "transactions", "Cargo.toml"))) {
+    run(
+      "cargo",
+      [
+        "build",
+        "--locked",
+        "-p",
+        "pluxy-transactions",
+        "--example",
+        "fixture-writer",
+        "--target-dir",
+        appToolsTarget,
+      ],
+      appTools,
+    );
   }
   const appImageDir = tempDir("pluxy-app-native-appimage-");
   // The same test trust profile in every run; without a test package, a key no build carries.
@@ -2027,6 +2107,33 @@ async function main(): Promise<number> {
           true,
         )),
       );
+      // The transaction library check, on the same build.
+      p.push(
+        ...(await runApp(
+          "managed",
+          trusted,
+          updaterKey,
+          managed,
+          undefined,
+          false,
+          false,
+          undefined,
+          undefined,
+          {},
+          false,
+          false,
+          false,
+          false,
+          false,
+          undefined,
+          release,
+          false,
+          false,
+          false,
+          false,
+          true,
+        )),
+      );
       // The usage hub check, on the same build.
       p.push(
         ...(await runApp(
@@ -2179,6 +2286,27 @@ func main() {
       });
       if (inst.setup !== undefined) throw new SetupError(inst.setup);
       problems.push(...inst.problems.map((x) => `instances: ${x}`));
+
+      // The signed application update (update.ts, update-session.ts, update_native.rs): the
+      // test package updates itself to its signed newer version and back, and refuses the rest.
+      if (testPackage) {
+        const upd = await runUpdate({
+          packageJson: join(packageDir, "test-package.json"),
+          pubkey: testPackage.updater_pubkey,
+          probe,
+          appImage,
+          core,
+          identifier: TEST_ID,
+          timeoutMs: 900_000,
+          sessions,
+          stopSession,
+          removeRun,
+        });
+        if (upd.setup !== undefined) throw new SetupError(upd.setup);
+        problems.push(...upd.problems.map((x) => `update: ${x}`));
+      } else {
+        problems.push("update: there is no test package to update");
+      }
     } finally {
       rmSync(prepared, { recursive: true, force: true });
     }

@@ -795,6 +795,11 @@ repeat; another outcome is refused. While one is open, no other journal begins. 
 candidate is told of none, as of unknown outcomes. The window's `program_status` lists the
 package's open and recently ended journals and whether each was reconciled after a crash.
 
+Config writers use the app tools' transaction library for this
+([`lib/transactions`](../../app-tools/README.md#libtransactions)): it pins a selected file or root
+(through a stow or chezmoi link) at preview, writes only its target, keeps backups and a journal
+here, and reconciles them from disk.
+
 ## Shared manifest fixtures
 
 [`protocol/testdata/app-manifests`](../../protocol/testdata/app-manifests) holds JSON cases with

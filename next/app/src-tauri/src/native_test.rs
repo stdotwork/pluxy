@@ -23,12 +23,15 @@
 //!    `PLUXY_APP_TEST_SPAWN`, only the host's spawn service, managed runtimes and launch
 //!    environment (`spawn_native.rs`); with
 //!    `PLUXY_APP_TEST_SESSIONS`, only the read-only Codex session reader (`sessions_native.rs`);
-//!    with `PLUXY_APP_TEST_USAGE`, only the usage hub and its fixture parser (`usage_native.rs`);
-//!    with `PLUXY_APP_TEST_LAUNCHER`, only the execution program and the launcher
-//!    (`launcher_native.rs`);
+//!    with `PLUXY_APP_TEST_TRANSACTIONS`, only the transaction library's fixture writer
+//!    (`transactions_native.rs`); with `PLUXY_APP_TEST_USAGE`, only the usage hub and its
+//!    fixture parser (`usage_native.rs`); with `PLUXY_APP_TEST_LAUNCHER`, only the execution
+//!    program and the launcher (`launcher_native.rs`);
 //! 5. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!
+//! With `PLUXY_APP_TEST_UPDATE` it runs only the signed application update check
+//! (`update_native.rs`).
 //! With `PLUXY_APP_TEST_WINDOW` or `PLUXY_APP_TEST_PRIVACY` it runs that stage of the window or
 //! privacy mode checks instead (`native_window.rs`, `native_privacy.rs`).
 //! Before these, as the app starts, it reports its updater gate (`updater_gate`).
@@ -80,6 +83,9 @@ mod spawn;
 #[cfg(target_os = "linux")]
 #[path = "swap_native.rs"]
 mod swap;
+#[cfg(target_os = "linux")]
+#[path = "transactions_native.rs"]
+mod transactions;
 #[cfg(target_os = "linux")]
 #[path = "usage_native.rs"]
 mod usage;
@@ -134,6 +140,8 @@ const ACTING: &[&str] = &[
     "confirmation_settings",
     "management_key_rotate",
     "device_install_file",
+    "app_update_start",
+    "app_update_cancel",
 ];
 
 #[path = "key_entry_test.rs"]
@@ -423,6 +431,11 @@ fn run(app: &AppHandle) -> Result<(), String> {
     wait_for("the window's shell", || {
         eval(&main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true)
     })?;
+    // The signed application update (update_native.rs), in a session of its own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_UPDATE") {
+        return crate::update_native::run(app, &main, dir.into());
+    }
     // Signed native-tier admission (admission_native.rs), in a session of its own.
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_ADMISSION") {
@@ -471,6 +484,14 @@ fn run(app: &AppHandle) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_SESSIONS") {
         sessions::run(app, &main, dir.into())?;
+        log("quit", json!({}));
+        crate::quit(app);
+        return Ok(());
+    }
+    // The transaction library's fixture writer (transactions_native.rs), in a session of its own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_TRANSACTIONS") {
+        transactions::run(app, &main, dir.into())?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());
