@@ -157,6 +157,59 @@ fn without_a_request_id_the_key_is_the_message_and_its_session() {
 }
 
 #[test]
+fn one_message_id_with_two_request_ids_is_two_messages() {
+    // Two responses under one message ID (a gateway reusing it) with their own request IDs: 10
+    // (two blocks) and 7, each its own event, as their keys are.
+    let got = parse(&[
+        block(NOON, "msg_1", Some("req_1"), "s", [10, 0, 0, 0]),
+        block(NOON, "msg_1", Some("req_1"), "s", [10, 0, 0, 0]),
+        block(NOON, "msg_1", Some("req_2"), "s", [7, 0, 0, 0]),
+    ]);
+    let got: Vec<(u64, Option<String>)> =
+        got.out.iter().map(|o| (o.3.input, o.2.clone())).collect();
+    assert_eq!(
+        got,
+        vec![
+            (10, Some(hash(&["request", "msg_1", "req_1"]))),
+            (7, Some(hash(&["request", "msg_1", "req_2"]))),
+        ]
+    );
+}
+
+#[test]
+fn an_empty_message_id_is_none() {
+    // Each line counts as it is (4 and 4), with no key.
+    let got = parse(&[
+        block(NOON, "", None, "s", [4, 0, 0, 0]),
+        block(NOON, "", None, "s", [4, 0, 0, 0]),
+    ]);
+    let got: Vec<(u64, Option<String>)> =
+        got.out.iter().map(|o| (o.3.input, o.2.clone())).collect();
+    assert_eq!(got, vec![(4, None), (4, None)]);
+}
+
+#[test]
+fn a_file_of_more_messages_than_the_hub_keeps_fails() {
+    let line = |i: usize| {
+        format!("{{\"timestamp\":\"{NOON}\",\"message\":{{\"id\":\"m{i}\",\"usage\":{{\"input_tokens\":1}}}}}}\n")
+    };
+    let text: String = (0..=transcript::MAX_MESSAGES).map(line).collect();
+    let mut got = Got::default();
+    let err = transcript::parse(&mut LineReader::new(text.as_bytes()), &mut got).unwrap_err();
+    assert!(
+        err.message.contains("more than 100000 messages"),
+        "{}",
+        err.message
+    );
+    assert!(got.out.is_empty());
+    // A message's lines repeated past the cap are still one message.
+    let text: String = (0..=transcript::MAX_MESSAGES).map(|_| line(0)).collect();
+    let mut got = Got::default();
+    transcript::parse(&mut LineReader::new(text.as_bytes()), &mut got).unwrap();
+    assert_eq!(got.out.len(), 1);
+}
+
+#[test]
 fn messages_come_out_in_the_order_they_first_appear_at_their_last_lines_time() {
     let got = parse(&[
         block(NOON, "msg_a", Some("r"), "s", [1, 0, 0, 0]),

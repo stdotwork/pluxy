@@ -5,15 +5,18 @@
 //!   under the field names the shared readers know (`pluxy_usage::fields`); its model is the
 //!   message's (or the line's) `model`, and `<synthetic>` (Claude Code's own placeholder) is none;
 //! - Claude Code writes one line per content block of a response, each with the response's
-//!   `message.id` and usage, so the lines with one message ID are one message: the last line
-//!   wins, at its own time;
+//!   `message.id` (and `requestId`) and usage, so the lines with one message ID (and request ID,
+//!   when they have one) are one message: the last line wins, at its own time; an empty message
+//!   ID is none;
 //! - a message is an event, counted once across files by a key (schema 2): a hash of its ID and
 //!   its `requestId`, else of its ID and its `sessionId`; with neither it is a plain row of the
 //!   file;
 //! - a line with usage and no message ID counts as it is, and so does each item of a line that is
 //!   a list (or holds a `messages` list);
 //! - every message or line counted is one sample; a time is the line's `timestamp` (a line with
-//!   no readable time is skipped; the old reader used the file's modification time).
+//!   no readable time is skipped; the old reader used the file's modification time);
+//! - a file's messages are held, one small record each, until the file is read; a file of more
+//!   than `MAX_MESSAGES` fails (the hub keeps no more rows of one file).
 //!
 //! Only counters, a model name, a time and the IDs hashed into a key are read. A prompt, a reply,
 //! a folder or a raw ID is never kept or sent.
@@ -29,6 +32,8 @@ use std::collections::HashMap;
 const CANCEL_EVERY: usize = 2048;
 /// The model Claude Code names its own placeholder messages with.
 const SYNTHETIC: &str = "<synthetic>";
+/// Distinct messages a file may have: the hub's rows of one file at most.
+pub const MAX_MESSAGES: usize = 100_000;
 
 /// Where the rows go: a usage sink, or a list in a test.
 pub trait Out {
@@ -65,7 +70,8 @@ struct Message {
 /// now and then at whether the job was cancelled.
 pub fn parse(lines: &mut LineReader, out: &mut dyn Out) -> Result<(), Error> {
     let mut messages: Vec<Message> = Vec::new();
-    let mut by_id: HashMap<String, usize> = HashMap::new();
+    // A message is its ID with its request ID, when it has one, as its key is.
+    let mut by_id: HashMap<(String, String), usize> = HashMap::new();
     let mut n = 0usize;
     while let Some(line) = lines.next_line()? {
         n += 1;
@@ -77,7 +83,10 @@ pub fn parse(lines: &mut LineReader, out: &mut dyn Out) -> Result<(), Error> {
         };
         if let (Some((tokens, model)), Some(id)) = (
             usage(&value),
-            value.pointer("/message/id").and_then(Value::as_str),
+            value
+                .pointer("/message/id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty()),
         ) {
             let message = Message {
                 time: timestamp(&value),
@@ -85,10 +94,19 @@ pub fn parse(lines: &mut LineReader, out: &mut dyn Out) -> Result<(), Error> {
                 tokens,
                 key: key(&value, id),
             };
-            match by_id.get(id) {
+            let at = (
+                id.to_string(),
+                field(&value, "requestId").unwrap_or_default().to_string(),
+            );
+            match by_id.get(&at) {
                 Some(&i) => messages[i] = message,
+                None if messages.len() == MAX_MESSAGES => {
+                    return Err(Error::internal(format!(
+                        "more than {MAX_MESSAGES} messages, more rows than the hub keeps of a file"
+                    )));
+                }
                 None => {
-                    by_id.insert(id.to_string(), messages.len());
+                    by_id.insert(at, messages.len());
                     messages.push(message);
                 }
             }
@@ -139,17 +157,19 @@ fn usage(value: &Value) -> Option<(Tokens, String)> {
     Some((tokens, model))
 }
 
+/// A line's string field name, when it is not empty.
+fn field<'a>(value: &'a Value, name: &str) -> Option<&'a str> {
+    value
+        .get(name)
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+}
+
 /// A message's key: the hash of its ID and request ID, else of its ID and session ID.
 fn key(value: &Value, id: &str) -> Option<String> {
-    let field = |name: &str| {
-        value
-            .get(name)
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-    };
-    if let Some(request) = field("requestId") {
+    if let Some(request) = field(value, "requestId") {
         Some(hash(&["request", id, request]))
     } else {
-        field("sessionId").map(|session| hash(&["session", id, session]))
+        field(value, "sessionId").map(|session| hash(&["session", id, session]))
     }
 }

@@ -44,7 +44,8 @@ most 8 folders deep, newest first, at most 20,000), finds a named file again onl
 (`locate`), reads it and sends its rows in parts within the batch limit (`Sink`). A parser of a
 format read whole (`parse`) gets a file of at most 16 MiB; a parser of a line-based format sets
 `streamed` and gets the file's lines one at a time (`parse_lines`, `LineReader`) whatever its size,
-a line over 16 MiB being skipped and counted. A parser at schema 2 sends a record that more than one
+a line over 16 MiB being skipped and counted: the reader holds one line, and what the parser keeps
+of a file meanwhile is its own (usage-claude keeps one small record per message). A parser at schema 2 sends a record that more than one
 file can hold as one keyed event (`Sink::event`). `fields` reads the fields usage records share, by
 the old desktop app's rules: token counters under the names agents use, a model name and a time.
 The schemas are in [`agent-usage/README.md`](agent-usage/README.md#schema-1).
@@ -96,7 +97,10 @@ reply, folder name or raw message, request or session ID leaves the parser. It n
 Claude Code file.
 
 A transcript's file ID is its path below the root with the first folder, Claude Code's project
-folder (named after the project's working folder), replaced by a hash of its name. Each file is
+folder (named after the project's working folder), replaced by a hash of its name. A custom root
+should name a `projects` folder (as `~/.claude/projects` is), so that the hashed folder is the
+project's: under a root above it, the project folder's name would be kept in the file ID in the
+hub's store (never in a report). Each file is
 read whole, line by line, when it changes, by the old desktop app's rules:
 
 - a line's usage is its `message.usage` (with no `message` object, its own `usage`), its model the
@@ -104,6 +108,8 @@ read whole, line by line, when it changes, by the old desktop app's rules:
 - Claude Code writes one line per content block of a response, each repeating the response's
   `message.id` and usage, so the lines of one message ID are one message: the last one wins, at its
   own time;
+- the lines of one message ID and request ID (or one message ID, when a line has no request ID)
+  are one message; an empty message ID is none;
 - a message is a keyed event: its key is a hash of its message ID and `requestId`, else of its
   message ID and `sessionId`, so a response that `/branch` or `--fork-session` copies into another
   transcript counts once; with neither ID it counts in its file only;
@@ -111,7 +117,9 @@ read whole, line by line, when it changes, by the old desktop app's rules:
   list (or holds a `messages` list);
 - the total is input + output + cache write + cache read unless the usage gives its own; every
   message is one sample; a line with no readable `timestamp` is skipped (the old reader used the
-  file's modification time).
+  file's modification time);
+- the parser holds one small record per message of a file until the file is read: a file of more
+  than 100,000 messages (more rows than the hub keeps of one file) fails, and keeps its old rows.
 
 Two responses that share a message ID and have no request ID (a gateway that reuses one ID) are
 one message within a file, as they were in the old app.
