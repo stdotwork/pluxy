@@ -346,7 +346,20 @@ impl Sync {
                         source.failed += unread(&files, &done, &staged);
                         source.error = Some(why());
                     }
-                    Kind::Read { .. } => {}
+                    // A job that says done without some of its files: they count as failed too.
+                    Kind::Read {
+                        files,
+                        done,
+                        staged,
+                    } => {
+                        let missed = unread(&files, &done, &staged);
+                        if missed > 0 {
+                            source.failed += missed;
+                            source.error = Some(format!(
+                                "the parser ended its job without reading {missed} of its files"
+                            ));
+                        }
+                    }
                 }
                 Ok(json!({}))
             }

@@ -50,8 +50,8 @@ A sync, for each parser registered now:
 A sync always ends. A job the hub hears nothing from for 60 seconds (the host waits at most 10 for
 a delivery, and delivers a job's end once, best-effort) is cancelled and counted as ended, with the
 reason shown on its source: a `files` job's source fails, and a `read` job's unfinished files keep
-their old rows and count as failed. A `read` job that ends cancelled or failed counts its unfinished
-files as failed the same way; the sync still ends done, and the next one reads those files again. A source whose file list cannot be stored when its `files` job ends fails too.
+their old rows and count as failed. A `read` job that ends cancelled or failed, or done without some of
+its files, counts its unfinished files as failed the same way; the sync still ends done, and the next one reads those files again. A source whose file list cannot be stored when its `files` job ends fails too.
 
 A file no longer listed is marked gone; its rows stay. A sync lives in the hub's memory: if the hub
 stops during one, the next sync starts over and reads only the files not yet stored.

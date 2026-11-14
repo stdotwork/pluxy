@@ -596,7 +596,7 @@ fn a_file_refused_before_its_last_part_fails_once_and_its_job_goes_on() {
         &batch(part("e", 5, 0, false, json!([row(0, "m", 5)]))),
     )
     .unwrap();
-    // The refused files' later parts (not in order, even) and "e"'s error are taken.
+    // The refused files' later parts (interleaved across files) and "e"'s error are taken.
     for (f, n, last) in [("a", 1, true), ("big", 1, false), ("big", 2, true)] {
         sync.ingest(
             &mut s,
@@ -675,8 +675,8 @@ fn read_job_midway(sync: &mut Sync, s: &mut Store, host: &FakeHost) -> String {
 }
 
 #[test]
-fn a_read_job_that_ends_failed_or_cancelled_counts_its_unread_files_as_failed() {
-    for end in ["failed", "cancelled"] {
+fn a_read_job_that_ends_without_all_its_files_counts_the_unread_ones_as_failed() {
+    for end in ["failed", "cancelled", "done"] {
         let (mut s, d) = store(&format!("unread-{end}"));
         let host = FakeHost::new(&["p/a"]);
         let mut sync = Sync::new();
@@ -692,7 +692,11 @@ fn a_read_job_that_ends_failed_or_cancelled_counts_its_unread_files_as_failed() 
                 &json!(1),
                 &json!(2),
                 &json!("done"),
-                &json!(format!("the job was {end}"))
+                &json!(if end == "done" {
+                    "the parser ended its job without reading 2 of its files".to_string()
+                } else {
+                    format!("the job was {end}")
+                })
             ),
             "{end}"
         );
