@@ -19,7 +19,8 @@
 //!    with `PLUXY_APP_TEST_ADMISSION`, a session checks only signed native-tier admission
 //!    (`admission_native.rs`) and quits; with `PLUXY_APP_TEST_PROGRAM`, only the program host
 //!    (`program_native.rs`, then `swap_native.rs`); with `PLUXY_APP_TEST_VAULT`, only the vault,
-//!    secret delivery and references and journal recovery (`vault_native.rs`); with
+//!    secret delivery and references and journal recovery (`vault_native.rs`), then native
+//!    client-key capture (`client_key_native.rs`); with
 //!    `PLUXY_APP_TEST_SPAWN`, only the host's spawn service, managed runtimes and launch
 //!    environment (`spawn_native.rs`); with
 //!    `PLUXY_APP_TEST_SESSIONS`, only the read-only Codex session reader (`sessions_native.rs`);
@@ -29,6 +30,8 @@
 //! 5. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!
+//! With `PLUXY_APP_TEST_UPDATE` it runs only the signed application update check
+//! (`update_native.rs`).
 //! With `PLUXY_APP_TEST_WINDOW` or `PLUXY_APP_TEST_PRIVACY` it runs that stage of the window or
 //! privacy mode checks instead (`native_window.rs`, `native_privacy.rs`).
 //! Before these, as the app starts, it reports its updater gate (`updater_gate`).
@@ -52,6 +55,9 @@ mod access;
 #[cfg(target_os = "linux")]
 #[path = "admission_native.rs"]
 mod admission;
+#[cfg(target_os = "linux")]
+#[path = "client_key_native.rs"]
+mod client_key;
 #[cfg(target_os = "linux")]
 #[path = "native_core.rs"]
 mod core_updates;
@@ -134,6 +140,8 @@ const ACTING: &[&str] = &[
     "confirmation_settings",
     "management_key_rotate",
     "device_install_file",
+    "app_update_start",
+    "app_update_cancel",
 ];
 
 #[path = "key_entry_test.rs"]
@@ -423,6 +431,11 @@ fn run(app: &AppHandle) -> Result<(), String> {
     wait_for("the window's shell", || {
         eval(&main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true)
     })?;
+    // The signed application update (update_native.rs), in a session of its own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_UPDATE") {
+        return crate::update_native::run(app, &main, dir.into());
+    }
     // Signed native-tier admission (admission_native.rs), in a session of its own.
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_ADMISSION") {
@@ -445,7 +458,9 @@ fn run(app: &AppHandle) -> Result<(), String> {
     // session of its own.
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_VAULT") {
-        vault::run(app, &main, dir.into())?;
+        vault::run(app, &main, dir.clone().into())?;
+        // Native one-time client-key capture (client_key_native.rs), with the same tools.
+        client_key::run(app, &main, dir.into())?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());

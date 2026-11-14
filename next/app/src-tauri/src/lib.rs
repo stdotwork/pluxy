@@ -17,6 +17,8 @@ pub static PLUXY_TEST_BUILD: [u8; 31] = *b"PLUXY_TEST_BUILD_DO_NOT_RELEASE";
 pub mod access;
 pub mod artifact;
 pub mod client;
+#[cfg(target_os = "linux")]
+mod client_keys;
 mod command_names;
 #[cfg(target_os = "linux")]
 pub mod confirmation;
@@ -49,6 +51,10 @@ pub mod route;
 pub mod spawn;
 mod startup;
 pub mod trust;
+#[cfg(all(target_os = "linux", feature = "native-test"))]
+mod update_native;
+#[cfg(unix)]
+mod updater;
 mod updates;
 #[cfg(target_os = "linux")]
 pub mod vault;
@@ -135,6 +141,9 @@ struct App {
     key_entry_open: AtomicBool,
     key_entry_after: Mutex<Option<std::time::Instant>>,
     rotation_open: AtomicBool,
+    /// The app's own update (`updater.rs`).
+    #[cfg(unix)]
+    updater: updater::State,
 }
 
 /// Every command checks its caller too: the capability already allows only the window.
@@ -2446,6 +2455,54 @@ fn vault_secret_remove(webview: Webview, id: String) -> Result<(), String> {
     }
 }
 
+/// Asks core for a new client key for native tool client, after a native confirmation, and keeps
+/// it in the vault as label; gives its secret's ID, label and binding. The key itself never
+/// passes through the window.
+#[tauri::command]
+async fn client_key_capture(
+    webview: Webview,
+    label: String,
+    client: String,
+) -> Result<Value, String> {
+    trusted(&webview)?;
+    #[cfg(target_os = "linux")]
+    {
+        let app = webview.app_handle().clone();
+        tauri::async_runtime::spawn_blocking(move || client_keys::capture(&app, &label, &client))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (label, client);
+        Err("the vault is on Linux only for now".into())
+    }
+}
+
+/// Reads an existing client key of the connected core for native tool client from native key
+/// entry and keeps it in the vault as label once core takes it; gives what client_key_capture
+/// gives.
+#[tauri::command]
+async fn client_key_enter(
+    webview: Webview,
+    label: String,
+    client: String,
+) -> Result<Value, String> {
+    trusted(&webview)?;
+    #[cfg(target_os = "linux")]
+    {
+        let app = webview.app_handle().clone();
+        tauri::async_runtime::spawn_blocking(move || client_keys::enter(&app, &label, &client))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (label, client);
+        Err("the vault is on Linux only for now".into())
+    }
+}
+
 /// The `pluxy-app:` scheme: a device page's files, served only to the page webview bound to
 /// that page's release folder, while the release is active and each file is unchanged.
 fn asset_scheme(
@@ -2665,7 +2722,23 @@ pub fn run() {
     std::hint::black_box(&PLUXY_BUILD_RECEIPT);
     #[cfg(any(feature = "native-test", feature = "artifact-test-trust"))]
     std::hint::black_box(&PLUXY_TEST_BUILD);
-    let app = tauri::Builder::default()
+    let context = tauri::generate_context!();
+    // The updater plugin exists only when the updater gate passes, before anything else runs: a
+    // build without updater trust never loads it.
+    #[cfg(unix)]
+    let gate = trust::updater_gate(
+        context.config(),
+        std::path::Path::new(&std::env::var_os("HOME").unwrap_or_default()),
+    );
+    let builder = tauri::Builder::default();
+    #[cfg(unix)]
+    let builder = match &gate {
+        Ok(key) => builder.plugin(tauri_plugin_updater::Builder::new().pubkey(key).build()),
+        Err(_) => builder,
+    };
+    #[cfg(unix)]
+    let updater_plugin = gate.map(|_| ());
+    let app = builder
         .invoke_handler(tauri::generate_handler![
             startup_get,
             startup_set,
@@ -2720,16 +2793,26 @@ pub fn run() {
             vault_secret_add,
             vault_secrets,
             vault_secret_remove,
+            client_key_capture,
+            client_key_enter,
             window_get,
             window_set,
             window_close,
             privacy_get,
             privacy_set,
+            #[cfg(unix)]
+            updater::app_update_get,
+            #[cfg(unix)]
+            updater::app_update_start,
+            #[cfg(unix)]
+            updater::app_update_cancel,
+            #[cfg(unix)]
+            updater::app_update_rollback,
         ])
         .register_asynchronous_uri_scheme_protocol(pages::SCHEME, page_scheme)
         .register_uri_scheme_protocol(notes::SCHEME, updates::notes_scheme)
         .register_asynchronous_uri_scheme_protocol(device::ASSET_SCHEME, asset_scheme)
-        .setup(|app| {
+        .setup(move |app| {
             // First, before the core, the tray or any webview: one app per profile. A later launch
             // has the first show its window, and ends here, having started nothing.
             let instance =
@@ -2887,6 +2970,8 @@ pub fn run() {
                 key_entry_open: AtomicBool::new(false),
                 key_entry_after: Mutex::new(None),
                 rotation_open: AtomicBool::new(false),
+                #[cfg(unix)]
+                updater: updater::State::new(updater_plugin.clone()),
             });
             let handle = app.handle().clone();
             // Tools' own calls of other packages' operations go through the router.
@@ -2961,6 +3046,11 @@ pub fn run() {
             if !silent || !usable_tray {
                 open_window(&handle)?;
             }
+            // A version an update installed accepts itself, which the earlier one waits for.
+            #[cfg(unix)]
+            updater::accept(&handle);
+            #[cfg(unix)]
+            updater::record_started_from(&handle);
             #[cfg(feature = "native-test")]
             native_test::start(handle);
             Ok(())
@@ -3001,7 +3091,7 @@ pub fn run() {
                 _ => {}
             }
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("building the app");
     app.run(|app, event| match event {
         RunEvent::ExitRequested {
@@ -3141,10 +3231,17 @@ mod tests {
     fn the_command_list_matches_the_handler() {
         let src = include_str!("lib.rs");
         let start = src.find("generate_handler![").unwrap();
-        let end = start + src[start..].find(']').unwrap();
+        // The list ends at `])`: a `#[cfg(...)]` in it has a `]` of its own.
+        let end = start + src[start..].find("])").unwrap();
         let mut handled: Vec<&str> = src[start + "generate_handler![".len()..end]
             .split(',')
-            .map(|s| s.trim().trim_start_matches("updates::"))
+            .map(|s| {
+                let s = s.trim();
+                // A command built only on some systems: `#[cfg(unix)] module::name`.
+                let s = s.strip_prefix("#[cfg(unix)]").unwrap_or(s).trim();
+                s.trim_start_matches("updates::")
+                    .trim_start_matches("updater::")
+            })
             .filter(|s| !s.is_empty())
             .collect();
         let mut listed = COMMANDS.to_vec();
