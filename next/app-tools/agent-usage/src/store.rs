@@ -9,8 +9,9 @@ use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-/// The store's own format version, in `meta`: 2 adds keyed events. A store of format 1 is moved to
-/// 2 in place when opened, its rows kept.
+/// The store's own format version, in `meta`: 2 adds keyed events and each file's schema (the
+/// producer's, when the file was read). A store of format 1 is moved to 2 in place when opened, its
+/// rows kept and its files at schema 1.
 const FORMAT: &str = "2";
 /// The sync intervals the person may choose, in minutes (0: off), and the default.
 pub const INTERVALS: [u64; 5] = [0, 5, 15, 30, 60];
@@ -109,10 +110,12 @@ impl Store {
             .map_err(e)?;
         match format.as_deref() {
             Some(FORMAT) => {}
-            // New, or format 1: add format 2's tables and say so, in one transaction.
+            // New, or format 1: add format 2's tables and files' schema, and say so, in one
+            // transaction.
             None | Some("1") => {
                 db.execute_batch(&format!(
                     "BEGIN; {EVENTS}
+                     ALTER TABLE files ADD COLUMN schema INTEGER NOT NULL DEFAULT 1;
                      INSERT INTO meta VALUES ('format', '{FORMAT}')
                        ON CONFLICT (key) DO UPDATE SET value = '{FORMAT}';
                      COMMIT;"
@@ -274,33 +277,40 @@ impl Store {
         rows.collect::<Result<_, _>>().map_err(e)
     }
 
-    /// Source's files' revisions: file ID to (size, modification time in ns).
-    pub fn revisions(&self, source: &str) -> Result<HashMap<String, (u64, i64)>, String> {
+    /// Source's files' revisions: file ID to (size, modification time in ns, the schema it was
+    /// read at).
+    pub fn revisions(&self, source: &str) -> Result<HashMap<String, (u64, i64, u64)>, String> {
         let mut st = self
             .db
-            .prepare("SELECT file, size, mtime_ns FROM files WHERE source = ?1")
+            .prepare("SELECT file, size, mtime_ns, schema FROM files WHERE source = ?1")
             .map_err(e)?;
         let rows = st
             .query_map([source], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
-                    (r.get::<_, i64>(1)? as u64, r.get(2)?),
+                    (
+                        r.get::<_, i64>(1)? as u64,
+                        r.get(2)?,
+                        r.get::<_, i64>(3)? as u64,
+                    ),
                 ))
             })
             .map_err(e)?;
         rows.collect::<Result<_, _>>().map_err(e)
     }
 
-    /// Replaces file's rows, references and revision with rows, events, size and mtime_ns, in one
-    /// transaction: a reader sees the old rows or the new, never part of either. Each event is
+    /// Replaces file's rows, references and revision with rows, events, size, mtime_ns and the
+    /// schema they were read at, in one transaction: a reader sees the old rows or the new, never part of either. Each event is
     /// kept once per source by its key, with this read's values, and referenced by the file; an
     /// event the file referenced before and no file references now is deleted.
+    #[allow(clippy::too_many_arguments)]
     pub fn replace_file(
         &mut self,
         source: &str,
         file: &str,
         size: u64,
         mtime_ns: i64,
+        schema: u64,
         rows: &Rows,
         events: &Events,
     ) -> Result<(), String> {
@@ -311,9 +321,11 @@ impl Store {
         )
         .map_err(e)?;
         tx.execute(
-            "INSERT INTO files (source, file, size, mtime_ns, present) VALUES (?1, ?2, ?3, ?4, 1)
-             ON CONFLICT (source, file) DO UPDATE SET size = ?3, mtime_ns = ?4, present = 1",
-            params![source, file, size as i64, mtime_ns],
+            "INSERT INTO files (source, file, size, mtime_ns, present, schema)
+             VALUES (?1, ?2, ?3, ?4, 1, ?5)
+             ON CONFLICT (source, file) DO UPDATE SET size = ?3, mtime_ns = ?4, present = 1,
+               schema = ?5",
+            params![source, file, size as i64, mtime_ns, schema as i64],
         )
         .map_err(e)?;
         let id: i64 = tx

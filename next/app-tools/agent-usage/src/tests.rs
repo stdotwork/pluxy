@@ -55,6 +55,7 @@ fn a_files_rows_and_revision_are_replaced_together_or_not_at_all() {
         "f1",
         10,
         100,
+        1,
         &rows(&[(0, "m", tok(1, 1, 2)), (3600, "m", tok(2, 0, 2))]),
         &Events::new(),
     )
@@ -64,6 +65,7 @@ fn a_files_rows_and_revision_are_replaced_together_or_not_at_all() {
         "f2",
         5,
         50,
+        1,
         &rows(&[(0, "m", tok(7, 0, 7))]),
         &Events::new(),
     )
@@ -74,6 +76,7 @@ fn a_files_rows_and_revision_are_replaced_together_or_not_at_all() {
         "f1",
         20,
         200,
+        1,
         &rows(&[(0, "m", tok(4, 0, 4))]),
         &Events::new(),
     )
@@ -93,12 +96,13 @@ fn a_files_rows_and_revision_are_replaced_together_or_not_at_all() {
         "f1",
         30,
         300,
+        1,
         &rows(&[(0, "a", tok(100, 0, 100)), (0, "boom", tok(1, 0, 1))]),
         &Events::new(),
     );
     assert!(r.unwrap_err().contains("refused"));
     assert_eq!(stored(&s), want);
-    assert_eq!(s.revisions("p/a").unwrap()["f1"], (20, 200));
+    assert_eq!(s.revisions("p/a").unwrap()["f1"], (20, 200, 1));
     std::fs::remove_dir_all(d).unwrap();
 }
 
@@ -110,6 +114,7 @@ fn clear_deletes_history_and_revisions_and_keeps_settings() {
         "f1",
         10,
         100,
+        1,
         &rows(&[(0, "m", tok(1, 1, 2))]),
         &Events::new(),
     )
@@ -667,6 +672,7 @@ fn a_keyed_event_counts_once_across_files_and_goes_when_no_file_references_it() 
         "f1",
         1,
         1,
+        1,
         &rows(&[(0, "m", tok(2, 0, 2))]),
         &events(&[("k1", k1.0, k1.1, k1.2), ("k2", k2.0, k2.1, k2.2)]),
     )
@@ -674,6 +680,7 @@ fn a_keyed_event_counts_once_across_files_and_goes_when_no_file_references_it() 
     s.replace_file(
         "p/c",
         "f2",
+        1,
         1,
         1,
         &Rows::new(),
@@ -708,13 +715,14 @@ fn a_keyed_event_counts_once_across_files_and_goes_when_no_file_references_it() 
         "f1",
         2,
         2,
+        1,
         &rows(&[(0, "m", tok(2, 0, 2))]),
         &Events::new(),
     )
     .unwrap();
     assert_eq!(stored(&s), both);
     // f2 read again without them: no file references k1, k2 or k3, so they go.
-    s.replace_file("p/c", "f2", 2, 2, &Rows::new(), &Events::new())
+    s.replace_file("p/c", "f2", 2, 2, 1, &Rows::new(), &Events::new())
         .unwrap();
     assert_eq!(
         stored(&s),
@@ -728,6 +736,7 @@ fn a_keyed_event_counts_once_across_files_and_goes_when_no_file_references_it() 
         "f1",
         3,
         3,
+        1,
         &Rows::new(),
         &events(&[("k1", NOV10, "m", tok(10, 0, 10))]),
     )
@@ -737,6 +746,7 @@ fn a_keyed_event_counts_once_across_files_and_goes_when_no_file_references_it() 
         "x",
         1,
         1,
+        1,
         &Rows::new(),
         &events(&[("k1", NOV10, "m", tok(1, 0, 1))]),
     )
@@ -744,6 +754,7 @@ fn a_keyed_event_counts_once_across_files_and_goes_when_no_file_references_it() 
     s.replace_file(
         "p/d",
         "y",
+        1,
         1,
         1,
         &Rows::new(),
@@ -802,7 +813,7 @@ fn a_format_1_store_moves_to_format_2_in_place_keeping_its_rows() {
         stored(&s),
         vec![("p/a".to_string(), 3600, "m".to_string(), 6, 7)]
     );
-    assert_eq!(s.revisions("p/a").unwrap()["f1"], (10, 100));
+    assert_eq!(s.revisions("p/a").unwrap()["f1"], (10, 100, 1));
     assert_eq!(
         (s.interval().unwrap(), s.last_sync().unwrap()),
         (15, Some(99))
@@ -819,6 +830,7 @@ fn a_format_1_store_moves_to_format_2_in_place_keeping_its_rows() {
     s.replace_file(
         "p/a",
         "f2",
+        1,
         1,
         1,
         &Rows::new(),
@@ -913,6 +925,145 @@ fn a_schema_2_producers_keyed_rows_count_once_and_a_schema_1_producer_may_send_n
     std::fs::remove_dir_all(d).unwrap();
 }
 
+/// One whole sync of p/a at now: lists files, then delivers reads (file, size, rows) at schema to
+/// the read job; gives the files the read job named.
+fn sync_once(
+    sync: &mut Sync,
+    s: &mut Store,
+    host: &FakeHost,
+    now: i64,
+    files: &[(&str, u64)],
+    schema: u64,
+    reads: &[(&str, u64, Value)],
+) -> Value {
+    sync.step(s, host, true, now).unwrap();
+    let (job, _) = host.last();
+    list(sync, s, &job, "p/a", files);
+    sync.step(s, host, false, now).unwrap();
+    let (read, input) = host.last();
+    for (file, size, rows) in reads {
+        let d = delivery(
+            &read,
+            "p/a",
+            "batch",
+            part(file, *size, 0, true, rows.clone()),
+        );
+        sync.ingest(s, now, &at_schema(d, schema)).unwrap();
+    }
+    sync.ingest(s, now, &delivery(&read, "p/a", "done", json!({})))
+        .unwrap();
+    assert_eq!(sync.step(s, host, false, now).unwrap()["running"], false);
+    input["files"].clone()
+}
+
+#[test]
+fn a_parser_moving_to_schema_2_reads_its_unchanged_files_again() {
+    let (mut s, d) = store("schema-up");
+    let mut host = FakeHost::new(&["p/a"]);
+    let mut sync = Sync::new();
+    // At schema 1, a session (f1: message M, 5) and its branch (f2: M copied, and B, 3) are
+    // counted per file: 13.
+    let m = |n| row(NOV10 + H, "m", n);
+    sync_once(
+        &mut sync,
+        &mut s,
+        &host,
+        T0,
+        &[("f1", 10), ("f2", 20)],
+        1,
+        &[("f1", 10, json!([m(5)])), ("f2", 20, json!([m(5), m(3)]))],
+    );
+    assert_eq!(
+        stored(&s),
+        vec![("p/a".into(), NOV10 + H, "m".into(), 13, 13)]
+    );
+    // The parser moves to schema 2 and the branch grows (C, 1); the session is unchanged but was
+    // read at schema 1, so it is read again: M, B and C once each, 9. Left as it was, its plain M
+    // would stay beside the event M: 14.
+    host.registrations[0]["schema"] = json!(2);
+    let k = |n, key| keyed(NOV10 + H, "m", n, key);
+    let named = sync_once(
+        &mut sync,
+        &mut s,
+        &host,
+        T0 + 10,
+        &[("f1", 10), ("f2", 25)],
+        2,
+        &[
+            ("f1", 10, json!([k(5, "M")])),
+            ("f2", 25, json!([k(5, "M"), k(3, "B"), k(1, "C")])),
+        ],
+    );
+    assert_eq!(named, json!(["f1", "f2"]));
+    assert_eq!(
+        stored(&s),
+        vec![("p/a".into(), NOV10 + H, "m".into(), 9, 9)]
+    );
+    assert_eq!(s.revisions("p/a").unwrap()["f1"], (10, 7, 2));
+    // A further sync at schema 2 reads nothing.
+    sync.step(&mut s, &host, true, T0 + 20).unwrap();
+    let (job, _) = host.last();
+    list(&mut sync, &mut s, &job, "p/a", &[("f1", 10), ("f2", 25)]);
+    let st = sync.step(&mut s, &host, false, T0 + 20).unwrap();
+    assert_eq!(
+        (st["running"].clone(), st["sources"][0]["changed"].clone()),
+        (json!(false), json!(0))
+    );
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn a_parser_moving_back_to_schema_1_reads_its_unchanged_files_again() {
+    let (mut s, d) = store("schema-down");
+    let mut host = FakeHost::new(&["p/a"]);
+    host.registrations[0]["schema"] = json!(2);
+    let mut sync = Sync::new();
+    // At schema 2: M once, B: 8, as two events.
+    let k = |n, key| keyed(NOV10 + H, "m", n, key);
+    sync_once(
+        &mut sync,
+        &mut s,
+        &host,
+        T0,
+        &[("f1", 10), ("f2", 20)],
+        2,
+        &[
+            ("f1", 10, json!([k(5, "M")])),
+            ("f2", 20, json!([k(5, "M"), k(3, "B")])),
+        ],
+    );
+    assert_eq!(
+        stored(&s),
+        vec![("p/a".into(), NOV10 + H, "m".into(), 8, 8)]
+    );
+    assert_eq!(s.storage().unwrap().1, 2);
+    // Back at schema 1, with the branch grown (C, 1): both files are read again and counted per
+    // file, as schema 1 counts: 5 + (5 + 3 + 1) = 14, in two plain rows and no event. Left as it
+    // was, the session would keep its reference to the event M.
+    host.registrations[0]["schema"] = json!(1);
+    let m = |n| row(NOV10 + H, "m", n);
+    let named = sync_once(
+        &mut sync,
+        &mut s,
+        &host,
+        T0 + 10,
+        &[("f1", 10), ("f2", 25)],
+        1,
+        &[
+            ("f1", 10, json!([m(5)])),
+            ("f2", 25, json!([m(5), m(3), m(1)])),
+        ],
+    );
+    assert_eq!(named, json!(["f1", "f2"]));
+    assert_eq!(
+        stored(&s),
+        vec![("p/a".into(), NOV10 + H, "m".into(), 14, 14)]
+    );
+    assert_eq!(s.storage().unwrap().1, 2);
+    assert_eq!(s.revisions("p/a").unwrap()["f1"], (10, 7, 1));
+    std::fs::remove_dir_all(d).unwrap();
+}
+
 /// Noon on 2026-11-10 UTC: the syncs' time.
 const T0: i64 = NOV10 + 43_200;
 /// 2026-11-10 00:00 UTC, a Tuesday.
@@ -936,6 +1087,7 @@ fn reports_bucket_hours_in_the_viewers_zone() {
         "f1",
         1,
         1,
+        1,
         &rows(&[
             (NOV10 - 3 * 86_400 - H, "m1", tok(1, 0, 1)),
             (NOV10 - 2 * 86_400 - 2 * H, "m1", tok(10, 0, 10)),
@@ -948,6 +1100,7 @@ fn reports_bucket_hours_in_the_viewers_zone() {
     s.replace_file(
         "p/b",
         "g1",
+        1,
         1,
         1,
         &rows(&[(1_788_256_800, "m3", tok(5, 0, 5))]),
@@ -1078,7 +1231,7 @@ fn a_trend_stacks_the_top_six_and_the_rest_as_other() {
         .map(|i| (NOV10, format!("m{i}"), tok(9 - i, 0, 9 - i)))
         .collect();
     let r: Rows = list.into_iter().map(|(h, m, t)| ((h, m), t)).collect();
-    s.replace_file("p/a", "f1", 1, 1, &r, &Events::new())
+    s.replace_file("p/a", "f1", 1, 1, 1, &r, &Events::new())
         .unwrap();
     let out = ask(
         &s,
@@ -1119,7 +1272,7 @@ fn the_last_24_hours_are_24_utc_hours_across_a_clock_change() {
     // One token in each of the 30 UTC hours to 13:00.
     let list: Vec<(i64, &str, Tokens)> =
         (0..30).map(|k| (now - k * H, "m", tok(1, 0, 1))).collect();
-    s.replace_file("p/a", "f1", 1, 1, &rows(&list), &Events::new())
+    s.replace_file("p/a", "f1", 1, 1, 1, &rows(&list), &Events::new())
         .unwrap();
     let r = ask(
         &s,
@@ -1146,6 +1299,7 @@ fn a_report_always_fits_a_frame() {
     s.replace_file(
         "p/a",
         "f1",
+        1,
         1,
         1,
         &rows(&[(0, "m", tok(1, 0, 1)), (NOV10, "m", tok(1, 0, 1))]),
@@ -1182,7 +1336,8 @@ fn a_report_always_fits_a_frame() {
             })
             .collect();
         let r: Rows = list.into_iter().map(|(h, m, t)| ((h, m), t)).collect();
-        s2.replace_file(src, "f", 1, 1, &r, &Events::new()).unwrap();
+        s2.replace_file(src, "f", 1, 1, 1, &r, &Events::new())
+            .unwrap();
     }
     let r = ask(
         &s2,
@@ -1197,7 +1352,7 @@ fn a_report_always_fits_a_frame() {
     let many: Rows = (0..205)
         .map(|m| ((NOV10, format!("m{m:03}")), tok(1, 0, 1)))
         .collect();
-    s3.replace_file("p/a", "f", 1, 1, &many, &Events::new())
+    s3.replace_file("p/a", "f", 1, 1, 1, &many, &Events::new())
         .unwrap();
     let r = ask(
         &s3,

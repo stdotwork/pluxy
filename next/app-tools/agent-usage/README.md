@@ -177,7 +177,10 @@ Rules, beside schema 1's:
 - A keyed row is one event: the parser sends each key of a file once, its `samples` normally 1,
   and does not sum two events into one row. Rows without a key are as in schema 1.
 - When a file's last part arrives, the hub replaces its references with the keys this read sent,
-  in the same transaction as its rows and revision. An event is stored once per source and key,
+  in the same transaction as its rows and revision, and records the schema it was read at. A
+  file read at another schema than its parser declares now is read again at the next sync, even
+  unchanged, so a parser that moves to schema 2 (or back) never has a record counted both as a
+  row and as an event. An event is stored once per source and key,
   with the values of the file read last that has it. An event no file references any more (every
   file that held it was read again without it) is deleted; a file that is gone from its folder
   keeps its references, as it keeps its rows.

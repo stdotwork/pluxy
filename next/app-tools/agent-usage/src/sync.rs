@@ -297,7 +297,7 @@ impl Sync {
         }
         let value = &d["value"];
         // Keyed rows are schema 2's: a producer at schema 1 may send none.
-        let keyed = d["source"]["schema"].as_u64() == Some(SCHEMA_KEYED);
+        let schema = d["source"]["schema"].as_u64().unwrap_or(1);
         match d["event"].as_str() {
             Some("batch") => {
                 let job = run.jobs.get_mut(&job_id).unwrap_or_else(|| unreachable!());
@@ -308,7 +308,7 @@ impl Sync {
                         files,
                         done,
                         staged,
-                    } => read_batch(store, source, files, done, staged, value, keyed, now),
+                    } => read_batch(store, source, files, done, staged, value, schema, now),
                 }
             }
             Some(end @ ("done" | "failed" | "cancelled")) => {
@@ -457,7 +457,9 @@ fn files_batch(source: &mut SourceRun, value: &Value) -> Result<Value, Error> {
 }
 
 /// The end of a source's `files` job: its label, and the files to read, those whose revision is
-/// not the one stored; a file no longer listed is marked gone (its rows stay), unless the listing
+/// not the one stored or that were read at another schema than the parser's now (so a parser
+/// moving to keyed rows, or back, reads every file again and none is counted both ways); a file
+/// no longer listed is marked gone (its rows stay), unless the listing
 /// was cut short.
 fn listed(store: &mut Store, source: &mut SourceRun, output: &Value) -> Result<(), Error> {
     let internal = |e: String| Error::internal(e);
@@ -470,9 +472,10 @@ fn listed(store: &mut Store, source: &mut SourceRun, output: &Value) -> Result<(
     }
     source.truncated |= output["truncated"] == true;
     let stored = store.revisions(&source.id).map_err(internal)?;
+    let schema = source.registration["schema"].as_u64().unwrap_or(1);
     let mut seen = HashSet::new();
     for (file, size, mtime) in &source.inventory {
-        if seen.insert(file.clone()) && stored.get(file) != Some(&(*size, *mtime)) {
+        if seen.insert(file.clone()) && stored.get(file) != Some(&(*size, *mtime, schema)) {
             source.todo.push_back(file.clone());
         }
     }
@@ -487,8 +490,8 @@ fn listed(store: &mut Store, source: &mut SourceRun, output: &Value) -> Result<(
 /// A `read` batch: a part of a file's rows, committed with the file's last part, or the file's
 /// error (its old rows stay). A file with a row before 2000 or more than a day after now, or with
 /// more than `MAX_STAGED_ROWS` rows, fails (its old rows stay) and the job goes on. A keyed row
-/// (keyed: the producer is at schema 2) is an event of the file; a key seen again in the file
-/// replaces the event.
+/// (from a producer at schema 2) is an event of the file; a key seen again in the file replaces
+/// the event. The file is stored as read at the producer's schema.
 #[allow(clippy::too_many_arguments)]
 fn read_batch(
     store: &mut Store,
@@ -497,7 +500,7 @@ fn read_batch(
     done: &mut HashSet<String>,
     staged: &mut HashMap<String, Staged>,
     value: &Value,
-    keyed: bool,
+    schema: u64,
     now: i64,
 ) -> Result<Value, Error> {
     let file = value["file"]
@@ -523,7 +526,7 @@ fn read_batch(
     let mut refused = None;
     for r in value["rows"].as_array().ok_or_else(|| bad("rows"))? {
         let row = Row::from_json(r).map_err(|e| bad(&e))?;
-        if row.key.is_some() && !keyed {
+        if row.key.is_some() && schema != SCHEMA_KEYED {
             return Err(bad("row (a key needs schema 2)"));
         }
         if row.hour < MIN_HOUR || row.hour > now + MAX_AHEAD {
@@ -561,7 +564,15 @@ fn read_batch(
         let mtime = value["mtime_ns"].as_i64().ok_or_else(|| bad("mtime_ns"))?;
         let staged = staged.remove(&file).unwrap_or_default();
         store
-            .replace_file(&source.id, &file, size, mtime, &staged.rows, &staged.events)
+            .replace_file(
+                &source.id,
+                &file,
+                size,
+                mtime,
+                schema,
+                &staged.rows,
+                &staged.events,
+            )
             .map_err(Error::internal)?;
         done.insert(file);
         source.read += 1;
