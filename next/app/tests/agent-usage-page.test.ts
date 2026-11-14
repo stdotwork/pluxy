@@ -389,6 +389,12 @@ describe("controls and status", () => {
     ]);
   });
 
+  test("the storage line counts rows, keyed events included, not hourly rows", () => {
+    expect(v.fill(v.t.storageCurrent, { size: v.size(2048), rows: v.full(4), files: v.full(2) })).toBe(
+      "Using 2.0 KB · 4 rows · 2 files",
+    );
+  });
+
   test("hour cannot be chosen for All", () => {
     const g = v.granularities("all");
     expect(g.map((x: { label: string; disabled: boolean }) => [x.label, x.disabled])).toEqual([

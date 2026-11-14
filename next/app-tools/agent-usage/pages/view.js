@@ -59,7 +59,7 @@ export const t = {
   heatMore: "More",
   storageTitle: "Agent usage storage",
   storageDescription: "Stored locally and kept after an Agent or its logs are removed, until you clear it.",
-  storageCurrent: "Using {size} · {rows} hourly rows · {files} files",
+  storageCurrent: "Using {size} · {rows} rows · {files} files",
   storageLastSync: "Last synced: {time}",
   clear: "Clear Agent history",
   cleared: "Agent usage history cleared.",
