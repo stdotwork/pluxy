@@ -1895,18 +1895,51 @@ async function main(): Promise<number> {
           )),
         );
       problems.push(...p.map((x) => `managed: ${x}`));
-      // The first start runs a stand-in that says where it listens, answers the app's readiness
-      // check (conn.rs ready), then exits; the next start, recovery's, runs the real core. The
-      // app runs the adopted copy of this script from an open file, so its mark is not beside $0.
+      // The first start runs a stand-in that serves on the socket the app hands it (-listen-fd),
+      // says where it listens, answers the app's readiness check (conn.rs ready), then exits; the
+      // next start, recovery's, runs the real core. The app runs the adopted copy of this script
+      // from an open file, so its mark is not beside $0.
       const early = join(prepared, "early-exit.sh");
-      const standIn = join(prepared, "early-exit.ts");
+      const standInSource = join(prepared, "early-exit.go");
+      const standIn = join(prepared, "early-exit");
       writeFileSync(
-        standIn,
-        `const s = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { setTimeout(() => process.exit(7), 500); return Response.json({}); } });\nconsole.error(\`pluxy: listening on http://127.0.0.1:\${s.port}\`);\n`,
+        standInSource,
+        `package main
+
+import (
+\t"fmt"
+\t"net"
+\t"net/http"
+\t"os"
+\t"strconv"
+\t"time"
+)
+
+func main() {
+\tfd := -1
+\tfor i, a := range os.Args {
+\t\tif a == "-listen-fd" && i+1 < len(os.Args) {
+\t\t\tfd, _ = strconv.Atoi(os.Args[i+1])
+\t\t}
+\t}
+\tln, err := net.FileListener(os.NewFile(uintptr(fd), "listen-fd"))
+\tif err != nil {
+\t\tfmt.Fprintln(os.Stderr, "stand-in:", err)
+\t\tos.Exit(2)
+\t}
+\tfmt.Fprintf(os.Stderr, "pluxy: listening on http://%s\\n", ln.Addr())
+\t_ = http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+\t\ttime.AfterFunc(500*time.Millisecond, func() { os.Exit(7) })
+\t\tw.Header().Set("Content-Type", "application/json")
+\t\t_, _ = w.Write([]byte("{}"))
+\t}))
+}
+`,
       );
+      run("go", ["build", "-o", standIn, standInSource], prepared);
       writeFileSync(
         early,
-        `#!/bin/sh\nif [ ! -e '${early}.ran' ]; then\n  : > '${early}.ran'\n  exec '${process.execPath}' '${standIn}'\nfi\nexec '${core}' "$@"\n`,
+        `#!/bin/sh\nif [ ! -e '${early}.ran' ]; then\n  : > '${early}.ran'\n  exec '${standIn}' "$@"\nfi\nexec '${core}' "$@"\n`,
         { mode: 0o755 },
       );
       const e = await runApp(
