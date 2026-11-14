@@ -64,7 +64,10 @@
 // typed into native key entry reaches a writer tool and a final consumer only on their pipes after
 // native confirmation, an execution tool gets only references, references refused to another
 // recipient, call or release, open journals reconciled after a crash without a second write, and
-// the key and a backup canary absent from webviews, logs and the app's output.
+// the key and a backup canary absent from webviews, logs and the app's output. Then, in that
+// session, native one-time client-key capture (client_key_native.rs): a key the app itself asks
+// its core for serves a fixture agent, is refused to another tool, after its deletion on core and
+// while the app is connected to another core, and never shows in a webview or the app's output.
 // The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
@@ -886,6 +889,18 @@ async function runApp(
       !output.some((line) => rotated.some((k) => line.includes(k))),
       "a management key from the rotation check appeared on stdout/stderr",
     );
+    // The client keys the client-key check captured (client_key_native.rs), as it learned them.
+    const clientKeysFile = vaultDir ? join(vaultDir, "client-keys") : undefined;
+    const clientKeys =
+      clientKeysFile && existsSync(clientKeysFile)
+        ? readFileSync(clientKeysFile, "utf8")
+            .split("\n")
+            .filter((k) => k.length > 0)
+        : [];
+    check(
+      !output.some((line) => clientKeys.some((k) => line.includes(k))),
+      "a client key from the client-key check appeared on stdout/stderr",
+    );
     if (suite) {
       check(suitePassed, `the ${suite} checks failed`);
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
@@ -979,8 +994,12 @@ async function runApp(
       const r = steps.get("vault") as { passed?: boolean } | undefined;
       const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
       check(r?.passed === true, `the vault check did not complete: ${failure}`);
+      const c = steps.get("client_keys") as { passed?: boolean } | undefined;
+      check(c?.passed === true, `the client-key check did not complete: ${failure}`);
+      check(clientKeys.length === 2, `the client-key check noted ${clientKeys.length} keys, not 2`);
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode} vault ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode} client keys ${JSON.stringify(c ?? {})}`);
       console.log(`${mode}: vault ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
