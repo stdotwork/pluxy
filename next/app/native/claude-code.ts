@@ -11,6 +11,8 @@
 //   `~/dotfiles/claude/.claude/settings.json` (mode 0640), beside `keep.json`;
 // - a chezmoi-style root: `~/.claude-root` is an absolute link to the folder
 //   `~/.local/share/chezmoi/dot_claude`, which has no settings.json yet;
+// - for the backup browser's step, the person's edits after a Manual Backup and the diff a restore
+//   of it shows, by hand;
 // - settings Claude Code would not take as its own: `~/unknown/settings.json` names another
 //   schema, `~/broken/settings.json` is not strict JSON (it has a comment);
 // - bin/ goes first on the app's PATH: `x-terminal-emulator` (the first terminal Automatic picks)
@@ -201,6 +203,22 @@ function configs(home: string, login: string) {
       stow_applied: `{\n${env(['"API_TIMEOUT_MS": "1"'])},\n  "model": "opus",\n${tail}`,
       // A file the root did not have, created.
       root_applied: `{\n${env([])},\n  "model": "opus",\n${tail}`,
+    },
+    // The backup browser's step (backups_native.rs), from the cleared settings: the person's
+    // edits after a Manual Backup, the diff a restore of it shows (setting names in the backup's
+    // order, then those only the file has now; never a value), and the values of the files no
+    // answer and no file in the tool's own data may hold.
+    backups: {
+      edits: [
+        ['"API_TIMEOUT_MS": "600000"', '"API_TIMEOUT_MS": "900000"'],
+        ['"model": "fable"', '"model": "pluxy-model-canary",\n  "outputStyle": "pluxy-style-canary"'],
+      ],
+      diff: [
+        { path: ["env", "API_TIMEOUT_MS"], restore: "changes" },
+        { path: ["model"], restore: "changes" },
+        { path: ["outputStyle"], restore: "removes" },
+      ],
+      values: ["fixture-own-api-key", "pluxy-model-canary", "pluxy-style-canary"],
     },
   };
 }

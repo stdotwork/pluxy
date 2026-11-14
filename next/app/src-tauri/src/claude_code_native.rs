@@ -23,6 +23,9 @@
 //!   nothing; a new preview's restore puts the original back through the link;
 //! - root: an apply to a file inside the selected root creates it, the root link kept; clear
 //!   removes it again;
+//! - backups: the backup browser (`backups_native.rs`): manual backups listed by ID, a diff that
+//!   names settings and never values, restore over the person's edits and of an absent file,
+//!   cancels and foreign IDs refused, retention, delete, nothing of the files in the tool's data;
 //! - launch: the package's recipe is the terminal running `claude`; through the launcher, a
 //!   cancelled confirmation starts nothing; a confirmed one runs the stand-in terminal with
 //!   exactly `-e <claude>` in the chosen folder, and `claude` with no arguments, no key and no
@@ -55,16 +58,21 @@ const SAME_INSTANT: &str = "an edit made in the same instant by another program 
 
 /// The answers and confirmations the check saw, for the audit.
 #[derive(Default)]
-struct Seen(RefCell<Vec<String>>);
+pub(super) struct Seen(RefCell<Vec<String>>);
 
 impl Seen {
-    fn add(&self, s: impl Into<String>) {
+    pub(super) fn add(&self, s: impl Into<String>) {
         self.0.borrow_mut().push(s.into());
     }
 }
 
 /// A read operation of the package: its value, failing on an error or a native confirmation.
-fn read_op(main: &Webview, seen: &Seen, op: &str, input: Value) -> Result<Value, String> {
+pub(super) fn read_op(
+    main: &Webview,
+    seen: &Seen,
+    op: &str,
+    input: Value,
+) -> Result<Value, String> {
     let (r, asked) = unasked(|| call(main, PACKAGE, op, input.clone()));
     let r = r?;
     seen.add(r.to_string());
@@ -74,7 +82,7 @@ fn read_op(main: &Webview, seen: &Seen, op: &str, input: Value) -> Result<Value,
 }
 
 /// A read operation that must be refused, unasked, saying says.
-fn read_refused(
+pub(super) fn read_refused(
     main: &Webview,
     seen: &Seen,
     op: &str,
@@ -93,7 +101,7 @@ fn read_refused(
 
 /// A write operation of the package from the window, its confirmation (naming every one of
 /// needles and none of hidden) accepted: the window's answer.
-fn confirmed(
+pub(super) fn confirmed(
     app: &AppHandle,
     main: &Webview,
     seen: &Seen,
@@ -127,7 +135,7 @@ fn confirmed(
 
 /// A confirmed write that must succeed: its output.
 #[allow(clippy::too_many_arguments)]
-fn written(
+pub(super) fn written(
     app: &AppHandle,
     main: &Webview,
     seen: &Seen,
@@ -151,14 +159,14 @@ fn stand_in(records: &Path, name: &str) -> Result<(Vec<String>, String, String),
     Ok((argv, r("cwd").trim_end().to_string(), r("env")))
 }
 
-fn mode(p: &Path) -> u32 {
+pub(super) fn mode(p: &Path) -> u32 {
     std::fs::metadata(p)
         .map(|m| m.permissions().mode() & 0o777)
         .unwrap_or(0)
 }
 
 /// Replaces line from with to in the file at p, as a person's editor would (in place).
-fn edit(p: &Path, from: &str, to: &str) -> Result<(), String> {
+pub(super) fn edit(p: &Path, from: &str, to: &str) -> Result<(), String> {
     let now = read(p).ok_or_else(|| format!("{} cannot be read", p.display()))?;
     require(now.contains(from), format!("{} has no {from}", p.display()))?;
     std::fs::write(p, now.replacen(from, to, 1)).map_err(|e| e.to_string())
@@ -539,6 +547,21 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         })(),
     )?;
     passed("root");
+
+    // ---- backups: the backup browser (backups_native.rs)
+    step(
+        "backups",
+        super::backups::run(&super::backups::Ctx {
+            app,
+            main,
+            seen: &seen,
+            hidden: &hidden,
+            x: &x,
+            key: &key,
+            secret: &secret,
+        }),
+    )?;
+    passed("backups");
 
     // ---- launch: the recipe through the launcher; cancel starts nothing
     step(
