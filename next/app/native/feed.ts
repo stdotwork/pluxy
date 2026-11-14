@@ -9,10 +9,13 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /** Makes a certificate authority and a server certificate for 127.0.0.1 in dir. */
-function certificates(dir: string): { ca: string; cert: string; key: string } {
+export function certificates(dir: string): { ca: string; cert: string; key: string } {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
   const ssl = (args: string[]) => {
     const r = spawnSync("openssl", args, { cwd: dir, stdio: ["ignore", "ignore", "pipe"], encoding: "utf8" });
-    if (r.status !== 0) throw new Error(`openssl ${args[0]}: ${r.stderr}`);
+    // r.error: openssl did not run at all (not found, or no such working folder).
+    if (r.error) throw new Error(`openssl ${args[0]} could not run in ${dir}: ${r.error.message}`);
+    if (r.status !== 0) throw new Error(`openssl ${args[0]}: exit ${r.status}: ${r.stderr}`);
   };
   const ec = ["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes"];
   ssl([

@@ -1,0 +1,12 @@
+[package]
+name = "usage-codex"
+version = "0.1.0"
+description = "The Codex usage parser for pluxy's usage hub: Codex's rollout files to token rows"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+pluxy-program = { path = "../lib/program" }
+pluxy-usage = { path = "../lib/usage" }
+serde_json = "1"
