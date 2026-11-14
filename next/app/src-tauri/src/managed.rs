@@ -4,11 +4,12 @@
 
 use serde_json::{json, Value};
 use std::collections::VecDeque;
-use std::fs;
+use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -148,6 +149,10 @@ pub fn core_program(chosen: Option<&str>) -> Result<PathBuf, String> {
 /// Called when the app's core exits, whatever the reason.
 pub type OnExit = Arc<dyn Fn() + Send + Sync>;
 
+/// Set once the app's core is being stopped or has exited: from then on nothing is sent to its
+/// address, where another program may listen next.
+pub type Gone = Arc<AtomicBool>;
+
 /// A running core of the app's own. A supervisor thread starts it and stays until it exits:
 /// on Linux the parent-death signal follows the thread that started the process, and the
 /// threads the app's commands run on end when idle.
@@ -158,20 +163,43 @@ pub struct ManagedCore {
     key: String,
     tail: Arc<Mutex<VecDeque<String>>>,
     status: Arc<Mutex<Option<ExitStatus>>>,
+    gone: Gone,
 }
 
 impl ManagedCore {
-    /// Starts program with the config in dir (made if missing) and waits until core says where it
-    /// listens. Core's log goes to the app's stderr, each line prefixed `core: `. on_exit runs
-    /// once core has exited.
+    /// Starts the open program (named name in messages) with the config in dir (made if missing)
+    /// and waits until core says where it listens. The program runs from that open file, the one
+    /// its caller checked, not from its path again. Core's log goes to the app's stderr, each line
+    /// prefixed `core: `. on_exit runs once core has exited.
     pub fn start(
-        program: &Path,
+        program: File,
+        name: &Path,
         dir: &Path,
         on_exit: Option<OnExit>,
     ) -> Result<ManagedCore, String> {
         let cfg = ensure_config(dir)?;
         let key = management_key(&cfg)?;
-        let mut cmd = Command::new(program);
+        #[cfg(unix)]
+        let fd = {
+            use std::os::fd::AsRawFd;
+            program.as_raw_fd()
+        };
+        let mut cmd = Command::new(format!("/proc/self/fd/{fd}"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.arg0(name);
+            // The child keeps the open program across exec, which a #! script's interpreter
+            // then reads (as /dev/fd/N); the app's own copy closes on exec as usual.
+            unsafe {
+                cmd.pre_exec(move || {
+                    if libc::fcntl(fd, libc::F_SETFD, 0) != 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
         cmd.arg("-config")
             .arg(&cfg)
             .current_dir(dir)
@@ -192,31 +220,51 @@ impl ManagedCore {
             }
         }
         let status: Arc<Mutex<Option<ExitStatus>>> = Arc::new(Mutex::new(None));
+        let gone: Gone = Arc::new(AtomicBool::new(false));
         let (started_tx, started_rx) = mpsc::channel();
         let st = Arc::clone(&status);
-        let name = program.display().to_string();
+        let g = Arc::clone(&gone);
+        let name = name.display().to_string();
         std::thread::spawn(move || {
-            let mut child = match cmd.spawn() {
+            let spawned = cmd.spawn();
+            drop(program);
+            let mut child = match spawned {
                 Ok(c) => c,
                 Err(e) => {
                     let _ = started_tx.send(Err(format!("starting {name}: {e}")));
                     return;
                 }
             };
+            // Opened before anything can reap the child, so it is this process's.
+            #[cfg(target_os = "linux")]
+            let mut exit_fd = pidfd(child.id());
             let stderr = child.stderr.take().expect("piped stderr");
             let child = Arc::new(Mutex::new(child));
             let _ = started_tx.send(Ok((Arc::clone(&child), stderr)));
             // Reaped only here, under the lock stop() kills under, so a signal never reaches a
-            // process that has already gone.
+            // process that has already gone. The exit is seen as it happens (a pidfd), and calls
+            // stop before the process is reaped; without a pidfd, within 100 ms.
             loop {
+                #[cfg(target_os = "linux")]
+                if let Some(fd) = &exit_fd {
+                    if exited_fd(fd) {
+                        g.store(true, Ordering::SeqCst);
+                    } else {
+                        exit_fd = None;
+                    }
+                }
                 let done = child.lock().unwrap().try_wait();
                 match done {
                     Ok(None) => std::thread::sleep(Duration::from_millis(100)),
                     Ok(Some(s)) => {
+                        g.store(true, Ordering::SeqCst);
                         *st.lock().unwrap() = Some(s);
                         break;
                     }
-                    Err(_) => break,
+                    Err(_) => {
+                        g.store(true, Ordering::SeqCst);
+                        break;
+                    }
                 }
             }
             if let Some(f) = on_exit {
@@ -252,6 +300,7 @@ impl ManagedCore {
             key,
             tail,
             status,
+            gone,
         };
         let deadline = Instant::now() + START_TIMEOUT;
         let mut gone: Option<Instant> = None;
@@ -304,6 +353,11 @@ impl ManagedCore {
         self.pid
     }
 
+    /// Set once this core is being stopped or has exited.
+    pub fn gone(&self) -> Gone {
+        Arc::clone(&self.gone)
+    }
+
     /// None while core runs; why it stopped once it has.
     pub fn exited(&self) -> Option<String> {
         let status = (*self.status.lock().unwrap())?;
@@ -330,6 +384,7 @@ impl ManagedCore {
     }
 
     fn kill(&self) {
+        self.gone.store(true, Ordering::SeqCst);
         {
             let mut c = self.child.lock().unwrap();
             if !matches!(c.try_wait(), Ok(None)) {
@@ -341,7 +396,9 @@ impl ManagedCore {
     }
 
     /// Asks core to stop (SIGTERM, so it drains), and kills it if it has not within 10 seconds.
+    /// Calls stop first: core closes its listener as it starts draining.
     pub fn stop(&mut self) {
+        self.gone.store(true, Ordering::SeqCst);
         {
             let mut c = self.child.lock().unwrap();
             if !matches!(c.try_wait(), Ok(None)) {
@@ -360,6 +417,108 @@ impl ManagedCore {
             self.kill();
         }
     }
+}
+
+/// A pidfd for process pid, readable once it has exited; none on kernels without them.
+#[cfg(target_os = "linux")]
+fn pidfd(pid: u32) -> Option<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd;
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0) };
+    (fd >= 0).then(|| unsafe { std::os::fd::OwnedFd::from_raw_fd(fd as libc::c_int) })
+}
+
+/// Waits until the process behind pidfd fd has exited: true then, false if it cannot wait.
+#[cfg(target_os = "linux")]
+fn exited_fd(fd: &std::os::fd::OwnedFd) -> bool {
+    use std::os::fd::AsRawFd;
+    let mut p = libc::pollfd {
+        fd: fd.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    loop {
+        match unsafe { libc::poll(&mut p, 1, -1) } {
+            1.. => return p.revents & libc::POLLIN != 0,
+            _ if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted => continue,
+            _ => return false,
+        }
+    }
+}
+
+/// Checks that every socket listening on base's port is the started core's own, before anything
+/// is sent there: another program on this computer (another user's too) could listen on that
+/// port, and the app sends the management key there.
+#[cfg(target_os = "linux")]
+pub fn owns_listener(core: &ManagedCore, base: &str) -> Result<(), String> {
+    let not = || format!("the started core is not listening on {base} itself");
+    let port = url::Url::parse(base)
+        .ok()
+        .and_then(|u| u.port_or_known_default())
+        .ok_or_else(not)?;
+    let listening =
+        listening_inodes(port).map_err(|e| format!("reading this computer's sockets: {e}"))?;
+    // The core stays unreaped until it exits, so its process ID is not reused meanwhile.
+    let own =
+        socket_inodes(core.pid()).map_err(|e| format!("reading the core's open files: {e}"))?;
+    if core.exited().is_some() || listening.is_empty() || !listening.iter().all(|i| own.contains(i))
+    {
+        return Err(not());
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn owns_listener(_core: &ManagedCore, _base: &str) -> Result<(), String> {
+    Err("checking that the app's own core is what listens works on Linux only for now".into())
+}
+
+/// The inodes of the sockets listening on port, on any address.
+#[cfg(target_os = "linux")]
+fn listening_inodes(port: u16) -> io::Result<Vec<u64>> {
+    let mut found = Vec::new();
+    for table in ["/proc/net/tcp", "/proc/net/tcp6"] {
+        let text = match fs::read_to_string(table) {
+            Ok(t) => t,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
+        for line in text.lines().skip(1) {
+            let f: Vec<&str> = line.split_whitespace().collect();
+            // sl local_address rem_address st ... inode (the tenth field); 0A is LISTEN.
+            let (Some(local), Some(st), Some(inode)) = (f.get(1), f.get(3), f.get(9)) else {
+                continue;
+            };
+            let p = local
+                .rsplit_once(':')
+                .and_then(|(_, p)| u16::from_str_radix(p, 16).ok());
+            if *st == "0A" && p == Some(port) {
+                if let Ok(i) = inode.parse() {
+                    found.push(i);
+                }
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// The inodes of the sockets process pid has open.
+#[cfg(target_os = "linux")]
+fn socket_inodes(pid: u32) -> io::Result<std::collections::HashSet<u64>> {
+    let mut own = std::collections::HashSet::new();
+    for e in fs::read_dir(format!("/proc/{pid}/fd"))? {
+        let Ok(link) = fs::read_link(e?.path()) else {
+            continue;
+        };
+        let link = link.to_string_lossy();
+        if let Some(i) = link
+            .strip_prefix("socket:[")
+            .and_then(|r| r.strip_suffix(']'))
+            .and_then(|i| i.parse().ok())
+        {
+            own.insert(i);
+        }
+    }
+    Ok(own)
 }
 
 impl Drop for ManagedCore {
@@ -480,9 +639,11 @@ mod tests {
             "echo 'pluxy: listening on http://127.0.0.1:1' >&2\nexec sleep 30",
         );
         let d = dir.clone();
-        let mut core = std::thread::spawn(move || ManagedCore::start(&program, &d, None).unwrap())
-            .join()
-            .unwrap();
+        let mut core = std::thread::spawn(move || {
+            ManagedCore::start(File::open(&program).unwrap(), &program, &d, None).unwrap()
+        })
+        .join()
+        .unwrap();
         std::thread::sleep(Duration::from_millis(500));
         assert_eq!(
             core.exited(),
@@ -491,6 +652,39 @@ mod tests {
         );
         core.stop();
         assert!(core.exited().is_some());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The exit is seen as it happens, from the pidfd, not by the 100 ms reaping poll: with the
+    /// child's lock held, nothing can reap it, so only the pidfd can set gone.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_core_exit_is_seen_before_it_is_reaped() {
+        let dir = temp("pidfd");
+        let program = script(
+            &dir,
+            "echo 'pluxy: listening on http://127.0.0.1:1' >&2\nexec sleep 30",
+        );
+        let core = ManagedCore::start(File::open(&program).unwrap(), &program, &dir, None).unwrap();
+        let gone = core.gone();
+        // Checked after the lock is let go, so a failure does not poison it for stop().
+        let (killed, seen, reaped) = {
+            let _held = core.child.lock().unwrap();
+            let killed = unsafe { libc::kill(core.pid() as libc::pid_t, libc::SIGKILL) } == 0;
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !gone.load(Ordering::SeqCst) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let reaped = core.status.lock().unwrap().is_some();
+            (killed, gone.load(Ordering::SeqCst), reaped)
+        };
+        assert!(killed, "the core could not be killed");
+        assert!(seen, "the core's exit was not seen while it was unreaped");
+        assert!(!reaped, "the core was reaped while its lock was held");
+        assert!(
+            core.wait(Duration::from_secs(2)),
+            "the core was never reaped"
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -508,7 +702,9 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
         }
-        let err = ManagedCore::start(&script, &dir, None).err().unwrap();
+        let err = ManagedCore::start(File::open(&script).unwrap(), &script, &dir, None)
+            .err()
+            .unwrap();
         assert!(err.contains("listen is required"), "{err}");
         fs::remove_dir_all(dir).unwrap();
     }

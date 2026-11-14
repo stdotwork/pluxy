@@ -1,6 +1,7 @@
 //! How the app reaches core, in one of three modes:
 //!
-//! - **managed**: the app runs a core of its own (`managed.rs`) and stops it when it quits;
+//! - **managed**: the app runs a core of its own (`managed.rs`), one of the versions it installed
+//!   (`cores.rs`), and stops it when it quits;
 //! - **local**: a core already running on this computer, such as a system service; the app only
 //!   connects, never starts or stops it;
 //! - **remote**: a core on another computer, over https only, shown with its address.
@@ -8,8 +9,10 @@
 //! The management key stays here: the window gets a view of the connection without it.
 //! Nothing in this module needs Tauri, so the tests drive it against a real core.
 
+use crate::artifact::PublisherKeys;
 use crate::client::{certificates, Client, Reply, ROTATE};
-use crate::managed::{core_program, write_private, ManagedCore, OnExit};
+use crate::cores::{self, ConfigSnapshot, Store};
+use crate::managed::{core_program, write_private, Gone, ManagedCore, OnExit};
 use crate::recovery::Recovery;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -19,6 +22,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use url::{Host, Url};
+
+/// How long a started core has to answer its management API, once it says where it listens.
+const READY_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -42,9 +48,13 @@ pub struct Settings {
     /// A PEM file of certificates to trust for a remote core, instead of the public roots.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ca_file: Option<String>,
-    /// The core program, in managed mode; unset: `pluxy` beside the app.
+    /// A core program the person chose, in managed mode, which the app runs only once it is
+    /// adopted (copied into the app's own versions); unset: `pluxy` beside the app.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub core_path: Option<String>,
+    /// Where the app's own core versions come from, in managed mode: an index file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub core_source: Option<String>,
 }
 
 impl Settings {
@@ -109,6 +119,7 @@ pub struct Change {
     pub url: Option<String>,
     pub ca_file: Option<String>,
     pub core_path: Option<String>,
+    pub core_source: Option<String>,
 }
 
 /// The connection as the window sees it: never the key.
@@ -126,6 +137,8 @@ pub struct View {
     pub ca_file: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub core_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub core_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub core: Option<CoreView>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -147,12 +160,22 @@ impl PartialEq for View {
             url,
             ca_file,
             core_path,
+            core_source,
             core,
             error,
             version: _,
         } = self;
         (
-            mode, target, signed_in, remembered, url, ca_file, core_path, core, error,
+            mode,
+            target,
+            signed_in,
+            remembered,
+            url,
+            ca_file,
+            core_path,
+            core_source,
+            core,
+            error,
         ) == (
             &other.mode,
             &other.target,
@@ -161,6 +184,7 @@ impl PartialEq for View {
             &other.url,
             &other.ca_file,
             &other.core_path,
+            &other.core_source,
             &other.core,
             &other.error,
         )
@@ -169,12 +193,73 @@ impl PartialEq for View {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CoreView {
+    /// `running`, `stopped`, `recovering` or `paused` (`recovery.rs`), or `missing` while no
+    /// version is installed.
     pub state: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
+    /// The installed version that runs (or would run): a release's version, or `custom-…`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// A core program waiting to be adopted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adopt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
 }
+
+/// The app's own core versions, as the window sees them.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct Versions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// What the source offers for this computer.
+    pub available: Vec<cores::Available>,
+    /// Why the source could not be read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_error: Option<String>,
+    pub installed: Vec<cores::Installed>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failed: Option<cores::Failed>,
+    /// How the last install, rollback or adoption ended.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<Outcome>,
+}
+
+/// How a core change the person asked for ended.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Outcome {
+    /// Counts up with each change.
+    pub seq: u64,
+    /// `install`, `rollback` or `adopt`.
+    pub action: &'static str,
+    pub version: String,
+    /// `done`, `cancelled` or `failed`.
+    pub result: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// A core change the person confirmed, ready to apply.
+pub enum CoreChange {
+    /// A checked release, not yet unpacked.
+    Install(cores::Staged),
+    /// An installed version.
+    Rollback(String),
+    /// A core program to copy in, with the SHA-256 the person confirmed.
+    Adopt {
+        path: PathBuf,
+        sha256: String,
+        size: u64,
+    },
+}
+
+const MISSING: &str =
+    "No core is installed yet: install one from the core source, or adopt a core program.";
 
 fn parse_origin(s: &str) -> Result<Url, String> {
     let u = Url::parse(s.trim()).map_err(|e| format!("{s:?} is not an address: {e}"))?;
@@ -237,6 +322,8 @@ pub struct Dirs {
     pub config: PathBuf,
     /// The managed core's folder: its config, credentials and packages.
     pub core: PathBuf,
+    /// The app's own core versions (`cores.rs`).
+    pub cores: PathBuf,
 }
 
 impl Dirs {
@@ -253,9 +340,15 @@ pub struct Connection {
     client: Option<Client>,
     key: Option<String>,
     managed: Option<ManagedCore>,
+    /// The installed version the managed core runs.
+    running: Option<String>,
+    /// Set once that core is being stopped or has exited: calls stop going to its address then.
+    /// It stays set when the core is stopped, until the app connects to something else.
+    gone: Option<Gone>,
     on_core_exit: Option<OnExit>,
     recovery: Recovery,
     error: Option<String>,
+    outcome: Option<Outcome>,
     views: u64,
 }
 
@@ -339,6 +432,7 @@ fn usable_key(k: &str) -> bool {
 pub struct Caller {
     client: Option<Client>,
     key: Option<String>,
+    gone: Option<Gone>,
 }
 
 impl Caller {
@@ -353,6 +447,22 @@ impl Caller {
         body: Option<&Value>,
         limit: Option<Duration>,
     ) -> Reply {
+        // The app's own core is stopping or has exited: whatever listens on its address now
+        // may not be it. Still open: a call that passed this check just before a stop or exit
+        // goes out; after a crash, the kernel frees the port as the core exits, a moment
+        // before the app sees the exit (its pidfd) and sets the flag; and when something other
+        // than the app stops the core (SIGTERM or SIGINT from outside), the core closes its
+        // listener at once and drains its calls for up to 10 seconds before it exits, all with
+        // the flag unset. A program that binds the freed port in either window can receive a
+        // call with the key. Only a socket the app holds and hands to the core, or calls without
+        // a bearer key, close that.
+        if self
+            .gone
+            .as_ref()
+            .is_some_and(|g| g.load(std::sync::atomic::Ordering::SeqCst))
+        {
+            return Reply::failed(0, "unavailable", "the app's core has stopped");
+        }
         match (&self.client, &self.key, limit) {
             (Some(c), Some(k), None) => c.call(k, method, path, body),
             (Some(c), Some(k), Some(l)) => c.call_within(k, method, path, body, l),
@@ -411,11 +521,17 @@ impl Connection {
             client: None,
             key: None,
             managed: None,
+            running: None,
+            gone: None,
             on_core_exit,
             recovery: Recovery::default(),
             error,
+            outcome: None,
             views: 0,
         };
+        if let Ok(store) = c.store() {
+            store.clear_staging();
+        }
         if c.error.is_none() && (start_core || c.settings.mode != Some(Mode::Managed)) {
             c.connect();
         }
@@ -425,6 +541,7 @@ impl Connection {
     /// Connects as the settings say, recording why not when it cannot.
     fn connect(&mut self) {
         self.stop_core();
+        self.gone = None;
         self.client = None;
         self.key = None;
         self.error = None;
@@ -465,18 +582,81 @@ impl Connection {
         }
     }
 
+    fn config_path(&self) -> PathBuf {
+        self.dirs.core.join("config.json")
+    }
+
+    /// The app's own core versions.
+    pub fn store(&self) -> Result<Store, String> {
+        Store::open(&self.dirs.cores)
+    }
+
+    /// Starts the selected version. A switch the app did not finish (it stopped while a
+    /// candidate was starting) is undone first: the config is put back, the candidate is
+    /// recorded as failed, and the version that worked before runs, as after a failed switch
+    /// (when that switch repaired the selected version itself, the one before it, selected once
+    /// it runs). With no version installed, the app runs no core.
     fn start_core(&mut self) -> Result<(), String> {
-        let program = core_program(self.settings.core_path.as_deref())?;
-        let core = ManagedCore::start(&program, &self.dirs.core, self.on_core_exit.clone())?;
+        let store = self.store()?;
+        let st = store.state()?;
+        if let Some(c) = st.candidate.clone() {
+            if let Some(kept) = ConfigSnapshot::kept(&store, &self.config_path())? {
+                kept.restore()?;
+            }
+            let reason = format!("the app stopped while core {c} was starting");
+            let failed = Some(cores::Failed {
+                version: c.clone(),
+                reason: reason.clone(),
+            });
+            let Some(last) = last_good(&store, &st, &c, true) else {
+                store.save_state(&ended(&store, &st, failed, None))?;
+                // Nothing else worked before it: no core runs.
+                return match st.selected {
+                    Some(_) => Err(reason),
+                    None => Ok(()),
+                };
+            };
+            let ran = self
+                .run_version(&store, &last)
+                .map_err(|e| format!("{reason}; core {last} did not start either: {e}"));
+            let saved = store.save_state(&ended(
+                &store,
+                &st,
+                failed,
+                ran.is_ok().then_some(last.as_str()),
+            ));
+            ran?;
+            return saved.map_err(|e| {
+                format!("{reason}; core {last} runs, but the app could not record that: {e}")
+            });
+        }
+        let Some(id) = st.selected else {
+            return Ok(());
+        };
+        self.run_version(&store, &id)
+    }
+
+    /// Starts installed version id and waits until it answers with the management key (and, for
+    /// a release, its own version), then connects to it.
+    fn run_version(&mut self, store: &Store, id: &str) -> Result<(), String> {
+        let program = store.program(id)?;
+        let expected = store.version(id)?;
+        let name = store.folder(id).join(cores::PROGRAM);
+        let core = ManagedCore::start(program, &name, &self.dirs.core, self.on_core_exit.clone())?;
+        ready(&core, expected.as_deref())?;
+        self.gone = Some(core.gone());
         self.client = Some(Client::new(core.base(), None));
         self.key = Some(core.key().to_string());
         self.managed = Some(core);
+        self.running = Some(id.to_string());
         self.recovery.running();
         self.error = None;
         Ok(())
     }
 
     /// Stops the app's own core, if it runs one. A local or remote core is never stopped.
+    /// Calls taken before refuse from the moment it begins (its flag stays set); calls taken
+    /// after have no address or key, at quit too.
     pub fn stop_core(&mut self) {
         self.recovery.cancel();
         if self.settings.mode == Some(Mode::Managed) {
@@ -486,7 +666,272 @@ impl Connection {
         }
         if let Some(mut core) = self.managed.take() {
             core.stop();
+            self.client = None;
+            self.key = None;
         }
+        self.running = None;
+    }
+
+    fn require_managed(&self) -> Result<(), String> {
+        if self.settings.mode != Some(Mode::Managed) {
+            return Err("the app runs no core of its own in this mode".into());
+        }
+        Ok(())
+    }
+
+    /// The core source the person set.
+    pub fn core_source(&self) -> Result<String, String> {
+        self.require_managed()?;
+        self.settings
+            .core_source
+            .clone()
+            .ok_or_else(|| "set a core source first".into())
+    }
+
+    /// Finds version in the core source and checks its signed archive with keys, before the
+    /// person confirms installing it.
+    pub fn prepare_install(
+        &self,
+        keys: &impl PublisherKeys,
+        version: &str,
+    ) -> Result<cores::Staged, String> {
+        let source = self.core_source()?;
+        self.store()?.stage(keys, &source, version)
+    }
+
+    /// Checks that version is installed, not running, and unchanged, before the person confirms
+    /// switching to it.
+    pub fn prepare_rollback(&self, id: &str) -> Result<(), String> {
+        self.require_managed()?;
+        let store = self.store()?;
+        if !store.installed(id) {
+            return Err(format!(
+                "core {id} is not installed: there is nothing to roll back to"
+            ));
+        }
+        if self.running.as_deref() == Some(id)
+            && self.managed.as_ref().is_some_and(|m| m.exited().is_none())
+        {
+            return Err(format!("core {id} already runs"));
+        }
+        store.program(id).map(|_| ())
+    }
+
+    /// The core program to adopt (the one the person chose, or `pluxy` beside the app), with its
+    /// SHA-256 and size, before the person confirms copying it in.
+    pub fn prepare_adopt(&self) -> Result<(PathBuf, String, u64), String> {
+        self.require_managed()?;
+        let path = core_program(self.settings.core_path.as_deref())?;
+        let (sha, size) = Store::inspect(&path)?;
+        Ok((path, sha, size))
+    }
+
+    /// Applies a core change the person confirmed: installs or copies in the version and runs
+    /// it in place of the current one. If it does not start and answer, the config is put back
+    /// as it was and the last version that worked runs again.
+    pub fn apply(&mut self, change: CoreChange) -> Result<(), String> {
+        self.require_managed()?;
+        let store = self.store()?;
+        match change {
+            CoreChange::Install(staged) => {
+                let fresh = !store.installed(staged.version());
+                let id = store.install(staged)?;
+                self.switch(&store, &id, fresh, true)
+            }
+            CoreChange::Rollback(id) => {
+                if !store.installed(&id) {
+                    return Err(format!(
+                        "core {id} is not installed: there is nothing to roll back to"
+                    ));
+                }
+                self.switch(&store, &id, false, false)
+            }
+            CoreChange::Adopt { path, sha256, size } => {
+                let fresh = !store.installed(&Store::adopted_id(&sha256));
+                let (id, copied) = store.adopt(&path, &sha256, size)?;
+                // The program is adopted before anything runs from it; a failed switch keeps
+                // it waiting for adoption again.
+                let pending = self.settings.core_path.take();
+                if let Err(e) = self.settings.save(&self.dirs.settings()) {
+                    self.settings.core_path = pending;
+                    if fresh {
+                        store.remove(&id);
+                    }
+                    return Err(e);
+                }
+                let r = self.switch(&store, &id, fresh, copied);
+                if r.is_err() {
+                    self.settings.core_path = pending;
+                    let _ = self.settings.save(&self.dirs.settings());
+                }
+                r
+            }
+        }
+    }
+
+    /// Runs version id in place of the current core. fresh: id was installed for this switch, so
+    /// a failure removes it again. replaced: id's files were written for this switch (an install,
+    /// or an adoption that copied the program in), so they never ran.
+    ///
+    /// The running core is stopped first, then the config is kept and the candidate recorded;
+    /// the switch counts only once the candidate answers and the new selection is saved. When
+    /// the candidate fails, the config is put back, and only then does the last good core start
+    /// again, its failure saved with that core's selection in one save; if the config cannot be
+    /// put back, no core runs and the candidate stays recorded, so the next start tries again.
+    fn switch(
+        &mut self,
+        store: &Store,
+        id: &str,
+        fresh: bool,
+        replaced: bool,
+    ) -> Result<(), String> {
+        self.revision += 1;
+        let st = store.state()?;
+        self.stop_core();
+        self.client = None;
+        self.key = None;
+        self.error = None;
+        // Runs the version that worked before. tried: the candidate ran, or its files were
+        // replaced. failed: why the candidate failed, saved together with the fallback's
+        // selection; until that one save the candidate stays recorded, so the next start undoes
+        // the switch again (and puts the config back again only if the mark that it was put
+        // back was not saved either).
+        let back = |c: &mut Self,
+                    mut msg: String,
+                    tried: bool,
+                    failed: Option<cores::Failed>|
+         -> Result<(), String> {
+            let last = last_good(store, &st, id, tried);
+            let mut runs = None;
+            if let Some(last) = &last {
+                match c.run_version(store, last) {
+                    Ok(()) => {
+                        msg.push_str(&format!("; core {last} runs again"));
+                        runs = Some(last.as_str());
+                    }
+                    Err(e) => msg.push_str(&format!("; core {last} did not start either: {e}")),
+                }
+            }
+            if failed.is_some() || runs.is_some_and(|r| st.selected.as_deref() != Some(r)) {
+                if let Err(e) = store.save_state(&ended(store, &st, failed, runs)) {
+                    msg.push_str(&format!(" (the app could not record that: {e})"));
+                }
+            }
+            if runs.is_none() {
+                c.error = Some(msg.clone());
+            }
+            Err(msg)
+        };
+        let snapshot = match ConfigSnapshot::take(store, &self.config_path()) {
+            Ok(s) => s,
+            Err(e) => {
+                return back(
+                    self,
+                    format!("the app could not keep a copy of the config: {e}"),
+                    replaced,
+                    None,
+                )
+            }
+        };
+        let mut marked = st.clone();
+        marked.candidate = Some(id.to_string());
+        if let Err(e) = store.save_state(&marked) {
+            return back(
+                self,
+                format!("the app could not record the switch: {e}"),
+                replaced,
+                None,
+            );
+        }
+        let started = self.run_version(store, id).and_then(|()| {
+            let mut done = st.clone();
+            if done.selected.as_deref() != Some(id) {
+                done.previous = done.selected.take();
+            }
+            done.selected = Some(id.to_string());
+            done.candidate = None;
+            done.failed = None;
+            store
+                .save_state(&done)
+                .map(|()| done)
+                .map_err(|e| format!("the app could not record the switch: {e}"))
+        });
+        let why = match started {
+            Ok(done) => {
+                let keep: Vec<&str> = [done.selected.as_deref(), done.previous.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                store.prune(&keep);
+                return Ok(());
+            }
+            Err(why) => why,
+        };
+        self.stop_core();
+        let mut msg = format!("core {id} did not start: {why}");
+        if let Err(e) = snapshot.restore() {
+            // The candidate stays recorded, with the kept copy, for the next start.
+            msg.push_str(&format!(
+                "; the app could not put the config back ({e}), so no core runs. What to put back is kept in {}; the app tries again at its next start",
+                snapshot.kept_at(store).display()
+            ));
+            self.error = Some(msg.clone());
+            return Err(msg);
+        }
+        msg.push_str("; its config was put back as it was");
+        if fresh {
+            store.remove(id);
+        }
+        let failed = cores::Failed {
+            version: id.to_string(),
+            reason: why,
+        };
+        back(self, msg, true, Some(failed))
+    }
+
+    /// Records how a core change ended, for the window.
+    pub fn record_outcome(
+        &mut self,
+        action: &'static str,
+        version: &str,
+        result: &'static str,
+        detail: Option<String>,
+    ) {
+        let seq = self.outcome.as_ref().map_or(0, |o| o.seq) + 1;
+        self.outcome = Some(Outcome {
+            seq,
+            action,
+            version: version.to_string(),
+            result,
+            detail,
+        });
+    }
+
+    /// The app's own core versions, and what the core source offers.
+    pub fn versions(&self) -> Versions {
+        let mut v = Versions {
+            source: self.settings.core_source.clone(),
+            outcome: self.outcome.clone(),
+            ..Versions::default()
+        };
+        match self.store() {
+            Ok(store) => {
+                v.installed = store.list();
+                if let Ok(st) = store.state() {
+                    v.selected = st.selected;
+                    v.previous = st.previous;
+                    v.failed = st.failed;
+                }
+            }
+            Err(e) => v.source_error = Some(e),
+        }
+        if let Some(src) = &self.settings.core_source {
+            match cores::available(src) {
+                Ok(a) => v.available = a,
+                Err(e) => v.source_error = Some(e),
+            }
+        }
+        v
     }
 
     /// Starts only an owned core; a live process is never replaced by Start.
@@ -502,7 +947,12 @@ impl Connection {
         if let Err(e) = &result {
             self.error = Some(e.clone());
         }
-        result
+        result?;
+        // As Restart says: with no version installed, nothing runs.
+        if self.managed.is_none() {
+            return Err(MISSING.into());
+        }
+        Ok(())
     }
 
     /// Observe only the child we own. Exit callbacks from an older child cannot affect it.
@@ -529,6 +979,7 @@ impl Connection {
         eprintln!("native-test: recovery-attempt {{\"generation\":{generation}}}");
         // The supervisor has already reaped this child. Never signal a PID found by address.
         self.managed.take();
+        self.running = None;
         if let Err(e) = self.start_core() {
             self.error = Some(e.clone());
             self.recovery.schedule(Instant::now(), e);
@@ -541,10 +992,11 @@ impl Connection {
     /// Starts the app's own core again, in managed mode.
     pub fn restart_core(&mut self) -> Result<(), String> {
         self.revision += 1;
-        if self.settings.mode != Some(Mode::Managed) {
-            return Err("the app runs no core of its own in this mode".into());
-        }
+        self.require_managed()?;
         self.connect();
+        if self.error.is_none() && self.managed.is_none() {
+            return Err(MISSING.into());
+        }
         self.error.clone().map_or(Ok(()), Err)
     }
 
@@ -554,6 +1006,7 @@ impl Connection {
             url: self.settings.url.clone(),
             ca_file: self.settings.ca_file.clone(),
             core_path: None,
+            core_source: None,
         });
         let mode = ch.mode.ok_or("choose a local or remote core")?;
         let url = ch.url.as_deref().unwrap_or("");
@@ -632,6 +1085,7 @@ impl Connection {
         target.settings.key = remember.then(|| key.to_owned());
         target.settings.save(&self.dirs.settings())?;
         self.stop_core();
+        self.gone = None;
         self.revision += 1;
         self.settings = target.settings;
         self.client = Some(target.client);
@@ -662,7 +1116,17 @@ impl Connection {
         match mode {
             Mode::Managed => {
                 next.core_path = ch.core_path.filter(|p| !p.is_empty());
-                core_program(next.core_path.as_deref())?;
+                if next
+                    .core_path
+                    .as_deref()
+                    .is_some_and(|p| !Path::new(p).is_absolute())
+                {
+                    return Err("the core program must be given as a full path".into());
+                }
+                next.core_source = ch.core_source.filter(|p| !p.is_empty());
+                if let Some(src) = &next.core_source {
+                    cores::source_path(src)?;
+                }
             }
             Mode::Local | Mode::Remote => {
                 let url = ch.url.as_deref().unwrap_or("");
@@ -697,6 +1161,7 @@ impl Connection {
                 };
                 next.save(&self.dirs.settings())?;
                 self.stop_core();
+                self.gone = None;
                 self.revision += 1;
                 self.settings = next;
                 self.client = Some(client);
@@ -845,6 +1310,7 @@ impl Connection {
         Caller {
             client: self.client.clone(),
             key: self.key.clone(),
+            gone: self.gone.clone(),
         }
     }
 
@@ -867,10 +1333,18 @@ impl Connection {
 
     pub fn view(&mut self) -> View {
         let core = if self.settings.mode == Some(Mode::Managed) {
+            let selected = self
+                .store()
+                .and_then(|s| s.state())
+                .ok()
+                .and_then(|s| s.selected);
+            let adopt = self.settings.core_path.clone();
             Some(if let Some((state, detail)) = self.recovery.status() {
                 CoreView {
                     state,
                     pid: None,
+                    version: self.running.clone().or(selected),
+                    adopt,
                     detail: Some(detail),
                 }
             } else {
@@ -879,17 +1353,30 @@ impl Connection {
                         None => CoreView {
                             state: "running",
                             pid: Some(m.pid()),
+                            version: self.running.clone(),
+                            adopt,
                             detail: None,
                         },
                         Some(why) => CoreView {
                             state: "stopped",
                             pid: None,
+                            version: self.running.clone(),
+                            adopt,
                             detail: Some(why),
                         },
+                    },
+                    None if selected.is_none() => CoreView {
+                        state: "missing",
+                        pid: None,
+                        version: None,
+                        adopt,
+                        detail: Some(self.error.clone().unwrap_or_else(|| MISSING.into())),
                     },
                     None => CoreView {
                         state: "stopped",
                         pid: None,
+                        version: selected,
+                        adopt,
                         detail: self.error.clone(),
                     },
                 }
@@ -905,6 +1392,7 @@ impl Connection {
             url: self.settings.url.clone(),
             ca_file: self.settings.ca_file.clone(),
             core_path: self.settings.core_path.clone(),
+            core_source: self.settings.core_source.clone(),
             core,
             error: self.error.clone(),
             version: {
@@ -934,6 +1422,77 @@ pub(crate) fn finish_key_unlocked(
     (result, c.view())
 }
 
+/// The version to run when a switch to id did not finish: the version that worked before, which
+/// is the selected one unless that is id and id was tried (it ran, or its files were replaced),
+/// then the one before it; only one that is installed.
+fn last_good(store: &Store, st: &cores::State, id: &str, tried: bool) -> Option<String> {
+    [
+        st.selected.as_deref().filter(|s| !(tried && *s == id)),
+        st.previous.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|v| store.installed(v))
+    .map(String::from)
+}
+
+/// st once a switch ended without its candidate: no candidate, failed recorded when given, and
+/// ran (a version that runs now) selected, with the one selected before it, while installed, as
+/// the one before.
+fn ended(
+    store: &Store,
+    st: &cores::State,
+    failed: Option<cores::Failed>,
+    ran: Option<&str>,
+) -> cores::State {
+    let mut s = st.clone();
+    s.candidate = None;
+    if failed.is_some() {
+        s.failed = failed;
+    }
+    if let Some(ran) = ran {
+        if s.selected.as_deref() != Some(ran) {
+            s.previous = s.selected.take().filter(|v| store.installed(v));
+            s.selected = Some(ran.to_string());
+        }
+    }
+    s
+}
+
+/// Whether a core the app just started is the one it asked for: it says it listens on this
+/// computer, answers `GET /status` with the app's management key, and (for a release) reports the
+/// version the app installed.
+fn ready(core: &ManagedCore, expected: Option<&str>) -> Result<(), String> {
+    let base = local_origin(core.base())
+        .map_err(|e| format!("core said it listens on {}: {e}", core.base()))?;
+    // The key goes only to a listener that is the started process's own.
+    crate::managed::owns_listener(core, &base)?;
+    let client = Client::new(&base, None);
+    let deadline = Instant::now() + READY_TIMEOUT;
+    loop {
+        if let Some(why) = core.exited() {
+            return Err(why);
+        }
+        let r = client.call(core.key(), "GET", "/status", None);
+        match r.status {
+            200 => {
+                let got = r.body.as_ref().and_then(|b| b["version"].as_str());
+                return match expected {
+                    Some(want) if got != Some(want) => Err(format!(
+                        "it reports version {}, not {want}",
+                        got.unwrap_or("none")
+                    )),
+                    _ => Ok(()),
+                };
+            }
+            0 if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
+            0 => return Err("it did not answer its management API".into()),
+            401 => return Err("it refused the app's management key".into()),
+            s => return Err(format!("its management API answered {s}")),
+        }
+    }
+}
+
 /// Whether core accepts key, as the panel checks it: `GET /status`.
 fn check_key(client: &Client, key: &str) -> Result<(), String> {
     let r = client.call(key, "GET", "/status", None);
@@ -958,6 +1517,67 @@ fn check_key(client: &Client, key: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    /// N1: a call taken before the app's core is stopped refuses from the moment the stop
+    /// begins, while the core drains with its listener closed and something else answers there.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_caller_refuses_once_its_core_is_being_stopped() {
+        use std::io::{Read, Write};
+        use std::sync::{Arc, Mutex};
+        let dir =
+            std::env::temp_dir().join(format!("pluxy-stopping-{}", crate::managed::random_key()));
+        fs::create_dir_all(&dir).unwrap();
+        // What answers on the core's port once the core has closed its listener.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let keep = seen.clone();
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut c) = conn else { return };
+                let _ = c.set_read_timeout(Some(std::time::Duration::from_millis(500)));
+                let mut buf = [0u8; 4096];
+                if let Ok(n) = c.read(&mut buf) {
+                    keep.lock().unwrap().extend_from_slice(&buf[..n]);
+                }
+                let _ = c.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                );
+            }
+        });
+        // A core that drains for two seconds after SIGTERM.
+        let program = dir.join("core.sh");
+        fs::write(
+            &program,
+            format!("#!/bin/sh\necho 'pluxy: listening on {base}' >&2\ntrap 'sleep 2; exit 0' TERM\nwhile :; do sleep 0.1; done\n"),
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let mut core =
+            ManagedCore::start(fs::File::open(&program).unwrap(), &program, &dir, None).unwrap();
+        let caller = Caller {
+            client: Some(Client::new(core.base(), None)),
+            key: Some(core.key().to_string()),
+            gone: Some(core.gone()),
+        };
+        assert_eq!(caller.call("GET", "/status", None).status, 200);
+        seen.lock().unwrap().clear();
+        let stopping = std::thread::spawn(move || core.stop());
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let r = caller.call("GET", "/status", None);
+        assert_ne!(r.status, 200, "a call went out while the core was stopping");
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "a call went out while the core was stopping"
+        );
+        stopping.join().unwrap();
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn a_failed_sign_in_save_preserves_the_old_connection() {
         use std::io::{Read, Write};
@@ -981,6 +1601,7 @@ mod tests {
         let dirs = Dirs {
             config: dir.join("config"),
             core: dir.join("core"),
+            cores: dir.join("cores"),
         };
         let old = crate::managed::random_key();
         Settings {
@@ -1038,6 +1659,7 @@ mod tests {
         let dirs = Dirs {
             config: dir.join("config"),
             core: dir.join("core"),
+            cores: dir.join("cores"),
         };
         Settings {
             mode: Some(Mode::Local),
@@ -1120,6 +1742,7 @@ mod tests {
         let dirs = Dirs {
             config: dir.join("config"),
             core: dir.join("core"),
+            cores: dir.join("cores"),
         };
         let old = crate::managed::random_key();
         Settings {
@@ -1195,6 +1818,7 @@ mod tests {
         let dirs = Dirs {
             config: dir.join("config"),
             core: dir.join("core"),
+            cores: dir.join("cores"),
         };
         Settings {
             mode: Some(Mode::Local),
@@ -1263,6 +1887,7 @@ mod tests {
             url: Some(base),
             ca_file: None,
             core_path: None,
+            core_source: None,
         })
         .unwrap();
         assert_eq!(
@@ -1282,6 +1907,7 @@ mod tests {
         let dirs = Dirs {
             config: dir.join("config"),
             core: dir.join("core"),
+            cores: dir.join("cores"),
         };
         Settings {
             mode: Some(Mode::Local),
@@ -1341,6 +1967,7 @@ mod tests {
         let dirs = Dirs {
             config: dir.join("config"),
             core: dir.join("core"),
+            cores: dir.join("cores"),
         };
         Settings {
             mode: Some(mode),
@@ -1395,6 +2022,7 @@ mod tests {
         let dirs = Dirs {
             config: dir.join("config"),
             core: dir.join("core"),
+            cores: dir.join("cores"),
         };
         let mut c = Connection::open_at_startup(dirs.clone(), None, false);
         let change = || Change {
@@ -1646,6 +2274,7 @@ mod tests {
         let dirs = Dirs {
             config: dir.join("config"),
             core: dir.join("core"),
+            cores: dir.join("cores"),
         };
         Settings {
             mode: Some(Mode::Managed),
@@ -1716,6 +2345,7 @@ mod tests {
         let dirs = Dirs {
             config: dir.join("config"),
             core: dir.join("core"),
+            cores: dir.join("cores"),
         };
         Settings {
             mode: Some(Mode::Local),
@@ -1747,6 +2377,7 @@ mod tests {
         let dirs = Dirs {
             config: dir.join("config"),
             core: dir.join("core"),
+            cores: dir.join("cores"),
         };
         Settings {
             mode: Some(Mode::Local),
@@ -1764,105 +2395,6 @@ mod tests {
         assert!(!serde_json::to_string(&v)
             .unwrap()
             .contains("secret-key-123"));
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    /// Start leaves a running core alone and Restart replaces it. The window's Start and the
-    /// tray's use Start, so a click that races a recovery keeps the recovered core.
-    #[cfg(unix)]
-    #[test]
-    fn start_leaves_a_live_core_alone_and_restart_replaces_it() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir =
-            std::env::temp_dir().join(format!("pluxy-app-start-{}", crate::managed::random_key()));
-        fs::create_dir_all(&dir).unwrap();
-        let dirs = Dirs {
-            config: dir.join("config"),
-            core: dir.join("core"),
-        };
-        let program = dir.join("core.sh");
-        fs::write(
-            &program,
-            "#!/bin/sh\necho 'pluxy: listening on http://127.0.0.1:1' >&2\nexec sleep 30\n",
-        )
-        .unwrap();
-        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
-        Settings {
-            mode: Some(Mode::Managed),
-            core_path: Some(program.display().to_string()),
-            ..Settings::default()
-        }
-        .save(&dirs.settings())
-        .unwrap();
-        let mut c = Connection::open(dirs, None);
-        let first = c.core_pid().expect("the fixture core runs");
-        c.resume_core().unwrap();
-        assert_eq!(c.core_pid(), Some(first), "Start replaced a running core");
-        // The same measure sees a replaced core.
-        c.restart_core().unwrap();
-        let second = c.core_pid().expect("Restart runs a core");
-        assert_ne!(second, first, "Restart kept the old core");
-        c.stop_core();
-        assert_eq!(c.core_pid(), None);
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    /// A core can exit while the app is still starting, before anything can act on its exit
-    /// callback. Asking the connection afterwards, as the app's setup does, schedules recovery.
-    #[cfg(unix)]
-    #[test]
-    fn a_core_that_exits_before_anyone_watches_is_recovered() {
-        use std::os::unix::fs::PermissionsExt;
-        use std::time::Duration;
-        let dir =
-            std::env::temp_dir().join(format!("pluxy-app-early-{}", crate::managed::random_key()));
-        fs::create_dir_all(&dir).unwrap();
-        let dirs = Dirs {
-            config: dir.join("config"),
-            core: dir.join("core"),
-        };
-        // Says where it listens, then exits at once.
-        let program = dir.join("core.sh");
-        fs::write(
-            &program,
-            "#!/bin/sh\necho 'pluxy: listening on http://127.0.0.1:1' >&2\nexit 7\n",
-        )
-        .unwrap();
-        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
-        Settings {
-            mode: Some(Mode::Managed),
-            core_path: Some(program.display().to_string()),
-            ..Settings::default()
-        }
-        .save(&dirs.settings())
-        .unwrap();
-        // Like the app's callback before its state exists: it reaches no connection.
-        let (exited, exit) = std::sync::mpsc::channel();
-        let on_exit: OnExit = std::sync::Arc::new(move || {
-            let _ = exited.send(());
-        });
-        let mut c = Connection::open(dirs, Some(on_exit));
-        assert_eq!(c.view().error, None, "the fixture core started");
-        exit.recv_timeout(Duration::from_secs(10))
-            .expect("the fixture core exited");
-
-        let asked = Instant::now();
-        let (_, due) = c.core_exited().expect("the early exit is recovered");
-        let core = c.view().core.expect("a managed core view");
-        assert_eq!(core.state, "recovering");
-        assert!(
-            core.detail
-                .as_deref()
-                .is_some_and(|d| d.contains("exit status: 7")),
-            "{:?}",
-            core.detail
-        );
-        // The first of the 2, 5 and 15 second delays.
-        let delay = due.duration_since(asked);
-        assert!(
-            delay >= Duration::from_millis(1900) && delay <= Duration::from_secs(3),
-            "{delay:?}"
-        );
         fs::remove_dir_all(dir).unwrap();
     }
 }

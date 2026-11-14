@@ -20,8 +20,17 @@ export interface Connection {
   url?: string;
   ca_file?: string;
   core_path?: string;
-  /** The core this app runs, in managed mode. */
-  core?: { state: "running" | "stopped" | "recovering" | "paused"; pid?: number; detail?: string };
+  core_source?: string;
+  /** The core this app runs, in managed mode: missing until a version is installed, recovering or
+   * paused while the app restarts it after it stopped; version is the installed version it runs;
+   * adopt names a core program waiting to be adopted. */
+  core?: {
+    state: "running" | "stopped" | "recovering" | "paused" | "missing";
+    pid?: number;
+    version?: string;
+    adopt?: string;
+    detail?: string;
+  };
   /** Why the app is not connected, when it is not. */
   error?: string;
 }
@@ -32,6 +41,25 @@ export interface ConnectionChange {
   url?: string;
   ca_file?: string;
   core_path?: string;
+  core_source?: string;
+}
+
+/** The app's own core versions, in managed mode. */
+export interface Versions {
+  source?: string;
+  available: { version: string }[];
+  source_error?: string;
+  installed: { id: string; kind: "signed" | "adopted"; version?: string; adopted_from?: string }[];
+  selected?: string;
+  previous?: string;
+  failed?: { version: string; reason: string };
+  outcome?: {
+    seq: number;
+    action: "install" | "rollback" | "adopt";
+    version: string;
+    result: "done" | "cancelled" | "failed";
+    detail?: string;
+  };
 }
 
 export const connectionGet = () => invoke<Connection>("connection_get");
@@ -43,6 +71,11 @@ export interface KeyEntryResult {
 export const keyEntry = (change?: ConnectionChange) =>
   invoke<KeyEntryResult>("key_entry", { change: change ?? null });
 export const coreRestart = () => invoke<Connection>("core_restart");
+export const coreVersions = () => invoke<Versions>("core_versions");
+/** Each opens the native confirmation and returns; the app sends pluxy-connection when done. */
+export const coreInstall = (version: string) => invoke<void>("core_install", { version });
+export const coreRollback = (version: string) => invoke<void>("core_rollback", { version });
+export const coreAdopt = () => invoke<void>("core_adopt");
 /** Starts the app's own core only if it is not running; a running one is left alone. */
 export const coreStart = () => invoke<Connection>("core_start");
 /** The Connection page's core button: Restart while the core runs, Start otherwise. */

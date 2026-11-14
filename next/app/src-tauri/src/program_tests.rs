@@ -956,6 +956,8 @@ fn a_call_allowed_for_another_release_is_refused() {
             chain: vec![Hop::Main],
             expect: Some((sha.into(), generation)),
             extra: Box::new(()),
+            feed: None,
+            turn_bounded: false,
             secrets: Vec::new(),
         })
     };
@@ -1658,6 +1660,45 @@ fn a_clean_stop_ends_the_crashes_in_a_row() {
     h.stop_all();
 }
 
+#[test]
+fn a_call_with_a_bounded_turn_gives_up_waiting_for_a_busy_package() {
+    let h = Arc::new(host(Value::Null));
+    // A call holds the package's turn longer than the startup limit (3 s here).
+    let slow = call_in_thread(&h, "slow", json!({"ms": 4500}));
+    until("the slow call", 5, || {
+        h.0.slots()
+            .get(ID)
+            .is_some_and(|s| s.gate.turn.lock().unwrap().0)
+    });
+    let started = Instant::now();
+    let e = h
+        .run_call_with(
+            h.begin_call(None).unwrap(),
+            ID,
+            "summary",
+            json!({"items": []}),
+            Arc::new(Context {
+                chain: vec![Hop::Main],
+                expect: None,
+                extra: Box::new(()),
+                feed: None,
+                turn_bounded: true,
+                secrets: Vec::new(),
+            }),
+            Cancel::default(),
+        )
+        .unwrap_err();
+    assert!(
+        e.message.contains("busy") && started.elapsed() < Duration::from_millis(4200),
+        "{e} after {:?}",
+        started.elapsed()
+    );
+    // The control: an ordinary call waits for the turn and is answered.
+    assert!(summary(&h, &["a"]).is_ok());
+    slow.join().unwrap().unwrap();
+    h.stop_all();
+}
+
 fn sha256_hex(b: &[u8]) -> String {
     Sha256::digest(b)
         .iter()
@@ -1676,6 +1717,8 @@ fn a_call_delivers_its_secrets_in_its_frame_and_the_tool_reaches_the_vault_only_
         chain: vec![Hop::Main],
         expect: None,
         extra: Box::new(()),
+        feed: None,
+        turn_bounded: false,
         secrets: vec![("r-1".into(), SECRET.into())],
     };
     let call = h.begin_call(None).unwrap();

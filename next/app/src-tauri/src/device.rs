@@ -24,6 +24,7 @@ pub use admission::{
     Signed, StateDecl,
 };
 pub use imports::{Consent, ConsentTarget, ExportDecl, Grant, ImportDecl, Refused, LAUNCH_FIELDS};
+pub use jobs::{ConsumeDecl, JobGrant, ProduceDecl, Registration};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -142,6 +143,11 @@ pub struct Release {
     /// Native: the operations other packages may import, and their contract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exports: Option<ExportDecl>,
+    /// Native: the kinds it produces as jobs, and consumes (`device_jobs.rs`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub produces: Vec<ProduceDecl>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub consumes: Vec<ConsumeDecl>,
 }
 
 fn web() -> String {
@@ -1125,6 +1131,8 @@ struct App {
     state: Option<State>,
     imports: Option<Vec<imports::ImportSpec>>,
     exports: Option<imports::ExportSpec>,
+    produces: Option<Vec<jobs::ProduceSpec>>,
+    consumes: Option<Vec<jobs::ConsumeSpec>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -1300,8 +1308,12 @@ impl App {
                 || self.operations.is_some()
                 || self.state.is_some()
                 || self.exports.is_some()
+                || self.produces.is_some()
+                || self.consumes.is_some()
             {
-                return Err("web app cannot declare programs, operations, exports or state".into());
+                return Err(
+                    "web app cannot declare programs, operations, exports, jobs or state".into(),
+                );
             }
             let mut seen = BTreeSet::new();
             for r in self.resources.iter().flatten() {
@@ -1354,6 +1366,12 @@ impl App {
             imports::validate_secrets(op)?;
         }
         imports::validate_exports(self.exports.as_ref(), ops)?;
+        jobs::validate(
+            self.produces.as_deref(),
+            self.consumes.as_deref(),
+            ops,
+            self.exports.as_ref(),
+        )?;
         match &self.state {
             Some(s) if s.version >= 0 && !s.readable_versions.is_empty() => {
                 if s.readable_versions.iter().any(|v| *v < 0) {
@@ -1643,6 +1661,8 @@ fn stage_signed(
             tree: BTreeMap::new(),
             imports: vec![],
             exports: None,
+            produces: vec![],
+            consumes: vec![],
         },
         staged: staged.clone(),
     };
@@ -1710,6 +1730,7 @@ fn stage_signed(
         .collect();
     r.settings = app.config.is_some();
     r.imports = imports::import_decls(&m.id, &app)?;
+    (r.produces, r.consumes) = jobs::decls(&m.id, &app)?;
     match signing {
         Some(s) if app.tier == "native" => {
             admission::native_release(r, &app, &staged, s.signed)?;
@@ -2269,6 +2290,8 @@ pub fn stage_from_registry(
 mod admission;
 #[path = "device_imports.rs"]
 mod imports;
+#[path = "device_jobs.rs"]
+mod jobs;
 #[path = "device_swap.rs"]
 mod swap;
 use admission::Signing;
