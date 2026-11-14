@@ -611,8 +611,9 @@ impl Target {
     /// it, so a link to it stays a link. The selection's resolution is checked again before the
     /// rename and after it, and the file after the write must be the one written. Returns the
     /// new file's identity (None once removed). The new file keeps the old one's permission bits
-    /// (setuid, setgid and sticky left out), or gets `mode` (else 0600) when there was none; it is
-    /// written 0600 and given them just before the rename. It is a new file: hard links to the
+    /// (setuid, setgid and sticky left out), or gets `mode` (else 0600) when there was none, with
+    /// the group's and others' bits taken away when `owner_only`; it is written 0600 and given
+    /// them just before the rename. It is a new file: hard links to the
     /// old one keep the old bytes, and its owner, ACLs and extended attributes are not copied.
     pub fn replace(
         &self,
@@ -620,6 +621,7 @@ impl Target {
         from: &Option<String>,
         bytes: Option<&[u8]>,
         mode: Option<u32>,
+        owner_only: bool,
     ) -> Result<Option<Id>, Failed> {
         let at = &self.pin.target;
         let modified = || {
@@ -662,6 +664,7 @@ impl Target {
             Ok(Some(m)) => m,
             _ => mode.unwrap_or(NEW_FILE_MODE) & 0o777,
         };
+        let mode = if owner_only { mode & !0o077 } else { mode };
         let tmp = PathBuf::from(format!(
             ".{}.pluxy-{}.tmp",
             self.name.to_string_lossy(),

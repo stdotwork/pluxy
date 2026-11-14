@@ -591,6 +591,8 @@ impl<'a> Transactions<'a> {
                 &from,
                 c.after.as_deref(),
                 c.after_mode,
+                // An apply writes the writer's values, a key among them: owner-only.
+                op == "apply",
             ) {
                 Ok(id) => {
                     done.push((i, id));
@@ -679,9 +681,9 @@ impl<'a> Transactions<'a> {
                     );
                     remember_all(state, "kept", k);
                 }
-            } else if let Err(f) = c
-                .target
-                .replace(Some(*id), &after, c.before.as_deref(), c.mode)
+            } else if let Err(f) =
+                c.target
+                    .replace(Some(*id), &after, c.before.as_deref(), c.mode, false)
             {
                 failed.push(format!(
                     "{}: {}",
@@ -815,7 +817,7 @@ impl<'a> Transactions<'a> {
                         Err(e) => return Err(e),
                     };
                     let mode = f["mode"].as_u64().map(|m| m as u32);
-                    t.replace(None, &t.pin.sha256, before.as_deref(), mode)
+                    t.replace(None, &t.pin.sha256, before.as_deref(), mode, false)
                         .map_err(|f| f.error)?;
                     restored.push(at);
                 }
