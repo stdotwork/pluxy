@@ -1,0 +1,330 @@
+//! Scanning, locating and reading against real folders, and `produce` against a host played over
+//! real pipes.
+
+use super::*;
+use pluxy_program::{read_frame, serve, write_frame, Description, Handler, Identity, MAX_INBOUND};
+use std::io::{PipeReader, PipeWriter};
+use std::sync::Arc;
+
+/// A new empty folder of its own under the system's temporary folder.
+fn folder(name: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("pluxy-usage-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+/// Writes bytes to path (making its folders) with the modification time secs.
+fn file(path: &Path, bytes: &str, secs: i64) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, bytes).unwrap();
+    let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs as u64);
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(t)
+        .unwrap();
+}
+
+fn log(p: &Path) -> bool {
+    p.extension().is_some_and(|e| e == "log")
+}
+
+#[test]
+fn a_scan_lists_wanted_files_newest_first_skipping_links_and_deep_files() {
+    let d = folder("scan");
+    let root = d.join("root");
+    file(&root.join("a.log"), "a", 1_000);
+    file(&root.join("x/b.log"), "bb", 3_000);
+    file(&root.join("x/c.txt"), "c", 4_000);
+    let deep: PathBuf = (0..MAX_DEPTH).fold(root.clone(), |p, i| p.join(format!("d{i}")));
+    file(&deep.join("ok.log"), "ok", 2_000);
+    file(&deep.join("too/deep.log"), "no", 5_000);
+    file(&d.join("outside/o.log"), "o", 6_000);
+    std::os::unix::fs::symlink(d.join("outside/o.log"), root.join("link.log")).unwrap();
+    std::os::unix::fs::symlink(d.join("outside"), root.join("linked")).unwrap();
+    let (found, truncated) = scan(std::slice::from_ref(&root), &log, &|| false).unwrap();
+    let got: Vec<(PathBuf, u64, i64)> = found
+        .into_iter()
+        .map(|f| (f.path, f.size, f.mtime_ns))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (root.join("x/b.log"), 2, 3_000_000_000_000),
+            (deep.join("ok.log"), 2, 2_000_000_000_000),
+            (root.join("a.log"), 1, 1_000_000_000_000),
+        ]
+    );
+    assert!(!truncated);
+    // A missing root lists nothing.
+    assert!(scan(&[d.join("missing")], &log, &|| false)
+        .unwrap()
+        .0
+        .is_empty());
+    assert_eq!(scan(&[root], &log, &|| true).unwrap_err().code, "cancelled");
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn locate_finds_only_what_a_scan_would() {
+    let d = folder("locate");
+    let root = d.join("root");
+    file(&root.join("x/b.log"), "bb", 3_000);
+    file(&root.join("x/c.txt"), "c", 3_000);
+    file(&d.join("outside/o.log"), "o", 3_000);
+    std::os::unix::fs::symlink(d.join("outside"), root.join("linked")).unwrap();
+    let roots = [root.clone()];
+    let s = |p: &Path| p.to_str().unwrap().to_string();
+    assert_eq!(
+        locate(&roots, &s(&root.join("x/b.log")), &log),
+        Some(root.join("x/b.log"))
+    );
+    for refused in [
+        s(&root.join("x/c.txt")),
+        s(&root.join("linked/o.log")),
+        s(&d.join("outside/o.log")),
+        format!("{}/x/../x/b.log", s(&root)),
+        "x/b.log".to_string(),
+        s(&root.join("x")),
+        s(&root.join("missing.log")),
+    ] {
+        assert_eq!(locate(&roots, &refused, &log), None, "{refused}");
+    }
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn read_file_reads_a_regular_file_up_to_the_limit() {
+    let d = folder("read");
+    file(&d.join("a.log"), "hello", 7);
+    let (bytes, size, mtime) = read_file(&d.join("a.log")).unwrap();
+    assert_eq!(
+        (bytes.as_slice(), size, mtime),
+        (&b"hello"[..], 5, 7_000_000_000)
+    );
+    let big = std::fs::File::create(d.join("big.log")).unwrap();
+    big.set_len(MAX_DOCUMENT + 1).unwrap();
+    assert!(read_file(&d.join("big.log"))
+        .unwrap_err()
+        .contains("larger"));
+    std::os::unix::fs::symlink(d.join("a.log"), d.join("link.log")).unwrap();
+    assert!(read_file(&d.join("link.log")).is_err());
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn rows_and_tokens_are_checked() {
+    let row = json!({"hour": 7200, "model": "m", "input": 1, "output": 2, "cache_read": 3,
+        "cache_write": 4, "reasoning": 5, "total": 10, "samples": 2});
+    let r = Row::from_json(&row).unwrap();
+    assert_eq!(
+        (r.hour, r.model.as_str(), r.tokens.values()),
+        (7200, "m", [1, 2, 3, 4, 5, 10, 2])
+    );
+    assert_eq!(r.to_json(), row);
+    for (field, bad) in [
+        ("hour", json!(7201)),
+        ("hour", json!(-3600)),
+        ("hour", json!(MAX_HOUR + 3600)),
+        ("model", json!("m".repeat(MAX_MODEL + 1))),
+        ("model", json!(null)),
+        ("input", json!(-1)),
+        ("total", json!(MAX_COUNT + 1)),
+        ("samples", json!(1.5)),
+        ("reasoning", json!(null)),
+    ] {
+        let mut v = row.clone();
+        v[field] = bad.clone();
+        assert!(Row::from_json(&v).is_err(), "{field} {bad}");
+    }
+    let mut t = Tokens::from_values([MAX_COUNT, 1, 0, 0, 0, 0, 0]);
+    t.add(&Tokens::from_values([1, 1, 0, 0, 0, 0, 0]));
+    assert_eq!(t.values(), [MAX_COUNT, 2, 0, 0, 0, 0, 0]);
+}
+
+/// A parser of `.log` files whose lines are `<unix seconds> <model> <input> <output>`; a line
+/// `cut` ends a part, `fail` fails the file.
+struct Lines;
+
+impl Parser for Lines {
+    fn label(&self) -> &str {
+        "Lines"
+    }
+    fn default_roots(&self, home: &Path) -> Vec<PathBuf> {
+        vec![home.join(".lines")]
+    }
+    fn wanted(&self, path: &Path) -> bool {
+        log(path)
+    }
+    fn parse(&self, bytes: &[u8], sink: &mut Sink) -> Result<(), Error> {
+        for line in std::str::from_utf8(bytes).unwrap_or_default().lines() {
+            let f: Vec<&str> = line.split(' ').collect();
+            match f.as_slice() {
+                ["cut"] => sink.end_part()?,
+                ["fail"] => return Err(Error::invalid_request("broken line")),
+                [t, m, i, o] => {
+                    let (i, o): (u64, u64) = (i.parse().unwrap(), o.parse().unwrap());
+                    let tokens = Tokens {
+                        input: i,
+                        output: o,
+                        total: i + o,
+                        samples: 1,
+                        ..Tokens::default()
+                    };
+                    sink.row(t.parse().unwrap(), m, &tokens)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+struct Producer;
+impl Handler for Producer {
+    fn call(&self, call: &Call) -> Result<Value, Error> {
+        produce(call, &Lines)
+    }
+}
+
+/// A host for Producer: sends one job call with input and acknowledges every batch; gives the
+/// batches and the terminal frame.
+fn job(input: Value) -> (Vec<Value>, Value) {
+    let (in_r, mut in_w): (PipeReader, PipeWriter) = std::io::pipe().unwrap();
+    let (mut out_r, out_w) = std::io::pipe().unwrap();
+    let description = Description::from_manifest(
+        br#"{"app": {"operations": [{"id": "scan", "description": "Scan"}],
+            "state": {"version": 0, "readable_versions": [0]}}}"#,
+    )
+    .unwrap();
+    let identity = Identity {
+        id: "pluxy/lines".into(),
+        sha256: "ab".repeat(32),
+    };
+    let served =
+        std::thread::spawn(move || serve(in_r, out_w, &identity, description, Arc::new(Producer)));
+    assert_eq!(read_frame(&mut out_r).unwrap().unwrap()["type"], "hello");
+    let call = json!({"type": "call", "id": "c-1", "op": "scan", "input": input,
+        "job": {"id": "j-1", "kind": KIND, "window": 4}});
+    write_frame(&mut in_w, &call, MAX_INBOUND).unwrap();
+    let mut batches = Vec::new();
+    let end = loop {
+        let f = read_frame(&mut out_r).unwrap().unwrap();
+        if f["type"] != "progress" {
+            break f;
+        }
+        let size = serde_json::to_vec(&f["value"]).unwrap().len();
+        assert!(size <= pluxy_program::MAX_BATCH, "a batch of {size} bytes");
+        batches.push(f["value"].clone());
+        let ack = json!({"type": "ack", "id": "c-1", "seq": batches.len()});
+        write_frame(&mut in_w, &ack, MAX_INBOUND).unwrap();
+    };
+    drop(in_w);
+    served.join().unwrap().unwrap();
+    (batches, end)
+}
+
+#[test]
+fn a_files_job_lists_the_files_in_batches() {
+    let d = folder("files");
+    let root = d.join("root");
+    // Enough files for more than one batch.
+    for n in 0..300 {
+        file(
+            &root.join(format!("{:0>120}.log", n)),
+            "x",
+            1_000_000 + n as i64,
+        );
+    }
+    let (batches, end) = job(json!({"mode": "files", "roots": [root]}));
+    assert!(batches.len() > 1);
+    let files: Vec<&Value> = batches
+        .iter()
+        .flat_map(|b| b["files"].as_array().unwrap())
+        .collect();
+    assert_eq!(files.len(), 300);
+    // Newest first.
+    assert_eq!(
+        files[0],
+        &json!({"file": root.join(format!("{:0>120}.log", 299)), "size": 1,
+            "mtime_ns": 1_000_299_000_000_000i64})
+    );
+    assert_eq!(
+        end["output"],
+        json!({"label": "Lines", "roots": [root], "count": 300, "truncated": false})
+    );
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn a_read_job_sends_each_files_rows_in_parts_and_errors_for_the_rest() {
+    let d = folder("readjob");
+    let root = d.join("root");
+    let a = root.join("a.log");
+    // Two models in hour 3600 and one in 7200, a part cut between, then the same hour again.
+    file(
+        &a,
+        "3600 m1 1 2\n3700 m1 10 20\n3601 m2 5 5\ncut\n7300 m1 1 1\n3650 m1 100 0\n",
+        50,
+    );
+    file(&root.join("broken.log"), "3600 m1 1 1\nfail\n", 60);
+    file(&root.join("empty.log"), "", 70);
+    let s = |p: &Path| p.to_str().unwrap().to_string();
+    let ids = [
+        s(&a),
+        s(&root.join("broken.log")),
+        s(&root.join("empty.log")),
+        s(&d.join("elsewhere.log")),
+        s(&a),
+    ];
+    let (batches, end) = job(json!({"mode": "read", "roots": [root], "files": ids}));
+    let row = |hour: i64, model: &str, i: u64, o: u64, n: u64| {
+        json!({"hour": hour, "model": model, "input": i, "output": o, "cache_read": 0,
+            "cache_write": 0, "reasoning": 0, "total": i + o, "samples": n})
+    };
+    assert_eq!(
+        batches,
+        vec![
+            json!({"file": s(&a), "size": 68, "mtime_ns": 50_000_000_000i64, "part": 0,
+                "last": false, "rows": [row(3600, "m1", 11, 22, 2), row(3600, "m2", 5, 5, 1)]}),
+            json!({"file": s(&a), "size": 68, "mtime_ns": 50_000_000_000i64, "part": 1,
+                "last": true, "rows": [row(3600, "m1", 100, 0, 1), row(7200, "m1", 1, 1, 1)]}),
+            json!({"file": s(&root.join("broken.log")), "error": "broken line"}),
+            json!({"file": s(&root.join("empty.log")), "size": 0, "mtime_ns": 70_000_000_000i64,
+                "part": 0, "last": true, "rows": []}),
+            json!({"file": s(&d.join("elsewhere.log")), "error": "not one of this source's files"}),
+        ]
+    );
+    assert_eq!(end["output"], json!({"read": 2, "failed": 2}));
+    // Neither mode, or not a job: refused.
+    let (b, end) = job(json!({"mode": "other"}));
+    assert!(b.is_empty() && end["error"]["code"] == "invalid_request");
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn a_big_file_is_split_into_parts_within_the_batch_limit() {
+    let d = folder("big");
+    let root = d.join("root");
+    let a = root.join("a.log");
+    // 2,000 hours: far more rows than one batch holds.
+    let lines: String = (0..2000)
+        .map(|h| format!("{} model-{} 1 1\n", h * 3600, h % 3))
+        .collect();
+    file(&a, &lines, 50);
+    let (batches, end) = job(json!({"mode": "read", "roots": [root], "files": [a]}));
+    assert!(batches.len() > 2, "{} parts", batches.len());
+    for (i, b) in batches.iter().enumerate() {
+        assert_eq!(b["part"], i);
+        assert_eq!(b["last"], i + 1 == batches.len());
+    }
+    let rows: usize = batches
+        .iter()
+        .map(|b| b["rows"].as_array().unwrap().len())
+        .sum();
+    assert_eq!(rows, 2000);
+    assert_eq!(end["output"], json!({"read": 1, "failed": 0}));
+    std::fs::remove_dir_all(d).unwrap();
+}

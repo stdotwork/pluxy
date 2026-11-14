@@ -1,0 +1,13 @@
+[package]
+name = "agent-usage"
+version = "0.1.0"
+description = "The usage hub for pluxy's desktop app: one store and page for agents' token usage"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+pluxy-program = { path = "../lib/program" }
+pluxy-usage = { path = "../lib/usage" }
+rusqlite = { version = "=0.41.1", features = ["bundled"] }
+serde_json = "1"
