@@ -46,6 +46,10 @@
 // that build: signed tools calling each other's declared exports through the host, a curated web
 // package's page calling native imports after their native consent, and the refusals of
 // undeclared, forged, cyclic, stale, revoked and Unverified routes, each with a positive control.
+// The declared jobs check (jobs_native.rs) runs after it in that session: a consumer lists the
+// registrations of its kind and starts jobs whose batches the host delivers with their source,
+// with the refusals of forged, duplicate and stale sources, past the window and the size and job
+// limits, cancel and restart, and a disabled producer, each with a positive control.
 // The vault check (vault.ts, vault_native.rs) runs in one more session with that build: a key
 // typed into native key entry reaches a writer tool and a final consumer only on their pipes after
 // native confirmation, an execution tool gets only references, references refused to another
@@ -766,8 +770,11 @@ async function runApp(
       const r = steps.get("routing") as { passed?: boolean } | undefined;
       const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
       check(r?.passed === true, `the routing check did not complete: ${failure}`);
+      const j = steps.get("jobs") as { passed?: boolean } | undefined;
+      check(j?.passed === true, `the jobs check did not complete: ${failure}`);
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode} routing ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode} jobs ${JSON.stringify(j ?? {})}`);
       console.log(`${mode}: routing ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
