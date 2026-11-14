@@ -528,15 +528,19 @@ impl Run {
         let body = serde_json::to_vec(v).expect("a JSON value");
         let mut frame = (body.len() as u32).to_be_bytes().to_vec();
         frame.extend(body);
+        // Counted before the writer can take it: counted after, the writer could write it and
+        // count it down first, wrapping the count past zero so a tool's next call reads as a
+        // flood of unread answers.
+        self.queued.fetch_add(1, Ordering::SeqCst);
         match self.tx.lock().unwrap().as_ref() {
-            Some(tx) if tx.send(frame).is_ok() => {
-                self.queued.fetch_add(1, Ordering::SeqCst);
-                Ok(())
+            Some(tx) if tx.send(frame).is_ok() => Ok(()),
+            _ => {
+                self.queued.fetch_sub(1, Ordering::SeqCst);
+                Err(fail(
+                    "extension_unavailable",
+                    format!("{} is stopping", self.spec.id),
+                ))
             }
-            _ => Err(fail(
-                "extension_unavailable",
-                format!("{} is stopping", self.spec.id),
-            )),
         }
     }
 
