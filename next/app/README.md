@@ -845,6 +845,33 @@ version** puts it back over whatever the file holds now (a file absent in the ba
 no automatic backup is made) and **Delete this version** deletes only that backup, each in the
 tool's native confirmation.
 
+## Grok Build
+
+The Grok Build page sets up and starts Grok Build with this core (`src/grok.tsx`). It needs the
+curated native tool `pluxy/grok-setup` ([app tools](../app-tools/README.md#grok-setup)) and, for
+**Start CLI**, the execution program, both installed and enabled on the Device extensions page. Like
+the Claude Code page it is the window's own page, because **Apply** gives the tool the client key.
+
+**Read configuration** previews Grok Build's `config.toml`: its user config (`~/.grok/config.toml`),
+a selected file (such as `$GROK_HOME/config.toml`; a link is followed and kept) or a file in a
+selected folder; it shows the status, the file it writes to, Grok Build's default model now and
+whether a key is in pluxy's entry, never the key, and notes model entries an older app left
+(`cpa-gui/…`), which pluxy leaves alone. The **Model catalog** holds the models pluxy's entries
+list: those the file has, and the core's served models, added (all selected, as the old app wrote
+them all) when **Refresh models** is pressed, never in the background. Each can be left out or
+given its **Context window**; the **Default model** is one of the selected models. The
+**Authentication Key** is one of the vault's secrets, or a new one through native key entry.
+
+**Connect in One Click** (or **Update Configuration** / **Repair Connection** once applied),
+**Close configuration** (Clear) and **Restore Backup** each preview the file again and call the
+tool, whose native confirmation names the file, the key's label for Apply, and that an edit made in
+the same instant by another program may be lost; **Backup and restore** keeps the file in manual
+backups, as on the Claude Code page. **Start CLI** asks the tool for its recipe (`~/.grok/bin/grok`
+when Grok Build's installer put it there, else `grok` from PATH, in a terminal with no arguments)
+and starts it through the launcher in the chosen working directory, terminal and optional program
+path. The key is not part of the launch: Grok Build reads it from config.toml. Grok Build has no
+Linux desktop app.
+
 ## Build and check
 
 Bun `1.4.3`, a stable Rust toolchain (CI uses 1.97.0), and on Linux the WebKitGTK 4.1 and

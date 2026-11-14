@@ -11,7 +11,7 @@ reference: this folder implements it, it does not change it.
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
 cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-omp)
 cargo build --locked -p pluxy-transactions --example fixture-writer   # the native test's fixture
-cargo build --release --locked -p claude-code   # likewise execution
+cargo build --release --locked -p claude-code   # likewise execution, grok-setup
 ```
 
 ## `lib/program`
@@ -304,6 +304,49 @@ since. `CLAUDE_CODE_EFFORT_LEVEL` and per-model `modelSettings` are left alone. 
 JSON (a comment, a trailing comma), not an object, an `env` that is not an object of strings, or a
 `$schema` other than `https://json.schemastore.org/claude-code-settings.json`. A missing or empty
 file is an empty one. Restore Backup puts the original back whatever the file holds now.
+
+## `grok-setup`
+
+`pluxy/grok-setup` sets up Grok Build (xAI's coding CLI, `grok`) to use pluxy's core and says how to
+start it, for the desktop app's Grok Build page (`../app/README.md`, "Grok Build"). It writes one
+file, Grok Build's user config, through `lib/transactions` (set `grok`): link-preserving,
+journalled, the original and applied images in the host's vault, and its manual backups. It exports
+nothing.
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `preview` | `read` | `targets`: one selection (`file`, or `root` and `path`), by default `~/.grok/config.toml` in the app's `HOME`; `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `settings`: `state` (`not-configured`, `configured`, `needs-update`), `base_url`, `key_set`, `default` (`models.default` as the file has it), `model` (the default's model when it is pluxy's entry), `models` (pluxy's entries: `model`, `name`, `context_window`), `legacy` (how many `cpa-gui/` entries an older app left); never the key |
+| `apply` | `write`; secret `key` (value) | One pin, `base_url`, `key`, `model` (the default: one of `models`), `models`: 1 to 256 of `{model, name, context_window}` (`name` empty: the model) | The library's outcome |
+| `clear` | `write` | One pin | The library's outcome: the values Apply wrote go, edits made since stay |
+| `restore` | `write` | One pin | The library's outcome: the original bytes back (Restore Backup) |
+| `status` | `read` | — | The library's status |
+| `recipe` | `read` | — | `{"client": "Grok Build", "kind": "terminal", "program": …, "args": []}`, for the launcher: `program` is `~/.grok/bin/grok` when that is an executable file (where Grok Build's install script puts it, often not on a desktop session's PATH), else `grok` |
+| `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations (`lib/transactions`), one file per version, diffed by TOML setting path | The library's answers: IDs, paths, presence, sizes and setting names, never a value |
+
+What `apply` writes, editing the file in place with `toml_edit` (comments, formatting, order and
+everything else kept), with Grok Build's own keys (its configuration reference,
+`docs/user-guide/26-config-reference.md` in xai-org/grok-build, and Grok Build 1.0.77 run offline
+on a temporary home, read 2026-11-14):
+
+- `models.default` = `pluxy/<model>`;
+- one table `[model."pluxy/<model>"]` per listed model, setting `model`, `base_url` (the core's
+  address with `/v1`), `name` (shown in Grok Build's model picker), `api_key` (the client key; a
+  model's own key wins over a signed-in session and `XAI_API_KEY`, so the person's login stays), `api_backend =
+  "chat_completions"` (the OpenAI Chat Completions API, as the old app wrote) and `context_window`
+  (it drives auto-compaction; the page offers 200000, the old app's default). Other keys the person
+  added to such a table stay; pluxy's tables for models no longer listed are removed. Entries of
+  the person's own and an older app's `cpa-gui/` entries are left as they are.
+
+Clear's three-way merge (TOML, values compared whatever their formatting) brings back the person's
+default model, unless they changed it since, and removes the untouched entries; a value the person
+changed in a pluxy entry stays. A file Apply created and nothing else changed is removed. Every
+operation but `restore` refuses, before writing, a file Grok Build would not take or Apply cannot
+edit: not UTF-8 or not TOML (Grok Build itself refuses such a file), `models` or `model` not a
+table, `models.default` not a string, or a `model."pluxy/…"` entry not a table. Grok Build has no
+version or schema field, and no version bound is assumed. A missing or empty file is an empty one.
+The tool's environment has no `GROK_HOME`: a person who moved Grok Build's folder selects the file
+or folder. A project's `.grok/config.toml` cannot hold models (Grok Build reads only MCP, plugin
+and permission settings there), so only the user config is written.
 
 ## `execution`
 
