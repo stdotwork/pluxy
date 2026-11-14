@@ -43,6 +43,8 @@ impl Handler for Tool {
                 call.vault("backup.put", f)
             }
             "huge" => Ok(json!({"text": "x".repeat(MAX_FRAME)})),
+            "spawn" => call.spawn(),
+            "runtime" => call.runtime("stop", Some("rt-1")),
             op => Err(Error::unsupported(format!("no operation {op}"))),
         };
         self.running.fetch_sub(1, Ordering::SeqCst);
@@ -280,4 +282,35 @@ fn identity_needs_the_hosts_environment() {
         assert!(Identity::from_env().is_err());
     }
     assert!(Description::from_manifest(b"{}").is_err());
+}
+
+#[test]
+fn spawn_and_runtime_requests_name_only_the_call_and_get_the_hosts_answer() {
+    let mut h = Host::start();
+    h.next();
+    h.send(json!({"type": "call", "id": "c-2", "op": "spawn", "input": {}}));
+    let s = h.next();
+    let id = s["id"].as_str().unwrap().to_string();
+    assert!(id.starts_with("s-"));
+    assert_eq!(s, json!({"type": "spawn", "id": id, "for": "c-2"}));
+    h.send(json!({"type": "result", "id": id, "output": {"lifetime": "detached"}}));
+    assert_eq!(
+        h.next(),
+        json!({"type": "result", "id": "c-2", "output": {"lifetime": "detached"}})
+    );
+    h.send(json!({"type": "call", "id": "c-3", "op": "runtime", "input": {}}));
+    let u = h.next();
+    let id = u["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        u,
+        json!({"type": "runtime", "id": id, "for": "c-3", "op": "stop", "runtime": "rt-1"})
+    );
+    h.send(
+        json!({"type": "error", "id": id, "error": {"code": "not_found", "message": "no runtime"}}),
+    );
+    assert_eq!(
+        h.next(),
+        json!({"type": "error", "id": "c-3", "error": {"code": "not_found", "message": "no runtime"}})
+    );
+    h.end().unwrap();
 }

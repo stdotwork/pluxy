@@ -1,0 +1,89 @@
+{
+  "manifest_version": 1,
+  "id": "pluxy/execution",
+  "version": "0.1.0",
+  "app": {
+    "version": 0,
+    "tier": "native",
+    "host_versions": [0],
+    "programs": {
+      "linux/amd64": "bin/execution",
+      "linux/arm64": "bin/execution"
+    },
+    "operations": [
+      {
+        "id": "terminals",
+        "description": "List the terminals found on the launch environment's PATH, Automatic first",
+        "effect": "read",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "search_path": { "type": "array", "maxItems": 256, "items": { "type": "string", "maxLength": 4096 } }
+          },
+          "required": ["search_path"],
+          "additionalProperties": false
+        },
+        "output_schema": { "type": "object", "required": ["terminals"] }
+      },
+      {
+        "id": "prepare",
+        "description": "Prepare a terminal or direct launch: the executable, argv and cwd to confirm",
+        "effect": "read",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "kind": { "enum": ["terminal", "direct"] },
+            "program": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "override": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "args": { "type": "array", "maxItems": 256, "items": { "type": "string", "maxLength": 32768 } },
+            "cwd": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "terminal": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "search_path": { "type": "array", "maxItems": 256, "items": { "type": "string", "maxLength": 4096 } }
+          },
+          "required": ["kind", "program", "cwd", "search_path"],
+          "additionalProperties": false
+        },
+        "output_schema": { "type": "object", "required": ["executable", "argv", "cwd"] }
+      },
+      {
+        "id": "launch",
+        "description": "Start a confirmed launch: the app spawns exactly what you confirmed",
+        "effect": "launch",
+        "secrets": { "key": "reference" },
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "executable": { "type": "string" },
+            "argv": { "type": "array", "items": { "type": "string" } },
+            "cwd": { "type": "string" },
+            "program": { "type": "string" },
+            "lifetime": { "enum": ["detached", "managed"] },
+            "environment": { "type": "object" },
+            "stdin": { "type": "string" },
+            "key": { "type": "string" }
+          },
+          "required": ["executable", "argv", "cwd"],
+          "additionalProperties": false
+        },
+        "output_schema": { "type": "object", "required": ["lifetime"] }
+      },
+      {
+        "id": "runtime",
+        "description": "Look at, list, stop or restart a managed runtime this package started",
+        "effect": "read",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "op": { "enum": ["status", "list", "stop", "restart"] },
+            "runtime": { "type": "string", "maxLength": 64 }
+          },
+          "required": ["op"],
+          "additionalProperties": false
+        },
+        "output_schema": { "type": "object" }
+      }
+    ],
+    "exports": { "contract": 1, "operations": ["launch", "runtime"] },
+    "state": { "version": 0, "readable_versions": [0] }
+  }
+}

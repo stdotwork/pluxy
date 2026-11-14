@@ -1,7 +1,8 @@
 //! The program side of pluxy's app program contract v0 (`next/app/app-host/README.md`, "App
 //! program contract v0"): framing, hello, describe (with the calls of unknown outcome and the open
 //! journals it names), calls with progress and cancellation, a program's own calls of other
-//! packages' operations, and its vault frames. Jobs come with the host's jobs contract.
+//! packages' operations, its vault frames, and its spawn and runtime requests. Jobs come with the
+//! host's jobs contract.
 //!
 //! A program implements [`Handler`] and hands it to [`run`], which checks the host's environment,
 //! says hello, answers describe from the package's own manifest and serves calls until its stdin
@@ -310,6 +311,28 @@ impl Call {
         frame.insert("for".into(), json!(self.id));
         frame.insert("op".into(), json!(op));
         self.ask(id, Value::Object(frame), false)
+    }
+
+    /// Asks the host to spawn the launch this call confirmed, with a `spawn` frame naming nothing
+    /// but the call (the host spawns exactly what the person confirmed, once): the host's answer,
+    /// `{"lifetime": "detached"}` or `{"lifetime": "managed", "runtime", "pid"}`. Once this call is
+    /// cancelled the request is cancelled too, and nothing starts.
+    pub fn spawn(&self) -> Result<Value, Error> {
+        self.check()?;
+        let id = format!("s-{}", self.shared.next.fetch_add(1, Ordering::SeqCst));
+        let frame = json!({"type": "spawn", "id": id, "for": self.id});
+        self.ask(id, frame, true)
+    }
+
+    /// Sends a `runtime` frame for this call: `op` (`status`, `list`, `stop` or `restart`) of
+    /// runtime, one of its package's managed runtimes (none for `list`): the host's answer.
+    pub fn runtime(&self, op: &str, runtime: Option<&str>) -> Result<Value, Error> {
+        let id = format!("u-{}", self.shared.next.fetch_add(1, Ordering::SeqCst));
+        let mut frame = json!({"type": "runtime", "id": id, "for": self.id, "op": op});
+        if let Some(r) = runtime {
+            frame["runtime"] = json!(r);
+        }
+        self.ask(id, frame, false)
     }
 
     fn ask(&self, id: String, frame: Value, cancellable: bool) -> Result<Value, Error> {
