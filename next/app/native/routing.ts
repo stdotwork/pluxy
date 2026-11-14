@@ -51,7 +51,7 @@ addEventListener("message", (e) => {
 parent.postMessage({ pluxy: "page", v: 0, type: "hello", versions: [0] }, "*");
 `;
 
-const summary = {
+export const summary = {
   id: "summary",
   description: "Count the items and name the longest",
   effect: "read",

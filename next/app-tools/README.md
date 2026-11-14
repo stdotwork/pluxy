@@ -9,7 +9,7 @@ reference: this folder implements it, it does not change it.
 
 ```bash
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
-cargo build --release --locked -p codex-sessions   # a small, stripped program
+cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage)
 ```
 
 ## `lib/program`
@@ -22,14 +22,39 @@ The program side of the contract, for any tool (`pluxy-program`):
 | `serve(input, output, identity, description, handler)` | `run` on any streams, for tests. |
 | `Handler::call(&Call)` | One call of a declared operation: its output or an `Error`. |
 | `Handler::reconcile(&Call, unknown, journals)` | Before `describe` is answered: the calls of unknown outcome and the open journals the host names. By default nothing. |
-| `Call` | `id`, `op`, `input`, `chain`, `secrets`; `cancelled()` and `check()`; `progress(value)`; `call(package, op, input)` (an import, through the host; cancelled with its call); `vault(op, fields)` (backups and journals). |
+| `Call` | `id`, `op`, `input`, `chain`, `secrets`, `job`; `cancelled()` and `check()`; `progress(value)`; `call(package, op, input)` (an import, through the host; cancelled with its call); `vault(op, fields)` (backups and journals); `jobs(op, input)` (a consumer's `registrations`, `start` or `cancel`); `batch(value)` (a producer's next batch, once the job's window has room) and `acked()`. |
+| `Job` | The job a producer's call runs: `id`, `kind`, `window`. |
 | `Error` | The contract's error object: `invalid_request`, `unsupported`, `not_found`, `unavailable`, `internal`, `cancelled`, or any code. |
 | `read_frame`, `write_frame` | The framing: a four-byte big-endian length and UTF-8 JSON; a program's frames are at most `MAX_FRAME` (1 MiB). |
+| `MAX_BATCH` | The largest batch a producer may send, 48 KiB of JSON. |
 
 Each call runs on a thread of its own that ends with the call; the thread that reads stdin
-routes cancels and the answers to a call's own calls and vault frames. An answer too large for a
-frame fails its call with `internal` instead of breaking the pipe. Jobs come with the host's jobs
-contract.
+routes cancels, the answers to a call's own calls, vault and jobs frames, and a job's acks. An
+answer too large for a frame fails its call with `internal` instead of breaking the pipe. A
+consumer answers the call that started a job before the job's batches can reach it (the host
+delivers them as calls of its deliver operation, one call of a package at a time), so it never
+waits for its own job inside a call.
+
+## `lib/usage`
+
+Schema 1 of the usage hub's ingest API and what a usage parser shares (`pluxy-usage`): a parser
+implements `Parser` (its label, default roots, which files are its, how a file's bytes become
+rows) and answers its produces operation with `produce`, which lists files (`scan`: no links, at
+most 8 folders deep, newest first, at most 20,000), finds a named file again only under the roots
+(`locate`), reads it (`read_file`, at most 16 MiB) and sends its rows in parts within the batch
+limit (`Sink`). The schema is in [`agent-usage/README.md`](agent-usage/README.md#schema-1).
+
+## `agent-usage`
+
+`pluxy/agent-usage`, the usage hub: the one store of agents' token usage and its *Agent usage*
+page. See [its README](agent-usage/README.md).
+
+## `usage-fixture`
+
+`pluxy/usage-fixture`, a usage parser of a simple test format for the hub's checks (the native
+test packs it); never released. It reads `*.jsonl` files of records `{"id"?, "ts", "model",
+"input", "output", ...}` under its roots, and lines that end a part or pause a read, so a check can
+cancel a job between two parts of one file.
 
 ## `codex-sessions`
 

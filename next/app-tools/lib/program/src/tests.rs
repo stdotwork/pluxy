@@ -9,6 +9,10 @@ use std::sync::atomic::AtomicUsize;
 struct Tool {
     reconciled: Mutex<Vec<(Vec<Value>, Vec<Value>)>>,
     running: AtomicUsize,
+    /// The acks the test host has sent so far, set before it writes each one.
+    acks_sent: AtomicU64,
+    /// For each batch the producer sent, the acks the host had sent by then.
+    acks_at_send: Mutex<Vec<u64>>,
 }
 
 impl Handler for Tool {
@@ -43,6 +47,19 @@ impl Handler for Tool {
                 call.vault("backup.put", f)
             }
             "huge" => Ok(json!({"text": "x".repeat(MAX_FRAME)})),
+            "start" => call.jobs("start", json!({"kind": "pluxy/hub/items"})),
+            "scan" => (|| {
+                for n in 1..=call.input["count"].as_u64().unwrap_or(0) {
+                    let seq = call.batch(json!({"n": n}))?;
+                    assert_eq!(seq, n);
+                    let at = self.acks_sent.load(Ordering::SeqCst);
+                    self.acks_at_send.lock().unwrap().push(at);
+                }
+                Ok(json!({"sent": call.input["count"]}))
+            })(),
+            "big" => call
+                .batch(json!({"text": "x".repeat(MAX_BATCH)}))
+                .map(|_| json!({})),
             op => Err(Error::unsupported(format!("no operation {op}"))),
         };
         self.running.fetch_sub(1, Ordering::SeqCst);
@@ -92,6 +109,12 @@ impl Host {
 
     fn send(&mut self, v: Value) {
         write_frame(self.to.as_mut().unwrap(), &v, MAX_INBOUND).unwrap();
+    }
+
+    /// Acknowledges batch seq of call id, noting it for the tool first.
+    fn ack(&mut self, id: &str, seq: u64) {
+        self.tool.acks_sent.store(seq, Ordering::SeqCst);
+        self.send(json!({"type": "ack", "id": id, "seq": seq}));
     }
 
     fn next(&mut self) -> Value {
@@ -185,7 +208,7 @@ fn calls_answer_with_results_errors_and_progress() {
 }
 
 #[test]
-fn a_cancel_ends_the_call_cancelled_even_if_it_finishes() {
+fn a_cancel_ends_a_call_that_honours_it_and_a_finished_call_keeps_its_result() {
     let mut h = Host::start();
     h.next();
     h.send(json!({"type": "call", "id": "c-2", "op": "wait", "input": {}}));
@@ -194,9 +217,14 @@ fn a_cancel_ends_the_call_cancelled_even_if_it_finishes() {
         h.next(),
         json!({"type": "error", "id": "c-2", "error": {"code": "cancelled", "message": "the call was cancelled"}})
     );
+    // A handler that finishes anyway did its work (a write may have taken effect): its result
+    // is the call's outcome, not `cancelled`.
     h.send(json!({"type": "call", "id": "c-3", "op": "ignore-cancel", "input": {}}));
     h.send(json!({"type": "cancel", "id": "c-3"}));
-    assert_eq!(h.next()["error"]["code"], "cancelled");
+    assert_eq!(
+        h.next(),
+        json!({"type": "result", "id": "c-3", "output": {"finished": true}})
+    );
     // The pipe stays: the next call is answered.
     h.send(json!({"type": "call", "id": "c-4", "op": "echo", "input": {}}));
     assert_eq!(h.next()["type"], "result");
@@ -280,4 +308,95 @@ fn identity_needs_the_hosts_environment() {
         assert!(Identity::from_env().is_err());
     }
     assert!(Description::from_manifest(b"{}").is_err());
+}
+
+#[test]
+fn a_consumers_jobs_frame_goes_to_the_hosts_job_service() {
+    let mut h = Host::start();
+    h.next();
+    h.send(json!({"type": "call", "id": "c-2", "op": "start", "input": {}}));
+    let q = h.next();
+    assert_eq!(
+        (&q["type"], &q["for"], &q["op"], &q["input"]),
+        (
+            &json!("jobs"),
+            &json!("c-2"),
+            &json!("start"),
+            &json!({"kind": "pluxy/hub/items"})
+        )
+    );
+    assert!(q["id"].as_str().unwrap().starts_with("q-"));
+    h.send(json!({"type": "result", "id": q["id"], "output": {"job": "j-7"}}));
+    assert_eq!(
+        h.next(),
+        json!({"type": "result", "id": "c-2", "output": {"job": "j-7"}})
+    );
+    // Refused by the host: the call gets the host's error.
+    h.send(json!({"type": "call", "id": "c-3", "op": "start", "input": {}}));
+    let q = h.next();
+    h.send(
+        json!({"type": "error", "id": q["id"], "error": {"code": "permission", "message": "no"}}),
+    );
+    assert_eq!(
+        h.next(),
+        json!({"type": "error", "id": "c-3", "error": {"code": "permission", "message": "no"}})
+    );
+    h.end().unwrap();
+}
+
+#[test]
+fn a_producer_sends_batches_within_its_window_of_acks() {
+    let mut h = Host::start();
+    h.next();
+    let job = json!({"id": "j-1", "kind": "pluxy/hub/items", "window": 2});
+    h.send(json!({"type": "call", "id": "c-2", "op": "scan", "input": {"count": 5}, "job": job}));
+    // Two batches go out before any ack; each later one only after the ack two behind it.
+    for n in 1..=5u64 {
+        assert_eq!(
+            h.next(),
+            json!({"type": "progress", "id": "c-2", "value": {"n": n}})
+        );
+        if n >= 2 {
+            // Late, so a batch sent past the window would have been sent before it.
+            std::thread::sleep(Duration::from_millis(50));
+            h.ack("c-2", n - 1);
+        }
+    }
+    assert_eq!(
+        h.next(),
+        json!({"type": "result", "id": "c-2", "output": {"sent": 5}})
+    );
+    // Batch n was sent only once the host had acknowledged n - 2.
+    assert_eq!(*h.tool.acks_at_send.lock().unwrap(), vec![0, 0, 1, 2, 3]);
+    h.end().unwrap();
+}
+
+#[test]
+fn a_batch_is_refused_too_big_outside_a_job_and_once_cancelled() {
+    let mut h = Host::start();
+    h.next();
+    let job = json!({"id": "j-1", "kind": "pluxy/hub/items", "window": 4});
+    // Too big: nothing is sent, the call fails.
+    h.send(json!({"type": "call", "id": "c-2", "op": "big", "input": {}, "job": job}));
+    let e = h.next();
+    assert_eq!(
+        (&e["type"], &e["error"]["code"]),
+        (&json!("error"), &json!("invalid_request"))
+    );
+    // Not a job's call.
+    h.send(json!({"type": "call", "id": "c-3", "op": "scan", "input": {"count": 1}}));
+    assert_eq!(
+        h.next(),
+        json!({"type": "error", "id": "c-3", "error": {"code": "invalid_request", "message": "this call runs no job"}})
+    );
+    // Waiting for an ack, then cancelled: it ends cancelled, with no more batches.
+    let job = json!({"id": "j-2", "kind": "pluxy/hub/items", "window": 1});
+    h.send(json!({"type": "call", "id": "c-4", "op": "scan", "input": {"count": 3}, "job": job}));
+    assert_eq!(h.next()["value"], json!({"n": 1}));
+    h.send(json!({"type": "cancel", "id": "c-4"}));
+    assert_eq!(
+        h.next(),
+        json!({"type": "error", "id": "c-4", "error": {"code": "cancelled", "message": "the call was cancelled"}})
+    );
+    h.end().unwrap();
 }
