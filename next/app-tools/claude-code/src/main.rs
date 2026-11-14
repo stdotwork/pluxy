@@ -3,13 +3,17 @@
 //! its values back, never the key; not exported), `apply`, `clear` and `restore` (write: each
 //! call asks the person; `apply` receives the client key as a secret's value and writes it where
 //! Claude Code reads it), `status` (read: the applied set, the originals kept for restore, the
-//! latest recovery reports) and `recipe` (read: how the launcher starts Claude Code). Writes go
-//! through pluxy-transactions: link-preserving, journalled, with the originals in the host's vault.
+//! latest recovery reports), `recipe` (read: how the launcher starts Claude Code) and the backup
+//! browser's standard operations (`backup-list` and `backup-diff`, reads; `backup-create`,
+//! `backup-restore` and `backup-delete`, writes). Writes go through pluxy-transactions:
+//! link-preserving, journalled, with the originals and manual backups in the host's vault.
 
 mod settings;
 
 use pluxy_program::{run, Call, Error, Handler};
-use pluxy_transactions::{data_dir, Pin, Selection, Target, Transactions};
+use pluxy_transactions::{
+    backup_call, data_dir, json_leaves, Pin, Selection, Target, Transactions,
+};
 use serde_json::{json, Value};
 use settings::{Checked, Settings};
 use std::path::PathBuf;
@@ -48,6 +52,13 @@ fn selection(input: &Value) -> Result<Selection, Error> {
 impl Handler for ClaudeCode {
     fn call(&self, call: &Call) -> Result<Value, Error> {
         let input = &call.input;
+        // The backup browser: manual backups of the settings file, diffed by setting name.
+        if call.op.starts_with("backup-") {
+            let tx = Transactions::new(call, data_dir()?);
+            if let Some(r) = backup_call(call, &tx, SET, &json_leaves) {
+                return r;
+            }
+        }
         match call.op.as_str() {
             "preview" => {
                 let sel = selection(input)?;

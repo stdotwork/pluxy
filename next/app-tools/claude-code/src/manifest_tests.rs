@@ -55,3 +55,13 @@ fn writes_take_exactly_one_strict_pin() {
         assert_eq!(operation(id)["input_schema"]["additionalProperties"], false);
     }
 }
+
+#[test]
+fn the_backup_operations_are_the_librarys_standard_ones() {
+    let ops = manifest()["app"]["operations"].as_array().unwrap().clone();
+    let backups: Vec<Value> = ops
+        .into_iter()
+        .filter(|o| o["id"].as_str().unwrap().starts_with("backup-"))
+        .collect();
+    assert_eq!(backups, pluxy_transactions::backup_operations(1));
+}

@@ -28,7 +28,8 @@
 //!    (`transactions_native.rs`); with `PLUXY_APP_TEST_USAGE`, only the usage hub and its
 //!    fixture parser (`usage_native.rs`); with `PLUXY_APP_TEST_LAUNCHER`, only the execution
 //!    program and the launcher (`launcher_native.rs`); with `PLUXY_APP_TEST_CLAUDE_CODE`, only
-//!    the Claude Code setup and launcher (`claude_code_native.rs`);
+//!    the Claude Code setup and launcher (`claude_code_native.rs`), with its backup browser
+//!    (`backups_native.rs`);
 //! 5. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!
@@ -57,6 +58,9 @@ mod access;
 #[cfg(target_os = "linux")]
 #[path = "admission_native.rs"]
 mod admission;
+#[cfg(target_os = "linux")]
+#[path = "backups_native.rs"]
+mod backups;
 #[cfg(target_os = "linux")]
 #[path = "claude_code_native.rs"]
 mod claude_code;

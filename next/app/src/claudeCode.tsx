@@ -6,7 +6,6 @@
 // never reaches this webview: native key entry keeps it, and the tool's preview reads back only
 // whether one is set. Labels follow the old app's Agents page.
 
-import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useId, useState } from "preact/hooks";
 import type { PageDef } from "../../ui/kit/shell";
 import { strings } from "../../ui/kit/strings";
@@ -22,6 +21,7 @@ import {
   useAction,
   useLoad,
 } from "../../ui/kit/ui";
+import { Backups, reply } from "./backups";
 import { connectionGet } from "./host";
 
 const t = strings("claudeCode", {
@@ -98,16 +98,6 @@ const LABELS: Record<Role, string> = { opus: "Opus", sonnet: "Sonnet", haiku: "H
 const PACKAGE = "pluxy/claude-code";
 const SET_DEFAULT = 200000;
 const SET_1M = 1000000;
-
-type Reply<T> = { status: number; body?: T; error?: { code: string; message: string } };
-
-async function reply<T>(cmd: string, args?: Record<string, unknown>): Promise<Reply<T>> {
-  try {
-    return { status: 200, body: await invoke<T>(cmd, args) };
-  } catch (e) {
-    return { status: 400, error: { code: "refused", message: String(e) } };
-  }
-}
 
 const tool = <T,>(op: string, input: Record<string, unknown>) =>
   reply<T>("program_call", { package: PACKAGE, op, input });
@@ -522,6 +512,7 @@ export function ClaudeCodePage() {
             </ConfirmButton>
             <small class="hint">{t("restoreHint")}</small>
           </Card>
+          <Backups pkg={PACKAGE} pins={pins} disabled={busy} onChange={load} />
         </>
       )}
       <StartCli available={!unavailable} />

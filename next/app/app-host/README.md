@@ -796,7 +796,8 @@ too, only to read backups (`backup.get`, `backup.list`) and to end the journals 
 | `journal.end` | `journal`, `outcome` (`committed` or `rolled_back`) | `{"journal", "outcome"}` |
 
 Backups and journals belong to the package, whatever its release, and stay when it is removed; a
-package keeps at most 256 backups. In a call, a tool commits or ends only a journal its own release
+package keeps at most 256 backups, a backstop: retention is the tool's, which alone knows which of
+its backups its records still name (the transaction library keeps 10 manual backups per set). In a call, a tool commits or ends only a journal its own release
 began; in describe, any journal that describe named. The vault's folders are opened without
 following links, and files in a package's folder that its records do not name (a write cut
 short, a removal that failed) are removed the next time they are read. Errors, which never name
