@@ -582,10 +582,26 @@ fn a_file_with_rows_out_of_bounds_fails_and_its_job_goes_on() {
 fn a_file_refused_before_its_last_part_fails_once_and_its_job_goes_on() {
     let (mut s, d) = store("refused-parts");
     // Old rows of "a" and "big" (an earlier revision): a refused read leaves them.
-    s.replace_file("p/a", "a", 1, 1, &rows(&[(NOV10, "m", tok(9, 0, 9))]))
-        .unwrap();
-    s.replace_file("p/a", "big", 1, 1, &rows(&[(NOV10, "m", tok(8, 0, 8))]))
-        .unwrap();
+    s.replace_file(
+        "p/a",
+        "a",
+        1,
+        1,
+        1,
+        &rows(&[(NOV10, "m", tok(9, 0, 9))]),
+        &Events::new(),
+    )
+    .unwrap();
+    s.replace_file(
+        "p/a",
+        "big",
+        1,
+        1,
+        1,
+        &rows(&[(NOV10, "m", tok(8, 0, 8))]),
+        &Events::new(),
+    )
+    .unwrap();
     let host = FakeHost::new(&["p/a"]);
     let mut sync = Sync::new();
     sync.step(&mut s, &host, true, T0).unwrap();
@@ -671,15 +687,23 @@ fn a_file_refused_before_its_last_part_fails_once_and_its_job_goes_on() {
     );
     // The old rows of "a" and "big" stay (9 and 8), and "b" is stored (2): 19 in all, one hour.
     assert_eq!(stored(&s), vec![("p/a".into(), NOV10, "m".into(), 19, 19)]);
-    assert_eq!(s.revisions("p/a").unwrap()["a"], (1, 1));
+    assert_eq!(s.revisions("p/a").unwrap()["a"], (1, 1, 1));
     std::fs::remove_dir_all(d).unwrap();
 }
 
 /// A run with files f1 (committed), f2 (a part staged, not last) and f3 (not reached) in one read
 /// job; returns the job's ID. f2 has old rows of 8 tokens and f1 none.
 fn read_job_midway(sync: &mut Sync, s: &mut Store, host: &FakeHost) -> String {
-    s.replace_file("p/a", "f2", 1, 1, &rows(&[(NOV10, "m", tok(8, 0, 8))]))
-        .unwrap();
+    s.replace_file(
+        "p/a",
+        "f2",
+        1,
+        1,
+        1,
+        &rows(&[(NOV10, "m", tok(8, 0, 8))]),
+        &Events::new(),
+    )
+    .unwrap();
     sync.step(s, host, true, T0).unwrap();
     let (job, _) = host.last();
     list(sync, s, &job, "p/a", &[("f1", 5), ("f2", 5), ("f3", 5)]);
@@ -1126,6 +1150,61 @@ fn a_schema_2_producers_keyed_rows_count_once_and_a_schema_1_producer_may_send_n
         stored(&s),
         vec![("p/a".into(), NOV10 + H, "m".into(), 9, 9)]
     );
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn a_file_refused_before_its_last_part_drops_its_staged_events_too() {
+    let (mut s, d) = store("refused-events");
+    let mut host = FakeHost::new(&["p/a"]);
+    host.registrations[0]["schema"] = json!(2);
+    let mut sync = Sync::new();
+    sync.step(&mut s, &host, true, T0).unwrap();
+    let (job, _) = host.last();
+    list(&mut sync, &mut s, &job, "p/a", &[("f1", 5), ("f2", 5)]);
+    sync.step(&mut s, &host, false, T0 + 1).unwrap();
+    let (read, _) = host.last();
+    let batch = |file: &str, n: u64, last: bool, rows: Value| {
+        at_schema(
+            delivery(&read, "p/a", "batch", part(file, 5, n, last, rows)),
+            2,
+        )
+    };
+    // f1 stages k1 (5) and k2 (7), then a row in 1970 refuses it; its last part (k3, 100) is
+    // dropped. f2, read meanwhile, has k1 (5).
+    for b in [
+        batch(
+            "f1",
+            0,
+            false,
+            json!([
+                keyed(NOV10 + H, "m", 5, "k1"),
+                keyed(NOV10 + H, "m", 7, "k2")
+            ]),
+        ),
+        batch("f1", 1, false, json!([keyed(0, "m", 1, "k9")])),
+        batch("f2", 0, true, json!([keyed(NOV10 + H, "m", 5, "k1")])),
+        batch("f1", 2, true, json!([keyed(NOV10 + H, "m", 100, "k3")])),
+    ] {
+        sync.ingest(&mut s, T0 + 1, &b).unwrap();
+    }
+    sync.ingest(&mut s, T0 + 1, &delivery(&read, "p/a", "done", json!({})))
+        .unwrap();
+    let st = sync.step(&mut s, &host, false, T0 + 2).unwrap();
+    assert_eq!(
+        (
+            st["sources"][0]["read"].clone(),
+            st["sources"][0]["failed"].clone()
+        ),
+        (json!(1), json!(1))
+    );
+    // Only f2's k1: one event of 5; nothing of f1 is stored.
+    assert_eq!(
+        stored(&s),
+        vec![("p/a".into(), NOV10 + H, "m".into(), 5, 5)]
+    );
+    assert_eq!(s.storage().unwrap().1, 1);
+    assert!(!s.revisions("p/a").unwrap().contains_key("f1"));
     std::fs::remove_dir_all(d).unwrap();
 }
 
