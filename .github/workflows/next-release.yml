@@ -150,7 +150,8 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: next/go.mod
-          cache: true
+          # On a tag push the release archives must not be built from the Go cache that Next CI saves on main.
+          cache: ${{ github.event_name == 'pull_request' }}
           cache-dependency-path: next/go.mod
       - name: Pack the extensions
         working-directory: next

@@ -22,6 +22,9 @@ permissions:
 
 env:
   CGO_ENABLED: 1
+  # The browser-test container can write the checkout, so a planted go.mod must not make a later
+  # step or setup-go's post-step switch Go toolchains. next/go.mod's go line is what setup-go installs.
+  GOTOOLCHAIN: local
 
 defaults:
   run:
@@ -108,6 +111,8 @@ jobs:
           # playwright test runs on the image's own Node (26 in 1.65.0), not on the Node 24 this job sets up.
           # .git is mounted read-only over the checkout: the checkout's post-step runs git there with
           # the job token in its environment, so the image must not be able to change git's config.
+          # Submodules would sit outside that read-only .git mount, so fail rather than leave them writable.
+          if [ -e "$GITHUB_WORKSPACE/.gitmodules" ]; then echo "::error::submodules would sit outside the read-only .git mount; mount their git folders read-only too" >&2; exit 1; fi
           docker run --rm --init --ipc=host \
             --user "$(id -u):$(id -g)" \
             -e CI -e HOME=/tmp -e CGO_ENABLED=0 \
