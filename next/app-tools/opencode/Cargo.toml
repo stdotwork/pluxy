@@ -1,0 +1,15 @@
+[package]
+name = "opencode"
+version = "0.1.0"
+description = "Sets up and starts OpenCode for pluxy's desktop app"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+# OpenCode's config is JSONC: edits go through a concrete syntax tree, so comments and formatting stay.
+jsonc-parser = { version = "0.34", default-features = false, features = ["cst", "serde_json"] }
+pluxy-program = { path = "../lib/program" }
+pluxy-transactions = { path = "../lib/transactions" }
+# Keys keep their order and numbers their digits in the values compared and written.
+serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
