@@ -12,7 +12,7 @@
 use crate::artifact::PublisherKeys;
 use crate::client::{certificates, Client, Reply, ROTATE};
 use crate::cores::{self, ConfigSnapshot, Store};
-use crate::managed::{core_program, write_private, Gone, ManagedCore, OnExit};
+use crate::managed::{core_program, write_private, Gone, Hold, ManagedCore, OnExit};
 use crate::recovery::Recovery;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -398,6 +398,9 @@ pub struct Caller {
     client: Option<Client>,
     key: Option<String>,
     gone: Option<Gone>,
+    /// The app's copy of its own core's listening socket, kept open (never read) while this
+    /// caller may send there.
+    _hold: Option<Hold>,
 }
 
 impl Caller {
@@ -412,15 +415,12 @@ impl Caller {
         body: Option<&Value>,
         limit: Option<Duration>,
     ) -> Reply {
-        // The app's own core is stopping or has exited: whatever listens on its address now
-        // may not be it. Still open: a call that passed this check just before a stop or exit
-        // goes out; after a crash, the kernel frees the port as the core exits, a moment
-        // before the app sees the exit (its pidfd) and sets the flag; and when something other
-        // than the app stops the core (SIGTERM or SIGINT from outside), the core closes its
-        // listener at once and drains its calls for up to 10 seconds before it exits, all with
-        // the flag unset. A program that binds the freed port in either window can receive a
-        // call with the key. Only a socket the app holds and hands to the core, or calls without
-        // a bearer key, close that.
+        // The app's own core is stopping or has exited: nothing more goes to its address. A
+        // call that passed this check just before a stop or an exit, or one made while the core
+        // drains after a SIGTERM from outside the app (it closes its listener at once, with the
+        // flag still unset), still goes out, but only to the core or into the app's own copy of
+        // its listening socket (_hold): no other program can listen there while this caller
+        // holds it. Once the core has exited, the app refuses such waiting calls.
         if self
             .gone
             .as_ref()
@@ -1249,6 +1249,7 @@ impl Connection {
             client: self.client.clone(),
             key: self.key.clone(),
             gone: self.gone.clone(),
+            _hold: self.managed.as_ref().and_then(ManagedCore::hold),
         }
     }
 
@@ -1437,38 +1438,22 @@ mod tests {
     use super::*;
 
     /// N1: a call taken before the app's core is stopped refuses from the moment the stop
-    /// begins, while the core drains with its listener closed and something else answers there.
+    /// begins, while the core drains; and no other program can listen on the core's address
+    /// while that call holds the app's copy of its socket.
     #[cfg(target_os = "linux")]
     #[test]
     fn a_caller_refuses_once_its_core_is_being_stopped() {
-        use std::io::{Read, Write};
-        use std::sync::{Arc, Mutex};
         let dir =
             std::env::temp_dir().join(format!("pluxy-stopping-{}", crate::managed::random_key()));
         fs::create_dir_all(&dir).unwrap();
-        // What answers on the core's port once the core has closed its listener.
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let base = format!("http://{}", listener.local_addr().unwrap());
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let keep = seen.clone();
-        std::thread::spawn(move || {
-            for conn in listener.incoming() {
-                let Ok(mut c) = conn else { return };
-                let _ = c.set_read_timeout(Some(std::time::Duration::from_millis(500)));
-                let mut buf = [0u8; 4096];
-                if let Ok(n) = c.read(&mut buf) {
-                    keep.lock().unwrap().extend_from_slice(&buf[..n]);
-                }
-                let _ = c.write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
-                );
-            }
-        });
-        // A core that drains for two seconds after SIGTERM.
+        let addr =
+            crate::managed::listen_addr(&crate::managed::ensure_config(&dir).unwrap()).unwrap();
+        // A core that says it listens on the socket the app gives it, and drains for two
+        // seconds after SIGTERM.
         let program = dir.join("core.sh");
         fs::write(
             &program,
-            format!("#!/bin/sh\necho 'pluxy: listening on {base}' >&2\ntrap 'sleep 2; exit 0' TERM\nwhile :; do sleep 0.1; done\n"),
+            format!("#!/bin/sh\necho 'pluxy: listening on http://{addr}' >&2\ntrap 'sleep 2; exit 0' TERM\nwhile :; do sleep 0.1; done\n"),
         )
         .unwrap();
         {
@@ -1481,19 +1466,22 @@ mod tests {
             client: Some(Client::new(core.base(), None)),
             key: Some(core.key().to_string()),
             gone: Some(core.gone()),
+            _hold: core.hold(),
         };
-        assert_eq!(caller.call("GET", "/status", None).status, 200);
-        seen.lock().unwrap().clear();
         let stopping = std::thread::spawn(move || core.stop());
         std::thread::sleep(std::time::Duration::from_millis(500));
         let r = caller.call("GET", "/status", None);
-        assert_ne!(r.status, 200, "a call went out while the core was stopping");
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        assert!(
-            seen.lock().unwrap().is_empty(),
+        assert_eq!(
+            r.error.as_ref().map(|e| e.message.as_str()),
+            Some("the app's core has stopped"),
             "a call went out while the core was stopping"
         );
         stopping.join().unwrap();
+        assert!(
+            std::net::TcpListener::bind(addr).is_err(),
+            "another program could listen on the core's address while a caller held it"
+        );
+        drop(caller);
         fs::remove_dir_all(dir).unwrap();
     }
 

@@ -37,6 +37,7 @@ func main() {
 	bundled := flag.String("bundled", "", "index of the registry of bundled packages (default: bundled/index.json beside this program, when it exists)")
 	importAuth := flag.String("import-auth", "", "copy the credential files of today's core's auth folder at this path into the credential store, then exit (run it while core is stopped)")
 	version := flag.Bool("version", false, "print the build's version, commit and build date, then exit")
+	listenFD := flag.Int("listen-fd", -1, "serve on the listening TCP socket inherited at this file descriptor instead of binding listen (for a program that starts core and keeps the socket)")
 	flag.Parse()
 	if *version {
 		fmt.Println(buildinfo.Line())
@@ -49,7 +50,7 @@ func main() {
 		}
 		return
 	}
-	if err := run(*configPath, *safeMode, *watch, *bundled); err != nil {
+	if err := run(*configPath, *safeMode, *watch, *bundled, *listenFD); err != nil {
 		log.Print(err)
 		os.Exit(1)
 	}
@@ -95,6 +96,31 @@ func importAuthDir(configPath, dir string) error {
 	return nil
 }
 
+// listen binds addr, or with fd 0 or more serves on the listening TCP socket inherited at fd.
+// The program that started core keeps its own copy of that socket, so no other program can bind
+// the address while core stops (it closes its listener as it starts draining) or after it exits.
+func listen(addr string, fd int) (net.Listener, error) {
+	if fd < 0 {
+		return net.Listen("tcp", addr)
+	}
+	f := os.NewFile(uintptr(fd), "listen-fd")
+	if f == nil {
+		return nil, fmt.Errorf("-listen-fd %d: not an open file", fd)
+	}
+	// FileListener keeps a duplicate that closes on exec, so programs core starts never hold the
+	// socket; the inherited descriptor is closed here.
+	defer f.Close()
+	ln, err := net.FileListener(f)
+	if err != nil {
+		return nil, fmt.Errorf("-listen-fd %d: %w", fd, err)
+	}
+	if _, ok := ln.(*net.TCPListener); !ok {
+		ln.Close()
+		return nil, fmt.Errorf("-listen-fd %d: not a TCP socket", fd)
+	}
+	return ln, nil
+}
+
 // defaultBundled returns bundled/index.json beside the running program when it exists.
 func defaultBundled() string {
 	exe, err := os.Executable()
@@ -108,7 +134,7 @@ func defaultBundled() string {
 	return p
 }
 
-func run(configPath string, safeMode bool, watch time.Duration, bundled string) error {
+func run(configPath string, safeMode bool, watch time.Duration, bundled string, listenFD int) error {
 	if bundled == "" {
 		bundled = defaultBundled()
 	} else if abs, err := filepath.Abs(bundled); err == nil {
@@ -134,7 +160,7 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string) 
 		log.Printf("extension %s %s started", e.ID, e.Version)
 	}
 
-	ln, err := net.Listen("tcp", cfg.Listen)
+	ln, err := listen(cfg.Listen, listenFD)
 	if err != nil {
 		return err
 	}
