@@ -169,14 +169,16 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             "source": curated,
         }))
     };
-    let listed = || -> Result<Vec<Value>, String> {
+    // The hub's registrations, as the host gave them, and without their signer (the curated
+    // key's: only its publisher, checked here, is known to the check).
+    let listed = || -> Result<(Vec<Value>, Vec<Value>), String> {
         let out = output(
             &ask(main, HUB, "registrations", json!({"kind": KIND}))?,
             "the hub's registrations",
         )?;
-        // The signer is the curated key's: only its publisher is known here.
-        let mut regs = out["registrations"].as_array().cloned().unwrap_or_default();
-        for x in &mut regs {
+        let regs = out["registrations"].as_array().cloned().unwrap_or_default();
+        let mut bare = regs.clone();
+        for x in &mut bare {
             require(
                 x["signer"]["publisher"] == "pluxy",
                 format!("a registration's signer: {x}"),
@@ -185,7 +187,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 m.remove("signer");
             }
         }
-        Ok(regs)
+        Ok((regs, bare))
     };
     let start_job = |reg: &Value, input: Value| -> Result<String, String> {
         let a = ask(
@@ -226,12 +228,14 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             enable(app, main, OTHER)?;
             enable(app, main, THIEF)?;
-            reg = registration("1.0.0")?;
-            let regs = listed()?;
+            let want = registration("1.0.0")?;
+            let (regs, bare) = listed()?;
             require(
-                regs == vec![reg.clone()],
-                format!("the hub's registrations should be only {reg}: {regs:?}"),
+                bare == vec![want.clone()],
+                format!("the hub's registrations should be only {want}: {regs:?}"),
             )?;
+            // With its signer: what a batch's source must be.
+            reg = regs[0].clone();
             denied(
                 &ask(main, THIEF, "registrations", json!({"kind": KIND}))?,
                 "permission",
@@ -472,12 +476,13 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                     "generation": reg["generation"], "input": {"count": 1}}),
             )?;
             denied(&a, "permission", "a start naming the replaced release")?;
-            let new = registration("1.1.0")?;
-            let regs = listed()?;
+            let want = registration("1.1.0")?;
+            let (regs, bare) = listed()?;
             require(
-                regs == vec![new.clone()],
-                format!("after the update the registrations should be {new}: {regs:?}"),
+                bare == vec![want.clone()],
+                format!("after the update the registrations should be {want}: {regs:?}"),
             )?;
+            let new = regs[0].clone();
             let job = start_job(&new, json!({"count": 1}))?;
             let (batches, end) = finished(main, &job)?;
             items(&batches, 1, &new)?;
@@ -506,7 +511,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 batches.len() == 1 && end["event"] == "cancelled",
                 format!("the disabled producer's job: {batches:?} {end}"),
             )?;
-            let regs = listed()?;
+            let (regs, _) = listed()?;
             require(
                 regs.is_empty(),
                 format!("a disabled producer is not listed: {regs:?}"),
@@ -524,9 +529,9 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             enable(app, main, SOURCE)?;
             let again = registration("1.1.0")?;
-            let regs = listed()?;
+            let (regs, bare) = listed()?;
             require(
-                regs == vec![again.clone()],
+                bare == vec![again.clone()],
                 format!("enabled again, the source is listed again: {regs:?}"),
             )
         })(),
