@@ -477,6 +477,83 @@ fn registry_pins_reserved_ids_and_paths() {
     done(root);
 }
 
+/// An install without a version, and what `offers` shows first, take the highest version the
+/// index lists for this computer, whatever order the index lists them in.
+#[test]
+fn registry_without_a_version_takes_the_highest_release() {
+    let root = temp();
+    let d = dirs(&root);
+    let reg = root.join("reg");
+    fs::create_dir_all(&reg).unwrap();
+    let old = package("example/notes", "1.0.0");
+    let new = package("example/notes", "2.0.0");
+    let beta = package("example/beta", "1.0.0-beta.2");
+    fs::write(reg.join("old.tar.gz"), &old).unwrap();
+    fs::write(reg.join("new.tar.gz"), &new).unwrap();
+    fs::write(reg.join("beta.tar.gz"), &beta).unwrap();
+    let p = platform();
+    let art = |f: &str, b: &[u8]| serde_json::json!({p.clone(): {"url": f, "sha256": digest(b), "size": b.len()}});
+    let index = serde_json::json!({"registry_version": 0, "packages": {
+        // An older release first, then one that is not a version, a prerelease and the highest.
+        "example/notes": {"releases": [
+            {"version": "1.0.0", "artifacts": art("old.tar.gz", &old)},
+            {"version": "latest", "artifacts": art("old.tar.gz", &old)},
+            {"version": "3.0.0-rc.1", "artifacts": art("old.tar.gz", &old)},
+            {"version": "2.0.0", "artifacts": art("new.tar.gz", &new)}
+        ]},
+        // Prereleases only: the highest of them.
+        "example/beta": {"releases": [
+            {"version": "1.0.0-beta.1", "artifacts": art("old.tar.gz", &old)},
+            {"version": "1.0.0-beta.2", "artifacts": art("beta.tar.gz", &beta)}
+        ]},
+        // Nothing that is a version: only a named install can take it.
+        "example/named": {"releases": [
+            {"version": "latest", "artifacts": art("old.tar.gz", &old)}
+        ]}
+    }});
+    fs::write(reg.join("index.json"), serde_json::to_vec(&index).unwrap()).unwrap();
+    fs::write(
+        &d.registries,
+        serde_json::to_vec(&serde_json::json!({"version": 0, "registries": [
+            {"name": "fixture", "url": reg.join("index.json")}]}))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let offers = offers(&d, &NoRoots).unwrap();
+    let versions = |id: &str| {
+        offers[0]
+            .packages
+            .iter()
+            .find(|o| o.id == id)
+            .map(|o| o.versions.clone())
+    };
+    assert_eq!(
+        versions("example/notes").unwrap(),
+        ["2.0.0", "1.0.0", "3.0.0-rc.1"]
+    );
+    assert_eq!(
+        versions("example/beta").unwrap(),
+        ["1.0.0-beta.2", "1.0.0-beta.1"]
+    );
+    assert_eq!(versions("example/named"), None);
+
+    // The release `offers` puts first is the one an install without a version stages.
+    let c = stage_from_registry(&d, &NoRoots, "fixture", "example/notes", None).unwrap();
+    assert_eq!(c.release.version, "2.0.0");
+    let c = stage_from_registry(&d, &NoRoots, "fixture", "example/beta", None).unwrap();
+    assert_eq!(c.release.version, "1.0.0-beta.2");
+    // Naming a version still installs it, a prerelease or one that is not a version too.
+    let c = stage_from_registry(&d, &NoRoots, "fixture", "example/notes", Some("1.0.0")).unwrap();
+    assert_eq!(c.release.version, "1.0.0");
+    let e = stage_from_registry(&d, &NoRoots, "fixture", "example/named", None).unwrap_err();
+    assert!(e.contains("lists no example/named"), "{e}");
+    let e =
+        stage_from_registry(&d, &NoRoots, "fixture", "example/named", Some("latest")).unwrap_err();
+    assert!(!e.contains("lists no"), "{e}");
+    done(root);
+}
+
 /// Removes a test's folder, the store's read-only releases in it too.
 fn done(root: PathBuf) {
     #[cfg(unix)]
@@ -1954,6 +2031,137 @@ fn imports_exports_and_effects_are_validated() {
     assert!(check("native", Value::Null).is_ok());
 }
 
+#[test]
+fn produced_and_consumed_kinds_are_validated() {
+    let check = |tier: &str, extra: Value| {
+        let mut m = serde_json::json!({"manifest_version": 1, "id": "pluxy/a", "version": "1",
+            "app": {"version": 0, "tier": tier, "host_versions": [0]}});
+        if tier == "native" {
+            m["app"]["programs"] = serde_json::json!({platform(): "bin/tool"});
+            m["app"]["operations"] = serde_json::json!([{"id": "op", "description": "d",
+                "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}]);
+            m["app"]["state"] = serde_json::json!({"version": 0, "readable_versions": [0]});
+        }
+        if let Value::Object(o) = extra {
+            for (k, v) in o {
+                m["app"][k] = v;
+            }
+        }
+        let m: Manifest = serde_json::from_value(m).unwrap();
+        validate(&m).and_then(|app| jobs::decls(&m.id, app.as_ref().unwrap()))
+    };
+    let produce = serde_json::json!({"kind": "pluxy/hub/items", "schema": 1, "operation": "op"});
+    let consume = serde_json::json!({"kind": "pluxy/a/items", "schema": [1], "deliver": "op"});
+    // The controls: a kind produced for another package, and one consumed in its own namespace,
+    // each by its own operation.
+    let two_ops = |extra: Value| {
+        let mut e = serde_json::json!({"operations": [
+            {"id": "op", "description": "d",
+                "input_schema": {"type": "object"}, "output_schema": {"type": "object"}},
+            {"id": "scan", "description": "d",
+                "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}]});
+        if let (Some(m), Value::Object(x)) = (e.as_object_mut(), extra) {
+            m.extend(x);
+        }
+        e
+    };
+    let (p, c) = check(
+        "native",
+        two_ops(serde_json::json!({"produces": [
+            {"kind": "pluxy/hub/items", "schema": 1, "operation": "scan"}],
+            "consumes": [consume]})),
+    )
+    .unwrap();
+    assert_eq!((p.len(), c.len(), c[0].deliver.as_str()), (1, 1, "op"));
+    // A job's operation and a deliver operation take no secrets; the control: a package with a
+    // secret field on another operation produces and consumes.
+    let with_secret = |extra: Value| {
+        let mut e = two_ops(extra);
+        e["operations"].as_array_mut().unwrap().push(serde_json::json!({"id": "keyed",
+            "description": "d", "secrets": {"key": "reference"}, "output_schema": {"type": "object"},
+            "input_schema": {"type": "object", "properties": {"key": {"type": "string"}}}}));
+        e
+    };
+    assert!(check(
+        "native",
+        with_secret(serde_json::json!({"produces": [
+            {"kind": "pluxy/hub/items", "schema": 1, "operation": "scan"}],
+            "consumes": [consume]})),
+    )
+    .is_ok());
+    assert!(check("native", serde_json::json!({"produces": [produce]})).is_ok());
+    for (tier, bad, says) in [
+        ("web", serde_json::json!({"produces": [produce]}), "jobs"),
+        ("web", serde_json::json!({"consumes": [consume]}), "jobs"),
+        (
+            "native",
+            serde_json::json!({"produces": [produce, produce]}),
+            "more than once",
+        ),
+        (
+            "native",
+            serde_json::json!({"consumes": [consume, consume]}),
+            "more than once",
+        ),
+        (
+            "native",
+            serde_json::json!({"consumes": [{"kind": "pluxy/hub/items", "schema": [1], "deliver": "op"}]}),
+            "its own namespace",
+        ),
+        (
+            "native",
+            serde_json::json!({"consumes": [consume],
+                "exports": {"contract": 1, "operations": ["op"]}}),
+            "cannot be exported",
+        ),
+        (
+            "native",
+            serde_json::json!({"produces": [produce], "consumes": [consume]}),
+            "also a deliver operation",
+        ),
+        (
+            "native",
+            serde_json::json!({"produces": [{"kind": "items", "schema": 1, "operation": "op"}]}),
+            "app.produces",
+        ),
+        (
+            "native",
+            serde_json::json!({"produces": [{"kind": "pluxy/hub/items", "operation": "op"}]}),
+            "app.produces",
+        ),
+        (
+            "native",
+            serde_json::json!({"produces": [{"kind": "pluxy/hub/items", "schema": 1, "operation": "nope"}]}),
+            "app.produces",
+        ),
+        (
+            "native",
+            serde_json::json!({"consumes": [{"kind": "pluxy/a/items", "schema": [], "deliver": "op"}]}),
+            "app.consumes",
+        ),
+        (
+            "native",
+            serde_json::json!({"consumes": [{"kind": "pluxy/a/items", "schema": [1], "deliver": "nope"}]}),
+            "app.consumes",
+        ),
+        (
+            "native",
+            with_secret(serde_json::json!({"produces": [
+                {"kind": "pluxy/hub/items", "schema": 1, "operation": "keyed"}]})),
+            "takes no secrets",
+        ),
+        (
+            "native",
+            with_secret(serde_json::json!({"consumes": [
+                {"kind": "pluxy/a/items", "schema": [1], "deliver": "keyed"}]})),
+            "takes no secrets",
+        ),
+    ] {
+        let e = check(tier, bad.clone()).unwrap_err();
+        assert!(e.contains(says), "{bad}: {e}");
+    }
+}
+
 /// A curated registry with tools that import and export, and web packages that import them;
 /// staged and committed into a catalog.
 fn routing_catalog(root: &Path) -> (Catalog, TestRoots) {
@@ -2031,6 +2239,40 @@ fn routing_catalog(root: &Path) -> (Catalog, TestRoots) {
         ),
         ("pluxy/sd", "2.0.0", serde_json::json!({})),
         ("pluxy/se", "1.0.0", serde_json::json!({})),
+        // Jobs: jhub consumes its items into hidden; jsrc produces them (and jimp's) by read, at
+        // schema 1 (2.0.0 too), jsrc2 at schema 2; jimp consumes its items and imports jsrc.
+        (
+            "pluxy/jhub",
+            "1.0.0",
+            serde_json::json!({"consumes": [{"kind": "pluxy/jhub/items", "schema": [1],
+                "deliver": "hidden"}]}),
+        ),
+        (
+            "pluxy/jsrc",
+            "1.0.0",
+            serde_json::json!({"exports": {"contract": 1, "operations": ["read"]},
+                "produces": [{"kind": "pluxy/jhub/items", "schema": 1, "operation": "read"},
+                    {"kind": "pluxy/jimp/items", "schema": 1, "operation": "read"}]}),
+        ),
+        (
+            "pluxy/jsrc",
+            "2.0.0",
+            serde_json::json!({"exports": {"contract": 1, "operations": ["read"]},
+                "produces": [{"kind": "pluxy/jhub/items", "schema": 1, "operation": "read"}]}),
+        ),
+        (
+            "pluxy/jsrc2",
+            "1.0.0",
+            serde_json::json!({"produces": [{"kind": "pluxy/jhub/items", "schema": 2,
+                "operation": "read"}]}),
+        ),
+        (
+            "pluxy/jimp",
+            "1.0.0",
+            serde_json::json!({"consumes": [{"kind": "pluxy/jimp/items", "schema": [1],
+                "deliver": "hidden"}],
+                "imports": [import("pluxy/jsrc", &[1], &["read"], false)]}),
+        ),
         (
             "pluxy/se",
             "2.0.0",
@@ -2107,6 +2349,10 @@ fn routing_catalog(root: &Path) -> (Catalog, TestRoots) {
         "pluxy/sb",
         "pluxy/sd",
         "pluxy/se",
+        "pluxy/jhub",
+        "pluxy/jsrc",
+        "pluxy/jsrc2",
+        "pluxy/jimp",
         "pluxy/guide",
     ] {
         c.commit(stage_from_registry(&d, &roots, "curated", id, Some("1.0.0")).unwrap())
@@ -2376,6 +2622,93 @@ fn dependencies_cycles_consent_and_grants() {
     c.set_enabled("pluxy/guide", true, &roots).unwrap();
     assert!(!c.imports_allowed("pluxy/guide", &roots));
     let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn registrations_and_job_grants_are_the_catalogs() {
+    let root = temp();
+    let (mut c, roots) = routing_catalog(&root);
+    for id in ["pluxy/jhub", "pluxy/jsrc", "pluxy/jsrc2", "pluxy/jimp"] {
+        enable(&mut c, id, &roots).unwrap();
+    }
+    const KIND: &str = "pluxy/jhub/items";
+    let hub = c.admitted("pluxy/jhub", &roots).unwrap();
+    let me = ("pluxy/jhub", hub.sha256(), hub.installed_at());
+    let src = c.admitted("pluxy/jsrc", &roots).unwrap();
+    let named = ("pluxy/jsrc", src.sha256(), src.installed_at());
+    #[cfg(target_os = "linux")]
+    {
+        let what = src.confirmation().what;
+        assert!(
+            what.contains("Produces: pluxy/jhub/items (schema 1, by read)"),
+            "{what}"
+        );
+    }
+    // Only jsrc: jsrc2's schema is not accepted. Its record is the catalog's.
+    let regs = c.registrations(me, KIND, &roots).unwrap();
+    assert_eq!(regs.len(), 1, "{regs:?}");
+    let r = &regs[0];
+    assert_eq!(
+        (
+            r.package.as_str(),
+            r.sha256.as_str(),
+            r.generation,
+            r.schema
+        ),
+        ("pluxy/jsrc", src.sha256(), src.installed_at(), 1)
+    );
+    assert_eq!(r.source, roots.source);
+    // A kind it does not consume, or a caller that is not the release it runs: refused.
+    assert_eq!(
+        c.registrations(me, "pluxy/jimp/items", &roots)
+            .unwrap_err()
+            .code,
+        "permission"
+    );
+    let stale = ("pluxy/jhub", hub.sha256(), hub.installed_at() + 1);
+    assert_eq!(
+        c.registrations(stale, KIND, &roots).unwrap_err().code,
+        "permission"
+    );
+    // The grant: the producer's operation and the consumer's deliver operation.
+    let g = c.job_grant(me, KIND, named, &roots).unwrap();
+    assert_eq!(
+        (g.producer.op.id.as_str(), g.deliver.id.as_str()),
+        ("read", "hidden")
+    );
+    let wrong = ("pluxy/jsrc", hub.sha256(), src.installed_at());
+    let e = c.job_grant(me, KIND, wrong, &roots).unwrap_err();
+    assert!(e.message.contains("not the release"), "{e:?}");
+    let s2 = c.admitted("pluxy/jsrc2", &roots).unwrap();
+    let e = c
+        .job_grant(
+            me,
+            KIND,
+            ("pluxy/jsrc2", s2.sha256(), s2.installed_at()),
+            &roots,
+        )
+        .unwrap_err();
+    assert!(e.message.contains("schema 2"), "{e:?}");
+    // A consumer that imports its producer is refused a job of it.
+    let imp = c.admitted("pluxy/jimp", &roots).unwrap();
+    let e = c
+        .job_grant(
+            ("pluxy/jimp", imp.sha256(), imp.installed_at()),
+            "pluxy/jimp/items",
+            named,
+            &roots,
+        )
+        .unwrap_err();
+    assert!(e.message.contains("imports pluxy/jsrc"), "{e:?}");
+    // The deliver operation takes only the host's deliveries; the window may call the others.
+    assert!(c.main_grant("pluxy/jhub", "read", &roots).is_ok());
+    let e = c.main_grant("pluxy/jhub", "hidden", &roots).unwrap_err();
+    assert!(e.message.contains("host's job deliveries"), "{e:?}");
+    // Disabled, the producer is not registered and its job is refused.
+    c.set_enabled("pluxy/jsrc", false, &roots).unwrap();
+    assert!(c.registrations(me, KIND, &roots).unwrap().is_empty());
+    assert!(c.job_grant(me, KIND, named, &roots).is_err());
+    done(root);
 }
 
 #[test]

@@ -24,6 +24,7 @@ pub use admission::{
     Signed, StateDecl,
 };
 pub use imports::{Consent, ConsentTarget, ExportDecl, Grant, ImportDecl, Refused, LAUNCH_FIELDS};
+pub use jobs::{ConsumeDecl, JobGrant, ProduceDecl, Registration};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -142,6 +143,11 @@ pub struct Release {
     /// Native: the operations other packages may import, and their contract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exports: Option<ExportDecl>,
+    /// Native: the kinds it produces as jobs, and consumes (`device_jobs.rs`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub produces: Vec<ProduceDecl>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub consumes: Vec<ConsumeDecl>,
 }
 
 fn web() -> String {
@@ -1125,6 +1131,8 @@ struct App {
     state: Option<State>,
     imports: Option<Vec<imports::ImportSpec>>,
     exports: Option<imports::ExportSpec>,
+    produces: Option<Vec<jobs::ProduceSpec>>,
+    consumes: Option<Vec<jobs::ConsumeSpec>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -1300,8 +1308,12 @@ impl App {
                 || self.operations.is_some()
                 || self.state.is_some()
                 || self.exports.is_some()
+                || self.produces.is_some()
+                || self.consumes.is_some()
             {
-                return Err("web app cannot declare programs, operations, exports or state".into());
+                return Err(
+                    "web app cannot declare programs, operations, exports, jobs or state".into(),
+                );
             }
             let mut seen = BTreeSet::new();
             for r in self.resources.iter().flatten() {
@@ -1354,6 +1366,12 @@ impl App {
             imports::validate_secrets(op)?;
         }
         imports::validate_exports(self.exports.as_ref(), ops)?;
+        jobs::validate(
+            self.produces.as_deref(),
+            self.consumes.as_deref(),
+            ops,
+            self.exports.as_ref(),
+        )?;
         match &self.state {
             Some(s) if s.version >= 0 && !s.readable_versions.is_empty() => {
                 if s.readable_versions.iter().any(|v| *v < 0) {
@@ -1643,6 +1661,8 @@ fn stage_signed(
             tree: BTreeMap::new(),
             imports: vec![],
             exports: None,
+            produces: vec![],
+            consumes: vec![],
         },
         staged: staged.clone(),
     };
@@ -1710,6 +1730,7 @@ fn stage_signed(
         .collect();
     r.settings = app.config.is_some();
     r.imports = imports::import_decls(&m.id, &app)?;
+    (r.produces, r.consumes) = jobs::decls(&m.id, &app)?;
     match signing {
         Some(s) if app.tier == "native" => {
             admission::native_release(r, &app, &staged, s.signed)?;
@@ -2024,11 +2045,32 @@ fn open_beneath(dir: &Path, rel: &str) -> Result<fs::File, String> {
     Ok(cur)
 }
 
+/// The releases of one package with an archive for platform that an install without a version
+/// may take, the one it takes first: the highest stable version, then the other stable ones
+/// downwards, then the prereleases downwards, so a prerelease is taken only when no stable
+/// release is listed. A version that is not a semantic version is left out, and installs only
+/// when named. Of equal precedence, the one the index lists first comes first. `offers` and
+/// `stage_from_registry` both choose through this.
+fn ranked<'a>(releases: &'a [IndexRelease], platform: &str) -> Vec<&'a IndexRelease> {
+    let mut v: Vec<(semver::Version, &IndexRelease)> = releases
+        .iter()
+        .filter(|x| x.artifacts.contains_key(platform))
+        .filter_map(|x| Some((semver::Version::parse(&x.version).ok()?, x)))
+        .collect();
+    v.sort_by(|(a, _), (b, _)| {
+        (!a.pre.is_empty())
+            .cmp(&!b.pre.is_empty())
+            .then_with(|| b.cmp_precedence(a))
+    });
+    v.into_iter().map(|(_, x)| x).collect()
+}
+
 /// A package a registry offers.
 #[derive(Clone, Debug, Serialize)]
 pub struct Offer {
     pub id: String,
-    /// Versions with an archive for this computer, newest first.
+    /// Versions with an archive for this computer that an install without a version may take,
+    /// the one it takes first (`ranked`).
     pub versions: Vec<String>,
     /// Why this app would refuse it whatever the archive holds, if it would.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2057,11 +2099,7 @@ pub fn offers(dirs: &Dirs, roots: &dyn Roots) -> Result<Vec<RegistryView>, Strin
                     .into_iter()
                     .filter(|(id, _)| valid_id(id))
                     .map(|(id, p)| {
-                        let releases: Vec<&IndexRelease> = p
-                            .releases
-                            .iter()
-                            .filter(|x| x.artifacts.contains_key(&platform))
-                            .collect();
+                        let releases = ranked(&p.releases, &platform);
                         // What install would say of the release offered, from the index alone.
                         let refused = releases.first().and_then(|x| {
                             let a = &x.artifacts[&platform];
@@ -2167,8 +2205,8 @@ fn to_verify<'a>(
     })
 }
 
-/// Fetches and stages package id's release version (the newest with an archive for this
-/// computer, when none is named) from registry name. From a curated registry (one a trust root
+/// Fetches and stages package id's release version (the highest with an archive for this
+/// computer, when none is named: `ranked`) from registry name. From a curated registry (one a trust root
 /// names by its index), a signed artifact is verified against the root before it is unpacked;
 /// a signature another registry lists is checked with the index's key.
 pub fn stage_from_registry(
@@ -2195,17 +2233,19 @@ pub fn stage_from_registry(
         .packages
         .get(id)
         .ok_or_else(|| format!("registry {name} does not list {id}"))?;
-    let release = p
-        .releases
-        .iter()
-        .filter(|x| version.is_none_or(|v| x.version == v))
-        .find(|x| x.artifacts.contains_key(&platform))
-        .ok_or_else(|| {
-            format!(
-                "registry {name} lists no {id}{} for {platform}",
-                version.map(|v| format!(" {v}")).unwrap_or_default()
-            )
-        })?;
+    let release = match version {
+        Some(v) => p
+            .releases
+            .iter()
+            .find(|x| x.version == v && x.artifacts.contains_key(&platform)),
+        None => ranked(&p.releases, &platform).into_iter().next(),
+    }
+    .ok_or_else(|| {
+        format!(
+            "registry {name} lists no {id}{} for {platform}",
+            version.map(|v| format!(" {v}")).unwrap_or_default()
+        )
+    })?;
     let a = &release.artifacts[&platform];
     let listed = to_verify(roots, &r, id, &release.version, a)?;
     let mut bytes = fetch_artifact(&base, a)?;
@@ -2250,6 +2290,8 @@ pub fn stage_from_registry(
 mod admission;
 #[path = "device_imports.rs"]
 mod imports;
+#[path = "device_jobs.rs"]
+mod jobs;
 #[path = "device_swap.rs"]
 mod swap;
 use admission::Signing;
