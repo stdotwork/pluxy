@@ -9,7 +9,7 @@ reference: this folder implements it, it does not change it.
 
 ```bash
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
-cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage)
+cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex)
 ```
 
 ## `lib/program`
@@ -55,6 +55,32 @@ page. See [its README](agent-usage/README.md).
 test packs it); never released. It reads `*.jsonl` files of records `{"id"?, "ts", "model",
 "input", "output", ...}` under its roots, and lines that end a part or pause a read, so a check can
 cancel a job between two parts of one file.
+
+## `usage-codex`
+
+`pluxy/usage-codex`, the usage hub's parser of Codex's session files. It reads the rollout files
+(`*.jsonl`) under `~/.codex/sessions` and `~/.codex/archived_sessions` (from the `HOME` the app
+gives; the hub's `roots` name others) and sends the hub token counts per UTC hour and model, and
+nothing else: no prompt, message, folder or key leaves the parser. It never writes a Codex file.
+
+A rollout's file ID is its file name, so a session Codex moves to the archive is the same file,
+and one copied there is one session (the newer file is read). Each file is read whole when it
+changes, by the old desktop app's rules:
+
+- a `turn_context` line sets the model for the lines after it, and a model in an event's own
+  usage object wins;
+- an event's `info.total_token_usage` is a cumulative counter: the event counts what each field
+  grew by since the last event in the file, never below zero (a counter that falls starts again from
+  the lower value); an event with only `info.last_token_usage` or `payload.usage` counts as it is;
+- input is net of cached input; the total is the event's `total_tokens`, else input + output +
+  cached input; reasoning is part of output;
+- every event is one sample, also one that adds nothing; an event with no counter yet (`info` null)
+  is none;
+- an event's hour is its line's `timestamp` (a line with no readable time is skipped; the old
+  reader used the file's modification time, which a parser is not given). A date with no time is
+  that day's start in UTC, where the old reader used local midnight.
+
+A file over 16 MiB is not read (schema 1's limit): it counts as failed and the hub keeps its old rows.
 
 ## `codex-sessions`
 
