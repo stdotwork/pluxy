@@ -6,6 +6,9 @@
 // - sqlite/codex-dev.db: automation_runs (one row newer than its thread, one archived);
 // - sqlite/threads.db, in WAL mode with no -wal or -shm left: threads with the optional columns;
 // - state_5.sqlite, the legacy database: threads with only id, name and updated_at (seconds);
+// - sqlite/live.db, in WAL mode with a -wal that still holds a committed row (as Codex leaves it
+//   when it stops before copying its -wal back) and no -shm: the reader reads that row too and
+//   adds no file beside it;
 // - sqlite/broken.db: not a database;
 // - rollouts in sessions/ (active) and archived_sessions/ (archived): one whose thread is in a
 //   database (dropped from the list, read for its detail), one named only by session_index.jsonl,
@@ -35,6 +38,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
@@ -69,6 +73,25 @@ function database(path: string, sql: string, wal = false) {
   for (const side of ["-wal", "-shm", "-journal"]) {
     if (existsSync(path + side)) throw new Error(`${path}${side} was left behind`);
   }
+}
+
+/** A WAL database at dest whose row wal-only is only in its -wal, with no -shm: made in source,
+ * then the database and its -wal copied while its connection still holds them. */
+function liveDatabase(source: string, dest: string) {
+  mkdirSync(source, { recursive: true });
+  const path = join(source, "live.db");
+  const db = new Database(path, { create: true });
+  db.run("PRAGMA journal_mode = WAL");
+  db.run("CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, updated_at_ms INTEGER)");
+  db.run("INSERT INTO threads VALUES ('wal-base', 'Checkpointed', 1753000000000)");
+  db.run("PRAGMA wal_checkpoint(TRUNCATE)");
+  db.run("PRAGMA wal_autocheckpoint = 0");
+  db.run("INSERT INTO threads VALUES ('wal-only', 'Only in the WAL', 1753500000000)");
+  copyFileSync(path, dest);
+  copyFileSync(`${path}-wal`, `${dest}-wal`);
+  db.close();
+  if (statSync(`${dest}-wal`).size === 0) throw new Error(`${dest}-wal holds no row`);
+  if (existsSync(`${dest}-shm`)) throw new Error(`${dest}-shm should not exist`);
 }
 
 /** The JSONL lines of T1's rollout, by line number. */
@@ -154,6 +177,7 @@ function codexHome(home: string, outside: string) {
     ].join("\n"),
   );
 
+  liveDatabase(join(outside, "live-source"), join(codex, "sqlite", "live.db"));
   database(
     join(codex, "sqlite", "codex-dev.db"),
     `CREATE TABLE automation_runs (thread_id TEXT PRIMARY KEY, status TEXT, thread_title TEXT, source_cwd TEXT, updated_at INTEGER);
@@ -186,6 +210,7 @@ function codexHome(home: string, outside: string) {
 function expected(codex: string, t1Rollout: string, t1Size: number) {
   const db = (name: string) => join(codex, name);
   const devDb = db("sqlite/codex-dev.db");
+  const liveDb = db("sqlite/live.db");
   const threadsDb = db("sqlite/threads.db");
   const legacyDb = db("state_5.sqlite");
   const s = (
@@ -203,6 +228,8 @@ function expected(codex: string, t1Rollout: string, t1Size: number) {
     s(`local:${T2}`, "Named thread", "/work/two", "openai", true, 1754200000000, threadsDb),
     s("auto-only", "Automation only", "/work/auto", "", true, 1754100000000, devDb),
     s("legacy-1", "Legacy thread", "", "", false, 1754000000000, legacyDb),
+    s("wal-only", "Only in the WAL", "", "", false, 1753500000000, liveDb),
+    s("wal-base", "Checkpointed", "", "", false, 1753000000000, liveDb),
     s(R2, "", "", "", true, 1751356800000, ""),
     s("thread-db-only", "Database only", "/work/three", "azure", false, null, threadsDb),
   ];
@@ -210,9 +237,9 @@ function expected(codex: string, t1Rollout: string, t1Size: number) {
     input: offset === 0 && limit === 50 ? {} : { offset, limit },
     output: {
       codex_home: codex,
-      databases: [devDb, threadsDb, legacyDb],
+      databases: [devDb, liveDb, threadsDb, legacyDb],
       sessions: all.slice(offset, offset + limit),
-      total: 7,
+      total: 9,
       offset,
       limit,
       has_more,
@@ -258,7 +285,13 @@ function expected(codex: string, t1Rollout: string, t1Size: number) {
     },
   });
   return {
-    list: [page(0, 50, false, 4, 3), page(0, 2, true, 2, 0), page(2, 2, true, 0, 2), page(6, 2, false, 1, 0)],
+    list: [
+      page(0, 50, false, 6, 3),
+      page(0, 2, true, 2, 0),
+      page(2, 2, true, 0, 2),
+      page(6, 2, true, 1, 1),
+      page(8, 2, false, 1, 0),
+    ],
     // Each list page has one warning, about broken.db; its wording is SQLite's.
     warning_names: db("sqlite/broken.db"),
     detail: [detail({ id: T1 }, 0, 50, null), detail({ id: T1, offset: 3, limit: 2 }, 3, 2, 5)],

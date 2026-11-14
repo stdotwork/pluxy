@@ -20,6 +20,16 @@
 //   (the window's or an extension page's) and no output line holds any key the run rotated; in
 //   local mode the app then starts again on the same folders and signs in with the kept key.
 //
+// The core steps (src-tauri/src/native_core.rs) run in a managed session of their own, on the
+// build with artifact-test-trust, which starts with no core installed: they install, update, roll
+// back and adopt the app's own core through the real native confirmation, from signed test
+// artifacts made here with a key generated for the run (coreSource below); the run's root joins
+// the trust profile in its temporary HOME, and the private key never leaves memory. A sentinel
+// core this runner starts must still run, untouched, when the app has quit. The app runs only a
+// core it installed (cores.rs): the startup runs and the early-exit run adopt their core_path
+// program before they start, and the other managed runs start with signed release 2.0.0
+// installed, which brings the bundled test packages beside its program.
+//
 // The packaged app too: the test package (package.ts test, an AppImage with the test identifier,
 // product name and compiled test marker) runs through the same checks in local mode, as the
 // AppImage itself, not the binary it was built from. Before anything else, each run's app reports
@@ -46,6 +56,10 @@
 // that build: signed tools calling each other's declared exports through the host, a curated web
 // package's page calling native imports after their native consent, and the refusals of
 // undeclared, forged, cyclic, stale, revoked and Unverified routes, each with a positive control.
+// The declared jobs check (jobs_native.rs) runs after it in that session: a consumer lists the
+// registrations of its kind and starts jobs whose batches the host delivers with their source,
+// with the refusals of forged, duplicate and stale sources, past the window and the size and job
+// limits, cancel and restart, and a disabled producer, each with a positive control.
 // The vault check (vault.ts, vault_native.rs) runs in one more session with that build: a key
 // typed into native key entry reaches a writer tool and a final consumer only on their pipes after
 // native confirmation, an execution tool gets only references, references refused to another
@@ -76,10 +90,11 @@
 // Go, cargo and those services).
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, generateKeyPairSync, type KeyObject, randomBytes, randomUUID, sign } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -88,6 +103,7 @@ import {
   readFileSync,
   readlinkSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -170,8 +186,8 @@ interface Probe {
   placed?: Box;
 }
 
-function run(cmd: string, args: string[], cwd: string) {
-  const r = spawnSync(cmd, args, { cwd, stdio: ["ignore", "pipe", "inherit"], encoding: "utf8" });
+function run(cmd: string, args: string[], cwd: string, env?: NodeJS.ProcessEnv) {
+  const r = spawnSync(cmd, args, { cwd, env, stdio: ["ignore", "pipe", "inherit"], encoding: "utf8" });
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(" ")} exited with ${r.status}`);
   return r.stdout;
 }
@@ -267,9 +283,210 @@ async function managementStatus(base: string, key: string, ca?: string): Promise
   return r.status;
 }
 
+/** Signed test core releases for the managed run, in a folder of their own. */
+interface CoreSource {
+  /** The index file, which the app's connection names as its core source. */
+  index: string;
+  /** A core program of the runner's, which the app must adopt before it runs it. */
+  custom: string;
+  /** The trust profile's root for the run's key, bound to the index. */
+  root: object;
+}
+
+const CORE_ID = "pluxy/core";
+const PLATFORM = `${process.platform}/${process.arch === "x64" ? "amd64" : process.arch}`;
+const VERSION_FLAG = "-X github.com/stdotwork/pluxy/next/internal/buildinfo.Version=";
+
+function hex(b: Buffer | Uint8Array): string {
+  return Buffer.from(b).toString("hex");
+}
+
+/** One release in the index: the archive of folder, its descriptor and a signature by key. */
+function release(dir: string, version: string, folder: string, key: KeyObject, keyId: string, bad = false) {
+  const name = `pluxy-core-${version}-${PLATFORM.replace("/", "-")}.tar.gz`;
+  run("tar", ["-czf", join(dir, name), "-C", folder, "."], dir);
+  const bytes = readFileSync(join(dir, name));
+  const descriptor = JSON.stringify({
+    id: CORE_ID,
+    version,
+    tier: "native",
+    platform: PLATFORM,
+    size: bytes.length,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+  });
+  const signature = sign(null, Buffer.from(descriptor), key);
+  if (bad) signature[0] = (signature[0] ?? 0) ^ 0xff;
+  return {
+    product: "core",
+    version,
+    channel: "stable",
+    published: "2026-11-01T00:00:00Z",
+    artifacts: [{ platform: PLATFORM, url: name, descriptor, signature: hex(signature), key_id: keyId }],
+  };
+}
+
+/** Builds cores 1.0.0 and 2.0.0 (with the bundled test packages of prepared), a 3.0.0 that
+ * breaks its config and exits, and a 2.1.0 whose signature does not verify, signed by a key made
+ * for this run, with their index. */
+function coreSource(dir: string, prepared: string): CoreSource {
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  const keyId = `native-test-${randomUUID()}`;
+  const releases = [];
+  for (const version of ["1.0.0", "2.0.0"]) {
+    const folder = join(dir, `core-${version}`);
+    mkdirSync(folder);
+    run(
+      "go",
+      [
+        "build",
+        "-buildvcs=false",
+        "-ldflags",
+        `${VERSION_FLAG}${version}`,
+        "-o",
+        join(folder, "pluxy"),
+        "./cmd/pluxy",
+      ],
+      next,
+    );
+    cpSync(join(prepared, "bundled"), join(folder, "bundled"), { recursive: true });
+    releases.push(release(dir, version, folder, privateKey, keyId));
+  }
+  const broken = join(dir, "core-3.0.0");
+  mkdirSync(broken);
+  writeFileSync(
+    join(broken, "pluxy"),
+    "#!/bin/sh\nset -e\n# A bad candidate: it breaks its config (-config <path>) and exits.\nprintf 'not json' > \"$2\"\necho 'pluxy: bad candidate broke its config' >&2\nexit 3\n",
+  );
+  chmodSync(join(broken, "pluxy"), 0o755);
+  releases.push(release(dir, "3.0.0", broken, privateKey, keyId));
+  releases.push(release(dir, "2.1.0", join(dir, "core-2.0.0"), privateKey, keyId, true));
+  const index = join(dir, "index.json");
+  writeFileSync(index, JSON.stringify({ format: 1, releases }, null, 2));
+  const jwk = publicKey.export({ format: "jwk" });
+  return {
+    index,
+    custom: join(prepared, "pluxy"),
+    root: {
+      kind: "test",
+      publisher: "pluxy",
+      source: index,
+      key_id: keyId,
+      public_key: hex(Buffer.from(jwk.x ?? "", "base64url")),
+    },
+  };
+}
+
+/** A core this runner starts, which the app never started: it must outlive the app's run. */
+async function startSentinel(dir: string, from: string) {
+  cpSync(from, dir, { recursive: true });
+  const key = hex(randomBytes(32));
+  const config = join(dir, "config.json");
+  writeFileSync(
+    config,
+    JSON.stringify({
+      listen: "127.0.0.1:0",
+      client_keys: [hex(randomBytes(32))],
+      management_key: key,
+      credentials_dir: join(dir, "credentials"),
+      packages: { dir: join(dir, "packages") },
+    }),
+    { mode: 0o600 },
+  );
+  const before = readFileSync(config);
+  const proc = spawn(join(dir, "pluxy"), ["-config", config], {
+    cwd: dir,
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  const base = await new Promise<string>((resolve, reject) => {
+    proc.once("exit", (code) => reject(new Error(`the sentinel core exited with ${code}`)));
+    if (proc.stderr)
+      createInterface({ input: proc.stderr }).on("line", (line) => {
+        const m = /^pluxy: listening on (\S+)$/.exec(line);
+        if (m?.[1]) resolve(m[1]);
+      });
+  });
+  return { proc, base, key, config, before, exe: statSync(join(dir, "pluxy")).ino };
+}
+
+/** What the managed run's core steps must report (native_core.rs). */
+const CORE_STEPS: [string, Record<string, unknown>][] = [
+  ["core_missing", { state: "missing", connected: false }],
+  ["core_no_roots", { refused: true, dialog: false }],
+  [
+    "core_install",
+    {
+      outcome: "done",
+      version: "1.0.0",
+      connected: true,
+      signed_in: true,
+      status: 200,
+      reported: "1.0.0",
+      exe_in_app: true,
+    },
+  ],
+  ["core_bad_signature", { refused: true, running: "1.0.0" }],
+  [
+    "core_update",
+    {
+      outcome: "done",
+      version: "2.0.0",
+      status: 200,
+      reported: "2.0.0",
+      old_alive: false,
+      new_pid: true,
+      config_kept: true,
+    },
+  ],
+  [
+    "core_bad_start",
+    {
+      outcome: "failed",
+      version: "2.0.0",
+      status: 200,
+      reported: "2.0.0",
+      old_alive: false,
+      running: true,
+      config_restored: true,
+      failed: "3.0.0",
+    },
+  ],
+  [
+    "core_rollback",
+    {
+      unknown_refused: true,
+      cancel: "cancelled",
+      cancel_kept: true,
+      outcome: "done",
+      version: "1.0.0",
+      status: 200,
+      reported: "1.0.0",
+      config_kept: true,
+    },
+  ],
+  [
+    "core_adopt",
+    {
+      custom_not_run: true,
+      running_before: "1.0.0",
+      outcome: "done",
+      status: 200,
+      exe_in_app: true,
+      custom_running: false,
+      back: "1.0.0",
+      back_outcome: "done",
+    },
+  ],
+];
+
 /** The management key in core's config file: its current one, also after a rotation. */
 function managementKey(config: string): string {
   return JSON.parse(readFileSync(config, "utf8")).management_key;
+}
+
+/** A signed release from a core source, installed before the app starts. */
+interface Release {
+  from: CoreSource;
+  version: string;
 }
 
 /** The window checks (window.ts), with or without a tray watcher in the session, the privacy
@@ -292,7 +509,9 @@ interface Rotation {
  * exists (PLUXY_APP_TEST_EARLY_EXIT), and only the recovery of that core is checked. admission:
  * the session checks only signed native-tier admission; program: only the program host and swap
  * checks; routing: only the cross-package routing check; vault: only the vault check; reader: only
- * the session reader check; transactions: only the transaction library check. */
+ * the session reader check; transactions: only the transaction library check. core: the session
+ * runs only the core steps, against that core source. release: the app starts with that release
+ * installed and selected. */
 async function runApp(
   mode: Mode,
   artifact: Artifact,
@@ -309,6 +528,8 @@ async function runApp(
   earlyExit = false,
   routing = false,
   vault = false,
+  core?: CoreSource,
+  release?: Release,
   reader = false,
   transactions = false,
 ): Promise<string[]> {
@@ -337,6 +558,32 @@ async function runApp(
       writeFileSync(join(dirs.config, artifact.identifier, "connection.json"), JSON.stringify(connection), {
         mode: 0o600,
       });
+    // A managed run with a core_path and no core source starts with that program adopted, as the
+    // person would adopt it in the window (core_adopt), so the app runs its own core.
+    const corePath = (connection as { core_path?: string }).core_path;
+    if (mode === "managed" && !core && corePath)
+      run(probe, ["adopt-core", join(dirs.data, artifact.identifier, "cores"), corePath], app);
+    // A release is installed the way a confirmed core_install would, trusting the run's root from
+    // a HOME of its own: the profile in the app's HOME has no publisher roots.
+    if (mode === "managed" && !core && release) {
+      const trustHome = join(root, "install-home");
+      mkdirSync(trustHome, { mode: 0o700 });
+      const nonce = /^nonce=([0-9a-f]{64})$/m.exec(run(probe, ["trust-marker", trustHome], app))?.[1] ?? "";
+      writeFileSync(
+        join(trustHome, PROFILE_FILE),
+        JSON.stringify({ roots: [release.from.root], updater: null }),
+        {
+          mode: 0o600,
+        },
+      );
+      run(
+        probe,
+        ["install-core", join(dirs.data, artifact.identifier, "cores"), release.from.index, release.version],
+        app,
+        { ...process.env, HOME: trustHome, PLUXY_TEST_TRUST_NONCE: nonce },
+      );
+      rmSync(trustHome, { recursive: true, force: true });
+    }
     // The main checks close the window to the tray; the window suite starts with Ask every time.
     if (!suite)
       writeFileSync(
@@ -362,6 +609,7 @@ async function runApp(
       !program &&
       !routing &&
       !vault &&
+      !core &&
       !reader &&
       !transactions &&
       suite !== "access"
@@ -549,6 +797,14 @@ async function runApp(
         : {}),
       ...(earlyExit ? { PLUXY_APP_TEST_EARLY_EXIT: "1" } : {}),
     };
+    const trustReady = join(root, "trust-ready");
+    if (core) {
+      // No roots at first (the profile above has none): the first install must be refused for
+      // that. The run's root joins the profile once it has been (core_no_roots).
+      env.PLUXY_APP_TEST_CORE_SOURCE = core.index;
+      env.PLUXY_APP_TEST_CORE_CUSTOM = core.custom;
+      env.PLUXY_APP_TEST_TRUST_READY = trustReady;
+    }
     // The session script starts and checks the desktop services, then runs the app.
     const session = [
       process.execPath,
@@ -639,6 +895,15 @@ async function runApp(
       }
       steps.set(step, value);
       order.push(step);
+      if (step === "core_no_roots" && core) {
+        writeFileSync(
+          join(dirs.home, PROFILE_FILE),
+          JSON.stringify({ roots: [core.root], updater: { kind: "test", public_key: updaterKey } }),
+          { mode: 0o600 },
+        );
+        writeFileSync(trustReady, "");
+      }
+      if (step.startsWith("core_")) console.log(`  ${label} | ${step} ${json}`);
       if (step === "confirmations")
         console.log(`  ${label} | native confirmations: ${JSON.stringify(value)}`);
       if (step === "frame") before = webProcesses(pid);
@@ -761,8 +1026,11 @@ async function runApp(
       const r = steps.get("routing") as { passed?: boolean } | undefined;
       const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
       check(r?.passed === true, `the routing check did not complete: ${failure}`);
+      const j = steps.get("jobs") as { passed?: boolean } | undefined;
+      check(j?.passed === true, `the jobs check did not complete: ${failure}`);
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode} routing ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode} jobs ${JSON.stringify(j ?? {})}`);
       console.log(`${mode}: routing ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
@@ -831,6 +1099,57 @@ async function runApp(
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode} admission ${JSON.stringify(a ?? {})}`);
       console.log(`${mode}: admission ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
+    if (core) {
+      checkGate();
+      for (const [step, expected] of CORE_STEPS) {
+        const value = steps.get(step);
+        check(
+          value && Object.entries(expected).every(([key, want]) => value[key] === want),
+          `${step} evidence missing or wrong: ${JSON.stringify(value)} (want ${JSON.stringify(expected)})`,
+        );
+      }
+      const installed = (step: string) => JSON.stringify(steps.get(step)?.installed);
+      check(
+        installed("core_no_roots") === "[]",
+        `installed after the refused install: ${installed("core_no_roots")}`,
+      );
+      check(
+        installed("core_bad_signature") === '["1.0.0"]',
+        `installed after the bad signature: ${installed("core_bad_signature")}`,
+      );
+      check(
+        installed("core_bad_start") === '["1.0.0","2.0.0"]',
+        `installed after the bad start: ${installed("core_bad_start")}`,
+      );
+      check(
+        /trust not configured/.test(String(steps.get("core_no_roots")?.detail)),
+        "the no-roots refusal does not say why",
+      );
+      check(
+        /signature/.test(String(steps.get("core_bad_signature")?.detail)),
+        "the bad-signature refusal does not say why",
+      );
+      check(
+        /not installed/.test(String(steps.get("core_rollback")?.unknown_detail)),
+        "the unknown rollback refusal does not say why",
+      );
+      check(
+        /bad candidate broke its config/.test(String(steps.get("core_bad_start")?.detail)),
+        "the bad start's reason is missing",
+      );
+      check(
+        steps.get("core_adopt")?.pending === core.custom,
+        `the custom program is not pending adoption: ${JSON.stringify(steps.get("core_adopt"))}`,
+      );
+      check(
+        /^custom-[0-9a-f]{64}$/.test(String(steps.get("core_adopt")?.version)),
+        "the adopted core has no app-owned version",
+      );
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode}: core steps ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
 
@@ -1288,13 +1607,23 @@ async function main(): Promise<number> {
   // The build without artifact-test-trust, kept aside before the build with it replaces it. The
   // device check needs the one (a normal build refuses the curated native tool), the admission
   // session and the updater gate's identifier check the other (its features are the test
-  // package's, so the two differ only in the identifier and product name).
+  // package's, so the two differ only in the identifier and product name). The probe is built
+  // again with it, since installing a core release (install-core) checks it with the test roots.
   const binDir = tempDir("pluxy-app-native-bin-");
   const bin = join(binDir, "pluxy-app");
   copyFileSync(join(targetDir, "debug", "pluxy-app"), bin);
   run(
     "cargo",
-    ["build", "--locked", "--features", "native-test,artifact-test-trust", "--bin", "pluxy-app"],
+    [
+      "build",
+      "--locked",
+      "--features",
+      "native-test,artifact-test-trust",
+      "--bin",
+      "pluxy-app",
+      "--example",
+      "session_probe",
+    ],
     tauri,
   );
   const trustBin = join(targetDir, "debug", "pluxy-app");
@@ -1340,10 +1669,74 @@ async function main(): Promise<number> {
       const { core } = JSON.parse(
         run("go", ["run", "./e2e/panelcore", "-probe", "-prepare", prepared], next),
       );
-      const managed = { mode: "managed", core_path: core };
-      const p = await runApp("managed", dev("managed"), updaterKey, managed);
-      p.push(...(await runApp("managed", dev("managed"), updaterKey, managed, undefined, true)));
-      p.push(...(await runApp("managed", dev("managed"), updaterKey, managed, undefined, true, true)));
+      const releases = join(prepared, "releases");
+      mkdirSync(releases);
+      const source = coreSource(releases, prepared);
+      // The core steps, on the build with artifact-test-trust, in a session of their own. A core
+      // the app did not start must outlive it, its config and program untouched.
+      const sentinel = await startSentinel(join(prepared, "sentinel"), join(releases, "core-1.0.0"));
+      try {
+        const c = await runApp(
+          "managed",
+          trusted,
+          updaterKey,
+          { mode: "managed", core_source: source.index },
+          undefined,
+          false,
+          false,
+          undefined,
+          undefined,
+          {},
+          false,
+          false,
+          false,
+          false,
+          false,
+          source,
+        );
+        const status = await managementStatus(sentinel.base, sentinel.key);
+        const kept = readFileSync(sentinel.config).equals(sentinel.before);
+        console.log(
+          `managed sentinel ${JSON.stringify({ alive: alive(sentinel.proc.pid ?? 0), status, config_kept: kept })}`,
+        );
+        if (!alive(sentinel.proc.pid ?? 0) || status !== 200)
+          c.push("the sentinel core did not survive the app");
+        if (!kept) c.push("the sentinel core's config changed");
+        if (statSync(join(prepared, "sentinel", "pluxy")).ino !== sentinel.exe)
+          c.push("the sentinel core's program changed");
+        problems.push(...c.map((x) => `managed, core steps: ${x}`));
+      } finally {
+        sentinel.proc.kill("SIGTERM");
+        await new Promise((r) => sentinel.proc.once("exit", r));
+      }
+      // The other runs need a core in the app's own store. The startup runs adopt the core_path
+      // program before each run, as the window's Adopt would. The rest use the bundled test
+      // packages beside the core's program, which an adopted program is copied without, so they
+      // start with signed release 2.0.0 (panelcore's packages) installed.
+      const adopted = { mode: "managed", core_path: core };
+      const managed = { mode: "managed", core_source: source.index };
+      const release: Release = { from: source, version: "2.0.0" };
+      const p = await runApp(
+        "managed",
+        dev("managed"),
+        updaterKey,
+        managed,
+        undefined,
+        false,
+        false,
+        undefined,
+        undefined,
+        {},
+        false,
+        false,
+        false,
+        false,
+        false,
+        undefined,
+        release,
+      );
+      p.push(...(await runApp("managed", dev("managed"), updaterKey, adopted, undefined, true)));
+      p.push(...(await runApp("managed", dev("managed"), updaterKey, adopted, undefined, true, true)));
       // The signed native-tier admission check, then the program host check and the routing
       // check, on the build with artifact-test-trust.
       p.push(
@@ -1359,6 +1752,12 @@ async function main(): Promise<number> {
           undefined,
           {},
           true,
+          false,
+          false,
+          false,
+          false,
+          undefined,
+          release,
         )),
       );
       p.push(
@@ -1375,6 +1774,11 @@ async function main(): Promise<number> {
           {},
           false,
           true,
+          false,
+          false,
+          false,
+          undefined,
+          release,
         )),
       );
       // The cross-package routing check, on the same build.
@@ -1394,6 +1798,9 @@ async function main(): Promise<number> {
           false,
           false,
           true,
+          false,
+          undefined,
+          release,
         )),
       );
       // The vault check, on the same build.
@@ -1414,6 +1821,8 @@ async function main(): Promise<number> {
           false,
           false,
           true,
+          undefined,
+          release,
         )),
       );
       // The Codex session reader check, on the same build.
@@ -1434,6 +1843,8 @@ async function main(): Promise<number> {
           false,
           false,
           false,
+          undefined,
+          release,
           true,
         )),
       );
@@ -1455,6 +1866,8 @@ async function main(): Promise<number> {
           false,
           false,
           false,
+          undefined,
+          release,
           false,
           true,
         )),
@@ -1471,15 +1884,29 @@ async function main(): Promise<number> {
             suite === "window-no-tray",
             undefined,
             suite,
+            {},
+            false,
+            false,
+            false,
+            false,
+            false,
+            undefined,
+            release,
           )),
         );
       problems.push(...p.map((x) => `managed: ${x}`));
-      // The first start runs a stand-in that says where it listens and exits at once; the next
-      // start, recovery's, runs the real core.
+      // The first start runs a stand-in that says where it listens, answers the app's readiness
+      // check (conn.rs ready), then exits; the next start, recovery's, runs the real core. The
+      // app runs the adopted copy of this script from an open file, so its mark is not beside $0.
       const early = join(prepared, "early-exit.sh");
+      const standIn = join(prepared, "early-exit.ts");
+      writeFileSync(
+        standIn,
+        `const s = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { setTimeout(() => process.exit(7), 500); return Response.json({}); } });\nconsole.error(\`pluxy: listening on http://127.0.0.1:\${s.port}\`);\n`,
+      );
       writeFileSync(
         early,
-        `#!/bin/sh\nif [ ! -e "$0.ran" ]; then\n  : > "$0.ran"\n  echo 'pluxy: listening on http://127.0.0.1:1' >&2\n  exit 7\nfi\nexec '${core}' "$@"\n`,
+        `#!/bin/sh\nif [ ! -e '${early}.ran' ]; then\n  : > '${early}.ran'\n  exec '${process.execPath}' '${standIn}'\nfi\nexec '${core}' "$@"\n`,
         { mode: 0o755 },
       );
       const e = await runApp(

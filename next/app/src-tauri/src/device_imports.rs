@@ -580,6 +580,7 @@ impl Catalog {
     /// A call from the window of tool target's operation op: any operation it declares.
     pub fn main_grant(&self, target: &str, op: &str, roots: &dyn Roots) -> Result<Grant, Refused> {
         let (a, _) = self.admitted_record(target, roots).map_err(unavailable)?;
+        jobs::host_only(&a, op)?;
         let op = a
             .operations
             .iter()
@@ -615,6 +616,7 @@ impl Catalog {
             .find(|i| i.package == target && i.operations.iter().any(|o| o == op))
             .ok_or_else(|| forbidden(format!("{caller} does not import {target}'s {op}")))?;
         let a = self.importable(i, roots)?;
+        jobs::host_only(&a, op)?;
         let op = a
             .operations
             .iter()
