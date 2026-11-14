@@ -79,7 +79,9 @@
 // fixture root through the host's jobs, driven from the hub's page, and its report equals a
 // hand-written expect file, also after a repeated sync, an appended and an added file, and a parser
 // disabled mid-file; ingest is refused to everyone but the host and report to another package's page;
-// no hub or parser process is left when idle.
+// no hub or parser process is left when idle. The Codex parser (next/app-tools/usage-codex) then reads
+// a hand-written Codex home in the run's HOME the same way, with prompt canaries kept out of every
+// report, the hub's store and the app's output.
 // The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
@@ -705,6 +707,7 @@ async function runApp(
         programFixture,
       );
       nonce = f.nonce;
+      canaries = f.canaries;
       roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
       writeFileSync(
         join(dirs.config, artifact.identifier, "device-registries.json"),
@@ -857,7 +860,9 @@ async function runApp(
         problems.push(
           reader
             ? "the session reader check's canary appeared on stdout/stderr"
-            : "the vault check's key or backup canary appeared on stdout/stderr",
+            : usage
+              ? "the usage check's Codex prompt canary appeared on stdout/stderr"
+              : "the vault check's key or backup canary appeared on stdout/stderr",
         );
         return;
       }
@@ -1650,7 +1655,7 @@ async function main(): Promise<number> {
   // and its fixture parser, each when its folder is there.
   if (existsSync(join(appTools, "Cargo.toml"))) {
     run("cargo", ["build", "--locked", "-p", "codex-sessions", "--target-dir", appToolsTarget], appTools);
-    const usageTools = ["agent-usage", "usage-fixture"].filter((t) =>
+    const usageTools = ["agent-usage", "usage-fixture", "usage-codex"].filter((t) =>
       existsSync(join(appTools, t, "Cargo.toml")),
     );
     if (usageTools.length > 0) {
