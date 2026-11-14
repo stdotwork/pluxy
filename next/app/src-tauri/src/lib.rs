@@ -21,6 +21,8 @@ mod command_names;
 #[cfg(target_os = "linux")]
 pub mod confirmation;
 pub mod conn;
+mod core_updates;
+pub mod cores;
 pub mod device;
 pub mod instance;
 mod key_entry;
@@ -51,6 +53,7 @@ pub mod window;
 pub use command_names::COMMANDS;
 
 use conn::{Change, Connection, Dirs, Mode, View};
+use core_updates::{core_adopt, core_install, core_rollback, core_versions};
 use pages::{Binding, Pages};
 use serde::Deserialize;
 use serde_json::Value;
@@ -74,6 +77,8 @@ pub const MAIN: &str = "main";
 struct App {
     startup: Mutex<(startup::Store, startup::Preferences)>,
     conn: Mutex<Connection>,
+    /// A change of the app's own core waiting for its native confirmation (`core_updates.rs`).
+    core_change: Mutex<Option<core_updates::Pending>>,
     #[cfg(target_os = "linux")]
     confirmations: Mutex<confirmation::Confirmations>,
     /// The page webviews' own web context's folder: nothing shared with the window's.
@@ -142,6 +147,7 @@ fn status_text(v: &View) -> String {
         (Some(Mode::Managed), Some(t), Some(c)) if c.state == "running" => {
             format!("Core running at {t}")
         }
+        (Some(Mode::Managed), _, Some(c)) if c.state == "missing" => "No core installed".into(),
         (Some(Mode::Managed), _, Some(c)) if c.state == "paused" => {
             "Core recovery paused — Start core to try again".into()
         }
@@ -1330,6 +1336,10 @@ fn device_changed_as(
         (labels, device_view(&st, &catalog), left)
     };
     left.extend(close_webviews(app, labels));
+    // Its registrations end with any change, a swap too: its jobs, as consumer or producer, are
+    // cancelled and nothing more of them is delivered.
+    #[cfg(target_os = "linux")]
+    st.routes.jobs.revoke(id);
     // A native tool runs only as the release it was admitted as: any change stops it, and its
     // next call starts it from its record then, if it still has one.
     #[cfg(target_os = "linux")]
@@ -2499,6 +2509,10 @@ pub fn run() {
             core_start,
             core_restart,
             core_call,
+            core_versions,
+            core_install,
+            core_rollback,
+            core_adopt,
             key_entry,
             management_key_rotate,
             sign_out,
@@ -2603,7 +2617,9 @@ pub fn run() {
             if let Some(w) = &access_store.warning {
                 eprintln!("pluxy-app: {w}");
             }
-            let core = app.path().app_data_dir()?.join("core");
+            let data = app.path().app_data_dir()?;
+            let core = data.join("core");
+            let cores = data.join("cores");
             // When the app's core exits, the tray and the window show it. Off this thread: the
             // exit may come while a connection change holds the connection.
             let handle = app.handle().clone();
@@ -2625,7 +2641,11 @@ pub fn run() {
             });
             let window_prefs = window::Store::open(config.join("window.json"));
             let conn = Connection::open_at_startup(
-                Dirs { config, core },
+                Dirs {
+                    config,
+                    core,
+                    cores,
+                },
                 Some(on_exit),
                 preferences.start_core_on_launch,
             );
@@ -2650,6 +2670,7 @@ pub fn run() {
             app.manage(App {
                 startup: Mutex::new((startup_store, preferences)),
                 conn: Mutex::new(conn),
+                core_change: Mutex::new(None),
                 #[cfg(target_os = "linux")]
                 confirmations: Mutex::new(confirmations),
                 pages_dir,
@@ -2827,6 +2848,8 @@ mod tests {
             core: Some(conn::CoreView {
                 state,
                 pid: None,
+                version: None,
+                adopt: None,
                 detail: None,
             }),
             version,

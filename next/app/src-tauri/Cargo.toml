@@ -54,7 +54,8 @@ semver = "1"
 # Release notes: Markdown to HTML, with raw HTML and images dropped (src/notes.rs).
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 pulldown-cmark-escape = "0.11"
-# Release archives of packages installed on this device (src/device.rs): gzip-compressed tar.
+# Release archives of packages installed on this device (src/device.rs) and of the app's own
+# core (src/cores.rs): gzip-compressed tar.
 flate2 = "=1.1.11"
 tar = { version = "=0.4.46", default-features = false }
 # Access (src/access.rs): reads relative to a folder the person granted, never leaving it.

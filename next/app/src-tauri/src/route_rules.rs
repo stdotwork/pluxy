@@ -97,10 +97,11 @@ struct Inflight {
     flag: Arc<AtomicBool>,
 }
 
-/// The page calls in flight.
+/// The page calls in flight, and the jobs under way (`jobs.rs`).
 #[derive(Default)]
 pub struct Routes {
     inflight: Mutex<Vec<Inflight>>,
+    pub jobs: super::jobs::Jobs,
 }
 
 impl Routes {

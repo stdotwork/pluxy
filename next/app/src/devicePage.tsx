@@ -342,7 +342,7 @@ function Available(props: { installed: DevicePackage[]; onInstalled: () => void 
   const offers: Offer[] = [];
   for (const r of registries.data ?? []) {
     for (const p of r.packages) {
-      const latest = p.versions[0]; // newest first
+      const latest = p.versions[0]; // the one an install without a version takes
       const installed = props.installed.find((i) => i.id === p.id);
       const current = installed?.source.kind === "registry" && installed.source.name === r.name;
       if (!latest || (installed && (!current || installed.active.version === latest))) continue;

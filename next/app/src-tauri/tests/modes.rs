@@ -2,8 +2,12 @@
 //! (next/e2e/panelcore, which needs Go). No window: these drive the same connection code the
 //! window's commands use. Every core runs in a temporary folder on a random loopback port.
 
+#[path = "support/releases.rs"]
+mod releases;
+
 use pluxy_app::client::{certificates, Client};
-use pluxy_app::conn::{Change, Connection, Dirs, Kept, Mode, Settings};
+use pluxy_app::conn::{Change, Connection, CoreChange, Dirs, Kept, Mode, Settings};
+use pluxy_app::managed::OnExit;
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -42,6 +46,7 @@ fn dirs(root: &Path) -> Dirs {
     Dirs {
         config: root.join("config"),
         core: root.join("core"),
+        cores: root.join("cores"),
     }
 }
 
@@ -150,17 +155,26 @@ fn managed_runs_its_own_core_and_stops_it() {
         .output()
         .unwrap();
     assert!(out.status.success());
-    let program: Value = serde_json::from_slice(&out.stdout).unwrap();
-    let program = program["core"].as_str().unwrap().to_string();
+    // The prepared core and its bundled test packages, as a signed release 1.0.0.
+    let program = root.join("program");
+    releases::build_core(&program, "1.0.0");
+    let source = root.join("source");
+    std::fs::create_dir_all(&source).unwrap();
+    let index = source.join("index.json");
+    let keys = releases::Keys::new(&index);
+    let release = releases::release(&source, &keys, "1.0.0", &releases::pack(&program), true);
+    releases::write_index(&index, &[release]);
 
     let mut c = Connection::open(dirs(&root), None);
     assert_eq!(c.view().mode, None);
     c.change(Change {
         mode: Some(Mode::Managed),
-        core_path: Some(program.clone()),
+        core_source: Some(index.display().to_string()),
         ..Change::default()
     })
     .unwrap();
+    let staged = c.prepare_install(&keys, "1.0.0").unwrap();
+    c.apply(CoreChange::Install(staged)).unwrap();
     let v = c.view();
     assert!(v.signed_in, "{v:?}");
     let target = v.target.clone().unwrap();
@@ -405,12 +419,7 @@ fn managed_rotation_survives_restarting_the_core() {
     assert!(out.status.success());
     let program: Value = serde_json::from_slice(&out.stdout).unwrap();
     let mut c = Connection::open(dirs(&root), None);
-    c.change(Change {
-        mode: Some(Mode::Managed),
-        core_path: Some(program["core"].as_str().unwrap().into()),
-        ..Change::default()
-    })
-    .unwrap();
+    adopt(&mut c, program["core"].as_str().unwrap());
     let config = dirs(&root).core.join("config.json");
     let old = config_key(&config);
     let base = c.view().target.unwrap();
@@ -429,6 +438,97 @@ fn managed_rotation_survives_restarting_the_core() {
     assert_eq!(c.caller().call("GET", "/status", None).status, 200);
     assert_eq!(direct.call(&old, "GET", "/status", None).status, 401);
     drop(c);
+}
+
+/// Sets managed mode with program as the core program, and adopts it as the window's Adopt
+/// would: the app runs only a core in its own store.
+fn adopt(c: &mut Connection, program: &str) {
+    c.change(Change {
+        mode: Some(Mode::Managed),
+        core_path: Some(program.into()),
+        ..Change::default()
+    })
+    .unwrap();
+    let (path, sha256, size) = c.prepare_adopt().unwrap();
+    c.apply(CoreChange::Adopt { path, sha256, size }).unwrap();
+}
+
+/// panelcore's prepared core program, in root.
+fn prepared_core(root: &Path) -> String {
+    let out = Command::new("go")
+        .args(["run", "./e2e/panelcore", "-prepare"])
+        .arg(root.join("program"))
+        .current_dir(next_dir())
+        .stderr(Stdio::inherit())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let program: Value = serde_json::from_slice(&out.stdout).unwrap();
+    program["core"].as_str().unwrap().to_string()
+}
+
+/// Start leaves a running core alone and Restart replaces it. The window's Start and the
+/// tray's use Start, so a click that races a recovery keeps the recovered core.
+#[test]
+fn start_leaves_a_live_core_alone_and_restart_replaces_it() {
+    let root = temp("start");
+    let program = prepared_core(&root);
+    let mut c = Connection::open(dirs(&root), None);
+    adopt(&mut c, &program);
+    let first = c.core_pid().expect("the adopted core runs");
+    c.resume_core().unwrap();
+    assert_eq!(c.core_pid(), Some(first), "Start replaced a running core");
+    // The same measure sees a replaced core.
+    c.restart_core().unwrap();
+    let second = c.core_pid().expect("Restart runs a core");
+    assert_ne!(second, first, "Restart kept the old core");
+    c.stop_core();
+    assert_eq!(c.core_pid(), None);
+}
+
+/// A core can exit while the app is still starting, before anything can act on its exit
+/// callback. Asking the connection afterwards, as the app's setup does, schedules recovery.
+#[test]
+fn a_core_that_exits_before_anyone_watches_is_recovered() {
+    use std::time::{Duration, Instant};
+    let root = temp("early");
+    let program = prepared_core(&root);
+    // Like the app's callback before its state exists: it reaches no connection.
+    let (exited, exit) = std::sync::mpsc::channel();
+    let on_exit: OnExit = std::sync::Arc::new(move || {
+        let _ = exited.send(());
+    });
+    let mut c = Connection::open(dirs(&root), Some(on_exit));
+    adopt(&mut c, &program);
+    assert_eq!(c.view().error, None, "the adopted core started");
+    // It answered the app (a core counts as started only then), and now it is gone.
+    let pid = c.core_pid().expect("the adopted core runs");
+    assert!(Command::new("kill")
+        .args(["-KILL", &pid.to_string()])
+        .status()
+        .unwrap()
+        .success());
+    exit.recv_timeout(Duration::from_secs(10))
+        .expect("the core exited");
+
+    let asked = Instant::now();
+    let (_, due) = c.core_exited().expect("the early exit is recovered");
+    let core = c.view().core.expect("a managed core view");
+    assert_eq!(core.state, "recovering");
+    assert!(
+        core.detail
+            .as_deref()
+            .is_some_and(|d| d.contains("signal: 9")),
+        "{:?}",
+        core.detail
+    );
+    // The first of the 2, 5 and 15 second delays.
+    let delay = due.duration_since(asked);
+    assert!(
+        delay >= Duration::from_millis(1900) && delay <= Duration::from_secs(3),
+        "{delay:?}"
+    );
+    c.stop_core();
 }
 
 /// Over https with the given authority, a kept rotated key works after a restart.

@@ -26,7 +26,8 @@
 //!   reference to `leak` and forwards a reference (its own, or `forward.key_from`'s, or the raw
 //!   value with `forward.raw`) to `forward.package`'s `forward.op`, and answers with the key in
 //!   `echo`, as a leaky tool would;
-//! - `report` with the journals it reconciled at its last describe and the last key it took;
+//! - `report` with the journals it reconciled at its last describe and the last key it took (and
+//!   what `take` kept, below);
 //! - `run`, the vault check's execution program: appends the frame it got to `record`, then calls
 //!   `consumer` with its own reference (or `steal`'s) and `out`, and appends the answer it got
 //!   back to `record` too;
@@ -36,6 +37,20 @@
 //! as `committed` when the file holds the bytes the journal names, `rolled_back` otherwise, and
 //! leaves open one whose intent says `leave_open`. With `describe_vault` in `fixture.json`, it also
 //! sends that vault request in describe; `report` gives the host's answer with the journals.
+//!
+//! As a job's consumer and producer (`app-host/README.md`, "Jobs"; `src/jobs_native.rs`):
+//!
+//! - `jobs` sends one `jobs` frame to the host, `{op, input}` from its input, for this call, and
+//!   answers with the host's answer: `{"answer": {"output": ...}}` or `{"answer": {"error": ...}}`;
+//! - `take`, a deliver operation, keeps what the host delivered (its input and the call's chain),
+//!   waits `value.hold` milliseconds when the batch names it, and answers `{"ok": true}`;
+//! - `report` also answers with everything `take` kept, in order (`deliveries`);
+//! - `scan`, a job's operation, sends `count` batches `{"n", "item": "item-<n>", "hold"}` as
+//!   progress, never more than the job's window ahead of the host's acks, waits until each is
+//!   acknowledged and answers `{"sent", "acked", "max_unacked", "window"}`. `mode` makes it
+//!   misbehave: `flood` sends twice the window and one more without waiting, `forge` sends one
+//!   batch naming a `source`, `big` one batch padded past the host's limit, and `wait` one batch;
+//!   each then waits for its cancel.
 //!
 //! Each answer of summary, store, launch and relay also carries the `chain` the host's call named.
 //!
@@ -229,6 +244,97 @@ fn ask(input: &mut impl Read, output: &mut impl Write, frame: Value) -> Value {
         }
     }
     json!({"error": {"code": "extension_unavailable", "message": "the host closed the pipe"}})
+}
+
+/// Reads frames for job call id until its cancel, which it answers, or the end of its input,
+/// counting acks in acked.
+fn until_cancelled(input: &mut impl Read, output: &mut impl Write, id: &Value, acked: &mut u64) {
+    while let Some(m) = read_frame(input) {
+        match m["type"].as_str() {
+            Some("ack") if m["id"] == *id => *acked = m["seq"].as_u64().unwrap_or(*acked),
+            Some("cancel") if m["id"] == *id => {
+                write_frame(output, &error(id, "cancelled", "the job was cancelled"));
+                return;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Runs job call f of `scan` (see the module's description).
+fn scan(input: &mut impl Read, output: &mut impl Write, f: &Value) {
+    let id = f["id"].clone();
+    let window = f["job"]["window"].as_u64().unwrap_or(0);
+    let count = f["input"]["count"].as_u64().unwrap_or(0);
+    let hold = f["input"]["hold"].clone();
+    let batch = |n: u64| json!({"type": "progress", "id": id, "value": {"n": n, "item": format!("item-{n}"), "hold": hold}});
+    let (mut sent, mut acked, mut max_unacked) = (0u64, 0u64, 0u64);
+    if window == 0 {
+        return write_frame(
+            output,
+            &error(&id, "invalid_request", "scan runs only as a job"),
+        );
+    }
+    match f["input"]["mode"].as_str().unwrap_or_default() {
+        "flood" => {
+            for n in 1..=window * 2 + 1 {
+                write_frame(output, &batch(n));
+            }
+            return until_cancelled(input, output, &id, &mut acked);
+        }
+        "forge" => {
+            let mut b = batch(1);
+            b["source"] = json!({"package": "pluxy/jobs-other"});
+            write_frame(output, &b);
+            return until_cancelled(input, output, &id, &mut acked);
+        }
+        "big" => {
+            let mut b = batch(1);
+            b["value"]["pad"] = json!("x".repeat(60 << 10));
+            write_frame(output, &b);
+            return until_cancelled(input, output, &id, &mut acked);
+        }
+        "wait" => {
+            write_frame(output, &batch(1));
+            return until_cancelled(input, output, &id, &mut acked);
+        }
+        _ => {}
+    }
+    /// Reads one frame for job call id: an ack, or its cancel (answered: false, the job ends).
+    fn next(input: &mut impl Read, output: &mut impl Write, id: &Value, acked: &mut u64) -> bool {
+        match read_frame(input) {
+            Some(m) if m["type"] == "ack" && m["id"] == *id => {
+                *acked = m["seq"].as_u64().unwrap_or(*acked);
+                true
+            }
+            Some(m) if m["type"] == "cancel" && m["id"] == *id => {
+                write_frame(output, &error(id, "cancelled", "the job was cancelled"));
+                false
+            }
+            Some(_) => true,
+            None => std::process::exit(0),
+        }
+    }
+    for n in 1..=count {
+        while sent - acked >= window {
+            if !next(input, output, &id, &mut acked) {
+                return;
+            }
+        }
+        write_frame(output, &batch(n));
+        sent += 1;
+        max_unacked = max_unacked.max(sent - acked);
+    }
+    while acked < sent {
+        if !next(input, output, &id, &mut acked) {
+            return;
+        }
+    }
+    write_frame(
+        output,
+        &json!({"type": "result", "id": id, "output": {"sent": sent, "acked": acked,
+            "max_unacked": max_unacked, "window": window}}),
+    );
 }
 
 fn sha256_hex(b: &[u8]) -> String {
@@ -480,6 +586,7 @@ pub fn main() -> ! {
     let mut calls = 0u64;
     let mut waiting: Option<Value> = None;
     let mut relayed = 0u64;
+    let mut deliveries: Vec<Value> = Vec::new();
     let mut reported = Value::Null;
     // The vault check's: journals reconciled at the last describe, frames asked, the last key.
     let mut reconciled = json!([]);
@@ -624,6 +731,29 @@ pub fn main() -> ! {
                                 "version": version, "pid": std::process::id(), "at": at()}}),
                         );
                     }
+                    "jobs" => {
+                        asked += 1;
+                        let answer = ask(
+                            &mut input,
+                            &mut output,
+                            json!({"type": "jobs", "id": format!("q-{asked}"), "for": id,
+                                "op": f["input"]["op"], "input": f["input"]["input"]}),
+                        );
+                        write_frame(
+                            &mut output,
+                            &json!({"type": "result", "id": id, "output": {"answer": answer}}),
+                        );
+                    }
+                    "take" => {
+                        deliveries.push(json!({"input": f["input"], "chain": chain}));
+                        let hold = f["input"]["value"]["hold"].as_u64().unwrap_or(0);
+                        std::thread::sleep(Duration::from_millis(hold));
+                        write_frame(
+                            &mut output,
+                            &json!({"type": "result", "id": id, "output": {"ok": true}}),
+                        );
+                    }
+                    "scan" => scan(&mut input, &mut output, &f),
                     "apply" => {
                         let r = apply(&mut input, &mut output, &f, &mut asked, &mut last_key);
                         write_frame(&mut output, &r);
@@ -632,7 +762,7 @@ pub fn main() -> ! {
                         &mut output,
                         &json!({"type": "result", "id": id, "output":
                             {"reconciled": reconciled, "echo": last_key, "calls": calls,
-                             "version": version}}),
+                             "version": version, "deliveries": deliveries}}),
                     ),
                     "run" => {
                         let i = &f["input"];
