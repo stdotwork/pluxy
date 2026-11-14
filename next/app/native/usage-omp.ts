@@ -54,13 +54,26 @@ const C_TOOL = "CANARY-OMP-TOOL-OUTPUT-b904";
 const C_THREE = "CANARY-OMP-PROMPT-THREE-0c5d";
 const C_KEY = "CANARY-OMP-KEY-58ae";
 const C_ADDED = "CANARY-OMP-PROMPT-ADDED-d4f3";
-export const OMP_CANARIES = [C_TITLE, C_CWD, C_ONE, C_REPLY, C_TWO, C_TOOL, C_THREE, C_KEY, C_ADDED];
+/** In the name of each session folder, which Oh My Pi makes from the working folder: no file ID may hold it. */
+const C_FOLDER = "CANARY-OMP-FOLDER-7e2a";
+export const OMP_CANARIES = [
+  C_TITLE,
+  C_CWD,
+  C_ONE,
+  C_REPLY,
+  C_TWO,
+  C_TOOL,
+  C_THREE,
+  C_KEY,
+  C_ADDED,
+  C_FOLDER,
+];
 
-const ONE = "-work-alpha/2026-11-09T21-00-00-000Z_019c0000-0000-7000-8000-000000000001.jsonl";
-const TWO = "-work-beta/2026-11-10T09-00-00-000Z_019c0000-0000-7000-8000-000000000002.jsonl";
-const THREE = "-work-gamma/2026-11-04T10-00-00-000Z_019c0000-0000-7000-8000-000000000003.jsonl";
-const FORK = "-work-alpha-fork/2026-11-10T13-00-00-000Z_019c0000-0000-7000-8000-000000000005.jsonl";
-const FOUR = "-work-delta/2026-11-10T11-00-00-000Z_019c0000-0000-7000-8000-000000000004.jsonl";
+const ONE = `-work-alpha-${C_FOLDER}/2026-11-09T21-00-00-000Z_019c0000-0000-7000-8000-000000000001.jsonl`;
+const TWO = `-work-beta-${C_FOLDER}/2026-11-10T09-00-00-000Z_019c0000-0000-7000-8000-000000000002.jsonl`;
+const THREE = `-work-gamma-${C_FOLDER}/2026-11-04T10-00-00-000Z_019c0000-0000-7000-8000-000000000003.jsonl`;
+const FORK = `-work-alpha-fork-${C_FOLDER}/2026-11-10T13-00-00-000Z_019c0000-0000-7000-8000-000000000005.jsonl`;
+const FOUR = `-work-delta-${C_FOLDER}/2026-11-10T11-00-00-000Z_019c0000-0000-7000-8000-000000000004.jsonl`;
 
 /** Oh My Pi's first line: a fixed-width 256-byte slot (its newline included) holding the title. */
 const titleSlot = JSON.stringify({ type: "title", title: C_TITLE, titleSource: "user" }).padEnd(255, " ");

@@ -16,14 +16,20 @@
 //! - the time is the entry's `timestamp` (an ISO time), else the message's (a number of milliseconds); an
 //!   entry with neither readable is skipped (the old reader used the file's time, which a parser is not
 //!   given);
-//! - every entry with a usage object that holds a count is one sample, also one that adds nothing.
+//! - every entry with a usage object that holds a count is one sample, also one that adds nothing;
+//! - an entry with an `id` and a `timestamp` is an event (schema 2) with a key made from the two: a
+//!   session a tool forks or branches is a new file with copies of the parent's entries, `id`s and
+//!   times unchanged, and the hub counts an event once whichever files hold it. A key is sent once per
+//!   file. An entry without either is a plain row, as at schema 1.
 //!
 //! Only counters, a model name and a time are read. A prompt, a message, a title, a folder or a key is
 //! never looked at beyond finding those fields, and none is kept.
 
+use crate::hash;
 use pluxy_program::Error;
 use pluxy_usage::{LineReader, Sink, Tokens};
 use serde_json::{Map, Value};
+use std::collections::HashSet;
 
 /// The longest model name kept, in characters.
 const MAX_MODEL_NAME: usize = 120;
@@ -33,6 +39,8 @@ const CANCEL_EVERY: usize = 2048;
 /// Where the rows go: a usage sink, or a list in a test.
 pub trait Out {
     fn row(&mut self, time: i64, model: &str, tokens: &Tokens) -> Result<(), Error>;
+    /// One event, counted once by its key across files.
+    fn event(&mut self, time: i64, model: &str, key: &str, tokens: &Tokens) -> Result<(), Error>;
     /// Whether the job was cancelled.
     fn cancelled(&self) -> bool;
 }
@@ -40,6 +48,10 @@ pub trait Out {
 impl Out for Sink<'_> {
     fn row(&mut self, time: i64, model: &str, tokens: &Tokens) -> Result<(), Error> {
         Sink::row(self, time, model, tokens)
+    }
+
+    fn event(&mut self, time: i64, model: &str, key: &str, tokens: &Tokens) -> Result<(), Error> {
+        Sink::event(self, time, model, key, tokens)
     }
 
     fn cancelled(&self) -> bool {
@@ -51,6 +63,7 @@ impl Out for Sink<'_> {
 /// looks now and then at whether the job was cancelled.
 pub fn parse(lines: &mut LineReader, out: &mut dyn Out) -> Result<(), Error> {
     let mut n = 0usize;
+    let mut seen = HashSet::new();
     while let Some(line) = lines.next_line()? {
         n += 1;
         if n % CANCEL_EVERY == 1 && out.cancelled() {
@@ -68,9 +81,28 @@ pub fn parse(lines: &mut LineReader, out: &mut dyn Out) -> Result<(), Error> {
         let Some(time) = time(&value, message) else {
             continue;
         };
-        out.row(time, &model, &tokens)?;
+        match key(&value) {
+            // An entry a fork or branch copied into another file has the same key there: sent once
+            // per file, counted once by the hub.
+            Some(key) if !seen.insert(key.clone()) => {}
+            Some(key) => out.event(time, &model, &key, &tokens)?,
+            None => out.row(time, &model, &tokens)?,
+        }
     }
     Ok(())
+}
+
+/// An entry's key: the hash of its `id` and `timestamp`, which a fork or branch keeps when it copies the
+/// entry into a new file. The `id` alone is 8 random hex digits, unique within one session only, so the
+/// time to the millisecond is part of it. An entry without either is no event.
+fn key(entry: &Value) -> Option<String> {
+    let field = |name: &str| {
+        entry
+            .get(name)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+    };
+    Some(hash(&["entry", field("id")?, field("timestamp")?]))
 }
 
 /// An entry's usage object, its model name, and its message when it is one.
