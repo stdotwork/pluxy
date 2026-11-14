@@ -41,8 +41,10 @@ Schema 1 of the usage hub's ingest API and what a usage parser shares (`pluxy-us
 implements `Parser` (its label, default roots, which files are its, how a file's bytes become
 rows) and answers its produces operation with `produce`, which lists files (`scan`: no links, at
 most 8 folders deep, newest first, at most 20,000), finds a named file again only under the roots
-(`locate`), reads it (`read_file`, at most 16 MiB) and sends its rows in parts within the batch
-limit (`Sink`). The schema is in [`agent-usage/README.md`](agent-usage/README.md#schema-1).
+(`locate`), reads it and sends its rows in parts within the batch limit (`Sink`). A parser of a
+format read whole (`parse`) gets a file of at most 16 MiB; a parser of a line-based format sets
+`streamed` and gets the file's lines one at a time (`parse_lines`, `LineReader`) whatever its size,
+a line over 16 MiB being skipped and counted. The schema is in [`agent-usage/README.md`](agent-usage/README.md#schema-1).
 
 ## `agent-usage`
 

@@ -41,7 +41,7 @@
 use pluxy_program::{Call, Error};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashSet};
-use std::io::Read;
+use std::io::{BufRead, Read};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
@@ -54,6 +54,8 @@ pub const MAX_FILES: usize = 20_000;
 pub const MAX_DEPTH: usize = 8;
 /// The largest source file read, in bytes.
 pub const MAX_DOCUMENT: u64 = 16 << 20;
+/// The longest line `LineReader` gives; a longer one is skipped.
+pub const MAX_LINE: u64 = 16 << 20;
 /// Roots a job may name, and the longest root, file ID and model name.
 pub const MAX_ROOTS: usize = 16;
 pub const MAX_PATH: usize = 4096;
@@ -290,10 +292,9 @@ pub fn locate(roots: &[PathBuf], id: &str, wanted: &dyn Fn(&Path) -> bool) -> Op
     wanted(&at).then_some(at)
 }
 
-/// A source file's bytes, size and modification time, read from the file found at path, which
-/// must still be that regular file (not replaced by a link meanwhile) and at most
-/// `MAX_DOCUMENT` bytes.
-pub fn read_file(path: &Path) -> Result<(Vec<u8>, u64, i64), String> {
+/// The file found at path, opened, with its size and modification time: it must still be that
+/// regular file (not replaced by a link meanwhile).
+pub fn open_file(path: &Path) -> Result<(std::fs::File, u64, i64), String> {
     let before = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
     if !before.is_file() {
         return Err("not a regular file".into());
@@ -303,17 +304,82 @@ pub fn read_file(path: &Path) -> Result<(Vec<u8>, u64, i64), String> {
     if (m.dev(), m.ino()) != (before.dev(), before.ino()) || !m.is_file() {
         return Err("the file changed while it was opened".into());
     }
-    if m.len() > MAX_DOCUMENT {
+    Ok((f, m.len(), mtime_ns(&m)))
+}
+
+/// A source file's bytes, size and modification time, read from the file found at path (see
+/// `open_file`), at most `MAX_DOCUMENT` bytes.
+pub fn read_file(path: &Path) -> Result<(Vec<u8>, u64, i64), String> {
+    let (f, size, mtime) = open_file(path)?;
+    if size > MAX_DOCUMENT {
         return Err(format!("larger than {MAX_DOCUMENT} bytes"));
     }
-    let mut bytes = Vec::with_capacity(m.len() as usize);
+    let mut bytes = Vec::with_capacity(size as usize);
     f.take(MAX_DOCUMENT + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
     if bytes.len() as u64 > MAX_DOCUMENT {
         return Err(format!("larger than {MAX_DOCUMENT} bytes"));
     }
-    Ok((bytes, m.len(), mtime_ns(&m)))
+    Ok((bytes, size, mtime))
+}
+
+/// The lines of a file one at a time, with no line end, for a parser of a line-based format
+/// that reads a file of any size: only the longest line is in memory. A line over `MAX_LINE`
+/// bytes is skipped and counted.
+pub struct LineReader<'a> {
+    reader: Box<dyn BufRead + 'a>,
+    line: Vec<u8>,
+    skipped: u64,
+}
+
+impl<'a> LineReader<'a> {
+    pub fn new(reader: impl BufRead + 'a) -> LineReader<'a> {
+        LineReader {
+            reader: Box::new(reader),
+            line: Vec::new(),
+            skipped: 0,
+        }
+    }
+
+    /// The next line that is at most `MAX_LINE` bytes, or None at the end.
+    pub fn next_line(&mut self) -> Result<Option<&[u8]>, Error> {
+        let io = |e: std::io::Error| Error::internal(e.to_string());
+        loop {
+            self.line.clear();
+            let n = (&mut self.reader)
+                .take(MAX_LINE + 1)
+                .read_until(b'\n', &mut self.line)
+                .map_err(io)?;
+            if n == 0 {
+                return Ok(None);
+            }
+            if self.line.last() == Some(&b'\n') {
+                self.line.pop();
+                return Ok(Some(&self.line));
+            }
+            if self.line.len() as u64 <= MAX_LINE {
+                // The last line, with no line end.
+                return Ok(Some(&self.line));
+            }
+            // Too long: drop the rest of it.
+            loop {
+                let chunk = self.reader.fill_buf().map_err(io)?;
+                let end = chunk.iter().position(|b| *b == b'\n');
+                let used = end.map_or(chunk.len(), |i| i + 1);
+                self.reader.consume(used);
+                if end.is_some() || used == 0 {
+                    break;
+                }
+            }
+            self.skipped += 1;
+        }
+    }
+
+    /// The lines skipped so far for being too long.
+    pub fn skipped(&self) -> u64 {
+        self.skipped
+    }
 }
 
 /// A usage parser: where its source files are, which files are its, and how a file's bytes
@@ -333,10 +399,22 @@ pub trait Parser: Send + Sync {
     fn locate(&self, roots: &[PathBuf], id: &str) -> Option<PathBuf> {
         locate(roots, id, &|p| self.wanted(p))
     }
-    /// Turns one file's bytes into rows, handed to sink as they are read. A record counted
-    /// twice in one file (a repeated message ID, a cumulative counter) is the parser's to
-    /// deduplicate; the hub replaces a file's rows as a whole.
-    fn parse(&self, bytes: &[u8], sink: &mut Sink) -> Result<(), Error>;
+    /// Turns one file's bytes (a file of at most `MAX_DOCUMENT` bytes) into rows, handed to sink
+    /// as they are read. A record counted twice in one file (a repeated message ID, a cumulative
+    /// counter) is the parser's to deduplicate; the hub replaces a file's rows as a whole.
+    /// A parser that is `streamed` implements `parse_lines` instead, and this reads lines.
+    fn parse(&self, bytes: &[u8], sink: &mut Sink) -> Result<(), Error> {
+        self.parse_lines(&mut LineReader::new(bytes), sink)
+    }
+    /// Whether the parser reads a file line by line (`parse_lines`, a file of any size) instead of
+    /// whole (`parse`, at most `MAX_DOCUMENT` bytes).
+    fn streamed(&self) -> bool {
+        false
+    }
+    /// Like `parse`, from a file's lines, in order.
+    fn parse_lines(&self, _lines: &mut LineReader, _sink: &mut Sink) -> Result<(), Error> {
+        Err(Error::unsupported("the parser reads no lines"))
+    }
 }
 
 /// Where a parser puts one file's rows: summed per hour and model into parts, each sent as a
@@ -472,6 +550,16 @@ fn chunked(call: &Call, key: &str, items: Vec<Value>) -> Result<(), Error> {
     Ok(())
 }
 
+/// A file's outcome once its parser is through: its last part sent, or why it failed; a
+/// cancellation ends the job.
+fn finished(parsed: Result<(), Error>, sink: Sink) -> Result<Result<(), String>, Error> {
+    match parsed {
+        Ok(()) => Ok(sink.finish().map_err(|e| e.message)),
+        Err(e) if e.code == "cancelled" => Err(e),
+        Err(e) => Ok(Err(e.message)),
+    }
+}
+
 /// Runs a job of schema 1 for parser, as the hub's job input asks:
 ///
 /// - `{"mode": "files", "roots"?}`: lists the source files, newest first, in batches
@@ -524,19 +612,30 @@ pub fn produce(call: &Call, parser: &dyn Parser) -> Result<Value, Error> {
                 if !done.insert(id) {
                     continue;
                 }
-                let found = parser
+                let located = parser
                     .locate(&roots, id)
-                    .ok_or_else(|| "not one of this source's files".to_string())
-                    .and_then(|path| read_file(&path));
-                let outcome = match found {
-                    Ok((bytes, size, mtime)) => {
-                        let mut sink = Sink::new(call, id, size, mtime);
-                        match parser.parse(&bytes, &mut sink) {
-                            Ok(()) => sink.finish().map_err(|e| e.message),
-                            Err(e) if e.code == "cancelled" => return Err(e),
-                            Err(e) => Err(e.message),
+                    .ok_or_else(|| "not one of this source's files".to_string());
+                // A streamed file is read as far as its size when opened, as that is the
+                // revision its rows are for.
+                let outcome = match located {
+                    Ok(path) if parser.streamed() => match open_file(&path) {
+                        Ok((file, size, mtime)) => {
+                            let mut sink = Sink::new(call, id, size, mtime);
+                            let reader = std::io::BufReader::new(file.take(size));
+                            let parsed =
+                                parser.parse_lines(&mut LineReader::new(reader), &mut sink);
+                            finished(parsed, sink)?
                         }
-                    }
+                        Err(e) => Err(e),
+                    },
+                    Ok(path) => match read_file(&path) {
+                        Ok((bytes, size, mtime)) => {
+                            let mut sink = Sink::new(call, id, size, mtime);
+                            let parsed = parser.parse(&bytes, &mut sink);
+                            finished(parsed, sink)?
+                        }
+                        Err(e) => Err(e),
+                    },
                     Err(e) => Err(e),
                 };
                 call.check()?;
