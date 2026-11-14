@@ -46,7 +46,7 @@ pub fn extend(chain: &[Hop], caller: &Hop, target: &str) -> Result<Vec<Hop>, Cal
     Ok(chain)
 }
 
-/// How a write or launch call is prepared for its native confirmation.
+/// How a call that asks (write, launch, disclose) is prepared for its native confirmation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Preparation {
     /// The chain a page started: a fresh Page Start, never remembered.
