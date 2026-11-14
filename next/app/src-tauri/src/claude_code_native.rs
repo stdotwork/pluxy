@@ -676,6 +676,6 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     passed("audit");
 
     out["passed"] = json!(true);
-    log("claude-code", out);
+    log("claude_code", out);
     Ok(())
 }
