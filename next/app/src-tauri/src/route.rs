@@ -34,7 +34,7 @@
 //! the secret, its release and this call; a `value` field's secret also travels in the call's frame,
 //! and nowhere else. The references end with the call. A client key's binding (`client_keys.rs`:
 //! its tool, its core, and that core still taking it) is checked before the confirmation, and
-//! again before its value goes into the frame.
+//! again before the call is made.
 //!
 //! Linux only, as the program host.
 
@@ -407,9 +407,10 @@ fn dispatch(
         &call.cancelled_by(&cancel),
     )?;
     let vault = Arc::clone(&app.state::<App>().vault);
-    // A client key's value, again now: the connection or core may have changed meanwhile.
-    for f in filled.iter().filter(|f| f.value) {
-        crate::client_keys::admit(app, &f.secret, &f.label, grant.target.id(), false, true)?;
+    // Each client key again now, its value's core too: the connection, the core or the vault may
+    // have changed meanwhile.
+    for f in &filled {
+        crate::client_keys::admit(app, &f.secret, &f.label, grant.target.id(), false, f.value)?;
     }
     // Each secret field gets a reference for the target's release, in this call.
     let token = vault.begin_call();

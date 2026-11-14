@@ -484,6 +484,17 @@ impl Vault {
         Ok(())
     }
 
+    /// Whether the vault can keep one more secret now: not broken, and not full.
+    pub fn can_add(&self) -> Result<(), String> {
+        if let Some(why) = &self.broken {
+            return Err(why.clone());
+        }
+        if self.lock().secrets.len() >= MAX_SECRETS {
+            return Err(format!("the vault keeps at most {MAX_SECRETS} secrets"));
+        }
+        Ok(())
+    }
+
     /// Keeps a secret the person entered natively, as label; gives its ID.
     pub fn add_secret(&self, label: &str, value: &str) -> Result<String, String> {
         self.add(label, value, None)

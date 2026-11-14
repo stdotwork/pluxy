@@ -64,6 +64,18 @@ fn a_client_keys_binding_is_kept_and_listed_without_its_value() {
 }
 
 #[test]
+fn a_full_or_broken_vault_says_so_before_anything_is_made() {
+    let (d, v) = vault();
+    assert!(v.can_add().is_ok());
+    for i in 0..MAX_SECRETS {
+        v.add_secret(&format!("s{i}"), KEY).unwrap();
+    }
+    assert!(v.can_add().unwrap_err().contains("at most"));
+    fs::write(d.0.join("vault").join("secrets.json"), b"not json").unwrap();
+    assert!(Vault::open(d.0.join("vault")).can_add().is_err());
+}
+
+#[test]
 fn secrets_are_kept_privately_listed_without_values_and_read_back() {
     let (d, v) = vault();
     assert!(v.add_secret("short", "1234567").is_err());
