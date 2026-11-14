@@ -832,6 +832,17 @@ working directory (recently used ones offered), terminal and optional program pa
 confirmation shows it in full. The key is not part of the launch: Claude Code reads it from its
 settings.
 
+**Backup and restore** (`src/backups.tsx`, the backup browser every writer's page shows) keeps
+manual backups of the previewed file in the app's vault through the tool's standard backup
+operations ([app tools](../app-tools/README.md#libtransactions)). **Manual Backup** saves the file
+as it is on disk (or that it does not exist); the newest 10 are kept, and saving another deletes
+the oldest, which its confirmation says. **Backup versions** lists each by date; selecting one
+shows its ID, whether the file was present and its size, and the settings restoring it would add,
+change or remove, by name only: this page never gets a value or the backup's bytes. **Restore this
+version** puts it back over whatever the file holds now (a file absent in the backup is removed;
+no automatic backup is made) and **Delete this version** deletes only that backup, each in the
+tool's native confirmation.
+
 ## Build and check
 
 Bun `1.4.3`, a stable Rust toolchain (CI uses 1.97.0), and on Linux the WebKitGTK 4.1 and

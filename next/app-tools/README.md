@@ -79,6 +79,13 @@ journal store of its own. Linux.
 | `Merge`, `Json`, `merge_value` | The three-way merge, and the one for JSON files (written with two-space indentation, keys in the file's order and numbers with their exact digits, through serde_json's `preserve_order` and `arbitrary_precision`; other formatting and comments are not kept, so a format that must keep them brings its own `Merge`). |
 | `Target`, `Pin` | Resolving and pinning, and the checked reads and writes, for a writer that needs them directly. `Pin::from_json` refuses any field `Pin::to_json` does not write. |
 | `pin_schema()` | The JSON Schema of a pin, in the host's schema subset: what a writer's write operations take as `targets` items (the fixture writer's manifest uses it exactly). |
+| `backup_create(set, pins)` | Manual Backup: keeps the pinned files as they are now (an empty image and `exists: false` for one that does not exist) as one version of `set`, vault backups labelled `bk <set>`; then deletes the oldest versions over `KEEP_BACKUPS` (10): `{"backup", "deleted"}`. |
+| `backup_list(set)` | The versions, newest first: `{"backups": [{"id", "created", "files": [{"selected", "path", "target", "exists", "size"}]}], "keep"}`. |
+| `backup_diff(set, id, leaves)` | For each file of version `id`, as its selection resolves now: `exists`, `now_exists`, `same`, `readable` and `changes`, each changed setting's `path` (its keys) and what a restore does to it (`adds`, `changes`, `removes`), at most 200 and the rest counted in `more`. Never a value. A selection that resolves to another file is refused. |
+| `backup_restore(set, pins, id, written)` | Puts version `id` back in its files (the pins must be of exactly its targets, in order), removing one it did not have, through a journal like every write. No automatic backup is made; the set's record and the originals kept for restore stay. |
+| `backup_delete(set, id)` | Deletes version `id` from the state file and the vault. |
+| `backup_call(call, tx, set, leaves)`, `backup_operations(files)` | The backup browser's standard operations, which every writer exports with exactly these manifest entries (`files` targets per version) and serves with `backup_call`: `backup-list`, `backup-diff` (reads), `backup-create`, `backup-restore`, `backup-delete` (writes, each confirmed). The app's shared backup browser (`../app/src/backups.tsx`) calls them. |
+| `Leaves`, `json_leaves` | A writer's reading of its file into settings for a diff (path and value, in file order; None when it cannot read it), and the one for JSON files: objects by key, arrays and other values as one setting each. |
 
 How a write goes:
 
@@ -119,6 +126,20 @@ Saving replaces the file; an edit made in the same instant by another program ma
 so where the person confirms: the writers' write operations carry this sentence in their
 descriptions, which their native confirmations show.
 This is cooperative write correctness for a full-access tool, not a confinement.
+
+Manual backups and retention:
+
+- A manual backup's bytes are only in the vault; the state file records each version's vault IDs,
+  selections, targets, presence, sizes and permission bits, never the bytes or a hash of them, and
+  pages get only the IDs, the paths and a diff of setting names. Values are compared inside the
+  tool. A setting whose name is itself a secret would show as that name; the host's redaction of
+  the vault's secrets applies to every answer as well.
+- Retention counts only: 10 versions per set, the oldest deleted when another is saved (the
+  operation's confirmation says so). Nothing is deleted by age. Retention and the backup
+  operations never touch the library's own backups (`tx `), which stay while a set's record, an
+  original kept after a conflict or a replaced record, or an open journal names them; `sweep`
+  deletes only backups nothing names, manual ones whose delete failed among them. The vault's
+  limit of 256 backups per package stays a backstop.
 
 The example `fixture-writer` (`examples/fixture-writer`, package `pluxy/fixture-writer`) is the
 library's test fixture, never a curated tool: it sets top-level values in JSON files with
@@ -212,7 +233,8 @@ The page renders every session's text as text, never as HTML.
 `pluxy/claude-code` sets up Claude Code to use pluxy's core and says how to start it, for the
 desktop app's Claude Code page (`../app/README.md`, "Claude Code"). It writes one settings file
 through `lib/transactions` (set `claude-code`): link-preserving, journalled, the original and
-applied images in the host's vault. It exports nothing.
+applied images in the host's vault, and its manual backups (the backup browser). It exports
+nothing.
 
 | Operation | Effect | Input | Output |
 | --- | --- | --- | --- |
@@ -222,6 +244,7 @@ applied images in the host's vault. It exports nothing.
 | `restore` | `write` | One pin | The library's outcome: the original bytes back (Restore Backup) |
 | `status` | `read` | — | The library's status |
 | `recipe` | `read` | — | `{"client": "Claude Code", "kind": "terminal", "program": "claude", "args": []}`, for the launcher |
+| `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations (`lib/transactions`), one file per version, diffed with `json_leaves` | The library's answers: IDs, paths, presence, sizes and setting names, never a value |
 
 What `apply` writes, keeping everything else in the file (keys in its order, numbers with their
 digits), with Claude Code's own names
