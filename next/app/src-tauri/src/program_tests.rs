@@ -1861,6 +1861,52 @@ fn a_start_whose_journals_cannot_be_read_fails() {
 }
 
 #[test]
+fn a_start_with_open_journals_that_cannot_take_its_turn_fails_instead_of_describing_none() {
+    let h = Arc::new(host(Value::Null));
+    let stub = private(&h, Stub::default());
+    stub.journals
+        .lock()
+        .unwrap()
+        .push(json!({"id": "j-7", "op": "apply",
+        "generation": 1, "began": 1, "intent": {"file": "/nonexistent"}}));
+    // An older release still holds the package's turn, past the startup limit (3 s here).
+    let held = || h.0.slots().entry(ID.to_string()).or_default().gate.clone();
+    let gate = held();
+    gate.turn.lock().unwrap().0 = true;
+    let started = Instant::now();
+    let caller = {
+        let h = Arc::clone(&h);
+        std::thread::spawn(move || h.call(ID, "report", json!({}), None))
+    };
+    // Released once the start has failed. A start that went on without the turn is served and
+    // its call waits for the turn, so it is released at a deadline well past the startup limit,
+    // and the call is answered.
+    let deadline = Instant::now() + fast().startup * 3;
+    while !caller.is_finished() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    gate.turn.lock().unwrap().0 = false;
+    gate.turned.notify_all();
+    let e = caller.join().unwrap().unwrap_err();
+    assert_eq!(e.code, "extension_unavailable", "{e}");
+    assert!(
+        e.message
+            .contains("could not take its turn to reconcile 1 journal"),
+        "{e}"
+    );
+    assert!(started.elapsed() >= fast().startup);
+    // The journal was never described away: it is still open and no vault frame was taken.
+    assert_eq!(stub.journals.lock().unwrap().len(), 1);
+    assert!(stub.frames.lock().unwrap().is_empty());
+    // On a later start, with the turn free, it is told of and reconciled.
+    std::thread::sleep(fast().backoff + Duration::from_millis(100));
+    let out = h.call(ID, "report", json!({}), None).unwrap();
+    assert_eq!(out["reconciled"][0]["journal"], "j-7");
+    assert!(stub.journals.lock().unwrap().is_empty());
+    h.stop_all();
+}
+
+#[test]
 fn a_tool_gets_its_home_and_its_own_data_folder_and_a_planted_link_refuses_the_start() {
     use std::os::unix::fs::PermissionsExt;
     let base = Folder(package(Value::Null).dir);
