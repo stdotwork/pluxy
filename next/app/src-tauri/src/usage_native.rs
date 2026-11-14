@@ -30,6 +30,7 @@
 //!   the run's HOME with both of its default roots (one session in both counts once, from the newer
 //!   copy); then disabled, a session written meanwhile is never scanned: the report is unchanged,
 //!   shows the source archived, and no parser process was started;
+//! - the Pi parser (pluxy/usage-pi, a real package), the same way on a Pi home;
 //! - the hub's own page: opened, it starts the hub;
 //! - idle: once nothing uses them, no hub, parser or peer process is left.
 //!
@@ -689,6 +690,12 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     step(
         "omp",
         session_source(app, main, &expect, &expect["omp"], &hub, &program),
+    )?;
+
+    // ---- the Pi parser: a real package, its default roots in the run's HOME.
+    step(
+        "pi",
+        session_source(app, main, &expect, &expect["pi"], &hub, &program),
     )?;
 
     // ---- the hub's own page starts it.

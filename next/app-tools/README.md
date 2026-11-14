@@ -9,7 +9,7 @@ reference: this folder implements it, it does not change it.
 
 ```bash
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
-cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-omp)
+cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-omp, usage-pi)
 ```
 
 ## `lib/program`
@@ -116,6 +116,11 @@ parser.
 `pluxy/usage-omp`, the usage hub's parser of Oh My Pi's session files, from `~/.omp/agent/sessions` and
 `~/.omp/sessions` (the `HOME` the app gives). It is `lib/pi-sessions` with Oh My Pi's name and folder.
 
+## `usage-pi`
+
+`pluxy/usage-pi`, the usage hub's parser of Pi's session files, from `~/.pi/agent/sessions` and
+`~/.pi/sessions` (the `HOME` the app gives). It is `lib/pi-sessions` with Pi's name and folder.
+
 ## `codex-sessions`
 
 `pluxy/codex-sessions` reads Codex's local sessions, read-only, and shows them on its page
@@ -144,7 +149,11 @@ What it reads, as the old desktop app's session manager did:
 - `session_index.jsonl`: a rollout's title and update time, else the file's modification time.
   An index larger than 16 MiB becomes a warning and is not read.
 
-Links to databases, rollouts and the index are skipped (the Codex home itself may be a link).
+Links to databases, rollouts and the index are skipped, and so is a `sqlite/`, `sessions/` or
+`archived_sessions/` folder that is itself a link (a warning names it), and a database whose
+`-wal` or `-shm` file is a link (a warning names it). The Codex home itself may be a link.
+`detail` finds a thread whose database ID is stored with Codex's `local:` prefix by its ID with or
+without the prefix.
 
 The reader adds no file beside a database that no Codex process has open.
 In WAL mode a reader needs SQLite's shared-memory file (`-shm`), which SQLite would create, so
