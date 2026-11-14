@@ -9,7 +9,7 @@
 //! - file link: a preview of the selected stow link (a read, asked nothing) names the link's text
 //!   and the file it resolves to; an apply asks a native confirmation naming both (and saying an
 //!   edit made in the same instant may be lost), then changes only that file, to the bytes
-//!   `expect.json` says, keeping its mode, and the link keeps its identity and text;
+//!   `expect.json` says, owner-only (0640 becomes 0600), and the link keeps its identity and text;
 //! - root link: the same for two files in the selected chezmoi root (one missing, so created),
 //!   the root link kept; a file inside the root that is a link, or a path leaving it, is refused,
 //!   and the link's target is untouched;
@@ -17,13 +17,15 @@
 //!   makes the confirmed apply fail as changed, writing nothing anywhere;
 //! - competing edit: an edit between preview and apply makes it fail as modified, the edit kept;
 //!   clear after the person's later edits removes only the writer's untouched value and keeps
-//!   theirs;
+//!   theirs, and the file's mode (0640, not the 0600 apply gave);
 //! - restore: puts the original bytes back (and removes the file the writer created), through
-//!   the same link;
-//! - partial rollback: an apply to two files whose second cannot be written puts the first back
-//!   and fails saying so; its journal ends rolled back;
+//!   the same link, keeping the mode the person gave the file after the apply (0640);
+//! - partial rollback: an apply to two files whose second cannot be written puts the first back,
+//!   bytes and mode (0640, though the apply wrote it 0600), and fails saying so; its journal ends
+//!   rolled back;
 //! - crash recovery: a writer that exits after writing one of two files has an unknown outcome;
-//!   its next start rolls the written file back (journal reconciled as rolled back), keeps a
+//!   its next start rolls the written file back, mode included (journal reconciled as rolled
+//!   back), keeps a
 //!   competing edit made after the crash instead of rolling over it, and commits a write that
 //!   finished before the crash (which clear then undoes); it also removes a temporary file a
 //!   write cut short left beside a target;
@@ -45,6 +47,13 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Webview};
+
+/// The permission bits of the file at p (0 when it cannot be read).
+fn mode_of(p: &Path) -> u32 {
+    std::fs::metadata(p)
+        .map(|m| m.permissions().mode() & 0o7777)
+        .unwrap_or(0)
+}
 
 /// Every entry under root, by its path: a file's mode and SHA-256, a link's inode and text, or a
 /// folder (folder times change as files are written in them, so they are not compared).
@@ -365,12 +374,9 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 read(&stow_target) == Some(bytes("settingsApplied")),
                 format!("the stow target after apply: {:?}", read(&stow_target)),
             )?;
-            let mode = std::fs::metadata(&stow_target)
-                .map_err(|e| e.to_string())?
-                .permissions()
-                .mode()
-                & 0o7777;
-            require(mode == 0o640, format!("the stow target's mode is {mode:o}"))?;
+            // An apply writes a writer's values: owner-only, though the file was 0640.
+            let mode = mode_of(&stow_target);
+            require(mode == 0o600, format!("the stow target's mode is {mode:o}"))?;
             require(
                 link(&stow_link)? == link_before,
                 "the stow link's identity or text changed",
@@ -546,6 +552,9 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             std::fs::write(&stow_target, bytes("settingsEditedAgain"))
                 .map_err(|e| e.to_string())?;
+            // The person gives the applied file another mode than apply's 0600: clear keeps it.
+            std::fs::set_permissions(&stow_target, std::fs::Permissions::from_mode(0o640))
+                .map_err(|e| e.to_string())?;
             let p = read_op(
                 main,
                 w,
@@ -571,6 +580,11 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 read(&stow_target) == Some(bytes("settingsCleared")),
                 format!("the stow target after clear: {:?}", read(&stow_target)),
             )?;
+            let mode = mode_of(&stow_target);
+            require(
+                mode == 0o640,
+                format!("clear changed the stow target's mode to {mode:o}"),
+            )?;
             require(
                 link(&stow_link)? == link_before,
                 "clear changed the stow link",
@@ -589,6 +603,9 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         "restore",
         (|| {
             std::fs::write(&a, bytes("aEdited")).map_err(|e| e.to_string())?;
+            // Apply made a.json 0600; the person gives it another mode, which restore keeps.
+            std::fs::set_permissions(&a, std::fs::Permissions::from_mode(0o640))
+                .map_err(|e| e.to_string())?;
             let p = read_op(
                 main,
                 w,
@@ -617,6 +634,11 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                     b.exists()
                 ),
             )?;
+            let mode = mode_of(&a);
+            require(
+                mode == 0o640,
+                format!("restore changed a.json's mode to {mode:o}"),
+            )?;
             require(
                 link(&root_link)? == link_before,
                 "restore changed the root link",
@@ -634,6 +656,12 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 w,
                 "preview",
                 json!({"set": "pair", "targets": [in_root("a.json"), file(&stow_link)]}),
+            )?;
+            // a.json is 0640 (the restore step's mode), not the 0600 an apply writes, so the
+            // rollback must put its mode back too.
+            require(
+                mode_of(&a) == 0o640,
+                format!("a.json's mode before the rollback is {:o}", mode_of(&a)),
             )?;
             let before = all()?;
             std::fs::set_permissions(&stow_folder, std::fs::Permissions::from_mode(0o555))
@@ -656,8 +684,12 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             require(
                 read(&a) == Some(bytes("a"))
-                    && read(&stow_target) == Some(bytes("settingsCleared")),
-                "a rolled-back apply left a write",
+                    && read(&stow_target) == Some(bytes("settingsCleared"))
+                    && mode_of(&a) == 0o640,
+                format!(
+                    "a rolled-back apply left a write (a.json's mode {:o})",
+                    mode_of(&a)
+                ),
             )?;
             let last = journals(main, w)?.last().cloned().unwrap_or_default();
             require(
@@ -694,8 +726,11 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 format!("the crashed apply: {r}"),
             )?;
             require(
-                read(&a) != Some(bytes("a")),
-                "the crashed apply did not write its first file",
+                read(&a) != Some(bytes("a")) && mode_of(&a) == 0o600,
+                format!(
+                    "the crashed apply did not write its first file owner-only (mode {:o})",
+                    mode_of(&a)
+                ),
             )?;
             let open: Vec<Value> = journals(main, w)?
                 .into_iter()
@@ -729,8 +764,11 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 format!("the recovery report: {st}"),
             )?;
             require(
-                read(&a) == Some(bytes("a")) && !b.exists(),
-                "the crashed apply was not rolled back",
+                read(&a) == Some(bytes("a")) && !b.exists() && mode_of(&a) == 0o640,
+                format!(
+                    "the crashed apply was not rolled back (a.json's mode {:o})",
+                    mode_of(&a)
+                ),
             )?;
             let j = journals(main, w)?
                 .into_iter()
