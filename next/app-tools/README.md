@@ -9,7 +9,7 @@ reference: this folder implements it, it does not change it.
 
 ```bash
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
-cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex)
+cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-claude)
 ```
 
 ## `lib/program`
@@ -37,14 +37,17 @@ waits for its own job inside a call.
 
 ## `lib/usage`
 
-Schema 1 of the usage hub's ingest API and what a usage parser shares (`pluxy-usage`): a parser
+Schemas 1 and 2 of the usage hub's ingest API and what a usage parser shares (`pluxy-usage`): a parser
 implements `Parser` (its label, default roots, which files are its, how a file's bytes become
 rows) and answers its produces operation with `produce`, which lists files (`scan`: no links, at
 most 8 folders deep, newest first, at most 20,000), finds a named file again only under the roots
 (`locate`), reads it and sends its rows in parts within the batch limit (`Sink`). A parser of a
 format read whole (`parse`) gets a file of at most 16 MiB; a parser of a line-based format sets
 `streamed` and gets the file's lines one at a time (`parse_lines`, `LineReader`) whatever its size,
-a line over 16 MiB being skipped and counted. The schema is in [`agent-usage/README.md`](agent-usage/README.md#schema-1).
+a line over 16 MiB being skipped and counted. A parser at schema 2 sends a record that more than one
+file can hold as one keyed event (`Sink::event`). `fields` reads the fields usage records share, by
+the old desktop app's rules: token counters under the names agents use, a model name and a time.
+The schemas are in [`agent-usage/README.md`](agent-usage/README.md#schema-1).
 
 ## `agent-usage`
 
@@ -83,6 +86,35 @@ changes, by the old desktop app's rules:
   that day's start in UTC, where the old reader used local midnight.
 
 The rollout is read line by line, whatever its size; a line over 16 MiB is skipped, as the old reader did.
+
+## `usage-claude`
+
+`pluxy/usage-claude`, the usage hub's parser of Claude Code's session transcripts, at schema 2. It
+reads the transcripts (`*.jsonl`) under `~/.claude/projects` (from the `HOME` the app gives; the
+hub's `roots` name others) and sends the hub token counts per message, and nothing else: no prompt,
+reply, folder name or raw message, request or session ID leaves the parser. It never writes a
+Claude Code file.
+
+A transcript's file ID is its path below the root with the first folder, Claude Code's project
+folder (named after the project's working folder), replaced by a hash of its name. Each file is
+read whole, line by line, when it changes, by the old desktop app's rules:
+
+- a line's usage is its `message.usage` (with no `message` object, its own `usage`), its model the
+  message's `model`; `<synthetic>`, Claude Code's own placeholder, is no model;
+- Claude Code writes one line per content block of a response, each repeating the response's
+  `message.id` and usage, so the lines of one message ID are one message: the last one wins, at its
+  own time;
+- a message is a keyed event: its key is a hash of its message ID and `requestId`, else of its
+  message ID and `sessionId`, so a response that `/branch` or `--fork-session` copies into another
+  transcript counts once; with neither ID it counts in its file only;
+- a line with usage but no message ID counts as it is, as does each record of a line that is a
+  list (or holds a `messages` list);
+- the total is input + output + cache write + cache read unless the usage gives its own; every
+  message is one sample; a line with no readable `timestamp` is skipped (the old reader used the
+  file's modification time).
+
+Two responses that share a message ID and have no request ID (a gateway that reuses one ID) are
+one message within a file, as they were in the old app.
 
 ## `codex-sessions`
 
