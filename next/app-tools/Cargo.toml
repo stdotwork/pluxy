@@ -3,7 +3,7 @@
 # into the desktop app.
 [workspace]
 resolver = "2"
-members = ["lib/program", "lib/transactions", "lib/usage", "agent-usage", "codex-sessions", "usage-codex", "usage-fixture"]
+members = ["lib/program", "lib/transactions", "lib/usage", "lib/pi-sessions", "agent-usage", "codex-sessions", "usage-codex", "usage-fixture", "usage-omp"]
 
 [workspace.package]
 edition = "2021"

@@ -10,6 +10,9 @@
 // prompt, reply, working folder and key canaries in the lines the parser must not carry. Its default
 // roots are used, so the check sets none.
 //
+// The Oh My Pi parser check (usage-omp, usage-omp.ts) is the same kind of check on an Oh My Pi home, run
+// after the Codex one.
+//
 // Each test archive adds one page to its package's manifest: routing.ts's relay page (`page`), which
 // sends the calls the check posts it on its channel. The hub's own page stays as it is; the parser has
 // no page of its own. The parser's test archive also imports the peer's `summary`, so its `relay` has
@@ -36,6 +39,7 @@ import {
 import { join } from "node:path";
 import { artifact, type Fixture, platform, writeTrustProfile } from "./admission";
 import { native, PAGE_SCRIPT, pack as packPackage, summary } from "./routing";
+import { OMP_CANARIES, OMP_ID, ompExpected, ompHome } from "./usage-omp";
 
 export const HUB_ID = "pluxy/agent-usage";
 export const PARSER_ID = "pluxy/usage-fixture";
@@ -538,7 +542,8 @@ export function buildUsageFixtures(
   const codex = pack(root, tools, "usage-codex", join(target, "usage-codex"), publicKey, privateKey);
   const curated = join(root, "curated.json");
   const packages: Record<string, object> = {};
-  for (const p of [hub, parser, peer, codex]) {
+  const omp = pack(root, tools, "usage-omp", join(target, "usage-omp"), publicKey, privateKey);
+  for (const p of [hub, parser, peer, codex, omp]) {
     if (p) packages[p.id] = { releases: [{ version: p.version, artifacts: { [platform()]: p.entry } }] };
   }
   writeFileSync(curated, JSON.stringify({ registry_version: 0, packages }));
@@ -547,6 +552,7 @@ export function buildUsageFixtures(
   writeFileSync(join(usageRoot, "a", "2026-11.jsonl"), `${A.join("\n")}\n`);
   writeFileSync(join(usageRoot, "b.jsonl"), `${B.join("\n")}\n`);
   const codexWrites = codexHome(home);
+  const ompWrites = ompHome(home);
   writeFileSync(
     join(root, "expect.json"),
     JSON.stringify({
@@ -560,18 +566,21 @@ export function buildUsageFixtures(
         [PARSER_ID]: parser?.version ?? "0.1.0",
         [PEER_ID]: peer?.version ?? "1.0.0",
         [CODEX_ID]: codex?.version ?? "0.1.0",
+        [OMP_ID]: omp?.version ?? "0.1.0",
       },
       sha256: {
         [HUB_ID]: hub?.sha256 ?? null,
         [PARSER_ID]: parser?.sha256 ?? null,
         [PEER_ID]: peer?.sha256 ?? null,
         [CODEX_ID]: codex?.sha256 ?? null,
+        [OMP_ID]: omp?.sha256 ?? null,
       },
       bin: {
         [HUB_ID]: hub?.bin ?? "bin/agent-usage",
         [PARSER_ID]: parser?.bin ?? "bin/usage-fixture",
         [PEER_ID]: peer?.bin ?? "bin/tool",
         [CODEX_ID]: codex?.bin ?? "bin/usage-codex",
+        [OMP_ID]: omp?.bin ?? "bin/usage-omp",
       },
       root: usageRoot,
       writes: {
@@ -599,8 +608,37 @@ export function buildUsageFixtures(
         },
         reports: codexExpected(),
       },
+      // The Oh My Pi parser, enabled after the Codex one; the sources listed before it in its reports are
+      // the Codex source (active) and the fixture parser (archived), as the steps before leave them.
+      omp: {
+        id: OMP_ID,
+        writes: ompWrites,
+        canaries: OMP_CANARIES,
+        // A model name both the store and the reports must hold (the positive control of the canary search).
+        model: "gpt-5.5-mini",
+        // Each sync's counts for the source: listed (one session in both roots, so twice), changed (to
+        // read), read, failed.
+        syncs: {
+          first: { listed: 4, changed: 3, read: 3, failed: 0 },
+          repeat: { listed: 4, changed: 0, read: 0, failed: 0 },
+          after: { listed: 4, changed: 1, read: 1, failed: 0 },
+        },
+        reports: ompExpected({
+          now: NOW,
+          offsets: OFFSETS,
+          days: DAYS,
+          others: [
+            { id: CODEX_ID, label: "Codex", status: "active", total: 5930, active_days: 2 },
+            { id: PARSER_ID, label: "Fixture", status: "archived", total: 1547, active_days: 4 },
+          ],
+        }),
+      },
     }),
   );
   const nonce = writeTrustProfile(home, [curated], publicKey);
-  return { registries: [{ name: "curated", url: curated }], nonce, canaries: CODEX_CANARIES };
+  return {
+    registries: [{ name: "curated", url: curated }],
+    nonce,
+    canaries: [...CODEX_CANARIES, ...OMP_CANARIES],
+  };
 }

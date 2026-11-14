@@ -1,0 +1,12 @@
+[package]
+name = "pluxy-pi-sessions"
+version = "0.1.0"
+description = "What the Pi and Oh My Pi usage parsers share: their session files as token rows for the usage hub"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+pluxy-program = { path = "../program" }
+pluxy-usage = { path = "../usage" }
+serde_json = "1"
